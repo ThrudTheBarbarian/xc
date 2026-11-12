@@ -171,6 +171,58 @@ class MachOSymDef
         }
     }
 
+    // One __compact_unwind entry of an object: its function by text offset,
+    // the personality by symbol (its nlist index + 1, 0 for none) and the
+    // LSDA by blob offset (+ 1, 0 for none). The link names both, and the
+    // writer builds __unwind_info from them, as ld64 does.
+    class MachOUnwindRec
+    {
+    u32 _fn;
+    u32 _len;
+    u32 _enc;
+    u32 _pers;
+    u32 _lsda;
+    String* _persSym;   // the link's: the personality's pointer slot
+    String* _lsdaSym;   // the link's: the LSDA, as a data symbol
+
+    void init(void)
+        {
+        }
+    u32 fn(void) { return _fn; }
+    u32 len(void) { return _len; }
+    u32 enc(void) { return _enc; }
+    u32 pers(void) { return _pers; }
+    u32 lsda(void) { return _lsda; }
+    String* persSym(void) { return _persSym; }
+    String* lsdaSym(void) { return _lsdaSym; }
+    void setFn(u32 f) { _fn = f; }
+    void setPersSym(String* s) { _persSym = s; }
+    void setLsdaSym(String* s) { _lsdaSym = s; }
+    static MachOUnwindRec* with(u32 fn, u32 len, u32 enc, u32 pers, u32 lsda)
+        {
+        MachOUnwindRec* r = new MachOUnwindRec();
+        r._fn = fn;
+        r._len = len;
+        r._enc = enc;
+        r._pers = pers;
+        r._lsda = lsda;
+        return r;
+        }
+    }
+
+    // The merged image's unwind entries, from the link to the writer (as
+    // DwarfWriter.pending carries -g's tables): 0 when no object had any.
+    class MachOUnwind
+    {
+    static Array* _pending;
+
+    void init(void)
+        {
+        }
+    static Array* pending(void) { return _pending; }
+    static void setPending(Array* a) { _pending = a; }
+    }
+
     class MachOObject
     {
     Data* _text;
@@ -186,6 +238,7 @@ class MachOSymDef
     Array* _objcRanges; // MachOObjcRange@
     Map* _commons;      // common (tentative) NAME -> Number(size), for bug 177
     u32 _dataPageMask;  // the largest page alignment (4 KB and more) in the blob, less one; 0 when none
+    Array* _unwind;     // MachOUnwindRec@, from __LD,__compact_unwind
     bool _ok;
 
     void init(void)
@@ -203,7 +256,13 @@ class MachOSymDef
         _objcRanges = new Array();
         _commons = new Map();
         _dataPageMask = (u32)0;
+        _unwind = new Array();
         _ok = false;
+        }
+
+    Array* unwind(void)
+        {
+        return _unwind;
         }
 
     u32 dataPageMask(void)
@@ -281,9 +340,38 @@ class MachOSymDef
     // Every MH_OBJECT member of a `!<arch>` archive, in archive order. The
     // symbol index (`__.SYMDEF`) and anything that is not an object are
     // skipped — a real archive carries those.
+    // A universal file's arm64 slice (cputype ARM64, subtype ALL: not
+    // arm64e), or the file itself when it is not universal; 0 when it has
+    // no such slice. The fat header is big-endian.
+    static Data* arm64Slice(Data* d)
+        {
+        if (d == (Data*)0 || d.length() < (u32)8 || MachOObject.rd32be(d, (u32)0) != (u32)$CAFEBABE)
+            return d;
+        u32 n = MachOObject.rd32be(d, (u32)4);
+        for (u32 i = (u32)0; i < n && (u32)8 + (i + (u32)1) * (u32)20 <= d.length(); i = i + (u32)1)
+            {
+            u32 e = (u32)8 + i * (u32)20;
+            if (MachOObject.rd32be(d, e) != (u32)$0100000C || (MachOObject.rd32be(d, e + (u32)4) & (u32)$00FFFFFF) != (u32)0)
+                continue;
+            u32 off = MachOObject.rd32be(d, e + (u32)8);
+            u32 sz = MachOObject.rd32be(d, e + (u32)12);
+            if (off + sz > d.length())
+                return (Data*)0;
+            return d.subdata(off, sz);
+            }
+        return (Data*)0;
+        }
+
+    static u32 rd32be(Data* b, u32 o)
+        {
+        return ((u32)b.byteAt(o) << (u32)24) | ((u32)b.byteAt(o + (u32)1) << (u32)16)
+             | ((u32)b.byteAt(o + (u32)2) << (u32)8) | (u32)b.byteAt(o + (u32)3);
+        }
+
     static Array* inArchive(String* path)
         {
-        Array* ms = ArArchive.membersOfFile(path);
+        Data* whole = MachOObject.arm64Slice(Files.readData(path));
+        Array* ms = whole != (Data*)0 ? ArArchive.members(whole) : (Array*)0;
         if (ms == (Array*)0)
             return (Array*)0;
         Array* out = new Array();
@@ -375,7 +463,8 @@ class MachOSymDef
             MachOSectHdr* s = (MachOSectHdr*)sects.get(i);
             u32 stype = s._flags & (u32)$FF;
             bool isText = s._seg.equals(String.withCString("__TEXT"));
-            bool textLiteral = isText && (stype == (u32)2 || stype == (u32)3 || stype == (u32)4 || stype == (u32)$E || stype == (u32)5 || s._name.equals(String.withCString("__const")) || s._name.equals(String.withCString("__cstring")));
+            bool textLiteral = isText && (stype == (u32)2 || stype == (u32)3 || stype == (u32)4 || stype == (u32)$E || stype == (u32)5 || s._name.equals(String.withCString("__const")) || s._name.equals(String.withCString("__cstring"))
+                                         || s._name.equals(String.withCString("__gcc_except_tab")));
             bool dataLike = s._seg.equals(String.withCString("__DATA")) || s._seg.equals(String.withCString("__DATA_CONST")) || textLiteral;
             if (!dataLike)
                 continue; // __compact_unwind / __LD / debug
@@ -526,6 +615,61 @@ class MachOSymDef
                 MachOReloc* rl = new MachOReloc();
                 rl.set(mo + MachOObject.rd32(b, r), MachOObject.rd32(b, r + (u32)4));
                 o._modInitRelocs.add((Object*)rl);
+                }
+            }
+        // __compact_unwind: 32-byte entries (function, length, encoding,
+        // personality, LSDA), the pointers by relocation, each holding its
+        // addend (a section-relative one the address itself).
+        for (u32 si = (u32)1; si < sects.count(); si = si + (u32)1)
+            {
+            MachOSectHdr* cs = (MachOSectHdr*)sects.get(si);
+            if (!cs._name.equals(String.withCString("__compact_unwind")))
+                continue;
+            Map* at = new Map(); // entry offset -> MachOReloc
+            for (u32 i = (u32)0; i < cs._nreloc; i = i + (u32)1)
+                {
+                u32 r = cs._reloff + i * (u32)8;
+                MachOReloc* rl = new MachOReloc();
+                rl.set(MachOObject.rd32(b, r), MachOObject.rd32(b, r + (u32)4));
+                at.set((Hashable*)Number.withU32(rl.off()), (Object*)rl);
+                }
+            for (u32 e = (u32)0; e + (u32)32 <= cs._size; e = e + (u32)32)
+                {
+                u32 fe = cs._foff + e;
+                MachOReloc* fr = (MachOReloc*)at.get((Hashable*)Number.withU32(e));
+                if (fr == (MachOReloc*)0)
+                    continue;
+                u64 fv = MachOObject.rd64(b, fe);
+                u32 fn = (u32)0;
+                if (fr.ext() == (u32)0 && fr.symnum() == textIdx)
+                    fn = (u32)(fv - textAddr);
+                else if (fr.ext() != (u32)0 && fr.symnum() < o._symdefs.count()
+                         && ((MachOSymDef*)o._symdefs.get(fr.symnum())).where() == (u32)1)
+                    fn = ((MachOSymDef*)o._symdefs.get(fr.symnum())).off() + (u32)fv;
+                else
+                    continue;
+                u32 len = MachOObject.rd32(b, fe + (u32)8);
+                u32 enc = MachOObject.rd32(b, fe + (u32)12);
+                u32 pers = (u32)0;
+                MachOReloc* pr = (MachOReloc*)at.get((Hashable*)Number.withU32(e + (u32)16));
+                if (pr != (MachOReloc*)0 && pr.ext() != (u32)0)
+                    pers = pr.symnum() + (u32)1;
+                u32 lsda = (u32)0;
+                MachOReloc* lr = (MachOReloc*)at.get((Hashable*)Number.withU32(e + (u32)24));
+                if (lr != (MachOReloc*)0)
+                    {
+                    u64 lv = MachOObject.rd64(b, fe + (u32)24);
+                    if (lr.ext() == (u32)0)
+                        {
+                        Object* bo = blobOff.get((Hashable*)Number.withU32(lr.symnum()));
+                        if (bo != (Object*)0)
+                            lsda = ((Number*)bo).asU32() + (u32)(lv - ((MachOSectHdr*)sects.get(lr.symnum()))._addr);
+                        }
+                    else if (lr.symnum() < o._symdefs.count()
+                             && ((MachOSymDef*)o._symdefs.get(lr.symnum())).where() == (u32)2)
+                        lsda = ((MachOSymDef*)o._symdefs.get(lr.symnum())).off() + (u32)lv + (u32)1;
+                    }
+                o._unwind.add((Object*)MachOUnwindRec.with(fn, len, enc, pers, lsda));
                 }
             }
         o._ok = true;

@@ -43,6 +43,7 @@
 #import <MachOLink>
 #import <Tbd>
 #import <PeLink>
+#import <CoffObject>
 #import <CodeSign>
 #import <Iface>
 #import <ElfArm64>
@@ -998,6 +999,28 @@ String* resolveLinkInput(DriverOptions* d, String* arg)
     // 0.4 skipped it (c2xc bug 37). Those targets use `.so` / `.a` instead.
     // The row's format decides (android and arm64 Linux are ELF though their
     // back end is arm64's).
+    // -l:<file>: that file by its own name (ld's form: a versioned shared
+    // object, libstdc++.so.6), on the -L path, then in the target's
+    // multiarch directories.
+    if (stem.hasPrefix(String.withCString(":"))) {
+        String* fname = stem.substringFromByte((u32)1);
+        Array* fdirs = new Array();
+        for (u32 i = (u32)0; i < dirs.count(); i = i + (u32)1) fdirs.add(dirs.get(i));
+        String* triple = d.targetRow() != (TargetRow*)0 && d.targetRow().cpu().equals(String.withCString("arm64"))
+                       ? String.withCString("aarch64-linux-gnu") : String.withCString("x86_64-linux-gnu");
+        fdirs.add((Object*)String.withCString("/usr/lib/").appending(triple));
+        fdirs.add((Object*)String.withCString("/lib/").appending(triple));
+        fdirs.add((Object*)String.withCString("/usr/lib"));
+        for (u32 i = (u32)0; i < fdirs.count(); i = i + (u32)1) {
+            String* p = String.withString((String*)fdirs.get(i));
+            p.appendCString("/"); p.append(fname);
+            if (Files.exists(p)) return p;
+        }
+        Stdio.printf("xcc: error: -l%s: no %s on the -L path or in the system library directories\n",
+                     stem.cString(), fname.cString());
+        Process.exit((i32)1);
+        return (String*)0;
+    }
     String* arch = d.arch();
     bool machO = d.targetRow() != (TargetRow*)0 ? d.targetRow().exeFormat().equals(String.withCString("macho"))
                : !(arch.equals(String.withCString("x86_64"))
@@ -1018,7 +1041,9 @@ String* resolveLinkInput(DriverOptions* d, String* arg)
     // to open, but the SDK ships a `.tbd` text stub naming its exports — and
     // that is what tells the bind which dylib ordinal the symbol belongs to
     // (bug 138 / uxkit 028: without it every import fell to ordinal 1).
-    String* sdk = appleSdkRoot(d);
+    // A Mach-O target's only: from a Mac, a win64 program's -lc++ is
+    // mingw's libc++.a, not macOS's stub.
+    String* sdk = machO ? appleSdkRoot(d) : (String*)0;
     if (sdk != (String*)0) {
         String* t1 = String.withString(sdk); t1.appendCString("/usr/lib/lib"); t1.append(stem); t1.appendCString(".tbd");
         if (Files.exists(t1)) return t1;
@@ -1419,6 +1444,13 @@ String* androidSonameOf(String* path)
     return path.lastPathComponent();
 }
 
+// Whether a library path names a shared object: libX.so, or a versioned
+// soname (libstdc++.so.6, which a -l:<file> names).
+bool isSharedLib(String* p)
+{
+    return p.hasSuffix(String.withCString(".so")) || p.contains(String.withCString(".so."));
+}
+
 // The same list with the `.so` libraries the program or library `#import`ed
 // after the base set, each by its soname (bug 460). Without them the image had
 // no DT_NEEDED for a library it calls into, and bionic had nothing to resolve
@@ -1445,7 +1477,7 @@ Map* arm64KnownImports(DriverOptions* d)
     Array* nl = d.fe().neededLibs();
     for (u32 i = (u32)0; nl != (Array*)0 && i < nl.count(); i = i + (u32)1) {
         String* lp = (String*)nl.get(i);
-        if (!lp.hasSuffix(String.withCString(".so"))) continue;
+        if (!isSharedLib(lp)) continue;
         ElfSharedInfo* info = Elf64.sharedInfo(lp);
         if (info == (ElfSharedInfo*)0) {
             Stdio.printf("xcc: error: '%s' is not a readable ELF64 shared object\n", lp.cString());
@@ -1470,7 +1502,7 @@ String* arm64ElfRunpath(DriverOptions* d, TargetRow* row)
     Array* dirs = new Array();
     for (u32 i = (u32)0; nl != (Array*)0 && i < nl.count(); i = i + (u32)1) {
         String* lp = (String*)nl.get(i);
-        if (!lp.hasSuffix(String.withCString(".so"))) continue;
+        if (!isSharedLib(lp)) continue;
         String* dir = standardPath(lp.deletingLastPathComponent());
         bool seen = false;
         for (u32 k = (u32)0; k < dirs.count(); k = k + (u32)1)
@@ -1491,7 +1523,7 @@ Array* androidNeededWithImports(DriverOptions* d, string base)
     Array* nl = d.fe().neededLibs();
     for (u32 i = (u32)0; nl != (Array*)0 && i < nl.count(); i = i + (u32)1) {
         String* lp = (String*)nl.get(i);
-        if (!lp.hasSuffix(String.withCString(".so"))) continue;
+        if (!isSharedLib(lp)) continue;
         String* sn = androidSonameOf(lp);
         Array* have = all.splitOnByte((u8)',');
         bool seen = false;
@@ -2804,6 +2836,24 @@ void linkX86_64Glibc(DriverOptions* d, String* prog)
             String* base = t.substringFromByte((u32)2);
             if (isGlibcOwnLib(base)) continue;          // glibc itself: the import map
             String* found = (String*)0;
+            // -l:<file>: that file, by its own name (ld's form), as a
+            // versioned shared object (libstdc++.so.6) is found.
+            if (base.hasPrefix(String.withCString(":"))) {
+                String* fname = base.substringFromByte((u32)1);
+                for (u32 k = (u32)0; k < dirs.count() && found == (String*)0; k = k + (u32)1) {
+                    String* p = String.withString((String*)dirs.get(k));
+                    p.appendCString("/"); p.append(fname);
+                    if (Files.exists(p)) found = p;
+                }
+                if (found == (String*)0) {
+                    Stdio.printf("xcc: error: -l%s: no %s on the -L path or in the system library directories\n",
+                                 base.cString(), fname.cString());
+                    Process.exit((i32)1); return;
+                }
+                if (found.contains(String.withCString(".so"))) sos.add((Object*)found);
+                else ars.add((Object*)found);
+                continue;
+            }
             for (u32 e = (u32)0; e < (u32)2 && found == (String*)0; e = e + (u32)1) {
                 for (u32 k = (u32)0; k < dirs.count() && found == (String*)0; k = k + (u32)1) {
                     String* p = String.withString((String*)dirs.get(k));
@@ -4256,6 +4306,13 @@ void linkObjectsArm64Elf(DriverOptions* d)
     // The libraries the objects imported (their .xtc.needs sidecars) are
     // needed as an #import <X> in one source would make them.
     Array* needs = objectNeeds(d.objectInputs());
+    // So is each shared library a -l names (C++'s -l:libstdc++.so.6).
+    for (u32 i = (u32)0; i < d.linkInputs().count(); i = i + (u32)1) {
+        String* t = (String*)d.linkInputs().get(i);
+        if (!t.hasPrefix(String.withCString("-l"))) continue;
+        String* lp = resolveLinkInput(d, t);
+        if (lp != (String*)0 && isSharedLib(lp)) needs.add((Object*)lp);
+    }
     for (u32 i = (u32)0; i < needs.count(); i = i + (u32)1) {
         bool have = false;
         for (u32 k = (u32)0; k < d.fe().neededLibs().count(); k = k + (u32)1)
@@ -4600,6 +4657,16 @@ void addLanguageLibs(DriverOptions* d, LanguageRow* lang)
             tbd.appendCString("/usr/lib/lib");
             tbd.append(nm);
             tbd.appendCString(".tbd");
+            // A static library where the SDK has no stub (libc++'s
+            // experimental library: the parallel algorithms' libdispatch
+            // back end).
+            if (sdk != (String*)0 && !Files.exists(tbd)) {
+                String* ar = String.withString(sdk);
+                ar.appendCString("/usr/lib/lib");
+                ar.append(nm);
+                ar.appendCString(".a");
+                if (Files.exists(ar)) tbd = ar;
+            }
             if (sdk == (String*)0 || !Files.exists(tbd)) {
                 Stdio.printf("xcc: error: a %s program links lib%s, and no macOS SDK has it (install the Command Line Tools)\n",
                              lang.name().cString(), nm.cString());
@@ -4944,12 +5011,25 @@ void main(void)
         // A whole program (not -c, not -S): xcc may take an ODR copy, the
         // program's one definition of it then.
         Languages.setWholeProgram(!gCSplitRelocatable && !d.keepAsm() && !d.compileOnly());
+        cPathSetElf(crow != (TargetRow*)0 && crow.exeFormat().hasPrefix(String.withCString("elf")));
+        // C++ on win64: the link keeps .pdata/.xdata, the SEH tables its
+        // exceptions unwind by.
+        CoffObject.setKeepUnwind(lang.ehFrames());
         // clang builds for the target, not the host: a triple, and from
         // another host the target's C headers (a sysroot with include/).
         String* tgt = cPathTargetFlags(d);
         if (tgt == (String*)0)
             {
             Process.exit((i32)1); return;
+            }
+        // C++ for win64 from another host: the mingw root's libc++ (its
+        // headers here, its static libraries in the link: libc++, libc++abi
+        // and libunwind, the row's windows: libraries).
+        if (lang.name().equals(String.withCString("c++")) && tgt.contains(String.withCString("mingw")))
+            {
+            u32 sr = tgt.byteIndexOf(String.withCString("--sysroot "));
+            String* root = tgt.substringFromByte(sr + (u32)10);
+            tgt = tgt.appending(String.withFormat(" -stdlib=libc++ -nostdinc++ -cxx-isystem %s/include/c++/v1", root.cString()));
             }
         cPathSetTarget(tgt);
         // C fuses the multiply-adds clang marks (llvm.fmuladd, its default
@@ -5534,7 +5614,7 @@ void emitModule(DriverOptions* d, IRModule* mod)
                 }
                 continue;
             }
-            if (!lp.hasSuffix(String.withCString(".so"))) continue;
+            if (!isSharedLib(lp)) continue;
             bool have = false;
             for (u32 k = (u32)0; k < d.fe().neededLibs().count(); k = k + (u32)1)
                 if (((String*)d.fe().neededLibs().get(k)).equals(lp)) have = true;

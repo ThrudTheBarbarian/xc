@@ -73,6 +73,10 @@ void cPathSetFpContract(String* v) { gCPathFpContract = v; }
 String* gCPathStd;
 void cPathSetStd(String* v) { gCPathStd = v; }
 String* cPathStd(void) { return gCPathStd; }
+// The target writes ELF: a language whose unwinder reads clang's frame table
+// (row field frames) gets it registered at start-up.
+bool gCPathElf;
+void cPathSetElf(bool b) { gCPathElf = b; }
 // The source's row of the language table (Language.xc): the command that
 // writes its LLVM IR, and which functions xcc takes. 0: C's.
 LanguageRow* gCPathLang;
@@ -206,6 +210,41 @@ class CPath
         if (r == (String*)0)
             Stdio.error(String.withFormat("xcc: error: cannot read clang's output '%s'\n", out.cString()));
         return r;
+        }
+
+    // A load-time function that calls __register_frame(&__xc_eh_frame_start).
+    static void registerFrames(IRModule* m)
+        {
+        String* u8p = String.withCString("Ptr(U8, unbanked)");
+        IRSymbol* eh = IRSymbol.dataGlobal(String.withCString("__xc_eh_frame_start"), String.withCString("U8"));
+        eh.setAttr(String.withCString("extern"), true);
+        m.addSym(eh);
+        m.addSym(IRSymbol.func(String.withCString("__register_frame"), String.withFormat("(%s) -> Void", u8p.cString()), false, true));
+        IRFunc* f = new IRFunc();
+        f.setName(String.withCString("__xc_register_frames"));
+        IRValue* mem = new IRValue(String.withCString("Mem"));
+        f.addParam(mem);
+        IRBlock* b = new IRBlock(String.withCString("bb_entry"));
+        IRInsn* a = IRInsn.with(String.withCString("AddrOf"));
+        IRValue* av = new IRValue(u8p);
+        a.setRes(av);
+        a.add(IROperand.sym(String.withCString("__xc_eh_frame_start")));
+        b.add(a);
+        IRInsn* c = IRInsn.with(String.withCString("Call"));
+        c.setCc(String.withCString("CallConv::Standard"));
+        c.add(IROperand.sym(String.withCString("__register_frame")));
+        c.add(IROperand.useVal(av));
+        c.add(IROperand.useVal(mem));
+        IRValue* mo = new IRValue(String.withCString("Mem"));
+        c.setMemRes(mo);
+        b.add(c);
+        IRInsn* r = IRInsn.with(String.withCString("Return"));
+        r.add(IROperand.useVal(mo));
+        b.setTerm(r);
+        f.addBlock(b);
+        m.addFunc(f);
+        m.addSym(IRSymbol.func(String.withCString("__xc_register_frames"), String.withCString("() -> Void"), false, false));
+        m.modinits().add((Object*)String.withCString("__xc_register_frames"));
         }
 
     // The C file as an IRModule, or 0 with the reason printed. `incs` and
@@ -404,6 +443,11 @@ class CPath
             m.addSym(IRSymbol.func(String.withCString("__xc_cpath_init"), String.withCString("() -> Void"), false, false));
             m.modinits().add((Object*)String.withCString("__xc_cpath_init"));
             }
+        // C++'s exceptions on an ELF target: the unwinder finds clang's frame
+        // table (merged by the link at __xc_eh_frame_start, ended by a zero
+        // word) once it is registered, at load time.
+        if (lang.ehFrames() && gCPathElf)
+            CPath.registerFrames(m);
         // XC_C_TRACE: the functions left to clang, and why the first was.
         if (r.unread().count() > (u32)0 && Platform.env(String.withCString("XC_C_TRACE")).byteLength() > (u32)0)
             {
@@ -438,9 +482,9 @@ class CPath
         if (gCPathTarget != (String*)0)
             cc.append(gCPathTarget);
         cc.appendCString(gCPathProtect ? " -O2 -fstack-protector-strong" : " -O2");
-        // Unwind tables only where the platform's linker carries them: a
-        // language that names one (C++, whose exceptions need them).
-        if (lang.linker().byteLength() == 0)
+        // Unwind tables only for a language that needs them (C++'s
+        // exceptions): one with a frame table, or a platform linker.
+        if (lang.linker().byteLength() == 0 && !lang.ehFrames())
             cc.appendCString(" -fno-unwind-tables -fno-asynchronous-unwind-tables");
         cc.appendCString(" -Wno-override-module -c -o ");
         cc.append(CPath.quoted(restO));

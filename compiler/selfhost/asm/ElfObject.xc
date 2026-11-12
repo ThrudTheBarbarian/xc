@@ -212,6 +212,9 @@ class ElfSymDef
     Map* _dataOffOf;
     Map* _tlsOffOf;
     Map* _initOffOf;
+    // Where the object's .eh_frame landed in the data blob, PLUS ONE (0: it
+    // has none). Followed there by the 4-byte zero that ends a frame table.
+    u32 _ehFrameOff;
 
     void init(void)
         {
@@ -241,6 +244,11 @@ class ElfSymDef
     Array* sections(void)
         {
         return _sections;
+        }
+    // The data-blob offset of the object's .eh_frame plus one, or 0.
+    u32 ehFrameOff(void)
+        {
+        return _ehFrameOff;
         }
     Array* symdefs(void)
         {
@@ -402,7 +410,11 @@ class ElfSymDef
                 _copyInto(_init, s.off(), s.size());
                 continue;
                 }
-            if (s.type() != (u32)1 && s.type() != (u32)8)
+            // SHT_X86_64_UNWIND: x86-64's .eh_frame (aarch64 writes it as
+            // PROGBITS). C++'s unwinder reads it, registered at start-up
+            // (__xc_eh_frame_start).
+            bool unwind = s.type() == (u32)$70000001;
+            if (s.type() != (u32)1 && s.type() != (u32)8 && !unwind)
                 continue; // PROGBITS / NOBITS
             if ((s.flags() & (u64)4) != (u64)0)
                 continue; // executable: already taken
@@ -421,10 +433,17 @@ class ElfSymDef
                 }
             _padTo(_data, s.align());
             _dataOffOf.set((Hashable*)Number.with(i), (Object*)Number.with(_data.length() + (u32)1));
+            bool ehFrame = s.name() != (String*)0 && s.name().equals(String.withCString(".eh_frame"));
+            if (ehFrame && _ehFrameOff == (u32)0)
+                _ehFrameOff = _data.length() + (u32)1;
             if (s.type() == (u32)8)
                 _zeros(_data, s.size());
             else
                 _copyInto(_data, s.off(), s.size());
+            // A frame table ends with a zero length word, which the section
+            // itself does not carry (crtend.o adds it for the platform's link).
+            if (ehFrame)
+                _zeros(_data, (u32)4);
             if (s.align() > _dataAlign)
                 _dataAlign = s.align();
             }

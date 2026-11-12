@@ -608,6 +608,9 @@ class Pe
     u32 _ifaceRVA;
     u32 _ifaceRaw;
     u32 _relocRVA;
+    u32 _pdataRVA;    // the exception directory: the merged .pdata (C++), sorted
+    u32 _pdataSz;
+    u32 _tlsDirRVA;   // the TLS directory (PeLink.placeTls), 0 when none
     u32 _relocRaw;
     u32 _afterRVA;
     // -g: the five debug sections, named through the COFF string table, and
@@ -912,6 +915,22 @@ class Pe
 
         if (!resolveFixups(text, data, symbols, dataSyms, fixups))
             return;
+        // The exception directory: the link's one .pdata table (PeLink),
+        // sorted by function start as RtlLookupFunctionEntry's search needs.
+        _pdataRVA = (u32)0;
+        _pdataSz = (u32)0;
+        Object* td = symbols.get((Hashable*)String.withCString("__xc_tls_dir"));
+        _tlsDirRVA = td != (Object*)0 ? _dataRVA + ((Number*)td).asU32() : (u32)0;
+        Object* ps = symbols.get((Hashable*)String.withCString("__xc_pdata_start"));
+        Object* pe = symbols.get((Hashable*)String.withCString("__xc_pdata_end"));
+        if (ps != (Object*)0 && pe != (Object*)0)
+            {
+            u32 s0 = ((Number*)ps).asU32();
+            u32 s1 = ((Number*)pe).asU32();
+            Pe.sortPdata(data, s0, (s1 - s0) / (u32)12);
+            _pdataRVA = _dataRVA + s0;
+            _pdataSz = ((s1 - s0) / (u32)12) * (u32)12;
+            }
 
         // Measure the file size AFTER patching: a vtable slot holding a
         // symbolic .quad was zero until the abs64 fixup wrote its address.
@@ -997,6 +1016,40 @@ class Pe
         text.appendLE((u32)r, (u32)4);
         }
 
+    // Sort n 12-byte RUNTIME_FUNCTION entries at `at` by their first word
+    // (insertion: the objects' tables come nearly sorted).
+    static void sortPdata(SectionBytes* d, u32 at, u32 n)
+        {
+        for (u32 i = (u32)1; i < n; i = i + (u32)1)
+            {
+            u32 e = at + i * (u32)12;
+            u32 key = Pe.rd32s(d, e);
+            u32 w1 = Pe.rd32s(d, e + (u32)4);
+            u32 w2 = Pe.rd32s(d, e + (u32)8);
+            u32 j = i;
+            while (j > (u32)0 && Pe.rd32s(d, at + (j - (u32)1) * (u32)12) > key)
+                {
+                u32 src = at + (j - (u32)1) * (u32)12;
+                for (u32 b = (u32)0; b < (u32)12; b = b + (u32)1)
+                    d.setByteAt(src + (u32)12 + b, d.byteAt(src + b));
+                j = j - (u32)1;
+                }
+            u32 dst = at + j * (u32)12;
+            Pe.wr32s(d, dst, key);
+            Pe.wr32s(d, dst + (u32)4, w1);
+            Pe.wr32s(d, dst + (u32)8, w2);
+            }
+        }
+    static u32 rd32s(SectionBytes* d, u32 o)
+        {
+        return (u32)d.byteAt(o) | ((u32)d.byteAt(o + (u32)1) << (u32)8) | ((u32)d.byteAt(o + (u32)2) << (u32)16) | ((u32)d.byteAt(o + (u32)3) << (u32)24);
+        }
+    static void wr32s(SectionBytes* d, u32 o, u32 v)
+        {
+        for (u32 k = (u32)0; k < (u32)4; k = k + (u32)1)
+            d.setByteAt(o + k, (u8)((v >> ((u32)8 * k)) & (u32)$FF));
+        }
+
     bool resolveFixups(SectionBytes* text, SectionBytes* data, Map* symbols, Array* dataSyms, Array* fixups)
         {
         for (u32 i = (u32)0; i < fixups.count(); i = i + (u32)1)
@@ -1068,6 +1121,20 @@ class Pe
                     data.setByteAt(f.offset() + (u32)4 + k, (u8)((hi >> ((u32)8 * k)) & (u32)$FF));
                 continue;
                 }
+            // An image-relative address in data (.pdata, .xdata): the
+            // target's RVA. Needs no base relocation either.
+            if (f.kind() == (u32)X86FIX_RVA32)
+                {
+                if (off == (Object*)0 || f.offset() + (u32)4 > data.length())
+                    {
+                    failWith(String.withCString("an image-relative address of a symbol not in the image"), f.symbol());
+                    return false;
+                    }
+                u32 rva = target + (u32)f.addend();
+                for (u32 k = (u32)0; k < (u32)4; k = k + (u32)1)
+                    data.setByteAt(f.offset() + k, (u8)((rva >> ((u32)8 * k)) & (u32)$FF));
+                continue;
+                }
             // A slot in data holding the distance from itself to the target
             // (a C switch's jump table). Relative, so a DLL needs no base
             // relocation for it.
@@ -1087,6 +1154,20 @@ class Pe
                 {
                 failWith(String.withCString("pc32 fixup past the end of text"), f.symbol());
                 return false;
+                }
+            // A thread-local's offset in the TLS template.
+            if (f.kind() == (u32)X86FIX_SECREL32)
+                {
+                Object* ts = symbols.get((Hashable*)String.withCString("__xc_tls_start"));
+                if (off == (Object*)0 || ts == (Object*)0)
+                    {
+                    failWith(String.withCString("a thread-local offset (SECREL) with no TLS template in the image:"), f.symbol());
+                    return false;
+                    }
+                u32 sr = target - (_dataRVA + ((Number*)ts).asU32()) + (u32)f.addend();
+                for (u32 k = (u32)0; k < (u32)4; k = k + (u32)1)
+                    text.setByteAt(f.offset() + k, (u8)((sr >> ((u32)8 * k)) & (u32)$FF));
+                continue;
                 }
             // Both sides carry ImageBase, so it cancels and this is RVA
             // arithmetic.
@@ -1164,6 +1245,16 @@ class Pe
                 {
                 p32(_descRVA);
                 p32(_descSz);
+                }
+            else if (i == (u32)9 && _tlsDirRVA != (u32)0)
+                {
+                p32(_tlsDirRVA);
+                p32((u32)40);
+                }
+            else if (i == (u32)3 && _pdataSz > (u32)0)
+                {
+                p32(_pdataRVA);
+                p32(_pdataSz);
                 }
             else if (i == (u32)5 && _reloc.length() > (u32)0)
                 {

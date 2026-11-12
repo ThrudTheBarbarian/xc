@@ -9,4 +9,6 @@
 #define COFF_SYM_SZ 18
 #define COFF_RELOC_SZ 10
 #define COFF_REL_ADDR64 $01
+#define COFF_REL_ADDR32NB $03
+#define COFF_REL_SECREL $0B
 #define COFF_REL_REL32 $04

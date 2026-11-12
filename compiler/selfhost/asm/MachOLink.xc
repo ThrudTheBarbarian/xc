@@ -19,6 +19,9 @@ class MachOLink
     String* _why;
     u32 _rc;           // 0 merged; 1 error (reported in why); 2 a reloc the in-house link cannot express
     Array* _gotFixups; // Arm64Fixup@ — GOT refs, resolved after the pull settles
+    Map* _slots;       // symbol -> its pointer slot's name (a data GOT entry)
+    Array* _slotOrder; // the symbols in _slots, in the order first asked for
+    Array* _unwind;    // MachOUnwindRec@, the merged image's
 
     SectionBytes* _objModInit; // the objects' constructor lists, one after another
     Array* _objModInitFix; // Arm64Fixup@ against _objModInit
@@ -27,6 +30,9 @@ class MachOLink
         {
         _rc = (u32)0;
         _gotFixups = new Array();
+        _slots = new Map();
+        _slotOrder = new Array();
+        _unwind = new Array();
         _objModInit = new SectionBytes();
         _objModInitFix = new Array();
         }
@@ -85,6 +91,38 @@ class MachOLink
     // name if it is a LOCAL definition (`l_.str` — Mach-O emits its relocs as
     // r_extern with a symtab index, but the symbol itself is non-external and
     // would clash across members).
+    // The name of a pointer slot holding `sym`'s address, made at the end of
+    // the merge (makeSlots): what an exception table's POINTER_TO_GOT and
+    // the unwind table's personality list point at. An imported symbol's
+    // slot is bound at load, a local one's rebased.
+    String* slotFor(String* sym)
+        {
+        Object* have = _slots.get((Hashable*)sym);
+        if (have != (Object*)0)
+            return (String*)have;
+        String* nm = String.withCString("__xc_got$").appending(sym);
+        _slots.set((Hashable*)sym, (Object*)nm);
+        _slotOrder.add((Object*)sym);
+        return nm;
+        }
+
+    void makeSlots(SectionBytes* mdata, Map* msyms, Array* mdataSyms, Array* mfix)
+        {
+        if (_slotOrder.count() == (u32)0)
+            return;
+        MachOLink.padArray(mdata, (u32)7);
+        for (u32 i = (u32)0; i < _slotOrder.count(); i = i + (u32)1)
+            {
+            String* sym = (String*)_slotOrder.get(i);
+            String* nm = (String*)_slots.get((Hashable*)sym);
+            msyms.set((Hashable*)nm, (Object*)Number.withU32(mdata.length()));
+            mdataSyms.add((Object*)nm);
+            mfix.add((Object*)Arm64Fixup.make(mdata.length(), (u32)FIXUP_POINTER64, sym, (u32)0));
+            for (u32 b = (u32)0; b < (u32)8; b = b + (u32)1)
+                mdata.appendByte((u8)0);
+            }
+        }
+
     static String* taggedSym(MachOSymDef* sd, u32 oi)
         {
         bool localDef = !sd.ext() && sd.where() != (u32)0;
@@ -390,6 +428,16 @@ class MachOLink
                         mfix.add((Object*)pf);
                         continue;
                         }
+                    // ARM64_RELOC_POINTER_TO_GOT, 32-bit PC-relative: an
+                    // exception table's type entry, `slot - here`.
+                    if (r.type() == (u32)7 && r.ext() != (u32)0 && r.pcrel() != (u32)0 && r.len() == (u32)2
+                        && r.symnum() < obj.symnames().count())
+                        {
+                        MachOSymDef* sd = (MachOSymDef*)obj.symdefs().get(r.symnum());
+                        mfix.add((Object*)Arm64Fixup.make(dbase + r.off(), (u32)FIXUP_PREL32,
+                                                          self.slotFor(MachOLink.taggedSym(sd, oi)), (u32)0));
+                        continue;
+                        }
                     Stdio.printf("xcc-ln-arm64: unhandled static-archive DATA relocation (type %lu, extern %lu)\n",
                                  (u32)r.type(), (u32)r.ext());
                     _why = String.withCString("unhandled data relocation");
@@ -401,9 +449,30 @@ class MachOLink
                 // S_MOD_INIT_FUNC_POINTERS section.
                 if (!mergeModInit(obj, oi))
                     return;
+                // Its unwind entries, at merged offsets, the personality by
+                // its pointer slot and the LSDA as a data symbol (the blob
+                // may yet be repartitioned).
+                Array* uw = obj.unwind();
+                for (u32 k = (u32)0; k < uw.count(); k = k + (u32)1)
+                    {
+                    MachOUnwindRec* ur = (MachOUnwindRec*)uw.get(k);
+                    MachOUnwindRec* mr = MachOUnwindRec.with(base + ur.fn(), ur.len(), ur.enc(), ur.pers(), ur.lsda());
+                    if (ur.pers() != (u32)0 && ur.pers() - (u32)1 < obj.symdefs().count())
+                        mr.setPersSym(self.slotFor(MachOLink.taggedSym((MachOSymDef*)obj.symdefs().get(ur.pers() - (u32)1), oi)));
+                    if (ur.lsda() != (u32)0)
+                        {
+                        String* ln = String.withFormat("__xc_lsda$%u$%u", oi, ur.lsda() - (u32)1);
+                        msyms.set((Hashable*)ln, (Object*)Number.withU32(dbase + ur.lsda() - (u32)1));
+                        mdataSyms.add((Object*)ln);
+                        mr.setLsdaSym(ln);
+                        }
+                    _unwind.add((Object*)mr);
+                    }
                 progress = true;
                 }
             }
+        self.makeSlots(mdata, msyms, mdataSyms, mfix);
+        MachOUnwind.setPending(_unwind.count() > (u32)0 ? _unwind : (Array*)0);
         MachOLink.selectorStubs(mtext, mdata, msyms, mdataSyms, mfix, mObjc);
         // GOT references, now that the pull has settled: a target DEFINED here
         // needs no GOT — relax `adrp x,s@GOTPAGE; ldr x,[x,s@GOTPAGEOFF]` to
@@ -706,8 +775,8 @@ class MachOLink
         for (u32 k = (u32)0; k < mfix.count(); k = k + (u32)1)
             {
             Arm64Fixup* f = (Arm64Fixup*)mfix.get(k);
-            if (f.kind() != (u32)FIXUP_POINTER64)
-                continue; // the only data-addressing kind
+            if (f.kind() != (u32)FIXUP_POINTER64 && f.kind() != (u32)FIXUP_PREL32)
+                continue; // the data-addressing kinds (PREL32: an exception table's)
             u32 nv = MachOLink.remap(moves, f.offset());
             if (nv != (u32)$FFFFFFFF)
                 f.setOffset(nv);
