@@ -845,6 +845,13 @@
         if (ivPhi.ops().count() != (u32)4 || accPhi.ops().count() != (u32)4)
             return false;
 
+        // A value the header computes from the counter and the body reads
+        // (clang's `getelementptr p, i` in the loop's condition block, #157):
+        // the vector body has no lane form of it, and the accumulator's vector
+        // update was left with no value. Such a loop stays scalar (the
+        // unroller copies it correctly).
+        if (self.vecHeaderFeedsBody(H, B, iv))
+            return false;
         _vrIvPhi = ivPhi;
         _vrAccPhi = accPhi;
         _vrGuard = guard;
@@ -857,6 +864,47 @@
         // already within 80 bytes of the arm64 frame budget.
         _vrIvStart = self.vecIvStart(ivPhi, B, defOf);
         return true;
+        }
+
+    // Whether an instruction of header H that reads the counter iv (directly or
+    // through other header instructions) has its result read in body B. The
+    // counter itself, and the header's own test, are not counted.
+    final bool vecHeaderFeedsBody(IRBlock* H, IRBlock* B, IRValue* iv)
+        {
+        Map* dep = new Map();
+        dep.set((Hashable*)iv, (Object*)iv);
+        Map* made = new Map();
+        for (u32 i = (u32)0; i < H.insns().count(); i = i + (u32)1)
+            {
+            IRInsn* x = (IRInsn*)H.insns().get(i);
+            if (x.res() == (IRValue*)0)
+                continue;
+            for (u32 k = (u32)0; k < x.ops().count(); k = k + (u32)1)
+                {
+                IROperand* o = (IROperand*)x.ops().get(k);
+                if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0 && dep.get((Hashable*)o.val()) != (Object*)0)
+                    {
+                    dep.set((Hashable*)x.res(), (Object*)x.res());
+                    made.set((Hashable*)x.res(), (Object*)x.res());
+                    break;
+                    }
+                }
+            }
+        if (made.count() == (u32)0)
+            return false;
+        for (u32 i = (u32)0; i <= B.insns().count(); i = i + (u32)1)
+            {
+            IRInsn* x = i < B.insns().count() ? (IRInsn*)B.insns().get(i) : B.term();
+            if (x == (IRInsn*)0)
+                continue;
+            for (u32 k = (u32)0; k < x.ops().count(); k = k + (u32)1)
+                {
+                IROperand* o = (IROperand*)x.ops().get(k);
+                if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0 && made.get((Hashable*)o.val()) != (Object*)0)
+                    return true;
+                }
+            }
+        return false;
         }
 
     // Classify every body instruction, returning the consistent lane type or
