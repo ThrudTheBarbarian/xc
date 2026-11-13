@@ -2156,8 +2156,12 @@ String* cPathTargetFlags(DriverOptions* d)
     String* host = String.withCString("arm64");
 #endif
     String* a = d.arch();
+    // arm64 Linux: atomics inline (-mno-outline-atomics). Outlined, they are
+    // calls to __aarch64_ldadd4_acq_rel and its kin, which only GCC's static
+    // libgcc.a defines, and xcc's link takes the shared libgcc_s.
+    String* atom = a.equals(String.withCString("arm64-linux")) ? String.withCString(" -mno-outline-atomics") : String.withCString("");
     if (a.equals(host))
-        return String.withCString("");
+        return atom;
     // The row's clang target (the target table); its C headers from a root
     // for that target: musl's for x86-64 Linux, mingw's for win64, glibc's
     // (usr/include, copied from an arm64 Linux machine) for arm64 Linux.
@@ -2199,6 +2203,7 @@ String* cPathTargetFlags(DriverOptions* d)
     f.append(triple);
     f.appendCString(" --sysroot ");
     f.append(root);
+    f.append(atom);
     return f;
 }
 
