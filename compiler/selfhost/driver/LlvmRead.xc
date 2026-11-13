@@ -2146,7 +2146,8 @@ class LlvmReader
             }
         String* elem = irOf(t);
         IRValue* ix = (IRValue*)0;
-        // A field of a struct: `%struct.X, ptr p, i32 0, i32 k`.
+        // A field of a struct: `%struct.X, ptr p, i32 0, i32 k`, or of
+        // element [i] of an array of them, `%struct.X, ptr p, i64 %i, i32 k`.
         if (elem != (String*)0 && elem.hasPrefix(String.withCString("Agg(")) && idx.count() == (u32)2
             && _fieldK >= (i64)0)
             {
@@ -2158,6 +2159,11 @@ class LlvmReader
                 }
             String* ft = L.typeAt((u32)_fieldK);
             IRValue* sb = asPtrTo(base, elem);
+            // The first index steps over whole structs (`T, ptr p, i64 %i,
+            // i32 k` is p[i].k): element [i] first, unless it is 0.
+            if (((Number*)constK.get((u32)0)).asI64() != (i64)0)
+                sb = emit(String.withCString("ElementAddr"), ptrTo(elem), IROperand.useVal(sb),
+                          IROperand.useVal((IRValue*)idx.get((u32)0)), (IROperand*)0);
             IRValue* fa = emit(String.withCString("FieldAddr"), ptrTo(ft), IROperand.useVal(sb),
                                IROperand.immI(_fieldK, String.withCString("U8")), (IROperand*)0);
             return fa;
