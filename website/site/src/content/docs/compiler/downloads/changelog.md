@@ -3,6 +3,24 @@ title: ChangeLog
 description: Release notes for the xcc toolchain, with bug fixes and new features per version.
 ---
 
+## Version 1.0.2 — fixes
+
+Everything since 1.0.1.
+
+### Fixed
+
+- **C on x86-64: a float select whose arm is a multiply-add gave wrong
+  results.** In a copy with FMA (the AVX2 copy, which `-msimd=auto` runs on
+  any AVX2 CPU), `c ? 0.0f - 2.0f * v : 2.0f * v` fused the multiply into the
+  add that the select computes after its branch, and the branch then read a
+  product that was never made. Wrong from 0.9.7 on, in C only; xc code under
+  the default `:goal(accuracy)` fuses nothing.
+
+### Work towards a C++ front end
+
+- Loops over a vector of structs, and loops reading their bound through the
+  object each pass, become blocks. Not yet a supported route.
+
 ## Version 1.0.1 — fixes
 
 Everything since 1.0.
