@@ -264,6 +264,7 @@ class ParVulkan
     static vkCmdPipelineBarrier_t* _barrier;
     static bool _discrete;      // the kernel's buffers in the GPU's memory, copied through staging
     static bool _int64;         // the device has 64-bit integers (shaderInt64); V3D has not
+    static bool _float64;       // the device has doubles (shaderFloat64); V3D has not
     static bool _int8Storage;   // the device writes 8-bit integers in storage buffers (storageBuffer8BitAccess)
     static String* _identity;   // the chosen device, for auto's hardware key (ParDevice)
     static vkCreateFence_t* _createFence;
@@ -523,6 +524,7 @@ class ParVulkan
         u8* has = (u8*)calloc((u64)1, (u64)220);
         feats(pd, (pointer)has);
         _int64 = *(u32*)(pointer)(has + 160) != (u32)0;
+        _float64 = *(u32*)(pointer)(has + 156) != (u32)0;
         u8* on = (u8*)calloc((u64)1, (u64)220);
         _vk32(on, (u32)160, *(u32*)(pointer)(has + 160));
         _vk32(on, (u32)156, *(u32*)(pointer)(has + 156));
@@ -1246,9 +1248,48 @@ class ParVulkan
             }
         else if (!_int64)
             return "its GPU version needs 64-bit integers, which this Vulkan device does not have";
+        // A module that declares doubles or 64-bit integers anyway (a C or C++
+        // block over double in the 32-bit span form) is refused by a device
+        // without them: Mesa's V3D compiler aborts the program on one (#185).
+        if (!_float64 && ParVulkan.declares(src, (u32)10))
+            return "its GPU version needs doubles, which this Vulkan device does not have";
+        if (!_int64 && ParVulkan.declares(src, (u32)11))
+            return "its GPU version needs 64-bit integers, which this Vulkan device does not have";
         if (ParVulkan.bytes8(src) && !_int8Storage)
             return "its GPU version writes bytes, which this Vulkan device cannot (no 8-bit storage)";
         return (u8*)0;
+        }
+
+    // Whether the kernel's SPIR-V module declares capability cap (OpCapability,
+    // which a module lists straight after its five-word header: Float64 = 10,
+    // Int64 = 11). The words follow the header line's NUL, 4-byte aligned;
+    // the header's `spirv=<n>` gives their count.
+    static bool declares(u8* src, u32 cap)
+        {
+        u32 at = (u32)0;
+        u64 words = (u64)0;
+        while (src[at] != (u8)0)
+            {
+            if (src[at] == (u8)'s' && src[at + (u32)1] == (u8)'p' && src[at + (u32)5] == (u8)'=')
+                {
+                u32 k = at + (u32)6;
+                words = (u64)ParDevice.num(src, &k);
+                }
+            at = at + (u32)1;
+            }
+        at = (at + (u32)4) & ~(u32)3;
+        u32* w = (u32*)(pointer)(src + at);
+        u64 i = (u64)5;
+        while (i + (u64)1 < words && (w[i] & (u32)0xFFFF) == (u32)17)
+            {
+            if (w[i + (u64)1] == cap)
+                return true;
+            u32 len = w[i] >> 16;
+            if (len == (u32)0)
+                return false;
+            i = i + (u64)len;
+            }
+        return false;
         }
 
     static bool span32(u8* src)
