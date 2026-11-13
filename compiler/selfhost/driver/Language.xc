@@ -119,7 +119,10 @@ class PtrIv
     i64 _step;          // bytes a step
     u32 _stepLine;      // the line of its step
     u32 _line;          // the line of its phi
-    String* _elem;      // the type loaded and stored through it
+    String* _elem;      // the type loaded and stored through it (a packed struct for a struct's fields)
+    Array* _fieldLines; // Number@: for a struct, the lines of its field addresses (getelementptr i8, ptr p, i64 C)
+    Array* _fieldIdx;   // Number@: the struct field each of them is
+    i64 _field0;        // the field at offset 0 read through p itself, else -1
 
     String* name(void)   { return _name; }
     String* start(void)  { return _start; }
@@ -279,6 +282,7 @@ class Languages
         {
         Array* lines = text.splitOnByte((u8)10);
         Map* nounwind = Languages.nounwindNames(lines);
+        Array* structs = new Array();   // String@: the packed structs pointerLoops named, %xcst.<index>
         String* out = new String();
         u32 i = 0;
         while (i < lines.count())
@@ -303,7 +307,7 @@ class Languages
                 Languages.elementOffsets(lines, i + 1, end);
                 Languages.byteCounts(lines, i + 1, end);
                 Languages.counted(lines, i + 1, end);
-                Languages.pointerLoops(lines, i + 1, end);
+                Languages.pointerLoops(lines, i + 1, end, structs);
                 Languages.downCounts(lines, i + 1, end);
                 for (u32 k = i; k <= end && k < lines.count(); k = k + 1)
                     {
@@ -322,7 +326,12 @@ class Languages
                 }
             i = end + 1;
             }
-        return out;
+        // Before any use: the reader sizes a named type where it meets it.
+        String* defs = new String();
+        for (u32 k = 0; k < structs.count(); k = k + 1)
+            defs.appendFormat("%%xcst.%u = type %s\n", k, ((String*)structs.get(k)).cString());
+        defs.append(out);
+        return defs;
         }
 
     // Whether `@name` is the C++ standard library's (namespace std): a
@@ -1206,7 +1215,7 @@ class Languages
     // at [i]. Other pointer phis of the header that step with it by their own
     // constant are written the same way. A line that grows is several lines
     // joined by newlines.
-    static void pointerLoops(Array* lines, u32 from, u32 end)
+    static void pointerLoops(Array* lines, u32 from, u32 end, Array* structs)
         {
         u32 made = 0;
         u32 blockStart = from;
@@ -1294,6 +1303,24 @@ class Languages
             Array* all = new Array();
             all.add((Object*)iv);
             all.addAll(others);
+            // A struct element by a name of its own (the reader takes named
+            // struct types).
+            for (u32 k = 0; k < all.count(); k = k + 1)
+                {
+                PtrIv* q = (PtrIv*)all.get(k);
+                if (!q._elem.hasPrefix(String.withCString("<{")))
+                    continue;
+                u32 si = String.notFound();
+                for (u32 s2 = 0; s2 < structs.count() && si == String.notFound(); s2 = s2 + 1)
+                    if (((String*)structs.get(s2)).equals(q._elem))
+                        si = s2;
+                if (si == String.notFound())
+                    {
+                    si = structs.count();
+                    structs.add((Object*)q._elem);
+                    }
+                q._elem = String.withFormat("%%xcst.%u", si);
+                }
             // The header's last phi, found before ours are taken out.
             u32 lastPhi = blockStart;
             for (u32 k = blockStart; k < i; k = k + 1)
@@ -1308,8 +1335,22 @@ class Languages
             for (u32 k = 0; k < all.count(); k = k + 1)
                 {
                 PtrIv* q = (PtrIv*)all.get(k);
-                geps.appendFormat("\n  %s = getelementptr inbounds %s, ptr %s, i64 %s", q.name().cString(), q.elem().cString(),
+                // A struct: element [i] (as C's a[i]), then each field of it
+                // (as C's a[i].f), the field at offset 0 being p itself.
+                String* el = q._fieldLines != (Array*)0 ? q.name().appending(String.withCString(".xce")) : q.name();
+                geps.appendFormat("\n  %s = getelementptr inbounds %s, ptr %s, i64 %s", el.cString(), q.elem().cString(),
                                   q.start().cString(), idx.cString());
+                if (q._fieldLines != (Array*)0)
+                    geps.appendFormat("\n  %s = getelementptr inbounds %s, ptr %s, i32 0, i32 %ld", q.name().cString(), q.elem().cString(),
+                                      el.cString(), q._field0 >= 0 ? q._field0 : (i64)0);
+                for (u32 f = 0; q._fieldLines != (Array*)0 && f < q._fieldLines.count(); f = f + 1)
+                    {
+                    u32 fl = ((Number*)q._fieldLines.get(f)).asU32();
+                    String* ft = ((String*)lines.get(fl)).trimmed();
+                    String* fn = ft.substringBytes(0, Languages.byteFrom(ft, (u8)' ', 0));
+                    lines.set(fl, (Object*)String.withFormat("  %s = getelementptr inbounds %s, ptr %s, i32 0, i32 %u", fn.cString(), q.elem().cString(),
+                                                             el.cString(), ((Number*)q._fieldIdx.get(f)).asU32()));
+                    }
                 }
             // The counter's phi after the header's last phi (in its place, when
             // it was ours). Each pointer is made at the top of the body, where
@@ -2227,9 +2268,16 @@ class Languages
                 if (sl == String.notFound())
                     continue;
                 String* elem = Languages.accessType(lines, from, end, name);
-                if (elem == (String*)0 || Languages.sizeOf(elem) != step)
-                    return (PtrIv*)0;
                 PtrIv* r = new PtrIv();
+                r._field0 = -1;
+                if (elem == (String*)0 || Languages.sizeOf(elem) != step)
+                    {
+                    // A struct's fields, each read or written at its byte
+                    // offset (an iterator over a vector of structs).
+                    elem = Languages.structThrough(lines, from, end, name, step, sl, r);
+                    if (elem == (String*)0)
+                        return (PtrIv*)0;
+                    }
                 r._name = name;
                 r._start = (String*)vals.get(1 - w);
                 r._pre = (String*)from2.get(1 - w);
@@ -2243,6 +2291,158 @@ class Languages
             return (PtrIv*)0;
             }
         return (PtrIv*)0;
+        }
+
+    // The packed struct, `step` bytes, whose fields a loop reads and writes
+    // through p: each `load T, ptr p` / `store T v, ptr p` (offset 0) or
+    // through `%f = getelementptr [inbounds] i8, ptr p, i64 C` used only by
+    // loads and stores of one scalar type; padding as [k x i8]. p is used
+    // otherwise only by its phi, its step (line sl) and the test. The field
+    // lines and indices go into r; 0 where the accesses are no such struct.
+    static String* structThrough(Array* lines, u32 from, u32 end, String* p, i64 step, u32 sl, PtrIv* r)
+        {
+        if (step <= 0 || step > 256)
+            return (String*)0;
+        Array* offs = new Array();      // Number@ (i64): a field's offset
+        Array* tys = new Array();       // String@: its type
+        Array* fLines = new Array();    // Number@: field-address lines
+        Array* fOffs = new Array();     // Number@: their offsets
+        u32 accesses = 0;
+        bool direct = false;
+        String* lk = String.withFormat(", ptr %s", p.cString());
+        for (u32 i = from; i < end; i = i + 1)
+            {
+            String* t = ((String*)lines.get(i)).trimmed();
+            u32 at = t.byteIndexOf(lk);
+            if (at == String.notFound() || i == sl)
+                continue;
+            u32 e = at + lk.byteLength();
+            if (e < t.byteLength() && LlvmName.isNameByte(t.byteAt(e)))
+                continue;
+            accesses = accesses + 1;
+            String* one = (String*)0;
+            i64 off = 0;
+            u32 ld = t.byteIndexOf(String.withCString(" = load "));
+            u32 gp = t.byteIndexOf(String.withCString(" = getelementptr "));
+            if (ld != String.notFound() && ld < at)
+                {
+                one = (String*)Languages.words(t.substringBytes(ld + 8, at - ld - 8).trimmed()).get(0);
+                direct = true;
+                }
+            else if (t.hasPrefix(String.withCString("store ")))
+                {
+                one = (String*)Languages.words(t.substringFromByte(6)).get(0);
+                direct = true;
+                }
+            else if (gp != String.notFound() && gp < at)
+                {
+                String* g = t.substringBytes(gp + 17, at - gp - 17).trimmed();
+                if (g.hasPrefix(String.withCString("inbounds ")))
+                    g = g.substringFromByte(9);
+                if (g.hasPrefix(String.withCString("nuw ")))
+                    g = g.substringFromByte(4);
+                if (!g.equals(String.withCString("i8")))
+                    return (String*)0;
+                Array* rest = t.substringFromByte(e).splitOnByte((u8)',');
+                if (rest.count() < 2)
+                    return (String*)0;
+                Array* kw = Languages.words(((String*)rest.get(1)).trimmed());
+                if (kw.count() != 2 || !((String*)kw.get(0)).equals(String.withCString("i64")))
+                    return (String*)0;
+                off = Languages.intOf((String*)kw.get(1));
+                if (off <= 0 || off >= step)
+                    return (String*)0;
+                String* fname = t.substringBytes(0, Languages.byteFrom(t, (u8)' ', 0));
+                one = Languages.accessType(lines, from, end, fname);
+                // The field's address is used only by its loads and stores.
+                u32 acc = 0;
+                String* fk = String.withFormat(", ptr %s", fname.cString());
+                for (u32 k = from; k < end; k = k + 1)
+                    {
+                    String* m = (String*)lines.get(k);
+                    u32 fa = m.byteIndexOf(fk);
+                    if (fa != String.notFound() && !(fa + fk.byteLength() < m.byteLength() && LlvmName.isNameByte(m.byteAt(fa + fk.byteLength()))))
+                        acc = acc + 1;
+                    }
+                if (one == (String*)0 || Languages.uses(lines, from, end, fname) != acc + 1)
+                    return (String*)0;
+                fLines.add((Object*)Number.with(i));
+                fOffs.add((Object*)Number.withI64(off));
+                }
+            else
+                return (String*)0;
+            i64 sz = Languages.sizeOf(one);
+            if (sz <= 0 || off + sz > step || off % sz != 0)
+                return (String*)0;
+            // One type per offset; fields apart.
+            bool have = false;
+            for (u32 k = 0; k < offs.count(); k = k + 1)
+                {
+                i64 o2 = ((Number*)offs.get(k)).asI64();
+                String* t2 = (String*)tys.get(k);
+                if (o2 == off)
+                    {
+                    if (!t2.equals(one))
+                        return (String*)0;
+                    have = true;
+                    }
+                else if (off < o2 + Languages.sizeOf(t2) && o2 < off + sz)
+                    return (String*)0;
+                }
+            if (!have)
+                {
+                offs.add((Object*)Number.withI64(off));
+                tys.add((Object*)one);
+                }
+            }
+        // p: its phi, its step, the test, and the accesses.
+        if (offs.count() == 0 || Languages.uses(lines, from, end, p) != accesses + 3)
+            return (String*)0;
+        // The struct, fields by offset, padding between.
+        String* out = String.withCString("<{ ");
+        Map* index = new Map();     // offset (as a string) -> field index
+        i64 at2 = 0;
+        u32 nf = 0;
+        bool first = true;
+        while (true)
+            {
+            i64 best = -1;
+            u32 bk = 0;
+            for (u32 k = 0; k < offs.count(); k = k + 1)
+                {
+                i64 o2 = ((Number*)offs.get(k)).asI64();
+                if (o2 >= at2 && (best < 0 || o2 < best))
+                    {
+                    best = o2;
+                    bk = k;
+                    }
+                }
+            if (best < 0)
+                break;
+            if (best > at2)
+                {
+                out.appendFormat("%s[%ld x i8]", first ? "" : ", ", best - at2);
+                first = false;
+                nf = nf + 1;
+                }
+            out.appendFormat("%s%s", first ? "" : ", ", ((String*)tys.get(bk)).cString());
+            first = false;
+            index.set((Hashable*)String.withFormat("%ld", best), (Object*)Number.with(nf));
+            nf = nf + 1;
+            at2 = best + Languages.sizeOf((String*)tys.get(bk));
+            }
+        if (at2 < step)
+            out.appendFormat(", [%ld x i8]", step - at2);
+        out.appendCString(" }>");
+        r._fieldLines = fLines;
+        r._fieldIdx = new Array();
+        for (u32 k = 0; k < fOffs.count(); k = k + 1)
+            r._fieldIdx.add(index.get((Hashable*)String.withFormat("%ld", ((Number*)fOffs.get(k)).asI64())));
+        Number* z = (Number*)index.get((Hashable*)String.withCString("0"));
+        r._field0 = direct && z != (Number*)0 ? (i64)z.asU32() : -1;
+        if (direct && z == (Number*)0)
+            return (String*)0;
+        return out;
         }
 
     // The one type every load and store through p has (`load T, ptr p`,
