@@ -5,6 +5,21 @@ description: Previous xcc and xtc toolchain releases, kept for archival referenc
 
 These archives are kept so that an existing build can be reproduced byte-for-byte with the version it was compiled with. For new work, use the [most recent release](/compiler/downloads/). The [ChangeLog](/compiler/downloads/changelog/) lists what has changed since.
 
+## xcc 1.0
+
+| Platform | Download | Size |
+| --- | --- | --- |
+| macOS (Apple silicon) | [xcc-osx-1.0.tar.bz2](/downloads/xcc-osx-1.0.tar.bz2) | 17.9 MB |
+| Linux (x86_64) | [xcc-linux-1.0.tar.bz2](/downloads/xcc-linux-1.0.tar.bz2) | 11.8 MB |
+| Linux (arm64, Raspberry Pi 5) | [xcc-linux-arm64-1.0.tar.bz2](/downloads/xcc-linux-arm64-1.0.tar.bz2) | 15.0 MB |
+| Windows (x64) | [xcc-win64-1.0.zip](/downloads/xcc-win64-1.0.zip) | 15.3 MB |
+| arm9 sysroot (any host) | [xcc-arm9-sysroot-0.9.5.tar.bz2](/downloads/xcc-arm9-sysroot-0.9.5.tar.bz2) | 830 KB |
+| xcd, the par daemon (macOS) | [xcd-osx-1.0.tar.bz2](/downloads/xcd-osx-1.0.tar.bz2) | 901 KB |
+| xcd, the par daemon (Linux x86_64) | [xcd-linux-1.0.tar.bz2](/downloads/xcd-linux-1.0.tar.bz2) | 841 KB |
+| xcd, the par daemon (Windows x64) | [xcd-win64-1.0.zip](/downloads/xcd-win64-1.0.zip) | 956 KB |
+| UXKit GTK 4 library (Linux x86_64) | [xcc-uxgtk-linux-1.0.tar.bz2](/downloads/xcc-uxgtk-linux-1.0.tar.bz2) | 113 KB |
+| UXKit library (macOS arm64, Windows x64, Linux x86_64 and arm64, web) | [xcc-uxkit-1.0.tar.bz2](/downloads/xcc-uxkit-1.0.tar.bz2) | 4.0 MB |
+
 ## xcc 0.9.7
 
 | Platform | Download | Size |
