@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<PhoronixTestSuite>
+  <Downloads>
+    <Package>
+      <URL>https://compile-xc.org/downloads/xcc-linux-1.0.2.tar.bz2</URL>
+      <SHA256>229de55cb6f19660f5bdb82895ed5d0232d350ed34d4802c918fc570e4a26848</SHA256>
+      <FileName>xcc-linux-1.0.2.tar.bz2</FileName>
+      <FileSize>11889301</FileSize>
+      <PlatformSpecific>Linux</PlatformSpecific>
+      <ArchitectureSpecific>x86_64</ArchitectureSpecific>
+    </Package>
+    <Package>
+      <URL>https://compile-xc.org/downloads/xcc-linux-arm64-1.0.2.tar.bz2</URL>
+      <SHA256>a00c906dbd223eed55b58f6bbcc3bf964a8b3f0bbfb327c6a4256a216bff64ce</SHA256>
+      <FileName>xcc-linux-arm64-1.0.2.tar.bz2</FileName>
+      <FileSize>15195553</FileSize>
+      <PlatformSpecific>Linux</PlatformSpecific>
+      <ArchitectureSpecific>aarch64</ArchitectureSpecific>
+    </Package>
+    <Package>
+      <URL>https://compile-xc.org/downloads/xcc-bench-sources-1.0.tar.bz2</URL>
+      <SHA256>0d725f9a7cdb502f027a76ff8052da996afff7366c97061c84129c34652cfe39</SHA256>
+      <FileName>xcc-bench-sources-1.0.tar.bz2</FileName>
+      <FileSize>205220</FileSize>
+    </Package>
+  </Downloads>
+</PhoronixTestSuite>

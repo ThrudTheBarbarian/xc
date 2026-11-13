@@ -25,7 +25,7 @@ because a timing between programs that compute different things means nothing.
 
 - A 64-bit x86-64 Ubuntu. Tested on 26.04. A GPU is optional; without a
   usable one the GPU modes are skipped, and the collector says why.
-- xcc 1.0.1 for Linux, from the [downloads](/compiler/downloads/) page.
+- xcc 1.0.2 for Linux, from the [downloads](/compiler/downloads/) page.
 - Python 3, which Ubuntu ships, for the collector.
 - For the language suite only: `clang`, `clang++`, `g++`, and `swiftc`, plus
   GNUstep for the Objective-C half. A toolchain that is absent is skipped, not
@@ -38,14 +38,14 @@ with bzip2, which a minimal Ubuntu may not have; if `tar` says it cannot run
 `bzip2`, install it first with `sudo apt-get install -y bzip2`.
 
 ```bash
-tar xjf xcc-linux-1.0.1.tar.bz2
-export PATH="$PWD/xcc-linux-1.0.1/bin:$PATH"
+tar xjf xcc-linux-1.0.2.tar.bz2
+export PATH="$PWD/xcc-linux-1.0.2/bin:$PATH"
 xcc -v
 ```
 
 The compiler finds its libraries relative to its own binary, so the directory
 can be moved anywhere. Put the `export` in your shell profile to keep it. The
-collector also finds a compiler installed as `/opt/xcc/1.0.1/`, with no `PATH`
+collector also finds a compiler installed as `/opt/xcc/1.0.2/`, with no `PATH`
 change.
 
 ### Set up the GPU (optional)
@@ -150,8 +150,8 @@ timing is refused.
 ### With the Phoronix Test Suite
 
 The par suite is also a [Phoronix Test Suite](https://www.phoronix-test-suite.com/)
-test profile, `benchmark/pts/xc-par-2.0.1/`, and the C programs are another,
-`benchmark/pts/xc-c-2.0.1/`. Each downloads the published Linux compiler for
+test profile, `benchmark/pts/xc-par-2.0.2/`, and the C programs are another,
+`benchmark/pts/xc-c-2.0.2/`. Each downloads the published Linux compiler for
 the machine, x86-64 or arm64 (a Raspberry Pi 5, an Arm server), and the
 benchmark sources. The par profile builds the five programs and offers each one
 on one CPU thread, every CPU thread, the GPU, every GPU, every device, or
@@ -169,8 +169,8 @@ profile).
 
 ```bash
 mkdir -p ~/.phoronix-test-suite/test-profiles/local
-cp -R benchmark/pts/xc-par-2.0.1 ~/.phoronix-test-suite/test-profiles/local/
-phoronix-test-suite benchmark local/xc-par-2.0.1
+cp -R benchmark/pts/xc-par-2.0.2 ~/.phoronix-test-suite/test-profiles/local/
+phoronix-test-suite benchmark local/xc-par-2.0.2
 ```
 
 ## 4. Comparing against other languages
