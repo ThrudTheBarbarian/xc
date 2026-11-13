@@ -1,14 +1,14 @@
 # Phoronix Test Suite profiles
 
 Two profiles, each pinned to one release's published archives by SHA-256 in
-its `downloads.xml`. The current versions are for xcc 1.0, on x86-64 Linux
+its `downloads.xml`. The current versions are for xcc 1.0.1, on x86-64 Linux
 and on arm64 Linux (a Raspberry Pi 5, an Arm server): each downloads the
 compiler for the machine it runs on.
 
 | profile | runs | pins |
 |---|---|---|
-| `xc-par-2.0.0` | the par suite, written in xc | `xcc-linux-1.0` or `xcc-linux-arm64-1.0`, `xcc-bench-sources-1.0` |
-| `xc-c-2.0.0` | plain C programs, xcc against GCC and Clang | `xcc-linux-1.0` or `xcc-linux-arm64-1.0`, `xcc-c-bench-sources-1.0` |
+| `xc-par-2.0.1` | the par suite, written in xc | `xcc-linux-1.0.1` or `xcc-linux-arm64-1.0.1`, `xcc-bench-sources-1.0` |
+| `xc-c-2.0.1` | plain C programs, xcc against GCC and Clang | `xcc-linux-1.0.1` or `xcc-linux-arm64-1.0.1`, `xcc-c-bench-sources-1.0` |
 
 On arm64, GCC and Clang build with `-mcpu=native` where x86-64 uses
 `-march=native`, which is why the build options are named "native CPU".
@@ -16,7 +16,7 @@ On arm64, GCC and Clang build with `-mcpu=native` where x86-64 uses
 The older versions (`xc-par-1.0.0` for 0.8, `xc-c-1.0.0` for 0.87.3, both 1.1.0s
 for 0.89, both 1.2.0s for 0.9, both 1.3.0s for 0.9.1, both 1.4.0s for 0.9.2,
 both 1.5.0s for 0.9.3, both 1.6.0s for 0.9.4, both 1.7.0s for 0.9.5, both
-1.8.0s for 0.9.5.1, both 1.9.0s for 0.9.7) stay, and so do the archives they pin, so a result made
+1.8.0s for 0.9.5.1, both 1.9.0s for 0.9.7, both 2.0.0s for 1.0) stay, and so do the archives they pin, so a result made
 with them can still be checked.
 
 ## xc-par: the par suite
@@ -40,8 +40,8 @@ A run is refused when the checksum is wrong, or when a GPU mode ran on the CPU
 or "tiles across" the devices of a set.
 
     mkdir -p ~/.phoronix-test-suite/test-profiles/local
-    cp -R xc-par-2.0.0 ~/.phoronix-test-suite/test-profiles/local/
-    phoronix-test-suite benchmark local/xc-par-2.0.0
+    cp -R xc-par-2.0.1 ~/.phoronix-test-suite/test-profiles/local/
+    phoronix-test-suite benchmark local/xc-par-2.0.1
 
 ## xc-c: the C programs
 
@@ -61,8 +61,8 @@ builds. The sources archive holds only the C files (the OpenMP copies in
 `openmp/`).
 
     mkdir -p ~/.phoronix-test-suite/test-profiles/local
-    cp -R xc-c-2.0.0 ~/.phoronix-test-suite/test-profiles/local/
-    phoronix-test-suite benchmark local/xc-c-2.0.0
+    cp -R xc-c-2.0.1 ~/.phoronix-test-suite/test-profiles/local/
+    phoronix-test-suite benchmark local/xc-c-2.0.1
 
 ## One combination, unattended
 
@@ -70,9 +70,9 @@ builds. The sources archive holds only the C files (the OpenMP copies in
 without its version:
 
     PRESET_OPTIONS_VALUES="xc-par.bench=mandel_deep;xc-par.device=gpu" \
-        phoronix-test-suite batch-run local/xc-par-2.0.0
+        phoronix-test-suite batch-run local/xc-par-2.0.1
     PRESET_OPTIONS_VALUES="xc-c.bench=mandelbrot;xc-c.build=xcc-par-gpu;xc-c.size=16" \
-        phoronix-test-suite batch-run local/xc-c-2.0.0
+        phoronix-test-suite batch-run local/xc-c-2.0.1
 
 ## A new release
 
