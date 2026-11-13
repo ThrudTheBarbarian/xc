@@ -20,7 +20,7 @@ cross-build native binaries for every target with **no other toolchain installed
 | xcd, the par daemon (macOS) | [xcd-osx-1.0.1.tar.bz2](/downloads/xcd-osx-1.0.1.tar.bz2) | 922 KB |
 | xcd, the par daemon (Linux x86_64) | [xcd-linux-1.0.1.tar.bz2](/downloads/xcd-linux-1.0.1.tar.bz2) | 909 KB |
 | xcd, the par daemon (Windows x64) | [xcd-win64-1.0.1.zip](/downloads/xcd-win64-1.0.1.zip) | 979 KB |
-| UXKit GTK 4 library (Linux x86_64) | [xcc-uxgtk-linux-1.0.1.tar.bz2](/downloads/xcc-uxgtk-linux-1.0.1.tar.bz2) | 113 KB |
+| UXKit GTK 4 library (Linux x86_64) | [xcc-uxgtk-linux-1.0.1.tar.bz2](/downloads/xcc-uxgtk-linux-1.0.1.tar.bz2) | 116 KB |
 | UXKit library (macOS arm64, Windows x64, Linux x86_64 and arm64, web) | [xcc-uxkit-1.0.1.tar.bz2](/downloads/xcc-uxkit-1.0.1.tar.bz2) | 4.0 MB |
 
 Every archive contains the same compiler. Each host build cross-compiles to **all**
