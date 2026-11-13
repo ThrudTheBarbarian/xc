@@ -43,6 +43,7 @@ class LlvmReader
     u32 _fileId;
     Map* _locs;             // "!N" -> Number@ line << 16 | column, from the DILocations
     Map* _structs;          // "%struct.X" -> "Agg(<layout id>)"
+    Map* _packedIds;        // layout id -> 1 for a packed struct (`<{ ... }>`): no padding, aligned 1
     bool _cabiAll;          // every function through the C ABI (clang's object calls them, or they its)
     bool _split;            // clang compiles the rest: globals are its, and a function not read stays its
     bool _fuseMulAdd;       // llvm.fmuladd is fused (arm64), as GCC and clang fuse C there
@@ -72,6 +73,7 @@ class LlvmReader
         _retTy = new Map();
         _defined = new Map();
         _structs = new Map();
+        _packedIds = new Map();
         _declOf = new Map();
         _readFns = new Array();
         _unread = new Array();
@@ -710,6 +712,11 @@ class LlvmReader
         u32 a = (u32)1;
         if (L.isArray())
             return alignOf(L.elemType());
+        u32 aid = (u32)0;
+        for (u32 k = (u32)4; k < irT.byteLength() && irT.byteAt(k) >= (u8)'0' && irT.byteAt(k) <= (u8)'9'; k = k + (u32)1)
+            aid = aid * (u32)10 + (u32)(irT.byteAt(k) - (u8)'0');
+        if (_packedIds.get((Hashable*)Number.withU32(aid)) != (Object*)0)
+            return (u32)1;
         for (u32 i = (u32)0; i < L.fieldCount(); i = i + (u32)1)
             {
             u32 fa = alignOf(L.typeAt(i));
@@ -719,12 +726,17 @@ class LlvmReader
         return a;
         }
 
-    // `%struct.X = type { T, T, ... }`: a layout with C's offsets.
+    // `%struct.X = type { T, T, ... }`: a layout with C's offsets. A packed
+    // one, `<{ T, T, ... }>` (`#pragma pack(1)`, `__attribute__((packed))`):
+    // each field right after the one before, the whole aligned 1.
     void readStruct(String* l)
         {
         at(l);
         String* name = word();
-        if (!eat("=") || !eat("type") || !eat("{"))
+        if (!eat("=") || !eat("type"))
+            return;
+        bool packed = eat("<{");
+        if (!packed && !eat("{"))
             return;
         IRLayout* L = IRLayout.with((u32)0, (u32)1);
         u32 off = (u32)0;
@@ -744,7 +756,7 @@ class LlvmReader
                 it = irOf(ft);
             if (it == (String*)0 || it.equals(String.withCString("Void")))
                 return;     // not read: its uses fail where they are
-            u32 a = alignOf(it);
+            u32 a = packed ? (u32)1 : alignOf(it);
             if (a > maxA)
                 maxA = a;
             off = (off + a - (u32)1) / a * a;
@@ -755,6 +767,8 @@ class LlvmReader
         off = (off + maxA - (u32)1) / maxA * maxA;
         L.setSize(off);
         u32 id = _m.addLayout(L);
+        if (packed)
+            _packedIds.set((Hashable*)Number.withU32(id), (Object*)Number.withU32((u32)1));
         _structs.set((Hashable*)name, (Object*)String.withFormat("Agg(%u)", id));
         }
 
@@ -2099,11 +2113,13 @@ class LlvmReader
         if (base == (IRValue*)0)
             return (IRValue*)0;
         Array* idx = new Array();
+        Array* constK = new Array();   // per index: its constant value, or -1
         _fieldK = (i64)0 - (i64)1;
         while (eat(","))
             {
-            // The second index of a struct's GEP is a constant field number.
-            if (idx.count() == (u32)1)
+            // The second index of a struct's GEP is a constant field number;
+            // so is the last of a field in an array of structs.
+            i64 kc = (i64)0 - (i64)1;
                 {
                 u32 save = _p;
                 String* it = llType();
@@ -2116,7 +2132,9 @@ class LlvmReader
                     i64 k = (i64)0;
                     for (u32 q = nb; q < _p; q = q + (u32)1)
                         k = k * (i64)10 + (i64)(_s.byteAt(q) - (u8)'0');
-                    _fieldK = k;
+                    kc = k;
+                    if (idx.count() == (u32)1)
+                        _fieldK = k;
                     }
                 _p = save;
                 }
@@ -2124,6 +2142,7 @@ class LlvmReader
             if (i == (IRValue*)0)
                 return (IRValue*)0;
             idx.add((Object*)i);
+            constK.add((Object*)Number.withI64(kc));
             }
         String* elem = irOf(t);
         IRValue* ix = (IRValue*)0;
@@ -2154,6 +2173,45 @@ class LlvmReader
             // element; the GEP into the row then indexes from there.
             Array* dims = new Array();
             elem = arrayLeaf(t, dims);
+            // A field of an element of an array of structs (`[N x %struct.S],
+            // ptr p, i64 0, i64 i, i32 k`): the element's address, then the
+            // field's.
+            i64 lastK = constK.count() > (u32)0 ? ((Number*)constK.get(constK.count() - (u32)1)).asI64() : (i64)-1;
+            if (elem != (String*)0 && elem.hasPrefix(String.withCString("Agg(")) && idx.count() == dims.count() + (u32)2
+                && lastK >= (i64)0 && !layoutOf(elem).isArray())
+                {
+                IRLayout* SL = layoutOf(elem);
+                if ((u32)lastK >= SL.fieldCount())
+                    {
+                    fail("a getelementptr past a struct's fields");
+                    return (IRValue*)0;
+                    }
+                idx.removeLast();
+                IRValue* ea = (IRValue*)0;
+                for (u32 l = (u32)1; l < idx.count(); l = l + (u32)1)
+                    {
+                    IRValue* il = (IRValue*)idx.get(l);
+                    i64 stride = (i64)1;
+                    for (u32 d = l; d < dims.count(); d = d + (u32)1)
+                        stride = stride * ((Number*)dims.get(d)).asI64();
+                    IRValue* term = il;
+                    if (stride != (i64)1)
+                        term = emit(String.withCString("Mul"), il.ty(), IROperand.useVal(il), IROperand.immI(stride, il.ty()), (IROperand*)0);
+                    if (ea == (IRValue*)0)
+                        ea = term;
+                    else if (term.ty().equals(ea.ty()))
+                        ea = emit(String.withCString("Add"), ea.ty(), IROperand.useVal(ea), IROperand.useVal(term), (IROperand*)0);
+                    else
+                        {
+                        fail("a getelementptr with indices of two widths");
+                        return (IRValue*)0;
+                        }
+                    }
+                IRValue* sb = asPtrTo(base, elem);
+                IRValue* el = emit(String.withCString("ElementAddr"), ptrTo(elem), IROperand.useVal(sb), IROperand.useVal(ea), (IROperand*)0);
+                return emit(String.withCString("FieldAddr"), ptrTo(SL.typeAt((u32)lastK)), IROperand.useVal(el),
+                            IROperand.immI(lastK, String.withCString("U8")), (IROperand*)0);
+                }
             if (elem == (String*)0 || idx.count() < (u32)2 || idx.count() > dims.count() + (u32)1)
                 {
                 fail("a getelementptr not read (a struct, or more indices)");
