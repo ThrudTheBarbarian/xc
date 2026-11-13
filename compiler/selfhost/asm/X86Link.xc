@@ -721,6 +721,8 @@ class X86Link
     // fact once the pull has finished.
     Array* synthesizeLinkerSymbols(MergedImage* im)
         {
+        // The objects' constructors join the program's table first.
+        ElfMerge.placeCtors(im);
         Array* abs = new Array();
         // The init/fini array bounds, all equal — so musl's start/exit code
         // walks an EMPTY array. No member of any archive we link carries an

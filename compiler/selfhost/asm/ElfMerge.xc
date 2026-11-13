@@ -168,6 +168,8 @@ class MergedImage
     Array* _tBounds;      // Number@ text unit boundaries (every text symbol, section, object start)
     Array* _dBounds;      // Number@ data unit boundaries (sized data symbols, sections, object starts)
     Array* _tlsAbs;       // TlsAbsReloc@ — R_X86_64_64 inside the TLS image
+    SectionBytes* _init;  // the objects' .init_array words, one after another
+    Array* _initFix;      // X86Fixup@ against _init (an ABS64 per word)
     String* _why;
     bool _failed;
 
@@ -184,6 +186,8 @@ class MergedImage
         _weakDef = new Array();
         _tlsSyms = new Map();
         _tlsAbs = new Array();
+        _init = new SectionBytes();
+        _initFix = new Array();
         _bss = new SectionBytes();
         _bssSyms = new Array();
         _bssAlign = (u32)1;
@@ -225,6 +229,14 @@ class MergedImage
     Array* fixups(void)
         {
         return _fixups;
+        }
+    SectionBytes* initWords(void)
+        {
+        return _init;
+        }
+    Array* initFixups(void)
+        {
+        return _initFix;
         }
     Array* weakUndef(void)
         {
@@ -1704,6 +1716,52 @@ class MergedImage
     {
     // Fold one object into the image. `tag` must be unique per object — it is
     // what keeps two members' static `buf`s apart.
+    // The program's constructor table (__xt_ctors_start .. __xt_ctors_end,
+    // which the start code walks) rebuilt at the end of data: its own
+    // entries, then every merged object's .init_array words. Nothing to do
+    // when no object brought any.
+    static void placeCtors(MergedImage* im)
+        {
+        if (im.initWords().length() == (u32)0)
+            return;
+        Object* so = im.syms().get((Hashable*)String.withCString("__xt_ctors_start"));
+        Object* eo = im.syms().get((Hashable*)String.withCString("__xt_ctors_end"));
+        if (so == (Object*)0 || eo == (Object*)0)
+            {
+            im.fail(String.withCString("objects carry constructors (.init_array) and the program has no constructor table"));
+            return;
+            }
+        u32 s0 = ((Number*)so).asU32();
+        u32 s1 = ((Number*)eo).asU32();
+        im.data().padTo((u32)8);
+        u32 nb = im.data().length();
+        // the program's own words, each with its fixup moved along
+        Array* fx = im.fixups();
+        u32 nfx = fx.count();
+        for (u32 off = s0; off + (u32)8 <= s1; off = off + (u32)8)
+            {
+            u32 at = im.data().length();
+            for (u32 b = (u32)0; b < (u32)8; b = b + (u32)1)
+                im.data().appendByte(im.data().byteAt(off + b));
+            for (u32 i = (u32)0; i < nfx; i = i + (u32)1)
+                {
+                X86Fixup* f = (X86Fixup*)fx.get(i);
+                if (f.kind() == (u32)X86FIX_ABS64 && f.offset() == off)
+                    fx.add((Object*)X86Fixup.make(at, f.kind(), f.symbol(), f.addend()));
+                }
+            }
+        u32 ob = im.data().length();
+        for (u32 b = (u32)0; b < im.initWords().length(); b = b + (u32)1)
+            im.data().appendByte(im.initWords().byteAt(b));
+        for (u32 i = (u32)0; i < im.initFixups().count(); i = i + (u32)1)
+            {
+            X86Fixup* f = (X86Fixup*)im.initFixups().get(i);
+            fx.add((Object*)X86Fixup.make(ob + f.offset(), f.kind(), f.symbol(), f.addend()));
+            }
+        im.syms().set((Hashable*)String.withCString("__xt_ctors_start"), (Object*)Number.withU32(nb));
+        im.syms().set((Hashable*)String.withCString("__xt_ctors_end"), (Object*)Number.withU32(im.data().length()));
+        }
+
     static void merge(MergedImage* im, ElfObject* o, String* label, u32 tag)
         {
         if (im.failed())
@@ -1849,6 +1907,28 @@ class MergedImage
             im.addGlobal(eh);
             }
 
+        // The object's constructors (.init_array: clang's half of a C or C++
+        // program, a library built elsewhere): kept for placeCtors, which
+        // adds them to the program's own table.
+        Data* ia = o.initArray();
+        if (ia.length() > (u32)0)
+            {
+            u32 ib = im.initWords().length();
+            for (u32 b = (u32)0; b < ia.length(); b = b + (u32)1)
+                im.initWords().appendByte(ia.byteAt(b));
+            Array* il = o.initRelocs();
+            for (u32 k = (u32)0; k < il.count(); k = k + (u32)1)
+                {
+                ElfReloc* r = (ElfReloc*)il.get(k);
+                if (r.type() != (u32)1)
+                    {
+                    im.fail(String.withFormat("an .init_array entry that is not a pointer in %s", label.cString()));
+                    return;
+                    }
+                im.initFixups().add((Object*)X86Fixup.make(ib + r.off(), (u32)X86FIX_ABS64,
+                                                           ElfMerge.tagged(o, r.sym(), tag), (i32)r.addend()));
+                }
+            }
         ElfMerge._textRelocs(im, o, label, tag, tbase);
         ElfMerge._dataRelocs(im, o, label, tag, dbase);
         ElfMerge._tlsRelocs(im, o, label, tag, lbase);

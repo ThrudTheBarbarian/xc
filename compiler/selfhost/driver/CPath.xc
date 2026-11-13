@@ -480,6 +480,13 @@ class CPath
         // A function taken from the read build keeps clang's own version too.
         if (readBuild != (String*)0)
             restText = Languages.keepClangCopies(restText, text, readText, r);
+        // A C++ program's static destructors are registered with
+        // __cxa_atexit(dtor, obj, &__dso_handle); on ELF the toolchain's
+        // crtbegin.o defines __dso_handle, which xcc's link does not take, so
+        // clang's half defines it (an address naming this program).
+        if (gCPathElf)
+            restText = restText.replacing(String.withCString("@__dso_handle = external hidden global i8"),
+                                          String.withCString("@__dso_handle = hidden global i8 0"));
         if (keep.byteLength() > (u32)0)
             Files.writeText(keep.appending(String.withCString(".rest.ll")), restText);
         if (!Files.writeText(restLl, restText))
