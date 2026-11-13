@@ -1636,8 +1636,16 @@
         IRValue* bound = c1.val();
         IRBlock* bb = (IRBlock*)defBlk.get((Hashable*)bound);
         bool remat = bb != (IRBlock*)0 && self.hasBlock(body, bb);
+        bool rematLoads = false;
         if (remat && !ppConstChain(bound, defOf, (u32)0))
-            return ppNo("ppOutlinePar 14");
+            {
+            // A bound loaded in the loop from addresses it does not move:
+            // read once at the call site, the loads guarded (ppOverlapGuard).
+            Array* bl = new Array();
+            if (!self.ppLoadBound(bound, L, defOf, defBlk, (u32)0, bl))
+                return ppNo("ppOutlinePar 14");
+            rematLoads = true;
+            }
         // An innermost loop of a few items known here (a 3x3 stencil's row) is no block:
         // a block costs a launch, which a GPU pays per run of the outer loop.
         IRValue* start = ppPhiIn(iv, L, false);
@@ -1714,6 +1722,80 @@
                 ins.add((Object*)v);
             }
         liveIns = ins;
+        // A load from an address the loop does not move (a std::vector's
+        // begin) is made once at the call site and is a capture of its own;
+        // a live-in only such loads read (the vector) is no capture.
+        Array* hoistAt = new Array();   // Number@: the capture each of _ppInvLoads becomes
+        // The arithmetic in the loop that only those loads' addresses use
+        // (a field's address): made again at the call site, not in the block.
+        Set* hoistOnly = new Set();
+        Array* cand = new Array();
+        for (u32 q = (u32)0; q < _ppInvLoads.count(); q = q + (u32)1)
+            self.ppAddrChain(((IROperand*)((IRInsn*)_ppInvLoads.get(q)).ops().get((u32)0)).val(), L, defOf, defBlk, cand, (u32)0);
+        // And the bound's arithmetic (the vector's end less its begin), for
+        // which the block's exit test reads the chunk's end.
+        if (rematLoads)
+            self.ppAddrChain(bound, L, defOf, defBlk, cand, (u32)0);
+        for (u32 q = (u32)0; q < cand.count(); q = q + (u32)1)
+            hoistOnly.add((Hashable*)cand.get(q));
+        bool shrunk = true;
+        while (shrunk)
+            {
+            shrunk = false;
+            for (u32 bb2 = (u32)0; bb2 < body.count(); bb2 = bb2 + (u32)1)
+                {
+                Array* all = ppAllInsns((IRBlock*)body.get(bb2));
+                for (u32 q = (u32)0; q < all.count(); q = q + (u32)1)
+                    {
+                    IRInsn* n = (IRInsn*)all.get(q);
+                    if (_ppInvLoads.indexOf((Object*)n) != (u32)$FFFFFFFF
+                        || (n.res() != (IRValue*)0 && hoistOnly.contains((Hashable*)n.res())))
+                        continue;
+                    for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
+                        {
+                        IROperand* o = (IROperand*)n.ops().get(k);
+                        if (n == cmp && k == (u32)1)
+                            continue;
+                        if (o.kind() == (u8)OPK_USE && hoistOnly.contains((Hashable*)o.val()))
+                            {
+                            hoistOnly.remove((Hashable*)o.val());
+                            shrunk = true;
+                            }
+                        }
+                    }
+                }
+            }
+        ins = new Array();
+        for (u32 i = (u32)0; i < liveIns.count(); i = i + (u32)1)
+            {
+            IRValue* v = (IRValue*)liveIns.get(i);
+            bool other = _ppInvLoads.count() == (u32)0;
+            for (u32 bb2 = (u32)0; bb2 < body.count() && !other; bb2 = bb2 + (u32)1)
+                {
+                Array* all = ppAllInsns((IRBlock*)body.get(bb2));
+                for (u32 q = (u32)0; q < all.count() && !other; q = q + (u32)1)
+                    {
+                    IRInsn* n = (IRInsn*)all.get(q);
+                    if (_ppInvLoads.indexOf((Object*)n) != (u32)$FFFFFFFF
+                        || (n.res() != (IRValue*)0 && hoistOnly.contains((Hashable*)n.res())))
+                        continue;
+                    for (u32 k = (u32)0; k < n.ops().count() && !other; k = k + (u32)1)
+                        {
+                        IROperand* o = (IROperand*)n.ops().get(k);
+                        if (o.kind() == (u8)OPK_USE && o.val() == v)
+                            other = true;
+                        }
+                    }
+                }
+            if (other)
+                ins.add((Object*)v);
+            }
+        liveIns = ins;
+        for (u32 q = (u32)0; q < _ppInvLoads.count(); q = q + (u32)1)
+            {
+            hoistAt.add((Object*)Number.with(liveIns.count()));
+            liveIns.add((Object*)((IRInsn*)_ppInvLoads.get(q)).res());
+            }
         // Which captures the loop only reads (before the casts below replace
         // untyped ones in place: the positions stay).
         ppReadOnlyCaptures(liveIns, defOf);
@@ -1722,11 +1804,39 @@
         // the call: a kernel cannot cast a device pointer, and the loop then
         // reads it as a typed pointer, as xc's own do.
         Map* castTo = new Map();       // a cast's result in the loop -> the live-in index it stands for
+        // The hoisted loads, made in the preheader in order: their results in
+        // the loop stand for their captures, as a cast's does.
+        _ppHoisted = new Map();
+        IRValue* hoistMem = memIn;
+        Array* hoistAddr = new Array();
+        for (u32 q = (u32)0; q < _ppInvLoads.count(); q = q + (u32)1)
+            {
+            IRInsn* n = (IRInsn*)_ppInvLoads.get(q);
+            u32 ci = ((Number*)hoistAt.get(q)).asU32();
+            IRInsn* c = IRInsn.with(String.withCString("Load"));
+            IRValue* r = new IRValue(n.res().ty());
+            c.setRes(r);
+            IRValue* ha = self.ppRematMem(P, ((IROperand*)n.ops().get((u32)0)).val(), defOf, defBlk, L);
+            hoistAddr.add((Object*)ha);
+            c.add(IROperand.useVal(ha));
+            c.add(IROperand.useVal(hoistMem));
+            hoistMem = new IRValue(String.withCString("Mem"));
+            c.setMemRes(hoistMem);
+            P.add(c);
+            _ppHoisted.set((Hashable*)n.res(), (Object*)r);
+            liveIns.set(ci, (Object*)r);
+            castTo.set((Hashable*)n.res(), (Object*)Number.with(ci));
+            }
         for (u32 i = (u32)0; i < liveIns.count(); i = i + (u32)1)
             {
             IRValue* v = (IRValue*)liveIns.get(i);
             if (!v.ty().equals(String.withCString("Ptr(U8, unbanked)")))
                 continue;
+            // A hoisted load's casts are of its result in the loop.
+            IRValue* inLoop = v;
+            for (u32 q = (u32)0; q < hoistAt.count(); q = q + (u32)1)
+                if (((Number*)hoistAt.get(q)).asU32() == i)
+                    inLoop = ((IRInsn*)_ppInvLoads.get(q)).res();
             String* tt = (String*)0;
             bool ok = true;
             Array* casts = new Array();
@@ -1739,7 +1849,9 @@
                     for (u32 k = (u32)0; k < n.ops().count() && ok; k = k + (u32)1)
                         {
                         IROperand* o = (IROperand*)n.ops().get(k);
-                        if (o.kind() != (u8)OPK_USE || o.val() != v)
+                        if (o.kind() != (u8)OPK_USE || o.val() != inLoop)
+                            continue;
+                        if (n.res() != (IRValue*)0 && hoistOnly.contains((Hashable*)n.res()))
                             continue;
                         if (!n.op().equals(String.withCString("Bitcast")) || n.res() == (IRValue*)0
                             || !n.res().ty().hasPrefix(String.withCString("Ptr(")))
@@ -1869,13 +1981,22 @@
             for (u32 i = (u32)0; i < all.count(); i = i + (u32)1)
                 {
                 IRInsn* n = (IRInsn*)all.get(i);
-                if (n.res() != (IRValue*)0 && castTo.get((Hashable*)n.res()) != (Object*)0)
+                if (n.res() != (IRValue*)0 && (castTo.get((Hashable*)n.res()) != (Object*)0 || hoistOnly.contains((Hashable*)n.res())))
                     continue;
                 if (n.res() != (IRValue*)0)
                     remap.set((Hashable*)n.res(), (Object*)IROperand.useVal(new IRValue(n.res().ty())));
                 if (n.memRes() != (IRValue*)0)
                     remap.set((Hashable*)n.memRes(), (Object*)IROperand.useVal(new IRValue(n.memRes().ty())));
                 }
+            }
+        // A hoisted load is not in the block: its memory token is the one
+        // it read.
+        for (u32 q = (u32)0; q < _ppInvLoads.count(); q = q + (u32)1)
+            {
+            IRInsn* n = (IRInsn*)_ppInvLoads.get(q);
+            if (n.memRes() != (IRValue*)0 && n.ops().count() > (u32)1
+                && ((IROperand*)n.ops().get((u32)1)).kind() == (u8)OPK_USE)
+                remap.set((Hashable*)n.memRes(), (Object*)IROperand.useVal(self.remappedValue(remap, ((IROperand*)n.ops().get((u32)1)).val())));
             }
         IRInsn* br = IRInsn.with(String.withCString("Branch"));
         br.add(IROperand.block((IRBlock*)blockMap.get((Hashable*)H)));
@@ -1912,7 +2033,7 @@
             for (u32 i = (u32)0; i < ob.insns().count(); i = i + (u32)1)
                 {
                 IRInsn* n = (IRInsn*)ob.insns().get(i);
-                if (n.res() != (IRValue*)0 && castTo.get((Hashable*)n.res()) != (Object*)0)
+                if (n.res() != (IRValue*)0 && (castTo.get((Hashable*)n.res()) != (Object*)0 || hoistOnly.contains((Hashable*)n.res())))
                     continue;
                 IRInsn* c = self.cloneInsn(remap, blockMap, n);
                 // The exit test against the chunk's end, always `<`.
@@ -2145,9 +2266,48 @@
         m.addSym(IRSymbol.stringLit(strName, nameBytes));
 
         // ── the call site, in the preheader ──
+        IRValue* lo64 = ppConvertTo(P, ppPhiIn(iv, L, false), String.withCString("I64"));
+        IRValue* hi64 = (IRValue*)0;
+        _ppRematMem = hoistMem;
+        if (rematLoads)
+            hi64 = ppConvertTo(P, self.ppRematMem(P, bound, defOf, defBlk, L), String.withCString("I64"));
+        else
+            hi64 = ppConvertTo(P, remat ? ppRemat(P, bound, defOf) : bound, String.withCString("I64"));
+        // The addresses of the loads the call site made (a std::vector's
+        // begin and end), which no store of the block may reach, and the
+        // bases those loads give (the vector's data), as read here.
+        _ppBoundAddrs = hoistAddr;
+        Array* loopBases = _ppGBase;
+        _ppGBase = new Array();
+        for (u32 q = (u32)0; q < loopBases.count(); q = q + (u32)1)
+            {
+            IRValue* gb = (IRValue*)loopBases.get(q);
+            IRBlock* gbb = (IRBlock*)defBlk.get((Hashable*)gb);
+            _ppGBase.add((Object*)(gbb != (IRBlock*)0 && self.hasBlock(body, gbb) ? self.ppRematMem(P, gb, defOf, defBlk, L) : gb));
+            }
+        hoistMem = _ppRematMem;
+        if (le)
+            hi64 = ppEmit(P, String.withCString("Add"), String.withCString("I64"), IROperand.useVal(hi64),
+                          IROperand.immI((i64)1, String.withCString("I64")), (IROperand*)0);
+        // Where a store of the loop may reach what the call site read, the
+        // loop runs as it was, reading it each pass; the block runs otherwise.
+        IRBlock* P0 = P;
+        if (_ppInvLoads.count() > (u32)0)
+            {
+            IRValue* inv = self.ppInvGuard(P, lo64, hi64);
+            IRBlock* Pc = new IRBlock(String.withFormat("%s_par", P.name().cString()));
+            IRInsn* cb = IRInsn.with(String.withCString("CondBranch"));
+            cb.copyDbg(P.term());
+            cb.add(IROperand.useVal(inv));
+            cb.add(IROperand.block(H));
+            cb.add(IROperand.block(Pc));
+            P.setTerm(cb);
+            fn.blocks().insert(self.blockIndex(fn, P) + (u32)1, (Object*)Pc);
+            P = Pc;
+            }
         IRValue* nm = ppEmit(P, String.withCString("AddrOf"), u8p, IROperand.sym(strName), (IROperand*)0, (IROperand*)0);
         IRValue* nb2 = ppEmit(P, String.withCString("Const"), String.withCString("U32"), IROperand.immI((i64)bytes, String.withCString("U32")), (IROperand*)0, (IROperand*)0);
-        IRValue* pm = memIn;
+        IRValue* pm = hoistMem;
         IRValue* obj = ppCall(P, String.withCString("ParFnChunk$make"), objT, IROperand.useVal(nb2), IROperand.useVal(nm), (IROperand*)0, pm);
         pm = _ppLastMem;
         IRValue* isa = ppEmit(P, String.withCString("FieldAddr"), String.withCString("Ptr(Ptr(Void, unbanked), xt_data)"),
@@ -2163,15 +2323,11 @@
             IRInsn* r = (IRInsn*)reds.get(i);
             pm = ppCtxStore(P, ctx, (u32)24 + (nIn + i) * (u32)8, ppPhiIn(r, L, false), pm);
             }
-        IRValue* lo64 = ppConvertTo(P, ppPhiIn(iv, L, false), String.withCString("I64"));
-        IRValue* hi64 = ppConvertTo(P, remat ? ppRemat(P, bound, defOf) : bound, String.withCString("I64"));
-        if (le)
-            hi64 = ppEmit(P, String.withCString("Add"), String.withCString("I64"), IROperand.useVal(hi64),
-                          IROperand.immI((i64)1, String.withCString("I64")), (IROperand*)0);
         // Arrays that may be one: serial where their ranges overlap.
         _ppGuardMem = pm;
         IRValue* serial = ppOverlapGuard(P, lo64, hi64);
         pm = _ppGuardMem;
+        _ppGBase = loopBases;
         IRInsn* runC = IRInsn.with(String.withCString("Call"));
         runC.setCc(String.withCString("CallConv::Standard"));
         if (at != (IRInsn*)0)
@@ -2198,6 +2354,77 @@
         pm = new IRValue(String.withCString("Mem"));
         rel.setMemRes(pm);
         P.add(rel);
+        if (P != P0)
+            {
+            // Versioned: the loop stays, for where the guard failed; its
+            // exit and the block's meet in X, which merges the accumulators
+            // and the memory, and goes on to E.
+            IRBlock* X = new IRBlock(String.withFormat("%s_join", P.name().cString()));
+            IRInsn* toX = IRInsn.with(String.withCString("Branch"));
+            toX.copyDbg(P0.term());
+            toX.add(IROperand.block(X));
+            P.setTerm(toX);
+            IRInsn* toE = IRInsn.with(String.withCString("Branch"));
+            toE.copyDbg(P0.term());
+            toE.add(IROperand.block(E));
+            X.setTerm(toE);
+            IRInsn* ht = H.term();
+            for (u32 k = (u32)0; k < ht.ops().count(); k = k + (u32)1)
+                {
+                IROperand* o = (IROperand*)ht.ops().get(k);
+                if (o.kind() == (u8)OPK_BLOCK && o.blk() == E)
+                    ht.ops().set(k, (Object*)IROperand.block(X));
+                }
+            for (u32 i = (u32)0; i < E.phis().count(); i = i + (u32)1)
+                {
+                IRInsn* phi = (IRInsn*)E.phis().get(i);
+                for (u32 k = (u32)0; k < phi.ops().count(); k = k + (u32)1)
+                    {
+                    IROperand* o = (IROperand*)phi.ops().get(k);
+                    if (o.kind() == (u8)OPK_BLOCK && self.hasBlock(body, o.blk()))
+                        phi.ops().set(k, (Object*)IROperand.block(X));
+                    }
+                }
+            Array* olds = new Array();
+            Array* news = new Array();
+            for (u32 i = (u32)0; i < reds.count(); i = i + (u32)1)
+                {
+                olds.add((Object*)((IRInsn*)reds.get(i)).res());
+                news.add(results.get(i));
+                }
+            if (memLast != (IRValue*)0)
+                {
+                olds.add((Object*)memLast);
+                news.add((Object*)pm);
+                }
+            fn.blocks().insert(self.blockIndex(fn, P) + (u32)1, (Object*)X);
+            for (u32 i = (u32)0; i < olds.count(); i = i + (u32)1)
+                {
+                IRValue* ov = (IRValue*)olds.get(i);
+                IRInsn* ph = IRInsn.with(String.withCString("Phi"));
+                IRValue* pr = new IRValue(ov.ty());
+                ph.setRes(pr);
+                ph.add(IROperand.block(H));
+                ph.add(IROperand.useVal(ov));
+                ph.add(IROperand.block(P));
+                ph.add(IROperand.useVal((IRValue*)news.get(i)));
+                for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+                    {
+                    IRBlock* ob = (IRBlock*)fn.blocks().get(b);
+                    if (ob == X || self.hasBlock(body, ob))
+                        continue;
+                    for (u32 q = (u32)0; q < ob.phis().count(); q = q + (u32)1)
+                        self.replaceUse((IRInsn*)ob.phis().get(q), ov, IROperand.useVal(pr));
+                    for (u32 q = (u32)0; q < ob.insns().count(); q = q + (u32)1)
+                        self.replaceUse((IRInsn*)ob.insns().get(q), ov, IROperand.useVal(pr));
+                    if (ob.term() != (IRInsn*)0)
+                        self.replaceUse(ob.term(), ov, IROperand.useVal(pr));
+                    }
+                X.addPhi(ph);
+                }
+            _ppHoisted = (Map*)0;
+            return true;
+            }
         IRInsn* jump = IRInsn.with(String.withCString("Branch"));
         jump.copyDbg(P.term());
         jump.add(IROperand.block(E));
@@ -2379,10 +2606,10 @@
                 }
             acc = ppEmit(P, String.withCString("Or"), bt, IROperand.useVal(acc), IROperand.useVal(ov), (IROperand*)0);
             }
+        String* i64t = String.withCString("I64");
         // A stored pointer beside a read-only one read anywhere: apart only
         // in different heap blocks. Two pointers into one block share its
         // end (base + Par.spanOf); either span unknown counts as one block.
-        String* i64t = String.withCString("I64");
         for (u32 p = 0; _ppSpanA != (Array*)0 && p < _ppSpanA.count(); p = p + 1)
             {
             IRValue* ends[2];
@@ -2410,6 +2637,32 @@
             }
         return acc;
         }
+    // Whether a store of the loop may reach a load the call site made in its
+    // place (_ppBoundAddrs, 8 bytes each): the loop then runs as it was.
+    final IRValue* ppInvGuard(IRBlock* P, IRValue* lo64, IRValue* hi64)
+        {
+        String* bt = String.withCString("Bool");
+        IRValue* acc = ppEmit(P, String.withCString("Const"), bt, IROperand.immI((i64)0, bt), (IROperand*)0, (IROperand*)0);
+        String* i64t = String.withCString("I64");
+        for (u32 q = (u32)0; _ppBoundAddrs != (Array*)0 && q < _ppBoundAddrs.count(); q = q + (u32)1)
+            {
+            IRValue* addr = (IRValue*)_ppBoundAddrs.get(q);
+            IRValue* aInt = self.ppEmit(P, String.withCString("PtrToInt"), i64t, IROperand.useVal(addr), (IROperand*)0, (IROperand*)0);
+            IRValue* aEnd = self.ppEmit(P, String.withCString("Add"), i64t, IROperand.useVal(aInt), IROperand.immI((i64)8, i64t), (IROperand*)0);
+            for (u32 k = (u32)0; k < _ppGBase.count(); k = k + (u32)1)
+                {
+                if (((Number*)_ppGStored.get(k)).asU32() == (u32)0)
+                    continue;
+                self.ppRangeOf(P, k, lo64, hi64);
+                IRValue* c1 = self.ppCmp(P, String.withCString("ULT"), aInt, _ppRangeHi);
+                IRValue* c2 = self.ppCmp(P, String.withCString("ULT"), _ppRangeLo, aEnd);
+                IRValue* ov = self.ppEmit(P, String.withCString("And"), bt, IROperand.useVal(c1), IROperand.useVal(c2), (IROperand*)0);
+                acc = self.ppEmit(P, String.withCString("Or"), bt, IROperand.useVal(acc), IROperand.useVal(ov), (IROperand*)0);
+                }
+            }
+        return acc;
+        }
+
     // Array k's base as an integer (its result), and the byte range [lo, hi)
     // the loop touches in it, in _ppRangeLo / _ppRangeHi.
     final IRValue* ppRangeOf(IRBlock* P, u32 k, IRValue* lo64, IRValue* hi64)
@@ -2871,6 +3124,7 @@
         _ppPairB = new Array();
         _ppSpanA = new Array();
         _ppSpanB = new Array();
+        _ppInvLoads = new Array();
         Array* body = L.body();
         for (u32 b = (u32)0; b < body.count(); b = b + (u32)1)
             {
@@ -2901,6 +3155,17 @@
                         return ppNo("ppParMemoryOk 1");
                     if (!st && _ppKey.hasPrefix(String.withCString("@__sinit_")))
                         continue;
+                    // A field read each pass from an address the loop does
+                    // not move (a std::vector's begin, reloaded because a
+                    // store might reach it): read where no store of the loop
+                    // reaches it, which the guard checks (ppOverlapGuard).
+                    if (!st && !_ppAtIv && !_ppKey.hasPrefix(String.withCString("@"))
+                        && self.ppScalarLoad(n.res().ty())
+                        && ppInvariant(addr, L, defOf, defBlk, (u32)0) && !self.ppHasCall(L))
+                        {
+                        _ppInvLoads.add((Object*)n);
+                        continue;
+                        }
                     if (st && !_ppAtIv)
                         return ppNo("a store not at [i]");
                     ppNoteKey(_ppBase, addr, _ppAtIv, st);
@@ -2948,8 +3213,9 @@
                                  && !sk.hasPrefix(String.withCString("@")) && !xk.hasPrefix(String.withCString("@"));
                     for (u32 w = (u32)0; w < (u32)2 && apart; w = w + (u32)1)
                         {
-                        IRBlock* db = (IRBlock*)defBlk.get((Hashable*)_ppGBase.get(w == (u32)0 ? s : x));
-                        if (db != (IRBlock*)0 && self.hasBlock(body, db))
+                        IRValue* gb = (IRValue*)_ppGBase.get(w == (u32)0 ? s : x);
+                        IRBlock* db = (IRBlock*)defBlk.get((Hashable*)gb);
+                        if (db != (IRBlock*)0 && self.hasBlock(body, db) && !self.ppInvLoaded(gb, L, defOf, defBlk))
                             apart = false;
                         }
                     if (!apart)
@@ -2967,8 +3233,9 @@
                     u32 idx = w == (u32)0 ? s : x;
                     if (((String*)_ppGKeys.get(idx)).hasPrefix(String.withCString("@")))
                         continue;
-                    IRBlock* db = (IRBlock*)defBlk.get((Hashable*)_ppGBase.get(idx));
-                    if (db != (IRBlock*)0 && self.hasBlock(body, db))
+                    IRValue* gb = (IRValue*)_ppGBase.get(idx);
+                    IRBlock* db = (IRBlock*)defBlk.get((Hashable*)gb);
+                    if (db != (IRBlock*)0 && self.hasBlock(body, db) && !self.ppInvLoaded(gb, L, defOf, defBlk))
                         return ppNo("a pointer computed in the loop");
                     }
                 _ppPairA.add((Object*)Number.with(s));
@@ -3147,6 +3414,11 @@
             if (!ppInvariant(o.val(), L, defOf, defBlk, (u32)0))
                 {
                 IRInsn* d = (IRInsn*)defOf.get((Hashable*)o.val());
+                // Loaded each pass from addresses the loop does not move (a
+                // std::vector's ends, `i < v.size()`): the block reads them
+                // once, guarded against the loop's stores (ppOverlapGuard).
+                if (self.ppLoadBound(o.val(), L, defOf, defBlk, (u32)0, new Array()))
+                    continue;
                 if (d == (IRInsn*)0 || !(d.op().equals(String.withCString("Add")) && ppStepOf(d, iv.res())))
                     return String.withCString("a bound computed in the loop");
                 }
@@ -3453,6 +3725,144 @@
     // Whether v is the same on every iteration: defined outside the loop, or a
     // constant, or pure arithmetic on such values (the lowering puts
     // `(u32)D + (u32)1` and `1 << 18` in the header).
+    // Whether the loop calls anything that may touch memory (and so move
+    // what a bound or a base reads); the runtime's class initialisation and
+    // functions that touch no memory do not.
+    final bool ppHasCall(LRCLoop* L)
+        {
+        for (u32 b = (u32)0; b < L.body().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)L.body().get(b);
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)bb.insns().get(i);
+                if (!n.isCall())
+                    continue;
+                if (n.op().equals(String.withCString("Call")) && n.ops().count() > (u32)0
+                    && ((IROperand*)n.ops().get((u32)0)).kind() == (u8)OPK_SYM)
+                    {
+                    String* callee = ((IROperand*)n.ops().get((u32)0)).name();
+                    if (callee.equals(String.withCString("_xtc_sinit_run")) || ppPureFn(callee, (u32)0))
+                        continue;
+                    }
+                return true;
+                }
+            }
+        return false;
+        }
+
+    // The values in the loop that address v is made of (pure arithmetic over
+    // values from outside it), into `into`.
+    final void ppAddrChain(IRValue* v, LRCLoop* L, Map* defOf, Map* defBlk, Array* into, u32 depth)
+        {
+        if (!ppDefinedIn(defBlk, v, L) || depth > (u32)8 || into.indexOf((Object*)v) != (u32)$FFFFFFFF)
+            return;
+        into.add((Object*)v);
+        IRInsn* d = (IRInsn*)defOf.get((Hashable*)v);
+        if (d == (IRInsn*)0)
+            return;
+        for (u32 k = (u32)0; k < d.ops().count(); k = k + (u32)1)
+            {
+            IROperand* o = (IROperand*)d.ops().get(k);
+            if (o.kind() == (u8)OPK_USE)
+                self.ppAddrChain(o.val(), L, defOf, defBlk, into, depth + (u32)1);
+            }
+        }
+
+    // Whether a load of type t reads at most 8 bytes: an integer, a float or
+    // a pointer (the span the guard keeps clear of the loop's stores).
+    final bool ppScalarLoad(String* t)
+        {
+        return self.irWidth(t) > (u32)0 || (t != (String*)0 && t.hasPrefix(String.withCString("Ptr(")));
+        }
+
+    // Whether v is a load the memory check took as one from an address the
+    // loop does not move (in _ppInvLoads).
+    final bool ppInvLoaded(IRValue* v, LRCLoop* L, Map* defOf, Map* defBlk)
+        {
+        IRInsn* d = (IRInsn*)defOf.get((Hashable*)v);
+        if (d == (IRInsn*)0 || !d.op().equals(String.withCString("Load")))
+            return false;
+        for (u32 q = (u32)0; q < _ppInvLoads.count(); q = q + (u32)1)
+            if ((IRInsn*)_ppInvLoads.get(q) == d)
+                return true;
+        return false;
+        }
+
+    // Whether v is pure arithmetic over values from outside the loop and
+    // loads from addresses that are (a std::vector's ends, reloaded each pass
+    // because a store might reach them); the loads go into `loads`.
+    final bool ppLoadBound(IRValue* v, LRCLoop* L, Map* defOf, Map* defBlk, u32 depth, Array* loads)
+        {
+        if (!ppDefinedIn(defBlk, v, L))
+            return true;
+        if (depth > (u32)8)
+            return false;
+        IRInsn* d = (IRInsn*)defOf.get((Hashable*)v);
+        if (d == (IRInsn*)0)
+            return false;
+        String* op = d.op();
+        if (op.equals(String.withCString("Const")))
+            return true;
+        if (op.equals(String.withCString("Load")))
+            {
+            if (self.ppHasCall(L) || d.ops().count() < (u32)1 || ((IROperand*)d.ops().get((u32)0)).kind() != (u8)OPK_USE
+                || !ppInvariant(((IROperand*)d.ops().get((u32)0)).val(), L, defOf, defBlk, (u32)0))
+                return false;
+            if (!self.ppScalarLoad(d.res().ty()))
+                return false;
+            loads.add((Object*)d);
+            return true;
+            }
+        if (d.memRes() != (IRValue*)0 || d.isCall() || op.equals(String.withCString("Phi")))
+            return false;
+        for (u32 k = (u32)0; k < d.ops().count(); k = k + (u32)1)
+            {
+            IROperand* o = (IROperand*)d.ops().get(k);
+            if (o.kind() == (u8)OPK_USE && !ppLoadBound(o.val(), L, defOf, defBlk, depth + (u32)1, loads))
+                return false;
+            }
+        return true;
+        }
+
+    // v made again in b: what the loop computes, the loads among it reading
+    // memory as _ppRematMem (threaded); a value from outside the loop is used
+    // as it is.
+    final IRValue* ppRematMem(IRBlock* b, IRValue* v, Map* defOf, Map* defBlk, LRCLoop* L)
+        {
+        if (!ppDefinedIn(defBlk, v, L))
+            return v;
+        IRValue* h = _ppHoisted == (Map*)0 ? (IRValue*)0 : (IRValue*)_ppHoisted.get((Hashable*)v);
+        if (h != (IRValue*)0)
+            return h;
+        IRInsn* d = (IRInsn*)defOf.get((Hashable*)v);
+        IRInsn* c = IRInsn.with(d.op());
+        IRValue* r = new IRValue(v.ty());
+        c.setRes(r);
+        if (d.op().equals(String.withCString("Load")))
+            {
+            c.add(IROperand.useVal(self.ppRematMem(b, ((IROperand*)d.ops().get((u32)0)).val(), defOf, defBlk, L)));
+            c.add(IROperand.useVal(_ppRematMem));
+            IRValue* mo = new IRValue(String.withCString("Mem"));
+            c.setMemRes(mo);
+            b.add(c);
+            _ppRematMem = mo;
+            return r;
+            }
+        if (d.op().equals(String.withCString("Const")))
+            c.add((IROperand*)d.ops().get((u32)0));
+        else
+            for (u32 k = (u32)0; k < d.ops().count(); k = k + (u32)1)
+                {
+                IROperand* o = (IROperand*)d.ops().get(k);
+                c.add(o.kind() == (u8)OPK_USE ? IROperand.useVal(self.ppRematMem(b, o.val(), defOf, defBlk, L)) : o);
+                }
+        if (d.pred() != (String*)0)
+            c.setPred(d.pred());
+        b.add(c);
+        return r;
+        }
+
     final bool ppInvariant(IRValue* v, LRCLoop* L, Map* defOf, Map* defBlk, u32 depth)
         {
         if (!ppDefinedIn(defBlk, v, L))

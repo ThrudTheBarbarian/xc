@@ -1623,6 +1623,10 @@ class BeFact : Object
     Array* _ppGOffHi;
     Array* _ppGStored;
     Array* _ppRO;        // per live-in of the block being made: 1 when the loop only reads through it (#156)
+    Array* _ppInvLoads;    // IRInsn@: loads from addresses the loop does not move (a std::vector's fields), guarded
+    IRValue* _ppRematMem;  // ppRematMem's memory token as it threads the loads it makes
+    Array* _ppBoundAddrs;  // IRValue@: the addresses of _ppInvLoads, at the call site
+    Map* _ppHoisted;       // a hoisted load's result in the loop -> its value read at the call site
     Array* _ppSpanA;       // Number@: a stored base, beside...
     Array* _ppSpanB;       // Number@: ...a read-only one read anywhere: apart when in different heap blocks
     IRValue* _ppGuardMem;  // ppOverlapGuard's memory token after its calls
