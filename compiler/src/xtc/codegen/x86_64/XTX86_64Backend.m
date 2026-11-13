@@ -7120,6 +7120,11 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
         return NO;
     if (!b.result || b.operands.count < 2 || b.result.type.kind != a.result.type.kind)
         return NO;
+    // Not an add a float Select computes after its branch (sSelSink): the
+    // Select emits that add again in its arm, reading the product, which the
+    // pair never wrote (#193: C's `c ? 0.0f - 2.0f * v : 2.0f * v`).
+    if (sSelSkip && (sSelSkip[@(b.result.valueId)] || sSelSkip[@(a.result.valueId)]))
+        return NO;
     if (sFmaUc[@(a.result.valueId)].integerValue != 1)
         return NO;
     XTIROperand* b0 = b.operands[0];

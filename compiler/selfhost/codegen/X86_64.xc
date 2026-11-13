@@ -8551,6 +8551,11 @@ class X86_64
             return false;
         if (b.res() == (IRValue*)0 || b.ops().count() < (u32)2 || !b.res().ty().equals(a.res().ty()))
             return false;
+        // Not an add a float Select computes after its branch (_selSink): the
+        // Select emits that add again in its arm, reading the product, which
+        // the pair never wrote (#193: C's `c ? 0.0f - 2.0f * v : 2.0f * v`).
+        if (inSelSkip(b.res()) || inSelSkip(a.res()))
+            return false;
         if (useCount(_fmaUc, a.res()) != (u32)1)
             return false;
         IROperand* b0 = (IROperand*)b.ops().get((u32)0);
