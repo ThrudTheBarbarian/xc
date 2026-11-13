@@ -3,6 +3,49 @@ title: ChangeLog
 description: Release notes for the xcc toolchain, with bug fixes and new features per version.
 ---
 
+## Version 1.0.1 — fixes
+
+Everything since 1.0.
+
+### Fixed
+
+- **C: a prefix sum gave the wrong answer.** A loop that reads its running
+  value inside the loop (`s += a[i]; b[i] = s`) was made a par block as if the
+  value were a reduction, so each chunk started its sum from zero, on the CPU,
+  the GPU and `auto`. Such a loop now stays serial.
+- **par on the GPU: a C or C++ loop's read-only arrays are not copied back.**
+  Every array a lifted loop captured came back from the device after a GPU
+  run, its inputs included; into read-only memory (a string literal, a
+  `const` table) that faulted on Metal. Only the arrays the loop writes come
+  back now, which also halves the traffic for a loop such as saxpy's.
+- **par on Metal: integer arithmetic that wraps.** A kernel did signed
+  32-bit arithmetic in MSL's `int`, where overflow is undefined, and Metal's
+  compiler could fold a comparison on a wrapped value: a C loop that wraps
+  through `unsigned` gave another answer on the GPU than on the CPU.
+- **par on the Pi 5's GPU: a C or C++ loop over `double`** was sent to V3D,
+  which has no doubles, and Mesa aborted the program. It runs on the CPU
+  there now (and on any Vulkan device without doubles).
+- **C: `trunc … to i1`** in clang's IR (the low bit of an integer) was read
+  as `x != 0`.
+- **The vectoriser and the loop unroller with a value computed in a loop's
+  condition** from the counter: a reduction reading such a value was
+  vectorised without a lane form of it, and the unroller then crashed. The
+  loop stays scalar.
+- **win64: `atexit` handlers run** at the end of a program (and stdio is
+  flushed), and a C program calling `atexit` links.
+- **x86-64 Linux: constructors in a C program's clang-compiled objects run.**
+  xcc's link left out their `.init_array`, so an
+  `__attribute__((constructor))` function never ran; `__dso_handle` is
+  defined for them too.
+- **macOS: code sections other than `__text`** in an object from clang (a C++
+  global constructor's `__StaticInit`) were left out of xcc's own link.
+
+### Work towards a C++ front end
+
+- xcc's own links for C++ on Linux, macOS and Windows, exceptions included; a
+  corpus of C++ programs; loops beside a read-only array guarded at run time;
+  libstdc++'s unrolled reductions re-rolled. Not yet a supported route.
+
 ## Version 1.0 — C arrays on the GPU, options on the command line, and a probe that finishes measuring
 
 Everything since 0.9.7.
