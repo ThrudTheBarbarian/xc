@@ -56,6 +56,11 @@ static NSString* signedName(XTIRType* t)
     return gLaneVecW == 2 ? [b stringByAppendingString:@"2"] : b;
     }
 
+static BOOL isSignedInt(XTIRType* t)
+    {
+    return t.kind == XTIRTypeKindI8 || t.kind == XTIRTypeKindI16 || t.kind == XTIRTypeKindI32 || t.kind == XTIRTypeKindI64;
+    }
+
 static NSString* unsignedName(XTIRType* t)
     {
     NSString* b;
@@ -910,9 +915,20 @@ static BOOL isTranscendental(NSString* callee)
     NSString* n = scalarName(t);
     switch (i.opcode)
         {
-        case XTIROpAdd: case XTIROpFAdd: return [NSString stringWithFormat:@"%@(%@ + %@)", n, a, b];
-        case XTIROpSub: case XTIROpFSub: return [NSString stringWithFormat:@"%@(%@ - %@)", n, a, b];
-        case XTIROpMul: case XTIROpFMul: return [NSString stringWithFormat:@"%@(%@ * %@)", n, a, b];
+        // Signed overflow is undefined in MSL (as in C++): a signed + - * <<
+        // is done in the unsigned type, which wraps, and converted back.
+        case XTIROpAdd: case XTIROpSub: case XTIROpMul:
+            if (isSignedInt(t))
+                {
+                NSString* u = unsignedName(t);
+                NSString* sym = i.opcode == XTIROpAdd ? @"+" : i.opcode == XTIROpSub ? @"-" : @"*";
+                return [NSString stringWithFormat:@"%@(%@(%@) %@ %@(%@))", n, u, a, sym, u, b];
+                }
+            return [NSString stringWithFormat:@"%@(%@ %@ %@)", n, a,
+                    i.opcode == XTIROpAdd ? @"+" : i.opcode == XTIROpSub ? @"-" : @"*", b];
+        case XTIROpFAdd: return [NSString stringWithFormat:@"%@(%@ + %@)", n, a, b];
+        case XTIROpFSub: return [NSString stringWithFormat:@"%@(%@ - %@)", n, a, b];
+        case XTIROpFMul: return [NSString stringWithFormat:@"%@(%@ * %@)", n, a, b];
         case XTIROpFDiv: return [NSString stringWithFormat:@"%@(%@ / %@)", n, a, b];
         case XTIROpUDiv: return [NSString stringWithFormat:@"%@(%@(%@) / %@(%@))", n, unsignedName(t), a, unsignedName(t), b];
         case XTIROpURem: return [NSString stringWithFormat:@"%@(%@(%@) %% %@(%@))", n, unsignedName(t), a, unsignedName(t), b];
@@ -921,7 +937,10 @@ static BOOL isTranscendental(NSString* callee)
         case XTIROpAnd: return [NSString stringWithFormat:@"%@(%@ & %@)", n, a, b];
         case XTIROpOr: return [NSString stringWithFormat:@"%@(%@ | %@)", n, a, b];
         case XTIROpXor: return [NSString stringWithFormat:@"%@(%@ ^ %@)", n, a, b];
-        case XTIROpShl: return [NSString stringWithFormat:@"%@(%@ << %@)", n, a, b];
+        case XTIROpShl:
+            if (isSignedInt(t))
+                return [NSString stringWithFormat:@"%@(%@(%@) << %@)", n, unsignedName(t), a, b];
+            return [NSString stringWithFormat:@"%@(%@ << %@)", n, a, b];
         case XTIROpLShr: return [NSString stringWithFormat:@"%@(%@(%@) >> %@)", n, unsignedName(t), a, b];
         case XTIROpAShr: return [NSString stringWithFormat:@"%@(%@(%@) >> %@)", n, signedName(t), a, b];
         default: return nil;
@@ -1009,7 +1028,11 @@ static NSString* intrinsicFor(NSString* callee)
         case XTIROpFNeg:
             {
             NSString* a = [self expr:i.operands[0] type:rt];
-            return a ? [NSString stringWithFormat:@"%@ = %@(-%@);", r, scalarName(rt), a] : nil;
+            if (!a)
+                return nil;
+            if (isSignedInt(rt))
+                return [NSString stringWithFormat:@"%@ = %@(-%@(%@));", r, scalarName(rt), unsignedName(rt), a];
+            return [NSString stringWithFormat:@"%@ = %@(-%@);", r, scalarName(rt), a];
             }
         case XTIROpFSqrt:
             {

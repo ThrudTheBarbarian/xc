@@ -37,6 +37,11 @@
         if (_mVecW == (u32)2) b.appendCString("2");
         return b;
         }
+    final bool mslSignedInt(String* t)
+        {
+        return t.equals(String.withCString("I8")) || t.equals(String.withCString("I16"))
+            || t.equals(String.withCString("I32")) || t.equals(String.withCString("I64"));
+        }
     final String* mslUnsigned(String* t)
         {
         String* b = (String*)0;
@@ -306,6 +311,11 @@
         else if (op.equals(String.withCString("LShr"))) { sym = String.withCString(" >> "); ca = mslUnsigned(t); castLeftOnly = true; }
         else if (op.equals(String.withCString("AShr"))) { sym = String.withCString(" >> "); ca = mslSigned(t); castLeftOnly = true; }
         if (sym == (String*)0) return (String*)0;
+        // Signed overflow is undefined in MSL (as in C++): a signed + - * <<
+        // is done in the unsigned type, which wraps, and converted back.
+        if (ca == (String*)0 && mslSignedInt(t) && (op.equals(String.withCString("Add")) || op.equals(String.withCString("Sub"))
+                || op.equals(String.withCString("Mul")) || op.equals(String.withCString("Shl"))))
+            { ca = mslUnsigned(t); castLeftOnly = op.equals(String.withCString("Shl")); }
         String* s = String.withString(n);
         s.appendCString("(");
         if (ca != (String*)0) { s.append(ca); s.appendCString("("); s.append(a); s.appendCString(")"); }
@@ -416,7 +426,10 @@
             {
             String* a = mslExpr(o0, rt);
             if (a == (String*)0) return (String*)0;
-            String* e = String.withString(self.mslScalar(rt)); e.appendCString("(-"); e.append(a); e.appendCString(")");
+            String* e = String.withString(self.mslScalar(rt)); e.appendCString("(-");
+            if (mslSignedInt(rt)) { e.append(mslUnsigned(rt)); e.appendCString("("); e.append(a); e.appendCString(")"); }
+            else e.append(a);
+            e.appendCString(")");
             return mslAssign(r, e);
             }
         if (op.equals(String.withCString("FSqrt")))
