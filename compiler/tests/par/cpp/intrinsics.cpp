@@ -63,8 +63,10 @@ int main()
         {
         u[i] = (uint32_t)i * 2654435761u;
         a[i] = (i * 37) % 201 - 100;
-        x[i] = (i % 97) * 0.37 - 17.9;
-        f[i] = (float)((i % 53) * 0.21 - 5.3);
+        // Exact in binary, so a fused multiply-add (x86-64 fuses where it
+        // has FMA, baseline clang++ cannot) gives the same inputs.
+        x[i] = (i % 97) * 0.375 - 17.875;
+        f[i] = (float)((i % 53) * 0.25 - 5.25);
         }
     std::printf("%u %llu %ld %.6f %.4f\n", bits(u, n), (unsigned long long)swaps(u, n), ints(a, n), floats(x, n), (double)floatsF(f, n));
     return 0;
