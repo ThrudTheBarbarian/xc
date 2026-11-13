@@ -3,8 +3,9 @@
 # perlin's grad, `(g & 2) != 0 ? 0.0f - 2.0f * v : 2.0f * v`, in C (which
 # fuses like clang). On x86-64 the select computed that arm after its branch
 # while the pair had fused it away, so the AVX2 copy read a product never
-# made. Every h must match clang's -O2 build, in xcc's default copy and in
-# XC_SIMD=base; plain and lifted. Skipped where there is no clang.
+# made. Every h must match clang's -O2 build, in xcc's default copy, in
+# XC_SIMD=base and, on an x86-64 host with AVX2, in XC_SIMD=avx2; plain and
+# lifted. Skipped where there is no clang.
 #
 #   bash tests/par/fma-select.sh
 set -u
@@ -44,10 +45,12 @@ C
 clang -O2 -o "$W/ref" "$W/g.c" || { echo "FAIL fma-select: clang does not build it"; exit 1; }
 want=$("$W/ref")
 fail=0
+copies=" base"
+[ "$(uname -m)" = x86_64 ] && grep -qw avx2 /proc/cpuinfo 2>/dev/null && copies=" base avx2"
 for ps in cpu auto; do
     "$XC" -q -O3 --par-style=$ps -H . -o "$W/t.$ps" "$W/g.c" > "$W/b.$ps" 2>&1 \
         || { echo "FAIL fma-select: does not build (--par-style=$ps)"; head -3 "$W/b.$ps"; fail=1; continue; }
-    for simd in "" base; do
+    for simd in "" $copies; do
         got=$(XC_SIMD=$simd XC_PAR=cpu "$W/t.$ps")
         [ "$got" = "$want" ] || { echo "FAIL fma-select: --par-style=$ps XC_SIMD=${simd:-default} differs from clang:"; diff <(echo "$want") <(echo "$got") | head -6; fail=1; }
     done
