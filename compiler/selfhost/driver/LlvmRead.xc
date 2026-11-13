@@ -2331,6 +2331,89 @@ class LlvmReader
                    IROperand.useVal((IRValue*)args.get(1)), (String*)0);
             return;
             }
+        // Integer abs: x < 0 ? 0 - x : x.
+        if (callee.hasPrefix(String.withCString("@llvm.abs.i")) && args.count() == 2)
+            {
+            IRValue* x = (IRValue*)args.get(0);
+            IRValue* z0 = emit(String.withCString("Const"), rt, IROperand.immI((i64)0, rt), (IROperand*)0, (IROperand*)0);
+            IRInsn* lt = IRInsn.with(String.withCString("ICmp"));
+            IRValue* ltv = new IRValue(String.withCString("Bool"));
+            lt.setRes(ltv);
+            lt.setPred(String.withCString("SLT"));
+            lt.add(IROperand.useVal(x));
+            lt.add(IROperand.useVal(z0));
+            _blk.add(lt);
+            IRValue* ng = emit(String.withCString("Sub"), rt, IROperand.useVal(z0), IROperand.useVal(x), (IROperand*)0);
+            define(res, String.withCString("Select"), rt, IROperand.useVal(ltv), IROperand.useVal(ng), IROperand.useVal(x), (String*)0);
+            return;
+            }
+        // Bit counts and byte swaps of 32 and 64 bits, as arithmetic (a
+        // block keeps its GPU form): ctpop bit-parallel; cttz(x) =
+        // ctpop((x & -x) - 1); ctlz(x) = ctpop(~smear(x)); bswap by bytes.
+        bool isPop = callee.hasPrefix(String.withCString("@llvm.ctpop.i"));
+        bool isTz = callee.hasPrefix(String.withCString("@llvm.cttz.i"));
+        bool isLz = callee.hasPrefix(String.withCString("@llvm.ctlz.i"));
+        bool isSwap = callee.hasPrefix(String.withCString("@llvm.bswap.i"));
+        if ((isPop || isTz || isLz || isSwap) && args.count() >= 1
+            && (rt.equals(String.withCString("I32")) || rt.equals(String.withCString("I64"))
+                || rt.equals(String.withCString("U32")) || rt.equals(String.withCString("U64"))))
+            {
+            bool w64 = rt.hasSuffix(String.withCString("64"));
+            // Worked unsigned, where wrapping is defined (a GPU's C++ may
+            // take 0 - INT_MIN as never happening), then given back as rt.
+            String* ut = w64 ? String.withCString("U64") : String.withCString("U32");
+            IRValue* x = (IRValue*)args.get(0);
+            if (!x.ty().equals(ut))
+                x = emit(String.withCString("Bitcast"), ut, IROperand.useVal(x), (IROperand*)0, (IROperand*)0);
+            if (isSwap)
+                {
+                IRValue* acc = (IRValue*)0;
+                u32 nb = w64 ? (u32)8 : (u32)4;
+                for (u32 k = (u32)0; k < nb; k = k + (u32)1)
+                    {
+                    IRValue* byte = emit(String.withCString("And"), ut,
+                                         IROperand.useVal(k == (u32)0 ? x : emit(String.withCString("LShr"), ut, IROperand.useVal(x), IROperand.immI((i64)(8 * k), ut), (IROperand*)0)),
+                                         IROperand.immI((i64)255, ut), (IROperand*)0);
+                    u32 sh = (nb - (u32)1 - k) * (u32)8;
+                    IRValue* placed = sh == (u32)0 ? byte : emit(String.withCString("Shl"), ut, IROperand.useVal(byte), IROperand.immI((i64)sh, ut), (IROperand*)0);
+                    acc = acc == (IRValue*)0 ? placed : emit(String.withCString("Or"), ut, IROperand.useVal(acc), IROperand.useVal(placed), (IROperand*)0);
+                    }
+                define(res, String.withCString("Bitcast"), rt, IROperand.useVal(acc), (IROperand*)0, (IROperand*)0, (String*)0);
+                return;
+                }
+            IRValue* v = x;
+            if (isTz)
+                {
+                IRValue* z0 = emit(String.withCString("Const"), ut, IROperand.immI((i64)0, ut), (IROperand*)0, (IROperand*)0);
+                IRValue* ng = emit(String.withCString("Sub"), ut, IROperand.useVal(z0), IROperand.useVal(x), (IROperand*)0);
+                IRValue* low = emit(String.withCString("And"), ut, IROperand.useVal(x), IROperand.useVal(ng), (IROperand*)0);
+                v = emit(String.withCString("Sub"), ut, IROperand.useVal(low), IROperand.immI((i64)1, ut), (IROperand*)0);
+                }
+            else if (isLz)
+                {
+                u32 top = w64 ? (u32)32 : (u32)16;
+                for (u32 sh = (u32)1; sh <= top; sh = sh * (u32)2)
+                    v = emit(String.withCString("Or"), ut, IROperand.useVal(v),
+                             IROperand.useVal(emit(String.withCString("LShr"), ut, IROperand.useVal(v), IROperand.immI((i64)sh, ut), (IROperand*)0)), (IROperand*)0);
+                v = emit(String.withCString("Xor"), ut, IROperand.useVal(v), IROperand.immI((i64)-1, ut), (IROperand*)0);
+                }
+            i64 m1 = w64 ? (i64)$5555555555555555 : (i64)$55555555;
+            i64 m2 = w64 ? (i64)$3333333333333333 : (i64)$33333333;
+            i64 m4 = w64 ? (i64)$0F0F0F0F0F0F0F0F : (i64)$0F0F0F0F;
+            i64 h01 = w64 ? (i64)$0101010101010101 : (i64)$01010101;
+            IRValue* t1 = emit(String.withCString("And"), ut, IROperand.useVal(emit(String.withCString("LShr"), ut, IROperand.useVal(v), IROperand.immI((i64)1, ut), (IROperand*)0)), IROperand.immI(m1, ut), (IROperand*)0);
+            IRValue* a1 = emit(String.withCString("Sub"), ut, IROperand.useVal(v), IROperand.useVal(t1), (IROperand*)0);
+            IRValue* lo2 = emit(String.withCString("And"), ut, IROperand.useVal(a1), IROperand.immI(m2, ut), (IROperand*)0);
+            IRValue* hi2 = emit(String.withCString("And"), ut, IROperand.useVal(emit(String.withCString("LShr"), ut, IROperand.useVal(a1), IROperand.immI((i64)2, ut), (IROperand*)0)), IROperand.immI(m2, ut), (IROperand*)0);
+            IRValue* a2 = emit(String.withCString("Add"), ut, IROperand.useVal(lo2), IROperand.useVal(hi2), (IROperand*)0);
+            IRValue* a3 = emit(String.withCString("And"), ut, IROperand.useVal(emit(String.withCString("Add"), ut, IROperand.useVal(a2),
+                               IROperand.useVal(emit(String.withCString("LShr"), ut, IROperand.useVal(a2), IROperand.immI((i64)4, ut), (IROperand*)0)), (IROperand*)0)),
+                               IROperand.immI(m4, ut), (IROperand*)0);
+            IRValue* mu = emit(String.withCString("Mul"), ut, IROperand.useVal(a3), IROperand.immI(h01, ut), (IROperand*)0);
+            IRValue* cnt = emit(String.withCString("LShr"), ut, IROperand.useVal(mu), IROperand.immI((i64)(w64 ? 56 : 24), ut), (IROperand*)0);
+            define(res, String.withCString("Bitcast"), rt, IROperand.useVal(cnt), (IROperand*)0, (IROperand*)0, (String*)0);
+            return;
+            }
         // Funnel shifts (a rotate when both are one value):
         //   fshl(a, b, s) = s' ? a << s' | b >>u (w - s') : a
         //   fshr(a, b, s) = s' ? a << (w - s') | b >>u s' : b
@@ -2392,12 +2475,36 @@ class LlvmReader
             if (callee.hasPrefix(String.withCString("@llvm.lifetime.")) || callee.hasPrefix(String.withCString("@llvm.dbg."))
                 || callee.hasPrefix(String.withCString("@llvm.assume")))
                 return;
-            // The maths: the C library's functions of the same name.
+            // The maths: the C library's functions of the same meaning
+            // (llvm.minnum is fmin, llvm.round C's round), the float forms
+            // with their `f`.
             String* lib = (String*)0;
-            if (callee.hasPrefix(String.withCString("@llvm.sqrt.f64"))) lib = String.withCString("sqrt");
-            else if (callee.hasPrefix(String.withCString("@llvm.sqrt.f32"))) lib = String.withCString("sqrtf");
-            else if (callee.hasPrefix(String.withCString("@llvm.fabs.f64"))) lib = String.withCString("fabs");
-            else if (callee.hasPrefix(String.withCString("@llvm.fabs.f32"))) lib = String.withCString("fabsf");
+            String* fam = (String*)0;
+            bool f32 = false;
+            String* names[13];
+            names[0] = String.withCString("sqrt"); names[1] = String.withCString("fabs"); names[2] = String.withCString("floor");
+            names[3] = String.withCString("ceil"); names[4] = String.withCString("trunc"); names[5] = String.withCString("round");
+            names[6] = String.withCString("rint"); names[7] = String.withCString("nearbyint"); names[8] = String.withCString("minnum");
+            names[9] = String.withCString("maxnum"); names[10] = String.withCString("copysign"); names[11] = String.withCString("fma");
+            names[12] = String.withCString("pow");
+            for (u32 q = (u32)0; q < (u32)13 && fam == (String*)0; q = q + (u32)1)
+                {
+                String* p64 = String.withFormat("@llvm.%s.f64", names[q].cString());
+                String* p32 = String.withFormat("@llvm.%s.f32", names[q].cString());
+                if (callee.equals(p64))
+                    fam = names[q];
+                else if (callee.equals(p32))
+                    {
+                    fam = names[q];
+                    f32 = true;
+                    }
+                }
+            if (fam != (String*)0)
+                {
+                String* base = fam.equals(String.withCString("minnum")) ? String.withCString("fmin")
+                             : fam.equals(String.withCString("maxnum")) ? String.withCString("fmax") : fam;
+                lib = f32 ? base.appending(String.withCString("f")) : base;
+                }
             if (lib == (String*)0)
                 {
                 fail(String.withFormat("an intrinsic not read: %s", callee.cString()).cString());
@@ -2407,7 +2514,10 @@ class LlvmReader
             if (_globals.get((Hashable*)n) == (Object*)0)
                 {
                 _globals.set((Hashable*)n, (Object*)lib);
-                String* sig = String.withFormat("(%s) -> %s", rt.cString(), rt.cString());
+                String* ps = String.withString(rt);
+                for (u32 q = (u32)1; q < args.count(); q = q + (u32)1)
+                    ps.appendFormat(", %s", rt.cString());
+                String* sig = String.withFormat("(%s) -> %s", ps.cString(), rt.cString());
                 _m.addSym(IRSymbol.func(lib, sig, false, true));
                 }
             callee = n;
