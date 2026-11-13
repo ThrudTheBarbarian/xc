@@ -300,6 +300,7 @@ class Languages
                 {
                 Languages.plainLabels(lines, i + 1, end);
                 Languages.reroll(lines, i + 1, end);
+                Languages.elementOffsets(lines, i + 1, end);
                 Languages.byteCounts(lines, i + 1, end);
                 Languages.counted(lines, i + 1, end);
                 Languages.pointerLoops(lines, i + 1, end);
@@ -1330,6 +1331,66 @@ class Languages
             }
         }
 
+
+    // A byte offset from an element's address that is a whole number of
+    // elements, in a function's body lines [from, end):
+    //     %b = getelementptr [inbounds] T, ptr %p, i64 %x
+    //     %a = getelementptr [inbounds nuw] i8, ptr %b, i64 C     ; C = k * sizeof(T)
+    // is written %a = getelementptr T, ptr %p, i64 (%x + k): clang's
+    // `in[i - 1]` beside `in[i]`, now an element of %p, which the outliner
+    // sees as one array read near [i] (stencil's neighbours), not as a
+    // pointer made in the loop.
+    static void elementOffsets(Array* lines, u32 from, u32 end)
+        {
+        Map* elemGep = new Map();   // %b -> "T|%p|%x"
+        u32 made = 0;
+        for (u32 i = from; i < end; i = i + 1)
+            {
+            String* l = (String*)lines.get(i);
+            String* t = Languages.withoutMeta(l.trimmed());
+            u32 eq = t.byteIndexOf(String.withCString(" = getelementptr "));
+            if (eq == String.notFound() || !t.hasPrefix(String.withCString("%")))
+                continue;
+            String* nm = t.substringBytes(0, eq);
+            String* rest = t.substringFromByte(eq + 17);
+            if (rest.hasPrefix(String.withCString("inbounds ")))
+                rest = rest.substringFromByte(9);
+            if (rest.hasPrefix(String.withCString("nuw ")))
+                rest = rest.substringFromByte(4);
+            Array* parts = rest.splitOnByte((u8)',');
+            if (parts.count() != 3)
+                continue;
+            String* ty = ((String*)parts.get(0)).trimmed();
+            String* base = ((String*)parts.get(1)).trimmed();
+            String* ix = ((String*)parts.get(2)).trimmed();
+            if (!base.hasPrefix(String.withCString("ptr %")) || !ix.hasPrefix(String.withCString("i64 ")))
+                continue;
+            base = base.substringFromByte(4);
+            ix = ix.substringFromByte(4);
+            if (!ty.equals(String.withCString("i8")))
+                {
+                if (Languages.sizeOf(ty) > 0)
+                    elemGep.set((Hashable*)nm, (Object*)String.withFormat("%s|%s|%s", ty.cString(), base.cString(), ix.cString()));
+                continue;
+                }
+            String* e = (String*)elemGep.get((Hashable*)base);
+            if (e == (String*)0)
+                continue;
+            Array* f = e.splitOnByte((u8)'|');
+            String* et = (String*)f.get(0);
+            i64 sz = Languages.sizeOf(et);
+            bool neg = ix.hasPrefix(String.withCString("-"));
+            i64 c = Languages.intOf(neg ? ix.substringFromByte(1) : ix);
+            if (sz <= 0 || c == 0 || c % sz != 0)
+                continue;
+            i64 k = (neg ? (i64)0 - c : c) / sz;
+            String* tag = String.withFormat("%%xeo%u", made);
+            made = made + 1;
+            lines.set(i, (Object*)String.withFormat("  %s = add i64 %s, %ld\n  %s = getelementptr %s, ptr %s, i64 %s",
+                                                    tag.cString(), ((String*)f.get(2)).cString(), k,
+                                                    nm.cString(), et.cString(), ((String*)f.get(1)).cString(), tag.cString()));
+            }
+        }
 
     // The `%names` a line mentions, in order (each as written, with its %).
     static Array* namesIn(String* l)
