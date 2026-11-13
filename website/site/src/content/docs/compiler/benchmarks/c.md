@@ -29,7 +29,7 @@ Milliseconds; the median of up to fifteen runs.
 | `md5` | 229 | 387 | 212 | **1.69× faster** | **1.08× slower** |
 | `md5_mask` | 188 | 277 | 176 | **1.47× faster** | **1.07× slower** |
 | `nbody` | 6.00 | 27.3 | 96.1 | **4.5× faster** | **16.0× faster** |
-| `perlin` | 75.3 | 64.4 | 74.8 | **1.17× slower** | **1.01× slower** |
+| `perlin` | 73.7 | 64.4 | 74.8 | **1.14× slower** | **1.01× faster** |
 | `saxpy` | 3.32 | 3.28 | 3.57 | **1.01× slower** | **1.07× faster** |
 | geometric mean | | | | **2.3× faster** | **2.5× faster** |
 
@@ -63,7 +63,7 @@ Milliseconds; the median of up to fifteen runs. xcc is ahead of both on
 | `md5` | 9.39 | 16.1 | 13.4 | **1.72× faster** | **1.43× faster** |
 | `md5_mask` | 8.17 | 12.1 | 13.4 | **1.48× faster** | **1.64× faster** |
 | `nbody` | 0.45 | 1.29 | 9.92 | **2.9× faster** | **22× faster** |
-| `perlin` | 5.87 | 4.38 | 7.05 | **1.34× slower** | **1.20× faster** |
+| `perlin` | 5.64 | 4.38 | 7.05 | **1.29× slower** | **1.25× faster** |
 | `saxpy` | 2.26 | 2.18 | 2.32 | **1.04× slower** | **1.03× faster** |
 | geometric mean | | | | **2.1× faster** | **3.0× faster** |
 
