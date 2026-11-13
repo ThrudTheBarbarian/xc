@@ -3,7 +3,8 @@
 # an exception thrown through clang's frames and caught (typed, catch-all,
 # in the same function), a thread_local (libc++abi keeps its exception
 # globals in one), a virtual call, a global object's constructor (__main),
-# and a loop xcc lifts into a par block next to a throw. The program's
+# and a loop xcc lifts into a par block next to a throw; then the C++ corpus
+# (tests/par/cpp/) against the mingw toolchain's clang++. The program's
 # exception directory and TLS directory are xcc's. Skipped without Wine, a
 # clang++, or the mingw root's libc++ (/opt/clang/win64).
 #
@@ -64,5 +65,22 @@ check() { # name, want
 check throw "1 5 3 7"
 check misc "42 21 9"
 check lift "1 7.000000"
+# The C++ corpus (tests/par/cpp/), each program against the mingw
+# toolchain's clang++ where it is there to build the reference.
+REF=${ROOT%/x86_64-w64-mingw32}/bin/x86_64-w64-mingw32-clang++
+if [ -x "$REF" ]; then
+    for f in tests/par/cpp/*.cpp; do
+        b=$(basename "$f" .cpp)
+        "$REF" -std=c++20 -O2 -w -fexperimental-library -o "$W/c_$b.ref.exe" "$f" > "$W/c_$b.rb" 2>&1 \
+            || { echo "FAIL cppwine: corpus $b: the mingw clang++ does not build it"; head -3 "$W/c_$b.rb"; fail=1; continue; }
+        "$XC" -q -O3 -std=c++20 -A win64 -H . -o "$W/c_$b.exe" "$f" > "$W/c_$b.b" 2>&1 \
+            || { echo "FAIL cppwine: corpus $b does not build"; grep -v 'warning\|In file\|^ *[0-9]* |\|^ *|' "$W/c_$b.b" | head -3; fail=1; continue; }
+        want=$(timeout 120 wine "$W/c_$b.ref.exe" 2>/dev/null | tr -d '\r')
+        got=$(XC_PAR=cpu timeout 120 wine "$W/c_$b.exe" 2>/dev/null | tr -d '\r')
+        [ "$got" = "$want" ] || { echo "FAIL cppwine: corpus $b gives '$got', clang++'s '$want'"; fail=1; }
+    done
+else
+    echo "cppwine: the corpus skipped (no $REF)"
+fi
 [ $fail = 0 ] && echo "--- cppwine: pass ---" || echo "--- cppwine: FAIL ---"
 exit $fail
