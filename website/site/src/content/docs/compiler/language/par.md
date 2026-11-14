@@ -356,7 +356,10 @@ Under speed:
   `exp`, `ln` and `pow` of `float` values use the hardware's approximations. Float results can then differ from
   the CPU's in the last few bits; integer results are the same either way.
 - A loop that `--par-style` makes a block of may add up `float` and `double`
-  values in any order (see [Loops that become blocks](#loops-that-become-blocks---par-style)).
+  values in any order, but only when speed is asked for: by the loop's own
+  `:goal(speed)`, the loop or block around it, a `#goal speed` line or
+  `-fgoal=speed`. Without one, a float sum stays a serial loop, and in a C
+  program it always does (see [Loops that become blocks](#loops-that-become-blocks---par-style)).
 - The SME kernel that stands in for a matrix multiply leaves out its NaN check
   ([`:goal` on a loop](/compiler/language/statements/#speed-or-accuracy-goal)
   explains).
