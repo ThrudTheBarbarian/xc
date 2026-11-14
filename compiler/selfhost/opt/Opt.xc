@@ -53,6 +53,7 @@
 #import <OptNarrow>
 #import <OptStrengthReduce>
 #import <OptNarrowIV>
+#import <OptFloatRange>
 #import <OptVectorizeShapes>
 #import <OptVectorizeRewrite>
 #import <OptOuterVectorize>
@@ -776,6 +777,12 @@
         if (_level >= (u32)2)
             self.narrowIV(m);
         if (stopHere(String.withCString("narrow-iv")))
+            return;
+        // A float-to-integer conversion whose operand is known finite and in
+        // range drops its range check (#23). On the final loop shapes.
+        if (_level >= (u32)2)
+            self.floatRange(m);
+        if (stopHere(String.withCString("float-range")))
             return;
         if (_level >= (u32)2 && (_profile.bitSelect() || _profile.bitSelect512()))
             self.vecPool(m);

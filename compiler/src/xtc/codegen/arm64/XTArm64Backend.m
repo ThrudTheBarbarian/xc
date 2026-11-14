@@ -7472,6 +7472,19 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
             NSString *src = [self operandReg:insn.operands[0]
                                  intoScratch:[self fregName:0 forType:av.type] ctx:ctx];
             BOOL toSigned = (insn.opcode == XTIROpFpToSI);
+            // UNCHECKED (C's casts, and xc's conversions the float-range pass
+            // proved in range, #23): the convert writes the result's own
+            // register at its width (#22: perlin's (unsigned)x was fcvtzu x16
+            // then a copy). As the port.
+            if (insn.predicate == XTIRConvUnchecked) {
+                NSUInteger uw = insn.result.type.byteWidth;
+                NSString *d = [self resultReg:insn.result.valueId
+                                      scratch:(uw >= 8 ? @"x16" : @"w16") ctx:ctx];
+                [ctx.out appendFormat:@"    %@ %@, %@\n", toSigned ? @"fcvtzs" : @"fcvtzu", d, src];
+                [self canonicaliseReg:d toType:insn.result.type ctx:ctx];
+                [self storeReg:d intoValue:insn.result.valueId ctx:ctx];
+                break;
+            }
             // Convert to 64-bit, then if the truncated value doesn't fit the
             // destination integer width, produce 0. LANGUAGE-SPEC §3.1 says an
             // out-of-range float→int saturates to 0 (and xt6502 does); ARMv8
