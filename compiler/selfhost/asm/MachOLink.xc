@@ -22,6 +22,7 @@ class MachOLink
     Map* _slots;       // symbol -> its pointer slot's name (a data GOT entry)
     Array* _slotOrder; // the symbols in _slots, in the order first asked for
     Array* _unwind;    // MachOUnwindRec@, the merged image's
+    Array* _fdes;      // MachOFde@, the merged image's (from the objects' __eh_frame)
 
     SectionBytes* _objModInit; // the objects' constructor lists, one after another
     Array* _objModInitFix; // Arm64Fixup@ against _objModInit
@@ -33,6 +34,7 @@ class MachOLink
         _slots = new Map();
         _slotOrder = new Array();
         _unwind = new Array();
+        _fdes = new Array();
         _objModInit = new SectionBytes();
         _objModInitFix = new Array();
         }
@@ -457,6 +459,26 @@ class MachOLink
                     {
                     MachOUnwindRec* ur = (MachOUnwindRec*)uw.get(k);
                     MachOUnwindRec* mr = MachOUnwindRec.with(base + ur.fn(), ur.len(), ur.enc(), ur.pers(), ur.lsda());
+                    // A DWARF-mode entry's FDE is its function's (in an object
+                    // the offset is a placeholder the final link fills): the
+                    // FDE joins the image's list, and the writer gives the
+                    // entry its offset there. One whose FDE was not taken keeps
+                    // no entry (encoding 0) rather than an offset into nothing.
+                    if ((ur.enc() & (u32)$0F000000) == (u32)$03000000)
+                        {
+                        mr.setEnc((u32)0);
+                        Array* ofd = obj.fdes();
+                        for (u32 q = (u32)0; ofd != (Array*)0 && q < ofd.count(); q = q + (u32)1)
+                            {
+                            MachOFde* of = (MachOFde*)ofd.get(q);
+                            if (of.fn() == ur.fn())
+                                {
+                                mr.setEnc((u32)$03000000);
+                                mr.setFde(_fdes.count() + q + (u32)1);
+                                break;
+                                }
+                            }
+                        }
                     if (ur.pers() != (u32)0 && ur.pers() - (u32)1 < obj.symdefs().count())
                         mr.setPersSym(self.slotFor(MachOLink.taggedSym((MachOSymDef*)obj.symdefs().get(ur.pers() - (u32)1), oi)));
                     if (ur.lsda() != (u32)0)
@@ -468,11 +490,16 @@ class MachOLink
                         }
                     _unwind.add((Object*)mr);
                     }
+                // Its FDEs, at merged offsets.
+                Array* fd = obj.fdes();
+                for (u32 k = (u32)0; fd != (Array*)0 && k < fd.count(); k = k + (u32)1)
+                    _fdes.add((Object*)((MachOFde*)fd.get(k)).moved(base));
                 progress = true;
                 }
             }
         self.makeSlots(mdata, msyms, mdataSyms, mfix);
         MachOUnwind.setPending(_unwind.count() > (u32)0 ? _unwind : (Array*)0);
+        MachOFdes.setPending(_fdes.count() > (u32)0 ? _fdes : (Array*)0);
         MachOLink.selectorStubs(mtext, mdata, msyms, mdataSyms, mfix, mObjc);
         // GOT references, now that the pull has settled: a target DEFINED here
         // needs no GOT — relax `adrp x,s@GOTPAGE; ldr x,[x,s@GOTPAGEOFF]` to

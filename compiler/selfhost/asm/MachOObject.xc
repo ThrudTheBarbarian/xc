@@ -184,10 +184,14 @@ class MachOSymDef
     u32 _lsda;
     String* _persSym;   // the link's: the personality's pointer slot
     String* _lsdaSym;   // the link's: the LSDA, as a data symbol
+    u32 _fde;           // a DWARF-mode entry's FDE in the image's list, plus one (0: none)
 
     void init(void)
         {
         }
+    u32 fde(void) { return _fde; }
+    void setFde(u32 f) { _fde = f; }
+    void setEnc(u32 e) { _enc = e; }
     u32 fn(void) { return _fn; }
     u32 len(void) { return _len; }
     u32 enc(void) { return _enc; }
@@ -208,6 +212,115 @@ class MachOSymDef
         r._lsda = lsda;
         return r;
         }
+    }
+
+    // One FDE of an object's __eh_frame: its function by text offset, and the
+    // call-frame rules of it and of its CIE (augmentation "zR" only: a CIE
+    // naming a personality or an LSDA is left out).
+    class MachOFde
+    {
+    u32 _fn;
+    u32 _len;
+    u32 _codeAlign;
+    i64 _dataAlign;
+    u32 _ra;
+    Data* _cieIns;   // the CIE's initial instructions
+    Data* _ins;      // the FDE's instructions
+    u32 _objOff;     // its offset in its object's __eh_frame (what a DWARF-mode entry names)
+
+    void init(void)
+        {
+        }
+    u32 objOff(void) { return _objOff; }
+    u32 fn(void) { return _fn; }
+    u32 len(void) { return _len; }
+    u32 codeAlign(void) { return _codeAlign; }
+    i64 dataAlign(void) { return _dataAlign; }
+    u32 ra(void) { return _ra; }
+    Data* cieIns(void) { return _cieIns; }
+    Data* ins(void) { return _ins; }
+    MachOFde* moved(u32 by)
+        {
+        MachOFde* f = new MachOFde();
+        f._fn = _fn + by;
+        f._len = _len;
+        f._codeAlign = _codeAlign;
+        f._dataAlign = _dataAlign;
+        f._ra = _ra;
+        f._cieIns = _cieIns;
+        f._ins = _ins;
+        f._objOff = _objOff;
+        return f;
+        }
+    }
+
+    // The merged image's FDEs (MachOFde@, functions at image text offsets),
+    // from the link to the writer; 0 when no object had any.
+    // A reading position in a Data, for LEB128 and byte fields.
+    class LebCursor
+    {
+    Data* _d;
+    u32 _at;
+
+    void init(void)
+        {
+        }
+    static LebCursor* at(Data* d, u32 at)
+        {
+        LebCursor* c = new LebCursor();
+        c._d = d;
+        c._at = at;
+        return c;
+        }
+    u32 where(void) { return _at; }
+    u32 u8v(void)
+        {
+        u32 v = (u32)_d.byteAt(_at);
+        _at = _at + (u32)1;
+        return v;
+        }
+    u64 uleb(void)
+        {
+        u64 v = (u64)0;
+        u32 shift = (u32)0;
+        for (u32 g = (u32)0; g < (u32)10; g = g + (u32)1)
+            {
+            u32 byte = self.u8v();
+            v = v | ((u64)(byte & (u32)$7F) << (u64)shift);
+            shift = shift + (u32)7;
+            if ((byte & (u32)$80) == (u32)0)
+                break;
+            }
+        return v;
+        }
+    i64 sleb(void)
+        {
+        i64 v = (i64)0;
+        u32 shift = (u32)0;
+        u32 byte = (u32)0;
+        for (u32 g = (u32)0; g < (u32)10; g = g + (u32)1)
+            {
+            byte = self.u8v();
+            v = v | ((i64)(byte & (u32)$7F) << (i64)shift);
+            shift = shift + (u32)7;
+            if ((byte & (u32)$80) == (u32)0)
+                break;
+            }
+        if (shift < (u32)64 && (byte & (u32)$40) != (u32)0)
+            v = v | ((i64)-1 << (i64)shift);
+        return v;
+        }
+    }
+
+    class MachOFdes
+    {
+    static Array* _pending;
+
+    void init(void)
+        {
+        }
+    static Array* pending(void) { return _pending; }
+    static void setPending(Array* a) { _pending = a; }
     }
 
     // The merged image's unwind entries, from the link to the writer (as
@@ -239,6 +352,8 @@ class MachOSymDef
     Map* _commons;      // common (tentative) NAME -> Number(size), for bug 177
     u32 _dataPageMask;  // the largest page alignment (4 KB and more) in the blob, less one; 0 when none
     Array* _unwind;     // MachOUnwindRec@, from __LD,__compact_unwind
+    Array* _fdes;       // MachOFde@, from __TEXT,__eh_frame
+    Array* _symvals;    // Number@ (i64), each symbol's n_value, nlist order
     bool _ok;
 
     void init(void)
@@ -257,8 +372,12 @@ class MachOSymDef
         _commons = new Map();
         _dataPageMask = (u32)0;
         _unwind = new Array();
+        _fdes = new Array();
+        _symvals = new Array();
         _ok = false;
         }
+
+    Array* fdes(void) { return _fdes; }
 
     Array* unwind(void)
         {
@@ -590,6 +709,7 @@ class MachOSymDef
                 }
             MachOSymDef* sd = new MachOSymDef();
             sd.set(n, ext, where, off);
+            o._symvals.add((Object*)Number.withI64((i64)val));
             o._symnames.add((Object*)n);
             o._symdefs.add((Object*)sd);
             if (n.byteLength() > (u32)0 && ext && where == (u32)1)
@@ -697,6 +817,139 @@ class MachOSymDef
                         lsda = ((MachOSymDef*)o._symdefs.get(lr.symnum())).off() + (u32)lv + (u32)1;
                     }
                 o._unwind.add((Object*)MachOUnwindRec.with(fn, len, enc, pers, lsda));
+                }
+            }
+        // __eh_frame: each FDE of a "zR" CIE whose address resolves into the
+        // object's code without a relocation (xcc's, pc-relative in the
+        // object's own addresses), for the image's __eh_frame.
+        for (u32 si = (u32)1; si < sects.count(); si = si + (u32)1)
+            {
+            MachOSectHdr* es = (MachOSectHdr*)sects.get(si);
+            // With relocations too (a `clang -r` object): the addresses are
+            // still written pc-relative in the object's own addresses; an
+            // FDE whose address does not resolve into code is left out.
+            if (!es._name.equals(String.withCString("__eh_frame")))
+                continue;
+            // `clang -r` writes an FDE's address against a global function as a
+            // SUBTRACTOR / UNSIGNED pair, the UNSIGNED naming the function's
+            // symbol: by field offset, that symbol's text offset.
+            // A field with a SUBTRACTOR (A) / UNSIGNED (B) pair holds
+            // B - A + its stored value (both symbols' object addresses):
+            // by field offset, B - A.
+            Map* subSym = new Map(); // field offset -> Number(A's address)
+            Map* pairAt = new Map(); // field offset -> Number(B - A, as i64)
+            for (u32 i = (u32)0; i < es._nreloc; i = i + (u32)1)
+                {
+                u32 r = es._reloff + i * (u32)8;
+                MachOReloc* rl = new MachOReloc();
+                rl.set(MachOObject.rd32(b, r), MachOObject.rd32(b, r + (u32)4));
+                if (rl.ext() == (u32)0 || rl.symnum() >= o._symvals.count())
+                    continue;
+                i64 sv = ((Number*)o._symvals.get(rl.symnum())).asI64();
+                if (rl.type() == (u32)1)
+                    subSym.set((Hashable*)Number.withU32(rl.off()), (Object*)Number.withI64(sv));
+                else if (rl.type() == (u32)0)
+                    {
+                    Number* a = (Number*)subSym.get((Hashable*)Number.withU32(rl.off()));
+                    if (a != (Number*)0)
+                        pairAt.set((Hashable*)Number.withU32(rl.off()), (Object*)Number.withI64(sv - a.asI64()));
+                    }
+                }
+            Map* cies = new Map(); // offset -> MachOFde (a template: its CIE's fields), absent when not taken
+            Map* encs = new Map(); // offset -> Number(pointer encoding)
+            u32 pos = (u32)0;
+            while (pos + (u32)8 <= es._size)
+                {
+                u32 len = MachOObject.rd32(b, es._foff + pos);
+                if (len == (u32)0 || len == (u32)$FFFFFFFF || pos + (u32)4 + len > es._size)
+                    break;
+                u32 id = MachOObject.rd32(b, es._foff + pos + (u32)4);
+                u32 end = pos + (u32)4 + len;
+                LebCursor* c = LebCursor.at(b, es._foff + pos + (u32)8);
+                if (id == (u32)0)
+                    {
+                    u32 version = c.u8v();
+                    String* aug = new String();
+                    for (u32 g = (u32)0; g < (u32)16; g = g + (u32)1)
+                        {
+                        u32 ch = c.u8v();
+                        if (ch == (u32)0)
+                            break;
+                        aug.appendByte((u8)ch);
+                        }
+                    MachOFde* t = new MachOFde();
+                    t._codeAlign = (u32)c.uleb();
+                    t._dataAlign = c.sleb();
+                    t._ra = version == (u32)1 ? c.u8v() : (u32)c.uleb();
+                    bool ok = aug.equals(String.withCString("zR"));
+                    u32 enc = (u32)0;
+                    if (ok)
+                        {
+                        c.uleb();          // augmentation data length (1)
+                        enc = c.u8v();
+                        ok = enc == (u32)$1B || enc == (u32)$10 || enc == (u32)0;
+                        }
+                    if (ok)
+                        {
+                        t._cieIns = new Data();
+                        for (u32 q = c.where() - es._foff; q < end; q = q + (u32)1)
+                            t._cieIns.appendByte(b.byteAt(es._foff + q));
+                        cies.set((Hashable*)Number.withU32(pos), (Object*)t);
+                        encs.set((Hashable*)Number.withU32(pos), (Object*)Number.withU32(enc));
+                        }
+                    }
+                else
+                    {
+                    Number* ip = (Number*)pairAt.get((Hashable*)Number.withU32(pos + (u32)4));
+                    u32 cieAt = pos + (u32)4 - (ip != (Number*)0 ? (u32)(ip.asI64() + (i64)id) : id);
+                    MachOFde* t = (MachOFde*)cies.get((Hashable*)Number.withU32(cieAt));
+                    if (t != (MachOFde*)0)
+                        {
+                        u32 enc = ((Number*)encs.get((Hashable*)Number.withU32(cieAt))).asU32();
+                        u32 field = pos + (u32)8;
+                        i64 v = (i64)0;
+                        u32 range = (u32)0;
+                        u32 after = field;
+                        if (enc == (u32)$1B)
+                            {
+                            v = (i64)(i32)MachOObject.rd32(b, es._foff + field);
+                            range = MachOObject.rd32(b, es._foff + field + (u32)4);
+                            after = field + (u32)8;
+                            }
+                        else
+                            {
+                            v = (i64)MachOObject.rd64(b, es._foff + field);
+                            range = (u32)MachOObject.rd64(b, es._foff + field + (u32)8);
+                            after = field + (u32)16;
+                            }
+                        Number* pv = (Number*)pairAt.get((Hashable*)Number.withU32(field));
+                        if (pv != (Number*)0)
+                            v = v + pv.asI64();
+                        i64 target = (enc & (u32)$70) == (u32)$10 ? (i64)es._addr + (i64)field + v : v;
+                        i64 fn = (i64)-1;
+                        for (u32 k = (u32)1; k < sects.count() && fn < (i64)0; k = k + (u32)1)
+                            {
+                            Object* co = codeOff.get((Hashable*)Number.withU32(k));
+                            MachOSectHdr* ks = (MachOSectHdr*)sects.get(k);
+                            if (co != (Object*)0 && target >= (i64)ks._addr && target < (i64)ks._addr + (i64)ks._size)
+                                fn = (i64)(((Number*)co).asU32() - (u32)1) + (target - (i64)ks._addr);
+                            }
+                        if (fn >= (i64)0)
+                            {
+                            LebCursor* fc = LebCursor.at(b, es._foff + after);
+                            u32 al = (u32)fc.uleb();   // augmentation data ("z")
+                            MachOFde* f = t.moved((u32)0);
+                            f._fn = (u32)fn;
+                            f._objOff = pos;
+                            f._len = range;
+                            f._ins = new Data();
+                            for (u32 q = fc.where() - es._foff + al; q < end; q = q + (u32)1)
+                                f._ins.appendByte(b.byteAt(es._foff + q));
+                            o._fdes.add((Object*)f);
+                            }
+                        }
+                    }
+                pos = end;
                 }
             }
         o._ok = true;

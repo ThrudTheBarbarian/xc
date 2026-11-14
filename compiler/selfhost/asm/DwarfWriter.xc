@@ -119,6 +119,7 @@ class DwarfWriter
     Array* _rowLine;
     Array* _rowCol;
     Array* _frameSetups; // Number@ u32 text offsets
+    Array* _frameSaves;  // String@ parallel: `reg:cfaoff ...` (C/C++ input), "" where none
     Array* _frameSizes;  // Number@ u32, parallel: the call frame's distance above fp
     Array* _variables;   // DwarfVar@, in assembly order
     Map* _typeDie;       // IR type spelling -> Number@ its DIE's unit offset (0 = none)
@@ -132,6 +133,7 @@ class DwarfWriter
         _rowLine = new Array();
         _rowCol = new Array();
         _frameSetups = new Array();
+        _frameSaves = new Array();
         _frameSizes = new Array();
         _variables = new Array();
         _secs = new Array();
@@ -208,6 +210,22 @@ class DwarfWriter
     {
         _frameSetups.add((Object*)Number.withU32(offset));
         _frameSizes.add((Object*)Number.withU32(frameSize));
+        _frameSaves.add((Object*)String.withCString(""));
+    }
+
+    // The registers the last frame set up saves (`.xc_saves`, C/C++ input).
+    void addSaves(String* list)
+    {
+        if (_frameSaves.count() > (u32)0)
+            _frameSaves.set(_frameSaves.count() - (u32)1, (Object*)list);
+    }
+
+    // True when any frame records its saves: the unwind tables are wanted.
+    bool hasSaves(void)
+    {
+        for (u32 i = (u32)0; i < _frameSaves.count(); i = i + (u32)1)
+            if (((String*)_frameSaves.get(i)).byteLength() > (u32)0) return true;
+        return false;
     }
 
     void addVariable(String* name, u32 at, u32 reg, i64 off, String* type, bool param)
@@ -718,11 +736,72 @@ class DwarfWriter
         return at;
     }
 
+    // The frame setups in offset order, each with its frame size and saves:
+    // into setups, sizes and saves.
+    void framesInOrder(Array* setups, Array* sizes, Array* saves)
+    {
+        Array* order = new Array();
+        Array* offs = new Array();
+        for (u32 i = (u32)0; i < _frameSetups.count(); i = i + (u32)1) {
+            order.add((Object*)Number.withU32(i));
+            offs.add(_frameSetups.get(i));
+        }
+        DwarfWriter.sortByOffset(order, offs);
+        for (u32 i = (u32)0; i < order.count(); i = i + (u32)1) {
+            u32 k = ((Number*)order.get(i)).asU32();
+            setups.add(_frameSetups.get(k));
+            sizes.add(_frameSizes.get(k));
+            saves.add(_frameSaves.get(k));
+        }
+    }
+
+    // A function's call-frame rules once its frame is set up `delta` code
+    // units in: the frame is fp + size, fp and the return address at its
+    // bottom, and each register `saves` names (`reg:cfaoff`) at its offset.
+    static void frameRules(Data* frame, u32 delta, u32 size, String* saves, u32 fpReg, u32 raReg)
+    {
+        DwarfWriter.putU8(frame, (u32)$02); // DW_CFA_advance_loc1 (a prologue is short)
+        DwarfWriter.putU8(frame, delta > (u32)255 ? (u32)255 : delta);
+        DwarfWriter.putU8(frame, (u32)$0C); // DW_CFA_def_cfa fp, size
+        DwarfWriter.putULEB(frame, (u64)fpReg);
+        DwarfWriter.putULEB(frame, (u64)size);
+        if (saves.byteLength() == (u32)0) {
+            DwarfWriter.putU8(frame, (u32)$80 | fpReg); // fp at cfa-size
+            DwarfWriter.putULEB(frame, (u64)(size / (u32)8));
+            DwarfWriter.putU8(frame, (u32)$80 | raReg); // return address just above it
+            DwarfWriter.putULEB(frame, (u64)(size / (u32)8 - (u32)1));
+            return;
+        }
+        Array* ws = saves.splitOnByte((u8)' ');
+        for (u32 i = (u32)0; i < ws.count(); i = i + (u32)1) {
+            Array* rv = ((String*)ws.get(i)).splitOnByte((u8)':');
+            if (rv.count() != (u32)2) continue;
+            DwarfScan* rs = DwarfScan.over((String*)rv.get((u32)0), (u32)0);
+            String* vs = (String*)rv.get((u32)1);
+            bool neg = vs.hasPrefix(String.withCString("-"));
+            DwarfScan* os = DwarfScan.over(neg ? vs.substringFromByte((u32)1) : vs, (u32)0);
+            if (!rs.scanInt() || !os.scanInt()) continue;
+            u32 reg = (u32)rs.value();
+            i64 off = neg ? (i64)0 - (i64)os.value() : (i64)os.value();
+            // Data alignment -8: the factored offset is -off / 8.
+            u64 fo = (u64)((i64)0 - off) / (u64)8;
+            if (reg < (u32)64) {
+                DwarfWriter.putU8(frame, (u32)$80 | reg); // DW_CFA_offset
+                DwarfWriter.putULEB(frame, fo);
+            } else {
+                DwarfWriter.putU8(frame, (u32)$05);       // DW_CFA_offset_extended
+                DwarfWriter.putULEB(frame, (u64)reg);
+                DwarfWriter.putULEB(frame, fo);
+            }
+        }
+    }
+
     // ---- .debug_frame ----
     // One CIE: on entry the call frame is the stack pointer and the return
     // address is in the link register. Then one FDE per function, which moves
     // the frame to fp + 16 once the frame record is set up (where fp and lr
-    // are saved at -16 and -8).
+    // are saved at -16 and -8), and names where each callee-saved register
+    // is (C/C++ input).
     Data* buildFrame(u64 textAddress, u32 textSize, Array* names, Array* offs, u32 minInsnLength)
     {
         bool a64 = minInsnLength == (u32)4;
@@ -748,14 +827,10 @@ class DwarfWriter
             DwarfWriter.putU8(frame, (u32)0); // DW_CFA_nop
         DwarfWriter.patchU32(frame, (u32)0, frame.length() - (u32)4);
 
-        // The frame setups in offset order.
         Array* setups = new Array();
         Array* sizes = new Array();
-        for (u32 i = (u32)0; i < _frameSetups.count(); i = i + (u32)1) {
-            setups.add(_frameSetups.get(i));
-            sizes.add(_frameSizes.get(i));
-        }
-        DwarfWriter.sortByOffset(sizes, setups);
+        Array* saves = new Array();
+        framesInOrder(setups, sizes, saves);
 
         for (u32 i = (u32)0; i < names.count(); i = i + (u32)1) {
             u32 start = ((Number*)offs.get(i)).asU32();
@@ -768,24 +843,109 @@ class DwarfWriter
             DwarfWriter.putU64(frame, (u64)(end - start));
             for (u32 k = (u32)0; k < setups.count(); k = k + (u32)1) {
                 u32 at = ((Number*)setups.get(k)).asU32();
-                u32 size = ((Number*)sizes.get(k)).asU32();
                 if (at < start || at >= end) continue;
-                u32 delta = (at - start) / minInsnLength;
-                DwarfWriter.putU8(frame, (u32)$02); // DW_CFA_advance_loc1 (a prologue is short)
-                DwarfWriter.putU8(frame, delta > (u32)255 ? (u32)255 : delta);
-                DwarfWriter.putU8(frame, (u32)$0C); // DW_CFA_def_cfa fp, size
-                DwarfWriter.putULEB(frame, (u64)fpReg);
-                DwarfWriter.putULEB(frame, (u64)size);
-                DwarfWriter.putU8(frame, (u32)$80 | fpReg); // fp at cfa-size
-                DwarfWriter.putULEB(frame, (u64)(size / (u32)8));
-                DwarfWriter.putU8(frame, (u32)$80 | raReg); // return address just above it
-                DwarfWriter.putULEB(frame, (u64)(size / (u32)8 - (u32)1));
+                DwarfWriter.frameRules(frame, (at - start) / minInsnLength, ((Number*)sizes.get(k)).asU32(),
+                                       (String*)saves.get(k), fpReg, raReg);
                 break;
             }
             while ((frame.length() - fdeAt) % (u32)8 != (u32)0)
                 DwarfWriter.putU8(frame, (u32)0);
             DwarfWriter.patchU32(frame, fdeAt, frame.length() - fdeAt - (u32)4);
         }
+        return frame;
+    }
+
+    // ---- __eh_frame / .eh_frame ----
+    // The unwind tables a C++ exception reads (C/C++ input): a CIE with
+    // augmentation "zR" (addresses pc-relative, 4 bytes), then an FDE for each
+    // function whose frame recorded its saves, with the same rules as above.
+    // `ehAddress` is where the table lands, `textAddress` where text does.
+    // The FDEs' offsets in the table go into fdeOffs (Number@, -1 where a
+    // function has none), parallel to names.
+    Data* buildEhFrame(u64 ehAddress, u64 textAddress, u32 textSize, Array* names, Array* offs,
+                       u32 minInsnLength, Array* fdeOffs)
+    {
+        return self.buildEhFrameAs(ehAddress, textAddress, textSize, names, offs, minInsnLength, fdeOffs, (Array*)0);
+    }
+
+    // The same; with `fields` given, for an object to relocate (as clang's):
+    // addresses 8 bytes (pcrel | absptr), each address field holding minus
+    // its own offset (the addend of a SUBTRACTOR / UNSIGNED pair against the
+    // table's start and the function), whose offsets go into fields
+    // (Number@, parallel to fdeOffs, -1 where a function has no FDE).
+    Data* buildEhFrameAs(u64 ehAddress, u64 textAddress, u32 textSize, Array* names, Array* offs,
+                         u32 minInsnLength, Array* fdeOffs, Array* fields)
+    {
+        bool wide = fields != (Array*)0;
+        bool a64 = minInsnLength == (u32)4;
+        Data* frame = new Data();
+        u32 spReg = a64 ? (u32)31 : (u32)7;
+        u32 raReg = a64 ? (u32)30 : (u32)16;
+        u32 fpReg = a64 ? (u32)29 : (u32)6;
+        DwarfWriter.putU32(frame, (u32)0);      // length, patched
+        DwarfWriter.putU32(frame, (u32)0);      // CIE id (0 in .eh_frame)
+        DwarfWriter.putU8(frame, (u32)1);       // version
+        DwarfWriter.putU8(frame, (u32)'z');
+        DwarfWriter.putU8(frame, (u32)'R');
+        DwarfWriter.putU8(frame, (u32)0);
+        DwarfWriter.putULEB(frame, (u64)minInsnLength);
+        DwarfWriter.putSLEB(frame, (i64)-8);
+        DwarfWriter.putULEB(frame, (u64)raReg);
+        DwarfWriter.putULEB(frame, (u64)1);     // augmentation data: one byte
+        DwarfWriter.putU8(frame, wide ? (u32)$10 : (u32)$1B); // FDE addresses: pcrel | absptr (8) or sdata4
+        DwarfWriter.putU8(frame, (u32)$0C);     // DW_CFA_def_cfa sp, 0 (8 on x86-64)
+        DwarfWriter.putULEB(frame, (u64)spReg);
+        DwarfWriter.putULEB(frame, a64 ? (u64)0 : (u64)8);
+        if (!a64) {
+            DwarfWriter.putU8(frame, (u32)$80 | raReg);
+            DwarfWriter.putULEB(frame, (u64)1);
+        }
+        while (frame.length() % (u32)4 != (u32)0)
+            DwarfWriter.putU8(frame, (u32)0);
+        DwarfWriter.patchU32(frame, (u32)0, frame.length() - (u32)4);
+
+        // The functions in address order (functionsOf gives them unsorted;
+        // sorted here in place, so fdeOffs is parallel to the sorted lists).
+        DwarfWriter.sortByOffset(names, offs);
+        Array* setups = new Array();
+        Array* sizes = new Array();
+        Array* saves = new Array();
+        framesInOrder(setups, sizes, saves);
+        for (u32 i = (u32)0; i < names.count(); i = i + (u32)1) {
+            u32 start = ((Number*)offs.get(i)).asU32();
+            u32 end = (i + (u32)1 < names.count()) ? ((Number*)offs.get(i + (u32)1)).asU32() : textSize;
+            u32 found = (u32)$FFFF_FFFF;
+            for (u32 k = (u32)0; k < setups.count() && end > start; k = k + (u32)1) {
+                u32 at = ((Number*)setups.get(k)).asU32();
+                if (at >= start && at < end && ((String*)saves.get(k)).byteLength() > (u32)0) { found = k; break; }
+            }
+            if (found == (u32)$FFFF_FFFF) {
+                fdeOffs.add((Object*)Number.withI64((i64)-1));
+                if (wide) fields.add((Object*)Number.withI64((i64)-1));
+                continue;
+            }
+            u32 fdeAt = frame.length();
+            fdeOffs.add((Object*)Number.withI64((i64)fdeAt));
+            DwarfWriter.putU32(frame, (u32)0);                // length, patched
+            DwarfWriter.putU32(frame, fdeAt + (u32)4);        // back to the CIE at 0
+            if (wide) {
+                fields.add((Object*)Number.withI64((i64)(fdeAt + (u32)8)));
+                DwarfWriter.putU64(frame, (u64)((i64)0 - (i64)(fdeAt + (u32)8))); // the relocation's addend
+                DwarfWriter.putU64(frame, (u64)(end - start));
+            } else {
+                i64 pc = (i64)(textAddress + (u64)start) - (i64)(ehAddress + (u64)fdeAt + (u64)8);
+                DwarfWriter.putU32(frame, (u32)pc);           // initial location, pc-relative
+                DwarfWriter.putU32(frame, end - start);       // range
+            }
+            DwarfWriter.putULEB(frame, (u64)0);               // augmentation data length
+            u32 at = ((Number*)setups.get(found)).asU32();
+            DwarfWriter.frameRules(frame, (at - start) / minInsnLength, ((Number*)sizes.get(found)).asU32(),
+                                   (String*)saves.get(found), fpReg, raReg);
+            while ((frame.length() - fdeAt) % (u32)4 != (u32)0)
+                DwarfWriter.putU8(frame, (u32)0);
+            DwarfWriter.patchU32(frame, fdeAt, frame.length() - fdeAt - (u32)4);
+        }
+        DwarfWriter.putU32(frame, (u32)0); // the terminator
         return frame;
     }
 
