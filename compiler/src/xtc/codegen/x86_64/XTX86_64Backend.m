@@ -2755,45 +2755,6 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
             }
     }
 
-// Whether a vector phi's incoming value must keep its own register (#220): it
-// is made before the phi's block (index h) and something other than the phi
-// reads it in that block or after (a loop's bound, read on every pass).
-// Coalesced, the phi's updates would overwrite it. As the port.
-static BOOL vecPhiInLive(XTIRFunction* fn, XTIRInsn* p, NSUInteger h, XTIRValueId v)
-    {
-    NSInteger dv = -1;
-    NSUInteger nb = fn.blocks.count;
-    for (NSUInteger b = 0; b < nb && dv < 0; b++)
-        {
-        XTIRBlock* bb = fn.blocks[b];
-        for (XTIRInsn* q in bb.phiNodes)
-            if (dv < 0 && q.result && q.result.valueId == v)
-                dv = (NSInteger)b;
-        for (XTIRInsn* q in bb.instructions)
-            if (dv < 0 && q.result && q.result.valueId == v)
-                dv = (NSInteger)b;
-        }
-    if (dv >= (NSInteger)h)
-        return NO;
-    for (NSUInteger b = h; b < nb; b++)
-        {
-        XTIRBlock* bb = fn.blocks[b];
-        NSMutableArray<XTIRInsn*>* all = [NSMutableArray arrayWithArray:bb.phiNodes];
-        [all addObjectsFromArray:bb.instructions];
-        if (bb.terminator)
-            [all addObject:bb.terminator];
-        for (XTIRInsn* u in all)
-            {
-            if (u == p)
-                continue;
-            for (XTIROperand* o in u.operands)
-                if (o.kind == XTIROperandKindUse && o.valueId == v)
-                    return YES;
-            }
-        }
-    return NO;
-    }
-
 // xmmN, ymmN or zmmN for the width of value vid.
 static NSString* vecScratchName(XTIRFunction* fn, XTIRValueId vid, unsigned r)
     {
@@ -2905,13 +2866,13 @@ static void vecSlotMove(XTIRFunction* fn, XTIRValueId vid, NSString* reg, BOOL l
         return nil;
 
     NSMutableDictionary<NSNumber*, NSNumber*>* canon = [NSMutableDictionary dictionary];
-    for (NSUInteger hb = 0; hb < fn.blocks.count; hb++)
-        for (XTIRInsn* p in fn.blocks[hb].phiNodes)
+    for (XTIRBlock* bb in fn.blocks)
+        for (XTIRInsn* p in bb.phiNodes)
             {
             if (!p.result || p.result.type.kind != XTIRTypeKindVec)
                 continue;
             for (XTIROperand* o in p.operands)
-                if (o.kind == XTIROperandKindUse && !vecPhiInLive(fn, p, hb, o.valueId))
+                if (o.kind == XTIROperandKindUse)
                     canon[@(o.valueId)] = @(p.result.valueId);
             }
     XTIRValueId (^classOf)(XTIRValueId) = ^XTIRValueId(XTIRValueId v) {
