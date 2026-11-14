@@ -204,6 +204,10 @@ class ElfLinkArm64
                 labels.add((Object*)lb);
                 }
             }
+        // The objects' frame tables when gathered (elfSetEhGather), end to end,
+        // and their fixups (offsets into ehw): placed after the pull.
+        SectionBytes* ehw = new SectionBytes();
+        Array* ehf = new Array();
         Map* pulled = new Map();
         Map* strongDefs = new Map();
         Map* weakDefs = new Map();
@@ -399,6 +403,28 @@ class ElfLinkArm64
                     fail(m);
                     return;
                     }
+                // The object's frame table, gathered, with its PC-relative words.
+                Data* eht = obj.eh();
+                u32 ehb = ehw.length();
+                for (u32 b = (u32)0; b < eht.length(); b = b + (u32)1)
+                    ehw.appendByte(eht.byteAt(b));
+                Array* el = obj.ehRelocs();
+                for (u32 k = (u32)0; k < el.count(); k = k + (u32)1)
+                    {
+                    ElfReloc* r = (ElfReloc*)el.get(k);
+                    // PREL32 / PREL64: a function's start, an LSDA, a personality.
+                    bool p64 = r.type() == (u32)RA64_PREL64;
+                    if ((r.type() != (u32)RA64_PREL32 && !p64) || r.sym() >= sdefs.count())
+                        {
+                        fail(String.withFormat("an .eh_frame relocation of type %u in %s", r.type(), label.cString()));
+                        return;
+                        }
+                    ElfSymDef* sd = (ElfSymDef*)sdefs.get(r.sym());
+                    Arm64Fixup* f = Arm64Fixup.make(ehb + r.off(), p64 ? (u32)FIXUP_PREL64 : (u32)FIXUP_PREL32,
+                                                    ElfLinkArm64.taggedSym(sd, oi, r.sym()), (u32)0);
+                    f.setAddend((i32)r.addend());
+                    ehf.add((Object*)f);
+                    }
                 // The object's constructors: each pointer word a Pointer64
                 // fixup at its place in the list.
                 Data* ia = obj.initArray();
@@ -422,6 +448,27 @@ class ElfLinkArm64
                     }
                 progress = true;
                 }
+            }
+        // The gathered tables after the data, one terminator: the one
+        // __register_frame of __xc_eh_frame_start covers every object's.
+        if (ehw.length() > (u32)0)
+            {
+            ElfLinkArm64.padArray(mdata, (u32)7);
+            u32 base = mdata.length();
+            for (u32 b = (u32)0; b < ehw.length(); b = b + (u32)1)
+                mdata.appendByte(ehw.byteAt(b));
+            for (u32 b = (u32)0; b < (u32)4; b = b + (u32)1)
+                mdata.appendByte((u8)0);
+            for (u32 i = (u32)0; i < ehf.count(); i = i + (u32)1)
+                {
+                Arm64Fixup* ef = (Arm64Fixup*)ehf.get(i);
+                Arm64Fixup* f = Arm64Fixup.make(base + ef.offset(), ef.kind(), ef.symbol(), (u32)0);
+                f.setAddend(ef.addend());
+                mfix.add((Object*)f);
+                }
+            String* ehName = String.withCString("__xc_eh_frame_start");
+            msyms.set((Hashable*)ehName, (Object*)Number.withU32(base));
+            mdataSyms.add((Object*)ehName);
             }
         // GOT references to what the image defines: adrp/ldr → adrp/add.
         for (u32 i = (u32)0; i < _gotFixups.count(); i = i + (u32)1)

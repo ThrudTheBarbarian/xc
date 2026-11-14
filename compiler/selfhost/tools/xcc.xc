@@ -4978,6 +4978,8 @@ void linkObjects(DriverOptions* d)
     bool askers = false;
     if (d.targetRow() != (TargetRow*)0 && d.targetRow().exeFormat().hasPrefix(String.withCString("elf")))
         askers = addObjectDepLibs(d);
+    // A C/C++ program's objects: their frame tables gathered, as the C path's.
+    if (askers) elfSetEhGather(true);
     if (d.targetRow() != (TargetRow*)0 && d.targetRow().exeFormat().equals(String.withCString("elf-pie"))) {
         linkObjectsArm64Elf(d); return;
     }
@@ -5355,6 +5357,9 @@ void main(void)
         // This file's suffix for the outliner's symbols, as the reader's for
         // its internal names: two C/C++ objects in one program stay apart.
         optSetModTag(LlvmReader.modTagFor(cin));
+        // ELF: every object's frame table (xcc's, clang's) under the one
+        // __register_frame, not the first object's alone.
+        elfSetEhGather(true);
         // C++ on win64: the link keeps .pdata/.xdata, the SEH tables its
         // exceptions unwind by.
         CoffObject.setKeepUnwind(lang.ehFrames());

@@ -723,6 +723,8 @@ class X86Link
         {
         // The objects' constructors join the program's table first.
         ElfMerge.placeCtors(im);
+        // …and their frame tables (gathered), one table for __register_frame.
+        ElfMerge.placeEh(im);
         Array* abs = new Array();
         // The init/fini array bounds, all equal — so musl's start/exit code
         // walks an EMPTY array. No member of any archive we link carries an
