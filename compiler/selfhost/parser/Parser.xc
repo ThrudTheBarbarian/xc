@@ -3865,6 +3865,24 @@ class Parser
             return e;
         return (String*)0;
     }
+    // The struct when t is a pointer to one (#113): a heap array of structs
+    // (`new P[n]`), sized at run time like a pointer to numbers once its block
+    // is page-aligned and registered (the struct allocators do that from
+    // 64 KB). The kernels hold it as words (#37). As the reference.
+    String* parStructPointee(String* t)
+    {
+        if (t == (String*)0 || t.byteLength() < (u32)2 || t.byteAt(t.byteLength() - (u32)1) != (u8)'*')
+            return (String*)0;
+        u32 from = (u32)0;
+        for (u32 i = (u32)0; i + (u32)1 < t.byteLength(); i = i + (u32)1)
+            if (t.byteAt(i) == (u8)':')
+                from = i + (u32)1;
+        u32 to = t.byteLength() - (u32)1;
+        if (to <= from)
+            return (String*)0;
+        String* e = t.substringBytes(from, to - from);
+        return _structNames.contains((Hashable*)e) ? e : (String*)0;
+    }
     static bool parReadsOnly(Map* frame, String* n)
     {
         Map* refs = (Map*)frame.get((Hashable*)String.withCString("refs"));
@@ -4743,6 +4761,20 @@ class Parser
                     call.add(simd);
                     call.setNum((i64)3);
                     bytes = call;
+                } else if (parStructPointee(t) != (String*)0) {
+                    // A pointer to structs (#113): asked of the runtime the
+                    // same way, in the struct's size (the reference explains).
+                    Node* sz = mk((u16)nkSizeof);
+                    sz.setName(parStructPointee(t));
+                    Node* call = mkNamed((u16)nkMethodCall, String.withCString("spanOf"));
+                    call.add(parIdent(String.withCString("Par")));
+                    call.add(parCast(String.withCString("pointer"), parFieldRef(cn)));
+                    call.add(parCast(String.withCString("i64"), sz));
+                    Node* nos = mk((u16)nkBool);
+                    nos.setNum((i64)0);
+                    call.add(nos);
+                    call.setNum((i64)3);
+                    bytes = call;
                 } else
                     continue;
                 Node* n = mk((u16)nkIf);
@@ -4768,7 +4800,8 @@ class Parser
             for (u32 i = (u32)0; i < caps.count(); i = i + (u32)1) {
                 String* cn = (String*)caps.get(i);
                 String* t = (String*)frameTypes.get((Hashable*)cn);
-                if (t == (String*)0 || (t.indexOfByte((u8)'[') == (u32)$FFFFFFFF && Parser.parPrimPointee(t) == (String*)0)
+                if (t == (String*)0 || (t.indexOfByte((u8)'[') == (u32)$FFFFFFFF && Parser.parPrimPointee(t) == (String*)0
+                                        && parStructPointee(t) == (String*)0)
                     || !Parser.parReadsOnly(frame, cn))
                     continue;
                 Node* n = mk((u16)nkIf);

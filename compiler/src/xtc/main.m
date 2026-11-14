@@ -2310,7 +2310,11 @@ static NSString *arm64ClassAllocStubs(NSString *prog) {
         [out appendFormat:@".text\n.globl __xtc_new_%@\n.align 2\n__xtc_new_%@:\n", cls, cls];
         if (hasDe) [out appendFormat:
             @"    adrp x2, _%@$dealloc@PAGE\n    add x2, x2, _%@$dealloc@PAGEOFF\n    b __xtc_alloc\n", cls, cls];
-        else [out appendString:@"    mov x2, #0\n    b __xtc_alloc\n"];
+        // No dealloc hook: plain data, and an array of 64 KB or more is
+        // page-aligned and registered as a numeric one is, so a par block can
+        // size it and share it with the GPU (#113). The port's classAllocStubs.
+        else [out appendFormat:@"    mul x9, x0, x1\n    mov x2, #0\n    lsr x10, x9, #16\n    cbz x10, L__xtc_new_%@_small\n"
+                               @"    b __xtc_alloc_aligned\nL__xtc_new_%@_small:\n    b __xtc_alloc\n", cls, cls];
     }
     return out;
 }
@@ -2399,8 +2403,17 @@ static NSString *x86_64ClassAllocStubs(NSString *prog, BOOL win64) {
                           @"_xtc_new_%@:\n", cls, cls];
         NSString *argReg = win64 ? @"r8" : @"rdx";
         if (hasDe) [out appendFormat:@"\tlea\t%@, [rip+%@$dealloc]\n", argReg, cls];
-        else       [out appendFormat:@"\txor\t%@, %@\n",
-                                     win64 ? @"r8d" : @"edx", win64 ? @"r8d" : @"edx"];
+        else
+            {
+            // No dealloc hook: plain data, and an array of 64 KB or more is
+            // page-aligned and registered as a numeric one is, so a par block
+            // can size it and share it with the GPU (#113). The port's
+            // x86ClassAllocStubs.
+            [out appendString:win64 ? @"\tmov\trax, rcx\n\timul\trax, rdx\n\txor\tr8d, r8d\n"
+                                    : @"\tmov\trax, rdi\n\timul\trax, rsi\n\txor\tedx, edx\n"];
+            [out appendFormat:@"\tcmp\trax, 65536\n\tjb\t.L_xtc_new_%@_small\n\tjmp\t_xtc_alloc_aligned\n"
+                              @".L_xtc_new_%@_small:\n", cls, cls];
+            }
         [out appendString:@"\tjmp\t_xtc_alloc\n"];
     }
     return out;
