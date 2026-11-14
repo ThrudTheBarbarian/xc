@@ -32,6 +32,13 @@
 #import "IrDefs.xc"
 #import <Homing>
 
+// C and C++ input (the driver sets it): each function's callee saves go out
+// as `.xc_saves`, from which the assembler builds the unwind tables a C++
+// exception passing an xcc frame needs. Off for xc, whose output it leaves
+// as it was.
+bool gArm64EhTables;
+void arm64SetEhTables(bool on) { gArm64EhTables = on; }
+
 // A set of values that keeps the order they were added in (the allocator's
 // candidate order reads it), with a map for membership. The liveness sets were
 // plain Arrays, searched linearly on every add: quadratic in a function's value
@@ -1132,6 +1139,23 @@ class Arm64
             _out.appendFormat("    str x8, %s\n",
                               spMemForOff(_sretSaveOffset, String.withCString("x8")).cString());
         emitCalleeSaves(false);
+        // C/C++ input: where each callee-saved register (and x29/x30) sits,
+        // as offsets from the call frame (the caller's sp, sp + frame), for
+        // the unwind tables. DWARF numbers: x0-x30 0-30, v0-v31 64-95.
+        if (gArm64EhTables && haveLoc) {
+            String* sv = String.withFormat("    .xc_saves 29:%ld 30:%ld", (i64)_maxOutStack - (i64)_frame,
+                                           (i64)_maxOutStack + (i64)8 - (i64)_frame);
+            for (u32 si = (u32)0; si < _savedRegs.count(); si = si + (u32)1) {
+                String* r = (String*)_savedRegs.get(si);
+                i64 rn = (i64)0;
+                for (u32 ci = (u32)1; ci < r.byteLength(); ci = ci + (u32)1)
+                    rn = rn * (i64)10 + (i64)(r.byteAt(ci) - (u8)'0');
+                if (isFPReg(r)) rn = rn + (i64)64;
+                sv.appendFormat(" %ld:%ld", rn, (i64)(_saveAreaOffset + (u32)8 * si) - (i64)_frame);
+            }
+            sv.appendCString("\n");
+            _out.append(sv);
+        }
         // x28 is saved above; point it at the high frame base now sp is final.
         // Everything from here to the epilogue's restore may address slots
         // through it — expandStagedSlots keys off exactly this line.
