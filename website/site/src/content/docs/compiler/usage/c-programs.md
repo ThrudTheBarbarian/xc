@@ -83,6 +83,6 @@ at load; the baseline copy rounds each operation on its own.
 any target, whatever `-ffp-contract` says: each operation is rounded on its
 own, as ISO C describes.
 
-## Not yet
+## C++
 
-C++ is planned, through the same path: see [Future work](/compiler/future-work/).
+C++ takes the same path: see [C++ programs](/compiler/usage/cpp-programs/).

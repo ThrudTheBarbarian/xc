@@ -82,19 +82,13 @@ own optimisation, and putting that through its own optimiser: the same passes, t
 data-parallel extraction that makes `par` blocks of independent loops, the same GPU kernel
 generation and the same back ends as an xc program (see [C programs](/compiler/usage/c-programs/)).
 
-The plan is to accept LLVM IR from any front end that makes it: C++ through `clang` first,
-then Rust, Swift, Zig, Fortran through `flang`, and the rest. Any language that compiles
+C++ takes the same path (see [C++ programs](/compiler/usage/cpp-programs/)). The plan is
+to accept LLVM IR from any front end that makes it: Rust, Swift, Zig, Fortran through
+`flang`, and the rest. Any language that compiles
 through LLVM would then get the same acceleration as xc and C: its loops lifted into `par`
 blocks, run across every CPU core and on GPUs through Metal, CUDA, Vulkan and WebGPU, on
 several GPUs at once or over the network, with no change to its source. Most of the work
 is widening what `xcc` reads of LLVM IR: today it takes the subset C needs.
-
-### A straight comparison for C++
-
-The [C benchmarks](/compiler/benchmarks/c/) already set unchanged C built by xcc against GCC
-and clang, with and without OpenMP. Once C++ compiles, the same for C++: the same source
-built by xcc with every parallel and GPU option available to it, against the other
-compilers with all their usual optimisations.
 
 ### `par` on FPGAs, through `xcd`
 
