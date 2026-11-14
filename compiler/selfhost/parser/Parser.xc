@@ -3609,6 +3609,12 @@ class Parser
             r.setOp(op);
             r.setName(cur().value());
             advance();
+            // `:reduce(+ h[])`: an array reduction, each chunk updating a
+            // private copy of the array h. As the reference.
+            if (match((u16)tokLBracket)) {
+                if (expect((u16)tokRBracket) == (Token*)0) return (Node*)0;
+                r.setNum((i64)1);
+            }
             expect((u16)tokRParen);
             p.add(r);
         }
@@ -3793,6 +3799,70 @@ class Parser
         if (frame.get((Hashable*)String.withCString("par")) == 0) return;
         if (t.kind() != (u16)nkIdent) return;
         ((Set*)frame.get((Hashable*)String.withCString("written"))).add((Hashable*)t.name());
+    }
+
+    // `a[k] op= x`, or `a[k] = a[k] op x` with the same index, op one of
+    // + | & ^, inside a `par` body: counted on every enclosing par frame
+    // under "<op><a>", once per use of a, so an array reduction
+    // (:reduce(+ a[])) can check that the body uses a in no other way. As
+    // the reference.
+    void parNoteUpdate(Node* t, String* op, Node* rhs)
+    {
+        if (t == (Node*)0 || t.kind() != (u16)nkSubscript || t.kidCount() < (u32)2 || op == (String*)0) return;
+        Node* base = t.kid((u32)0);
+        if (base.kind() != (u16)nkIdent || base.name() == (String*)0) return;
+        u8 c = (u8)0;
+        u32 uses = (u32)1;
+        if (op.byteLength() == (u32)2 && op.byteAt((u32)1) == (u8)'=')
+            c = op.byteAt((u32)0);
+        else if (Parser._same(op, "=") && rhs != (Node*)0 && rhs.kind() == (u16)nkBinary && rhs.kidCount() == (u32)2
+                 && rhs.op() != (String*)0 && rhs.op().byteLength() == (u32)1) {
+            Node* l = rhs.kid((u32)0);
+            if (l.kind() == (u16)nkSubscript && l.kidCount() >= (u32)2 && l.kid((u32)0).kind() == (u16)nkIdent
+                && l.kid((u32)0).name() != (String*)0 && l.kid((u32)0).name().equals(base.name())
+                && Parser.parSameIndex(l.kid((u32)1), t.kid((u32)1))) {
+                c = rhs.op().byteAt((u32)0);
+                uses = (u32)2;
+            }
+        }
+        if (c != (u8)'+' && c != (u8)'|' && c != (u8)'&' && c != (u8)'^') return;
+        String* key = new String();
+        key.appendByte(c);
+        key.append(base.name());
+        for (u32 fi = (u32)0; fi < _blkFrames.count(); fi = fi + (u32)1) {
+            Map* pf = (Map*)_blkFrames.get(fi);
+            if (pf.get((Hashable*)String.withCString("par")) == (Object*)0) continue;
+            Map* ups = (Map*)pf.get((Hashable*)String.withCString("updates"));
+            if (ups == (Map*)0) {
+                ups = new Map();
+                pf.set((Hashable*)String.withCString("updates"), (Object*)ups);
+            }
+            Number* had = (Number*)ups.get((Hashable*)key);
+            u32 n = had == (Number*)0 ? (u32)0 : had.asU32();
+            ups.set((Hashable*)key, (Object*)Number.withU32(n + uses));
+        }
+    }
+    // Two index expressions alike: names, integer literals, casts, binary
+    // operators and element reads, of the same shape. As the reference's
+    // parSameIndex.
+    static bool parSameIndex(Node* a, Node* b)
+    {
+        if (a == (Node*)0 || b == (Node*)0 || a.kind() != b.kind()) return false;
+        if (a.kind() == (u16)nkIdent)
+            return a.name() != (String*)0 && b.name() != (String*)0 && a.name().equals(b.name());
+        if (a.kind() == (u16)nkInt)
+            return a.num() == b.num();
+        if (a.kind() == (u16)nkCast)
+            return a.name() != (String*)0 && b.name() != (String*)0 && a.name().equals(b.name())
+                && a.kidCount() == (u32)1 && b.kidCount() == (u32)1 && Parser.parSameIndex(a.kid((u32)0), b.kid((u32)0));
+        if (a.kind() == (u16)nkBinary)
+            return a.op() != (String*)0 && b.op() != (String*)0 && a.op().equals(b.op())
+                && a.kidCount() == (u32)2 && b.kidCount() == (u32)2
+                && Parser.parSameIndex(a.kid((u32)0), b.kid((u32)0)) && Parser.parSameIndex(a.kid((u32)1), b.kid((u32)1));
+        if (a.kind() == (u16)nkSubscript)
+            return a.kidCount() == (u32)2 && b.kidCount() == (u32)2
+                && Parser.parSameIndex(a.kid((u32)0), b.kid((u32)0)) && Parser.parSameIndex(a.kid((u32)1), b.kid((u32)1));
+        return false;
     }
 
     // A node at a token, for an error reported there.
@@ -4120,6 +4190,55 @@ class Parser
         return cur;
     }
 
+    // An array reduction's code for ParFnChunk.arrMerge: the array's bytes
+    // << 8, the operator << 4 (1 +, 2 |, 3 &, 4 ^), the element's width in
+    // bytes. 0 when ty is no one-dimensional array of integers of a size
+    // known when the program is built, or op is none of + | & ^. As the
+    // reference's parArrCode.
+    static i64 parArrCode(String* ty, String* op)
+    {
+        if (ty == (String*)0) return (i64)0;
+        u32 lb = ty.indexOfByte((u8)'[');
+        if (lb == (u32)$FFFFFFFF) return (i64)0;
+        String* e = ty.substringBytes((u32)0, lb);
+        i64 w = (i64)0;
+        if (Parser._same(e, "u8") || Parser._same(e, "i8")) w = (i64)1;
+        else if (Parser._same(e, "u16") || Parser._same(e, "i16")) w = (i64)2;
+        else if (Parser._same(e, "u32") || Parser._same(e, "i32")) w = (i64)4;
+        else if (Parser._same(e, "u64") || Parser._same(e, "i64")) w = (i64)8;
+        if (w == (i64)0) return (i64)0;
+        i64 count = (i64)0;
+        u32 q = lb + (u32)1;
+        while (q < ty.byteLength() && ty.byteAt(q) >= (u8)'0' && ty.byteAt(q) <= (u8)'9') {
+            count = count * (i64)10 + (i64)(ty.byteAt(q) - (u8)'0');
+            q = q + (u32)1;
+        }
+        if (count <= (i64)0 || q + (u32)1 != ty.byteLength() || ty.byteAt(q) != (u8)']') return (i64)0;
+        i64 o = Parser._same(op, "+") ? (i64)1 : Parser._same(op, "|") ? (i64)2
+              : Parser._same(op, "&") ? (i64)3 : Parser._same(op, "^") ? (i64)4 : (i64)0;
+        if (o == (i64)0) return (i64)0;
+        return ((count * w) << (i64)8) | (o << (i64)4) | w;
+    }
+    // An array reduction's element type: `u32` for `u32[256]`.
+    static String* parArrElem(String* ty)
+    {
+        return ty.substringBytes((u32)0, ty.indexOfByte((u8)'['));
+    }
+    // A chunk's private copy of an array reduction's array, every element
+    // the operator's identity: `(T*)ParFnChunk.arrNew(bytes, fill)`.
+    Node* parArrNew(String* op, String* ty)
+    {
+        i64 code = Parser.parArrCode(ty, op);
+        Node* call = mkNamed((u16)nkMethodCall, String.withCString("arrNew"));
+        call.add(parIdent(String.withCString("ParFnChunk")));
+        call.add(parCast(String.withCString("i64"), parInt(code >> (i64)8)));
+        call.add(parCast(String.withCString("u32"), parInt(Parser._same(op, "&") ? (i64)255 : (i64)0)));
+        call.setNum((i64)2);
+        String* pt = Parser.parArrElem(ty);
+        pt.appendByte((u8)'*');
+        return parCast(pt, call);
+    }
+
     // A capture named as one of the block's own members keeps its name in
     // the body (a local of run()), and its ivar is `__par_<name>`. As the
     // reference's reservedCapture / fieldOf / fieldRef.
@@ -4260,10 +4379,44 @@ class Parser
             Node* r = (Node*)reds.get(i);
             Object* t = frameTypes.get((Hashable*)r.name());
             if (t == 0) t = (Object*)blkTyOf(blkLookup(r.name(), (u32*)0));
+            // An array reduction's array may be a global as well.
+            if (t == 0 && r.num() != (i64)0 && _parTopVars != (Map*)0) t = _parTopVars.get((Hashable*)r.name());
             if (t == 0) {
-                _errorAt(String.withFormat("':reduce(%s %s)': '%s' is not a local declared before the '%s' block",
-                                           r.op().cString(), r.name().cString(), r.name().cString(), label.cString()), parKeywordNode());
+                if (r.num() != (i64)0)
+                    _errorAt(String.withFormat("':reduce(%s %s[])': '%s' is not an array declared before the '%s' block",
+                                               r.op().cString(), r.name().cString(), r.name().cString(), label.cString()), parKeywordNode());
+                else
+                    _errorAt(String.withFormat("':reduce(%s %s)': '%s' is not a local declared before the '%s' block",
+                                               r.op().cString(), r.name().cString(), r.name().cString(), label.cString()), parKeywordNode());
                 return (Node*)0;
+            }
+            // `:reduce(+ h[])`: + | & or ^ over an array of integers of a
+            // size known when the program is built, which the body only
+            // updates, as h[k] op= x or h[k] = h[k] op x. As the reference.
+            if (r.num() != (i64)0) {
+                if (!Parser._same(r.op(), "+") && !Parser._same(r.op(), "|") && !Parser._same(r.op(), "&") && !Parser._same(r.op(), "^")) {
+                    _errorAt(String.withFormat("':reduce(%s %s[])': an array reduction takes + | & or ^",
+                                               r.op().cString(), r.name().cString()), parKeywordNode());
+                    return (Node*)0;
+                }
+                if (Parser.parArrCode((String*)t, r.op()) == (i64)0) {
+                    _errorAt(String.withFormat("':reduce(%s %s[])': '%s' is not an array of integers (u8 to u64, i8 to i64) of a size known when the program is built",
+                                               r.op().cString(), r.name().cString(), r.name().cString()), parKeywordNode());
+                    return (Node*)0;
+                }
+                String* key = String.withString(r.op());
+                key.append(r.name());
+                Map* refs = (Map*)frame.get((Hashable*)String.withCString("refs"));
+                Map* ups = (Map*)frame.get((Hashable*)String.withCString("updates"));
+                Number* nr = refs != (Map*)0 ? (Number*)refs.get((Hashable*)r.name()) : (Number*)0;
+                Number* nu = ups != (Map*)0 ? (Number*)ups.get((Hashable*)key) : (Number*)0;
+                if (nr == (Number*)0 || nu == (Number*)0 || nr.asU32() != nu.asU32()) {
+                    _errorAt(String.withFormat("':reduce(%s %s[])': the '%s' block uses '%s' other than as %s[k] %s= x or %s[k] = %s[k] %s x",
+                                               r.op().cString(), r.name().cString(), label.cString(), r.name().cString(),
+                                               r.name().cString(), r.op().cString(), r.name().cString(), r.name().cString(),
+                                               r.op().cString()), parKeywordNode());
+                    return (Node*)0;
+                }
             }
             redTypes.set((Hashable*)r.name(), t);
         }
@@ -4340,7 +4493,15 @@ class Parser
         for (u32 i = (u32)0; i < reds.count(); i = i + (u32)1) {
             Node* r = (Node*)reds.get(i);
             Node* ivn = mkNamed((u16)nkVariableDecl, Parser.parFieldOf(r.name()));
-            ivn.setOp((String*)redTypes.get((Hashable*)r.name()));
+            // An array reduction's ivar points at the array the chunk
+            // updates: the real one in the block's own chunk, a private
+            // copy in every other.
+            if (r.num() != (i64)0) {
+                String* pt = Parser.parArrElem((String*)redTypes.get((Hashable*)r.name()));
+                pt.appendByte((u8)'*');
+                ivn.setOp(pt);
+            } else
+                ivn.setOp((String*)redTypes.get((Hashable*)r.name()));
             cls.add(ivn);
         }
         // run(): the loop over [lo, hi), the body verbatim.
@@ -4401,13 +4562,21 @@ class Parser
             for (u32 i = (u32)0; i < reds.count(); i = i + (u32)1) {
                 Node* r = (Node*)reds.get(i);
                 Node* d = mkNamed((u16)nkVariableDecl, r.name());
-                d.setOp((String*)redTypes.get((Hashable*)r.name()));
+                // An array reduction's local is the pointer the body indexes
+                // (it shadows a global of that name); nothing is stored back.
+                if (r.num() != (i64)0) {
+                    String* pt = Parser.parArrElem((String*)redTypes.get((Hashable*)r.name()));
+                    pt.appendByte((u8)'*');
+                    d.setOp(pt);
+                } else
+                    d.setOp((String*)redTypes.get((Hashable*)r.name()));
                 d.add(parMember(String.withCString("self"), Parser.parFieldOf(r.name())));
                 rb.add(d);
             }
             rb.add(f);
             for (u32 i = (u32)0; i < reds.count(); i = i + (u32)1) {
                 Node* r = (Node*)reds.get(i);
+                if (r.num() != (i64)0) continue;
                 rb.add(parAssign(parMember(String.withCString("self"), Parser.parFieldOf(r.name())), parIdent(r.name())));
             }
             m.add(rb);
@@ -4433,6 +4602,11 @@ class Parser
             }
             for (u32 i = (u32)0; i < reds.count(); i = i + (u32)1) {
                 Node* r = (Node*)reds.get(i);
+                if (r.num() != (i64)0) {
+                    b.add(parAssign(parMember(String.withCString("__par_t"), Parser.parFieldOf(r.name())),
+                                    parArrNew(r.op(), (String*)redTypes.get((Hashable*)r.name()))));
+                    continue;
+                }
                 b.add(parAssign(parMember(String.withCString("__par_t"), Parser.parFieldOf(r.name())),
                                 parStart(r.op(), (String*)redTypes.get((Hashable*)r.name()), parFieldRef(r.name()))));
             }
@@ -4608,9 +4782,18 @@ class Parser
             Array* globs = new Array();
             Array* outer = (Array*)frame.get((Hashable*)String.withCString("outer"));
             if (outer != (Array*)0 && _parTopVars != (Map*)0)
-                for (u32 i = (u32)0; i < outer.count(); i = i + (u32)1)
-                    if (_parTopVars.get((Hashable*)outer.get(i)) != (Object*)0)
+                for (u32 i = (u32)0; i < outer.count(); i = i + (u32)1) {
+                    if (_parTopVars.get((Hashable*)outer.get(i)) == (Object*)0)
+                        continue;
+                    // An array reduction's global: the body reaches it
+                    // through the chunk's pointer, never by name.
+                    bool arr = false;
+                    for (u32 q = (u32)0; q < reds.count(); q = q + (u32)1)
+                        if (((Node*)reds.get(q)).num() != (i64)0 && ((Node*)reds.get(q)).name().equals((String*)outer.get(i)))
+                            arr = true;
+                    if (!arr)
                         globs.add(outer.get(i));
+                }
             Node* ma = mkNamed((u16)nkMethodDecl, String.withCString("gpuGlobal"));
             ma.setOp(String.withCString("pointer"));
             Node* pa = mkNamed((u16)nkParam, String.withCString("name"));
@@ -4837,8 +5020,11 @@ class Parser
             // refused a written one.
             if (frame.get((Hashable*)String.withCString("auto")) != 0)
                 tag.appendCString("auto;");
+            // An array reduction is `a<field>=<op>;`: it has no GPU form yet,
+            // and par-check keeps it on the CPU.
             for (u32 i = (u32)0; i < reds.count(); i = i + (u32)1) {
                 Node* r = (Node*)reds.get(i);
+                if (r.num() != (i64)0) tag.appendCString("a");
                 tag.append(String.withU32((u32)3 + caps.count() + i));
                 tag.appendCString("=");
                 tag.append(r.op());
@@ -4895,6 +5081,19 @@ class Parser
             }
             for (u32 i = (u32)0; i < reds.count(); i = i + (u32)1) {
                 Node* r = (Node*)reds.get(i);
+                // An array reduction: the other chunk's copy folded into
+                // this one's array, and freed.
+                if (r.num() != (i64)0) {
+                    String* u8p = String.withCString("u8*");
+                    Node* call = mkNamed((u16)nkMethodCall, String.withCString("arrMerge"));
+                    call.add(parIdent(String.withCString("ParFnChunk")));
+                    call.add(parCast(u8p, parMember(String.withCString("self"), Parser.parFieldOf(r.name()))));
+                    call.add(parCast(u8p, parMember(String.withCString("o"), Parser.parFieldOf(r.name()))));
+                    call.add(parCast(String.withCString("i64"), parInt(Parser.parArrCode((String*)redTypes.get((Hashable*)r.name()), r.op()))));
+                    call.setNum((i64)3);
+                    b.add(parStmt(call));
+                    continue;
+                }
                 b.add(parFold(r.op(), parFieldRef(r.name()), parFieldRef(r.name()),
                               parMember(String.withCString("o"), Parser.parFieldOf(r.name()))));
             }
@@ -4942,6 +5141,18 @@ class Parser
         }
         for (u32 i = (u32)0; i < reds.count(); i = i + (u32)1) {
             Node* r = (Node*)reds.get(i);
+            // An array reduction's own chunk updates the array itself.
+            if (r.num() != (i64)0) {
+                Node* sub = mk((u16)nkSubscript);
+                sub.add(parIdent(r.name()));
+                sub.add(parInt((i64)0));
+                Node* addr = mkNamed((u16)nkUnary, String.withCString("&"));
+                addr.setOp(String.withCString("&"));
+                addr.add(sub);
+                site.add(parAssign(parMember(pv, Parser.parFieldOf(r.name())), addr));
+                blkNoteUse(r.name());
+                continue;
+            }
             site.add(parAssign(parMember(pv, Parser.parFieldOf(r.name())),
                                parStart(r.op(), (String*)redTypes.get((Hashable*)r.name()), parIdent(r.name()))));
             blkNoteUse(r.name());
@@ -4957,6 +5168,7 @@ class Parser
         site.add(parStmt(call));
         for (u32 i = (u32)0; i < reds.count(); i = i + (u32)1) {
             Node* r = (Node*)reds.get(i);
+            if (r.num() != (i64)0) continue;
             if (parIdem(r.op())) site.add(parAssign(parIdent(r.name()), parMember(pv, Parser.parFieldOf(r.name()))));
             else site.add(parFold(r.op(), parIdent(r.name()), parIdent(r.name()), parMember(pv, Parser.parFieldOf(r.name()))));
         }
@@ -5915,6 +6127,7 @@ class Parser
                     else _error(String.withCString("a block with `block:` captures cannot be stored beyond its frame — its write-back targets a local slot. Write results into an object instead"));
                 }
                 parNoteWrite(lhs);
+                parNoteUpdate(lhs, opTok.value(), rhs);
                 a.add(lhs); a.add(rhs);
                 lhs = a;
                 continue;

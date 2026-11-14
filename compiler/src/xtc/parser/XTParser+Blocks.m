@@ -89,6 +89,33 @@ static XTType* _Nullable parPrimPointee(XTType* t)
     return (e.isInteger || e.isFloating || e.kind == XTTypeKindBool) ? e : nil;
     }
 
+// An array reduction's code for ParFnChunk.arrMerge: the array's bytes << 8,
+// the operator << 4 (1 +, 2 |, 3 &, 4 ^), the element's width in bytes. 0 when
+// t is no one-dimensional array of integers of a size known when the program
+// is built, or op is none of + | & ^. Mirrored in the port (parArrCode).
+static int64_t parArrCode(XTType* t, NSString* op)
+    {
+    if (![t isKindOfClass:[XTArrayType class]])
+        return 0;
+    XTArrayType* at = (XTArrayType*)t;
+    XTType* e = at.elementType;
+    if ([e isKindOfClass:[XTArrayType class]] || at.elementCount == 0)
+        return 0;
+    NSString* n = e.displayName;
+    int64_t w = [n isEqualToString:@"u8"] || [n isEqualToString:@"i8"]     ? 1
+                : [n isEqualToString:@"u16"] || [n isEqualToString:@"i16"] ? 2
+                : [n isEqualToString:@"u32"] || [n isEqualToString:@"i32"] ? 4
+                : [n isEqualToString:@"u64"] || [n isEqualToString:@"i64"] ? 8
+                                                                           : 0;
+    if (!w)
+        return 0;
+    int64_t o = [op isEqualToString:@"+"] ? 1 : [op isEqualToString:@"|"] ? 2 : [op isEqualToString:@"&"] ? 3
+                : [op isEqualToString:@"^"] ? 4 : 0;
+    if (!o)
+        return 0;
+    return (((int64_t)at.elementCount * w) << 8) | (o << 4) | w;
+    }
+
 NS_ASSUME_NONNULL_BEGIN
 
 // ── parser-side block state (associated storage lives in XTParser via the
@@ -990,6 +1017,75 @@ NS_ASSUME_NONNULL_END
     }
 
 /****************************************************************************\
+|* Two index expressions alike: names, integer literals, casts, binary
+|* operators and element reads, of the same shape. Mirrored in the port.
+\****************************************************************************/
+static BOOL parSameIndex(XTASTNode* a, XTASTNode* b)
+    {
+    if (!a || !b || [a class] != [b class])
+        return NO;
+    if ([a isKindOfClass:[XTIdentifierNode class]])
+        return [((XTIdentifierNode*)a).identName isEqualToString:((XTIdentifierNode*)b).identName];
+    if ([a isKindOfClass:[XTLiteralIntNode class]])
+        return ((XTLiteralIntNode*)a).intValue == ((XTLiteralIntNode*)b).intValue;
+    if ([a isKindOfClass:[XTCastExprNode class]])
+        return [((XTCastExprNode*)a).castType.displayName isEqualToString:((XTCastExprNode*)b).castType.displayName]
+               && parSameIndex(((XTCastExprNode*)a).operand, ((XTCastExprNode*)b).operand);
+    if ([a isKindOfClass:[XTBinaryExprNode class]])
+        return ((XTBinaryExprNode*)a).op == ((XTBinaryExprNode*)b).op
+               && parSameIndex(((XTBinaryExprNode*)a).left, ((XTBinaryExprNode*)b).left)
+               && parSameIndex(((XTBinaryExprNode*)a).right, ((XTBinaryExprNode*)b).right);
+    if ([a isKindOfClass:[XTSubscriptExprNode class]])
+        return parSameIndex(((XTSubscriptExprNode*)a).base, ((XTSubscriptExprNode*)b).base)
+               && parSameIndex(((XTSubscriptExprNode*)a).index, ((XTSubscriptExprNode*)b).index);
+    return NO;
+    }
+
+/****************************************************************************\
+|* `a[k] op= x`, or `a[k] = a[k] op x` with the same index, op one of + | & ^,
+|* inside a `par` body: counted on every enclosing par frame under "<op><a>",
+|* once per use of a, so an array reduction (:reduce(+ a[])) can check that
+|* the body uses a in no other way.
+\****************************************************************************/
+- (void)parNoteUpdate:(nullable XTASTNode*)target op:(XTAssignOp)aop rhs:(nullable XTASTNode*)rhs
+    {
+    if (![target isKindOfClass:[XTSubscriptExprNode class]])
+        return;
+    XTASTNode* base = ((XTSubscriptExprNode*)target).base;
+    if (![base isKindOfClass:[XTIdentifierNode class]])
+        return;
+    NSString* name = ((XTIdentifierNode*)base).identName;
+    NSString* c = aop == XTAssignOpAdd ? @"+" : aop == XTAssignOpBitOr ? @"|" : aop == XTAssignOpBitAnd ? @"&"
+                  : aop == XTAssignOpBitXor ? @"^" : nil;
+    NSUInteger uses = 1;
+    if (aop == XTAssignOpAssign && [rhs isKindOfClass:[XTBinaryExprNode class]])
+        {
+        XTBinaryExprNode* b = (XTBinaryExprNode*)rhs;
+        XTASTNode* l = b.left;
+        if ([l isKindOfClass:[XTSubscriptExprNode class]]
+            && [((XTSubscriptExprNode*)l).base isKindOfClass:[XTIdentifierNode class]]
+            && [((XTIdentifierNode*)((XTSubscriptExprNode*)l).base).identName isEqualToString:name]
+            && parSameIndex(((XTSubscriptExprNode*)l).index, ((XTSubscriptExprNode*)target).index))
+            {
+            c = b.op == XTBinaryOpAdd ? @"+" : b.op == XTBinaryOpBitOr ? @"|" : b.op == XTBinaryOpBitAnd ? @"&"
+                : b.op == XTBinaryOpBitXor ? @"^" : nil;
+            uses = 2;
+            }
+        }
+    if (!c)
+        return;
+    NSString* key = [c stringByAppendingString:name];
+    for (NSMutableDictionary* f in [self blkFrames])
+        if ([f[@"par"] boolValue])
+            {
+            NSMutableDictionary* ups = f[@"updates"];
+            if (!ups)
+                f[@"updates"] = ups = [NSMutableDictionary dictionary];
+            ups[key] = @([ups[key] unsignedIntegerValue] + uses);
+            }
+    }
+
+/****************************************************************************\
 |* The name an element access is rooted at: `a` for a[i], a[i][j], a[i].f.
 \****************************************************************************/
 static NSString* parRootName(XTASTNode* n)
@@ -1411,13 +1507,58 @@ static NSString* parRootName(XTASTNode* n)
         NSUInteger d = 0;
         NSDictionary* info = [self blkLookup:r[1] depth:&d];
         XTType* t = frameTypes[r[1]] ?: (info ? info[@"type"] : nil);
+        BOOL isArr = r.count > 2;
+        // An array reduction's array may be a global as well.
+        if (![t isKindOfClass:[XTType class]] && isArr)
+            t = self.blkState[@"topVars"][r[1]];
         if (![t isKindOfClass:[XTType class]])
             {
-            [self.diagnostics emitError:[NSString stringWithFormat:@"':reduce(%@ %@)': '%@' is not a local "
-                                                                     "declared before the '%@' block",
-                                                                   r[0], r[1], r[1], label]
-                                     at:loc];
+            if (isArr)
+                [self.diagnostics emitError:[NSString stringWithFormat:@"':reduce(%@ %@[])': '%@' is not an array "
+                                                                         "declared before the '%@' block",
+                                                                       r[0], r[1], r[1], label]
+                                         at:loc];
+            else
+                [self.diagnostics emitError:[NSString stringWithFormat:@"':reduce(%@ %@)': '%@' is not a local "
+                                                                         "declared before the '%@' block",
+                                                                       r[0], r[1], r[1], label]
+                                         at:loc];
             return nil;
+            }
+        // `:reduce(+ h[])`: + | & or ^ over an array of integers of a size
+        // known when the program is built, which the body only updates, as
+        // h[k] op= x or h[k] = h[k] op x (parNoteUpdate counted those).
+        if (isArr)
+            {
+            NSString* op = r[0];
+            if (![op isEqualToString:@"+"] && ![op isEqualToString:@"|"] && ![op isEqualToString:@"&"]
+                && ![op isEqualToString:@"^"])
+                {
+                [self.diagnostics emitError:[NSString stringWithFormat:@"':reduce(%@ %@[])': an array reduction "
+                                                                         "takes + | & or ^",
+                                                                       op, r[1]]
+                                         at:loc];
+                return nil;
+                }
+            if (!parArrCode(t, op))
+                {
+                [self.diagnostics emitError:[NSString stringWithFormat:@"':reduce(%@ %@[])': '%@' is not an array of "
+                                                                         "integers (u8 to u64, i8 to i64) of a size "
+                                                                         "known when the program is built",
+                                                                       op, r[1], r[1]]
+                                         at:loc];
+                return nil;
+                }
+            NSNumber* nr = frame[@"refs"][r[1]];
+            NSNumber* nu = frame[@"updates"][[op stringByAppendingString:r[1]]];
+            if (!nr || !nu || nr.unsignedIntValue != nu.unsignedIntValue)
+                {
+                [self.diagnostics emitError:[NSString stringWithFormat:@"':reduce(%@ %@[])': the '%@' block uses '%@' "
+                                                                         "other than as %@[k] %@= x or %@[k] = %@[k] %@ x",
+                                                                       op, r[1], label, r[1], r[1], op, r[1], r[1], op]
+                                         at:loc];
+                return nil;
+                }
             }
         redByVar[r[1]] = r;
         redTypes[r[1]] = t;
@@ -1548,8 +1689,15 @@ static NSString* parRootName(XTASTNode* n)
             t = [XTPointerType pointerToType:((XTArrayType*)t).elementType];
         [ivars addObject:[[XTVariableDeclNode alloc] initWithName:fieldOf(cn) type:t initialiser:nil location:loc]];
         }
+    // An array reduction's ivar points at the array the chunk updates: the
+    // real one in the block's own chunk, a private copy in every other.
+    XTType* (^redIvarType)(NSArray<NSString*>*) = ^XTType*(NSArray<NSString*>* r) {
+        if (r.count > 2)
+            return [XTPointerType pointerToType:((XTArrayType*)redTypes[r[1]]).elementType];
+        return redTypes[r[1]];
+    };
     for (NSArray<NSString*>* r in reductions)
-        [ivars addObject:[[XTVariableDeclNode alloc] initWithName:fieldOf(r[1]) type:redTypes[r[1]] initialiser:nil location:loc]];
+        [ivars addObject:[[XTVariableDeclNode alloc] initWithName:fieldOf(r[1]) type:redIvarType(r) initialiser:nil location:loc]];
 
     NSMutableArray<XTMethodDeclNode*>* methods = [NSMutableArray array];
     // run(): the loop over [lo, hi), the body verbatim.
@@ -1612,12 +1760,15 @@ static NSString* parRootName(XTASTNode* n)
             [stmts addObject:[[XTVariableDeclNode alloc] initWithName:cn type:t
                                                        initialiser:member(@"self", fieldOf(cn)) location:loc]];
             }
+        // An array reduction's local is the pointer the body indexes (it
+        // shadows a global of that name); nothing is stored back.
         for (NSArray<NSString*>* r in reductions)
-            [stmts addObject:[[XTVariableDeclNode alloc] initWithName:r[1] type:redTypes[r[1]]
+            [stmts addObject:[[XTVariableDeclNode alloc] initWithName:r[1] type:redIvarType(r)
                                                        initialiser:member(@"self", fieldOf(r[1])) location:loc]];
         [stmts addObject:f];
         for (NSArray<NSString*>* r in reductions)
-            [stmts addObject:assign(member(@"self", fieldOf(r[1])), ident(r[1]))];
+            if (r.count <= 2)
+                [stmts addObject:assign(member(@"self", fieldOf(r[1])), ident(r[1]))];
         XTBlockNode* rb = [[XTBlockNode alloc] initWithStatements:stmts location:loc];
         [methods addObject:[[XTMethodDeclNode alloc] initWithName:@"run" returnTypes:@[ [XTType voidType] ]
                                                        parameters:@[] isStatic:NO isVarArgs:NO body:rb location:loc]];
@@ -1635,7 +1786,25 @@ static NSString* parRootName(XTASTNode* n)
         for (NSString* cn in caps)
             [st addObject:assign(member(@"__par_t", fieldOf(cn)), fieldRef(cn))];
         for (NSArray<NSString*>* r in reductions)
+            {
+            // An array reduction: a private copy of the array, every element
+            // the operator's identity, `(T*)ParFnChunk.arrNew(bytes, fill)`.
+            if (r.count > 2)
+                {
+                int64_t code = parArrCode(redTypes[r[1]], r[0]);
+                XTASTNode* call = [[XTMethodCallExprNode alloc]
+                    initWithReceiver:ident(@"ParFnChunk")
+                          methodName:@"arrNew"
+                           arguments:@[ cast(i64T, [[XTLiteralIntNode alloc] initWithValue:code >> 8 location:loc]),
+                                        cast([self.typeTable typeForName:@"u32"],
+                                             [[XTLiteralIntNode alloc] initWithValue:[r[0] isEqualToString:@"&"] ? 255 : 0
+                                                                            location:loc]) ]
+                            location:loc];
+                [st addObject:assign(member(@"__par_t", fieldOf(r[1])), cast(redIvarType(r), call))];
+                continue;
+                }
             [st addObject:assign(member(@"__par_t", fieldOf(r[1])), startOf(r, fieldRef(r[1])))];
+            }
         [st addObject:[[XTReturnNode alloc] initWithValues:@[ ident(@"__par_t") ] location:loc]];
         [methods addObject:[[XTMethodDeclNode alloc] initWithName:@"copyChunk" returnTypes:@[ chunkPtr ]
                                                        parameters:@[] isStatic:NO isVarArgs:NO
@@ -1829,8 +1998,18 @@ static NSString* parRootName(XTASTNode* n)
         NSDictionary* topVars = self.blkState[@"topVars"];
         NSMutableArray<NSString*>* globs = [NSMutableArray array];
         for (NSString* n in frame[@"outer"])
-            if (topVars[n])
+            {
+            if (!topVars[n])
+                continue;
+            // An array reduction's global: the body reaches it through the
+            // chunk's pointer, never by name.
+            BOOL arr = NO;
+            for (NSArray<NSString*>* r in reductions)
+                if (r.count > 2 && [r[1] isEqualToString:n])
+                    arr = YES;
+            if (!arr)
                 [globs addObject:n];
+            }
         XTType* u8p = [XTPointerType pointerToType:[self.typeTable typeForName:@"u8"]];
         XTType* ptrT = [self.typeTable typeForName:@"pointer"];
         NSMutableArray<XTASTNode*>* addrSt = [NSMutableArray array];
@@ -2014,8 +2193,11 @@ static NSString* parRootName(XTASTNode* n)
         // written one.
         if (frame[@"auto"])
             [tagText appendString:@"auto;"];
+        // An array reduction is `a<field>=<op>;`: it has no GPU form yet, and
+        // par-check keeps it on the CPU.
         for (NSUInteger j = 0; j < reductions.count; j++)
-            [tagText appendFormat:@"%lu=%@;", (unsigned long)(3 + caps.count + j), reductions[j][0]];
+            [tagText appendFormat:@"%@%lu=%@;", reductions[j].count > 2 ? @"a" : @"", (unsigned long)(3 + caps.count + j),
+                                  reductions[j][0]];
         // …and `c<field>;` for each :constant capture, which the Metal
         // printer binds in the constant address space.
         for (NSString* cn in constants)
@@ -2050,7 +2232,24 @@ static NSString* parRootName(XTASTNode* n)
                                                        initialiser:cast(implPtr, ident(@"other"))
                                                           location:loc]];
         for (NSArray<NSString*>* r in reductions)
+            {
+            // An array reduction: the other chunk's copy folded into this
+            // one's array, and freed.
+            if (r.count > 2)
+                {
+                XTType* u8p = [XTPointerType pointerToType:[self.typeTable typeForName:@"u8"]];
+                XTASTNode* call = [[XTMethodCallExprNode alloc]
+                    initWithReceiver:ident(@"ParFnChunk")
+                          methodName:@"arrMerge"
+                           arguments:@[ cast(u8p, member(@"self", fieldOf(r[1]))), cast(u8p, member(@"o", fieldOf(r[1]))),
+                                        cast(i64T, [[XTLiteralIntNode alloc] initWithValue:parArrCode(redTypes[r[1]], r[0])
+                                                                                   location:loc]) ]
+                            location:loc];
+                [st addObject:stmt(call)];
+                continue;
+                }
             [st addObject:fold(r[0], fieldRef(r[1]), fieldRef(r[1]), member(@"o", fieldOf(r[1])))];
+            }
         XTParamNode* p = [[XTParamNode alloc] initWithType:chunkPtr name:@"other" location:loc];
         [methods addObject:[[XTMethodDeclNode alloc] initWithName:@"merge" returnTypes:@[ [XTType voidType] ]
                                                        parameters:@[ p ] isStatic:NO isVarArgs:NO
@@ -2097,7 +2296,16 @@ static NSString* parRootName(XTASTNode* n)
         }
     for (NSArray<NSString*>* r in reductions)
         {
-        [site addObject:assign(member(pv, fieldOf(r[1])), startOf(r, ident(r[1])))];
+        // An array reduction's own chunk updates the array itself.
+        if (r.count > 2)
+            [site addObject:assign(member(pv, fieldOf(r[1])),
+                                   [[XTUnaryExprNode alloc] initWithOp:XTUnaryOpAddrOf
+                                                               operand:[[XTSubscriptExprNode alloc] initWithBase:ident(r[1])
+                                                                                                            index:[[XTLiteralIntNode alloc] initWithValue:0 location:loc]
+                                                                                                         location:loc]
+                                                              location:loc])];
+        else
+            [site addObject:assign(member(pv, fieldOf(r[1])), startOf(r, ident(r[1])))];
         [self blkNoteIdentifierUse:r[1] at:loc];
         }
     XTASTNode* hi = cond.right;
@@ -2111,6 +2319,8 @@ static NSString* parRootName(XTASTNode* n)
     [site addObject:stmt(run)];
     for (NSArray<NSString*>* r in reductions)
         {
+        if (r.count > 2)
+            continue;
         NSString* op = r[0];
         BOOL idem = [op isEqualToString:@"&"] || [op isEqualToString:@"|"] || [op isEqualToString:@"min"]
                     || [op isEqualToString:@"max"];

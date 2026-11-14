@@ -183,6 +183,7 @@ static XTOpInfo operatorInfo(XTTokenType type)
                     }
                 }
             [self parNoteWriteTarget:lhs];
+            [self parNoteUpdate:lhs op:aop rhs:rhs];
             lhs = [[XTAssignExprNode alloc] initWithOp:aop lhs:lhs rhs:rhs location:op.location];
             continue;
             }

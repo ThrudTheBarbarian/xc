@@ -232,6 +232,9 @@ static void parResolveKept(XTIRModule* module, NSSet<NSString*>* serial)
 
 static int64_t gParGridW = 0;
 static int64_t gParGridH = 0;
+// The array reductions' fields (`a<field>=<op>;` words), read by
+// readGridWords: below for the dependence test.
+static NSMutableIndexSet* gParArrFields = nil;
 
 /****************************************************************************\
 |* Several trips of a GPU kernel's `while` per exit test (2026-11-01). A GPU
@@ -1370,6 +1373,7 @@ static BOOL gEmitsWGSL = NO;
         // The block's reductions, after the tag: `<field>=<op>;` each (bug 645).
         NSMutableDictionary<NSNumber*, NSString*>* redOps = nil;
         NSMutableIndexSet* constFields = [NSMutableIndexSet indexSet];
+        NSMutableIndexSet* arrFields = [NSMutableIndexSet indexSet];
         gParGridW = 0;
         gParGridH = 0;
         NSUInteger litEnd = lit.length;
@@ -1392,6 +1396,12 @@ static BOOL gEmitsWGSL = NO;
                 // `gw=<n>` / `gh=<n>`: a grid's constant width and height.
                 if ([pair hasPrefix:@"gw="]) { gParGridW = [pair substringFromIndex:3].longLongValue; continue; }
                 if ([pair hasPrefix:@"gh="]) { gParGridH = [pair substringFromIndex:3].longLongValue; continue; }
+                // `a<field>=<op>`: an array reduction, not a scalar one.
+                if (pair.length > 1 && [pair hasPrefix:@"a"] && [pair rangeOfString:@"="].location != NSNotFound)
+                    {
+                    [arrFields addIndex:(NSUInteger)[pair substringFromIndex:1].integerValue];
+                    continue;
+                    }
                 NSRange eq = [pair rangeOfString:@"="];
                 if (eq.location == NSNotFound || eq.location == 0)
                     continue;
@@ -1456,7 +1466,12 @@ static BOOL gEmitsWGSL = NO;
         NSString* lost = serialBlock ? nil : unlocatedGlobal(f, module, module, fcls);
         if (lost)
             mslWhy = ptxWhy = wgslWhy = spvWhy = [@"it uses the global " stringByAppendingString:shownName(lost)];
-        BOOL noForms = serialBlock || lost;
+        // An array reduction has no GPU form yet: the block runs on the CPU's
+        // threads. Mirrored in the port.
+        BOOL arrRed = !serialBlock && !lost && arrFields.count > 0;
+        if (arrRed)
+            mslWhy = ptxWhy = wgslWhy = spvWhy = @"it has an array reduction (:reduce(op a[])), which has no GPU version yet";
+        BOOL noForms = serialBlock || lost || arrRed;
         NSString* msl = gEmitsMetal && !noForms ? metalOf(&mslWhy) : nil;
         NSString* ptx = gEmitsPTX && !noForms ? ptxOf(&ptxWhy) : nil;
         NSString* wgsl = gEmitsWGSL && !noForms ? wgslOf(&wgslWhy) : nil;
@@ -1580,6 +1595,10 @@ static BOOL gEmitsWGSL = NO;
                 XTIRType* e = t.kind == XTIRTypeKindPtr ? t.pointeeType : nil;
                 if (!e || e.kind == XTIRTypeKindAgg || e.kind == XTIRTypeKindPtr || e.kind == XTIRTypeKindVec
                     || e.kind == XTIRTypeKindVoid || e.byteWidth == 0)
+                    continue;
+                // An array reduction's pointer is a chunk's own copy, or the
+                // array itself, which no other buffer names.
+                if ([arrFields containsIndex:k])
                     continue;
                 [hdr appendFormat:@" buf=%u:%lu:%u", fl[k].byteOffset, (unsigned long)(k - 3), e.byteWidth];
                 }
@@ -1718,6 +1737,7 @@ static BOOL gEmitsWGSL = NO;
     {
     gParGridW = 0;
     gParGridH = 0;
+    gParArrFields = [NSMutableIndexSet indexSet];
     NSData* plain = [[NSString stringWithFormat:@"__XC_PAR_MSL_%@__", n] dataUsingEncoding:NSUTF8StringEncoding];
     NSData* fastTag = [[NSString stringWithFormat:@"__XC_PAR_FAST_%@__", n] dataUsingEncoding:NSUTF8StringEncoding];
     for (XTIRSymbol* sym in module.symbols)
@@ -1742,6 +1762,9 @@ static BOOL gEmitsWGSL = NO;
             {
             if ([pair hasPrefix:@"gw="]) gParGridW = [pair substringFromIndex:3].longLongValue;
             if ([pair hasPrefix:@"gh="]) gParGridH = [pair substringFromIndex:3].longLongValue;
+            // `a<field>=<op>`: an array reduction's field.
+            if (pair.length > 1 && [pair hasPrefix:@"a"] && [pair rangeOfString:@"="].location != NSNotFound)
+                [gParArrFields addIndex:(NSUInteger)[pair substringFromIndex:1].integerValue];
             }
         return;
         }
@@ -2700,6 +2723,12 @@ static BOOL parIsComputeOp(XTIROpcode op)
     // in block order); its phi operand is the iv. Mirrored in the port.
     XTIRValueId iv = [self inductionVariableOf:f defs:def first:firstPhi];
     XTIRValueId selfId = (XTIRValueId)0; // parameter n is value n; self is the first
+    // An array reduction's array: each chunk updates its own copy, so its
+    // accesses meet no other item's (readGridWords: read the fields).
+    NSMutableSet<NSString*>* arrBufs = [NSMutableSet set];
+    for (NSUInteger k = 1; k <= ivars.count; k++)
+        if ([gParArrFields containsIndex:k])
+            [arrBufs addObject:ivars[k - 1]];
     NSMutableDictionary<NSString*, NSMutableArray<NSValue*>*>* writes = [NSMutableDictionary dictionary];
     NSMutableArray<NSArray*>* reads = [NSMutableArray array]; // [buffer, NSValue(index)]
     for (XTIRBlock* b in f.blocks)
@@ -2714,7 +2743,7 @@ static BOOL parIsComputeOp(XTIROpcode op)
             if (ea.opcode != XTIROpElementAddr || ea.operands.count < 2)
                 continue;
             NSString* buf = [self bufferOf:ea.operands[0] self:selfId ivars:ivars defs:def];
-            if (!buf)
+            if (!buf || [arrBufs containsObject:buf])
                 continue;
             XTParIndex x = [self indexOf:ea.operands[1] iv:iv defs:def depth:0];
             if (!x.affine)

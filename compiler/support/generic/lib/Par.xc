@@ -229,19 +229,38 @@ class ParFnChunk : ParChunk
         {
         return _ctx.bytes();
         }
-#if ARCH_arm64 || ARCH_x86_64 || OS_windows
-    // An array reduction (h[k[i]] += x): each chunk updates a private copy of
-    // the array, which resetCtx makes here, `bytes` bytes each `fill` (the
+    // An array reduction (h[k[i]] += x, or a written block's
+    // :reduce(+ h[])): each chunk updates a private copy of the array, which
+    // resetCtx or copyChunk makes here, `bytes` bytes each `fill` (the
     // operator's identity: 0, or 0xFF for &).
+#if ARCH_arm64 || ARCH_x86_64 || OS_windows
     static u8* arrNew(i64 bytes, u32 fill)
         {
         u8* p = (u8*)malloc((u64)bytes);
         memset((pointer)p, (i32)fill, (u64)bytes);
         return p;
         }
+    static void arrFree(u8* p)
+        {
+        free((pointer)p);
+        }
+#else
+    static u8* arrNew(i64 bytes, u32 fill)
+        {
+        u32 n = (u32)bytes;
+        u8* p = new u8[n];
+        for (u32 at = (u32)0; at < n; at = at + (u32)1)
+            p[at] = (u8)fill;
+        return p;
+        }
+    static void arrFree(u8* p)
+        {
+        delete p;
+        }
+#endif
     // One chunk's copy folded into another's, or into the array itself at
-    // the end of the block (runOn), and freed. code: the array's bytes << 8,
-    // the operator << 4 (1 +, 2 |, 3 &, 4 ^), the element's width in bytes.
+    // the end of the block, and freed. code: the array's bytes << 8, the
+    // operator << 4 (1 +, 2 |, 3 &, 4 ^), the element's width in bytes.
     static u8* arrMerge(u8* into, u8* from, i64 code)
         {
         i64 bytes = code >> (i64)8;
@@ -254,7 +273,7 @@ class ParFnChunk : ParChunk
             u64 r = op == (u32)1 ? a + b : op == (u32)2 ? (a | b) : op == (u32)3 ? (a & b) : (a ^ b);
             ParFnChunk.arrSet(into + at, w, r);
             }
-        free((pointer)from);
+        ParFnChunk.arrFree(from);
         return into;
         }
     static u64 arrGet(u8* p, i64 w)
@@ -278,7 +297,6 @@ class ParFnChunk : ParChunk
         else
             *(u64*)(pointer)p = v;
         }
-#endif
     static ParFnChunk* make(u32 bytes, u8* name)
         {
         ParFnChunk* c = new ParFnChunk();

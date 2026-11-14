@@ -683,6 +683,7 @@ class ClassInfo
     Map* _mConst;           // the :constant capture fields, by field index (String), from the placeholder's `c<field>;` words
     i64 _mGridW;            // a grid's constant width and height from the placeholder's `gw=`/`gh=` words, else 0
     i64 _mGridH;
+    Map* _mArrRed;          // the array reductions' fields, by field index (String), from the placeholder's `a<field>=<op>;` words
     // The static-init guard of a class the kernel calls (Math, say): value seq
     // of the AddrOf naming its flag ("1"), its init function or its static
     // data ("0"). The host ran every init before the block started, so the

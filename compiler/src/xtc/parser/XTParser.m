@@ -4574,10 +4574,19 @@ static int64_t parAutoConst(XTASTNode* e)
             }
         [self advance];
         XTToken* var = [self expect:XTTokenIdentifier];
+        // `:reduce(+ h[])`: an array reduction, each chunk updating a private
+        // copy of the array h (a third element, "[]").
+        BOOL isArray = NO;
+        if (var && [self match:XTTokenLBracket])
+            {
+            if (![self expect:XTTokenRBracket])
+                return nil;
+            isArray = YES;
+            }
         [self expect:XTTokenRParen];
         if (!var)
             return nil;
-        [reductions addObject:@[ op, var.value ]];
+        [reductions addObject:isArray ? @[ op, var.value, @"[]" ] : @[ op, var.value ]];
         }
     if (![self checkBlockOpen])
         {

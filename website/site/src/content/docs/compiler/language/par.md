@@ -126,6 +126,27 @@ Integer reductions give the same result whatever the number of threads. A
 floating-point sum can differ in its last bits from a sequential one, because
 addition in a different order rounds differently.
 
+`:reduce(op array[])` names an array instead, for a body that updates it
+through an index read from data, such as a histogram:
+
+```c
+u32 hist[256];
+par count :reduce(+ hist[])
+{
+    for (u32 i in 0..n)
+        hist[key[i]] = hist[key[i]] + 1;
+}
+```
+
+The operator is `+`, `|`, `&` or `^`, and the array is a local or global
+one-dimensional array of integers whose size is known when the program is
+built. The body may use the array only to update an element with the
+operator, as `h[k] op= x` or `h[k] = h[k] op x` with the same index on both
+sides. Each thread updates its own copy of the array, filled with the
+operator's identity, and the copies are combined into the array when the block
+ends, so the result is the sequential loop's. Such a block runs on the CPU's
+threads; it has no GPU version yet.
+
 ## Threads
 
 The range is split into one contiguous chunk per CPU thread (`Thread.cpuCount`).

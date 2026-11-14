@@ -1,0 +1,4 @@
+hist: bad=0 total=22016 hist[5]=301
+bits: bad=0 bits[3]=65535
+masks: bad=0 masks[2]=91
+mix: bad=0

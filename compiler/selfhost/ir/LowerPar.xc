@@ -246,6 +246,7 @@
         {
         _mGridW = (i64)0;
         _mGridH = (i64)0;
+        _mArrRed = new Map();
         String* plain = String.withCString("__XC_PAR_MSL_");
         plain.append(n);
         plain.appendCString("__");
@@ -274,6 +275,9 @@
                     {
                     if (inVal && key.equals(String.withCString("gw"))) _mGridW = parWordI64(val);
                     if (inVal && key.equals(String.withCString("gh"))) _mGridH = parWordI64(val);
+                    // `a<field>=<op>`: an array reduction's field.
+                    if (inVal && key.byteLength() > (u32)1 && key.byteAt((u32)0) == (u8)'a')
+                        _mArrRed.set((Hashable*)key.substringFromByte((u32)1), (Object*)val);
                     key = new String();
                     val = new String();
                     inVal = false;
@@ -1827,6 +1831,12 @@
         // the guard comes first in block order); its phi operand is the iv.
         iv = parInductionVariable(f, def, iv);
         IRValue* selfVal = (IRValue*)f.params().get((u32)0);
+        // An array reduction's array: each chunk updates its own copy, so its
+        // accesses meet no other item's (parReadGridWords read the fields).
+        Set* arrBufs = new Set();
+        for (u32 k = (u32)1; _mArrRed != (Map*)0 && k <= ivars.count(); k = k + (u32)1)
+            if (_mArrRed.get((Hashable*)String.withU32(k)) != (Object*)0)
+                arrBufs.add((Hashable*)ivars.get(k - (u32)1));
         Map* writes = new Map();        // buffer -> Array of "affine k c" strings
         Map* wShown = new Map();        // buffer -> its first write's index, as shown
         Map* wSym = new Map();          // buffer -> Array of its writes' symbolic forms (ParIdx)
@@ -1849,7 +1859,7 @@
                 if (ea == (IRInsn*)0 || !ea.op().equals(String.withCString("ElementAddr")) || ea.ops().count() < (u32)2)
                     continue;
                 String* buf = parBufferOf((IROperand*)ea.ops().get((u32)0), selfVal, ivars, def);
-                if (buf == (String*)0)
+                if (buf == (String*)0 || arrBufs.contains((Hashable*)buf))
                     continue;
                 ParIdx* px = parIndex((IROperand*)ea.ops().get((u32)1), iv, def, (u32)0);
                 if (!px.affine)
@@ -2871,6 +2881,7 @@
         // The block's reductions, after the tag: `<field>=<op>;` each (bug 645).
         _mRedOps = (Map*)0;
         _mConst = new Map();
+        _mArrRed = new Map();
         _mGridW = (i64)0;
         _mGridH = (i64)0;
         for (u32 j = (u32)0; j < _m.syms().count(); j = j + (u32)1)
@@ -2896,6 +2907,9 @@
                         _mGridW = parWordI64(val);
                     else if (key.byteLength() > (u32)0 && inVal && key.equals(String.withCString("gh")))
                         _mGridH = parWordI64(val);
+                    // `a<field>=<op>`: an array reduction, not a scalar one.
+                    else if (key.byteLength() > (u32)1 && inVal && key.byteAt((u32)0) == (u8)'a')
+                        _mArrRed.set((Hashable*)key.substringFromByte((u32)1), (Object*)val);
                     else if (key.byteLength() > (u32)0 && inVal)
                         _mRedOps.set((Hashable*)key, (Object*)val);
                     // `c<field>`: a :constant capture (storage hints).
@@ -2952,7 +2966,11 @@
             lostWhy = String.withCString("it uses the global ");
             lostWhy.append(self.parShown(lost));
             }
-        bool noForms = serialBlock || lost != (String*)0;
+        // An array reduction has no GPU form yet: the block runs on the
+        // CPU's threads. As the reference.
+        if (!serialBlock && lost == (String*)0 && _mArrRed.count() > (u32)0)
+            lostWhy = String.withCString("it has an array reduction (:reduce(op a[])), which has no GPU version yet");
+        bool noForms = serialBlock || lostWhy != (String*)0;
         _mWhy = lostWhy;
         String* mslText = _parMetal && !noForms ? parMslK(f, kfUse, kmod) : (String*)0;
         mslWhy = _mWhy;
@@ -3080,6 +3098,10 @@
                 {
                 String* e = self.mslPointee(bl.typeAt(k));
                 if (e == (String*)0 || e.hasPrefix(String.withCString("Agg(")) || self.irWidth(e) == (u32)0)
+                    continue;
+                // An array reduction's pointer is a chunk's own copy, or the
+                // array itself, which no other buffer names.
+                if (_mArrRed.get((Hashable*)String.withU32(k)) != (Object*)0)
                     continue;
                 msl.appendCString(" buf=");
                 msl.append(String.withU32(bl.offsetAt(k)));
