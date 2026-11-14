@@ -122,6 +122,39 @@ static BOOL recipBits(uint64_t bits, BOOL f32, uint64_t* out)
               }
           }
     };
+    // The 2x of x in bb that the -2 rewrite can share: an exact x + x, or an
+    // x * 2 that no add reads (so it fuses with nothing), which becomes x + x
+    // with it. nil when there is neither.
+    XTIRInsn* (^twiceIn)(XTIRBlock*, XTIROperand*, XTIRTypeKind) = ^XTIRInsn*(XTIRBlock* bb, XTIROperand* x, XTIRTypeKind k) {
+      if (x.kind != XTIROperandKindUse)
+          return nil;
+      for (XTIRInsn* t in bb.instructions)
+          {
+          if (t.predicate != XTIRFpExact || t.operands.count != 2 || !t.result || t.result.type.kind != k)
+              continue;
+          XTIROperand *t0 = t.operands[0], *t1 = t.operands[1];
+          if (t.opcode == XTIROpFAdd)
+              {
+              if (t0.kind == XTIROperandKindUse && t1.kind == XTIROperandKindUse && t0.valueId == x.valueId
+                  && t1.valueId == x.valueId)
+                  return t;
+              continue;
+              }
+          if (t.opcode != XTIROpFMul)
+              continue;
+          BOOL isX = (t0.kind == XTIROperandKindUse && t0.valueId == x.valueId && isConst(t1, k, 0x4000000000000000ULL))
+                     || (t1.kind == XTIROperandKindUse && t1.valueId == x.valueId && isConst(t0, k, 0x4000000000000000ULL));
+          if (!isX)
+              continue;
+          BOOL fuses = NO;
+          for (XTIRInsn* u in uses[@(t.result.valueId)])
+              if (u.opcode == XTIROpFAdd || u.opcode == XTIROpFSub)
+                  fuses = YES;
+          if (!fuses)
+              return t;
+          }
+      return nil;
+    };
     BOOL mulOk = self.profile.floatMulToAdd && fn.speedLoopHeaders.count == 0;
     const uint64_t two = 0x4000000000000000ULL, minusTwo = 0xC000000000000000ULL;
     for (XTIRBlock* bb in fn.blocks)
@@ -129,7 +162,11 @@ static BOOL recipBits(uint64_t bits, BOOL f32, uint64_t* out)
         for (NSUInteger i = 0; i < bb.instructions.count; i++)
             {
             XTIRInsn* n = bb.instructions[i];
-            if (!n.result || n.operands.count != 2 || n.predicate != XTIRFpExact || !isF(n.result.type))
+            if (!n.result || n.operands.count != 2 || !isF(n.result.type))
+                continue;
+            // A contract-marked add takes only the shared -2 rewrite below.
+            BOOL contract = n.predicate != XTIRFpExact;
+            if (contract && (n.predicate != XTIRFpContract || n.opcode != XTIROpFAdd))
                 continue;
             XTIRTypeKind k = n.result.type.kind;
             XTIROperand *a = n.operands[0], *c = n.operands[1];
@@ -169,9 +206,17 @@ static BOOL recipBits(uint64_t bits, BOOL f32, uint64_t* out)
                 changed = YES;
                 continue;
                 }
-            if (!mulOk)
+            // In :goal(speed) code, and at a contract-marked add, only the
+            // (x * -2) + c rewrite, and only where the block already adds
+            // x + x: the sum is then shared (CSE), so c - (x + x) is one
+            // subtract where the product and the add were two, and nothing is
+            // lost to fusing. Contract allows the unfused evaluation, and
+            // c - (x + x) is that exactly. C perlin's gradient, whose
+            // `0.0f - 2.0f * v` arm sits beside a `2.0f * v` (#24).
+            BOOL sharedOnly = !mulOk || contract;
+            if (sharedOnly && !self.profile.floatMulToAdd)
                 continue;
-            if (n.opcode == XTIROpFMul)
+            if (n.opcode == XTIROpFMul && !sharedOnly)
                 {
                 XTIROperand* x = isConst(c, k, two) ? a : isConst(a, k, two) ? c : nil;
                 if (!x)
@@ -199,6 +244,14 @@ static BOOL recipBits(uint64_t bits, BOOL f32, uint64_t* out)
                     XTIROperand* x = isConst(d1, k, minusTwo) ? d0 : isConst(d0, k, minusTwo) ? d1 : nil;
                     if (!x)
                         continue;
+                    if (sharedOnly)
+                        {
+                        XTIRInsn* tw = twiceIn(bb, x, k);
+                        if (!tw)
+                            continue;
+                        if (tw.opcode == XTIROpFMul)
+                            retag(tw, XTIROpFAdd, @[ x, x ]);
+                        }
                     retag(d, XTIROpFAdd, @[ x, x ]);
                     retag(n, XTIROpFSub, @[ o, p ]);
                     changed = YES;

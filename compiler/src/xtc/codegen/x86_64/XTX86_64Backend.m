@@ -66,6 +66,7 @@ static NSSet<NSNumber*>* sFmaPhi = nil;                   // phi results: a loop
 // it has no sign to extend). A C program's indices are all signed (LLVM's i32),
 // and perlin's `perm[X & 255]` paid a movsxd for each.
 static NSSet<NSNumber*>* sNonNeg = nil;
+static NSSet<NSNumber*>* sFZero = nil; // the float Consts that are +0.0 (xorps, not loaded)
 // Auto-vectorised loops: a Vec-typed SSA value-id → its assigned SSE register
 // (xmm2..xmm15, all caller-saved on System V; vectorised loop bodies contain no
 // calls, so no prologue save is needed; xmm0/xmm1 stay emission scratch).
@@ -718,7 +719,9 @@ static NSArray<NSString *> *XTAsmStatements(NSString *text) {
             [out appendFormat:@"\tmovaps\t%@, %@\n", xmm, fhome];
         return;
         }
-    if (s)
+    // A +0.0 constant is made, not read back from its slot: xorps is a zeroing
+    // idiom the core retires without a load (C perlin's `0.0f - u`, #24).
+    if (s && ![sFZero containsObject:@(op.valueId)])
         [out appendFormat:@"\tmov%@\t%@, [rbp-%@]\n", d ? @"sd" : @"ss", xmm, s];
     else
         [out appendFormat:@"\txorps\t%@, %@\n", xmm, xmm];
@@ -3309,11 +3312,18 @@ static void vecSlotMove(XTIRFunction* fn, XTIRValueId vid, NSString* reg, BOOL l
     // The vectors whose lanes are all one value: VMulHi's odd-lane shuffle of
     // one is the same register, so it is not made (2026-11-01). As the port.
     NSMutableSet<NSNumber*>* splats = [NSMutableSet set];
+    NSMutableSet<NSNumber*>* fzero = [NSMutableSet set];
     for (XTIRBlock* sb in fn.blocks)
         for (XTIRInsn* sn in sb.instructions)
+            {
             if (sn.opcode == XTIROpVSplat && sn.result)
                 [splats addObject:@(sn.result.valueId)];
+            if (sn.opcode == XTIROpConst && sn.result && [self isFloatVal:sn.result] && sn.operands.count >= 1
+                && sn.operands[0].kind == XTIROperandKindImmF && sn.operands[0].floatRawBytes == 0)
+                [fzero addObject:@(sn.result.valueId)];
+            }
     sSplatVec = splats;
+    sFZero = fzero;
     sNonNeg = nonNeg;
     // The given-up vector values are THIS function's: assignVectorRegsFor:
     // returns before it resets them when the function has no vector values

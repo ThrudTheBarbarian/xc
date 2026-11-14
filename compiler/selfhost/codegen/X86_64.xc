@@ -1417,6 +1417,22 @@ class X86_64
         return true;
         }
 
+    // A float Const whose bits are +0.0 (all zero).
+    static bool isPosZeroConst(IRInsn* n)
+        {
+        if (!n.op().equals(String.withCString("Const")) || n.res() == (IRValue*)0 || n.ops().count() < (u32)1)
+            return false;
+        if (!n.res().ty().equals(String.withCString("F32")) && !n.res().ty().equals(String.withCString("F64")))
+            return false;
+        IROperand* k = (IROperand*)n.ops().get((u32)0);
+        if (k.kind() != (u8)OPK_IMMF || k.fpHex() == (String*)0 || k.fpHex().byteLength() != (u32)16)
+            return false;
+        for (u32 i = (u32)0; i < (u32)16; i = i + (u32)1)
+            if (k.fpHex().byteAt(i) != (u8)48)
+                return false;
+        return true;
+        }
+
     void loadF(IROperand* op, String* xmm)
         {
         if (op.kind() != (u8)OPK_USE || op.val() == (IRValue*)0)
@@ -1433,7 +1449,10 @@ class X86_64
                 _out.appendFormat("\tmovaps\t%s, %s\n", xmm.cString(), fh.cString());
             return;
             }
-        if (!hasSlot(op.val()))
+        // A +0.0 constant is made, not read back from its slot: xorps is a
+        // zeroing idiom the core retires without a load (C perlin's
+        // `0.0f - u`, four reloads a pass, #24).
+        if (!hasSlot(op.val()) || (_fZero != (Map*)0 && _fZero.get((Hashable*)Number.withU32(op.val().pid())) != (Object*)0))
             {
             _out.appendFormat("\txorps\t%s, %s\n", xmm.cString(), xmm.cString());
             return;
@@ -5332,6 +5351,7 @@ class X86_64
         // of one is the same register, so it is not made (2026-11-01). As the
         // reference.
         _splatVec = new Map();
+        _fZero = new Map();
         for (u32 sbi = (u32)0; sbi < fn.blocks().count(); sbi = sbi + (u32)1)
             {
             IRBlock* sb = (IRBlock*)fn.blocks().get(sbi);
@@ -5340,6 +5360,8 @@ class X86_64
                 IRInsn* sn = (IRInsn*)sb.insns().get(sni);
                 if (sn.op().equals(String.withCString("VSplat")) && sn.res() != (IRValue*)0)
                     _splatVec.set((Hashable*)Number.withU32(sn.res().pid()), (Object*)Number.withU32((u32)1));
+                if (isPosZeroConst(sn))
+                    _fZero.set((Hashable*)Number.withU32(sn.res().pid()), (Object*)Number.withU32((u32)1));
                 }
             }
         if (_hasAsm)
@@ -8265,6 +8287,7 @@ class X86_64
     Map* _fmaPhi;    // value -> its phi: a loop-carried addend stays unfused
     bool _fmaOk;     // this function's code has FMA (an avx2/avx512 copy, or a build that has it)
     bool _buildFma;  // the build needs an FMA CPU (-mavx2, -msimd=avx512)
+    Map* _fZero;     // the float Consts that are +0.0 (made by xorps, not loaded)
     Map* _splatVec;  // this function's VSplat results (every lane the same)
     bool _vexOk;     // this function is an avx2/avx512 copy: three-operand forms
     // A signed 32-bit value known to be non-negative: an And with a mask from

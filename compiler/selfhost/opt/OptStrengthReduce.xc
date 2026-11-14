@@ -194,7 +194,11 @@
             for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
                 {
                 IRInsn* n = (IRInsn*)bb.insns().get(i);
-                if (n.res() == (IRValue*)0 || n.ops().count() != (u32)2 || n.pred() != (String*)0)
+                if (n.res() == (IRValue*)0 || n.ops().count() != (u32)2)
+                    continue;
+                // A contract-marked add takes only the shared -2 rewrite below.
+                bool contract = n.pred() != (String*)0;
+                if (contract && (!n.pred().equals(String.withCString("contract")) || !n.op().equals(String.withCString("FAdd"))))
                     continue;
                 String* ty = n.res().ty();
                 if (!ty.equals(String.withCString("F32")) && !ty.equals(String.withCString("F64")))
@@ -238,9 +242,17 @@
                     changed = true;
                     continue;
                     }
-                if (!mulOk)
+                // In :goal(speed) code, and at a contract-marked add, only the
+                // (x * -2) + c rewrite, and only where the block already adds
+                // x + x: the sum is then shared (CSE), so c - (x + x) is one
+                // subtract where the product and the add were two, and nothing
+                // is lost to fusing. Contract allows the unfused evaluation,
+                // and c - (x + x) is that exactly. C perlin's gradient, whose
+                // `0.0f - 2.0f * v` arm sits beside a `2.0f * v` (#24).
+                bool sharedOnly = !mulOk || contract;
+                if (sharedOnly && !_srFloatMul)
                     continue;
-                if (n.op().equals(String.withCString("FMul")))
+                if (n.op().equals(String.withCString("FMul")) && !sharedOnly)
                     {
                     // x * 2 (either side) -> x + x
                     IROperand* x = (IROperand*)0;
@@ -281,6 +293,15 @@
                             x = d1;
                         if (x == (IROperand*)0)
                             continue;
+                        IRInsn* tw = (IRInsn*)0;
+                        if (sharedOnly)
+                            {
+                            tw = srfTwiceIn(bb, x, ty, defOf, uses);
+                            if (tw == (IRInsn*)0)
+                                continue;
+                            if (tw.op().equals(String.withCString("FMul")))
+                                srfRetag(fn, tw, "FAdd", x, x);
+                            }
                         srfRetag(fn, d, "FAdd", x, x);
                         srfRetag(fn, n, "FSub", o, p);
                         changed = true;
@@ -290,6 +311,46 @@
                 }
             }
         return changed;
+        }
+
+    // The 2x of x in bb that the -2 rewrite can share: an exact x + x, or an
+    // x * 2 that no add reads (so it fuses with nothing), which becomes x + x
+    // with it. 0 when there is neither.
+    final IRInsn* srfTwiceIn(IRBlock* bb, IROperand* x, String* ty, Map* defOf, Map* uses)
+        {
+        if (x.kind() != (u8)OPK_USE || x.val() == (IRValue*)0)
+            return (IRInsn*)0;
+        for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+            {
+            IRInsn* t = (IRInsn*)bb.insns().get(i);
+            if (t.pred() != (String*)0 || t.ops().count() != (u32)2 || t.res() == (IRValue*)0 || !t.res().ty().equals(ty))
+                continue;
+            IROperand* t0 = (IROperand*)t.ops().get((u32)0);
+            IROperand* t1 = (IROperand*)t.ops().get((u32)1);
+            if (t.op().equals(String.withCString("FAdd")))
+                {
+                if (t0.kind() == (u8)OPK_USE && t1.kind() == (u8)OPK_USE && t0.val() == x.val() && t1.val() == x.val())
+                    return t;
+                continue;
+                }
+            if (!t.op().equals(String.withCString("FMul")))
+                continue;
+            bool isX = (t0.kind() == (u8)OPK_USE && t0.val() == x.val() && srfIsConst(defOf, t1, ty, "4000000000000000"))
+                       || (t1.kind() == (u8)OPK_USE && t1.val() == x.val() && srfIsConst(defOf, t0, ty, "4000000000000000"));
+            if (!isX)
+                continue;
+            Array* tu = (Array*)uses.get((Hashable*)t.res());
+            bool fuses = false;
+            for (u32 j = (u32)0; tu != (Array*)0 && j < tu.count(); j = j + (u32)1)
+                {
+                String* uo = ((IRInsn*)tu.get(j)).op();
+                if (uo.equals(String.withCString("FAdd")) || uo.equals(String.withCString("FSub")))
+                    fuses = true;
+                }
+            if (!fuses)
+                return t;
+            }
+        return (IRInsn*)0;
         }
 
     final void srfNote(Map* uses, IRInsn* n)
