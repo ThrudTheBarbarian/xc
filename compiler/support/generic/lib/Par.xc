@@ -52,6 +52,10 @@ i64 _xtc_simd_span(pointer p);
 // libSystem: the usable size of a malloc block from its start, else 0.
 u64 malloc_size(pointer p);
 #endif
+// An array reduction's private copies (ParFnChunk.arrNew, arrMerge).
+pointer malloc(u64 n);
+void free(pointer p);
+pointer memset(pointer dst, i32 c, u64 n);
 #endif
 
 // Two C strings equal: how a block's generated gpuGlobal() finds a global by
@@ -224,6 +228,56 @@ class ParFnChunk : ParChunk
         {
         return _ctx.bytes();
         }
+#if ARCH_arm64 || ARCH_x86_64 || OS_windows
+    // An array reduction (h[k[i]] += x): each chunk updates a private copy of
+    // the array, which resetCtx makes here, `bytes` bytes each `fill` (the
+    // operator's identity: 0, or 0xFF for &).
+    static u8* arrNew(i64 bytes, u32 fill)
+        {
+        u8* p = (u8*)malloc((u64)bytes);
+        memset((pointer)p, (i32)fill, (u64)bytes);
+        return p;
+        }
+    // One chunk's copy folded into another's, or into the array itself at
+    // the end of the block (runOn), and freed. code: the array's bytes << 8,
+    // the operator << 4 (1 +, 2 |, 3 &, 4 ^), the element's width in bytes.
+    static u8* arrMerge(u8* into, u8* from, i64 code)
+        {
+        i64 bytes = code >> (i64)8;
+        u32 op = (u32)((code >> (i64)4) & (i64)15);
+        i64 w = code & (i64)15;
+        for (i64 at = (i64)0; at < bytes; at = at + w)
+            {
+            u64 a = ParFnChunk.arrGet(into + at, w);
+            u64 b = ParFnChunk.arrGet(from + at, w);
+            u64 r = op == (u32)1 ? a + b : op == (u32)2 ? (a | b) : op == (u32)3 ? (a & b) : (a ^ b);
+            ParFnChunk.arrSet(into + at, w, r);
+            }
+        free((pointer)from);
+        return into;
+        }
+    static u64 arrGet(u8* p, i64 w)
+        {
+        if (w == (i64)1)
+            return (u64)*p;
+        if (w == (i64)2)
+            return (u64)*(u16*)(pointer)p;
+        if (w == (i64)4)
+            return (u64)*(u32*)(pointer)p;
+        return *(u64*)(pointer)p;
+        }
+    static void arrSet(u8* p, i64 w, u64 v)
+        {
+        if (w == (i64)1)
+            *p = (u8)v;
+        else if (w == (i64)2)
+            *(u16*)(pointer)p = (u16)v;
+        else if (w == (i64)4)
+            *(u32*)(pointer)p = (u32)v;
+        else
+            *(u64*)(pointer)p = v;
+        }
+#endif
     static ParFnChunk* make(u32 bytes, u8* name)
         {
         ParFnChunk* c = new ParFnChunk();
