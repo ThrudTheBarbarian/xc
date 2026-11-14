@@ -147,6 +147,7 @@ const SIDEBAR = [
 						{ label: 'Overview', slug: 'compiler/usage' },
 						{ label: 'Allocator & ARC', slug: 'compiler/usage/allocator-arc' },
 						{ label: 'C programs', slug: 'compiler/usage/c-programs' },
+						{ label: 'C++ programs', slug: 'compiler/usage/cpp-programs' },
 						{ label: 'CLI flag reference', slug: 'compiler/usage/cli' },
 						{ label: 'Debugging', slug: 'compiler/usage/debugging' },
 						{ label: 'Environment & settings', slug: 'compiler/usage/environment' },
