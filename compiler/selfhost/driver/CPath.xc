@@ -232,36 +232,91 @@ class CPath
         return r != (String*)0 ? Languages.plainCallingConv(r) : r;
         }
 
-    // A load-time function that calls __register_frame(&__xc_eh_frame_start).
+    // A load-time function that calls __register_frame(&__xc_eh_frame_start)
+    // once per program: every C/C++ object carries one, and the link gathers
+    // their tables under that one symbol, so each checks and sets a flag that
+    // the objects share (an uninitialised global: a common symbol, merged).
     static void registerFrames(IRModule* m)
         {
         String* u8p = String.withCString("Ptr(U8, unbanked)");
         IRSymbol* eh = IRSymbol.dataGlobal(String.withCString("__xc_eh_frame_start"), String.withCString("U8"));
         eh.setAttr(String.withCString("extern"), true);
         m.addSym(eh);
+        m.addSym(IRSymbol.dataGlobal(String.withCString("__xc_eh_registered"), String.withCString("U8")));
         m.addSym(IRSymbol.func(String.withCString("__register_frame"), String.withFormat("(%s) -> Void", u8p.cString()), false, true));
         IRFunc* f = new IRFunc();
         f.setName(String.withCString("__xc_register_frames"));
         IRValue* mem = new IRValue(String.withCString("Mem"));
         f.addParam(mem);
         IRBlock* b = new IRBlock(String.withCString("bb_entry"));
+        IRBlock* done = new IRBlock(String.withCString("bb_done"));
+        IRBlock* reg = new IRBlock(String.withCString("bb_register"));
+        // entry: the flag, and on to done when it is set.
+        IRInsn* fa = IRInsn.with(String.withCString("AddrOf"));
+        IRValue* fav = new IRValue(u8p);
+        fa.setRes(fav);
+        fa.add(IROperand.sym(String.withCString("__xc_eh_registered")));
+        b.add(fa);
+        IRInsn* ld = IRInsn.with(String.withCString("Load"));
+        IRValue* fv = new IRValue(String.withCString("U8"));
+        IRValue* m1 = new IRValue(String.withCString("Mem"));
+        ld.setRes(fv);
+        ld.setMemRes(m1);
+        ld.add(IROperand.useVal(fav));
+        ld.add(IROperand.useVal(mem));
+        b.add(ld);
+        IRInsn* zero = IRInsn.with(String.withCString("Const"));
+        IRValue* zv = new IRValue(String.withCString("U8"));
+        zero.setRes(zv);
+        zero.add(IROperand.immI((i64)0, String.withCString("U8")));
+        b.add(zero);
+        IRInsn* cmp = IRInsn.with(String.withCString("ICmp"));
+        IRValue* set = new IRValue(String.withCString("Bool"));
+        cmp.setRes(set);
+        cmp.setPred(String.withCString("NE"));
+        cmp.add(IROperand.useVal(fv));
+        cmp.add(IROperand.useVal(zv));
+        b.add(cmp);
+        IRInsn* br = IRInsn.with(String.withCString("CondBranch"));
+        br.add(IROperand.useVal(set));
+        br.add(IROperand.block(done));
+        br.add(IROperand.block(reg));
+        b.setTerm(br);
+        IRInsn* r0 = IRInsn.with(String.withCString("Return"));
+        r0.add(IROperand.useVal(m1));
+        done.setTerm(r0);
+        // register: set the flag, then hand the table over.
+        IRInsn* one = IRInsn.with(String.withCString("Const"));
+        IRValue* ov = new IRValue(String.withCString("U8"));
+        one.setRes(ov);
+        one.add(IROperand.immI((i64)1, String.withCString("U8")));
+        reg.add(one);
+        IRInsn* st = IRInsn.with(String.withCString("Store"));
+        IRValue* m2 = new IRValue(String.withCString("Mem"));
+        st.add(IROperand.useVal(fav));
+        st.add(IROperand.useVal(ov));
+        st.add(IROperand.useVal(m1));
+        st.setMemRes(m2);
+        reg.add(st);
         IRInsn* a = IRInsn.with(String.withCString("AddrOf"));
         IRValue* av = new IRValue(u8p);
         a.setRes(av);
         a.add(IROperand.sym(String.withCString("__xc_eh_frame_start")));
-        b.add(a);
+        reg.add(a);
         IRInsn* c = IRInsn.with(String.withCString("Call"));
         c.setCc(String.withCString("CallConv::Standard"));
         c.add(IROperand.sym(String.withCString("__register_frame")));
         c.add(IROperand.useVal(av));
-        c.add(IROperand.useVal(mem));
+        c.add(IROperand.useVal(m2));
         IRValue* mo = new IRValue(String.withCString("Mem"));
         c.setMemRes(mo);
-        b.add(c);
+        reg.add(c);
         IRInsn* r = IRInsn.with(String.withCString("Return"));
         r.add(IROperand.useVal(mo));
-        b.setTerm(r);
+        reg.setTerm(r);
         f.addBlock(b);
+        f.addBlock(done);
+        f.addBlock(reg);
         m.addFunc(f);
         m.addSym(IRSymbol.func(String.withCString("__xc_register_frames"), String.withCString("() -> Void"), false, false));
         m.modinits().add((Object*)String.withCString("__xc_register_frames"));

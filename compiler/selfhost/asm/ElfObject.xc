@@ -409,8 +409,61 @@ class ElfSymDef
         if (!o._symbols())
             return o;
         o._relocations();
+        o._compactEh();
         o._ok = true;
         return o;
+        }
+
+    // A gathered table holds records only: a zero length word inside it (a
+    // relocatable link that kept one input's terminator) would end the
+    // unwinder's walk of every object's table laid after it. Each is
+    // dropped, and the relocations after it move down. (A record and the
+    // CIE it points back to sit on one side of such a word, so the FDEs'
+    // CIE pointers are unchanged.)
+    void _compactEh(void)
+        {
+        if (_eh.length() == (u32)0)
+            return;
+        Array* gone = new Array();
+        u32 p = (u32)0;
+        while (p + (u32)4 <= _eh.length())
+            {
+            u32 len = (u32)_eh.bytes()[p] | ((u32)_eh.bytes()[p + (u32)1] << (u32)8)
+                    | ((u32)_eh.bytes()[p + (u32)2] << (u32)16) | ((u32)_eh.bytes()[p + (u32)3] << (u32)24);
+            if (len == (u32)0)
+                {
+                gone.add((Object*)Number.withU32(p));
+                p = p + (u32)4;
+                continue;
+                }
+            if (len == (u32)$FFFFFFFF)
+                break; // a 64-bit length: left as it is
+            p = p + (u32)4 + len;
+            }
+        if (gone.count() == (u32)0)
+            return;
+        Data* out = new Data();
+        u32 g = (u32)0;
+        for (u32 i = (u32)0; i < _eh.length(); i = i + (u32)1)
+            {
+            if (g < gone.count() && i == ((Number*)gone.get(g)).asU32())
+                {
+                i = i + (u32)3;
+                g = g + (u32)1;
+                continue;
+                }
+            out.appendByte(_eh.bytes()[i]);
+            }
+        for (u32 k = (u32)0; k < _ehRelocs.count(); k = k + (u32)1)
+            {
+            ElfReloc* r = (ElfReloc*)_ehRelocs.get(k);
+            u32 before = (u32)0;
+            for (u32 q = (u32)0; q < gone.count(); q = q + (u32)1)
+                if (((Number*)gone.get(q)).asU32() < r.off())
+                    before = before + (u32)1;
+            r.set(r.off() - (u32)4 * before, r.sym(), r.type(), r.addend());
+            }
+        _eh = out;
         }
 
     // ── the three blobs ──────────────────────────────────────────────────
