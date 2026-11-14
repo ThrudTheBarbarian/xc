@@ -304,10 +304,13 @@ class Languages
                 {
                 Languages.plainLabels(lines, i + 1, end);
                 Languages.reroll(lines, i + 1, end);
-                Languages.elementOffsets(lines, i + 1, end);
+                Languages.elementOffsets(lines, i + 1, end, String.withCString("xeo"));
                 Languages.byteCounts(lines, i + 1, end);
                 Languages.counted(lines, i + 1, end);
                 Languages.pointerLoops(lines, i + 1, end, structs);
+                // Again after it: an element read beside a pointer it made one
+                // (a reverse iterator's `*(p - 1)`).
+                Languages.elementOffsets(lines, i + 1, end, String.withCString("xeb"));
                 Languages.downCounts(lines, i + 1, end);
                 for (u32 k = i; k <= end && k < lines.count(); k = k + 1)
                     {
@@ -2381,6 +2384,38 @@ class Languages
             String* pre = String.withFormat("  %s.s = ptrtoint ptr %s to i64\n  %s.e = ptrtoint ptr %s to i64\n  %s.d = sub i64 %s.e, %s.s\n  %s = sdiv exact i64 %s.d, %ld\n",
                                             tag.cString(), iv.start().cString(), tag.cString(), e.cString(), tag.cString(), tag.cString(), tag.cString(),
                                             cnt.cString(), tag.cString(), iv.step());
+            // A pointer that steps down by S from s is element (n - i) of
+            // s - n*S (its last value, normally the array's start).
+            Array* allQ = new Array();
+            allQ.add((Object*)iv);
+            allQ.addAll(others);
+            bool down = false;
+            for (u32 k = 0; k < allQ.count(); k = k + 1)
+                {
+                PtrIv* q = (PtrIv*)allQ.get(k);
+                if (q.step() >= 0)
+                    continue;
+                if (!down)
+                    pre.appendFormat("  %s.negn = sub i64 0, %s\n", tag.cString(), cnt.cString());
+                down = true;
+                pre.appendFormat("  %s.b%u = getelementptr inbounds %s, ptr %s, i64 %s.negn\n", tag.cString(), k,
+                                 q.elem().cString(), q.start().cString(), tag.cString());
+                }
+            // Each pointer's value when the loop ends (start + n*S, or the
+            // base for one that steps down), for a use past the exit (an
+            // extracted loop handing back std::copy's end iterator).
+            for (u32 k = 0; k < allQ.count(); k = k + 1)
+                {
+                PtrIv* q = (PtrIv*)allQ.get(k);
+                if (q.elem().hasPrefix(String.withCString("<{")))
+                    continue;
+                if (q.step() < 0)
+                    pre.appendFormat("  %s.f%u = getelementptr inbounds %s, ptr %s.b%u, i64 0\n", tag.cString(), k,
+                                     q.elem().cString(), tag.cString(), k);
+                else
+                    pre.appendFormat("  %s.f%u = getelementptr inbounds %s, ptr %s, i64 %s\n", tag.cString(), k,
+                                     q.elem().cString(), q.start().cString(), cnt.cString());
+                }
             lines.set(preBr, (Object*)pre.appending((String*)lines.get(preBr)));
             // The header: the counter's phi, then each pointer as [i].
             String* hdr = String.withFormat("  %s = phi i64 [ 0, %s ], [ %s, %s ]", idx.cString(), iv.pre().cString(), nxt.cString(), iv.latch().cString());
@@ -2389,6 +2424,26 @@ class Languages
             u32 bodyAt = bodyLabel != (String*)0 ? Languages.labelLine(lines, from, end, bodyLabel) : String.notFound();
             if (bodyAt == String.notFound())
                 continue;
+            // The exit block: a pointer used there is its value at the end.
+            String* exitLabel = Languages.branchTarget((String*)lines.get(brAt), c, eq ? 0 : 1);
+            u32 exitAt = exitLabel != (String*)0 ? Languages.labelLine(lines, from, end, exitLabel) : String.notFound();
+            if (exitAt != String.notFound())
+                {
+                Map* fin = new Map();
+                for (u32 k = 0; k < allQ.count(); k = k + 1)
+                    {
+                    PtrIv* q = (PtrIv*)allQ.get(k);
+                    if (!q.elem().hasPrefix(String.withCString("<{")))
+                        fin.set((Hashable*)q.name(), (Object*)String.withFormat("%s.f%u", tag.cString(), k));
+                    }
+                for (u32 k = exitAt + 1; k < end; k = k + 1)
+                    {
+                    String* m = (String*)lines.get(k);
+                    if (m.byteLength() > 0 && m.byteAt(0) != (u8)' ' && m.byteAt(0) != (u8)';')
+                        break;
+                    lines.set(k, (Object*)Languages.renamed(m, fin));
+                    }
+                }
             Array* all = new Array();
             all.add((Object*)iv);
             all.addAll(others);
@@ -2427,8 +2482,15 @@ class Languages
                 // A struct: element [i] (as C's a[i]), then each field of it
                 // (as C's a[i].f), the field at offset 0 being p itself.
                 String* el = q._fieldLines != (Array*)0 ? q.name().appending(String.withCString(".xce")) : q.name();
-                geps.appendFormat("\n  %s = getelementptr inbounds %s, ptr %s, i64 %s", el.cString(), q.elem().cString(),
-                                  q.start().cString(), idx.cString());
+                if (q.step() < 0)
+                    {
+                    geps.appendFormat("\n  %s.r%u = sub i64 %s, %s", tag.cString(), k, cnt.cString(), idx.cString());
+                    geps.appendFormat("\n  %s = getelementptr inbounds %s, ptr %s.b%u, i64 %s.r%u", el.cString(), q.elem().cString(),
+                                      tag.cString(), k, tag.cString(), k);
+                    }
+                else
+                    geps.appendFormat("\n  %s = getelementptr inbounds %s, ptr %s, i64 %s", el.cString(), q.elem().cString(),
+                                      q.start().cString(), idx.cString());
                 if (q._fieldLines != (Array*)0)
                     geps.appendFormat("\n  %s = getelementptr inbounds %s, ptr %s, i32 0, i32 %ld", q.name().cString(), q.elem().cString(),
                                       el.cString(), q._field0 >= 0 ? q._field0 : (i64)0);
@@ -2470,7 +2532,40 @@ class Languages
     // `in[i - 1]` beside `in[i]`, now an element of %p, which the outliner
     // sees as one array read near [i] (stencil's neighbours), not as a
     // pointer made in the loop.
-    static void elementOffsets(Array* lines, u32 from, u32 end)
+    static void elementOffsets(Array* lines, u32 from, u32 end, String* pfx)
+        {
+        // A line a pass grew (several lines joined by newlines, pointerLoops'
+        // body label with its GEPs) is taken line by line.
+        Array* flat = new Array();
+        Array* owner = new Array();
+        for (u32 i = from; i < end; i = i + 1)
+            {
+            Array* parts = ((String*)lines.get(i)).splitOnByte((u8)10);
+            for (u32 q = 0; q < parts.count(); q = q + 1)
+                {
+                flat.add(parts.get(q));
+                owner.add((Object*)Number.with(i));
+                }
+            }
+        Languages.elementOffsetsFlat(flat, 0, flat.count(), pfx);
+        u32 at = 0;
+        for (u32 i = from; i < end; i = i + 1)
+            {
+            String* joined = new String();
+            bool first = true;
+            while (at < flat.count() && ((Number*)owner.get(at)).asU32() == i)
+                {
+                if (!first)
+                    joined.appendCString("\n");
+                joined.append((String*)flat.get(at));
+                first = false;
+                at = at + 1;
+                }
+            lines.set(i, (Object*)joined);
+            }
+        }
+
+    static void elementOffsetsFlat(Array* lines, u32 from, u32 end, String* pfx)
         {
         Map* elemGep = new Map();   // %b -> "T|%p|%x"
         u32 made = 0;
@@ -2525,7 +2620,8 @@ class Languages
             if (sz <= 0 || c == 0 || c % sz != 0)
                 continue;
             i64 k = (neg ? (i64)0 - c : c) / sz;
-            String* tag = String.withFormat("%%xeo%u", made);
+            // Named by the line, so the pass may run twice (each line once).
+            String* tag = String.withFormat("%%%s%u", pfx.cString(), i);
             made = made + 1;
             lines.set(i, (Object*)String.withFormat("  %s = add i64 %s, %ld\n  %s = getelementptr %s, ptr %s, i64 %s",
                                                     tag.cString(), ((String*)f.get(2)).cString(), k,
@@ -3388,9 +3484,11 @@ class Languages
                     Array* kw = Languages.words(((String*)gp.get(2)).trimmed());
                     if (kw.count() != 2)
                         break;
-                    i64 kk = Languages.intOf((String*)kw.get(1));
+                    String* kws = (String*)kw.get(1);
+                    i64 kk = kws.hasPrefix(String.withCString("-")) ? (i64)0 - Languages.intOf(kws.substringFromByte(1)) : Languages.intOf(kws);
                     i64 sz = Languages.sizeOf(gt);
-                    if (kk <= 0 || sz <= 0)
+                    // A step down (a reverse iterator's -8) as well as up.
+                    if (kk == 0 || sz <= 0)
                         break;
                     step = kk * sz;
                     sl = k;
@@ -3398,10 +3496,17 @@ class Languages
                     }
                 if (sl == String.notFound())
                     continue;
+                i64 ab = step < 0 ? (i64)0 - step : step;
                 String* elem = Languages.accessType(lines, from, end, name);
+                // A reverse iterator reads through its stepped value (`*(p -
+                // 1)`, the step itself): that value's accesses give the type.
+                if (elem == (String*)0)
+                    elem = Languages.accessType(lines, from, end, pn);
                 PtrIv* r = new PtrIv();
                 r._field0 = -1;
-                if (elem == (String*)0 || Languages.sizeOf(elem) != step)
+                if ((elem == (String*)0 || Languages.sizeOf(elem) != ab) && step < 0)
+                    return (PtrIv*)0;
+                if (elem == (String*)0 || Languages.sizeOf(elem) != ab)
                     {
                     // A struct's fields, each read or written at its byte
                     // offset (an iterator over a vector of structs).
