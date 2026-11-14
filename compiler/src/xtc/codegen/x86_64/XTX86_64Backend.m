@@ -2330,7 +2330,10 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
             {
             NSMutableString* fbuf = [NSMutableString string]; // per-function → peephole
             [self emitFunction:fn module:mod into:fbuf];
-            [out appendString:[self withVzeroupper:[self peepholeTailDup:[self peepholeFlags:[self peepholeFallthrough:[self peepholeLea:[self peepholeCopyProp:fbuf]]]]] avx:fn.simdLevel != nil]];
+            // peepholeLea again after the tail copies: a copied block that
+            // starts with `mov r, r` can land after a 32-bit write of r (the
+            // port explains).
+            [out appendString:[self withVzeroupper:[self peepholeLea:[self peepholeTailDup:[self peepholeFlags:[self peepholeFallthrough:[self peepholeLea:[self peepholeCopyProp:fbuf]]]]]] avx:fn.simdLevel != nil]];
             }
         }
     // The matrix kernels the module calls (idiom-matmul): `_auto` is dispatched

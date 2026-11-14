@@ -506,7 +506,10 @@ class X86_64
             String* module = _out;
             _out = new String();
             emitFunction(fn);
-            module.append(withVzeroupper(peepholeTailDup(peepholeFlags(peepholeFallthrough(peepholeLea(peepholeCopyProp(_out))))), fn.simdLevel() != (String*)0));
+            // peepholeLea again after the tail copies: a copied block that starts
+            // with `mov r, r` can land after a 32-bit write of r, which the first
+            // pass never saw side by side.
+            module.append(withVzeroupper(peepholeLea(peepholeTailDup(peepholeFlags(peepholeFallthrough(peepholeLea(peepholeCopyProp(_out)))))), fn.simdLevel() != (String*)0));
             _out = module;
             }
         // The matrix kernels the module calls (idiom-matmul): `_auto` is
