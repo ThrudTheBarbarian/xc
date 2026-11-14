@@ -170,6 +170,8 @@ class MergedImage
     Array* _tlsAbs;       // TlsAbsReloc@ — R_X86_64_64 inside the TLS image
     SectionBytes* _init;  // the objects' .init_array words, one after another
     Array* _initFix;      // X86Fixup@ against _init (an ABS64 per word)
+    SectionBytes* _eh;    // the objects' .eh_frame tables, end to end (gathered)
+    Array* _ehFix;        // X86Fixup@ against _eh
     String* _why;
     bool _failed;
 
@@ -188,6 +190,8 @@ class MergedImage
         _tlsAbs = new Array();
         _init = new SectionBytes();
         _initFix = new Array();
+        _eh = new SectionBytes();
+        _ehFix = new Array();
         _bss = new SectionBytes();
         _bssSyms = new Array();
         _bssAlign = (u32)1;
@@ -234,6 +238,16 @@ class MergedImage
         {
         return _init;
         }
+    SectionBytes* ehWords(void)
+        {
+        return _eh;
+        }
+
+    Array* ehFixups(void)
+        {
+        return _ehFix;
+        }
+
     Array* initFixups(void)
         {
         return _initFix;
@@ -1762,6 +1776,30 @@ class MergedImage
         im.syms().set((Hashable*)String.withCString("__xt_ctors_end"), (Object*)Number.withU32(im.data().length()));
         }
 
+    // The objects' frame tables (gathered, elfSetEhGather), end to end after
+    // the data with one terminator: __xc_eh_frame_start, which the C++
+    // start-up hands __register_frame, then covers every object's.
+    static void placeEh(MergedImage* im)
+        {
+        if (im.ehWords().length() == (u32)0)
+            return;
+        im.data().padTo((u32)8);
+        u32 base = im.data().length();
+        for (u32 b = (u32)0; b < im.ehWords().length(); b = b + (u32)1)
+            im.data().appendByte(im.ehWords().byteAt(b));
+        for (u32 b = (u32)0; b < (u32)4; b = b + (u32)1)
+            im.data().appendByte((u8)0);
+        for (u32 i = (u32)0; i < im.ehFixups().count(); i = i + (u32)1)
+            {
+            X86Fixup* f = (X86Fixup*)im.ehFixups().get(i);
+            im.fixups().add((Object*)X86Fixup.make(base + f.offset(), f.kind(), f.symbol(), f.addend()));
+            }
+        String* eh = String.withCString("__xc_eh_frame_start");
+        im.syms().set((Hashable*)eh, (Object*)Number.withU32(base));
+        im.dataSyms().add((Object*)eh);
+        im.addGlobal(eh);
+        }
+
     static void merge(MergedImage* im, ElfObject* o, String* label, u32 tag)
         {
         if (im.failed())
@@ -1927,6 +1965,27 @@ class MergedImage
                     }
                 im.initFixups().add((Object*)X86Fixup.make(ib + r.off(), (u32)X86FIX_ABS64,
                                                            ElfMerge.tagged(o, r.sym(), tag), (i32)r.addend()));
+                }
+            }
+        // The object's frame table, gathered: placed by placeEh.
+        Data* eht = o.eh();
+        if (eht.length() > (u32)0)
+            {
+            u32 eb = im.ehWords().length();
+            for (u32 b = (u32)0; b < eht.length(); b = b + (u32)1)
+                im.ehWords().appendByte(eht.byteAt(b));
+            Array* el = o.ehRelocs();
+            for (u32 k = (u32)0; k < el.count(); k = k + (u32)1)
+                {
+                ElfReloc* r = (ElfReloc*)el.get(k);
+                // 2 PC32: an FDE's function, an LSDA, a personality's pointer.
+                if (r.type() != (u32)2 || r.sym() >= o.symdefs().count())
+                    {
+                    im.fail(String.withFormat("an .eh_frame relocation of type %u in %s", r.type(), label.cString()));
+                    return;
+                    }
+                im.ehFixups().add((Object*)X86Fixup.make(eb + r.off(), (u32)X86FIX_PC32DATA,
+                                                         ElfMerge.tagged(o, r.sym(), tag), (i32)r.addend()));
                 }
             }
         ElfMerge._textRelocs(im, o, label, tag, tbase);

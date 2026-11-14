@@ -32,6 +32,15 @@
 
 // Where a symbol is defined: 0 = nowhere (undefined), 1 = text, 2 = data,
 // 3 = thread-local.
+// Whether objects keep their .eh_frame apart (eh(), ehRelocs()) for the link
+// to lay every object's table end to end under one terminator, which the one
+// __register_frame then covers (C/C++ programs: their objects' tables, xcc's
+// and clang's). Off, a table stays in the object's data as before, so an xc
+// program that links a foreign object is laid out byte for byte as it was.
+bool gElfEhGather;
+void elfSetEhGather(bool on) { gElfEhGather = on; }
+bool elfEhGather(void) { return gElfEhGather; }
+
 class ElfSymDef
     {
     String* _name;
@@ -199,6 +208,9 @@ class ElfSymDef
     Array* _tlsRelocs;  // ElfReloc@ against the TLS image
     Array* _initRelocs; // ElfReloc@ against the constructors' pointers
     Array* _depLibs;    // String@: the libraries the object asks for (.deplibs)
+    Data* _eh;          // .eh_frame when gathered (gElfEhGather), no terminator
+    Map* _ehOffOf;      // section index -> offset in _eh plus one
+    Array* _ehRelocs;   // ElfReloc@ against _eh
     Data* _text;
     Data* _init;        // .init_array: the load-time constructors' pointers
     Data* _data;
@@ -226,6 +238,9 @@ class ElfSymDef
         _tlsRelocs = new Array();
         _initRelocs = new Array();
         _depLibs = new Array();
+        _eh = new Data();
+        _ehOffOf = new Map();
+        _ehRelocs = new Array();
         _init = new Data();
         _initOffOf = new Map();
         _text = new Data();
@@ -287,6 +302,18 @@ class ElfSymDef
         {
         return _init;
         }
+    // The object's frame table when gathered (elfSetEhGather), and its
+    // relocations (offsets into it).
+    Data* eh(void)
+        {
+        return _eh;
+        }
+
+    Array* ehRelocs(void)
+        {
+        return _ehRelocs;
+        }
+
     // The libraries the object asks its link for, as `-l` names them
     // (.deplibs, SHT_LLVM_DEPENDENT_LIBRARIES): a C/C++ object xcc wrote.
     Array* depLibs(void)
@@ -452,9 +479,15 @@ class ElfSymDef
                     _tlsAlign = s.align();
                 continue;
                 }
+            bool ehFrame = s.name() != (String*)0 && s.name().equals(String.withCString(".eh_frame"));
+            if (ehFrame && gElfEhGather)
+                {
+                _ehOffOf.set((Hashable*)Number.with(i), (Object*)Number.with(_eh.length() + (u32)1));
+                _copyInto(_eh, s.off(), s.size());
+                continue;
+                }
             _padTo(_data, s.align());
             _dataOffOf.set((Hashable*)Number.with(i), (Object*)Number.with(_data.length() + (u32)1));
-            bool ehFrame = s.name() != (String*)0 && s.name().equals(String.withCString(".eh_frame"));
             if (ehFrame && _ehFrameOff == (u32)0)
                 _ehFrameOff = _data.length() + (u32)1;
             if (s.type() == (u32)8)
@@ -563,10 +596,11 @@ class ElfSymDef
             u32 dd = _in(_dataOffOf, applies);
             u32 l = _in(_tlsOffOf, applies);
             u32 ia = _in(_initOffOf, applies);
-            if (t == (u32)0 && dd == (u32)0 && l == (u32)0 && ia == (u32)0)
-                continue; // e.g. .rela.eh_frame
-            u32 base = (t != (u32)0 ? t : (dd != (u32)0 ? dd : (l != (u32)0 ? l : ia))) - (u32)1;
-            Array* into = t != (u32)0 ? _relocs : (dd != (u32)0 ? _dataRelocs : (l != (u32)0 ? _tlsRelocs : _initRelocs));
+            u32 eo = _in(_ehOffOf, applies);
+            if (t == (u32)0 && dd == (u32)0 && l == (u32)0 && ia == (u32)0 && eo == (u32)0)
+                continue; // e.g. .rela.debug_info
+            u32 base = (t != (u32)0 ? t : (dd != (u32)0 ? dd : (l != (u32)0 ? l : (ia != (u32)0 ? ia : eo)))) - (u32)1;
+            Array* into = t != (u32)0 ? _relocs : (dd != (u32)0 ? _dataRelocs : (l != (u32)0 ? _tlsRelocs : (ia != (u32)0 ? _initRelocs : _ehRelocs)));
             u32 n = s.size() / (u32)24;
             for (u32 r = (u32)0; r < n; r = r + (u32)1)
                 {
