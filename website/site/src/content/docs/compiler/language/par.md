@@ -358,8 +358,8 @@ Under speed:
 - A loop that `--par-style` makes a block of may add up `float` and `double`
   values in any order, but only when speed is asked for: by the loop's own
   `:goal(speed)`, the loop or block around it, a `#goal speed` line or
-  `-fgoal=speed`. Without one, a float sum stays a serial loop, and in a C
-  program it always does (see [Loops that become blocks](#loops-that-become-blocks---par-style)).
+  `-fgoal=speed`, the only one a C program has. Without one, a float sum
+  stays a serial loop (see [Loops that become blocks](#loops-that-become-blocks---par-style)).
 - The SME kernel that stands in for a matrix multiply leaves out its NaN check
   ([`:goal` on a loop](/compiler/language/statements/#speed-or-accuracy-goal)
   explains).
