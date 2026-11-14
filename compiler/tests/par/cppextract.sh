@@ -22,7 +22,7 @@ clang++ -std=c++20 -O2 -w -o "$W/ref" "$SRC" || { echo "FAIL cppextract: clang++
 want=$("$W/ref")
 XC_PAR_OUTLINE_TRACE=1 "$XC" -q -O3 -std=c++20 -H . -o "$W/x" "$SRC" > "$W/b" 2>&1 \
     || { echo "FAIL cppextract: does not build"; grep -v warning "$W/b" | head -3; exit 1; }
-blocks=$(grep -c 'main\$xcl[0-9]*:[0-9]*: outlined, a block' "$W/b")
+blocks=$(grep -c 'main\$xcl[0-9]*\(\$m[0-9a-f]*\)\{0,1\}:[0-9]*: outlined, a block' "$W/b")
 [ "$blocks" -ge 4 ] || { echo "FAIL cppextract: $blocks of main's loops became blocks (want 4 or more)"; grep 'main\$xcl' "$W/b" | head -12; fail=1; }
 for d in cpu gpu; do
     got=$(XC_PAR=$d "$W/x")

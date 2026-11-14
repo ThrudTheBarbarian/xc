@@ -361,6 +361,7 @@ bool machoEhMerge(void) { return gMachOEhMerge; }
     Array* _unwind;     // MachOUnwindRec@, from __LD,__compact_unwind
     Array* _fdes;       // MachOFde@, from __TEXT,__eh_frame
     Array* _symvals;    // Number@ (i64), each symbol's n_value, nlist order
+    Array* _linkerOpts; // Array@ of String@: each LC_LINKER_OPTION's arguments
     bool _ok;
 
     void init(void)
@@ -379,11 +380,13 @@ bool machoEhMerge(void) { return gMachOEhMerge; }
         _commons = new Map();
         _dataPageMask = (u32)0;
         _unwind = new Array();
+        _linkerOpts = new Array();
         _fdes = new Array();
         _symvals = new Array();
         _ok = false;
         }
 
+    Array* linkerOpts(void) { return _linkerOpts; }
     Array* fdes(void) { return _fdes; }
 
     Array* unwind(void)
@@ -553,6 +556,21 @@ bool machoEhMerge(void) { return gMachOEhMerge; }
                     sects.add((Object*)h);
                     so = so + (u32)80;
                     }
+                }
+            else if (cmd == (u32)$2D)
+                {
+                // LC_LINKER_OPTION: what the object asks the link for, as
+                // arguments (`-framework Metal`, `-lc++`), each group one entry.
+                u32 cnt = MachOObject.rd32(b, p + (u32)8);
+                Array* grp = new Array();
+                u32 q = p + (u32)12;
+                for (u32 k = (u32)0; k < cnt && q < p + csz; k = k + (u32)1)
+                    {
+                    String* a = MachOObject.str(b, q);
+                    grp.add((Object*)a);
+                    q = q + a.byteLength() + (u32)1;
+                    }
+                o._linkerOpts.add((Object*)grp);
                 }
             else if (cmd == (u32)MACHO_LC_SYMTAB)
                 {
