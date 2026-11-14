@@ -3536,8 +3536,7 @@ class X86Fixup
             u32 al = (u32)1 << (u32)n;
             // Code pads with NOPs, data with zeros.
             if (section == (u32)0)
-                while (_text.length() % al != (u32)0)
-                    _text.appendByte((u8)$90);
+                emitNops(_text, (al - _text.length() % al) % al);
             else if (section == (u32)2)
                 {
                 _bss.padTo(al);
@@ -3550,6 +3549,43 @@ class X86Fixup
             }
 
         return handleDataDirective(d, rest, l, section);
+        }
+
+    // Code padding as multi-byte NOPs (the recommended 0F 1F forms, at most
+    // 10 bytes each, as assemblers use for generic x86-64): padding that
+    // execution falls into then costs one instruction per 10 bytes, not one
+    // per byte (#41). As the reference's emitNops.
+    static void emitNops(SectionBytes* t, u32 n)
+        {
+        while (n > (u32)0)
+            {
+            u32 k = n > (u32)10 ? (u32)10 : n;
+            if (k == (u32)2 || k == (u32)6 || k >= (u32)9)
+                t.appendByte((u8)$66);
+            if (k == (u32)10)
+                t.appendByte((u8)$2E);
+            if (k == (u32)1 || k == (u32)2)
+                t.appendByte((u8)$90);
+            else
+                {
+                t.appendByte((u8)$0F);
+                t.appendByte((u8)$1F);
+                // ModRM: [rax] (3), [rax+d8] (4), [rax+rax+d8] (5, 6),
+                // [rax+d32] (7), [rax+rax+d32] (8-10).
+                u32 core = k == (u32)6 || k >= (u32)9 ? k - (k == (u32)10 ? (u32)2 : (u32)1) : k;
+                if (core == (u32)3)
+                    t.appendByte((u8)$00);
+                else if (core == (u32)4)
+                    { t.appendByte((u8)$40); t.appendByte((u8)$00); }
+                else if (core == (u32)5)
+                    { t.appendByte((u8)$44); t.appendByte((u8)$00); t.appendByte((u8)$00); }
+                else if (core == (u32)7)
+                    { t.appendByte((u8)$80); t.appendZeros((u32)4); }
+                else
+                    { t.appendByte((u8)$84); t.appendByte((u8)$00); t.appendZeros((u32)4); }
+                }
+            n = n - k;
+            }
         }
 
     // Split out purely for the arm64 frame budget: a chain of literal

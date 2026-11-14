@@ -207,6 +207,29 @@ static void emit8(NSMutableData *d, uint8_t b) { [d appendBytes:&b length:1]; }
 // A run of zero bytes in one call: a large zero-filled global (`.zero`, `.comm`,
 // `.lcomm`) is one length change, not one append per byte.
 static void emitZeros(NSMutableData *d, int64_t n) { if (n > 0) [d increaseLengthBy:(NSUInteger)n]; }
+// Code padding as multi-byte NOPs (the recommended 0F 1F forms, at most 10
+// bytes each, as assemblers use for generic x86-64): padding that execution
+// falls into then costs one instruction per 10 bytes, not one per byte (#41).
+static void emitNops(NSMutableData *d, uint64_t n)
+{
+    static const uint8_t nops[10][10] = {
+        {0x90},
+        {0x66,0x90},
+        {0x0F,0x1F,0x00},
+        {0x0F,0x1F,0x40,0x00},
+        {0x0F,0x1F,0x44,0x00,0x00},
+        {0x66,0x0F,0x1F,0x44,0x00,0x00},
+        {0x0F,0x1F,0x80,0x00,0x00,0x00,0x00},
+        {0x0F,0x1F,0x84,0x00,0x00,0x00,0x00,0x00},
+        {0x66,0x0F,0x1F,0x84,0x00,0x00,0x00,0x00,0x00},
+        {0x66,0x2E,0x0F,0x1F,0x84,0x00,0x00,0x00,0x00,0x00},
+    };
+    while (n > 0) {
+        uint64_t k = n > 10 ? 10 : n;
+        [d appendBytes:nops[k - 1] length:(NSUInteger)k];
+        n -= k;
+    }
+}
 static void emit16(NSMutableData *d, uint16_t v) { for (int i=0;i<2;i++) emit8(d,(uint8_t)(v>>(8*i))); }
 static void emit32(NSMutableData *d, uint32_t v) { for (int i=0;i<4;i++) emit8(d,(uint8_t)(v>>(8*i))); }
 static void emit64(NSMutableData *d, uint64_t v) { for (int i=0;i<8;i++) emit8(d,(uint8_t)(v>>(8*i))); }
@@ -1844,7 +1867,7 @@ static BOOL isPlainIntLiteral(NSString *s) {
                 // .align is byte-granular on some assemblers but the backend only
                 // ever emits .p2align; treat both as a power of two.
                 uint64_t a = 1ull << n;
-                if (section == 0)      { while (text.length % a) emit8(text, 0x90); }   // nop-pad code
+                if (section == 0)      { emitNops(text, (a - text.length % a) % a); }   // nop-pad code
                 else if (section == 2) { while (bss.length % a) emit8(bss, 0); if (a > bssAlign) bssAlign = a; }
                 else                   { while (_data.length % a) emit8(_data, 0); }
                 continue;
