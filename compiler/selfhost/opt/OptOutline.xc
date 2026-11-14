@@ -1688,6 +1688,14 @@
         if (!ppParMemoryOk(fn, L, iv.res(), defOf, defBlk))
             return ppNo("ppOutlinePar 16");
 
+        // An array reduction calls the runtime's arrNew and arrMerge.
+        u32 nHist = _ppHistSt.count();
+        if (nHist > (u32)0
+            && ((funcNamed(m, String.withCString("ParFnChunk$arrNew")) == (IRFunc*)0
+                 && symNamed(m, String.withCString("ParFnChunk$arrNew")) == (IRSymbol*)0)
+                || (funcNamed(m, String.withCString("ParFnChunk$arrMerge")) == (IRFunc*)0
+                    && symNamed(m, String.withCString("ParFnChunk$arrMerge")) == (IRSymbol*)0)))
+            return ppNo("no ParFnChunk.arrNew or arrMerge");
         // The captures: the live-ins the body reads, less those only the
         // counter's start and the exit test read (lo and hi stand for them).
         Array* ins = new Array();
@@ -1796,6 +1804,10 @@
             hoistAt.add((Object*)Number.with(liveIns.count()));
             liveIns.add((Object*)((IRInsn*)_ppInvLoads.get(q)).res());
             }
+        // An array reduction's array is reached through the chunk's private
+        // copy: an AddrOf of it in the loop is not made in the block.
+        for (u32 h = (u32)0; h < nHist; h = h + (u32)1)
+            hoistOnly.add((Hashable*)_ppHistBase.get(h));
         // Which captures the loop only reads (before the casts below replace
         // untyped ones in place: the positions stay).
         ppReadOnlyCaptures(liveIns, defOf);
@@ -1877,7 +1889,8 @@
         // with FieldAddr, so that the loop's function has the shape of a
         // generated block's run(): what the kernel printers read.
         u32 nIn = liveIns.count();
-        u32 bytes = (u32)24 + (nIn + reds.count()) * (u32)8;
+        u32 bytes = (u32)24 + (nIn + reds.count() + nHist) * (u32)8;
+        u32 histAt = (u32)3 + nIn + reds.count();   // the first private copy's field
         IRLayout* recL = IRLayout.with(bytes, (u32)8);
         recL.addField((u32)0, String.withCString("Ptr(Void, unbanked)"));
         recL.addField((u32)8, String.withCString("I64"));
@@ -1886,6 +1899,8 @@
             recL.addField((u32)24 + i * (u32)8, ((IRValue*)liveIns.get(i)).ty());
         for (u32 i = (u32)0; i < reds.count(); i = i + (u32)1)
             recL.addField((u32)24 + (nIn + i) * (u32)8, ((IRInsn*)reds.get(i)).res().ty());
+        for (u32 h = (u32)0; h < nHist; h = h + (u32)1)
+            recL.addField((histAt + h) * (u32)8, ((IRValue*)_ppHistBase.get(h)).ty());
         String* recT = String.withFormat("Ptr(Agg(%u), unbanked)", m.addLayout(recL));
         _ppOutN = _ppOutN + (u32)1;
         String* stem = String.withFormat("ParOut$%u", _ppOutN);
@@ -1961,6 +1976,13 @@
             IRInsn* r = (IRInsn*)reds.get(i);
             redInit.add((Object*)ppFieldLoad(entry, bRec, (u32)3 + nIn + i, r.res().ty(), mcur));
             mcur = _ppLastMem;
+            }
+        for (u32 h = (u32)0; h < nHist; h = h + (u32)1)
+            {
+            IRValue* hb = (IRValue*)_ppHistBase.get(h);
+            IRValue* pv = ppFieldLoad(entry, bRec, histAt + h, hb.ty(), mcur);
+            mcur = _ppLastMem;
+            remap.set((Hashable*)hb, (Object*)IROperand.useVal(pv));
             }
         IRValue* bLo = ppFieldLoad(entry, bRec, (u32)1, String.withCString("I64"), mcur);
         mcur = _ppLastMem;
@@ -2107,6 +2129,15 @@
             IRValue* z = ppIdentity(rb, ty, (String*)redOps.get(i));
             rm = ppCtxStore(rb, rCtx, (u32)24 + (nIn + i) * (u32)8, z, rm);
             }
+        for (u32 h = (u32)0; h < nHist; h = h + (u32)1)
+            {
+            i64 code = ((Number*)_ppHistCode.get(h)).asI64();
+            u32 fill = ((code >> (i64)4) & (i64)15) == (i64)3 ? (u32)255 : (u32)0;
+            IRValue* nbv = ppEmit(rb, String.withCString("Const"), String.withCString("I64"), IROperand.immI(code >> (i64)8, String.withCString("I64")), (IROperand*)0, (IROperand*)0);
+            IRValue* fv = ppEmit(rb, String.withCString("Const"), String.withCString("U32"), IROperand.immI((i64)fill, String.withCString("U32")), (IROperand*)0, (IROperand*)0);
+            IRValue* pv = ppCall(rb, String.withCString("ParFnChunk$arrNew"), u8p, IROperand.useVal(nbv), IROperand.useVal(fv), (IROperand*)0, rm);
+            rm = ppCtxStore(rb, rCtx, (histAt + h) * (u32)8, pv, _ppLastMem);
+            }
         IRInsn* rr = IRInsn.with(String.withCString("Return"));
         rr.add(IROperand.useVal(rm));
         rb.setTerm(rr);
@@ -2160,6 +2191,18 @@
                 }
             gm = ppCtxStore(gb, gInto, off, sum, gm);
             }
+        for (u32 h = (u32)0; h < nHist; h = h + (u32)1)
+            {
+            u32 off = (histAt + h) * (u32)8;
+            IRValue* a = ppCtxLoad(gb, gInto, off, u8p, gm);
+            gm = _ppLastMem;
+            IRValue* b2 = ppCtxLoad(gb, gFrom, off, u8p, gm);
+            gm = _ppLastMem;
+            IRValue* cv = ppEmit(gb, String.withCString("Const"), String.withCString("I64"),
+                                 IROperand.immI(((Number*)_ppHistCode.get(h)).asI64(), String.withCString("I64")), (IROperand*)0, (IROperand*)0);
+            ppCall(gb, String.withCString("ParFnChunk$arrMerge"), u8p, IROperand.useVal(a), IROperand.useVal(b2), IROperand.useVal(cv), gm);
+            gm = _ppLastMem;
+            }
         IRInsn* gr = IRInsn.with(String.withCString("Return"));
         gr.add(IROperand.useVal(gm));
         gb.setTerm(gr);
@@ -2203,7 +2246,10 @@
             ftys.add((Object*)((IRValue*)liveIns.get(i)).ty());
         for (u32 i = (u32)0; i < reds.count(); i = i + (u32)1)
             ftys.add((Object*)((IRInsn*)reds.get(i)).res().ty());
-        _ppMade.add((Object*)ParOutBlock.with(pcls, ftys));
+        // A block with an array reduction has no GPU version yet (#143): its
+        // gpuSource stays the base's empty one, so it runs on the CPU.
+        if (nHist == (u32)0)
+            _ppMade.add((Object*)ParOutBlock.with(pcls, ftys));
         // ── the class: ParFnChunk's vtable with the three replaced (they are
         // dispatched: Par.xc's ParFnChunkBase overrides them too) ──
         Array* slots = new Array();
@@ -2218,7 +2264,7 @@
                 s = R.name();
             else if (s.equals(String.withCString("ParFnChunk$mergeCtx")))
                 s = G.name();
-            else if (s.equals(String.withCString("ParChunk$gpuSource")) || s.equals(String.withCString("ParFnChunk$gpuSource")))
+            else if ((s.equals(String.withCString("ParChunk$gpuSource")) || s.equals(String.withCString("ParFnChunk$gpuSource"))) && nHist == (u32)0)
                 s = S.name();
             else if (s.equals(String.withCString("ParChunk$gpuGlobal")))
                 s = gName;
@@ -2327,6 +2373,15 @@
             {
             IRInsn* r = (IRInsn*)reds.get(i);
             pm = ppCtxStore(P, ctx, (u32)24 + (nIn + i) * (u32)8, ppPhiIn(r, L, false), pm);
+            }
+        // An array reduction's field holds the array itself: runOn folds the
+        // chunks' copies into it, and a serial run updates it in place.
+        for (u32 h = (u32)0; h < nHist; h = h + (u32)1)
+            {
+            IRValue* hb = (IRValue*)_ppHistBase.get(h);
+            String* gname = ((String*)_ppHistKey.get(h)).substringFromByte((u32)1);
+            IRValue* ha = ppEmit(P, String.withCString("AddrOf"), hb.ty(), IROperand.sym(gname), (IROperand*)0, (IROperand*)0);
+            pm = ppCtxStore(P, ctx, (histAt + h) * (u32)8, ha, pm);
             }
         // Arrays that may be one: serial where their ranges overlap.
         _ppGuardMem = pm;
@@ -3114,6 +3169,162 @@
         return false;
         }
 
+    // An integer element's width in bytes, or 0.
+    static i64 ppIntBytes(String* t)
+        {
+        if (t.equals(String.withCString("U8")) || t.equals(String.withCString("I8")))
+            return (i64)1;
+        if (t.equals(String.withCString("U16")) || t.equals(String.withCString("I16")))
+            return (i64)2;
+        if (t.equals(String.withCString("U32")) || t.equals(String.withCString("I32")))
+            return (i64)4;
+        if (t.equals(String.withCString("U64")) || t.equals(String.withCString("I64")))
+            return (i64)8;
+        return (i64)0;
+        }
+
+    // The array reductions of L (#143): a store h[k] = h[k] op x, k not the
+    // induction variable (an index read from data), op one of + | & ^ on an
+    // integer element, x not read from h[k], h a global of a size known here.
+    // Each chunk then updates a private copy of h, and the copies are folded
+    // into h when the block ends. Fills the _ppHist arrays; ppParMemoryOk
+    // refuses the loop if it touches such an h in any other way.
+    final void ppFindHist(LRCLoop* L, IRValue* iv, Map* defOf)
+        {
+        _ppHistSt = new Array();
+        _ppHistLd = new Array();
+        _ppHistBase = new Array();
+        _ppHistKey = new Array();
+        _ppHistCode = new Array();
+        if (_ppModule == (IRModule*)0)
+            return;
+        Array* body = L.body();
+        for (u32 b = (u32)0; b < body.count(); b = b + (u32)1)
+            {
+            IRBlock* blk = (IRBlock*)body.get(b);
+            for (u32 i = (u32)0; i < blk.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)blk.insns().get(i);
+                if (!n.op().equals(String.withCString("Store")) || n.ops().count() != (u32)3)
+                    continue;
+                IROperand* ao = (IROperand*)n.ops().get((u32)0);
+                IROperand* vo = (IROperand*)n.ops().get((u32)1);
+                IROperand* mo = (IROperand*)n.ops().get((u32)2);
+                if (ao.kind() != (u8)OPK_USE || vo.kind() != (u8)OPK_USE || mo.kind() != (u8)OPK_USE)
+                    continue;
+                if (!ppAddrKey(ao.val(), iv, defOf) || _ppAtIv || !_ppKey.hasPrefix(String.withCString("@")))
+                    continue;
+                String* key = _ppKey;
+                IRValue* base = _ppBase;
+                // The value: the one operator over the element's old value
+                // and something not read from it.
+                IRInsn* d = (IRInsn*)defOf.get((Hashable*)vo.val());
+                // A narrow element is updated in C's int and cut back
+                // (h[k] |= x on bytes: Trunc(Or(ZExt(h[k]), x))); + | & ^
+                // give the same low bits either way.
+                if (d != (IRInsn*)0 && d.op().equals(String.withCString("Trunc")) && d.ops().count() == (u32)1
+                    && ((IROperand*)d.ops().get((u32)0)).kind() == (u8)OPK_USE)
+                    d = (IRInsn*)defOf.get((Hashable*)((IROperand*)d.ops().get((u32)0)).val());
+                if (d == (IRInsn*)0 || d.ops().count() != (u32)2 || d.res() == (IRValue*)0)
+                    continue;
+                u32 opc = d.op().equals(String.withCString("Add")) ? (u32)1 : d.op().equals(String.withCString("Or")) ? (u32)2
+                        : d.op().equals(String.withCString("And")) ? (u32)3 : d.op().equals(String.withCString("Xor")) ? (u32)4 : (u32)0;
+                i64 w = ppIntBytes(vo.val().ty());
+                if (opc == (u32)0 || w == (i64)0 || ppIntBytes(d.res().ty()) < w)
+                    continue;
+                IRInsn* ld = (IRInsn*)0;
+                IROperand* other = (IROperand*)0;
+                for (u32 k = (u32)0; k < (u32)2 && ld == (IRInsn*)0; k = k + (u32)1)
+                    {
+                    IROperand* o = (IROperand*)d.ops().get(k);
+                    if (o.kind() != (u8)OPK_USE)
+                        continue;
+                    IRInsn* od = (IRInsn*)defOf.get((Hashable*)o.val());
+                    // Through a widening, and a mask that keeps every bit of
+                    // the element (narrowed byte arithmetic: And(h[k], #255)).
+                    for (u32 g = (u32)0; g < (u32)4 && od != (IRInsn*)0; g = g + (u32)1)
+                        {
+                        IROperand* next = (IROperand*)0;
+                        if ((od.op().equals(String.withCString("ZExt")) || od.op().equals(String.withCString("SExt")))
+                            && od.ops().count() == (u32)1)
+                            next = (IROperand*)od.ops().get((u32)0);
+                        else if (od.op().equals(String.withCString("And")) && od.ops().count() == (u32)2)
+                            {
+                            i64 full = w >= (i64)8 ? (i64)-1 : ((i64)1 << (w * (i64)8)) - (i64)1;
+                            for (u32 j = (u32)0; j < (u32)2 && next == (IROperand*)0; j = j + (u32)1)
+                                {
+                                i64 mk = (i64)0;
+                                if (self.constValue(defOf, (IROperand*)od.ops().get(j), &mk) && (mk & full) == full)
+                                    next = (IROperand*)od.ops().get((u32)1 - j);
+                                }
+                            }
+                        if (next == (IROperand*)0 || next.kind() != (u8)OPK_USE)
+                            break;
+                        od = (IRInsn*)defOf.get((Hashable*)next.val());
+                        }
+                    if (od != (IRInsn*)0 && od.op().equals(String.withCString("Load")) && od.ops().count() >= (u32)1
+                        && ((IROperand*)od.ops().get((u32)0)).kind() == (u8)OPK_USE
+                        && ((IROperand*)od.ops().get((u32)0)).val() == ao.val())
+                        {
+                        ld = od;
+                        other = (IROperand*)d.ops().get((u32)1 - k);
+                        }
+                    }
+                if (ld == (IRInsn*)0 || !self.hasBlock(body, (IRBlock*)_ppDefBlk.get((Hashable*)ld.res())))
+                    continue;
+                if (other.kind() == (u8)OPK_USE && ppDependsOn(other.val(), ld.res(), defOf, (u32)0))
+                    continue;
+                // Nothing but loads between the load and the store.
+                IRValue* mv = mo.val();
+                bool clear = false;
+                for (u32 g = (u32)0; g < (u32)32 && !clear; g = g + (u32)1)
+                    {
+                    if (mv == ld.memRes() || (ld.memRes() == (IRValue*)0 && ld.ops().count() > (u32)1
+                        && ((IROperand*)ld.ops().get((u32)1)).kind() == (u8)OPK_USE && mv == ((IROperand*)ld.ops().get((u32)1)).val()))
+                        {
+                        clear = true;
+                        break;
+                        }
+                    IRInsn* md = (IRInsn*)0;
+                    for (u32 q = (u32)0; q < blk.insns().count() && md == (IRInsn*)0; q = q + (u32)1)
+                        if (((IRInsn*)blk.insns().get(q)).memRes() == mv)
+                            md = (IRInsn*)blk.insns().get(q);
+                    if (md == (IRInsn*)0 || !md.op().equals(String.withCString("Load")) || md.ops().count() < (u32)2
+                        || ((IROperand*)md.ops().get((u32)1)).kind() != (u8)OPK_USE)
+                        break;
+                    mv = ((IROperand*)md.ops().get((u32)1)).val();
+                    }
+                if (!clear)
+                    continue;
+                // The array's size, from its global.
+                IRSymbol* g = self.symNamed(_ppModule, key.substringFromByte((u32)1));
+                String* gt = g != (IRSymbol*)0 ? g.globalTy() : (String*)0;
+                i64 size = (i64)0;
+                if (gt != (String*)0 && gt.hasPrefix(String.withCString("Agg(")))
+                    {
+                    u32 lid = self.aeLayoutId(_ppModule, gt);
+                    if (lid < _ppModule.layouts().count())
+                        size = (i64)((IRLayout*)_ppModule.layouts().get(lid)).size();
+                    }
+                if (size <= (i64)0 || size % w != (i64)0)
+                    continue;
+                bool dupKey = false;
+                for (u32 h = (u32)0; h < _ppHistKey.count(); h = h + (u32)1)
+                    dupKey = dupKey || ((String*)_ppHistKey.get(h)).equals(key);
+                if (dupKey)
+                    {
+                    // Two updates of one array: left to the general rules.
+                    continue;
+                    }
+                _ppHistSt.add((Object*)n);
+                _ppHistLd.add((Object*)ld);
+                _ppHistBase.add((Object*)base);
+                _ppHistKey.add((Object*)key);
+                _ppHistCode.add((Object*)Number.with((size << (i64)8) | ((i64)opc << (i64)4) | w));
+                }
+            }
+        }
+
     final bool ppParMemoryOk(IRFunc* fn, LRCLoop* L, IRValue* iv, Map* defOf, Map* defBlk)
         {
         _ppDefBlk = defBlk;
@@ -3131,6 +3342,7 @@
         _ppSpanB = new Array();
         _ppInvLoads = new Array();
         Array* body = L.body();
+        self.ppFindHist(L, iv, defOf);
         for (u32 b = (u32)0; b < body.count(); b = b + (u32)1)
             {
             IRBlock* blk = (IRBlock*)body.get(b);
@@ -3139,6 +3351,8 @@
                 IRInsn* n = (IRInsn*)blk.insns().get(i);
                 String* op = n.op();
                 bool st = op.equals(String.withCString("Store"));
+                if (_ppHistSt.indexOf((Object*)n) != (u32)$FFFFFFFF || _ppHistLd.indexOf((Object*)n) != (u32)$FFFFFFFF)
+                    continue;
                 // A class's one-time initialisation, which the loop may run:
                 // its flag and its run are the runtime's, thread-safe, and
                 // touch nothing of the loop's.
@@ -3171,6 +3385,10 @@
                         _ppInvLoads.add((Object*)n);
                         continue;
                         }
+                    // An array reduction's array is touched by its update only.
+                    for (u32 h = (u32)0; h < _ppHistKey.count(); h = h + (u32)1)
+                        if (((String*)_ppHistKey.get(h)).equals(_ppKey))
+                            return ppNo("an array updated through a data index, also read or written another way");
                     if (st && !_ppAtIv)
                         return ppNo("a store not at [i]");
                     ppNoteKey(_ppBase, addr, _ppAtIv, st);
