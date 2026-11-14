@@ -35,6 +35,12 @@ ParKernelHook* gParKernelHook;
 // mem2reg promotes such a slot too, where only loads and stores reach it.
 bool gOptPromoteScalars;
 
+// -Wpar-auto on a C or C++ file (the driver sets it): the outliner says what
+// it lifted and, for a loop it left, why, as xc's lowering does for xc.
+bool gOptWarnParAuto;
+void optSetWarnParAuto(bool on) { gOptWarnParAuto = on; }
+bool optWarnParAuto(void) { return gOptWarnParAuto; }
+
 // The IR outliner on for this compile without XC_PAR_PROPOSE: a C file
 // built with --par-style=auto (the C path has no parser scan; the outliner is
 // how its loops become blocks).
@@ -1594,6 +1600,8 @@ class BeFact : Object
     i64 _ppRowHi;
 
     Map* _ppDefBlk;
+    String* _ppWarnAt;     // -Wpar-auto: the loop's file:line:col
+    String* _ppLastWhy;    // the last reason ppNo gave
 
     Map* _ppLabels;     // block labels given so far (file:line), how many each
     String* _ppWhere;      // the loop being tried, for the trace

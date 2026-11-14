@@ -88,11 +88,13 @@
                     String* path = (String*)IRDbg.files().get(at.dbgFile());
                     if (path == (String*)0 || IRDbg.isLibraryPath(path))
                         continue;
+                    _ppWarnAt = String.withFormat("%s:%ld:%ld", path.cString(), (i32)at.dbgLine(), (i32)at.dbgCol());
                     String* verdict = ppVerdict(fn, L);
                     if (verdict != (String*)0)
                         {
                         _ppWhere = fn.name();
                         ppNo(verdict.cString());
+                        self.ppWarnAuto(verdict);
                         continue;
                         }
                     if (ppOutlineLoop(m, fn, L, at))
@@ -317,6 +319,7 @@
                          memOuts.count() == (u32)1 ? (IRValue*)memOuts.get((u32)0) : (IRValue*)0, liveOuts))
             {
             ppTrace("a block");
+            self.ppWarnAuto((String*)0);
             return true;
             }
         // Too small to be a block, and no loop inside it to judge: it stays,
@@ -326,6 +329,7 @@
             _ppStayPut = false;
             return false;
             }
+        self.ppWarnAuto(_ppLastWhy != (String*)0 ? _ppLastWhy : String.withCString("its items could not be shown independent"));
         if (liveOuts.count() > (u32)1)
             return ppNo("cut 10");
         IRValue* outV = liveOuts.count() == (u32)1 ? (IRValue*)liveOuts.get((u32)0) : (IRValue*)0;
@@ -1493,7 +1497,7 @@
                       Array* liveIns, IRValue* memIn, IRValue* memLast, Array* liveOuts)
         {
         if (_profile == (OptProfile*)0 || !_profile.ptr64())
-            return ppNo("ppOutlinePar 1");
+            return ppNo("this target has no par runtime for it");
         // The runtime in the program, or its declarations from libRuntime
         // (2026-11-03): a method of an imported class is a symbol with its
         // signature, not a function with a body; its return type is the
@@ -1530,23 +1534,23 @@
         // The exit test.
         IRInsn* t = H.term();
         if (t == (IRInsn*)0 || !t.op().equals(String.withCString("CondBranch")) || t.ops().count() < (u32)3)
-            return ppNo("ppOutlinePar 3");
+            return ppNo("its exit test is not a compare and branch");
         IROperand* onTrue = (IROperand*)t.ops().get((u32)1);
         IROperand* onFalse = (IROperand*)t.ops().get((u32)2);
         if (onTrue.kind() != (u8)OPK_BLOCK || !self.hasBlock(body, onTrue.blk())
             || onFalse.kind() != (u8)OPK_BLOCK || onFalse.blk() != E)
-            return ppNo("ppOutlinePar 4");
+            return ppNo("it can leave other than at its exit test");
         IRInsn* cmp = (IRInsn*)defOf.get((Hashable*)((IROperand*)t.ops().get((u32)0)).val());
         if (cmp == (IRInsn*)0 || !cmp.op().equals(String.withCString("ICmp")) || cmp.ops().count() != (u32)2)
-            return ppNo("ppOutlinePar 5");
+            return ppNo("its exit test is not an integer compare");
         String* pred = cmp.pred();
         bool le = pred.equals(String.withCString("SLE")) || pred.equals(String.withCString("ULE"));
         if (!le && !pred.equals(String.withCString("SLT")) && !pred.equals(String.withCString("ULT")))
-            return ppNo("ppOutlinePar 6");
+            return ppNo("its exit test is not < or <=");
         IROperand* c0 = (IROperand*)cmp.ops().get((u32)0);
         IROperand* c1 = (IROperand*)cmp.ops().get((u32)1);
         if (c0.kind() != (u8)OPK_USE || c1.kind() != (u8)OPK_USE)
-            return ppNo("ppOutlinePar 7");
+            return ppNo("its exit test does not compare two values");
         // The induction variable and the accumulators.
         IRInsn* iv = (IRInsn*)0;
         Array* reds = new Array();      // the accumulator phis
@@ -1557,7 +1561,7 @@
             if (phi.res() == (IRValue*)0 || ppIsMem(phi.res()))
                 continue;
             if (phi.ops().count() != (u32)4)
-                return ppNo("ppOutlinePar 8");
+                return ppNo("a value carried round it comes in from more than one place");
             IRValue* nx = ppPhiIn(phi, L, true);
             IRInsn* step = nx != (IRValue*)0 ? (IRInsn*)defOf.get((Hashable*)nx) : (IRInsn*)0;
             // A running minimum or maximum, if-converted to a Select.
@@ -1589,10 +1593,10 @@
                 continue;
                 }
             if (step == (IRInsn*)0 || step.ops().count() != (u32)2)
-                return ppNo("ppOutlinePar 9");
+                return ppNo("a value carried round it is not one step of the loop");
             bool addI = step.op().equals(String.withCString("Add"));
             if (!addI && !ppRedOp(step.op()))
-                return ppNo("ppOutlinePar 10");
+                return ppNo("a value carried round it is neither a counter nor a reduction");
             IROperand* s0 = (IROperand*)step.ops().get((u32)0);
             IROperand* s1 = (IROperand*)step.ops().get((u32)1);
             IROperand* other = (IROperand*)0;
@@ -1609,19 +1613,19 @@
                 continue;
                 }
             if (other == (IROperand*)0)
-                return ppNo("ppOutlinePar 11");
+                return ppNo("a value carried round it does not change");
             if (iv == (IRInsn*)0 && addI && c0.val() == phi.res() && ppConstOne(other, defOf))
                 {
                 iv = phi;
                 continue;
                 }
             if (other.kind() == (u8)OPK_USE && ppDependsOn(other.val(), phi.res(), defOf, (u32)0))
-                return ppNo("ppOutlinePar 12");
+                return ppNo("a reduction depends on itself other than through its step");
             reds.add((Object*)phi);
             redOps.add((Object*)step.op());
             }
         if (iv == (IRInsn*)0 || !ppIntType(iv.res().ty()))
-            return ppNo("ppOutlinePar 13");
+            return ppNo("it has no integer counter");
         // An accumulator is folded per chunk and combined at the end, so the
         // loop may only update it: a running value read inside the loop (a
         // prefix sum, `s += a[i]; b[i] = s`) depends on every earlier item and
@@ -1643,7 +1647,7 @@
             // read once at the call site, the loads guarded (ppOverlapGuard).
             Array* bl = new Array();
             if (!self.ppLoadBound(bound, L, defOf, defBlk, (u32)0, bl))
-                return ppNo("ppOutlinePar 14");
+                return ppNo("its bound is read from memory the loop may change");
             rematLoads = true;
             }
         // An innermost loop of a few items known here (a 3x3 stencil's row) is no block:
@@ -1682,11 +1686,12 @@
             for (u32 r = (u32)0; r < reds.count() && !isRed; r = r + (u32)1)
                 isRed = ((IRInsn*)reds.get(r)).res() == (IRValue*)liveOuts.get(i);
             if (!isRed)
-                return ppNo("ppOutlinePar 15");
+                return ppNo("a value it leaves for the code after it is not a reduction");
             }
         // The memory: stores to [i] only, a stored array read only at [i].
+        // Its own reason, already given (ppNo).
         if (!ppParMemoryOk(fn, L, iv.res(), defOf, defBlk))
-            return ppNo("ppOutlinePar 16");
+            return false;
 
         // An array reduction calls the runtime's arrNew and arrMerge.
         u32 nHist = _ppHistSt.count();
@@ -2514,9 +2519,24 @@
     // XC_PAR_OUTLINE_TRACE: say which test a loop failed (always false).
     final bool ppNo(u8* why)
         {
+        _ppLastWhy = String.withCString(why);
         if (ppEnvSet("XC_PAR_OUTLINE_TRACE"))
             Stdio.error(String.withFormat("outline: %s: not a block: %s\n", _ppWhere.cString(), why));
         return false;
+        }
+
+    // -Wpar-auto (optWarnParAuto()): a loop of the program's own lifted (why
+    // 0) or left serial, and why, at its file:line:col, in xc's words.
+    final void ppWarnAuto(String* why)
+        {
+        if (!optWarnParAuto() || _ppWarnAt == (String*)0)
+            return;
+        if (why == (String*)0)
+            Stdio.error(String.withFormat("%s: warning: this loop became a 'par' block (--par-style)\n", _ppWarnAt.cString()));
+        else
+            Stdio.error(String.withFormat("%s: warning: this loop runs serially, not as a 'par' block (--par-style): %s\n",
+                                          _ppWarnAt.cString(), why.cString()));
+        _ppWarnAt = (String*)0;
         }
 
     // XC_PAR_OUTLINE_TRACE: say what became of a loop that was outlined.
@@ -3620,7 +3640,7 @@
                     {
                     IRValue* addr = ((IROperand*)n.ops().get((u32)0)).val();
                     if (!ppAddrKey(addr, iv, defOf))
-                        return ppNo("ppParMemoryOk 1");
+                        return ppNo("an address it reads or writes that cannot be followed to an array");
                     if (!st && _ppKey.hasPrefix(String.withCString("@__sinit_")))
                         continue;
                     // A field read each pass from an address the loop does

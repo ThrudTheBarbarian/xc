@@ -5088,6 +5088,8 @@ void main(void)
         // program's one definition of it then.
         Languages.setWholeProgram(!gCSplitRelocatable && !d.keepAsm() && !d.compileOnly());
         cPathSetElf(crow != (TargetRow*)0 && crow.exeFormat().hasPrefix(String.withCString("elf")));
+        // -Wpar-auto: the outliner says what it lifted from this file, and why not.
+        optSetWarnParAuto(!d.fe().warningSuppressed(String.withCString("par-auto")));
         // C and C++: unwind tables for xcc's functions, so a C++ exception
         // can pass through one (arm64: the back end reports its saves).
         arm64SetEhTables(true);
