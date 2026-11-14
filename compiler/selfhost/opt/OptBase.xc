@@ -1644,6 +1644,23 @@ class BeFact : Object
     Array* _ppHistBase;
     Array* _ppHistKey;
     Array* _ppHistCode;
+    // A read away from [i] whose index is bounded (#219): an inner loop's
+    // counter from a constant up to the iteration (i + c) or a constant.
+    // Each bound is (relative to i?, c); per array, merged over its accesses.
+    bool _ppBndOk;
+    bool _ppBndLoIv;
+    i64 _ppBndLoC;
+    bool _ppBndHiIv;
+    i64 _ppBndHiC;
+    Array* _ppGBnd;        // Number@ per array: 1 while every access is bounded
+    Array* _ppGLoIv;       // Number@ 1 when the lower bound is i-relative
+    Array* _ppGLoC;        // Number@ (I64)
+    Array* _ppGHiIv;
+    Array* _ppGHiC;
+    Array* _ppBodyBlocks;  // IRBlock@: the loop being judged's
+    IRFunc* _ppFn;         // and its function
+    Array* _ppRangeA;      // Number@: a stored array...
+    Array* _ppRangeB;      // Number@: ...a read-only one read away from [i] within bounds: a range test
     IRValue* _ppGuardMem;  // ppOverlapGuard's memory token after its calls
     // The pairs that need a check at run time (indices into the above).
     Array* _ppPairA;

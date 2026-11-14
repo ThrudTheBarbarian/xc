@@ -2666,6 +2666,21 @@
                 }
             acc = ppEmit(P, String.withCString("Or"), bt, IROperand.useVal(acc), IROperand.useVal(ov), (IROperand*)0);
             }
+        // A stored array beside a read-only one read within bounds away from
+        // [i]: the byte ranges each can touch over [lo, hi) (#219).
+        for (u32 p = (u32)0; _ppRangeA != (Array*)0 && p < _ppRangeA.count(); p = p + (u32)1)
+            {
+            u32 a = ((Number*)_ppRangeA.get(p)).asU32();
+            u32 b = ((Number*)_ppRangeB.get(p)).asU32();
+            self.ppRangeOf(P, a, lo64, hi64);
+            IRValue* aLo = _ppRangeLo;
+            IRValue* aHi = _ppRangeHi;
+            self.ppBoundRange(P, b, lo64, hi64);
+            IRValue* c1 = ppCmp(P, String.withCString("ULT"), aLo, _ppRangeHi);
+            IRValue* c2 = ppCmp(P, String.withCString("ULT"), _ppRangeLo, aHi);
+            IRValue* ov = ppEmit(P, String.withCString("And"), bt, IROperand.useVal(c1), IROperand.useVal(c2), (IROperand*)0);
+            acc = ppEmit(P, String.withCString("Or"), bt, IROperand.useVal(acc), IROperand.useVal(ov), (IROperand*)0);
+            }
         String* i64t = String.withCString("I64");
         // A stored pointer beside a read-only one read anywhere: apart only
         // in different heap blocks. Two pointers into one block share its
@@ -2753,6 +2768,197 @@
         _ppRangeLo = ppEmit(P, String.withCString("Add"), i64t, IROperand.useVal(at), IROperand.useVal(lb), (IROperand*)0);
         _ppRangeHi = ppEmit(P, String.withCString("Add"), i64t, IROperand.useVal(at), IROperand.useVal(hb), (IROperand*)0);
         return at;
+        }
+
+    // Array k's bounded byte range over [lo, hi), in _ppRangeLo / _ppRangeHi:
+    // elements from its low bound (lo + c, or c) to its high bound
+    // ((hi - 1) + c, or c, and never below the low bound), inclusive (#219).
+    final void ppBoundRange(IRBlock* P, u32 k, IRValue* lo64, IRValue* hi64)
+        {
+        String* i64t = String.withCString("I64");
+        String* key = (String*)_ppGKeys.get(k);
+        IRValue* base = (IRValue*)_ppGBase.get(k);
+        if (key.hasPrefix(String.withCString("@")))
+            base = ppEmit(P, String.withCString("AddrOf"), base.ty(),
+                          IROperand.sym(key.substringFromByte((u32)1)), (IROperand*)0, (IROperand*)0);
+        IRValue* at = ppEmit(P, String.withCString("PtrToInt"), i64t, IROperand.useVal(base), (IROperand*)0, (IROperand*)0);
+        IRValue* es = ppEmit(P, String.withCString("Const"), i64t,
+                             IROperand.immI((i64)((Number*)_ppGElem.get(k)).asU32(), i64t), (IROperand*)0, (IROperand*)0);
+        bool loIv = ((Number*)_ppGLoIv.get(k)).asU32() != (u32)0;
+        bool hiIv = ((Number*)_ppGHiIv.get(k)).asU32() != (u32)0;
+        IRValue* loC = ppEmit(P, String.withCString("Const"), i64t, IROperand.immI(((Number*)_ppGLoC.get(k)).asI64(), i64t), (IROperand*)0, (IROperand*)0);
+        IRValue* hiC = ppEmit(P, String.withCString("Const"), i64t,
+                              IROperand.immI(((Number*)_ppGHiC.get(k)).asI64() - (hiIv ? (i64)1 : (i64)0), i64t), (IROperand*)0, (IROperand*)0);
+        IRValue* le = loIv ? ppEmit(P, String.withCString("Add"), i64t, IROperand.useVal(lo64), IROperand.useVal(loC), (IROperand*)0) : loC;
+        IRValue* he = hiIv ? ppEmit(P, String.withCString("Add"), i64t, IROperand.useVal(hi64), IROperand.useVal(hiC), (IROperand*)0) : hiC;
+        IRValue* below = ppCmp(P, String.withCString("SLT"), he, le);
+        IRInsn* sel = IRInsn.with(String.withCString("Select"));
+        IRValue* hc = new IRValue(i64t);
+        sel.setRes(hc);
+        sel.add(IROperand.useVal(below));
+        sel.add(IROperand.useVal(le));
+        sel.add(IROperand.useVal(he));
+        P.add(sel);
+        IRValue* one = ppEmit(P, String.withCString("Const"), i64t, IROperand.immI((i64)1, i64t), (IROperand*)0, (IROperand*)0);
+        IRValue* hx = ppEmit(P, String.withCString("Add"), i64t, IROperand.useVal(hc), IROperand.useVal(one), (IROperand*)0);
+        IRValue* lb = ppEmit(P, String.withCString("Mul"), i64t, IROperand.useVal(le), IROperand.useVal(es), (IROperand*)0);
+        IRValue* hb = ppEmit(P, String.withCString("Mul"), i64t, IROperand.useVal(hx), IROperand.useVal(es), (IROperand*)0);
+        _ppRangeLo = ppEmit(P, String.withCString("Add"), i64t, IROperand.useVal(at), IROperand.useVal(lb), (IROperand*)0);
+        _ppRangeHi = ppEmit(P, String.withCString("Add"), i64t, IROperand.useVal(at), IROperand.useVal(hb), (IROperand*)0);
+        }
+
+    // An index that is an inner loop's counter (#219): a phi in a block of the
+    // loop being judged, from a constant on entry, stepping up by a constant
+    // from a latch that branches back on a compare of the counter (or its
+    // next value) against the iteration (i + c) or a constant. Sets _ppBndOk
+    // and the bounds: low the start, high the bound plus one (the latch tests
+    // after the body, so the last value run may reach the bound itself).
+    final void ppBoundIndex(IRValue* idx, IRValue* iv, Map* defOf)
+        {
+        IRValue* x = ppStripExt(idx, defOf);
+        if (x == iv || _ppBodyBlocks == (Array*)0)
+            return;
+        IRBlock* H = (IRBlock*)0;
+        IRInsn* phi = (IRInsn*)0;
+        for (u32 b = (u32)0; b < _ppBodyBlocks.count() && phi == (IRInsn*)0; b = b + (u32)1)
+            {
+            IRBlock* blk = (IRBlock*)_ppBodyBlocks.get(b);
+            for (u32 i = (u32)0; i < blk.phis().count(); i = i + (u32)1)
+                if (((IRInsn*)blk.phis().get(i)).res() == x)
+                    {
+                    phi = (IRInsn*)blk.phis().get(i);
+                    H = blk;
+                    }
+            }
+        if (phi == (IRInsn*)0 || phi.ops().count() != (u32)4)
+            return;
+        for (u32 side = (u32)0; side < (u32)2; side = side + (u32)1)
+            {
+            IROperand* lb = (IROperand*)phi.ops().get(side * (u32)2);
+            IROperand* lv = (IROperand*)phi.ops().get(side * (u32)2 + (u32)1);
+            IROperand* iv0 = (IROperand*)phi.ops().get(((u32)1 - side) * (u32)2 + (u32)1);
+            if (lb.kind() != (u8)OPK_BLOCK || lb.blk() == (IRBlock*)0 || lv.kind() != (u8)OPK_USE || lv.val() == (IRValue*)0)
+                continue;
+            IRInsn* t = lb.blk().term();
+            if (t == (IRInsn*)0)
+                continue;
+            bool toT = false;
+            if (t.op().equals(String.withCString("CondBranch")) && t.ops().count() == (u32)3)
+                {
+                // Rotated: the latch tests and branches back to H.
+                IROperand* tt = (IROperand*)t.ops().get((u32)1);
+                IROperand* tf = (IROperand*)t.ops().get((u32)2);
+                toT = tt.kind() == (u8)OPK_BLOCK && tt.blk() == H;
+                bool toF = tf.kind() == (u8)OPK_BLOCK && tf.blk() == H;
+                if (toT == toF)
+                    continue;
+                }
+            else if (t.op().equals(String.withCString("Branch")) && t.ops().count() >= (u32)1
+                     && ((IROperand*)t.ops().get((u32)0)).kind() == (u8)OPK_BLOCK && ((IROperand*)t.ops().get((u32)0)).blk() == H)
+                {
+                // As clang writes it (for.cond): H tests before the body, and
+                // the latch only branches back. The edge that stays in the
+                // loop goes to a block between H and the latch.
+                IRInsn* ht = H.term();
+                if (ht == (IRInsn*)0 || !ht.op().equals(String.withCString("CondBranch")) || ht.ops().count() != (u32)3)
+                    continue;
+                // The inner loop: the blocks that reach the latch without
+                // passing H (the walk the loop finder takes).
+                Array* inner = new Array();
+                Array* wl = new Array();
+                wl.add((Object*)lb.blk());
+                while (wl.count() > (u32)0 && _ppFn != (IRFunc*)0)
+                    {
+                    IRBlock* nb = (IRBlock*)wl.get(wl.count() - (u32)1);
+                    wl.removeLast();
+                    if (nb == H || self.hasBlock(inner, nb))
+                        continue;
+                    inner.add((Object*)nb);
+                    Array* ps = self.lrcPreds(_ppFn, nb);
+                    for (u32 q = (u32)0; q < ps.count(); q = q + (u32)1)
+                        wl.add(ps.get(q));
+                    }
+                IROperand* ht0 = (IROperand*)ht.ops().get((u32)1);
+                IROperand* ht1 = (IROperand*)ht.ops().get((u32)2);
+                bool tIn = ht0.kind() == (u8)OPK_BLOCK && self.hasBlock(inner, ht0.blk());
+                bool fIn = ht1.kind() == (u8)OPK_BLOCK && self.hasBlock(inner, ht1.blk());
+                if (tIn == fIn)
+                    continue;
+                toT = tIn;
+                t = ht;
+                }
+            else
+                continue;
+            i64 start = (i64)0;
+            if (!self.constValue(defOf, iv0, &start))
+                continue;
+            IRInsn* nx = (IRInsn*)defOf.get((Hashable*)lv.val());
+            if (nx == (IRInsn*)0 || !nx.op().equals(String.withCString("Add")) || nx.ops().count() != (u32)2)
+                continue;
+            IROperand* n0 = (IROperand*)nx.ops().get((u32)0);
+            IROperand* n1 = (IROperand*)nx.ops().get((u32)1);
+            i64 step = (i64)0;
+            bool okStep = (n0.kind() == (u8)OPK_USE && n0.val() == x && self.constValue(defOf, n1, &step))
+                          || (n1.kind() == (u8)OPK_USE && n1.val() == x && self.constValue(defOf, n0, &step));
+            if (!okStep || step <= (i64)0)
+                continue;
+            IROperand* c = (IROperand*)t.ops().get((u32)0);
+            if (c.kind() != (u8)OPK_USE || c.val() == (IRValue*)0)
+                continue;
+            IRInsn* cmp = (IRInsn*)defOf.get((Hashable*)c.val());
+            if (cmp == (IRInsn*)0 || !cmp.op().equals(String.withCString("ICmp")) || cmp.ops().count() != (u32)2 || cmp.pred() == (String*)0)
+                continue;
+            IROperand* ca = (IROperand*)cmp.ops().get((u32)0);
+            if (ca.kind() != (u8)OPK_USE || ca.val() == (IRValue*)0)
+                continue;
+            IRValue* cav = ppStripExt(ca.val(), defOf);
+            if (cav != x && cav != lv.val())
+                continue;
+            // The compare that keeps the loop going: `<` or `<=`, as the
+            // branch reads it (its true edge back, or its false edge with the
+            // opposite compare).
+            String* pr = cmp.pred();
+            bool lt = toT ? (pr.equals(String.withCString("ULT")) || pr.equals(String.withCString("SLT")))
+                          : (pr.equals(String.withCString("UGE")) || pr.equals(String.withCString("SGE")));
+            bool le = toT ? (pr.equals(String.withCString("ULE")) || pr.equals(String.withCString("SLE")))
+                          : (pr.equals(String.withCString("UGT")) || pr.equals(String.withCString("SGT")));
+            if (!lt && !le)
+                continue;
+            // The bound: a constant, i, or i + c / c + i / i - c.
+            IROperand* bo = (IROperand*)cmp.ops().get((u32)1);
+            bool hiIv = false;
+            i64 hiC = (i64)0;
+            if (self.constValue(defOf, bo, &hiC))
+                hiIv = false;
+            else if (bo.kind() == (u8)OPK_USE && ppStripExt(bo.val(), defOf) == iv)
+                hiIv = true;
+            else if (bo.kind() == (u8)OPK_USE)
+                {
+                IRInsn* bd = (IRInsn*)defOf.get((Hashable*)ppStripExt(bo.val(), defOf));
+                if (bd == (IRInsn*)0 || bd.ops().count() != (u32)2
+                    || !(bd.op().equals(String.withCString("Add")) || bd.op().equals(String.withCString("Sub"))))
+                    continue;
+                IROperand* b0 = (IROperand*)bd.ops().get((u32)0);
+                IROperand* b1 = (IROperand*)bd.ops().get((u32)1);
+                bool sub = bd.op().equals(String.withCString("Sub"));
+                i64 k = (i64)0;
+                if (b0.kind() == (u8)OPK_USE && ppStripExt(b0.val(), defOf) == iv && self.constValue(defOf, b1, &k))
+                    hiC = sub ? (i64)0 - k : k;
+                else if (!sub && b1.kind() == (u8)OPK_USE && ppStripExt(b1.val(), defOf) == iv && self.constValue(defOf, b0, &k))
+                    hiC = k;
+                else
+                    continue;
+                hiIv = true;
+                }
+            else
+                continue;
+            _ppBndOk = true;
+            _ppBndLoIv = false;
+            _ppBndLoC = start;
+            _ppBndHiIv = hiIv;
+            _ppBndHiC = hiC + (i64)1;
+            return;
+            }
         }
 
     final IRValue* ppCmp(IRBlock* P, String* pred, IRValue* a, IRValue* b)
@@ -2911,6 +3117,7 @@
         {
         _ppKey = (String*)0;
         _ppAtIv = false;
+        _ppBndOk = false;
         _ppOff = (i64)1;
         _ppOffLo = (i64)0;
         _ppOffHi = (i64)0;
@@ -3005,6 +3212,19 @@
                 _ppAtIv = ppRowOwned(terms, iv, defOf);
                 ppShapeRow();
                 }
+            // The elements this access can touch, as bounds the call site can
+            // evaluate (#219): [i + c0, i + c1] for the iteration's own, or an
+            // inner loop's counter's range.
+            if (terms.count() == (u32)1 && _ppAtIv && _ppOff == (i64)1)
+                {
+                _ppBndOk = true;
+                _ppBndLoIv = true;
+                _ppBndLoC = _ppOffLo;
+                _ppBndHiIv = true;
+                _ppBndHiC = _ppOffHi;
+                }
+            else if (terms.count() == (u32)1 && !_ppAtIv && io.kind() == (u8)OPK_USE)
+                self.ppBoundIndex(io.val(), iv, defOf);
             }
         // Through a cast of a pointer to its element type (the C path casts
         // its untyped pointers where they are used): the array is the
@@ -3067,7 +3287,27 @@
             _ppGOffLo.add((Object*)Number.withI64(_ppOffLo));
             _ppGOffHi.add((Object*)Number.withI64(_ppOffHi));
             _ppGStored.add((Object*)Number.with(stored ? (u32)1 : (u32)0));
+            _ppGBnd.add((Object*)Number.with(_ppBndOk ? (u32)1 : (u32)0));
+            _ppGLoIv.add((Object*)Number.with(_ppBndLoIv ? (u32)1 : (u32)0));
+            _ppGLoC.add((Object*)Number.withI64(_ppBndLoC));
+            _ppGHiIv.add((Object*)Number.with(_ppBndHiIv ? (u32)1 : (u32)0));
+            _ppGHiC.add((Object*)Number.withI64(_ppBndHiC));
             return;
+            }
+        // The bounds over every access: one kind each (i-relative or not),
+        // the lowest low and the highest high; otherwise unbounded.
+        if (((Number*)_ppGBnd.get(k)).asU32() != (u32)0)
+            {
+            if (!_ppBndOk || (((Number*)_ppGLoIv.get(k)).asU32() != (u32)0) != _ppBndLoIv
+                || (((Number*)_ppGHiIv.get(k)).asU32() != (u32)0) != _ppBndHiIv)
+                _ppGBnd.set(k, (Object*)Number.with((u32)0));
+            else
+                {
+                if (_ppBndLoC < ((Number*)_ppGLoC.get(k)).asI64())
+                    _ppGLoC.set(k, (Object*)Number.withI64(_ppBndLoC));
+                if (_ppBndHiC > ((Number*)_ppGHiC.get(k)).asI64())
+                    _ppGHiC.set(k, (Object*)Number.withI64(_ppBndHiC));
+                }
             }
         // Every access the iteration's own at one offset, or none is.
         if (!atIv || ((Number*)_ppGOff.get(k)).asI64() != _ppOff)
@@ -3340,9 +3580,18 @@
         _ppPairB = new Array();
         _ppSpanA = new Array();
         _ppSpanB = new Array();
+        _ppRangeA = new Array();
+        _ppRangeB = new Array();
+        _ppGBnd = new Array();
+        _ppGLoIv = new Array();
+        _ppGLoC = new Array();
+        _ppGHiIv = new Array();
+        _ppGHiC = new Array();
         _ppInvLoads = new Array();
         Array* body = L.body();
         self.ppFindHist(L, iv, defOf);
+        _ppBodyBlocks = body;
+        _ppFn = fn;
         for (u32 b = (u32)0; b < body.count(); b = b + (u32)1)
             {
             IRBlock* blk = (IRBlock*)body.get(b);
@@ -3440,6 +3689,17 @@
                         IRBlock* db = (IRBlock*)defBlk.get((Hashable*)gb);
                         if (db != (IRBlock*)0 && self.hasBlock(body, db) && !self.ppInvLoaded(gb, L, defOf, defBlk))
                             apart = false;
+                        }
+                    // Every access to it bounded (an inner loop's counter up
+                    // to the iteration, a constant range): the bytes it can
+                    // reach are known at the call site, so the two are
+                    // compared by range, which needs no allocator (#219).
+                    if (apart && ((Number*)_ppGBnd.get(x)).asU32() != (u32)0
+                        && ((Number*)_ppGElem.get(s)).asU32() != (u32)0 && ((Number*)_ppGElem.get(x)).asU32() != (u32)0)
+                        {
+                        _ppRangeA.add((Object*)Number.with(s));
+                        _ppRangeB.add((Object*)Number.with(x));
+                        continue;
                         }
                     if (!apart)
                         return ppNo("an array that may overlap a stored one, read away from [i]");
