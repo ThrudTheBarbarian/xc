@@ -325,6 +325,10 @@ class ParCpuLane : Object
 // (a piece's own cost, a chunk copy and a merge, against its work).
 #define PAR_CPU_PIECES 8
 #define PAR_CPU_PIECE_MIN 256
+// A block whose items may cost different amounts (a nested loop) takes pieces
+// down to this many items: a triangular nest's last 256 items were one piece
+// as heavy as a lane's whole share, and every lane waited for it (#16).
+#define PAR_CPU_PIECE_MIN_UNEVEN 16
 Array* gParLanes;
 u32 gParLanesBusy;
 Mutex* gParLanesLock;   // held by whoever runs on the lanes; a loser spawns
@@ -432,10 +436,12 @@ class ParCpuLanes
         // one a lane for an item body with no nested loop, whose items cost
         // the same (the pieces' setup is serial: 255 chunk copies on 32
         // lanes, 0.15 ms a run of a memory-bound saxpy).
-        i64 perLane = ParCpuLanes.evenItems(proto.gpuSource()) ? (i64)1 : (i64)PAR_CPU_PIECES;
+        bool even = ParCpuLanes.evenItems(proto.gpuSource());
+        i64 perLane = even ? (i64)1 : (i64)PAR_CPU_PIECES;
         i64 pieces = (i64)k * perLane;
-        if (pieces > n / (i64)PAR_CPU_PIECE_MIN)
-            pieces = n / (i64)PAR_CPU_PIECE_MIN;
+        i64 pmin = even ? (i64)PAR_CPU_PIECE_MIN : (i64)PAR_CPU_PIECE_MIN_UNEVEN;
+        if (pieces > n / pmin)
+            pieces = n / pmin;
         if (pieces < (i64)k)
             pieces = (i64)k;
         ParCpuJob* job = new ParCpuJob();
