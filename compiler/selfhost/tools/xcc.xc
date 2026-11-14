@@ -43,6 +43,7 @@
 #import "MachODefs.xc"
 #import <MachOLink>
 #import <MachOObject>
+#import <ElfObject>
 #import <Tbd>
 #import <PeLink>
 #import <CoffObject>
@@ -2723,6 +2724,7 @@ void emitX86_64(DriverOptions* d, IRModule* mod)
             Process.exit((i32)1); return;
         }
         Elf64* w = new Elf64();
+        w.setDepLibs(objectDepLibs(d));
         Data* img = w.objectFromText(as.text(), as.data(), as.symbols(),
                                       as.dataSyms(), as.globalSyms(), as.commonSyms(), as.fixups());
         if (w.failed() || img == (Data*)0) {
@@ -4371,7 +4373,11 @@ void linkObjectsArm64Elf(DriverOptions* d)
     if (xcArgsFor(d, (String*)0)) crt = crtArm64WithXcArgs(d, crt, lrow.crt());
     // Already in the ELF spelling, as the image path takes them.
     combined.append(crt); combined.appendByte((u8)'\n');
-    combined.append(rt);  combined.appendByte((u8)'\n');
+    // A program that takes libRuntime (a C/C++ program, objects that ask for
+    // it) links the library's runtime, not one of its own: one per process.
+    if (!(lrow.os().equals(String.withCString("linux")) && runtimeTaken(d))) {
+        combined.append(rt);  combined.appendByte((u8)'\n');
+    }
     Arm64Asm* as = new Arm64Asm();
     as.assemble(Arm64Asm.machoDialectFromElf(combined));
     as.demoteCommonsToLocalData();
@@ -4421,6 +4427,49 @@ void linkObjectsArm64Elf(DriverOptions* d)
         Process.exit((i32)1); return;
     }
     Files.setExecutable(d.fe().output());
+}
+
+// The libraries an ELF C/C++ object asks its link for (.deplibs): the `-l`
+// entries of objectLinkerOptions without their `-l` (`Runtime`,
+// `:libstdc++.so.6`). Empty for an xc object.
+Array* objectDepLibs(DriverOptions* d)
+{
+    Array* out = new Array();
+    Array* groups = objectLinkerOptions(d);
+    for (u32 i = (u32)0; i < groups.count(); i = i + (u32)1) {
+        Array* g = (Array*)groups.get(i);
+        if (g.count() != (u32)1) continue;
+        String* a = (String*)g.get((u32)0);
+        if (a.hasPrefix(String.withCString("-l"))) out.add((Object*)a.substringFromByte((u32)2));
+    }
+    return out;
+}
+
+// An object-only ELF link: each object's .deplibs. `Runtime` is this target's
+// libRuntime, taken as a C/C++ program takes it (resolveRuntimeLib); any other
+// name is a `-l` input. Whether any object asked for something.
+bool addObjectDepLibs(DriverOptions* d)
+{
+    bool any = false;
+    bool wantRt = false;
+    for (u32 i = (u32)0; i < d.objectInputs().count(); i = i + (u32)1) {
+        String* op = (String*)d.objectInputs().get(i);
+        if (!op.hasSuffix(String.withCString(".o"))) continue;
+        ElfObject* o = ElfObject.parse(Files.readData(op));
+        Array* dl = o.depLibs();
+        for (u32 k = (u32)0; dl != (Array*)0 && k < dl.count(); k = k + (u32)1) {
+            String* nm = (String*)dl.get(k);
+            any = true;
+            if (nm.equals(String.withCString("Runtime"))) { wantRt = true; continue; }
+            String* li = String.withCString("-l").appending(nm);
+            bool have = false;
+            for (u32 q = (u32)0; q < d.linkInputs().count(); q = q + (u32)1)
+                if (((String*)d.linkInputs().get(q)).equals(li)) have = true;
+            if (!have) d.linkInputs().add((Object*)li);
+        }
+    }
+    if (wantRt && d.fe().runtimeLibFile() == (String*)0) resolveRuntimeLib(d);
+    return any;
 }
 
 // The LC_LINKER_OPTION groups an arm64 macOS C/C++ object carries: `-framework X`
@@ -4925,13 +4974,20 @@ void linkObjects(DriverOptions* d)
         emitModule(d, mod);
         return;
     }
+    // ELF objects that say what they link (a C/C++ object's .deplibs).
+    bool askers = false;
+    if (d.targetRow() != (TargetRow*)0 && d.targetRow().exeFormat().hasPrefix(String.withCString("elf")))
+        askers = addObjectDepLibs(d);
     if (d.targetRow() != (TargetRow*)0 && d.targetRow().exeFormat().equals(String.withCString("elf-pie"))) {
         linkObjectsArm64Elf(d); return;
     }
     if (d.arch().equals(String.withCString("arm64")) || isIos(d)) { linkObjectsArm64(d); return; }
     // An object-only link is the static musl one, as the reference's (which has
-    // no glibc object link yet), unless -dynamic asks for glibc.
-    if (isX86_64(d) && d.caps().dynamicExplicit()) { linkX86_64Glibc(d, String.withCString("")); return; }
+    // no glibc object link yet), unless -dynamic asks for glibc, or the objects
+    // are a C/C++ program's (linked as one: glibc, dynamic).
+    if (isX86_64(d) && (d.caps().dynamicExplicit() || (askers && !d.caps().staticLink()))) {
+        linkX86_64Glibc(d, String.withCString("")); return;
+    }
     if (isX86_64(d)) { linkX86_64(d, String.withCString("")); return; }
     if (isArm9(d)) { linkObjectsArm9(d); return; }
     if (d.arch().equals(String.withCString("win64"))) {
@@ -5726,6 +5782,9 @@ void emitModule(DriverOptions* d, IRModule* mod)
         // The aarch64 ELF rows (arm64 Linux, android): an ET_REL object, with
         // the ELF spelling of the names (no leading underscore), as the image
         // path assembles them; ElfLinkArm64 reads it back at the link.
+        // A C/C++ file's xcc half links libRuntime: the guard through the GOT.
+        if (gCSplitOut != (String*)0 && d.fe().runtimeLibFile() != (String*)0 && !isAndroid(d))
+            prog = guardThroughGot(prog);
         String* one = new String();
         one.append(stripLeadingUnderscore(classAllocStubs(prog)));
         one.appendByte((u8)'\n');
@@ -5737,6 +5796,7 @@ void emitModule(DriverOptions* d, IRModule* mod)
             Process.exit((i32)1); return;
         }
         ElfArm64* eo = new ElfArm64();
+        eo.setDepLibs(objectDepLibs(d));
         Data* od = eo.objectFromText(oas.textBytes(), oas.dataBytes(), oas.symbols(), oas.dataSyms(),
                                      oas.fixups(), oas.globals(), oas.commonSyms(),
                                      oas.modInitBytes(), oas.modInitFixups());

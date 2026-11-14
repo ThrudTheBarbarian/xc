@@ -36,6 +36,7 @@ class ElfArm64
     {
     Data* _out;
     bool _failed;
+    Array* _depLibs;    // String@: the libraries an object asks its link for (.deplibs)
     String* _why;
     String* _interp;   // an executable's PT_INTERP (the reference's setInterpreter:)
     String* _runpath;  // a DT_RUNPATH, or 0 for none (the reference's setRunpath:)
@@ -160,6 +161,12 @@ class ElfArm64
     // page ADR_PREL_PG_HI21, a lo12 offset ADD_ABS_LO12_NC or the LDST type of
     // its access size, a GOT page and offset ADR_GOT_PAGE and LD64_GOT_LO12_NC,
     // a pointer word ABS64.
+    // The libraries the next object asks its link for (Elf64.setDepLibs).
+    void setDepLibs(Array* names)
+        {
+        _depLibs = names;
+        }
+
     Data* objectFromText(SectionBytes* text, SectionBytes* data, Map* symbols, Array* dataSyms,
                          Array* fixups, Array* exports, Map* commons,
                          SectionBytes* modInit, Array* modInitFix)
@@ -364,6 +371,19 @@ class ElfArm64
         secNames.add((Object*)String.withCString(".strtab"));
         u32 secShstr = secNames.count();
         secNames.add((Object*)String.withCString(".shstrtab"));
+        // .deplibs last, so no other section's index moves.
+        Data* dep = new Data();
+        for (u32 i = (u32)0; _depLibs != (Array*)0 && i < _depLibs.count(); i = i + (u32)1)
+            {
+            String* dn = (String*)_depLibs.get(i);
+            for (u32 k = (u32)0; k < dn.byteLength(); k = k + (u32)1)
+                dep.appendByte(dn.byteAt(k));
+            dep.appendByte((u8)0);
+            }
+        _depLibs = (Array*)0;
+        u32 secDep = secNames.count();
+        if (dep.length() > (u32)0)
+            secNames.add((Object*)String.withCString(".deplibs"));
         Data* shstr = new Data();
         shstr.appendByte((u8)0);
         Array* shName = new Array();
@@ -386,7 +406,8 @@ class ElfArm64
         u32 symOff = irelOff + initRel.length();
         u32 strOff = symOff + symtab.length();
         u32 shstrOff = strOff + strtab.length();
-        u32 shOff = ElfArm64.roundUp(shstrOff + shstr.length(), (u32)8);
+        u32 depOff = shstrOff + shstr.length();
+        u32 shOff = ElfArm64.roundUp(depOff + dep.length(), (u32)8);
 
         p8((u32)$7F); p8((u32)'E'); p8((u32)'L'); p8((u32)'F');
         p8((u32)2); p8((u32)1); p8((u32)1);
@@ -422,6 +443,7 @@ class ElfArm64
         ElfArm64.appendBytes(_out, symtab);
         ElfArm64.appendBytes(_out, strtab);
         ElfArm64.appendBytes(_out, shstr);
+        ElfArm64.appendBytes(_out, dep);
         padTo(shOff);
 
         // The section headers: name, type, flags, addr, offset, size, link,
@@ -439,6 +461,8 @@ class ElfArm64
         objSection(((Number*)shName.get(secSym)).asU32(), (u32)2, (u32)0, symOff, symtab.length(), secStr, firstGlobal, (u32)8, (u32)24);
         objSection(((Number*)shName.get(secStr)).asU32(), (u32)3, (u32)0, strOff, strtab.length(), (u32)0, (u32)0, (u32)1, (u32)0);
         objSection(((Number*)shName.get(secShstr)).asU32(), (u32)3, (u32)0, shstrOff, shstr.length(), (u32)0, (u32)0, (u32)1, (u32)0);
+        if (dep.length() > (u32)0)
+            objSection(((Number*)shName.get(secDep)).asU32(), (u32)$6FFF4C04, (u32)$30, depOff, dep.length(), (u32)0, (u32)0, (u32)1, (u32)1);
         return _out;
         }
 

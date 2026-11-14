@@ -198,6 +198,7 @@ class ElfSymDef
     Array* _dataRelocs; // ElfReloc@ against data
     Array* _tlsRelocs;  // ElfReloc@ against the TLS image
     Array* _initRelocs; // ElfReloc@ against the constructors' pointers
+    Array* _depLibs;    // String@: the libraries the object asks for (.deplibs)
     Data* _text;
     Data* _init;        // .init_array: the load-time constructors' pointers
     Data* _data;
@@ -224,6 +225,7 @@ class ElfSymDef
         _dataRelocs = new Array();
         _tlsRelocs = new Array();
         _initRelocs = new Array();
+        _depLibs = new Array();
         _init = new Data();
         _initOffOf = new Map();
         _text = new Data();
@@ -285,6 +287,13 @@ class ElfSymDef
         {
         return _init;
         }
+    // The libraries the object asks its link for, as `-l` names them
+    // (.deplibs, SHT_LLVM_DEPENDENT_LIBRARIES): a C/C++ object xcc wrote.
+    Array* depLibs(void)
+        {
+        return _depLibs;
+        }
+
     Array* initRelocs(void)
         {
         return _initRelocs;
@@ -400,6 +409,18 @@ class ElfSymDef
             ElfSection* s = (ElfSection*)_sections.get(i);
             if (_in(_textOffOf, i) != (u32)0)
                 continue;
+            if (s.type() == (u32)$6FFF4C04)
+                {
+                String* w = new String();
+                for (u32 k = (u32)0; k < s.size(); k = k + (u32)1)
+                    {
+                    u8 c = _d.bytes()[s.off() + k];
+                    if (c != (u8)0) { w.appendByte(c); continue; }
+                    if (w.byteLength() > (u32)0) _depLibs.add((Object*)w);
+                    w = new String();
+                    }
+                continue;
+                }
             if ((s.flags() & (u64)2) == (u64)0)
                 continue; // SHF_ALLOC
             if (s.type() == (u32)14)

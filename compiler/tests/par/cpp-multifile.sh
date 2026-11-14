@@ -2,18 +2,18 @@
 # cpp-multifile.sh — a C/C++ program of several files: tests/par/c-multi's
 # main.cpp, part.cpp and csum.c, built in one command and as each `xcc -c`
 # with the objects linked by xcc
-# with no framework or library named (each object asks for what it needs,
-# LC_LINKER_OPTION; every object shares one libRuntime), give clang++'s
-# answer. The three files' static helpers share a name and stay apart.
-# Skipped without clang++ or off macOS (the object link is arm64 macOS's).
+# with no framework or library named (each object asks for what it needs:
+# LC_LINKER_OPTION on macOS, .deplibs on Linux; every object shares one
+# libRuntime), give clang++'s answer. The three files' static helpers share a
+# name and stay apart. Skipped without clang++.
 #
 #   bash tests/par/cpp-multifile.sh
 set -u
 cd "$(dirname "$0")/../.." || exit 1
 PLAT=$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )
 XC=${XC:-bin/$PLAT/xcc-xc}
-if [ "$PLAT" != osx ] || ! clang++ --version >/dev/null 2>&1; then
-    echo "--- cpp-multifile: skipped (macOS with clang++ only) ---"
+if ! clang++ --version >/dev/null 2>&1; then
+    echo "--- cpp-multifile: skipped (no clang++) ---"
     exit 0
 fi
 W=$(mktemp -d); trap 'rm -rf "$W"' EXIT
