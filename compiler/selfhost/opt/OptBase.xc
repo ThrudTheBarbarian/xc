@@ -40,15 +40,21 @@ bool gOptPromoteScalars;
 // how its loops become blocks).
 bool gOptOutline;
 
+// The outliner may take a float + reduction: a C build under -fgoal=speed
+// (the explicit speed goal xc's parser scan asks for; C has no :goal or #goal).
+bool gOptOutlineFloatSum;
+
 // The three switches above, as functions: a file compiled against Opt's
 // interface (the split build) sees functions, not globals.
 bool optOutline(void) { return gOptOutline; }
+bool optOutlineFloatSum(void) { return gOptOutlineFloatSum; }
 // The globals as functions, for the files compiled against this one's
 // interface (a global is not in an interface).
 bool optPromoteScalars(void) { return gOptPromoteScalars; }
 ParKernelHook* optParKernelHook(void) { return gParKernelHook; }
 u8* optGetenv(u8* name) { return _xt_getenv(name); }
 void optSetOutline(bool b) { gOptOutline = b; }
+void optSetOutlineFloatSum(bool b) { gOptOutlineFloatSum = b; }
 void optSetPromoteScalars(bool b) { gOptPromoteScalars = b; }
 void optSetParKernelHook(ParKernelHook* h) { gParKernelHook = h; }
 

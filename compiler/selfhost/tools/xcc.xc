@@ -5047,6 +5047,9 @@ void main(void)
         String* cin = d.fe().input();
         if (d.fe().parAuto())
             optSetOutline(true);
+        // -fgoal=speed: a float sum may become a block too (#206).
+        if (d.fe().goalDefault() == (u32)1)
+            optSetOutlineFloatSum(true);
         Array* cIncs = new Array();
         cIncs.addAll(d.fe().incs());
         Array* cDefs = new Array();
