@@ -1444,6 +1444,91 @@ static BOOL x86LeaFlagsRead(NSArray<NSString*>* lines, NSUInteger from)
     return out;
     }
 
+// ── Flags already set ────────────────────────────────────────────────────
+//
+// `sub r, 1 ; cmp r, 0 ; jbe L`: the arithmetic already set ZF and SF from r,
+// so the compare goes (#41, the insertion sort's exit test). Only jumps that
+// read ZF or SF qualify, as `cmp r, 0` and `test r, r` leave CF and OF clear
+// where the arithmetic may not: je/jne/js/jns keep their condition, and jbe/ja
+// (r == 0 / r != 0 against zero) become je/jne. The line after the jump and
+// the jump's target must not read the flags. The port's peepholeFlags.
++ (nullable NSString*)flagCcOf:(NSString*)cc
+{
+    if ([cc isEqualToString:@"e"] || [cc isEqualToString:@"ne"] || [cc isEqualToString:@"z"] ||
+        [cc isEqualToString:@"nz"] || [cc isEqualToString:@"s"] || [cc isEqualToString:@"ns"])
+        return cc;
+    if ([cc isEqualToString:@"be"]) return @"e";
+    if ([cc isEqualToString:@"a"]) return @"ne";
+    return nil;
+}
++ (BOOL)readsFlags:(NSString*)t
+{
+    return ([t hasPrefix:@"j"] && ![t hasPrefix:@"jmp"]) || [t hasPrefix:@"set"] || [t hasPrefix:@"cmov"] ||
+           [t hasPrefix:@"adc"] || [t hasPrefix:@"sbb"] || [t hasPrefix:@"rcl"] || [t hasPrefix:@"rcr"];
+}
++ (NSString*)peepholeFlags:(NSString*)text
+{
+    NSMutableArray<NSString*>* lines = [[text componentsSeparatedByString:@"\n"] mutableCopy];
+    NSCharacterSet* ws = [NSCharacterSet whitespaceCharacterSet];
+    NSMutableDictionary<NSString*, NSNumber*>* at = [NSMutableDictionary dictionary];
+    for (NSUInteger i = 0; i < lines.count; i++)
+        {
+        NSString* t = [lines[i] stringByTrimmingCharactersInSet:ws];
+        if (t.length > 3 && [t hasPrefix:@".L"] && [t hasSuffix:@":"])
+            at[[t substringToIndex:t.length - 1]] = @(i);
+        }
+    NSString* (^firstReal)(NSUInteger) = ^NSString*(NSUInteger from) {
+      for (NSUInteger j = from; j < lines.count; j++)
+          {
+          NSString* u = [lines[j] stringByTrimmingCharactersInSet:ws];
+          if (!u.length || [u hasPrefix:@"#"] || [u hasPrefix:@"."] || [u hasSuffix:@":"])
+              continue;
+          return u;
+          }
+      return @"";
+    };
+    for (NSUInteger i = 1; i + 2 < lines.count; i++)
+        {
+        NSString* c = [lines[i] stringByTrimmingCharactersInSet:ws];
+        NSString* reg = nil;
+        if ([c hasPrefix:@"cmp\t"] && [c hasSuffix:@", 0"])
+            reg = [c substringWithRange:NSMakeRange(4, c.length - 7)];
+        else if ([c hasPrefix:@"test\t"])
+            {
+            NSArray<NSString*>* o = [[c substringFromIndex:5] componentsSeparatedByString:@", "];
+            if (o.count == 2 && [o[0] isEqualToString:o[1]])
+                reg = o[0];
+            }
+        if (!reg.length || [reg containsString:@"["] || [reg containsString:@" "])
+            continue;
+        NSString* a = [lines[i - 1] stringByTrimmingCharactersInSet:ws];
+        NSRange tab = [a rangeOfString:@"\t"];
+        if (tab.location == NSNotFound)
+            continue;
+        NSString* mn = [a substringToIndex:tab.location];
+        NSString* ops = [a substringFromIndex:tab.location + 1];
+        BOOL arith = [mn isEqualToString:@"sub"] || [mn isEqualToString:@"add"] || [mn isEqualToString:@"and"] ||
+                     [mn isEqualToString:@"or"] || [mn isEqualToString:@"xor"];
+        BOOL unary = [mn isEqualToString:@"inc"] || [mn isEqualToString:@"dec"];
+        if (!((arith && [ops hasPrefix:[reg stringByAppendingString:@", "]]) || (unary && [ops isEqualToString:reg])))
+            continue;
+        NSString* j = [lines[i + 1] stringByTrimmingCharactersInSet:ws];
+        NSRange jt = [j rangeOfString:@"\t"];
+        if (![j hasPrefix:@"j"] || [j hasPrefix:@"jmp"] || jt.location == NSNotFound)
+            continue;
+        NSString* cc2 = [self flagCcOf:[j substringWithRange:NSMakeRange(1, jt.location - 1)]];
+        NSString* target = [[j substringFromIndex:jt.location + 1] stringByTrimmingCharactersInSet:ws];
+        NSNumber* ti = at[target];
+        if (!cc2 || !ti)
+            continue;
+        if ([self readsFlags:firstReal(i + 2)] || [self readsFlags:firstReal(ti.unsignedIntegerValue + 1)])
+            continue;
+        lines[i + 1] = [NSString stringWithFormat:@"\tj%@\t%@", cc2, target];
+        [lines removeObjectAtIndex:i];
+        }
+    return [lines componentsJoinedByString:@"\n"];
+}
+
 // ── Tail duplication ─────────────────────────────────────────────────────
 //
 // A `jmp L` whose target block is short and itself ends in a `jmp` is
@@ -2245,7 +2330,7 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
             {
             NSMutableString* fbuf = [NSMutableString string]; // per-function → peephole
             [self emitFunction:fn module:mod into:fbuf];
-            [out appendString:[self withVzeroupper:[self peepholeTailDup:[self peepholeFallthrough:[self peepholeLea:[self peepholeCopyProp:fbuf]]]] avx:fn.simdLevel != nil]];
+            [out appendString:[self withVzeroupper:[self peepholeTailDup:[self peepholeFlags:[self peepholeFallthrough:[self peepholeLea:[self peepholeCopyProp:fbuf]]]]] avx:fn.simdLevel != nil]];
             }
         }
     // The matrix kernels the module calls (idiom-matmul): `_auto` is dispatched

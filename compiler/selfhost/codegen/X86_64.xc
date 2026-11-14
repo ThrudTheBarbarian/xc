@@ -506,7 +506,7 @@ class X86_64
             String* module = _out;
             _out = new String();
             emitFunction(fn);
-            module.append(withVzeroupper(peepholeTailDup(peepholeFallthrough(peepholeLea(peepholeCopyProp(_out)))), fn.simdLevel() != (String*)0));
+            module.append(withVzeroupper(peepholeTailDup(peepholeFlags(peepholeFallthrough(peepholeLea(peepholeCopyProp(_out))))), fn.simdLevel() != (String*)0));
             _out = module;
             }
         // The matrix kernels the module calls (idiom-matmul): `_auto` is
@@ -5048,6 +5048,130 @@ class X86_64
             if (t.byteAt(i) == (u8)'x' && t.byteAt(i + (u32)1) == (u8)'m' && t.byteAt(i + (u32)2) == (u8)'m')
                 n = n + (u32)1;
         return n;
+        }
+
+    // `sub r, 1 ; cmp r, 0 ; jbe L`: the arithmetic already set ZF and SF
+    // from r, so the compare goes (#41, the insertion sort's exit test). Only
+    // jumps that read ZF or SF qualify, as `cmp r, 0` and `test r, r` leave CF
+    // and OF clear where the arithmetic may not: je/jne/js/jns keep their
+    // condition, and jbe/ja (r == 0 / r != 0 against zero) become je/jne. The
+    // line after the jump and the jump's target must not read the flags. As
+    // the reference's peepholeFlags.
+    static String* flagCcOf(String* cc)
+        {
+        if (cc.equals(String.withCString("e")) || cc.equals(String.withCString("ne")) || cc.equals(String.withCString("z"))
+            || cc.equals(String.withCString("nz")) || cc.equals(String.withCString("s")) || cc.equals(String.withCString("ns")))
+            return cc;
+        if (cc.equals(String.withCString("be")))
+            return String.withCString("e");
+        if (cc.equals(String.withCString("a")))
+            return String.withCString("ne");
+        return (String*)0;
+        }
+
+    static bool readsFlags(String* t)
+        {
+        return (t.hasPrefix(String.withCString("j")) && !t.hasPrefix(String.withCString("jmp"))) || t.hasPrefix(String.withCString("set"))
+            || t.hasPrefix(String.withCString("cmov")) || t.hasPrefix(String.withCString("adc")) || t.hasPrefix(String.withCString("sbb"))
+            || t.hasPrefix(String.withCString("rcl")) || t.hasPrefix(String.withCString("rcr"));
+        }
+
+    // The first instruction at or after line from, past blanks, directives
+    // and labels; "" at the end.
+    static String* flFirstReal(Array* lines, u32 from)
+        {
+        for (u32 j = from; j < lines.count(); j = j + (u32)1)
+            {
+            String* u = ((String*)lines.get(j)).trimmed();
+            if (u.byteLength() == (u32)0 || u.hasPrefix(String.withCString("#")) || u.hasPrefix(String.withCString("."))
+                || u.byteAt(u.byteLength() - (u32)1) == (u8)':')
+                continue;
+            return u;
+            }
+        return String.withCString("");
+        }
+
+    static i32 flTab(String* t)
+        {
+        for (u32 q = (u32)0; q < t.byteLength(); q = q + (u32)1)
+            if (t.byteAt(q) == (u8)'\t')
+                return (i32)q;
+        return (i32)-1;
+        }
+
+    String* peepholeFlags(String* text)
+        {
+        Array* lines = text.splitOnByte((u8)'\n');
+        Map* at = new Map();
+        for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1)
+            {
+            String* t = ((String*)lines.get(i)).trimmed();
+            if (t.byteLength() > (u32)3 && t.hasPrefix(String.withCString(".L")) && t.byteAt(t.byteLength() - (u32)1) == (u8)':')
+                at.set((Hashable*)t.substringToByte(t.byteLength() - (u32)1), (Object*)Number.with(i));
+            }
+        for (u32 i = (u32)1; i + (u32)2 < lines.count(); i = i + (u32)1)
+            {
+            String* c = ((String*)lines.get(i)).trimmed();
+            String* reg = (String*)0;
+            if (c.hasPrefix(String.withCString("cmp\t")) && c.hasSuffix(String.withCString(", 0")) && c.byteLength() > (u32)7)
+                reg = c.substringBytes((u32)4, c.byteLength() - (u32)7);
+            else if (c.hasPrefix(String.withCString("test\t")))
+                {
+                String* o = c.substringFromByte((u32)5);
+                i32 cm = (i32)-1;
+                for (u32 q = (u32)0; q + (u32)1 < o.byteLength() && cm < (i32)0; q = q + (u32)1)
+                    if (o.byteAt(q) == (u8)',' && o.byteAt(q + (u32)1) == (u8)' ')
+                        cm = (i32)q;
+                if (cm > (i32)0)
+                    {
+                    String* o0 = o.substringToByte((u32)cm);
+                    String* o1 = o.substringFromByte((u32)cm + (u32)2);
+                    if (o0.equals(o1))
+                        reg = o0;
+                    }
+                }
+            if (reg == (String*)0 || reg.byteLength() == (u32)0 || reg.contains(String.withCString("[")) || reg.contains(String.withCString(" ")))
+                continue;
+            String* a = ((String*)lines.get(i - (u32)1)).trimmed();
+            i32 tab = flTab(a);
+            if (tab < (i32)0)
+                continue;
+            String* mn = a.substringToByte((u32)tab);
+            String* ops = a.substringFromByte((u32)tab + (u32)1);
+            bool arith = mn.equals(String.withCString("sub")) || mn.equals(String.withCString("add")) || mn.equals(String.withCString("and"))
+                || mn.equals(String.withCString("or")) || mn.equals(String.withCString("xor"));
+            bool unary = mn.equals(String.withCString("inc")) || mn.equals(String.withCString("dec"));
+            String* rp = String.withCString("");
+            rp.append(reg);
+            rp.appendCString(", ");
+            if (!((arith && ops.hasPrefix(rp)) || (unary && ops.equals(reg))))
+                continue;
+            String* j = ((String*)lines.get(i + (u32)1)).trimmed();
+            i32 jt = flTab(j);
+            if (!j.hasPrefix(String.withCString("j")) || j.hasPrefix(String.withCString("jmp")) || jt < (i32)0)
+                continue;
+            String* cc2 = flagCcOf(j.substringBytes((u32)1, (u32)jt - (u32)1));
+            String* target = j.substringFromByte((u32)jt + (u32)1).trimmed();
+            Object* ti = at.get((Hashable*)target);
+            if (cc2 == (String*)0 || ti == (Object*)0)
+                continue;
+            if (readsFlags(flFirstReal(lines, i + (u32)2)) || readsFlags(flFirstReal(lines, ((Number*)ti).asU32() + (u32)1)))
+                continue;
+            String* nl = String.withCString("\tj");
+            nl.append(cc2);
+            nl.appendCString("\t");
+            nl.append(target);
+            lines.set(i + (u32)1, (Object*)nl);
+            lines.removeAt(i);
+            }
+        String* out = String.withCString("");
+        for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1)
+            {
+            if (i > (u32)0)
+                out.appendCString("\n");
+            out.append((String*)lines.get(i));
+            }
+        return out;
         }
 
     // A `jmp L` whose target block is short and itself ends in a `jmp` is
