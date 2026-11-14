@@ -2706,6 +2706,12 @@ void emitX86_64(DriverOptions* d, IRModule* mod)
 
     // ── -c: an object, not an image ──────────────────────────────────────
     if (d.compileOnly()) {
+        // A C/C++ file's xcc half links libRuntime (when the target has one):
+        // it reads the library's canary guard through the GOT, as a program
+        // that takes it does (linkX86_64Glibc), the rewrite made here since
+        // the link sees only the object.
+        if (gCSplitOut != (String*)0 && d.fe().runtimeLibFile() != (String*)0 && !d.caps().staticLink())
+            prog = guardThroughGotX86(prog);
         String* one = new String();
         one.append(x86ClassAllocStubs(prog, false));
         one.appendCString("\n");
