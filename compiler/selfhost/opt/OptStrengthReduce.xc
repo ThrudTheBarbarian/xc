@@ -242,15 +242,16 @@
                     changed = true;
                     continue;
                     }
-                // In :goal(speed) code, and at a contract-marked add, only the
-                // (x * -2) + c rewrite, and only where the block already adds
-                // x + x: the sum is then shared (CSE), so c - (x + x) is one
-                // subtract where the product and the add were two, and nothing
-                // is lost to fusing. Contract allows the unfused evaluation,
+                // In :goal(speed) code, at a contract-marked add, and on a
+                // target that fuses (arm64), only the (x * -2) + c rewrite, and
+                // only where the block already adds x + x: the sum is then
+                // shared (CSE), so c - (x + x) is one subtract where the product
+                // and the add were two (or one fused, where a select's arm did
+                // not take the add away: #22), and nothing is lost. Contract allows the unfused evaluation,
                 // and c - (x + x) is that exactly. C perlin's gradient, whose
                 // `0.0f - 2.0f * v` arm sits beside a `2.0f * v` (#24).
                 bool sharedOnly = !mulOk || contract;
-                if (sharedOnly && !_srFloatMul)
+                if (sharedOnly && !_srShared)
                     continue;
                 if (n.op().equals(String.withCString("FMul")) && !sharedOnly)
                     {
