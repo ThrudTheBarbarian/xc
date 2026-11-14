@@ -1444,6 +1444,85 @@ static BOOL x86LeaFlagsRead(NSArray<NSString*>* lines, NSUInteger from)
     return out;
     }
 
+// ── Tail duplication ─────────────────────────────────────────────────────
+//
+// A `jmp L` whose target block is short and itself ends in a `jmp` is
+// replaced by a copy of that block (#41, #42). The block order is a reverse
+// postorder, so a loop's latch often sits after an arm that reaches it, and
+// the common path took two jumps a trip: sieve's composite case `jmp join`
+// then join's `jmp for_body`; sort_small's `jmp header` and `jmp exit`. After
+// register allocation the copy is exact. A block qualifies with at most
+// TAILDUP_MAX instructions, no label inside, nothing but `.loc` among its
+// directives, no jump to a numeric (asm) label, and a final `jmp` to somewhere
+// other than itself; a jump inside
+// the block it targets is left alone, and copies are not copied again. The
+// port's peepholeTailDup is the same pass.
+enum { TAILDUP_MAX = 6 };
++ (NSString*)peepholeTailDup:(NSString*)text
+{
+    NSArray<NSString*>* lines = [text componentsSeparatedByString:@"\n"];
+    NSCharacterSet* ws = [NSCharacterSet whitespaceCharacterSet];
+    NSMutableDictionary<NSString*, NSNumber*>* at = [NSMutableDictionary dictionary];
+    for (NSUInteger i = 0; i < lines.count; i++)
+        {
+        NSString* t = [lines[i] stringByTrimmingCharactersInSet:ws];
+        if (t.length > 3 && [t hasPrefix:@".L"] && [t hasSuffix:@":"])
+            at[[t substringToIndex:t.length - 1]] = @(i);
+        }
+    NSMutableArray<NSString*>* out = [NSMutableArray arrayWithCapacity:lines.count];
+    for (NSUInteger i = 0; i < lines.count; i++)
+        {
+        NSString* t = [lines[i] stringByTrimmingCharactersInSet:ws];
+        NSNumber* li = [t hasPrefix:@"jmp\t"] ? at[[[t substringFromIndex:4] stringByTrimmingCharactersInSet:ws]] : nil;
+        if (li)
+            {
+            NSString* L = [[t substringFromIndex:4] stringByTrimmingCharactersInSet:ws];
+            NSMutableArray<NSString*>* body = [NSMutableArray array];
+            NSUInteger n = 0;
+            BOOL ok = NO;
+            NSUInteger j = li.unsignedIntegerValue + 1;
+            for (; j < lines.count; j++)
+                {
+                NSString* u = [lines[j] stringByTrimmingCharactersInSet:ws];
+                if (!u.length || [u hasPrefix:@"#"])
+                    continue;
+                if ([u hasPrefix:@".loc"])
+                    {
+                    [body addObject:lines[j]];
+                    continue;
+                    }
+                if ([u hasPrefix:@"."] || [u hasSuffix:@":"] || [u hasPrefix:@"ret"])
+                    break;
+                if (++n > TAILDUP_MAX)
+                    break;
+                // An asm block's numeric label (`jmp 1b`) would resolve
+                // against another label from the copy.
+                NSRange sp = [u rangeOfCharacterFromSet:ws];
+                if (([u hasPrefix:@"j"] || [u hasPrefix:@"loop"]) && sp.location != NSNotFound)
+                    {
+                    NSString* op = [[u substringFromIndex:sp.location] stringByTrimmingCharactersInSet:ws];
+                    unichar c0 = op.length ? [op characterAtIndex:0] : 0;
+                    if (c0 >= '0' && c0 <= '9')
+                        break;
+                    }
+                [body addObject:lines[j]];
+                if ([u hasPrefix:@"jmp\t"])
+                    {
+                    ok = ![[[u substringFromIndex:4] stringByTrimmingCharactersInSet:ws] isEqualToString:L];
+                    break;
+                    }
+                }
+            if (ok && !(i > li.unsignedIntegerValue && i <= j))
+                {
+                [out addObjectsFromArray:body];
+                continue;
+                }
+            }
+        [out addObject:lines[i]];
+        }
+    return [out componentsJoinedByString:@"\n"];
+}
+
 + (NSString*)peepholeFallthrough:(NSString*)text
 {
     static NSDictionary* inv;
@@ -2166,7 +2245,7 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
             {
             NSMutableString* fbuf = [NSMutableString string]; // per-function → peephole
             [self emitFunction:fn module:mod into:fbuf];
-            [out appendString:[self withVzeroupper:[self peepholeFallthrough:[self peepholeLea:[self peepholeCopyProp:fbuf]]] avx:fn.simdLevel != nil]];
+            [out appendString:[self withVzeroupper:[self peepholeTailDup:[self peepholeFallthrough:[self peepholeLea:[self peepholeCopyProp:fbuf]]]] avx:fn.simdLevel != nil]];
             }
         }
     // The matrix kernels the module calls (idiom-matmul): `_auto` is dispatched

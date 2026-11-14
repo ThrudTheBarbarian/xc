@@ -506,7 +506,7 @@ class X86_64
             String* module = _out;
             _out = new String();
             emitFunction(fn);
-            module.append(withVzeroupper(peepholeFallthrough(peepholeLea(peepholeCopyProp(_out))), fn.simdLevel() != (String*)0));
+            module.append(withVzeroupper(peepholeTailDup(peepholeFallthrough(peepholeLea(peepholeCopyProp(_out)))), fn.simdLevel() != (String*)0));
             _out = module;
             }
         // The matrix kernels the module calls (idiom-matmul): `_auto` is
@@ -5048,6 +5048,104 @@ class X86_64
             if (t.byteAt(i) == (u8)'x' && t.byteAt(i + (u32)1) == (u8)'m' && t.byteAt(i + (u32)2) == (u8)'m')
                 n = n + (u32)1;
         return n;
+        }
+
+    // A `jmp L` whose target block is short and itself ends in a `jmp` is
+    // replaced by a copy of that block (#41, #42): the block order is a
+    // reverse postorder, so a loop's latch often sits after an arm that
+    // reaches it and the common path took two jumps a trip (sieve's `jmp
+    // join` then join's `jmp for_body`). After register allocation the copy
+    // is exact. At most TAILDUP_MAX instructions, no label inside, only `.loc`
+    // among its directives, no jump to a numeric (asm) label, a final `jmp`
+    // elsewhere than itself; a jump inside
+    // the block it targets is left alone, and copies are not copied again.
+    // As the reference's peepholeTailDup.
+    String* peepholeTailDup(String* text)
+        {
+        Array* lines = text.splitOnByte((u8)'\n');
+        Map* at = new Map();
+        for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1)
+            {
+            String* t = ((String*)lines.get(i)).trimmed();
+            if (t.byteLength() > (u32)3 && t.hasPrefix(String.withCString(".L")) && t.byteAt(t.byteLength() - (u32)1) == (u8)':')
+                at.set((Hashable*)t.substringToByte(t.byteLength() - (u32)1), (Object*)Number.with(i));
+            }
+        String* out = String.withCString("");
+        bool first = true;
+        for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1)
+            {
+            String* t = ((String*)lines.get(i)).trimmed();
+            Array* body = (Array*)0;
+            if (t.hasPrefix(String.withCString("jmp\t")))
+                {
+                String* L = t.substringFromByte((u32)4).trimmed();
+                Object* li = at.get((Hashable*)L);
+                if (li != (Object*)0)
+                    body = tdBlock(lines, ((Number*)li).asU32(), L, i);
+                }
+            if (body == (Array*)0)
+                {
+                body = new Array();
+                body.add(lines.get(i));
+                }
+            for (u32 k = (u32)0; k < body.count(); k = k + (u32)1)
+                {
+                if (!first)
+                    out.appendCString("\n");
+                out.append((String*)body.get(k));
+                first = false;
+                }
+            }
+        return out;
+        }
+
+    // The lines of the block at label line li, for peepholeTailDup, or 0
+    // when it does not qualify (or holds the jump at line from).
+    Array* tdBlock(Array* lines, u32 li, String* L, u32 from)
+        {
+        Array* body = new Array();
+        u32 n = (u32)0;
+        for (u32 j = li + (u32)1; j < lines.count(); j = j + (u32)1)
+            {
+            String* u = ((String*)lines.get(j)).trimmed();
+            if (u.byteLength() == (u32)0 || u.hasPrefix(String.withCString("#")))
+                continue;
+            if (u.hasPrefix(String.withCString(".loc")))
+                {
+                body.add(lines.get(j));
+                continue;
+                }
+            if (u.hasPrefix(String.withCString(".")) || u.byteAt(u.byteLength() - (u32)1) == (u8)':' || u.hasPrefix(String.withCString("ret")))
+                return (Array*)0;
+            n = n + (u32)1;
+            if (n > (u32)6) // the reference's TAILDUP_MAX
+                return (Array*)0;
+            // An asm block's numeric label (`jmp 1b`) would resolve against
+            // another label from the copy.
+            if (u.hasPrefix(String.withCString("j")) || u.hasPrefix(String.withCString("loop")))
+                {
+                u32 sp = (u32)0;
+                for (u32 q = (u32)1; q < u.byteLength() && sp == (u32)0; q = q + (u32)1)
+                    if (u.byteAt(q) == (u8)'\t' || u.byteAt(q) == (u8)' ')
+                        sp = q;
+                if (sp != (u32)0)
+                    {
+                    String* op = u.substringFromByte(sp).trimmed();
+                    if (op.byteLength() > (u32)0 && op.byteAt((u32)0) >= (u8)'0' && op.byteAt((u32)0) <= (u8)'9')
+                        return (Array*)0;
+                    }
+                }
+            body.add(lines.get(j));
+            if (u.hasPrefix(String.withCString("jmp\t")))
+                {
+                if (u.substringFromByte((u32)4).trimmed().equals(L))
+                    return (Array*)0;
+                if (from > li && from <= j)
+                    return (Array*)0;
+                return body;
+                }
+            }
+        return (Array*)0;
         }
 
     String* peepholeFallthrough(String* text)
