@@ -724,6 +724,34 @@ class BitSet
                     }
                 }
             }
+        // x86's float Select (the only caller that passes selection info)
+        // loads its false value into the result's register and then branches
+        // to the true value: a result in the register of a false value that
+        // dies there needs no copy (C perlin's `g & 1 ? 0 - u : u`, #24).
+        // Not a Select beside another on the same condition: that pair is one
+        // branch only while neither result is where an arm lives.
+        if (_selInfo != 0)
+            for (u32 bi = (u32)0; bi < _nb; bi = bi + (u32)1)
+                {
+                Array* si = ((IRBlock*)_fn.blocks().get(bi)).insns();
+                for (u32 i = (u32)0; i < si.count(); i = i + (u32)1)
+                    {
+                    IRInsn* sn = (IRInsn*)si.get(i);
+                    if (!sn.op().equals(String.withCString("Select")) || sn.res() == 0 || sn.ops().count() != (u32)3)
+                        continue;
+                    String* sty = sn.res().ty();
+                    if (!sty.equals(String.withCString("F32")) && !sty.equals(String.withCString("F64")))
+                        continue;
+                    if ((i > (u32)0 && selSameCond(sn, (IRInsn*)si.get(i - (u32)1)))
+                        || (i + (u32)1 < si.count() && selSameCond(sn, (IRInsn*)si.get(i + (u32)1))))
+                        continue;
+                    IROperand* sf = (IROperand*)sn.ops().get((u32)2);
+                    if (sf.kind() != (u8)OPK_USE || sf.val() == 0 || sf.val().pid() >= _nv)
+                        continue;
+                    relate(sn.res().pid(), sf.val().pid());
+                    relate(sf.val().pid(), sn.res().pid());
+                    }
+                }
         for (u32 v = (u32)0; v < _nv; v = v + (u32)1)
             {
             Array* sg = (Array*)_segs.get(v);
@@ -740,6 +768,16 @@ class BitSet
             _segLo.set(v, (Object*)Number.with(lo));
             _segHi.set(v, (Object*)Number.with(hi));
             }
+        }
+
+    // Is o a Select on the same condition value as s?
+    static bool selSameCond(IRInsn* s, IRInsn* o)
+        {
+        if (!o.op().equals(String.withCString("Select")) || o.ops().count() != (u32)3)
+            return false;
+        IROperand* a = (IROperand*)s.ops().get((u32)0);
+        IROperand* b = (IROperand*)o.ops().get((u32)0);
+        return a.kind() == (u8)OPK_USE && b.kind() == (u8)OPK_USE && a.val() != 0 && a.val() == b.val();
         }
 
     void relateFirst(u32 a, u32 b)
