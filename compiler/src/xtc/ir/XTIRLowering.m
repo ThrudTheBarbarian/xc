@@ -248,6 +248,12 @@
 // in a `simd:` pointer, so lowerNewExpr picks the page-aligned helper
 // (`_xtc_new_simd_<T>`, par-blocks.md); consumed by that lowering.
 @property(nonatomic) BOOL newSimd;
+// `a[i] op= x` / `@p op= x`: the left side whose address the store forms, and
+// that address once formed. The read of the same left side inside the
+// desugared `lhs op rhs` loads through it instead of forming it again, so the
+// index or pointer expression is evaluated once.
+@property(nonatomic, nullable) XTASTNode* compoundLhs;
+@property(nonatomic, nullable) XTIRValue* compoundLhsAddr;
 // ARC 2d self-retain: set by the method-lowering callers when the method
 // must retain `self` on entry (every call site is a heap receiver, and
 // it's an instance method that isn't a destructor). `_lowerCallable`
@@ -5152,7 +5158,10 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
             }
         }
 
-    XTIRValue* operand = [self lowerExpression:node.operand];
+    // The read half of `@p op= x` dereferences the pointer its store formed.
+    XTIRValue* operand = (node.op == XTUnaryOpDeref && node == self.compoundLhs && self.compoundLhsAddr)
+                             ? [self takeCompoundLhsAddr]
+                             : [self lowerExpression:node.operand];
     if (!operand)
         return nil;
     XTIRType* resultIRType = [self irTypeForASTType:node.resolvedType at:node.location];
@@ -5670,12 +5679,12 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
         // `lhs = lhs op rhs` and recurse, reusing every lvalue shape the
         // plain path already handles (identifier / pinned / global / ivar
         // / member-access / subscript / deref). The lhs node is shared
-        // between the value-read (inside the binary) and the store target;
-        // for the lvalue shapes that appear in practice (a bare name, a
-        // member, or a subscript with a side-effect-free index) this reads
-        // the address-forming subexpressions twice with no observable
-        // double-evaluation. The arithmetic is performed at the lhs type
-        // and the result coerced back on store — i.e. `lhs = (Tlhs)(lhs op rhs)`.
+        // between the value-read (inside the binary) and the store target.
+        // For a subscript or a deref the store path forms the address first
+        // and the read loads through that same address (compoundLhs), so an
+        // index such as `a[next()]` is evaluated once. The arithmetic is
+        // performed at the lhs type and the result coerced back on store —
+        // i.e. `lhs = (Tlhs)(lhs op rhs)`.
         XTBinaryOp bop;
         if (![self binaryOpForCompoundAssign:node.assignOp out:&bop])
             {
@@ -5693,7 +5702,17 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
                                                                    rhs:bin
                                                               location:node.location];
         plain.resolvedType = node.resolvedType ?: node.lhs.resolvedType;
-        return [self lowerAssignExpr:plain];
+        BOOL viaAddr = node.lhs.nodeKind == XTASTNodeKindSubscriptExpr || (node.lhs.nodeKind == XTASTNodeKindUnaryExpr && ((XTUnaryExprNode*)node.lhs).op == XTUnaryOpDeref);
+        if (!viaAddr)
+            return [self lowerAssignExpr:plain];
+        XTASTNode* savedLhs = self.compoundLhs;
+        XTIRValue* savedAddr = self.compoundLhsAddr;
+        self.compoundLhs = node.lhs;
+        self.compoundLhsAddr = nil;
+        XTIRValue* res = [self lowerAssignExpr:plain];
+        self.compoundLhs = savedLhs;
+        self.compoundLhsAddr = savedAddr;
+        return res;
         }
 
     // Property-setter rewrite: `obj.prop = expr` where sema resolved a
@@ -5756,6 +5775,8 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
                                             location:sub.location ?: node.location];
         if (!addr)
             return nil;
+        if (node.lhs == self.compoundLhs)
+            self.compoundLhsAddr = addr;
         // Struct-array element whole-struct assign (`sharr[i] = makeHolder(...)`):
         // the element is a struct embedding owned class pointers. For an OWNED rhs
         // (sret maker/return) release+zero the OLD element's strong fields BEFORE
@@ -5911,6 +5932,8 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
         XTIRValue* ptr = [self lowerExpression:deref.operand];
         if (!ptr)
             return nil;
+        if (node.lhs == self.compoundLhs)
+            self.compoundLhsAddr = ptr;
         XTIRValue* rhsVal = [self lowerExpression:node.rhs];
         if (!rhsVal)
             return nil;
@@ -9204,11 +9227,23 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
     return nil;
     }
 
+// Hand over the address a compound assignment's store formed, once.
+- (XTIRValue*)takeCompoundLhsAddr
+    {
+    XTIRValue* a = self.compoundLhsAddr;
+    self.compoundLhs = nil;
+    self.compoundLhsAddr = nil;
+    return a;
+    }
+
 - (nullable XTIRValue*)lowerSubscriptExpr:(XTSubscriptExprNode*)node
     {
-    XTIRValue* addr = [self emitSubscriptAddress:node.base
-                                           index:node.index
-                                        location:node.location];
+    // The read half of `a[i] op= x` loads through the address its store formed.
+    XTIRValue* addr = (node == self.compoundLhs && self.compoundLhsAddr)
+                          ? [self takeCompoundLhsAddr]
+                          : [self emitSubscriptAddress:node.base
+                                                 index:node.index
+                                              location:node.location];
     if (!addr)
         return nil;
     XTIRType* resultIR = [self irTypeForASTType:node.resolvedType at:node.location];

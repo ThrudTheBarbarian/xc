@@ -503,6 +503,12 @@ class ClassInfo
     // in a `simd:` pointer, so lowerNewNonClass picks the page-aligned helper
     // (`_xtc_new_simd_<T>`, par-blocks.md); consumed by that lowering.
     bool _newSimd;
+    // `a[i] op= x` / `@p op= x`: the left side whose address the store forms,
+    // and that address once formed. The read of the same left side inside the
+    // synthesised `lhs op rhs` loads through it instead of forming it again,
+    // so the index or pointer expression is evaluated once.
+    Node* _cmpLhs;
+    IRValue* _cmpAddr;
     Array* _shadowScopes;     // per arc scope: ShadowSave@ for names it shadowed
     Map* _staticIvar;         // "<Class>.<ivar>" -> its module global's name
     Map* _staticIvarTy;       // …and its declared type
@@ -804,6 +810,8 @@ class ClassInfo
         _tssMode = (i32)-1;
         _boundsCheck = false;
         _vtSite = (Node*)0;
+        _cmpLhs = (Node*)0;
+        _cmpAddr = (IRValue*)0;
         _debugInfo = false;
         _dbgPin = true;
         _threadSafeStatics = false;
@@ -4566,7 +4574,9 @@ class ClassInfo
             // it is answered here rather than in lowerUnary.
             if (isName(n.op(), "*"))
                 {
-                IRValue* addr = lowerExpr(n.kid((u32)0));
+                // The read half of `@p op= x` goes through the pointer its
+                // store formed.
+                IRValue* addr = (n == _cmpLhs && _cmpAddr != 0) ? takeCmpAddr() : lowerExpr(n.kid((u32)0));
                 if (_failed)
                     return (IRValue*)0;
                 return loadThrough(addr, n.ty());
@@ -4579,7 +4589,9 @@ class ClassInfo
             return stringAddr(n.name());
         if (k == (u16)nkSubscript)
             {
-            IRValue* addr = elementAddr(n);
+            // The read half of `a[i] op= x` loads through the address its store
+            // formed.
+            IRValue* addr = (n == _cmpLhs && _cmpAddr != 0) ? takeCmpAddr() : elementAddr(n);
             if (_failed)
                 return (IRValue*)0;
             // An element that IS a class instance — `new Cell[6]` lays six of
@@ -5214,6 +5226,15 @@ class ClassInfo
                     String.withCString("Bool"), jo);
         }
 
+    // Hand over the address a compound assignment's store formed, once.
+    IRValue* takeCmpAddr(void)
+        {
+        IRValue* a = _cmpAddr;
+        _cmpLhs = (Node*)0;
+        _cmpAddr = (IRValue*)0;
+        return a;
+        }
+
     IRValue* lowerStoreThrough(Node* n, Node* lhs)
         {
         IRValue* addr = (lhs.kind() == (u16)nkSubscript)
@@ -5221,6 +5242,8 @@ class ClassInfo
                             : lowerExpr(lhs.kid((u32)0));
         if (_failed)
             return (IRValue*)0;
+        if (lhs == _cmpLhs)
+            _cmpAddr = addr;
         // An element of a strong ARRAY owns what it holds. The old
         // occupant is read BEFORE the right-hand side — a maker may write
         // its result straight into the slot — and released after the
@@ -5418,6 +5441,35 @@ class ClassInfo
             if (isBoundSig(stripQual(ft)) && !isWidenedFn(n.kid((u32)1)))
                 registerBoundPair(fa, mv, ft);
             return mv;
+            }
+        // `a[i] op= x` / `@p op= x` — compound-assign through an ADDRESS. As
+        // the reference does, it becomes `lhs = lhs op rhs` on the store-through
+        // path: the store's address is formed first, then the synthesised
+        // binary reads the element through that same address (_cmpAddr), then
+        // the op at the element's type, then the store. The index is evaluated
+        // once.
+        if (!isName(n.op(), "=") && (lhs.kind() == (u16)nkSubscript || (lhs.kind() == (u16)nkUnary && isName(lhs.op(), "*"))))
+            {
+            Node* cbin = Node.with((u16)nkBinary);
+            cbin.setOp(n.op().substringBytes((u32)0, n.op().byteLength() - (u32)1));
+            cbin.add(lhs);
+            cbin.add(n.kid((u32)1));
+            cbin.setTy(lhs.ty() != 0 ? lhs.ty() : n.ty());
+            cbin.setPos(n.fileId(), n.line(), n.col());
+            Node* cplain = Node.with((u16)nkAssign);
+            cplain.setOp(String.withCString("="));
+            cplain.add(lhs);
+            cplain.add(cbin);
+            cplain.setTy(n.ty() != 0 ? n.ty() : lhs.ty());
+            cplain.setPos(n.fileId(), n.line(), n.col());
+            Node* savedLhs = _cmpLhs;
+            IRValue* savedAddr = _cmpAddr;
+            _cmpLhs = lhs;
+            _cmpAddr = (IRValue*)0;
+            IRValue* cres = lowerStoreThrough(cplain, lhs);
+            _cmpLhs = savedLhs;
+            _cmpAddr = savedAddr;
+            return cres;
             }
         // `s.n += k` / `p->m += k` — compound-assign on a struct/class FIELD.
         // The reference rewrites `member op= rhs` to `member = member op rhs`:
