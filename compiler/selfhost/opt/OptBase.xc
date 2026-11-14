@@ -1635,6 +1635,15 @@ class BeFact : Object
     Map* _ppHoisted;       // a hoisted load's result in the loop -> its value read at the call site
     Array* _ppSpanA;       // Number@: a stored base, beside...
     Array* _ppSpanB;       // Number@: ...a read-only one read anywhere: apart when in different heap blocks
+    // Array reductions (h[k] = h[k] op x through an index read from data, #143):
+    // per array, its store and load in the loop, its base (an AddrOf of a
+    // global), its key, and its code for ParFnChunk.arrMerge (the array's
+    // bytes << 8, the operator << 4, the element's width).
+    Array* _ppHistSt;
+    Array* _ppHistLd;
+    Array* _ppHistBase;
+    Array* _ppHistKey;
+    Array* _ppHistCode;
     IRValue* _ppGuardMem;  // ppOverlapGuard's memory token after its calls
     // The pairs that need a check at run time (indices into the above).
     Array* _ppPairA;

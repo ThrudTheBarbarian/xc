@@ -15,6 +15,20 @@ source needs no pragmas or annotations. `--par-style=cpu` builds it as written,
 on one thread. See [par blocks](/compiler/language/par/) for how a block chooses
 its devices.
 
+A loop that updates a global array through an index read from data, such as a
+histogram, becomes a block too:
+
+```c
+for (unsigned i = 0; i < n; i++)
+    hist[key[i]] += 1;
+```
+
+The update must be `+=`, `|=`, `&=` or `^=` on an integer element, the array a
+global of fixed size, and the loop must touch it in no other way. Each thread
+updates a private copy of the array, and the copies are combined into it when the
+block ends, so the result is the serial loop's. Such a block runs on the CPU's
+threads; it has no GPU version yet.
+
 ## What it needs
 
 C is an add-on: `xcc` uses the C compiler and headers already on the machine and

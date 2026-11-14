@@ -937,6 +937,8 @@
             self.seed(m, reachable, work, String.withCString("ParFnChunk$ctx"));
             self.seed(m, reachable, work, String.withCString("Par$run"));
             self.seed(m, reachable, work, String.withCString("ParFnChunk$runOn"));
+            self.seed(m, reachable, work, String.withCString("ParFnChunk$arrNew"));
+            self.seed(m, reachable, work, String.withCString("ParFnChunk$arrMerge"));
             self.seed(m, reachable, work, String.withCString("parSameName"));
             self.seed(m, reachable, work, String.withCString("Par$spanOf"));
             }
