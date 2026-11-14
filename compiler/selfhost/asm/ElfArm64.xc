@@ -24,6 +24,7 @@
 #import "Foundation.xc"
 #import <Arm64Asm>
 #import <SectionBytes>
+#import <DwarfWriter>
 #import "Arm64AsmDefs.xc"
 
 // 16 KB, not 4. Android 15 runs on devices with 16 KB pages and will not map a
@@ -37,6 +38,7 @@ class ElfArm64
     Data* _out;
     bool _failed;
     Array* _depLibs;    // String@: the libraries an object asks its link for (.deplibs)
+    Map* _ehFuncs;      // the functions' names (the rest are block labels), for .eh_frame
     String* _why;
     String* _interp;   // an executable's PT_INTERP (the reference's setInterpreter:)
     String* _runpath;  // a DT_RUNPATH, or 0 for none (the reference's setRunpath:)
@@ -161,6 +163,14 @@ class ElfArm64
     // page ADR_PREL_PG_HI21, a lo12 offset ADD_ABS_LO12_NC or the LDST type of
     // its access size, a GOT page and offset ADR_GOT_PAGE and LD64_GOT_LO12_NC,
     // a pointer word ABS64.
+    // The next object's functions by name: the text symbols that start one
+    // (in the ELF spelling a block label is a plain name too, `L…`), which
+    // bound its unwind entries.
+    void setEhFunctions(Map* names)
+        {
+        _ehFuncs = names;
+        }
+
     // The libraries the next object asks its link for (Elf64.setDepLibs).
     void setDepLibs(Array* names)
         {
@@ -244,6 +254,46 @@ class ElfArm64
         Map* symIndex = new Map();
         for (u32 i = (u32)0; i < order.count(); i = i + (u32)1)
             symIndex.set((Hashable*)(String*)order.get(i), (Object*)Number.withU32(i + (u32)1));
+
+        // C/C++ input: xcc's functions' unwind tables (the back end's saves,
+        // .xc_saves) as the object's .eh_frame, each FDE's start a PREL32
+        // against its function; without its terminator, which the link adds
+        // once after every object's table (ElfLinkArm64, gathered).
+        DwarfWriter* dwEh = DwarfWriter.pending();
+        Data* eh = new Data();
+        Data* ehRel = new Data();
+        if (dwEh != (DwarfWriter*)0 && dwEh.hasSaves())
+            {
+            Array* ehNames = new Array();
+            Array* ehOffs = new Array();
+            Array* fdeOffs = new Array();
+            Array* allNames = new Array();
+            Array* allOffs = new Array();
+            DwarfWriter.functionsOf(symbols, dataSyms, String.withCString(""), text.length(), allNames, allOffs);
+            for (u32 i = (u32)0; i < allNames.count(); i = i + (u32)1)
+                {
+                if (_ehFuncs != (Map*)0 && _ehFuncs.get((Hashable*)allNames.get(i)) == (Object*)0)
+                    continue;
+                ehNames.add(allNames.get(i));
+                ehOffs.add(allOffs.get(i));
+                }
+            eh = dwEh.buildEhFrame((u64)0, (u64)0, text.length(), ehNames, ehOffs, (u32)4, fdeOffs);
+            eh.setLength(eh.length() - (u32)4);
+            for (u32 i = (u32)0; i < fdeOffs.count(); i = i + (u32)1)
+                {
+                i64 fo = ((Number*)fdeOffs.get(i)).asI64();
+                Object* si = symIndex.get((Hashable*)ehNames.get(i));
+                if (fo < (i64)0 || si == (Object*)0)
+                    continue;
+                DwarfWriter.patchU32(eh, (u32)fo + (u32)8, (u32)0);
+                ElfArm64.put64Into(ehRel, (u32)fo + (u32)8);
+                ElfArm64.put32Into(ehRel, (u32)RA64_PREL32);
+                ElfArm64.put32Into(ehRel, ((Number*)si).asU32());
+                ElfArm64.put64Into(ehRel, (u32)0);
+                }
+            }
+        bool hasEh = eh.length() > (u32)0;
+        _ehFuncs = (Map*)0;
 
         bool hasInit = modInit.length() > (u32)0;
         // Section indices: 1 .text, 2 .data, then .init_array when there is one.
@@ -381,6 +431,12 @@ class ElfArm64
             dep.appendByte((u8)0);
             }
         _depLibs = (Array*)0;
+        u32 secEh = secNames.count();
+        if (hasEh)
+            {
+            secNames.add((Object*)String.withCString(".eh_frame"));
+            secNames.add((Object*)String.withCString(".rela.eh_frame"));
+            }
         u32 secDep = secNames.count();
         if (dep.length() > (u32)0)
             secNames.add((Object*)String.withCString(".deplibs"));
@@ -406,7 +462,11 @@ class ElfArm64
         u32 symOff = irelOff + initRel.length();
         u32 strOff = symOff + symtab.length();
         u32 shstrOff = strOff + strtab.length();
-        u32 depOff = shstrOff + shstr.length();
+        u32 ehOff = ElfArm64.roundUp(shstrOff + shstr.length(), (u32)8);
+        u32 erelOff = ElfArm64.roundUp(ehOff + eh.length(), (u32)8);
+        u32 depOff = erelOff + ehRel.length();
+        if (!hasEh)
+            depOff = shstrOff + shstr.length();
         u32 shOff = ElfArm64.roundUp(depOff + dep.length(), (u32)8);
 
         p8((u32)$7F); p8((u32)'E'); p8((u32)'L'); p8((u32)'F');
@@ -443,6 +503,13 @@ class ElfArm64
         ElfArm64.appendBytes(_out, symtab);
         ElfArm64.appendBytes(_out, strtab);
         ElfArm64.appendBytes(_out, shstr);
+        if (hasEh)
+            {
+            padTo(ehOff);
+            ElfArm64.appendBytes(_out, eh);
+            padTo(erelOff);
+            ElfArm64.appendBytes(_out, ehRel);
+            }
         ElfArm64.appendBytes(_out, dep);
         padTo(shOff);
 
@@ -461,6 +528,11 @@ class ElfArm64
         objSection(((Number*)shName.get(secSym)).asU32(), (u32)2, (u32)0, symOff, symtab.length(), secStr, firstGlobal, (u32)8, (u32)24);
         objSection(((Number*)shName.get(secStr)).asU32(), (u32)3, (u32)0, strOff, strtab.length(), (u32)0, (u32)0, (u32)1, (u32)0);
         objSection(((Number*)shName.get(secShstr)).asU32(), (u32)3, (u32)0, shstrOff, shstr.length(), (u32)0, (u32)0, (u32)1, (u32)0);
+        if (hasEh)
+            {
+            objSection(((Number*)shName.get(secEh)).asU32(), (u32)1, (u32)2, ehOff, eh.length(), (u32)0, (u32)0, (u32)8, (u32)0);
+            objSection(((Number*)shName.get(secEh + (u32)1)).asU32(), (u32)4, (u32)$40, erelOff, ehRel.length(), secSym, secEh, (u32)8, (u32)24);
+            }
         if (dep.length() > (u32)0)
             objSection(((Number*)shName.get(secDep)).asU32(), (u32)$6FFF4C04, (u32)$30, depOff, dep.length(), (u32)0, (u32)0, (u32)1, (u32)1);
         return _out;

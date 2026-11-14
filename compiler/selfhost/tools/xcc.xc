@@ -4429,6 +4429,28 @@ void linkObjectsArm64Elf(DriverOptions* d)
     Files.setExecutable(d.fe().output());
 }
 
+// The functions of Mach-O-spelled assembly, by their ELF names: each line
+// `_name:` (a block label is `L…` or `.L…`), its underscore dropped.
+Map* machoFunctionNames(String* text)
+{
+    Map* out = new Map();
+    Array* lines = text.splitOnByte((u8)'\n');
+    for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1) {
+        String* l = (String*)lines.get(i);
+        u32 n = l.byteLength();
+        if (n < (u32)3 || l.byteAt((u32)0) != (u8)'_' || l.byteAt(n - (u32)1) != (u8)':') continue;
+        bool plain = true;
+        for (u32 k = (u32)1; k + (u32)1 < n; k = k + (u32)1) {
+            u8 c = l.byteAt(k);
+            if (c == (u8)' ' || c == (u8)'\t' || c == (u8)'"') plain = false;
+        }
+        if (!plain) continue;
+        String* nm = l.substringBytes((u32)1, n - (u32)2);
+        out.set((Hashable*)nm, (Object*)nm);
+    }
+    return out;
+}
+
 // The libraries an ELF C/C++ object asks its link for (.deplibs): the `-l`
 // entries of objectLinkerOptions without their `-l` (`Runtime`,
 // `:libstdc++.so.6`). Empty for an xc object.
@@ -5790,10 +5812,11 @@ void emitModule(DriverOptions* d, IRModule* mod)
         // A C/C++ file's xcc half links libRuntime: the guard through the GOT.
         if (gCSplitOut != (String*)0 && d.fe().runtimeLibFile() != (String*)0 && !isAndroid(d))
             prog = guardThroughGot(prog);
-        String* one = new String();
-        one.append(stripLeadingUnderscore(classAllocStubs(prog)));
-        one.appendByte((u8)'\n');
-        one.append(stripLeadingUnderscore(prog));
+        String* one0 = new String();
+        one0.append(classAllocStubs(prog));
+        one0.appendByte((u8)'\n');
+        one0.append(prog);
+        String* one = stripLeadingUnderscore(one0);
         Arm64Asm* oas = new Arm64Asm();
         oas.assemble(Arm64Asm.machoDialectFromElf(one));
         if (oas.failed()) {
@@ -5802,6 +5825,7 @@ void emitModule(DriverOptions* d, IRModule* mod)
         }
         ElfArm64* eo = new ElfArm64();
         eo.setDepLibs(objectDepLibs(d));
+        if (gCSplitOut != (String*)0) eo.setEhFunctions(machoFunctionNames(one0));
         Data* od = eo.objectFromText(oas.textBytes(), oas.dataBytes(), oas.symbols(), oas.dataSyms(),
                                      oas.fixups(), oas.globals(), oas.commonSyms(),
                                      oas.modInitBytes(), oas.modInitFixups());
