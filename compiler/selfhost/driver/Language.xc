@@ -2029,8 +2029,10 @@ class Languages
             // Without its debug information: the function it copies keeps
             // its subprogram, and one subprogram attached to two functions
             // makes clang drop the half's debug information, with a warning.
-            String* head = LlvmReader.external(r.renamed(l)).replacing(n.appending(String.withCString("(")),
-                                                                        n.appending(String.withCString("_xclib(")));
+            // Named `_xclib` before the globals are renamed: a name kept to
+            // its file would otherwise take its suffix first (noteLocalNames).
+            String* head = LlvmReader.external(r.renamed(l.replacing(n.appending(String.withCString("(")),
+                                                                     n.appending(String.withCString("_xclib(")))));
             // Out of any COMDAT group: the group bears the original's name,
             // which the copy no longer has ("use of undefined comdat").
             head = Languages.withoutComdat(head);

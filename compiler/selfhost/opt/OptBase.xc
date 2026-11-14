@@ -40,6 +40,13 @@ bool gOptPromoteScalars;
 bool gOptWarnParAuto;
 void optSetWarnParAuto(bool on) { gOptWarnParAuto = on; }
 bool optWarnParAuto(void) { return gOptWarnParAuto; }
+// A C/C++ file's suffix for the symbols the outliner makes (ParOut$<n>...),
+// so two files' objects in one program keep their blocks apart (the reader
+// gives the file's internal names the same suffix, LlvmReader.modTagFor).
+// Unset, the names are as they always were (xc output byte for byte).
+String* gOptModTag;
+void optSetModTag(String* t) { gOptModTag = t; }
+String* optModTag(void) { return gOptModTag != (String*)0 ? gOptModTag : String.withCString(""); }
 
 // The IR outliner on for this compile without XC_PAR_PROPOSE: a C file
 // built with --par-style=auto (the C path has no parser scan; the outliner is

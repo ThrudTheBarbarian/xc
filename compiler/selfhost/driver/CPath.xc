@@ -418,6 +418,9 @@ class CPath
         // objects are linked (CPath.restObject).
         r.setSplit(true);
         r.setFuseMulAdd(gCPathFuseMulAdd);
+        // clang's whole IR: the names it keeps to this file.
+        r.setPath(input);
+        r.noteLocalNames(text);
         if (Platform.env(String.withCString("XC_C_CABI")).byteLength() > (u32)0)
             r.setCabiAll(true);
         IRModule* m = (IRModule*)0;

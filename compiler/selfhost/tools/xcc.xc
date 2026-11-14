@@ -32,6 +32,7 @@
 #import <Frontend>
 #import <IrParse>
 #import <OptBase>
+#import <LlvmRead>
 #import <Opt>
 #import "OptDefs.xc"
 #import <Arm64>          // the BACK END
@@ -718,8 +719,8 @@ void resolveRuntimeLib(DriverOptions* d)
         String* t = (String*)li.get(i);
         if (t.hasSuffix(String.withCString(".o")) || t.hasSuffix(String.withCString(".a"))) return;
     }
-    // …and so does a C or C++ program: its xc half is linked with clang's.
-    if (Languages.forFile(d.fe().input()) != (LanguageRow*)0) return;
+    // A C or C++ program takes it too (2026-11-14): its xc half's objects
+    // then share one runtime, so a program of several C/C++ objects has one.
     String* dir = String.withString(root);
     dir.appendCString("/runtime-lib/");
     dir.append(d.targetRow().name());
@@ -4416,12 +4417,114 @@ void linkObjectsArm64Elf(DriverOptions* d)
     Files.setExecutable(d.fe().output());
 }
 
+// The LC_LINKER_OPTION groups an arm64 macOS C/C++ object carries: `-framework X`
+// for each framework the module needs (#import <X>, -framework on the line),
+// and `-l<name>` for each library its language links (C++: libc++).
+Array* objectLinkerOptions(DriverOptions* d)
+{
+    Array* out = new Array();
+    // C/C++ objects only: an xc object stays byte for byte as it was.
+    if (gCSplitOut == (String*)0) return out;
+    Map* seen = new Map();
+    Array* fws = new Array();
+    Array* nl = d.fe().neededLibs();
+    for (u32 i = (u32)0; nl != (Array*)0 && i < nl.count(); i = i + (u32)1) {
+        String* lp = (String*)nl.get(i);
+        if (lp.hasPrefix(String.withCString("framework:"))) fws.add((Object*)lp.substringFromByte((u32)10));
+    }
+    Array* fw = d.frameworks();
+    for (u32 i = (u32)0; fw != (Array*)0 && i < fw.count(); i = i + (u32)1) fws.add(fw.get(i));
+    for (u32 i = (u32)0; i < fws.count(); i = i + (u32)1) {
+        String* nm = (String*)fws.get(i);
+        String* key = String.withFormat("framework:%s", nm.cString());
+        if (seen.get((Hashable*)key) != (Object*)0) continue;
+        seen.set((Hashable*)key, (Object*)nm);
+        Array* g = new Array();
+        g.add((Object*)String.withCString("-framework"));
+        g.add((Object*)nm);
+        out.add((Object*)g);
+    }
+    // The shared runtime the object's xc half takes (resolveRuntimeLib), as
+    // `-lRuntime` (a relocatable link keeps only -l and -framework): the
+    // link finds it as resolveRuntimeLib does.
+    if (d.fe().runtimeLibFile() != (String*)0) {
+        Array* g = new Array();
+        g.add((Object*)String.withCString("-lRuntime"));
+        out.add((Object*)g);
+    }
+    if (d.targetRow() != (TargetRow*)0) {
+        Array* libs = CPath.language().libsFor(d.targetRow().os());
+        for (u32 i = (u32)0; i < libs.count(); i = i + (u32)1) {
+            Array* g = new Array();
+            g.add((Object*)String.withFormat("-l%s", ((String*)libs.get(i)).cString()));
+            out.add((Object*)g);
+        }
+    }
+    return out;
+}
+
+// The libRuntime an object-only link's objects asked for (`-lRuntime`), or 0:
+// the link then imports it and assembles no runtime of its own.
+String* gObjRuntimeLib;
+
+// An object-only link takes what its objects ask for (LC_LINKER_OPTION):
+// each `-framework X` joins the frameworks, each `-l<name>` the libraries
+// (on macOS the SDK's stub of it, or its static library), once each.
+void addObjectLinkerOptions(DriverOptions* d)
+{
+    for (u32 i = (u32)0; i < d.objectInputs().count(); i = i + (u32)1) {
+        String* op = (String*)d.objectInputs().get(i);
+        if (!op.hasSuffix(String.withCString(".o"))) continue;
+        MachOObject* o = MachOObject.atPath(op);
+        if (o == (MachOObject*)0 || o.linkerOpts() == (Array*)0) continue;
+        for (u32 k = (u32)0; k < o.linkerOpts().count(); k = k + (u32)1) {
+            Array* g = (Array*)o.linkerOpts().get(k);
+            if (g.count() == (u32)2 && ((String*)g.get((u32)0)).equals(String.withCString("-framework"))) {
+                String* nm = (String*)g.get((u32)1);
+                bool have = false;
+                for (u32 q = (u32)0; q < d.frameworks().count(); q = q + (u32)1)
+                    if (((String*)d.frameworks().get(q)).equals(nm)) have = true;
+                if (!have) d.frameworks().add((Object*)nm);
+            } else if (g.count() == (u32)1 && ((String*)g.get((u32)0)).equals(String.withCString("-lRuntime"))) {
+                // xcc's shared runtime (the objects' xc halves took it): this
+                // target's libRuntime, imported, its directory a runpath.
+                String* root = supportRoot(d.fe());
+                if (root == (String*)0 || d.targetRow() == (TargetRow*)0) continue;
+                Array* exts = d.targetRow().libExts();
+                for (u32 e = (u32)0; exts != (Array*)0 && e < exts.count(); e = e + (u32)1) {
+                    String* lp = String.withFormat("%s/runtime-lib/%s/libRuntime.%s", root.cString(),
+                                                   d.targetRow().name().cString(), ((String*)exts.get(e)).cString());
+                    if (!Files.exists(lp)) continue;
+                    if (lp.byteAt((u32)0) != (u8)'/') {
+                        IRDbg.setWorkingDirectory(Frontend.workingDirectory());
+                        lp = IRDbg.canonicalPath(String.withFormat("%s/%s", Frontend.workingDirectory().cString(), lp.cString()));
+                    }
+                    gObjRuntimeLib = lp;
+                    break;
+                }
+            } else if (g.count() == (u32)1 && ((String*)g.get((u32)0)).hasPrefix(String.withCString("-l"))) {
+                String* nm = ((String*)g.get((u32)0)).substringFromByte((u32)2);
+                String* sdk = appleSdkRoot(d);
+                if (sdk == (String*)0) continue;
+                String* lib = String.withFormat("%s/usr/lib/lib%s.tbd", sdk.cString(), nm.cString());
+                if (!Files.exists(lib)) lib = String.withFormat("%s/usr/lib/lib%s.a", sdk.cString(), nm.cString());
+                if (!Files.exists(lib)) continue;
+                bool have = false;
+                for (u32 q = (u32)0; q < d.linkInputs().count(); q = q + (u32)1)
+                    if (((String*)d.linkInputs().get(q)).equals(lib)) have = true;
+                if (!have) d.linkInputs().add((Object*)lib);
+            }
+        }
+    }
+}
+
 void linkObjectsArm64(DriverOptions* d)
 {
     // An object-only link has no xc source to keep byte for byte: the
     // objects' unwind tables (a C/C++ object's xcc functions, clang's
     // DWARF-mode entries) are merged into the image.
     machoSetEhMerge(true);
+    addObjectLinkerOptions(d);
     String* crt = readRuntime(d.fe(), String.withCString("crt-macos.s"));
     String* rt  = readRuntime(d.fe(), String.withCString("rt-macos.s"));
     if (crt == 0 || rt == 0) {
@@ -4430,7 +4533,9 @@ void linkObjectsArm64(DriverOptions* d)
     }
     String* combined = new String();
     if (xcArgsFor(d, (String*)0)) crt = crtArm64WithXcArgs(d, crt, String.withCString("crt-macos.s"));
-    combined.append(crt); combined.appendByte((u8)'\n'); combined.append(rt);
+    combined.append(crt); combined.appendByte((u8)'\n');
+    // Objects that took libRuntime: the library carries the runtime.
+    if (gObjRuntimeLib == (String*)0) combined.append(rt);
     if (isIos(d)) { combined.appendByte((u8)'\n'); combined.append(iosRuntimeSource(d)); }   // stage 4 shim
     Arm64Asm* as = new Arm64Asm();
     as.assemble(Arm64Asm.machoDialectFromElf(combined));
@@ -4455,11 +4560,16 @@ void linkObjectsArm64(DriverOptions* d)
 
     // What the objects `#import <Lib>`ed (their .xtc.needs sidecars), then
     // the libraries and frameworks named on the line — one rule (arm64LinkDeps).
-    Array* deps = arm64LinkDeps(d, objectNeeds(d.objectInputs()), d.objectInputs());
+    Array* objNeeds = objectNeeds(d.objectInputs());
+    if (gObjRuntimeLib != (String*)0) {
+        if (objNeeds == (Array*)0) objNeeds = new Array();
+        objNeeds.add((Object*)gObjRuntimeLib);
+    }
+    Array* deps = arm64LinkDeps(d, objNeeds, d.objectInputs());
     MachO* m = new MachO();
     if (isIos(d)) m.setApplePlatform(d.arch());
     m.setDeps(deps);
-    m.setRpaths(arm64Rpaths(d, objectNeeds(d.objectInputs())));
+    m.setRpaths(arm64Rpaths(d, objNeeds));
     m.executable(as.textBytes(), ((Number*)entry).asU32(), as.symbols(),
                  dataBytes, as.dataSyms(), fixups, miLen, objcSects, bssLen);
     checkSystemImports(d, m);
@@ -5094,6 +5204,9 @@ void main(void)
         // can pass through one (arm64: the back end reports its saves).
         arm64SetEhTables(true);
         machoSetEhMerge(true);
+        // This file's suffix for the outliner's symbols, as the reader's for
+        // its internal names: two C/C++ objects in one program stay apart.
+        optSetModTag(LlvmReader.modTagFor(cin));
         // C++ on win64: the link keeps .pdata/.xdata, the SEH tables its
         // exceptions unwind by.
         CoffObject.setKeepUnwind(lang.ehFrames());
@@ -5569,6 +5682,9 @@ void emitModule(DriverOptions* d, IRModule* mod)
         // The module's load-time constructors (XG-NIB registration) travel in
         // the object as its __mod_init_func, for the link to run.
         mo.setModInit(oas.modInitBytes(), oas.modInitFixups());
+        // What a link of the object alone needs: the frameworks the module
+        // imports, and on the C path its language's libraries.
+        mo.setLinkerOptions(objectLinkerOptions(d));
         Data* od = mo.objectFromText(oas.textBytes(), oas.dataBytes(), oas.symbols(),
                                      oas.dataSyms(), oas.fixups(), oas.globals(), oas.commonSyms());
         if (od == (Data*)0) {

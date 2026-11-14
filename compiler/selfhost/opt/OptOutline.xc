@@ -336,7 +336,7 @@
 
         // The outlined function.
         _ppOutN = _ppOutN + (u32)1;
-        String* name = String.withFormat("ParOut$%u$run", _ppOutN);
+        String* name = String.withFormat("ParOut$%u%s$run", _ppOutN, optModTag().cString());
         IRFunc* O = new IRFunc();
         O.setName(name);
         O.setRet(outV != (IRValue*)0 ? outV.ty() : String.withCString("Void"));
@@ -1908,7 +1908,7 @@
             recL.addField((histAt + h) * (u32)8, ((IRValue*)_ppHistBase.get(h)).ty());
         String* recT = String.withFormat("Ptr(Agg(%u), unbanked)", m.addLayout(recL));
         _ppOutN = _ppOutN + (u32)1;
-        String* stem = String.withFormat("ParOut$%u", _ppOutN);
+        String* stem = String.withFormat("ParOut$%u%s", _ppOutN, optModTag().cString());
         String* objT = makeRet;
         String* u8p = String.withCString("Ptr(U8, unbanked)");
         String* ivT = iv.res().ty();
@@ -1916,7 +1916,7 @@
         // ── run(rec): the loop over [rec.lo, rec.hi) ──
         IRFunc* B = new IRFunc();
         // ParImpl$o<n>$run: the name the kernel printers find a block by.
-        String* pcls = String.withFormat("ParImpl$o%u", _ppOutN);
+        String* pcls = String.withFormat("ParImpl$o%u%s", _ppOutN, optModTag().cString());
         B.setName(String.withFormat("%s$run", pcls.cString()));
         if (fn.hasDbg())
             B.setDbg(fn.dbgFile(), fn.dbgLine(), fn.dbgCol());

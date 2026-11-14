@@ -845,6 +845,17 @@ class MachOSha256
     SectionBytes* _objModInit;
     Array* _objModInitFix;
 
+    // The link arguments the next object asks for (LC_LINKER_OPTION, one
+    // command per group: [`-framework`, `Metal`], [`-lc++`]): the frameworks
+    // its runtime imports and its language's libraries, so a link of objects
+    // alone knows them. Unset or empty, the object is as it always was.
+    Array* _objLinkerOpts;
+
+    void setLinkerOptions(Array* groups)
+        {
+        _objLinkerOpts = groups;
+        }
+
     void setModInit(SectionBytes* bytes, Array* fixups)
         {
         _objModInit = bytes;
@@ -1042,10 +1053,22 @@ class MachOSha256
         u32 nsects = (hasMi ? (u32)3 : (u32)2) + (hasEh ? (u32)1 : (u32)0);
         u32 hdrSize = (u32)32;
         u32 segCmd = (u32)72 + (u32)80 * nsects;
+        // LC_LINKER_OPTION commands: count, then the NUL-ended arguments,
+        // padded to 8.
+        Array* lo = _objLinkerOpts != (Array*)0 ? _objLinkerOpts : new Array();
+        u32 loCmds = (u32)0;
+        for (u32 i = (u32)0; i < lo.count(); i = i + (u32)1)
+            {
+            Array* g = (Array*)lo.get(i);
+            u32 n = (u32)12;
+            for (u32 k = (u32)0; k < g.count(); k = k + (u32)1)
+                n = n + ((String*)g.get(k)).byteLength() + (u32)1;
+            loCmds = loCmds + MachO.roundUp(n, (u32)8);
+            }
         u32 symCmd = (u32)24;
         u32 dysymCmd = (u32)80;
         u32 buildCmd = (u32)24;
-        u32 sizeofcmds = segCmd + symCmd + dysymCmd + buildCmd;
+        u32 sizeofcmds = segCmd + symCmd + dysymCmd + buildCmd + loCmds;
         u32 textOff = MachO.roundUp(hdrSize + sizeofcmds, (u32)16);
         u32 dataOff = MachO.roundUp(textOff + text.length(), (u32)16);
         u32 miOff = MachO.roundUp(dataOff + data.length(), (u32)8);
@@ -1095,7 +1118,7 @@ class MachOSha256
         put32(MachO.CPU_TYPE_ARM64());
         put32((u32)0);
         put32((u32)1); // MH_OBJECT
-        put32((u32)4); // ncmds
+        put32((u32)4 + lo.count()); // ncmds
         put32(sizeofcmds);
         put32((u32)0);
         put32((u32)0);
@@ -1193,6 +1216,27 @@ class MachOSha256
             put32(_platformVer);
             }
         put32((u32)0); // ntools
+
+        for (u32 i = (u32)0; i < lo.count(); i = i + (u32)1)
+            {
+            Array* g = (Array*)lo.get(i);
+            u32 n = (u32)12;
+            for (u32 k = (u32)0; k < g.count(); k = k + (u32)1)
+                n = n + ((String*)g.get(k)).byteLength() + (u32)1;
+            u32 sz = MachO.roundUp(n, (u32)8);
+            put32((u32)$2D);
+            put32(sz);          // LC_LINKER_OPTION
+            put32(g.count());
+            for (u32 k = (u32)0; k < g.count(); k = k + (u32)1)
+                {
+                String* a = (String*)g.get(k);
+                for (u32 c = (u32)0; c < a.byteLength(); c = c + (u32)1)
+                    put8((u32)a.byteAt(c));
+                put8((u32)0);
+                }
+            for (u32 c = n; c < sz; c = c + (u32)1)
+                put8((u32)0);
+            }
 
         put32((u32)$B);
         put32(dysymCmd); // LC_DYSYMTAB

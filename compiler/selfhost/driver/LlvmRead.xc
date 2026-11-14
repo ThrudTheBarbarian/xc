@@ -30,6 +30,8 @@ class LlvmReader
     IRModule* _m;
     String* _why;           // the first construct a function used that is not read; 0 when all were
     Map* _globals;          // "@name" -> its symbol name in the module
+    Map* _localNames;       // "@name" -> 1: internal or private in clang's IR (noteLocalNames)
+    String* _modTag;        // `$m<hash>`, this file's suffix for those names
     Map* _globalElem;       // "@name" -> the IR type an AddrOf of it addresses (the element of an array)
     Map* _cpage;            // "@name" -> its bytes: a numeric array clang's half gives pages of its own (gpu-globals)
     Map* _negOf;            // a value read from `fneg x` -> x
@@ -97,6 +99,71 @@ class LlvmReader
     void setCabiAll(bool b)
         {
         _cabiAll = b;
+        }
+
+    // The names clang's IR (all of it, `text`) gives internal or private
+    // linkage: both halves of the split reach them, so they are external in
+    // each object, and two files' (a `static` helper, a string `@.str`) would
+    // meet in a program of several. Each gets this file's suffix
+    // (`$m<hash of its path>`) on both sides (symFor, renamed).
+    // A file's suffix for the names kept to it: `$m` and a hash of its path
+    // (FNV-1a), the same wherever the file is compiled from that path.
+    static String* modTagFor(String* path)
+        {
+        u32 h = (u32)$811C9DC5;
+        String* key = path != (String*)0 ? path : String.withCString("");
+        for (u32 i = (u32)0; i < key.byteLength(); i = i + (u32)1)
+            h = (h ^ (u32)key.byteAt(i)) * (u32)16777619;
+        return String.withFormat("$m%08x", h);
+        }
+
+    void noteLocalNames(String* text)
+        {
+        _localNames = new Map();
+        _modTag = LlvmReader.modTagFor(_path);
+        Array* lines = text.splitOnByte((u8)10);
+        for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1)
+            {
+            String* l = (String*)lines.get(i);
+            bool def = l.hasPrefix(String.withCString("define "));
+            if (!def && !l.hasPrefix(String.withCString("@")))
+                continue;
+            u32 at = l.indexOfByte((u8)'@');
+            if (at == (u32)$FFFFFFFF)
+                continue;
+            // The name: to its end (a quoted one to its closing quote).
+            u32 e = at + (u32)1;
+            if (e < l.byteLength() && l.byteAt(e) == (u8)'"')
+                {
+                e = e + (u32)1;
+                while (e < l.byteLength() && l.byteAt(e) != (u8)'"')
+                    e = e + (u32)1;
+                e = e + (u32)1;
+                }
+            else
+                while (e < l.byteLength() && l.byteAt(e) != (u8)'(' && l.byteAt(e) != (u8)' ' && l.byteAt(e) != (u8)',')
+                    e = e + (u32)1;
+            String* nm = l.substringBytes(at, e - at);
+            // The linkage: before the name on a define line, after `=` on a global's.
+            String* head = def ? l.substringBytes((u32)0, at) : l.substringFromByte(e);
+            if (!def)
+                {
+                u32 eq = head.byteIndexOf(String.withCString("= "));
+                head = eq != String.notFound() ? head.substringFromByte(eq) : head;
+                Array* ws = head.splitOnByte((u8)' ');
+                head = ws.count() > (u32)1 ? String.withFormat(" %s ", ((String*)ws.get((u32)1)).cString()) : String.withCString("");
+                }
+            if (head.contains(String.withCString(" internal ")) || head.contains(String.withCString(" private ")))
+                {
+                _localNames.set((Hashable*)nm, (Object*)nm);
+                // Its clang copy beside xcc's (Languages.takeFrom): the same.
+                if (def && !nm.hasPrefix(String.withCString("@\"")))
+                    {
+                    String* twin = nm.appending(String.withCString("_xclib"));
+                    _localNames.set((Hashable*)twin, (Object*)twin);
+                    }
+                }
+            }
         }
     // Split: clang compiles what this file does not take. Every function
     // goes through the C ABI, the globals are clang's (here, references to
@@ -455,6 +522,10 @@ class LlvmReader
                     e = e + (u32)1;
             String* n = l.substringBytes(p, e - p);
             String* sym = (String*)_globals.get((Hashable*)n);
+            // A name kept to this file that the reader never met (a static
+            // function only clang's half defines): its suffix all the same.
+            if (sym == (String*)0 && _localNames != (Map*)0 && _localNames.get((Hashable*)n) != (Object*)0)
+                sym = self.symFor(n);
             if (sym != (String*)0 && !n.substringFromByte((u32)1).equals(sym))
                 {
                 out.appendCString("@");
@@ -856,6 +927,10 @@ class LlvmReader
             _strN = _strN + (u32)1;
             n = String.withFormat("cg_%u", _strN);
             }
+        // Internal or private in clang's IR: this file's suffix, so another
+        // file's of the same name stays apart in a program of several.
+        if (_localNames != (Map*)0 && _localNames.get((Hashable*)llName) != (Object*)0)
+            n = n.appending(_modTag);
         // A name the x86 back end renames (a register or an operand word in
         // Intel syntax: C's `ss`, `al`, `byte`) is given its renamed form on
         // both sides of a split, clang's too, so that the two objects meet.
