@@ -1674,6 +1674,7 @@ class BeFact : Object
     Array* _pivInvs;
 
     bool _srFloatMul; // the float multiply rewrites (set for the main pipeline)
+    bool _srShared;   // the shared-2x rewrite, every target (set for the main pipeline)
 
     // Set for par kernels only: unroll a loop only when its constant trip is
     // a whole number of groups, so no copy needs a guard. A GPU pays for the

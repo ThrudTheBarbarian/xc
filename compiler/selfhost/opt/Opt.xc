@@ -724,8 +724,10 @@
         if (_level >= (u32)2)
             {
             _srFloatMul = _profile.floatMulToAdd();
+            _srShared = true;
             self.strengthReduce(m);
             _srFloatMul = false;
+            _srShared = false;
             }
         if (stopHere(String.withCString("strength-reduce")))
             return;
