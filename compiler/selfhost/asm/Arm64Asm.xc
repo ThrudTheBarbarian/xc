@@ -3333,6 +3333,13 @@ class Arm64Asm
                 // line table, recorded against the text offset they precede.
                 // -g: `.xc_frame <n>` — the next frame setup leaves the call
                 // frame n bytes above the frame pointer, x29/x30 at its bottom.
+                // `.xc_saves <reg>:<cfa offset> ...` (C/C++ input) — where the
+                // frame just set up keeps x29, x30 and each callee-saved
+                // register, for the unwind tables.
+                if (l.hasPrefix(String.withCString(".xc_saves"))) {
+                    if (dwarf != (DwarfWriter*)0) dwarf.addSaves(l.substringFromByte((u32)9).trimmed());
+                    continue;
+                }
                 if (l.hasPrefix(String.withCString(".xc_frame"))) {
                     DwarfScan* fsc = DwarfScan.over(l, (u32)9);
                     if (fsc.scanInt()) pendingFrame = (u32)fsc.value();

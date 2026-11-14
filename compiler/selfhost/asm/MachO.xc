@@ -523,6 +523,9 @@ class MachOSha256
     u32 textOffset;
     u32 unwindOffset; // __TEXT,__unwind_info, after __stubs (0 size: none)
     u32 unwindSize;
+    u32 ehOffset;     // __TEXT,__eh_frame, after __unwind_info (0 size: none)
+    u32 ehSize;
+    Data* ehBytes;
     Data* unwindBytes;
     u32 stubsOffset;
     u32 stubsSize;
@@ -653,6 +656,7 @@ class MachOSha256
         _names.add((Object*)String.withCString("__XTC"));                      // 13
         _names.add((Object*)String.withCString("__iface"));                    // 14
         _names.add((Object*)String.withCString("__unwind_info"));              // 15
+        _names.add((Object*)String.withCString("__eh_frame"));                 // 16
         }
 
     // The dylibs an EXECUTABLE links against, or the libraries a DYLIB
@@ -890,6 +894,26 @@ class MachOSha256
                     locText.add((Object*)n);
                 }
             }
+        // C/C++ input: xcc's functions' unwind tables as the object's
+        // __eh_frame, after everything else, each FDE's address relocated as
+        // clang's are (a SUBTRACTOR / UNSIGNED pair against `ltmp_eh`, the
+        // table's start, and the function), so a relocatable link (`clang
+        // -r`) and the in-house one both read it.
+        DwarfWriter* dwEh = DwarfWriter.pending();
+        bool hasEh = dwEh != (DwarfWriter*)0 && dwEh.hasSaves();
+        Array* ehNames = new Array();
+        Array* ehOffs = new Array();
+        Array* ehFields = new Array();
+        if (hasEh)
+            DwarfWriter.functionsOf(symbols, dataSyms, String.withCString("_"), text.length(), ehNames, ehOffs);
+        bool hasMi0 = mi.length() > (u32)0;
+        u32 ehAddr = MachO.roundUp(hasMi0 ? MachO.roundUp(text.length() + data.length(), (u32)8) + mi.length()
+                                          : text.length() + data.length(), (u32)8);
+        Data* eh = hasEh ? dwEh.buildEhFrameAs((u64)ehAddr, (u64)0, text.length(), ehNames, ehOffs, (u32)4, new Array(), ehFields)
+                         : (Data*)0;
+        String* ehSym = String.withCString("ltmp_eh");
+        if (hasEh)
+            locData.add((Object*)ehSym);
         u32 nLocals = locText.count() + locData.count();
         Array* undef = new Array();
         for (u32 i = (u32)0; i < fixups.count(); i = i + (u32)1)
@@ -1015,7 +1039,7 @@ class MachOSha256
         // A __mod_init_func section (S_MOD_INIT_FUNC_POINTERS) after __data
         // when there are constructors; without them the object is as before.
         bool hasMi = mi.length() > (u32)0;
-        u32 nsects = hasMi ? (u32)3 : (u32)2;
+        u32 nsects = (hasMi ? (u32)3 : (u32)2) + (hasEh ? (u32)1 : (u32)0);
         u32 hdrSize = (u32)32;
         u32 segCmd = (u32)72 + (u32)80 * nsects;
         u32 symCmd = (u32)24;
@@ -1026,11 +1050,30 @@ class MachOSha256
         u32 dataOff = MachO.roundUp(textOff + text.length(), (u32)16);
         u32 miOff = MachO.roundUp(dataOff + data.length(), (u32)8);
         u32 miAddr = MachO.roundUp(text.length() + data.length(), (u32)8);
-        u32 textRelOff = hasMi ? miOff + mi.length() : dataOff + data.length();
+        u32 ehOff = MachO.roundUp(hasMi ? miOff + mi.length() : dataOff + data.length(), (u32)8);
+        // Each FDE's address: SUBTRACTOR (ltmp_eh) then UNSIGNED (the
+        // function), 8 bytes, external, at the field.
+        Data* ehRel = new Data();
+        u32 nEhRel = (u32)0;
+        for (u32 i = (u32)0; hasEh && i < ehNames.count(); i = i + (u32)1)
+            {
+            i64 fo = ((Number*)ehFields.get(i)).asI64();
+            Number* fs = (Number*)symIndex.get((Hashable*)String.withFormat("_%s", ((String*)ehNames.get(i)).cString()));
+            if (fo < (i64)0 || fs == (Number*)0)
+                continue;
+            u32 es = ((Number*)symIndex.get((Hashable*)ehSym)).asU32();
+            MachO.put32In(ehRel, (u32)fo);
+            MachO.put32In(ehRel, ((u32)1 << (u32)28) | ((u32)1 << (u32)27) | ((u32)3 << (u32)25) | (es & (u32)$FFFFFF));
+            MachO.put32In(ehRel, (u32)fo);
+            MachO.put32In(ehRel, ((u32)1 << (u32)27) | ((u32)3 << (u32)25) | (fs.asU32() & (u32)$FFFFFF));
+            nEhRel = nEhRel + (u32)2;
+            }
+        u32 textRelOff = hasEh ? ehOff + eh.length() : (hasMi ? miOff + mi.length() : dataOff + data.length());
         u32 dataRelOff = textRelOff + textRel.length();
         u32 miRelOff = dataRelOff + dataRel.length();
-        u32 symOff = MachO.roundUp(miRelOff + miRel.length(), (u32)8);
-        u32 segSize = hasMi ? miAddr + mi.length() : text.length() + data.length();
+        u32 ehRelOff = miRelOff + miRel.length();
+        u32 symOff = MachO.roundUp(ehRelOff + ehRel.length(), (u32)8);
+        u32 segSize = hasEh ? ehAddr + eh.length() : (hasMi ? miAddr + mi.length() : text.length() + data.length());
         u32 strOff = symOff + order.count() * (u32)16;
 
         Data* strtab = new Data();
@@ -1110,6 +1153,21 @@ class MachOSha256
             put32((u32)0);
             put32((u32)0);
             }
+        if (hasEh)
+            {
+            putFixed(String.withCString("__eh_frame"), (u32)16);
+            putFixed(String.withCString("__TEXT"), (u32)16);
+            put64(ehAddr, (u32)0);
+            put64(eh.length(), (u32)0);
+            put32(ehOff);
+            put32((u32)3); // align 8
+            put32(nEhRel != (u32)0 ? ehRelOff : (u32)0);
+            put32(nEhRel);
+            put32((u32)$6800000B); // S_COALESCED, no TOC, strip static syms, live support (as clang's)
+            put32((u32)0);
+            put32((u32)0);
+            put32((u32)0);
+            }
 
         put32((u32)2);
         put32(symCmd); // LC_SYMTAB
@@ -1156,13 +1214,30 @@ class MachOSha256
             padTo(miOff);
             appendSection(mi);
             }
+        if (hasEh)
+            {
+            padTo(ehOff);
+            _out.append(eh);
+            }
         _out.append(textRel);
         _out.append(dataRel);
         _out.append(miRel);
+        _out.append(ehRel);
         padTo(symOff);
         for (u32 i = (u32)0; i < order.count(); i = i + (u32)1)
             {
             String* n = (String*)order.get(i);
+            // ltmp_eh: the __eh_frame's start, a local of that section.
+            if (hasEh && n.equals(ehSym))
+                {
+                put32(((Number*)strx.get(i)).asU32());
+                put8((u32)$0E);
+                put8(hasMi ? (u32)4 : (u32)3);
+                put8((u32)0);
+                put8((u32)0);
+                put64(ehAddr, (u32)0);
+                continue;
+                }
             Object* at = symbols.get((Hashable*)n);
             bool isUndef = at == (Object*)0;
             bool inData = MachO.hasName(dataSyms, n);
@@ -1372,13 +1447,51 @@ class MachOSha256
         u32 nimp = _imports.count();
         bool hasImp = nimp > (u32)0;
         bool hasDataSeg = hasData || hasImp || hasBss;
+        // The objects' FDEs (MachOLink: xcc's own functions from C/C++ input,
+        // whose frame keeps its saves above the frame record, which the
+        // compact encodings cannot say): each goes in __eh_frame, and its
+        // function gets a DWARF-mode __unwind_info entry pointing at it.
+        Array* ehFdes = MachOFdes.pending();
+        MachOFdes.setPending((Array*)0);
+        bool ehOn = ehFdes != (Array*)0;
+        Array* ehAt = new Array();
+        u32 ehSize = ehOn ? MachO.ehFrameFrom(ehFdes, (u64)0, (u64)0, ehAt).length() : (u32)0;
         // The objects' unwind entries (MachOLink), which __unwind_info holds.
         Array* uw = MachOUnwind.pending();
         MachOUnwind.setPending((Array*)0);
+        // The objects' own DWARF-mode entries: their FDE's offset in this
+        // image's table.
+        for (u32 i = (u32)0; uw != (Array*)0 && i < uw.count(); i = i + (u32)1)
+            {
+            MachOUnwindRec* r = (MachOUnwindRec*)uw.get(i);
+            if (r.fde() != (u32)0 && ehOn && r.fde() - (u32)1 < ehAt.count())
+                r.setEnc((u32)$03000000 | (((Number*)ehAt.get(r.fde() - (u32)1)).asU32() & (u32)$00FFFFFF));
+            else if (r.fde() != (u32)0)
+                r.setEnc((u32)0);
+            }
+        if (ehOn)
+            {
+            if (uw == (Array*)0)
+                uw = new Array();
+            u32 nObj = uw.count();
+            for (u32 i = (u32)0; i < ehFdes.count(); i = i + (u32)1)
+                {
+                MachOFde* f = (MachOFde*)ehFdes.get(i);
+                bool covered = false;
+                for (u32 k = (u32)0; k < nObj && !covered; k = k + (u32)1)
+                    {
+                    MachOUnwindRec* r = (MachOUnwindRec*)uw.get(k);
+                    covered = f.fn() >= r.fn() && f.fn() < r.fn() + r.len();
+                    }
+                if (!covered && f.len() > (u32)0)
+                    uw.add((Object*)MachOUnwindRec.with(f.fn(), f.len(),
+                                                         (u32)$03000000 | (((Number*)ehAt.get(i)).asU32() & (u32)$00FFFFFF), (u32)0, (u32)0));
+                }
+            }
         Array* uwRows = uw != (Array*)0 ? MachO.unwindRows(uw, text.length()) : (Array*)0;
         Array* uwPers = uw != (Array*)0 ? MachO.unwindPersonalities(uw) : (Array*)0;
         u32 unwindSize = uwRows != (Array*)0 ? MachO.unwindInfoSize(uwRows, uwPers) : (u32)0;
-        gMachOTextExtra = unwindSize > (u32)0 ? (u32)1 : (u32)0;
+        gMachOTextExtra = (unwindSize > (u32)0 ? (u32)1 : (u32)0) + (ehSize > (u32)0 ? (u32)1 : (u32)0);
 
         // 2. Layout. The vmaddr of everything is VMBASE + its file offset, so
         //    a single set of offsets describes both.
@@ -1386,7 +1499,8 @@ class MachOSha256
         u32 stubsOffset = roundUp(textOffset + text.length(), (u32)4);
         u32 stubsSize = nimp * (u32)STUB_SZ;
         u32 unwindOffset = roundUp(stubsOffset + stubsSize, (u32)4);
-        u32 textSegEnd = roundUp(unwindOffset + unwindSize, (u32)MACHO_PAGE);
+        u32 ehOffset = roundUp(unwindOffset + unwindSize, (u32)8);
+        u32 textSegEnd = roundUp(ehSize > (u32)0 ? ehOffset + ehSize : unwindOffset + unwindSize, (u32)MACHO_PAGE);
         u32 dataSegFileOff = textSegEnd;
         u32 dataProgOffset = dataSegFileOff;
         u32 gotOffset = roundUp(dataProgOffset + (hasData ? data.length() : (u32)0), (u32)8);
@@ -1512,6 +1626,11 @@ class MachOSha256
         MachOLayout* L = new MachOLayout();
         L.unwindOffset = unwindOffset;
         L.unwindSize = unwindSize;
+        L.ehOffset = ehOffset;
+        L.ehSize = ehSize;
+        L.ehBytes = ehSize > (u32)0
+                  ? MachO.ehFrameFrom(ehFdes, ((u64)1 << (u64)32) + (u64)ehOffset, ((u64)1 << (u64)32) + (u64)textOffset, new Array())
+                  : (Data*)0;
         L.unwindBytes = unwindSize > (u32)0
                       ? MachO.unwindInfo(uwRows, uwPers, symbols, dataSyms, textOffset, dataProgOffset, text.length())
                       : (Data*)0;
@@ -2217,6 +2336,62 @@ class MachOSha256
         }
 
     // ── The image ────────────────────────────────────────────────────────
+    // ── __eh_frame ───────────────────────────────────────────────────────
+    //
+    // The image's FDEs (MachOFde@, functions at text offsets): a "zR" CIE for
+    // each distinct set of CIE rules, then each FDE after its CIE, addresses
+    // pc-relative in 4 bytes, a zero word at the end. ehAddr and textAddr are
+    // where the table and the text land. Each FDE's offset in the table goes
+    // into fdeAt (Number@, parallel to fdes), which __unwind_info names.
+    static Data* ehFrameFrom(Array* fdes, u64 ehAddr, u64 textAddr, Array* fdeAt)
+        {
+        Data* out = new Data();
+        Map* cieAt = new Map(); // key -> Number(offset)
+        for (u32 i = (u32)0; i < fdes.count(); i = i + (u32)1)
+            {
+            MachOFde* f = (MachOFde*)fdes.get(i);
+            String* key = String.withFormat("%u/%ld/%u/", f.codeAlign(), f.dataAlign(), f.ra());
+            for (u32 q = (u32)0; q < f.cieIns().length(); q = q + (u32)1)
+                key.appendFormat("%02x", (u32)f.cieIns().byteAt(q));
+            Number* ca = (Number*)cieAt.get((Hashable*)key);
+            if (ca == (Number*)0)
+                {
+                u32 at = out.length();
+                ca = Number.withU32(at);
+                cieAt.set((Hashable*)key, (Object*)ca);
+                DwarfWriter.putU32(out, (u32)0);
+                DwarfWriter.putU32(out, (u32)0);
+                DwarfWriter.putU8(out, (u32)1);
+                DwarfWriter.putU8(out, (u32)'z');
+                DwarfWriter.putU8(out, (u32)'R');
+                DwarfWriter.putU8(out, (u32)0);
+                DwarfWriter.putULEB(out, (u64)f.codeAlign());
+                DwarfWriter.putSLEB(out, f.dataAlign());
+                DwarfWriter.putULEB(out, (u64)f.ra());
+                DwarfWriter.putULEB(out, (u64)1);
+                DwarfWriter.putU8(out, (u32)$1B);
+                out.append(f.cieIns());
+                while ((out.length() - at) % (u32)4 != (u32)0)
+                    DwarfWriter.putU8(out, (u32)0);
+                DwarfWriter.patchU32(out, at, out.length() - at - (u32)4);
+                }
+            u32 fa = out.length();
+            fdeAt.add((Object*)Number.withU32(fa));
+            DwarfWriter.putU32(out, (u32)0);
+            DwarfWriter.putU32(out, fa + (u32)4 - ca.asU32());
+            i64 pc = (i64)(textAddr + (u64)f.fn()) - (i64)(ehAddr + (u64)fa + (u64)8);
+            DwarfWriter.putU32(out, (u32)pc);
+            DwarfWriter.putU32(out, f.len());
+            DwarfWriter.putULEB(out, (u64)0);
+            out.append(f.ins());
+            while ((out.length() - fa) % (u32)4 != (u32)0)
+                DwarfWriter.putU8(out, (u32)0);
+            DwarfWriter.patchU32(out, fa, out.length() - fa - (u32)4);
+            }
+        DwarfWriter.putU32(out, (u32)0);
+        return out;
+        }
+
     // ── __unwind_info ────────────────────────────────────────────────────
     //
     // What ld64 makes from the objects' __compact_unwind and Darwin's
@@ -2428,6 +2603,11 @@ class MachOSha256
             padTo(L.unwindOffset);
             appendAll(L.unwindBytes);
             }
+        if (L.ehSize > (u32)0)
+            {
+            padTo(L.ehOffset);
+            appendAll(L.ehBytes);
+            }
         if (L.hasData)
             {
             padTo(L.dataProgOffset);
@@ -2466,7 +2646,8 @@ class MachOSha256
         u32 libSysLen = (u32)26;                                                                                                              // "/usr/lib/libSystem.B.dylib"
         L.nDataSects = (L.hasDataSect ? (u32)1 : (u32)0) + (L.hasModInit ? (u32)1 : (u32)0) + (L.hasImp ? (u32)1 : (u32)0) + objcSectCount() + (L.hasBss ? (u32)1 : (u32)0); // bug 642, 069
         L.szPagezero = (u32)72;
-        L.szTextSeg = (u32)72 + (u32)80 * ((u32)1 + (L.hasImp ? (u32)1 : (u32)0) + (L.unwindSize > (u32)0 ? (u32)1 : (u32)0));
+        L.szTextSeg = (u32)72 + (u32)80 * ((u32)1 + (L.hasImp ? (u32)1 : (u32)0) + (L.unwindSize > (u32)0 ? (u32)1 : (u32)0)
+                                           + (L.ehSize > (u32)0 ? (u32)1 : (u32)0));
         L.szDataSeg = (u32)72 + (u32)80 * L.nDataSects;
         L.szLink = (u32)72;
         L.szDyldInfo = (u32)48;
@@ -2531,7 +2712,7 @@ class MachOSha256
         put64(L.textSegEnd, (u32)0);
         put32(VM_READ() | VM_EXEC());
         put32(VM_READ() | VM_EXEC());
-        put32((L.hasImp ? (u32)2 : (u32)1) + (L.unwindSize > (u32)0 ? (u32)1 : (u32)0));
+        put32((L.hasImp ? (u32)2 : (u32)1) + (L.unwindSize > (u32)0 ? (u32)1 : (u32)0) + (L.ehSize > (u32)0 ? (u32)1 : (u32)0));
         put32((u32)0);
         putName((u32)2, (u32)16);
         putName((u32)1, (u32)16);
@@ -2568,6 +2749,21 @@ class MachOSha256
             put64(L.unwindSize, (u32)0);
             put32(L.unwindOffset);
             put32((u32)2);
+            put32((u32)0);
+            put32((u32)0);
+            put32((u32)0);
+            put32((u32)0);
+            put32((u32)0);
+            put32((u32)0);
+            }
+        if (L.ehSize > (u32)0)
+            {
+            putName((u32)16, (u32)16);
+            putName((u32)1, (u32)16); // __eh_frame, __TEXT
+            putAddr(L.ehOffset);
+            put64(L.ehSize, (u32)0);
+            put32(L.ehOffset);
+            put32((u32)3);            // 8-byte aligned
             put32((u32)0);
             put32((u32)0);
             put32((u32)0);

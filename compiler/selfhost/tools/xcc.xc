@@ -5083,6 +5083,9 @@ void main(void)
         // program's one definition of it then.
         Languages.setWholeProgram(!gCSplitRelocatable && !d.keepAsm() && !d.compileOnly());
         cPathSetElf(crow != (TargetRow*)0 && crow.exeFormat().hasPrefix(String.withCString("elf")));
+        // C and C++: unwind tables for xcc's functions, so a C++ exception
+        // can pass through one (arm64: the back end reports its saves).
+        arm64SetEhTables(true);
         // C++ on win64: the link keeps .pdata/.xdata, the SEH tables its
         // exceptions unwind by.
         CoffObject.setKeepUnwind(lang.ehFrames());
