@@ -1740,6 +1740,7 @@ class ElfSharedInfo
         secNames.add((Object*)String.withCString(".rela.data"));
         secNames.add((Object*)String.withCString(".symtab"));
         secNames.add((Object*)String.withCString(".strtab"));
+        u32 secShstr = secNames.count();
         secNames.add((Object*)String.withCString(".shstrtab"));
         // .deplibs last, so no other section's index moves.
         Data* dep = Elf64.depLibsBytes(_depLibs);
@@ -1802,7 +1803,7 @@ class ElfSharedInfo
         p16((u32)0); // no program headers
         p16((u32)64);
         p16(secNames.count());
-        p16((u32)7); // .shstrtab
+        p16(secShstr);
 
         padTo(textOff);
         text.appendRangeTo(_out, (u32)0, text.length());
@@ -1835,7 +1836,7 @@ class ElfSharedInfo
         objShdr(shName, (u32)7, (u32)3, (u32)0, shstOff, shstr.length(), (u32)0, (u32)0, (u32)1, (u32)0);
         // SHT_LLVM_DEPENDENT_LIBRARIES, SHF_MERGE|SHF_STRINGS.
         if (hasDep)
-            objShdr(shName, (u32)8, (u32)$6FFF4C04, (u32)$30, depOff, dep.length(), (u32)0, (u32)0, (u32)1, (u32)1);
+            objShdr(shName, secShstr + (u32)1, (u32)$6FFF4C04, (u32)$30, depOff, dep.length(), (u32)0, (u32)0, (u32)1, (u32)1);
         _depLibs = (Array*)0;
         return _out;
         }
