@@ -3948,7 +3948,9 @@ class ClassInfo
                 giveUp(w);
                 return (IRValue*)0;
                 }
-            IRValue* recv = lowerExpr(base);
+            // The read half of `obj.n op= x` reaches the ivar through the
+            // receiver its store formed.
+            IRValue* recv = (n == _cmpLhs && _cmpAddr != 0) ? takeCmpAddr() : lowerExpr(base);
             if (_failed)
                 return (IRValue*)0;
             String* ft = (String*)ci.ivarType().get((Hashable*)n.name());
@@ -3975,9 +3977,15 @@ class ClassInfo
         String* fieldTy = fieldTypeOf(st, n.name());
         // `->`, or a base that is already a pointer to the struct: the base
         // VALUE is the address. Otherwise the base is an lvalue to address.
-        IRValue* baseAddr = (n.hasFlag((u32)NF_ARROW) || Types.isPointer(bt))
-                                ? lowerExpr(base)
-                                : aggregateAddr(base);
+        // The read half of `s.f op= x` reaches the field through the base its
+        // store formed.
+        IRValue* baseAddr = (IRValue*)0;
+        if (n == _cmpLhs && _cmpAddr != 0)
+            baseAddr = takeCmpAddr();
+        else if (n.hasFlag((u32)NF_ARROW) || Types.isPointer(bt))
+            baseAddr = lowerExpr(base);
+        else
+            baseAddr = aggregateAddr(base);
         if (_failed)
             return (IRValue*)0;
         return fieldAddr(baseAddr, (u32)idx, ptrTo(irType(fieldTy)));
@@ -5473,8 +5481,8 @@ class ClassInfo
             }
         // `s.n += k` / `p->m += k` — compound-assign on a struct/class FIELD.
         // The reference rewrites `member op= rhs` to `member = member op rhs`:
-        // it forms the STORE base address first, then reads the member, then
-        // the op, then stores. Mirrored here so the port stops rejecting a
+        // it forms the STORE base address first, then reads the member through
+        // that base, then the op, then stores. Mirrored here so the port stops rejecting a
         // member LHS with "assignment target" (c2xc bug 35). Identifier
         // compound-assign is handled below.
         if (!isName(n.op(), "=") && lhs.kind() == (u16)nkMember)
@@ -5506,16 +5514,27 @@ class ClassInfo
                 }
             if (_failed)
                 return (IRValue*)0;
-            // (2) read the current member value (its own base addr + Load).
+            // (2) read the current member value through the base just
+            // formed, so an index inside the base is evaluated once.
+            Node* savedLhs = _cmpLhs;
+            IRValue* savedAddr = _cmpAddr;
+            _cmpLhs = lhs;
+            _cmpAddr = sbase;
             IRValue* cold = lowerExpr(lhs);
+            _cmpLhs = savedLhs;
+            _cmpAddr = savedAddr;
             if (_failed)
                 return (IRValue*)0;
-            // (3) the right-hand side, coerced (shift keeps its own width).
+            // (3) the right-hand side, coerced to the field type.
             IRValue* crhs = lowerExpr(n.kid((u32)1));
             if (_failed)
                 return (IRValue*)0;
+            // A shift count is narrowed to U8, as the reference's shift
+            // lowering does.
             bool cshift = isName(mbop, "<<") || isName(mbop, ">>");
-            if (!cshift)
+            if (cshift)
+                crhs = coerce(crhs, n.kid((u32)1).ty(), String.withCString("u8"));
+            else
                 crhs = coerce(crhs, n.kid((u32)1).ty(), mft);
             String* cmn = arithOp(mbop, mft);
             if (cmn == 0)

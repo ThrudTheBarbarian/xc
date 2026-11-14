@@ -5682,7 +5682,9 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
         // between the value-read (inside the binary) and the store target.
         // For a subscript or a deref the store path forms the address first
         // and the read loads through that same address (compoundLhs), so an
-        // index such as `a[next()]` is evaluated once. The arithmetic is
+        // index such as `a[next()]` is evaluated once. A member's store path
+        // forms its base the same way and the read reaches the field through
+        // it, so `a[next()].x` evaluates the index once too. The arithmetic is
         // performed at the lhs type and the result coerced back on store —
         // i.e. `lhs = (Tlhs)(lhs op rhs)`.
         XTBinaryOp bop;
@@ -5702,7 +5704,7 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
                                                                    rhs:bin
                                                               location:node.location];
         plain.resolvedType = node.resolvedType ?: node.lhs.resolvedType;
-        BOOL viaAddr = node.lhs.nodeKind == XTASTNodeKindSubscriptExpr || (node.lhs.nodeKind == XTASTNodeKindUnaryExpr && ((XTUnaryExprNode*)node.lhs).op == XTUnaryOpDeref);
+        BOOL viaAddr = node.lhs.nodeKind == XTASTNodeKindSubscriptExpr || node.lhs.nodeKind == XTASTNodeKindMemberAccess || (node.lhs.nodeKind == XTASTNodeKindUnaryExpr && ((XTUnaryExprNode*)node.lhs).op == XTUnaryOpDeref);
         if (!viaAddr)
             return [self lowerAssignExpr:plain];
         XTASTNode* savedLhs = self.compoundLhs;
@@ -6409,6 +6411,8 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
             }
         if (!baseAddr)
             return nil;
+        if (lhs == self.compoundLhs)
+            self.compoundLhsAddr = baseAddr;
         XTIRValue* rhsVal = [self lowerExpression:rhsNode];
         if (!rhsVal)
             return nil;
@@ -6511,6 +6515,8 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
     XTIRValue* basePtr = [self selfPointerForClassBase:base];
     if (!basePtr)
         return nil;
+    if (lhs == self.compoundLhs)
+        self.compoundLhsAddr = basePtr;
     XTIRValue* rhsVal = [self lowerExpression:rhsNode];
     if (!rhsVal)
         return nil;
@@ -7765,7 +7771,13 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
         // (`s.w` where `s` is `gfx_surface@`): the base value is the address.
         BOOL baseIsPointer = (baseType && [baseType isKindOfClass:[XTPointerType class]]);
         XTIRValue* baseAddr = nil;
-        if (node.isArrow || baseIsPointer)
+        if (node == self.compoundLhs && self.compoundLhsAddr)
+            {
+            // The read half of `s.f op= x` reaches the field through the
+            // base its store formed.
+            baseAddr = [self takeCompoundLhsAddr];
+            }
+        else if (node.isArrow || baseIsPointer)
             {
             baseAddr = [self lowerExpression:base];
             }
@@ -7901,7 +7913,11 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
         return nil;
         }
 
-    XTIRValue* basePtr = [self selfPointerForClassBase:base];
+    // The read half of `obj.n op= x` reaches the ivar through the receiver
+    // its store formed.
+    XTIRValue* basePtr = (node == self.compoundLhs && self.compoundLhsAddr)
+                             ? [self takeCompoundLhsAddr]
+                             : [self selfPointerForClassBase:base];
     if (!basePtr)
         return nil;
     XTIRType* fieldIRType = [self irTypeForASTType:ivarAST at:node.location];
