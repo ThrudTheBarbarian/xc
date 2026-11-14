@@ -4976,10 +4976,96 @@ void raiseStackLimit(void)
 #endif
 }
 
+// The source files after the first (`xcc a.cpp b.c c.xc -o prog`), or 0.
+Array* gExtraSources;
+
+// A build of several source files: each compiled by this xcc as `-c` would
+// compile it, with the line's other options, into an object (a temporary
+// one, or with -c `<name>.o` here, as other compilers do), then the objects
+// linked by this xcc into the program. Each file is its own module, as with
+// separate compilation (C/C++ objects say what they link and share the
+// runtime, #225). The status is the first failure's, else 0.
+i32 multiSourceBuild(DriverOptions* d)
+{
+    Array* srcs = new Array();
+    srcs.add((Object*)d.fe().input());
+    srcs.addAll(gExtraSources);
+    bool cOnly = d.compileOnly();
+    String* out = d.fe().output();
+    if (cOnly && out != (String*)0) {
+        Stdio.printf("xcc: error: -o names one object, and -c with several sources makes one each\n");
+        return (i32)1;
+    }
+    // The line's options: everything but the sources, -c and -o <file>.
+    Array* flags = new Array();
+    u32 argc = Process.argumentCount();
+    for (u32 i = (u32)1; i < argc; i = i + (u32)1) {
+        String* a = Process.argument(i);
+        if (a.equals(String.withCString("-o"))) { i = i + (u32)1; continue; }
+        if (a.equals(String.withCString("-c"))) continue;
+        bool isSrc = false;
+        for (u32 k = (u32)0; k < srcs.count(); k = k + (u32)1)
+            if (((String*)srcs.get(k)).equals(a)) isSrc = true;
+        if (!isSrc) flags.add((Object*)a);
+    }
+    String* self = Process.argument((u32)0);
+    Array* objs = new Array();
+    for (u32 k = (u32)0; k < srcs.count(); k = k + (u32)1) {
+        String* src = (String*)srcs.get(k);
+        String* obj = (String*)0;
+        if (cOnly) {
+            String* base = src.lastPathComponent();
+            u32 dot = (u32)$FFFFFFFF;
+            for (u32 q = (u32)0; q < base.byteLength(); q = q + (u32)1)
+                if (base.byteAt(q) == (u8)'.') dot = q;
+            obj = (dot != (u32)$FFFFFFFF ? base.substringBytes((u32)0, dot) : base).appending(String.withCString(".o"));
+        } else
+            obj = External.tempPath(String.withFormat("xcc-src%u.o", k).cString());
+        Array* argv = new Array();
+        argv.add((Object*)self);
+        // A -std= goes to the files of its language only (`-std=c++20` to the
+        // C++ files, `-std=c17` to the C ones) in a build that mixes them.
+        LanguageRow* lr = Languages.forFile(src);
+        bool isCxx = lr != (LanguageRow*)0 && lr.name().equals(String.withCString("c++"));
+        bool isC = lr != (LanguageRow*)0 && lr.name().equals(String.withCString("c"));
+        for (u32 q = (u32)0; q < flags.count(); q = q + (u32)1) {
+            String* f = (String*)flags.get(q);
+            if (f.hasPrefix(String.withCString("-std="))) {
+                bool cxxStd = f.contains(String.withCString("++"));
+                if ((isC && cxxStd) || (isCxx && !cxxStd)) continue;
+            }
+            argv.add((Object*)f);
+        }
+        argv.add((Object*)String.withCString("-c"));
+        argv.add((Object*)String.withCString("-o"));
+        argv.add((Object*)obj);
+        argv.add((Object*)src);
+        if (External.run(argv) != (i32)0) return (i32)1;
+        objs.add((Object*)obj);
+    }
+    if (cOnly) return (i32)0;
+    Array* link = new Array();
+    link.add((Object*)self);
+    for (u32 q = (u32)0; q < flags.count(); q = q + (u32)1)
+        if (!((String*)flags.get(q)).hasPrefix(String.withCString("-std=")))
+            link.add(flags.get(q));
+    link.add((Object*)String.withCString("-o"));
+    link.add((Object*)(out != (String*)0 ? out : String.withCString("a.out")));
+    link.addAll(objs);
+    i32 rc = External.run(link);
+    for (u32 k = (u32)0; k < objs.count(); k = k + (u32)1)
+        Directory._unlink((String*)objs.get(k));
+    return rc == (i32)0 ? (i32)0 : (i32)1;
+}
+
 void main(void)
 {
     raiseStackLimit();
     DriverOptions* d = parseDriverArgs();
+    if (d != 0 && gExtraSources != (Array*)0 && gExtraSources.count() > (u32)0) {
+        Process.exit(multiSourceBuild(d));
+        return;
+    }
     // --print-target: the row the command line names, and nothing else.
     if (d != 0 && d.printTarget()) {
         TargetRow* r = d.targetRow();
@@ -7909,10 +7995,13 @@ DriverOptions* parseDriverArgs(void)
         // and hand back a binary with no `_main` — which fails at LOAD time
         // with a dyld error and never mentions the dropped file.
         // private:docs/bugs/245.
+        // Several: each is compiled as `-c` would (multiSourceBuild) and the
+        // objects linked, one program.
         if (o.input() != (String*)0 && o.input().byteLength() > (u32)0) {
-            Stdio.printf("xcc: error: multi-file inputs not supported on the new-IR path yet\n");
-            Process.exit((i32)1);
-            return (DriverOptions*)0;
+            if (gExtraSources == (Array*)0) gExtraSources = new Array();
+            gExtraSources.add((Object*)a);
+            i = i + (u32)1;
+            continue;
         }
         o.setInput(a);
         i = i + (u32)1;
