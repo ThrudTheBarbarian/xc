@@ -607,7 +607,11 @@ String* classAllocStubs(String* prog)
             out.appendCString("    adrp x2, "); out.append(d2); out.appendCString("@PAGE\n");
             out.appendCString("    add x2, x2, "); out.append(d2); out.appendCString("@PAGEOFF\n");
         } else {
-            out.appendCString("    mov x2, #0\n");
+            // No dealloc hook: an array of 64 KB or more is page-aligned and
+            // registered (#113; the x86 stub explains). As the reference.
+            out.appendCString("    mul x9, x0, x1\n    mov x2, #0\n    lsr x10, x9, #16\n    cbz x10, L");
+            out.append(u); out.append(cls); out.appendCString("_small\n    b __xtc_alloc_aligned\nL");
+            out.append(u); out.append(cls); out.appendCString("_small:\n");
         }
         out.appendCString("    b ");
         out.appendCString("__xtc_alloc\n");
@@ -2111,7 +2115,14 @@ String* x86ClassAllocStubs(String* prog, bool win64)
             out.append(cls);
             out.appendCString("$dealloc]\n");
         } else {
-            out.appendCString(win64 ? "\txor\tr8d, r8d\n" : "\txor\tedx, edx\n");
+            // No dealloc hook: plain data, and an array of 64 KB or more is
+            // page-aligned and registered as a numeric one is, so a par block
+            // can size it and share it with the GPU (#113). As the reference.
+            out.appendCString(win64 ? "\tmov\trax, rcx\n\timul\trax, rdx\n\txor\tr8d, r8d\n"
+                                    : "\tmov\trax, rdi\n\timul\trax, rsi\n\txor\tedx, edx\n");
+            out.appendCString("\tcmp\trax, 65536\n\tjb\t.L_xtc_new_");
+            out.append(cls); out.appendCString("_small\n\tjmp\t_xtc_alloc_aligned\n.L_xtc_new_");
+            out.append(cls); out.appendCString("_small:\n");
         }
         out.appendCString("\tjmp\t_xtc_alloc\n");
     }

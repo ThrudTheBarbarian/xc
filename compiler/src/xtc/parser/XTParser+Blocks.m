@@ -89,6 +89,18 @@ static XTType* _Nullable parPrimPointee(XTType* t)
     return (e.isInteger || e.isFloating || e.kind == XTTypeKindBool) ? e : nil;
     }
 
+// The struct when t is a pointer to one (#113): a heap array of structs
+// (`new P[n]`), sized at run time like a pointer to numbers once its block is
+// page-aligned and registered (the struct allocators do that from 64 KB). The
+// kernels hold it as words (#37). Mirrored in the port (parStructPointee).
+static XTType* _Nullable parStructPointee(XTType* t)
+    {
+    if (![t isKindOfClass:[XTPointerType class]])
+        return nil;
+    XTType* e = ((XTPointerType*)t).pointeeType;
+    return e && e.kind == XTTypeKindStruct ? e : nil;
+    }
+
 NS_ASSUME_NONNULL_BEGIN
 
 // ── parser-side block state (associated storage lives in XTParser via the
@@ -1701,6 +1713,20 @@ static NSString* parRootName(XTASTNode* n)
                                         [[XTLiteralBoolNode alloc] initWithBool:((XTPointerType*)t).isSimd location:loc] ]
                             location:loc];
                 }
+            else if (parStructPointee(t))
+                {
+                // A pointer to structs (#113): asked of the runtime the same
+                // way, in the struct's size; an array of one under 64 KB is in
+                // no registered block and keeps the block on the CPU.
+                XTType* pointerT = [self.typeTable typeForName:@"pointer"];
+                bytes = [[XTMethodCallExprNode alloc]
+                    initWithReceiver:ident(@"Par")
+                          methodName:@"spanOf"
+                           arguments:@[ cast(pointerT, fieldRef(cn)),
+                                        cast(i64T, [[XTSizeofExprNode alloc] initWithOperand:parStructPointee(t) location:loc]),
+                                        [[XTLiteralBoolNode alloc] initWithBool:NO location:loc] ]
+                            location:loc];
+                }
             if (bytes)
                 {
                 XTASTNode* test = [[XTBinaryExprNode alloc]
@@ -1732,7 +1758,8 @@ static NSString* parRootName(XTASTNode* n)
         j = 0;
         for (NSString* cn in caps)
             {
-            if (([frameTypes[cn] isKindOfClass:[XTArrayType class]] || parPrimPointee(frameTypes[cn])) &&
+            if (([frameTypes[cn] isKindOfClass:[XTArrayType class]] || parPrimPointee(frameTypes[cn]) ||
+                 parStructPointee(frameTypes[cn])) &&
                 readsOnly(cn))
                 {
                 XTASTNode* test = [[XTBinaryExprNode alloc]
