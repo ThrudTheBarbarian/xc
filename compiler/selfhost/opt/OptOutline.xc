@@ -3395,9 +3395,13 @@
             String* op = ppChainOp(nx, phi.res(), defOf, seen, (u32)0);
             if (op == (String*)0)
                 return String.withCString("a carried value that is not an accumulator");
-            if (op.equals(String.withCString("FAdd")) || op.equals(String.withCString("FMul")))
-                return String.withCString("a float reduction (only under :goal(speed))");
-            if (!(op.equals(String.withCString("Add")) || op.equals(String.withCString("Mul")) ||
+            // A float sum reassociates across the items: taken only under an
+            // explicit speed goal (a C build's -fgoal=speed), and only +, as
+            // the parser's scan takes it in xc.
+            bool floatSum = op.equals(String.withCString("FAdd")) && optOutlineFloatSum();
+            if (!floatSum && (op.equals(String.withCString("FAdd")) || op.equals(String.withCString("FMul"))))
+                return String.withCString("a float reduction (only + under -fgoal=speed)");
+            if (!floatSum && !(op.equals(String.withCString("Add")) || op.equals(String.withCString("Mul")) ||
                   op.equals(String.withCString("And")) || op.equals(String.withCString("Or")) ||
                   op.equals(String.withCString("Xor")) || op.equals(String.withCString("Select")) ||
                   op.equals(String.withCString("="))))

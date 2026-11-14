@@ -26,6 +26,7 @@ SOURCES_PAGE = os.path.join(REPO, "website", "site", "src", "content", "docs", "
 SOURCES_URL = "/compiler/benchmark-sources/"
 C_PAGE = os.path.join(REPO, "website", "site", "src", "content", "docs", "compiler", "benchmarks", "c.md")
 C_NAMES = (("gcc", "GCC"), ("clang", "clang"))
+CPP_PAGE = os.path.join(REPO, "website", "site", "src", "content", "docs", "compiler", "benchmarks", "cpp.md")
 SRC_FILES = (("xc", "xc", "c"), ("m", "Objective-C", "objc"), ("cpp", "C++", "cpp"), ("swift", "Swift", "swift"))
 
 # "gcc" is the C++ source built with GCC: on the Linux host (g++), and from 0.8
@@ -960,6 +961,10 @@ def sources_page(names):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--current", default="v0.8")
+    # The C++ page is published only on request: no docs page about C++
+    # until the owner says the C++ route is a peer of C (2026-11-10).
+    ap.add_argument("--cpp-page", action="store_true",
+                    help="also write benchmarks/cpp.md from cpp.json (off until C++ is documented)")
     ap.add_argument("--history", default="v0.62,v0.63,v0.64,v0.65,v0.66,v0.7,v0.71,v0.72,v0.73,v0.74,v0.75,v0.8")
     ap.add_argument("--release", default="0.8")
     # A dot release times xc again and keeps the other languages' figures from
@@ -1051,6 +1056,15 @@ def main():
         with open(C_PAGE, "w") as fh:
             fh.write(C_PAGE_TEMPLATE.format(release=a.release, pi_section=pi, **ct))
         print("wrote", os.path.relpath(C_PAGE, REPO))
+    # C++ (c_run.py --lang c++): the same tables from cpp.json and cpp-pi.json,
+    # with --cpp-page only.
+    xt = c_tables(a.current, "cpp.json") if a.cpp_page else None
+    if xt:
+        pt = c_tables(a.current, "cpp-pi.json")
+        pi = CPP_PI_TEMPLATE.format(release=a.release, **pt) if pt else ""
+        with open(CPP_PAGE, "w") as fh:
+            fh.write(CPP_PAGE_TEMPLATE.format(release=a.release, pi_section=pi, **xt))
+        print("wrote", os.path.relpath(CPP_PAGE, REPO))
     sources_page(cur.keys())
     published(a.current)
 
@@ -1294,6 +1308,85 @@ of both on {all_wins} of the {n}:
 On the Pi, xcc's escape vectoriser runs `mandelbrot`'s and `mandel_deep`'s
 per-pixel loop four pixels at a time in NEON, which neither GCC nor clang
 vectorises.
+"""
+
+
+CPP_PAGE_TEMPLATE = """---
+title: "Performance: C++"
+description: Plain C++ built by xcc, against the same C++ built by g++ and clang++, on one thread and on every thread with OpenMP.
+---
+
+xcc compiles C++ ([C++ programs](/compiler/usage/cpp-programs/)): it reads a
+`.cpp` file through clang's front end, takes its loops and generates their
+code itself. These are the seven par benchmarks as plain C++ (`std::vector`,
+`std::array`, templates, the loops in functions of their own), the same files
+for every compiler, timed on an {cpu} ({threads} hardware threads) running
+Linux, with xcc {release}, {gcc} and {clang}.
+
+Each machine has two tables, which measure different things and are never
+mixed: one thread is the code each core runs; every thread adds how a
+compiler spreads a loop across the cores.
+
+## {cpu}
+
+### One thread
+
+Each compiler builds the plain C++ with no parallel code: `xcc -O3` against
+`g++ -O3 -march=native` and `clang++ -O3 -march=native`, all `-std=c++17`.
+
+Milliseconds; the median of up to fifteen runs.
+
+{one}
+
+### Every thread
+
+The same C++, run across all {threads} threads:
+
+- **xcc:** `xcc -O3 --par-style=auto` on the unchanged files, its blocks kept
+  on the CPU (`XC_PAR=cpu`), so this is CPU against CPU.
+- **GCC and clang:** `-O3 -march=native -fopenmp`, on a copy of each file
+  with a `#pragma omp parallel for` line (with its `reduction` clause where the
+  loop has one) before each loop that does the work.
+
+Milliseconds; the median of up to fifteen runs. xcc is ahead of both on
+{all_wins} of the {n}.
+
+{all}
+{pi_section}
+## How they were measured
+
+As for [Performance: C](/compiler/benchmarks/c/): every program prints its
+checksum and its best time over its own repeats; each build was run several
+times, round-robin with the others, the machine idle before each round, and
+the figure is the median of those runs' best times. Every build of a program
+gave the same checksum, the same as the C version's.
+
+The C++ sources and their OpenMP copies are in the repository's
+`benchmark/par/cpp/` and `benchmark/par/cpp/openmp/`;
+`benchmark/par/c_run.py --lang c++` repeats the whole measurement.
+"""
+
+
+# The Raspberry Pi's section of the C++ page (c_run.py --lang c++ --machine pi).
+CPP_PI_TEMPLATE = """
+## Raspberry Pi 5
+
+The same seven programs on a {cpu}, its {threads} cores: xcc {release}
+cross-built them with `-A arm64-linux`; {gcc} and {clang} built them on the Pi,
+with the same flags as above.
+
+### One thread
+
+Milliseconds; the median of up to fifteen runs:
+
+{one}
+
+### Every thread
+
+xcc `--par-style=auto`, GCC and clang with OpenMP, milliseconds. xcc is ahead
+of both on {all_wins} of the {n}:
+
+{all}
 """
 
 

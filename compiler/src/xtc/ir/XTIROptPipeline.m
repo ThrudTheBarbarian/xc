@@ -44,6 +44,7 @@
 #import "XTIROptLoopReductionCollapse.h"
 #import "XTIROptNarrow.h"
 #import "XTIROptNarrowIV.h"
+#import "XTIROptFloatRange.h"
 #import "XTIROptTargetProfile.h"
 
 @implementation XTIROptPipeline
@@ -347,6 +348,9 @@
         XTIROptNarrowIV* narrowIV = [[XTIROptNarrowIV alloc] init];
         narrowIV.profile = profile;
         [p addPass:narrowIV];
+        // A float-to-integer conversion whose operand is known finite and in
+        // range drops its range check (#23). On the final loop shapes.
+        [p addPass:[[XTIROptFloatRange alloc] init]];
         XTIROptVecCombine* vecPool = [[XTIROptVecCombine alloc] init];
         vecPool.profile = profile;
         vecPool.pool = YES;

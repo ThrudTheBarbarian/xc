@@ -401,6 +401,44 @@
                 [related[ov] addObject:rv];
                 }
             }
+    // x86's float Select (the only caller that passes selection info) loads
+    // its false value into the result's register and then branches to the
+    // true value: a result in the register of a false value that dies there
+    // needs no copy (C perlin's `g & 1 ? 0 - u : u`, #24). Not a Select beside
+    // another on the same condition: that pair is one branch only while
+    // neither result is where an arm lives. As the port.
+    BOOL (^sameCond)(XTIRInsn*, XTIRInsn*) = ^BOOL(XTIRInsn* a, XTIRInsn* b) {
+      if (b.opcode != XTIROpSelect || b.operands.count != 3)
+          return NO;
+      XTIROperand *x = a.operands[0], *y = b.operands[0];
+      return x.kind == XTIROperandKindUse && y.kind == XTIROperandKindUse && x.valueId == y.valueId;
+    };
+    if (selInfo)
+        for (NSUInteger bi = 0; bi < nb; bi++)
+            {
+            NSArray<XTIRInsn*>* si = blocks[bi].instructions;
+            for (NSUInteger i = 0; i < si.count; i++)
+                {
+                XTIRInsn* sn = si[i];
+                if (sn.opcode != XTIROpSelect || !sn.result || sn.operands.count != 3)
+                    continue;
+                XTIRTypeKind sk = sn.result.type.kind;
+                if (sk != XTIRTypeKindF32 && sk != XTIRTypeKindF64)
+                    continue;
+                if ((i > 0 && sameCond(sn, si[i - 1])) || (i + 1 < si.count && sameCond(sn, si[i + 1])))
+                    continue;
+                XTIROperand* sf = sn.operands[2];
+                if (sf.kind != XTIROperandKindUse)
+                    continue;
+                NSNumber *rv = @(sn.result.valueId), *ov = @(sf.valueId);
+                if (!related[rv])
+                    related[rv] = [NSMutableArray array];
+                [related[rv] addObject:ov];
+                if (!related[ov])
+                    related[ov] = [NSMutableArray array];
+                [related[ov] addObject:rv];
+                }
+            }
     // The span of each value's segments, to skip pairs that cannot meet.
     NSMutableDictionary<NSNumber*, NSNumber*>*segLo = [NSMutableDictionary dictionary], *segHi = [NSMutableDictionary dictionary];
     for (NSNumber* v in segs)

@@ -2045,6 +2045,10 @@ static NSString *quadSymbolOperand(NSString *l) {
                 if ([sc scanLongLong:&n]) pendingFrame = n;
                 continue;
             }
+            // `.xc_saves <dwarfreg>:<cfa-offset> ...` — the callee-saved
+            // registers of the frame, for the unwind tables of C and C++
+            // input. Accepted here and recorded by nothing yet.
+            if([l hasPrefix:@".xc_saves"]) continue;
             if([l hasPrefix:@".xc_var"] || [l hasPrefix:@".xc_param"]) {
                 NSArray<NSString *> *q = [l componentsSeparatedByString:@"\""];
                 if (q.count >= 5) {

@@ -1008,6 +1008,12 @@ String* resolveLinkInput(DriverOptions* d, String* arg)
         for (u32 i = (u32)0; i < dirs.count(); i = i + (u32)1) fdirs.add(dirs.get(i));
         String* triple = d.targetRow() != (TargetRow*)0 && d.targetRow().cpu().equals(String.withCString("arm64"))
                        ? String.withCString("aarch64-linux-gnu") : String.withCString("x86_64-linux-gnu");
+        // A cross build's sysroot first (its usr/lib and lib copied from a
+        // machine of the target), then this machine's own.
+        if (gCPathRoot != (String*)0) {
+            fdirs.add((Object*)String.withFormat("%s/usr/lib/%s", gCPathRoot.cString(), triple.cString()));
+            fdirs.add((Object*)String.withFormat("%s/lib/%s", gCPathRoot.cString(), triple.cString()));
+        }
         fdirs.add((Object*)String.withCString("/usr/lib/").appending(triple));
         fdirs.add((Object*)String.withCString("/lib/").appending(triple));
         fdirs.add((Object*)String.withCString("/usr/lib"));
@@ -2142,7 +2148,11 @@ String* muslLibDir(FeOptions* o)
 // that target's C headers: the musl root ($XTC_MUSL_ROOT, else
 // /opt/clang/linux/x86_64-linux-musl) or the mingw one
 // (/opt/clang/win64/x86_64-w64-mingw32), each with an include/ directory.
-String* cPathTargetFlags(DriverOptions* d)
+// The sysroot a C or C++ build for another target uses (cPathTargetFlags),
+// whose library directories the link searches for a -l:<file> too.
+String* gCPathRoot;
+
+String* cPathTargetFlags(DriverOptions* d, bool cxx)
 {
 #if OS_windows
     String* host = String.withCString("win64");
@@ -2173,7 +2183,12 @@ String* cPathTargetFlags(DriverOptions* d)
         Stdio.error(String.withFormat("xcc: error: a C program builds for the host or for x86_64, win64 and arm64-linux; not for '%s'\n", a.cString()));
         return (String*)0;
     }
-    if (triple.hasPrefix(String.withCString("x86_64-linux"))) {
+    if (triple.hasPrefix(String.withCString("x86_64-linux")) && cxx) {
+        // C++ links the target's libstdc++, so its headers: a glibc root
+        // (usr/include copied from an x86-64 Linux machine), as arm64's.
+        rootVar = String.withCString("XTC_X86_64_LINUX_ROOT");
+        root = String.withCString("/opt/clang/linux/x86_64-linux-gnu");
+    } else if (triple.hasPrefix(String.withCString("x86_64-linux"))) {
         rootVar = String.withCString("XTC_MUSL_ROOT");
         root = String.withCString("/opt/clang/linux/x86_64-linux-musl");
     } else if (triple.hasPrefix(String.withCString("aarch64-linux"))) {
@@ -2199,12 +2214,55 @@ String* cPathTargetFlags(DriverOptions* d)
                                       rootVar != (String*)0 ? " to a sysroot)" : ""));
         return (String*)0;
     }
+    gCPathRoot = root;
     String* f = String.withCString(" -target ");
     f.append(triple);
     f.appendCString(" --sysroot ");
     f.append(root);
     f.append(atom);
+    // C++ from a glibc root: clang finds libstdc++'s headers only beside a
+    // whole GCC installation (crtbegin.o), which a copied usr/include lacks,
+    // so they are named: usr/include/c++/<N> (the newest), its target
+    // directory and backward/, for C++ compilations only (-cxx-isystem).
+    if (cxx)
+        f.append(cxxHeaderFlags(root));
     return f;
+}
+
+// The -cxx-isystem flags for a glibc root's libstdc++ headers, or "".
+String* cxxHeaderFlags(String* root)
+{
+    String* out = String.withCString("");
+    String* base = String.withFormat("%s/usr/include/c++", root.cString());
+    Array* vs = Directory.list(base);
+    if (vs == (Array*)0)
+        return out;
+    String* best = (String*)0;
+    i64 bestN = (i64)-1;
+    for (u32 i = (u32)0; i < vs.count(); i = i + (u32)1) {
+        String* v = ((DirEntry*)vs.get(i)).name;
+        i64 n = (i64)0;
+        bool num = v.byteLength() > (u32)0;
+        for (u32 k = (u32)0; k < v.byteLength() && num; k = k + (u32)1) {
+            u8 c = v.byteAt(k);
+            if (c < (u8)'0' || c > (u8)'9') num = false;
+            else n = n * (i64)10 + (i64)(c - (u8)'0');
+        }
+        if (num && n > bestN) { bestN = n; best = v; }
+    }
+    if (best == (String*)0)
+        return out;
+    out.appendFormat(" -cxx-isystem %s/%s", base.cString(), best.cString());
+    // The target directory: usr/include/<multiarch>/c++/<N>.
+    Array* ds = Directory.list(String.withFormat("%s/usr/include", root.cString()));
+    for (u32 i = (u32)0; ds != (Array*)0 && i < ds.count(); i = i + (u32)1) {
+        String* dname = ((DirEntry*)ds.get(i)).name;
+        String* t = String.withFormat("%s/usr/include/%s/c++/%s", root.cString(), dname.cString(), best.cString());
+        if (dname.contains(String.withCString("-linux-")) && Files.exists(t))
+            out.appendFormat(" -cxx-isystem %s", t.cString());
+    }
+    out.appendFormat(" -cxx-isystem %s/%s/backward", base.cString(), best.cString());
+    return out;
 }
 
 // ── win64 ────────────────────────────────────────────────────────────────
@@ -2830,6 +2888,11 @@ void linkX86_64Glibc(DriverOptions* d, String* prog)
     Array* dirs = new Array();
     for (u32 i = (u32)0; i < d.fe().libs().count(); i = i + (u32)1) dirs.add(d.fe().libs().get(i));
     for (u32 i = (u32)0; i < d.ldDirs().count(); i = i + (u32)1) dirs.add(d.ldDirs().get(i));
+    // A C/C++ cross build's sysroot (cPathTargetFlags) before this machine's.
+    if (gCPathRoot != (String*)0) {
+        dirs.add((Object*)String.withFormat("%s/usr/lib/x86_64-linux-gnu", gCPathRoot.cString()));
+        dirs.add((Object*)String.withFormat("%s/lib/x86_64-linux-gnu", gCPathRoot.cString()));
+    }
     dirs.add((Object*)String.withCString("/usr/lib/x86_64-linux-gnu"));
     dirs.add((Object*)String.withCString("/lib/x86_64-linux-gnu"));
     dirs.add((Object*)String.withCString("/usr/lib64"));
@@ -4984,6 +5047,9 @@ void main(void)
         String* cin = d.fe().input();
         if (d.fe().parAuto())
             optSetOutline(true);
+        // -fgoal=speed: a float sum may become a block too (#206).
+        if (d.fe().goalDefault() == (u32)1)
+            optSetOutlineFloatSum(true);
         Array* cIncs = new Array();
         cIncs.addAll(d.fe().incs());
         Array* cDefs = new Array();
@@ -5022,7 +5088,7 @@ void main(void)
         CoffObject.setKeepUnwind(lang.ehFrames());
         // clang builds for the target, not the host: a triple, and from
         // another host the target's C headers (a sysroot with include/).
-        String* tgt = cPathTargetFlags(d);
+        String* tgt = cPathTargetFlags(d, lang.name().equals(String.withCString("c++")));
         if (tgt == (String*)0)
             {
             Process.exit((i32)1); return;
