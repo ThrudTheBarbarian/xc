@@ -3263,10 +3263,31 @@ class X86_64
                     }
                 }
             }
+        // A value a vector phi reads keeps a register: the edge copy moves it
+        // from one (#220: an entry value kept apart from its phi was a splat
+        // made where read, which no edge copy made, and the phi started from
+        // whatever its register held).
+        Map* phiIn = new Map();
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            Array* ps = ((IRBlock*)fn.blocks().get(b)).phis();
+            for (u32 i = (u32)0; i < ps.count(); i = i + (u32)1)
+                {
+                IRInsn* p = (IRInsn*)ps.get(i);
+                if (p.res() == (IRValue*)0 || !isVecTy(p.res().ty()))
+                    continue;
+                for (u32 k = (u32)0; k < p.ops().count(); k = k + (u32)1)
+                    {
+                    IROperand* o = (IROperand*)p.ops().get(k);
+                    if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0)
+                        phiIn.set((Hashable*)o.val(), (Object*)o.val());
+                    }
+                }
+            }
         for (u32 i = (u32)0; i < vecVals.count(); i = i + (u32)1)
             {
             IRValue* v = (IRValue*)vecVals.get(i);
-            if (classOfVec(v) == v && !inMap(members, v) && !vecHasCls(phiCls, v))
+            if (classOfVec(v) == v && !inMap(members, v) && !vecHasCls(phiCls, v) && !inMap(phiIn, v))
                 _vSpillable.set((Hashable*)v, (Object*)v);
             }
         for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
@@ -3278,7 +3299,7 @@ class X86_64
                 if (!n.op().equals(String.withCString("VSplat")) || n.res() == (IRValue*)0 || n.ops().count() < (u32)1)
                     continue;
                 IRValue* v = n.res();
-                if (classOfVec(v) != v || inMap(members, v) || vecHasCls(phiCls, v))
+                if (classOfVec(v) != v || inMap(members, v) || vecHasCls(phiCls, v) || inMap(phiIn, v))
                     continue;
                 IROperand* o = (IROperand*)n.ops().get((u32)0);
                 IROperand* k = (IROperand*)0;

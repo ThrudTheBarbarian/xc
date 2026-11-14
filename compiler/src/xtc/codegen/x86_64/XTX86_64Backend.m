@@ -2725,9 +2725,19 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
     for (NSNumber* v in vecVals)
         if (classOf(v.unsignedIntegerValue) != v.unsignedIntegerValue)
             [members addObject:@(classOf(v.unsignedIntegerValue))];
+    // A value a vector phi reads keeps a register: the edge copy moves it from
+    // one (#220: an entry value kept apart from its phi, made again where
+    // read, was never copied in). As the port.
+    NSMutableSet<NSNumber*>* phiIn = [NSMutableSet set];
+    for (XTIRBlock* pb in fn.blocks)
+        for (XTIRInsn* p in pb.phiNodes)
+            if (p.result && p.result.type.kind == XTIRTypeKindVec)
+                for (XTIROperand* o in p.operands)
+                    if (o.kind == XTIROperandKindUse)
+                        [phiIn addObject:@(o.valueId)];
     for (NSNumber* v in vecVals)
         if (classOf(v.unsignedIntegerValue) == v.unsignedIntegerValue && ![members containsObject:v]
-            && ![phiClass containsObject:v])
+            && ![phiClass containsObject:v] && ![phiIn containsObject:v])
             [spillable addObject:v];
     NSMutableDictionary<NSNumber*, XTIRInsn*>* consts = [NSMutableDictionary dictionary];
     for (XTIRBlock* bb in fn.blocks)
@@ -2742,7 +2752,7 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
                 continue;
             NSNumber* v = @(n.result.valueId);
             if (classOf(v.unsignedIntegerValue) != v.unsignedIntegerValue || [members containsObject:v]
-                || [phiClass containsObject:v])
+                || [phiClass containsObject:v] || [phiIn containsObject:v])
                 continue;
             XTIROperand* o = n.operands[0];
             XTIROperand* k = nil;

@@ -9462,6 +9462,16 @@ static BOOL arm64NamesFrameReg(NSString *t) {
                                                                     ctx:(XTArm64FnCtx *)ctx {
     NSMutableDictionary<NSNumber *, XTIROperand *> *r = [NSMutableDictionary dictionary];
     NSSet<NSNumber *> *members = [NSSet setWithArray:canon.allValues];
+    // A value a vector phi reads keeps a register: the edge copy moves it from
+    // one (#220: an entry value kept apart from its phi, made again where
+    // read, was never copied in). As the port.
+    NSMutableSet<NSNumber*>* phiIn = [NSMutableSet set];
+    for (XTIRBlock* pb in fn.blocks)
+        for (XTIRInsn* p in pb.phiNodes)
+            if (p.result && p.result.type.kind == XTIRTypeKindVec)
+                for (XTIROperand* o in p.operands)
+                    if (o.kind == XTIROperandKindUse)
+                        [phiIn addObject:@(o.valueId)];
     NSMutableDictionary<NSNumber *, XTIRInsn *> *consts = [NSMutableDictionary dictionary];
     for (XTIRBlock *bb in fn.blocks)
         for (XTIRInsn *n in bb.instructions)
@@ -9472,7 +9482,7 @@ static BOOL arm64NamesFrameReg(NSString *t) {
         for (XTIRInsn *n in bb.instructions) {
             if (n.opcode != XTIROpVSplat || !n.result || n.operands.count < 1) continue;
             NSNumber *v = @(n.result.valueId);
-            if (canon[v] || [members containsObject:v] || [vecPhis containsObject:v] || ctx.laneAddr[v]
+            if (canon[v] || [members containsObject:v] || [vecPhis containsObject:v] || [phiIn containsObject:v] || ctx.laneAddr[v]
                 || ctx.laneLeader[v]) continue;
             XTIROperand *o = n.operands[0];
             XTIROperand *k = nil;
