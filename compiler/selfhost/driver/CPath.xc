@@ -38,15 +38,35 @@ String* gCPathTarget;
 String* gCPathFpContract;
 
 // -c of a C file: xcc's object and clang's become one relocatable object
-// (`clang -r`, the system linker on macOS, ld.lld for another target), not a
+// (`clang -r`: the system linker, or ld.lld for another target where it is
+// installed), not a
 // program. 0 when it worked, else the shell's status.
+// Whether `prog` is a file in one of $PATH's directories.
+bool cPathOnPath(u8* prog)
+    {
+    Array* dirs = Platform.env(String.withCString("PATH")).splitOnByte((u8)':');
+    for (u32 i = (u32)0; i < dirs.count(); i = i + (u32)1)
+        {
+        String* dir = (String*)dirs.get(i);
+        if (dir.byteLength() == (u32)0) continue;
+        String* f = String.withString(dir);
+        f.appendCString("/");
+        f.appendCString(prog);
+        if (Files.exists(f)) return true;
+        }
+    return false;
+    }
+
 i32 cPathRelocatable(String* xo, String* out)
     {
     String* cc = String.withCString("clang");
     if (gCPathTarget != (String*)0 && gCPathTarget.byteLength() > (u32)0)
         {
         cc.append(gCPathTarget);
-        cc.appendCString(" -fuse-ld=lld");
+        // ld.lld for another target's objects (the Mac's linker reads only
+        // Mach-O); a Linux host without it combines with its own ld -r.
+        if (cPathOnPath("ld.lld"))
+            cc.appendCString(" -fuse-ld=lld");
         }
     cc.appendCString(" -r -nostdlib -o ");
     cc.append(CPath.quoted(out));

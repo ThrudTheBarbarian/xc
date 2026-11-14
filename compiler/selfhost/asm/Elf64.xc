@@ -58,11 +58,34 @@ class ElfSharedInfo
     Data* _out;
     bool _failed;
     String* _why;
+    Array* _depLibs;    // String@: the libraries an object asks its link for (.deplibs)
 
     void init(void)
         {
         _out = new Data();
         _failed = false;
+        }
+
+    // The libraries the next object asks its link for, each as `-l` would
+    // name it (`Runtime`, `:libstdc++.so.6`): a `.deplibs` section, LLD's
+    // convention, written only when there are some. A C/C++ object's.
+    void setDepLibs(Array* names)
+        {
+        _depLibs = names;
+        }
+
+    // The bytes of a `.deplibs` section: each name and its NUL.
+    static Data* depLibsBytes(Array* names)
+        {
+        Data* d = new Data();
+        for (u32 i = (u32)0; names != (Array*)0 && i < names.count(); i = i + (u32)1)
+            {
+            String* n = (String*)names.get(i);
+            for (u32 k = (u32)0; k < n.byteLength(); k = k + (u32)1)
+                d.appendByte(n.byteAt(k));
+            d.appendByte((u8)0);
+            }
+        return d;
         }
 
     Data* bytes(void)
@@ -1718,6 +1741,11 @@ class ElfSharedInfo
         secNames.add((Object*)String.withCString(".symtab"));
         secNames.add((Object*)String.withCString(".strtab"));
         secNames.add((Object*)String.withCString(".shstrtab"));
+        // .deplibs last, so no other section's index moves.
+        Data* dep = Elf64.depLibsBytes(_depLibs);
+        bool hasDep = dep.length() > (u32)0;
+        if (hasDep)
+            secNames.add((Object*)String.withCString(".deplibs"));
         Data* shstr = new Data();
         shstr.appendByte((u8)0);
         Array* shName = new Array();
@@ -1748,6 +1776,8 @@ class ElfSharedInfo
         off = strOff + strtab.length();
         u32 shstOff = off;
         off = shstOff + shstr.length();
+        u32 depOff = off;
+        off = depOff + dep.length();
         u32 shOff = Elf64.roundUpTo(off, (u32)8);
 
         _out = new Data();
@@ -1772,7 +1802,7 @@ class ElfSharedInfo
         p16((u32)0); // no program headers
         p16((u32)64);
         p16(secNames.count());
-        p16(secNames.count() - (u32)1);
+        p16((u32)7); // .shstrtab
 
         padTo(textOff);
         text.appendRangeTo(_out, (u32)0, text.length());
@@ -1788,6 +1818,7 @@ class ElfSharedInfo
         Elf64.appendAll(_out, strtab);
         padTo(shstOff);
         Elf64.appendAll(_out, shstr);
+        Elf64.appendAll(_out, dep);
         padTo(shOff);
 
         objShdr(shName, (u32)0, (u32)0, (u32)0, (u32)0, (u32)0, (u32)0, (u32)0, (u32)0, (u32)0);
@@ -1802,6 +1833,10 @@ class ElfSharedInfo
                 (u32)6, firstGlobal, (u32)8, (u32)SYM_SZ);
         objShdr(shName, (u32)6, (u32)3, (u32)0, strOff, strtab.length(), (u32)0, (u32)0, (u32)1, (u32)0);
         objShdr(shName, (u32)7, (u32)3, (u32)0, shstOff, shstr.length(), (u32)0, (u32)0, (u32)1, (u32)0);
+        // SHT_LLVM_DEPENDENT_LIBRARIES, SHF_MERGE|SHF_STRINGS.
+        if (hasDep)
+            objShdr(shName, (u32)8, (u32)$6FFF4C04, (u32)$30, depOff, dep.length(), (u32)0, (u32)0, (u32)1, (u32)1);
+        _depLibs = (Array*)0;
         return _out;
         }
 
