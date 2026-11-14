@@ -50,7 +50,9 @@
     }
 
 // Whether fn's vector code may use the bit select and the lane rotate:
-// everywhere on arm64; on x86 in a function 64 bytes wide (the port's vcWanted).
+// everywhere on arm64; on x86 in a function 32 or 64 bytes wide (the port's
+// vcWanted). At 32 bytes (the avx2 copy) a select is vpandn, vpand, vpor and the
+// constants come from the table (issue 197).
 + (BOOL)wantedFor:(XTIRFunction*)fn profile:(XTIROptTargetProfile*)prof
     {
     if (prof.vectorizesBitSelect)
@@ -58,7 +60,7 @@
     if (!prof.vectorizesWideBitSelect)
         return NO;
     NSUInteger w = fn.simdLaneBytes ? fn.simdLaneBytes : prof.vectorLaneBytes;
-    return w == 64;
+    return w == 64 || w == 32;
     }
 
 static BOOL vcIntKind(XTIRTypeKind k)
@@ -92,7 +94,7 @@ static XTIRInsn* _Nullable vcPoolable(XTIRInsn* n, NSDictionary<NSNumber*, XTIRI
 // LATE, after the last LICM, which would take each table load out of the loop
 // as invariant and hold all 64 of MD5's in the 14 vector registers; the table's
 // address is an AddrOf at the block's top.
-// vcPoolable for a 64-byte vector of 32-bit integer lanes.
+// vcPoolable for a 32- or 64-byte vector of 32-bit integer lanes.
 static XTIRInsn* _Nullable vcPoolableWide(XTIRInsn* n, NSDictionary<NSNumber*, XTIRInsn*>* defIn)
     {
     if (n.opcode != XTIROpVSplat || n.operands.count != 1 || !n.result)
@@ -104,7 +106,7 @@ static XTIRInsn* _Nullable vcPoolableWide(XTIRInsn* n, NSDictionary<NSNumber*, X
     if (!d || d.opcode != XTIROpConst || d.operands.count < 1 || d.operands[0].kind != XTIROperandKindImmI)
         return nil;
     XTIRType* t = n.result.type;
-    if (t.kind != XTIRTypeKindVec || t.vecBytes != 64 || !t.pointeeType
+    if (t.kind != XTIRTypeKindVec || (t.vecBytes != 64 && t.vecBytes != 32) || !t.pointeeType
         || !(t.pointeeType.kind == XTIRTypeKindI32 || t.pointeeType.kind == XTIRTypeKindU32))
         return nil;
     if (!d.result || !(d.result.type.kind == XTIRTypeKindI32 || d.result.type.kind == XTIRTypeKindU32))
@@ -112,7 +114,7 @@ static XTIRInsn* _Nullable vcPoolableWide(XTIRInsn* n, NSDictionary<NSNumber*, X
     return d;
     }
 
-// x86 at 64 bytes: the same table, one 4-byte entry per constant, each splat
+// x86 at 32 and 64 bytes: the same table, one 4-byte entry per constant, each splat
 // reading its entry (folded into one vpbroadcastd from memory; the port explains).
 - (void)poolBlockWide:(XTIRBlock*)bb index:(NSUInteger)bi function:(XTIRFunction*)fn module:(XTIRModule*)mod
     {

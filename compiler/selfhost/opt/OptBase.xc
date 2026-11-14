@@ -2213,8 +2213,10 @@ class BeFact : Object
         }
 
     // Whether fn's vector code may use the bit select and the lane rotate:
-    // everywhere on arm64; on x86 in a function 64 bytes wide (an AVX-512
-    // dispatch copy, or the whole program under -mavx512).
+    // everywhere on arm64; on x86 in a function 32 or 64 bytes wide (an AVX2
+    // or AVX-512 dispatch copy, or the whole program under -mavx2/-mavx512).
+    // At 32 bytes a select is vpandn, vpand, vpor and the constants come from
+    // the table (issue 197).
     bool vcWanted(IRFunc* fn)
         {
         if (_profile.bitSelect())
@@ -2222,7 +2224,7 @@ class BeFact : Object
         if (!_profile.bitSelect512())
             return false;
         u32 w = fn.simdLaneBytes() != (u32)0 ? fn.simdLaneBytes() : _profile.vectorLaneBytes();
-        return w == (u32)64;
+        return w == (u32)64 || w == (u32)32;
         }
 
     // The defining insn of a use operand, when it is `op`, in `bb`, with one use.

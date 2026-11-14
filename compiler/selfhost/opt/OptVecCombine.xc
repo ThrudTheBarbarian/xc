@@ -45,7 +45,7 @@
             }
         }
 
-    // x86 at 64 bytes: the same table, one 4-byte entry per constant, and each
+    // x86 at 32 and 64 bytes: the same table, one 4-byte entry per constant, and each
     // splat reading its entry. A Load feeding a VSplat folds into one
     // vpbroadcastd from memory, against the constant's own mov and the mov,
     // movd and vpbroadcastd of a register splat (MD5's 64 round constants).
@@ -132,7 +132,7 @@
             bb.insns().add(out.get(i));
         }
 
-    // vcPoolable for a 64-byte vector of 32-bit integer lanes.
+    // vcPoolable for a 32- or 64-byte vector of 32-bit integer lanes.
     final IRInsn* vcPoolableWide(IRInsn* n, Map* defIn)
         {
         if (!n.op().equals(String.withCString("VSplat")) || n.ops().count() != (u32)1 || n.res() == (IRValue*)0)
@@ -145,7 +145,8 @@
             || ((IROperand*)d.ops().get((u32)0)).kind() != (u8)OPK_IMMI)
             return (IRInsn*)0;
         String* t = n.res().ty();
-        if (!(t.equals(String.withCString("Vec(I32, 64)")) || t.equals(String.withCString("Vec(U32, 64)"))))
+        if (!(t.equals(String.withCString("Vec(I32, 64)")) || t.equals(String.withCString("Vec(U32, 64)"))
+              || t.equals(String.withCString("Vec(I32, 32)")) || t.equals(String.withCString("Vec(U32, 32)"))))
             return (IRInsn*)0;
         if (d.res() == (IRValue*)0 || fieldWidth4(d.res().ty()) != (u32)4)
             return (IRInsn*)0;
