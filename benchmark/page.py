@@ -961,6 +961,10 @@ def sources_page(names):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--current", default="v0.8")
+    # The C++ page is published only on request: no docs page about C++
+    # until the owner says the C++ route is a peer of C (2026-11-10).
+    ap.add_argument("--cpp-page", action="store_true",
+                    help="also write benchmarks/cpp.md from cpp.json (off until C++ is documented)")
     ap.add_argument("--history", default="v0.62,v0.63,v0.64,v0.65,v0.66,v0.7,v0.71,v0.72,v0.73,v0.74,v0.75,v0.8")
     ap.add_argument("--release", default="0.8")
     # A dot release times xc again and keeps the other languages' figures from
@@ -1052,8 +1056,9 @@ def main():
         with open(C_PAGE, "w") as fh:
             fh.write(C_PAGE_TEMPLATE.format(release=a.release, pi_section=pi, **ct))
         print("wrote", os.path.relpath(C_PAGE, REPO))
-    # C++ (c_run.py --lang c++): the same tables from cpp.json and cpp-pi.json.
-    xt = c_tables(a.current, "cpp.json")
+    # C++ (c_run.py --lang c++): the same tables from cpp.json and cpp-pi.json,
+    # with --cpp-page only.
+    xt = c_tables(a.current, "cpp.json") if a.cpp_page else None
     if xt:
         pt = c_tables(a.current, "cpp-pi.json")
         pi = CPP_PI_TEMPLATE.format(release=a.release, **pt) if pt else ""
