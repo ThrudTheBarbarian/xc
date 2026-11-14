@@ -214,6 +214,13 @@ class MachOSymDef
         }
     }
 
+// C and C++ input (the driver sets it): the link merges the objects' FDEs
+// into the image's __eh_frame. Off, an image is as it always was, whatever
+// its objects carry (an xc program linking a clang object stays byte for byte).
+bool gMachOEhMerge;
+void machoSetEhMerge(bool on) { gMachOEhMerge = on; }
+bool machoEhMerge(void) { return gMachOEhMerge; }
+
     // One FDE of an object's __eh_frame: its function by text offset, and the
     // call-frame rules of it and of its CIE (augmentation "zR" only: a CIE
     // naming a personality or an LSDA is left out).

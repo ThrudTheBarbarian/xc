@@ -41,6 +41,7 @@
 #import <MachO>
 #import "MachODefs.xc"
 #import <MachOLink>
+#import <MachOObject>
 #import <Tbd>
 #import <PeLink>
 #import <CoffObject>
@@ -4417,6 +4418,10 @@ void linkObjectsArm64Elf(DriverOptions* d)
 
 void linkObjectsArm64(DriverOptions* d)
 {
+    // An object-only link has no xc source to keep byte for byte: the
+    // objects' unwind tables (a C/C++ object's xcc functions, clang's
+    // DWARF-mode entries) are merged into the image.
+    machoSetEhMerge(true);
     String* crt = readRuntime(d.fe(), String.withCString("crt-macos.s"));
     String* rt  = readRuntime(d.fe(), String.withCString("rt-macos.s"));
     if (crt == 0 || rt == 0) {
@@ -5086,6 +5091,7 @@ void main(void)
         // C and C++: unwind tables for xcc's functions, so a C++ exception
         // can pass through one (arm64: the back end reports its saves).
         arm64SetEhTables(true);
+        machoSetEhMerge(true);
         // C++ on win64: the link keeps .pdata/.xdata, the SEH tables its
         // exceptions unwind by.
         CoffObject.setKeepUnwind(lang.ehFrames());

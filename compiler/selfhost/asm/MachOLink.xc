@@ -464,7 +464,7 @@ class MachOLink
                     // FDE joins the image's list, and the writer gives the
                     // entry its offset there. One whose FDE was not taken keeps
                     // no entry (encoding 0) rather than an offset into nothing.
-                    if ((ur.enc() & (u32)$0F000000) == (u32)$03000000)
+                    if (machoEhMerge() && (ur.enc() & (u32)$0F000000) == (u32)$03000000)
                         {
                         mr.setEnc((u32)0);
                         Array* ofd = obj.fdes();
@@ -491,7 +491,7 @@ class MachOLink
                     _unwind.add((Object*)mr);
                     }
                 // Its FDEs, at merged offsets.
-                Array* fd = obj.fdes();
+                Array* fd = machoEhMerge() ? obj.fdes() : (Array*)0;
                 for (u32 k = (u32)0; fd != (Array*)0 && k < fd.count(); k = k + (u32)1)
                     _fdes.add((Object*)((MachOFde*)fd.get(k)).moved(base));
                 progress = true;
