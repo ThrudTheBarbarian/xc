@@ -1797,6 +1797,10 @@ static BOOL isPlainIntLiteral(NSString *s) {
             // table, recorded against the text offset they precede.
             // -g: `.xc_var "<name>" <reg> <offset> "<type>"` — a variable of the
             // function being assembled, for the debug information.
+            // `.xc_saves <dwarfreg>:<cfa-offset> ...` — the callee-saved
+            // registers of the frame, for the unwind tables of C and C++ input.
+            // Accepted here and recorded by nothing yet.
+            if ([d isEqualToString:@".xc_saves"]) continue;
             if ([d isEqualToString:@".xc_var"] || [d isEqualToString:@".xc_param"]) {
                 NSArray<NSString *> *q = [rest componentsSeparatedByString:@"\""];
                 if (q.count >= 5) {
