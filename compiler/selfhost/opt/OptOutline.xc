@@ -2215,7 +2215,7 @@
 
         // gpuSource(): the placeholder the printers fill: the tag, `auto;`,
         // and each reduction as `<field>=<op>;`, as the parser writes them.
-        String* tagText = String.withFormat("__XC_PAR_FAST_o%u__auto;", _ppOutN);
+        String* tagText = String.withFormat("__XC_PAR_FAST_o%u%s__auto;", _ppOutN, optModTag().cString());
         for (u32 i = (u32)0; i < reds.count(); i = i + (u32)1)
             tagText.append(String.withFormat("%u=%s;", (u32)3 + nIn + i, ppRedWord((String*)redOps.get(i)).cString()));
         Array* tagBytes = new Array();
