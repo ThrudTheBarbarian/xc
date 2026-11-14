@@ -2547,7 +2547,7 @@ class Languages
                 owner.add((Object*)Number.with(i));
                 }
             }
-        Languages.elementOffsetsFlat(flat, 0, flat.count(), pfx);
+        Languages.elementOffsetsFlat(flat, 0, flat.count(), pfx, lines);
         u32 at = 0;
         for (u32 i = from; i < end; i = i + 1)
             {
@@ -2565,9 +2565,11 @@ class Languages
             }
         }
 
-    static void elementOffsetsFlat(Array* lines, u32 from, u32 end, String* pfx)
+    // `module`: the whole text's lines, where the struct types are defined.
+    static void elementOffsetsFlat(Array* lines, u32 from, u32 end, String* pfx, Array* module)
         {
         Map* elemGep = new Map();   // %b -> "T|%p|%x"
+        Map* structAt = new Map();  // %b -> its line, for a struct element
         u32 made = 0;
         for (u32 i = from; i < end; i = i + 1)
             {
@@ -2595,7 +2597,11 @@ class Languages
             if (!ty.equals(String.withCString("i8")))
                 {
                 if (Languages.sizeOf(ty) > 0 || ty.hasPrefix(String.withCString("%struct.")) || ty.hasPrefix(String.withCString("%class.")))
+                    {
                     elemGep.set((Hashable*)nm, (Object*)String.withFormat("%s|%s|%s", ty.cString(), base.cString(), ix.cString()));
+                    if (Languages.sizeOf(ty) == 0)
+                        structAt.set((Hashable*)nm, (Object*)Number.with(i));
+                    }
                 continue;
                 }
             String* e = (String*)elemGep.get((Hashable*)base);
@@ -2610,7 +2616,7 @@ class Languages
             // a[i]'s address + 4): the field of element [i].
             if (sz == 0)
                 {
-                i64 fk = neg ? (i64)-1 : Languages.structFieldAt(lines, et, c);
+                i64 fk = neg ? (i64)-1 : Languages.structFieldAt(module, et, c);
                 if (fk < 0)
                     continue;
                 lines.set(i, (Object*)String.withFormat("  %s = getelementptr inbounds %s, ptr %s, i64 %s, i32 %ld", nm.cString(), et.cString(),
@@ -2627,6 +2633,53 @@ class Languages
                                                     tag.cString(), ((String*)f.get(2)).cString(), k,
                                                     nm.cString(), et.cString(), ((String*)f.get(1)).cString(), tag.cString()));
             }
+        // A struct element's address used only to read or write its first
+        // field (`a[i].x` as a[i]'s address): field 0 of element [i].
+        Array* sk = structAt.allKeys();
+        for (u32 q = 0; q < sk.count(); q = q + 1)
+            {
+            String* nm = (String*)sk.get(q);
+            u32 at = ((Number*)structAt.get((Hashable*)nm)).asU32();
+            String* t = Languages.accessType(lines, from, end, nm);
+            if (t == (String*)0)
+                continue;
+            Array* f = ((String*)elemGep.get((Hashable*)nm)).splitOnByte((u8)'|');
+            String* f0 = Languages.structFieldType(module, (String*)f.get(0), 0);
+            if (f0 == (String*)0 || !f0.equals(t))
+                continue;
+            // Every use a load or a store through it.
+            u32 acc = 0;
+            String* fk = String.withFormat(", ptr %s", nm.cString());
+            for (u32 k = from; k < end; k = k + 1)
+                {
+                String* m = (String*)lines.get(k);
+                u32 fa = m.byteIndexOf(fk);
+                if (fa != String.notFound() && !(fa + fk.byteLength() < m.byteLength() && LlvmName.isNameByte(m.byteAt(fa + fk.byteLength()))))
+                    acc = acc + 1;
+                }
+            if (Languages.uses(lines, from, end, nm) != acc + 1)
+                continue;
+            lines.set(at, (Object*)String.withFormat("  %s = getelementptr inbounds %s, ptr %s, i64 %s, i32 0", nm.cString(),
+                                                     ((String*)f.get(0)).cString(), ((String*)f.get(1)).cString(), ((String*)f.get(2)).cString()));
+            }
+        }
+
+    // The type of field k of named struct type t (its line among lines), or 0.
+    static String* structFieldType(Array* lines, String* t, u32 k)
+        {
+        String* head = t.appending(String.withCString(" = type { "));
+        for (u32 i = 0; i < lines.count(); i = i + 1)
+            {
+            String* l = (String*)lines.get(i);
+            if (!l.hasPrefix(head))
+                continue;
+            u32 close = l.byteIndexOf(String.withCString(" }"));
+            if (close == String.notFound())
+                return (String*)0;
+            Array* fs = Languages.topLevelSplit(l.substringBytes(head.byteLength(), close - head.byteLength()));
+            return k < fs.count() ? ((String*)fs.get(k)).trimmed() : (String*)0;
+            }
+        return (String*)0;
         }
 
     // The field of named struct type t (its `t = type { ... }` line among
