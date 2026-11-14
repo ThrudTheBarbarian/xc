@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""benchmark/par/c_run.py — the C par programs against GCC and clang.
+"""benchmark/par/c_run.py — the C (or C++) par programs against GCC and clang.
 
 The same C files (benchmark/par/c/*.c, undecorated) built by xcc, and, for
 OpenMP, the copies in benchmark/par/c/openmp/ with one `#pragma omp` line each,
-built by GCC and clang. Two comparisons, never mixed:
+built by GCC and clang. --lang c++ runs the C++ ports the same way
+(benchmark/par/cpp/*.cpp, their OpenMP copies in cpp/openmp/ with a pragma on
+each loop that does the work) against g++ and clang++, into cpp.json (cpp-pi.json
+on the Pi). Two comparisons, never mixed:
 
   one thread     xcc -O3 --par-style=cpu (no lifting)  against  gcc / clang -O3 -march=native
   every thread   xcc -O3 --par-style=auto, on the CPU (XC_PAR=cpu)
@@ -24,6 +27,7 @@ every-thread build is left out and the file says so.
   python3 benchmark/par/c_run.py
   python3 benchmark/par/c_run.py --bench md5 --runs 5
   python3 benchmark/par/c_run.py --machine pi --xcc compiler/bin/osx/xcc-xc
+  python3 benchmark/par/c_run.py --lang c++
 """
 import argparse
 import json
@@ -38,6 +42,13 @@ sys.path.insert(0, os.path.dirname(HERE))
 import run as common  # noqa: E402
 
 CDIR = os.path.join(HERE, "c")
+# Each language: its sources' directory and extension, its compilers on the
+# Linux machine (the files' "gcc" and "clang" keys), their standard flag, and
+# the results file's stem.
+LANGS = {
+    "c": {"dir": "c", "ext": ".c", "gcc": "gcc", "clang": "clang", "std": "", "stem": "c"},
+    "c++": {"dir": "cpp", "ext": ".cpp", "gcc": "g++", "clang": "clang++", "std": "-std=c++17", "stem": "cpp"},
+}
 BENCHES = ["saxpy", "nbody", "perlin", "md5", "md5_mask", "mandelbrot", "mandel_deep"]
 # mode -> (the build's file suffix, the environment it runs with)
 MODES = {
@@ -63,22 +74,26 @@ def main():
     ap.add_argument("--runs", type=int, default=15, help="the most runs of a build")
     ap.add_argument("--version", default=common.COMPILER_VERSION)
     ap.add_argument("--machine", choices=["linux", "pi"], default="linux")
+    ap.add_argument("--lang", choices=sorted(LANGS), default="c")
     ap.add_argument("--xcc", help="the compiler to measure (default: the installed release)")
     ap.add_argument("--carry-from", metavar="VERSION",
                     help="time xcc only, and carry GCC's and clang's figures (and toolchains) from that "
                          "version's file: a point release re-times the compiler that changed")
     a = ap.parse_args()
     env = common.build_env()
+    L = LANGS[a.lang]
+    sdir = os.path.join(HERE, L["dir"])
+    std = L["std"].split()
     if a.machine == "pi":
-        host, arch, name = env.get("XTC_LINUX_ARM64_HOST"), "arm64-linux", "c-pi.json"
+        host, arch, name = env.get("XTC_LINUX_ARM64_HOST"), "arm64-linux", L["stem"] + "-pi.json"
         if not host:
             sys.exit("par/c_run.py: no XTC_LINUX_ARM64_HOST in build.env")
     else:
-        host, arch, name = env.get("XTC_C_HOST") or env.get("XTC_LINUX_HOST"), "x86_64", "c.json"
+        host, arch, name = env.get("XTC_C_HOST") or env.get("XTC_LINUX_HOST"), "x86_64", L["stem"] + ".json"
         if not host:
             sys.exit("par/c_run.py: no XTC_C_HOST or XTC_LINUX_HOST in build.env")
     benches = [b for b in (a.bench or BENCHES) if b not in a.skip]
-    work = os.path.join(HERE, "build", "c-" + a.machine)
+    work = os.path.join(HERE, "build", L["stem"] + "-" + a.machine)
     os.makedirs(work, exist_ok=True)
     if a.xcc:
         xp = os.path.abspath(a.xcc)
@@ -87,27 +102,33 @@ def main():
     else:
         xcc = [common.xcc_path()] + common.xcc_home_args() + common.bench_flags()
     for b in benches:
-        src = os.path.join(CDIR, b + ".c")
+        src = os.path.join(sdir, b + L["ext"])
         # One thread is --par-style=cpu: since 0.9.2 lifting is the default,
         # so a build with no flag ran its loops on every thread (or the GPU)
         # and the "one thread" column compared that with gcc's single thread.
         for tag, extra in (("xcc-one", ["--par-style=cpu"]), ("xcc-all", ["--par-style=auto"])):
             out = os.path.join(work, "%s.%s" % (b, tag))
-            r = subprocess.run(xcc + ["-q", "-A", arch, "-O3"] + extra + ["-o", out, src],
+            r = subprocess.run(xcc + ["-q", "-A", arch, "-O3"] + std + extra + ["-o", out, src],
                                capture_output=True, text=True)
             if r.returncode != 0:
                 sys.exit("par/c_run.py: xcc does not build %s:\n%s" % (b, r.stderr))
-    rdir = "/tmp/xc-cbench"
-    sh(host, "rm -rf %s && mkdir -p %s/openmp" % (rdir, rdir))
-    subprocess.run(["scp", "-q"] + [os.path.join(CDIR, f) for f in os.listdir(CDIR) if f.endswith((".c", ".h"))]
+    # The sources as they lie here (c/, and cpp/ beside it, whose files
+    # include ../c/bench_time.h), built in the language's directory.
+    top = "/tmp/xc-cbench"
+    rdir = "%s/%s" % (top, L["dir"])
+    sh(host, "rm -rf %s && mkdir -p %s/openmp %s/c" % (top, rdir, top))
+    subprocess.run(["scp", "-q"] + [os.path.join(CDIR, f) for f in os.listdir(CDIR) if f.endswith(".h")]
+                   + ["%s:%s/c/" % (host, top)], check=True)
+    subprocess.run(["scp", "-q"] + [os.path.join(sdir, f) for f in os.listdir(sdir) if f.endswith((L["ext"], ".h"))]
                    + ["%s:%s/" % (host, rdir)], check=True)
-    od = os.path.join(CDIR, "openmp")
+    od = os.path.join(sdir, "openmp")
     subprocess.run(["scp", "-q"] + [os.path.join(od, f) for f in os.listdir(od)] + ["%s:%s/openmp/" % (host, rdir)],
                    check=True)
     subprocess.run(["scp", "-q"] + [os.path.join(work, f) for f in os.listdir(work) if f.split(".")[0] in benches]
                    + ["%s:%s/" % (host, rdir)], check=True)
     # clang's OpenMP needs libomp, which a distribution's clang may not have.
-    probe = "echo 'int main(void){return 0;}' > %s/omp.c && clang -fopenmp -o %s/omp %s/omp.c" % (rdir, rdir, rdir)
+    probe = "echo 'int main(void){return 0;}' > %s/omp%s && %s -fopenmp -o %s/omp %s/omp%s" % (
+        rdir, L["ext"], L["clang"], rdir, rdir, L["ext"])
     clang_omp = subprocess.run(["ssh", host, probe], capture_output=True).returncode == 0
     missing = [] if clang_omp else ["all/clang: no OpenMP runtime (libomp) for clang on that machine"]
     carried = None
@@ -121,11 +142,12 @@ def main():
     for b in benches:
         if carried:
             continue
-        builds.append("gcc -O3 -march=native -w -o {b}.gcc-one {b}.c -lm".format(b=b))
-        builds.append("clang -O3 -march=native -w -o {b}.clang-one {b}.c -lm".format(b=b))
-        builds.append("gcc -O3 -march=native -fopenmp -w -o {b}.gcc-all openmp/{b}.c -lm".format(b=b))
+        f = dict(b=b, e=L["ext"], g=L["gcc"], c=L["clang"], s=L["std"])
+        builds.append("{g} {s} -O3 -march=native -w -o {b}.gcc-one {b}{e} -lm".format(**f))
+        builds.append("{c} {s} -O3 -march=native -w -o {b}.clang-one {b}{e} -lm".format(**f))
+        builds.append("{g} {s} -O3 -march=native -fopenmp -w -o {b}.gcc-all openmp/{b}{e} -lm".format(**f))
         if clang_omp:
-            builds.append("clang -O3 -march=native -fopenmp -w -o {b}.clang-all openmp/{b}.c -lm".format(b=b))
+            builds.append("{c} {s} -O3 -march=native -fopenmp -w -o {b}.clang-all openmp/{b}{e} -lm".format(**f))
     if builds:
         sh(host, "cd %s && %s" % (rdir, " && ".join(builds)))
     if carried:
@@ -135,8 +157,8 @@ def main():
         missing = carried.get("missing", [])
     else:
         toolchains = {"xcc": a.version,
-                      "gcc": sh(host, "gcc --version").splitlines()[0],
-                      "clang": sh(host, "clang --version").splitlines()[0]}
+                      "gcc": sh(host, "%s --version" % L["gcc"]).splitlines()[0],
+                      "clang": sh(host, "%s --version" % L["clang"]).splitlines()[0]}
     # x86 names its CPU in /proc/cpuinfo; arm64 Linux does not, but lscpu does,
     # and a Raspberry Pi names the board in its device tree.
     cpu = sh(host, "grep -m1 '^model name' /proc/cpuinfo | cut -d: -f2-", check=False).strip() \
