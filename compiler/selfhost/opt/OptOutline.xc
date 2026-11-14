@@ -2283,7 +2283,12 @@
             {
             IRValue* gb = (IRValue*)loopBases.get(q);
             IRBlock* gbb = (IRBlock*)defBlk.get((Hashable*)gb);
-            _ppGBase.add((Object*)(gbb != (IRBlock*)0 && self.hasBlock(body, gbb) ? self.ppRematMem(P, gb, defOf, defBlk, L) : gb));
+            // Only a base the call site can make: a hoisted load's result, or
+            // arithmetic over values from outside. Any other (a pointer the
+            // loop steps, a phi) is in no guard term and stays as it is.
+            bool made = gbb != (IRBlock*)0 && self.hasBlock(body, gbb)
+                        && (_ppHoisted.get((Hashable*)gb) != (Object*)0 || ppInvariant(gb, L, defOf, defBlk, (u32)0));
+            _ppGBase.add((Object*)(made ? self.ppRematMem(P, gb, defOf, defBlk, L) : gb));
             }
         hoistMem = _ppRematMem;
         if (le)

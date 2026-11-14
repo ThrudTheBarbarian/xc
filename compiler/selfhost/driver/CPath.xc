@@ -389,6 +389,16 @@ class CPath
                     return (IRModule*)0;
                 }
             }
+        // A function xcc leaves to clang (one an exception may pass through)
+        // has its loops moved into functions of their own, which xcc takes
+        // (Languages.extractLoops); in clang's build, whose calls they are,
+        // and added to the read build as they are there.
+        if (lang.loopsOnly())
+            {
+            text = Languages.extractLoops(text);
+            if (readBuild != (String*)0)
+                readBuild = Languages.withExtracted(readBuild, Languages.extractedOnly(text), text);
+            }
         // reads `loops`: the reader sees only the functions xcc may take,
         // from the read build where there is one (and clang's build has them).
         String* readText = lang.loopsOnly() ? Languages.loopFunctions(readBuild != (String*)0 ? readBuild : text) : text;
@@ -476,7 +486,10 @@ class CPath
         restO.appendCString(".rest.o");
         String* restText = r.rest(text);
         if (lang.loopsOnly())
+            {
             restText = Languages.keepOdr(restText);
+            restText = Languages.plainExtracted(restText);
+            }
         // A function taken from the read build keeps clang's own version too.
         if (readBuild != (String*)0)
             restText = Languages.keepClangCopies(restText, text, readText, r);

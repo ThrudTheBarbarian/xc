@@ -334,6 +334,1027 @@ class Languages
         return defs;
         }
 
+    // ── Loop extraction ─────────────────────────────────────────────────
+    // A function xcc leaves to clang (one an exception may pass through:
+    // main with its vectors, anything that allocates) keeps its loops out of
+    // xcc's reach. Each outermost loop of such a function whose own body xcc
+    // could take (no invoke or landing pad, nothing called that may throw,
+    // no alloca) is moved into a function of its own,
+    //     define internal i32 @<f>$xcl<k>(<live-ins>, ptr <live-out slots>)
+    // which xcc reads and lifts like any other; the loop's place in <f> is a
+    // block that calls it, loads what the loop leaves for later (each
+    // live-out, through a slot the caller allocates) and goes on to the exit
+    // it returns the number of. Live-ins keep their names as parameters, so
+    // the loop's lines move as they are. clang's build only (see CPath).
+    static String* extractLoops(String* text)
+        {
+        Array* lines = text.splitOnByte((u8)10);
+        // A numbered type (`%0 = type ...`) is named like a numbered value,
+        // which the renaming below would take it for.
+        for (u32 i = 0; i < lines.count(); i = i + 1)
+            {
+            String* l = (String*)lines.get(i);
+            if (l.byteLength() > 1 && l.byteAt(0) == (u8)'%' && l.byteAt(1) >= (u8)'0' && l.byteAt(1) <= (u8)'9'
+                && l.contains(String.withCString(" = type ")))
+                return text;
+            }
+        Map* nounwind = Languages.nounwindNames(lines);
+        String* out = new String();
+        String* added = new String();
+        u32 i = 0;
+        while (i < lines.count())
+            {
+            String* l = (String*)lines.get(i);
+            if (!l.hasPrefix(String.withCString("define ")))
+                {
+                out.append(l);
+                out.appendCString("\n");
+                i = i + 1;
+                continue;
+                }
+            u32 end = i + 1;
+            while (end < lines.count() && !((String*)lines.get(end)).equals(String.withCString("}")))
+                end = end + 1;
+            String* fname = Languages.calleeOf(l, 0);
+            Array* fn = new Array();
+            for (u32 k = i; k <= end && k < lines.count(); k = k + 1)
+                fn.add(lines.get(k));
+            if (fname != (String*)0 && !fname.hasPrefix(String.withCString("@\"")) && !Languages.notOurs(l) && !Languages.isStd(fname)
+                && end < lines.count() && Languages.hasLoop(lines, i + 1, end) && Languages.mayThrow(lines, i + 1, end, nounwind))
+                {
+                Array* named = Languages.numberedNamed(fn);
+                if (named != (Array*)0)
+                    {
+                    Map* tried = new Map();
+                    u32 k = 0;
+                    Array* next = Languages.extractOne(named, fname, k, nounwind, tried, added);
+                    while (next != (Array*)0 && k < 64)
+                        {
+                        named = next;
+                        k = k + 1;
+                        next = Languages.extractOne(named, fname, k, nounwind, tried, added);
+                        }
+                    if (k > 0)
+                        fn = named;
+                    }
+                }
+            for (u32 k = 0; k < fn.count(); k = k + 1)
+                {
+                out.append((String*)fn.get(k));
+                out.appendCString("\n");
+                }
+            i = end + 1;
+            }
+        out.append(added);
+        return out;
+        }
+
+    // The functions extractLoops made (`@<f>$xcl<k>`), from its text.
+    static String* extractedOnly(String* text)
+        {
+        Array* lines = text.splitOnByte((u8)10);
+        String* out = new String();
+        u32 i = 0;
+        while (i < lines.count())
+            {
+            String* l = (String*)lines.get(i);
+            if (!l.hasPrefix(String.withCString("define internal i32 @")) || !l.contains(String.withCString("$xcl")))
+                {
+                i = i + 1;
+                continue;
+                }
+            while (i < lines.count())
+                {
+                out.append((String*)lines.get(i));
+                out.appendCString("\n");
+                if (((String*)lines.get(i)).equals(String.withCString("}")))
+                    break;
+                i = i + 1;
+                }
+            i = i + 1;
+            }
+        return out;
+        }
+
+    // The read build with the extracted functions of clang's build added,
+    // and a declaration of each function they call that it lacks: xcc reads
+    // them from there (takeFrom keeps them, clang's build having them).
+    static String* withExtracted(String* readBuild, String* extracted, String* clangText)
+        {
+        if (extracted.byteLength() == 0)
+            return readBuild;
+        Map* rfuncs = new Map();
+        Map* rglobs = new Map();
+        Languages.symbolsOf(readBuild, rfuncs, rglobs);
+        Map* cfuncs = new Map();
+        Map* cglobs = new Map();
+        Languages.symbolsOf(clangText, cfuncs, cglobs);
+        String* out = String.withString(readBuild);
+        Map* seen = new Map();
+        Array* el = extracted.splitOnByte((u8)10);
+        for (u32 i = 0; i < el.count(); i = i + 1)
+            {
+            String* l = (String*)el.get(i);
+            u32 c = l.byteIndexOf(String.withCString(" call "));
+            String* n = c != String.notFound() ? Languages.calleeOf(l, c) : (String*)0;
+            if (n == (String*)0 || rfuncs.get((Hashable*)n) != (Object*)0 || seen.get((Hashable*)n) != (Object*)0)
+                continue;
+            String* d = (String*)cfuncs.get((Hashable*)n);
+            if (d == (String*)0)
+                continue;
+            seen.set((Hashable*)n, (Object*)n);
+            String* decl = d.hasPrefix(String.withCString("define ")) ? Languages.declarationOf(d) : d;
+            if (decl != (String*)0)
+                {
+                out.append(decl);
+                out.appendCString("\n");
+                }
+            }
+        out.append(extracted);
+        return out;
+        }
+
+    // clang's half with no debug locations in an extracted function it
+    // compiles (one xcc did not read): its lines' scope is the function it
+    // came from, which LLVM's verifier allows only there.
+    static String* plainExtracted(String* restText)
+        {
+        Array* lines = restText.splitOnByte((u8)10);
+        String* out = new String();
+        bool inside = false;
+        for (u32 i = 0; i < lines.count(); i = i + 1)
+            {
+            String* l = (String*)lines.get(i);
+            if (l.hasPrefix(String.withCString("define ")))
+                inside = l.contains(String.withCString("$xcl"));
+            else if (l.equals(String.withCString("}")))
+                inside = false;
+            else if (inside)
+                l = Languages.withoutDbg(l);
+            out.append(l);
+            if (i + 1 < lines.count())
+                out.appendCString("\n");
+            }
+        return out;
+        }
+
+    // Whether l is a block's label line (`name:`, maybe with a comment).
+    static bool isLabelLine(String* l)
+        {
+        if (l.byteLength() == 0)
+            return false;
+        u8 c = l.byteAt(0);
+        if (c == (u8)' ' || c == (u8)';' || c == (u8)'}' || c == (u8)'\t' || l.hasPrefix(String.withCString("define ")))
+            return false;
+        return l.indexOfByte((u8)':') != String.notFound();
+        }
+
+    static String* labelOf(String* l)
+        {
+        return l.substringBytes(0, l.indexOfByte((u8)':'));
+        }
+
+    // fn (its define line, body and `}`) with every numbered name (`%7`,
+    // block `7:`, the unlabelled entry block's implicit number) given a name
+    // (`%xn7`): a function split in two leaves gaps in either half's
+    // numbering, which LLVM's parser refuses. 0 where it cannot (inline
+    // assembly, whose text may hold `%0`).
+    static Array* numberedNamed(Array* fn)
+        {
+        String* d = (String*)fn.get(0);
+        Array* out = new Array();
+        out.addAll(fn);
+        // The unnamed parameters are numbered first, then the entry block.
+        if (fn.count() > 1 && !Languages.isLabelLine((String*)fn.get(1)))
+            {
+            u32 open = d.indexOfByte((u8)'(');
+            u32 k = 0;
+            Array* ps = open != String.notFound() ? Languages.namesIn(d.substringFromByte(open)) : new Array();
+            for (u32 p = 0; p < ps.count(); p = p + 1)
+                if (Languages.isNumberName((String*)ps.get(p)))
+                    k = k + 1;
+            out.insert(1, (Object*)String.withFormat("%u:", k));
+            }
+        Map* ren = new Map();
+        bool hasAsm = false;
+        for (u32 i = 0; i < out.count(); i = i + 1)
+            {
+            String* l = (String*)out.get(i);
+            if (l.contains(String.withCString(" asm ")))
+                hasAsm = true;
+            Array* ns = Languages.namesIn(l);
+            for (u32 k = 0; k < ns.count(); k = k + 1)
+                {
+                String* n = (String*)ns.get(k);
+                if (Languages.isNumberName(n))
+                    ren.set((Hashable*)n, (Object*)String.withFormat("%%xn%s", n.substringFromByte(1).cString()));
+                }
+            }
+        if (ren.count() == 0)
+            {
+            // Only the entry's label, maybe: it is named too.
+            for (u32 i = 1; i < out.count(); i = i + 1)
+                {
+                String* l = (String*)out.get(i);
+                if (Languages.isLabelLine(l) && l.byteAt(0) >= (u8)'0' && l.byteAt(0) <= (u8)'9')
+                    out.set(i, (Object*)String.withFormat("xn%s", l.cString()));
+                }
+            return out;
+            }
+        if (hasAsm)
+            return (Array*)0;
+        for (u32 i = 0; i < out.count(); i = i + 1)
+            {
+            String* l = Languages.renamed((String*)out.get(i), ren);
+            if (i > 0 && Languages.isLabelLine(l) && l.byteAt(0) >= (u8)'0' && l.byteAt(0) <= (u8)'9')
+                l = String.withFormat("xn%s", l.cString());
+            out.set(i, (Object*)l);
+            }
+        return out;
+        }
+
+    static bool isNumberName(String* n)
+        {
+        if (n.byteLength() < 2 || n.byteAt(0) != (u8)'%')
+            return false;
+        for (u32 i = 1; i < n.byteLength(); i = i + 1)
+            if (n.byteAt(i) < (u8)'0' || n.byteAt(i) > (u8)'9')
+                return false;
+        return true;
+        }
+
+    // One loop of fn (named, see numberedNamed) moved into @<fname>$xcl<k>,
+    // whose text goes onto `added`: fn's new lines, or 0 where no loop is
+    // left to move. A loop that cannot move is noted in `tried` (by its
+    // header) and not looked at again.
+    static Array* extractOne(Array* fn, String* fname, u32 k, Map* nounwind, Map* tried, String* added)
+        {
+        // The blocks: label, first line, end (exclusive).
+        Array* bl = new Array();
+        Array* bs = new Array();
+        Array* be = new Array();
+        Map* index = new Map();
+        for (u32 i = 1; i + 1 < fn.count(); i = i + 1)
+            {
+            String* l = (String*)fn.get(i);
+            if (!Languages.isLabelLine(l))
+                continue;
+            if (bl.count() > 0)
+                be.add((Object*)Number.with(i));
+            String* lab = Languages.labelOf(l);
+            if (lab.hasPrefix(String.withCString("\"")))
+                return (Array*)0;
+            index.set((Hashable*)lab, (Object*)Number.with(bl.count()));
+            bl.add((Object*)lab);
+            bs.add((Object*)Number.with(i + 1));
+            }
+        if (bl.count() < 2)
+            return (Array*)0;
+        be.add((Object*)Number.with(fn.count() - 1));
+        u32 nb = bl.count();
+        // Successors: every `label %x` of a block.
+        Array* succ = new Array();
+        Array* pred = new Array();
+        for (u32 b = 0; b < nb; b = b + 1)
+            {
+            succ.add((Object*)new Array());
+            pred.add((Object*)new Array());
+            }
+        String* lk = String.withCString("label %");
+        for (u32 b = 0; b < nb; b = b + 1)
+            {
+            for (u32 i = ((Number*)bs.get(b)).asU32(); i < ((Number*)be.get(b)).asU32(); i = i + 1)
+                {
+                String* l = (String*)fn.get(i);
+                for (u32 p = l.byteIndexOf(lk); p != String.notFound(); p = l.byteIndexOf(lk, p + 1))
+                    {
+                    u32 s = p + 6;
+                    u32 e = s + 1;
+                    while (e < l.byteLength() && LlvmName.isNameByte(l.byteAt(e)))
+                        e = e + 1;
+                    Number* t = (Number*)index.get((Hashable*)l.substringBytes(s + 1, e - s - 1));
+                    if (t == (Number*)0)
+                        return (Array*)0;
+                    Array* sb = (Array*)succ.get(b);
+                    if (sb.indexOf((Object*)t) == (u32)$FFFFFFFF)
+                        {
+                        bool dup = false;
+                        for (u32 q = 0; q < sb.count(); q = q + 1)
+                            if (((Number*)sb.get(q)).asU32() == t.asU32())
+                                dup = true;
+                        if (!dup)
+                            {
+                            sb.add((Object*)t);
+                            ((Array*)pred.get(t.asU32())).add((Object*)Number.with(b));
+                            }
+                        }
+                    }
+                }
+            }
+        // Reverse postorder from the entry, then dominators (Cooper, Harvey
+        // and Kennedy's iteration).
+        Array* rpoNum = new Array();
+        for (u32 b = 0; b < nb; b = b + 1)
+            rpoNum.add((Object*)Number.with((u32)$FFFFFFFF));
+        Array* post = new Array();
+        Array* stack = new Array();
+        Array* next = new Array();
+        Array* seenB = new Array();
+        for (u32 b = 0; b < nb; b = b + 1)
+            {
+            next.add((Object*)Number.with(0));
+            seenB.add((Object*)Number.with(0));
+            }
+        stack.add((Object*)Number.with(0));
+        seenB.set(0, (Object*)Number.with(1));
+        while (stack.count() > 0)
+            {
+            u32 b = ((Number*)stack.get(stack.count() - 1)).asU32();
+            u32 n = ((Number*)next.get(b)).asU32();
+            Array* sb = (Array*)succ.get(b);
+            if (n < sb.count())
+                {
+                next.set(b, (Object*)Number.with(n + 1));
+                u32 t = ((Number*)sb.get(n)).asU32();
+                if (((Number*)seenB.get(t)).asU32() == 0)
+                    {
+                    seenB.set(t, (Object*)Number.with(1));
+                    stack.add((Object*)Number.with(t));
+                    }
+                continue;
+                }
+            stack.removeLast();
+            post.add((Object*)Number.with(b));
+            }
+        Array* rpo = new Array();
+        for (u32 q = post.count(); q > 0; q = q - 1)
+            {
+            u32 b = ((Number*)post.get(q - 1)).asU32();
+            rpoNum.set(b, (Object*)Number.with(rpo.count()));
+            rpo.add((Object*)Number.with(b));
+            }
+        u32 none = (u32)$FFFFFFFF;
+        Array* idom = new Array();
+        for (u32 b = 0; b < nb; b = b + 1)
+            idom.add((Object*)Number.with(none));
+        idom.set(0, (Object*)Number.with(0));
+        bool changed = true;
+        while (changed)
+            {
+            changed = false;
+            for (u32 q = 1; q < rpo.count(); q = q + 1)
+                {
+                u32 b = ((Number*)rpo.get(q)).asU32();
+                u32 nd = none;
+                Array* pb = (Array*)pred.get(b);
+                for (u32 r = 0; r < pb.count(); r = r + 1)
+                    {
+                    u32 p = ((Number*)pb.get(r)).asU32();
+                    if (((Number*)idom.get(p)).asU32() == none)
+                        continue;
+                    if (nd == none)
+                        {
+                        nd = p;
+                        continue;
+                        }
+                    u32 f1 = p;
+                    u32 f2 = nd;
+                    while (f1 != f2)
+                        {
+                        while (((Number*)rpoNum.get(f1)).asU32() > ((Number*)rpoNum.get(f2)).asU32())
+                            f1 = ((Number*)idom.get(f1)).asU32();
+                        while (((Number*)rpoNum.get(f2)).asU32() > ((Number*)rpoNum.get(f1)).asU32())
+                            f2 = ((Number*)idom.get(f2)).asU32();
+                        }
+                    nd = f1;
+                    }
+                if (nd != ((Number*)idom.get(b)).asU32())
+                    {
+                    idom.set(b, (Object*)Number.with(nd));
+                    changed = true;
+                    }
+                }
+            }
+        // Natural loops: a back edge u -> h (h dominates u) and the blocks
+        // that reach u without passing h. One loop per header.
+        Array* heads = new Array();
+        Array* bodies = new Array();
+        for (u32 u = 0; u < nb; u = u + 1)
+            {
+            if (((Number*)idom.get(u)).asU32() == none)
+                continue;
+            Array* su = (Array*)succ.get(u);
+            for (u32 q = 0; q < su.count(); q = q + 1)
+                {
+                u32 h = ((Number*)su.get(q)).asU32();
+                if (!Languages.domIn(idom, h, u))
+                    continue;
+                u32 at = none;
+                for (u32 r = 0; r < heads.count(); r = r + 1)
+                    if (((Number*)heads.get(r)).asU32() == h)
+                        at = r;
+                Array* lp = (Array*)0;
+                if (at == none)
+                    {
+                    lp = new Array();
+                    for (u32 b = 0; b < nb; b = b + 1)
+                        lp.add((Object*)Number.with(0));
+                    lp.set(h, (Object*)Number.with(1));
+                    heads.add((Object*)Number.with(h));
+                    bodies.add((Object*)lp);
+                    }
+                else
+                    lp = (Array*)bodies.get(at);
+                Array* work = new Array();
+                if (((Number*)lp.get(u)).asU32() == 0)
+                    {
+                    lp.set(u, (Object*)Number.with(1));
+                    work.add((Object*)Number.with(u));
+                    }
+                while (work.count() > 0)
+                    {
+                    u32 w = ((Number*)work.get(work.count() - 1)).asU32();
+                    work.removeLast();
+                    Array* pw = (Array*)pred.get(w);
+                    for (u32 r = 0; r < pw.count(); r = r + 1)
+                        {
+                        u32 p = ((Number*)pw.get(r)).asU32();
+                        if (((Number*)lp.get(p)).asU32() == 0 && ((Number*)idom.get(p)).asU32() != none)
+                            {
+                            lp.set(p, (Object*)Number.with(1));
+                            work.add((Object*)Number.with(p));
+                            }
+                        }
+                    }
+                }
+            }
+        // The largest loop not yet tried first: an outer loop before its inner ones.
+        while (true)
+            {
+            u32 best = none;
+            u32 bestSize = 0;
+            for (u32 r = 0; r < heads.count(); r = r + 1)
+                {
+                String* hl = (String*)bl.get(((Number*)heads.get(r)).asU32());
+                if (tried.get((Hashable*)hl) != (Object*)0)
+                    continue;
+                u32 size = 0;
+                Array* lp = (Array*)bodies.get(r);
+                for (u32 b = 0; b < nb; b = b + 1)
+                    size = size + ((Number*)lp.get(b)).asU32();
+                if (size > bestSize)
+                    {
+                    best = r;
+                    bestSize = size;
+                    }
+                }
+            if (best == none)
+                return (Array*)0;
+            u32 h = ((Number*)heads.get(best)).asU32();
+            tried.set((Hashable*)bl.get(h), (Object*)bl.get(h));
+            Array* res = Languages.moveLoop(fn, fname, k, nounwind, bl, bs, be, succ, pred, idom, h, (Array*)bodies.get(best), added);
+            if (res != (Array*)0)
+                return res;
+            }
+        return (Array*)0;
+        }
+
+    // Whether block a dominates block b (idom: each block's immediate dominator).
+    static bool domIn(Array* idom, u32 a, u32 b)
+        {
+        u32 x = b;
+        for (u32 guard = 0; guard < 100000; guard = guard + 1)
+            {
+            if (x == a)
+                return true;
+            u32 p = ((Number*)idom.get(x)).asU32();
+            if (p == x || p == (u32)$FFFFFFFF)
+                return false;
+            x = p;
+            }
+        return false;
+        }
+
+    // The loop of header h (in: 1 per block in it) moved out of fn, or 0
+    // where it cannot be.
+    static Array* moveLoop(Array* fn, String* fname, u32 k, Map* nounwind, Array* bl, Array* bs, Array* be,
+                           Array* succ, Array* pred, Array* idom, u32 h, Array* lp, String* added)
+        {
+        u32 nb = bl.count();
+        if (h == 0)
+            return (Array*)0;
+        // One way in: from one block outside (the preheader).
+        u32 pre = (u32)$FFFFFFFF;
+        Array* ph = (Array*)pred.get(h);
+        for (u32 r = 0; r < ph.count(); r = r + 1)
+            {
+            u32 p = ((Number*)ph.get(r)).asU32();
+            if (((Number*)lp.get(p)).asU32() != 0)
+                continue;
+            if (pre != (u32)$FFFFFFFF)
+                return (Array*)0;
+            pre = p;
+            }
+        if (pre == (u32)$FFFFFFFF)
+            return (Array*)0;
+        // The loop's lines: nothing xcc does not take, nothing that may throw.
+        Array* ll = new Array();
+        Map* defIn = new Map();      // name -> its line, defined lp the loop
+        Map* defBlk = new Map();     // name -> its block (Number), anywhere
+        Map* defOut = new Map();     // name -> its line, defined outside
+        for (u32 b = 0; b < nb; b = b + 1)
+            {
+            bool inside = ((Number*)lp.get(b)).asU32() != 0;
+            for (u32 i = ((Number*)bs.get(b)).asU32(); i < ((Number*)be.get(b)).asU32(); i = i + 1)
+                {
+                String* l = (String*)fn.get(i);
+                String* t = l.trimmed();
+                if (inside)
+                    ll.add((Object*)l);
+                if (!t.hasPrefix(String.withCString("%")))
+                    continue;
+                u32 eq = t.byteIndexOf(String.withCString(" = "));
+                if (eq == String.notFound())
+                    continue;
+                String* n = t.substringBytes(0, eq);
+                defBlk.set((Hashable*)n, (Object*)Number.with(b));
+                if (inside)
+                    defIn.set((Hashable*)n, (Object*)t);
+                else
+                    defOut.set((Hashable*)n, (Object*)t);
+                }
+            }
+        Array* bad = String.withCString(" invoke |landingpad| resume |callbr|indirectbr|blockaddress|musttail|%\"| alloca |va_arg|catchswitch|cleanuppad|catchpad| asm ").splitOnByte((u8)'|');
+        for (u32 i = 0; i < ll.count(); i = i + 1)
+            for (u32 q = 0; q < bad.count(); q = q + 1)
+                if (((String*)ll.get(i)).contains((String*)bad.get(q)))
+                    return (Array*)0;
+        if (Languages.mayThrow(ll, 0, ll.count(), nounwind))
+            return (Array*)0;
+        // The parameters' types, from the define line.
+        Map* argTy = Languages.paramTypes((String*)fn.get(0));
+        if (argTy == (Map*)0)
+            return (Array*)0;
+        // Live-ins: names the loop uses that are defined outside it.
+        Array* ins = new Array();
+        Array* insTy = new Array();
+        Map* seen = new Map();
+        for (u32 i = 0; i < ll.count(); i = i + 1)
+            {
+            Array* ns = Languages.namesIn(Languages.withoutMeta((String*)ll.get(i)));
+            for (u32 q = 0; q < ns.count(); q = q + 1)
+                {
+                String* n = (String*)ns.get(q);
+                if (seen.get((Hashable*)n) != (Object*)0 || defIn.get((Hashable*)n) != (Object*)0)
+                    continue;
+                String* ty = (String*)argTy.get((Hashable*)n);
+                String* dl = (String*)defOut.get((Hashable*)n);
+                if (ty == (String*)0 && dl != (String*)0)
+                    {
+                    ty = Languages.typeOfDef(dl);
+                    if (ty == (String*)0)
+                        return (Array*)0;
+                    }
+                if (ty == (String*)0)
+                    continue;
+                seen.set((Hashable*)n, (Object*)n);
+                ins.add((Object*)n);
+                insTy.add((Object*)ty);
+                }
+            }
+        // Live-outs: names defined in the loop that a line outside uses.
+        Array* outs = new Array();
+        Array* outsTy = new Array();
+        for (u32 b = 0; b < nb; b = b + 1)
+            {
+            if (((Number*)lp.get(b)).asU32() != 0)
+                continue;
+            for (u32 i = ((Number*)bs.get(b)).asU32(); i < ((Number*)be.get(b)).asU32(); i = i + 1)
+                {
+                Array* ns = Languages.namesIn(Languages.withoutMeta((String*)fn.get(i)));
+                for (u32 q = 0; q < ns.count(); q = q + 1)
+                    {
+                    String* n = (String*)ns.get(q);
+                    String* dl = (String*)defIn.get((Hashable*)n);
+                    if (dl == (String*)0 || seen.get((Hashable*)n) != (Object*)0)
+                        continue;
+                    String* ty = Languages.typeOfDef(dl);
+                    if (ty == (String*)0)
+                        return (Array*)0;
+                    seen.set((Hashable*)n, (Object*)n);
+                    outs.add((Object*)n);
+                    outsTy.add((Object*)ty);
+                    }
+                }
+            }
+        if (ins.count() > 48 || outs.count() > 32)
+            return (Array*)0;
+        // The exits: (block in the loop, block outside) edges, numbered.
+        Array* exX = new Array();
+        Array* exT = new Array();
+        for (u32 b = 0; b < nb; b = b + 1)
+            {
+            if (((Number*)lp.get(b)).asU32() == 0)
+                continue;
+            Array* sb = (Array*)succ.get(b);
+            for (u32 q = 0; q < sb.count(); q = q + 1)
+                {
+                u32 t = ((Number*)sb.get(q)).asU32();
+                if (((Number*)lp.get(t)).asU32() != 0)
+                    continue;
+                exX.add((Object*)Number.with(b));
+                exT.add((Object*)Number.with(t));
+                }
+            }
+        if (exX.count() == 0)
+            return (Array*)0;
+        // The new function.
+        String* tag = String.withFormat("xcl%u", k);
+        String* nf = String.withFormat("%s$xcl%u", fname.cString(), k);
+        String* params = new String();
+        for (u32 q = 0; q < ins.count(); q = q + 1)
+            params.appendFormat("%s%s %s", q == 0 ? "" : ", ", ((String*)insTy.get(q)).cString(), ((String*)ins.get(q)).cString());
+        for (u32 q = 0; q < outs.count(); q = q + 1)
+            params.appendFormat("%sptr %%%s.o%u", params.byteLength() == 0 ? "" : ", ", tag.cString(), q);
+        String* attrs = Languages.attrGroupsOf((String*)fn.get(0));
+        String* xf = String.withFormat("define internal i32 %s(%s)%s {\n%s.entry:\n  br label %%%s\n", nf.cString(), params.cString(),
+                                       attrs.cString(), tag.cString(), ((String*)bl.get(h)).cString());
+        String* preName = String.withFormat("%%%s", ((String*)bl.get(pre)).cString());
+        for (u32 b = 0; b < nb; b = b + 1)
+            {
+            if (((Number*)lp.get(b)).asU32() == 0)
+                continue;
+            Map* ren = new Map();
+            if (b == h)
+                ren.set((Hashable*)preName, (Object*)String.withFormat("%%%s.entry", tag.cString()));
+            for (u32 e = 0; e < exX.count(); e = e + 1)
+                if (((Number*)exX.get(e)).asU32() == b)
+                    ren.set((Hashable*)String.withFormat("%%%s", ((String*)bl.get(((Number*)exT.get(e)).asU32())).cString()),
+                            (Object*)String.withFormat("%%%s.ret%u", tag.cString(), e));
+            xf.append((String*)fn.get(((Number*)bs.get(b)).asU32() - 1));
+            xf.appendCString("\n");
+            for (u32 i = ((Number*)bs.get(b)).asU32(); i < ((Number*)be.get(b)).asU32(); i = i + 1)
+                {
+                xf.append(ren.count() > 0 ? Languages.renamed((String*)fn.get(i), ren) : (String*)fn.get(i));
+                xf.appendCString("\n");
+                }
+            }
+        for (u32 e = 0; e < exX.count(); e = e + 1)
+            {
+            u32 x = ((Number*)exX.get(e)).asU32();
+            xf.appendFormat("%s.ret%u:\n", tag.cString(), e);
+            for (u32 q = 0; q < outs.count(); q = q + 1)
+                {
+                u32 db = ((Number*)defBlk.get((Hashable*)outs.get(q))).asU32();
+                if (Languages.domIn(idom, db, x))
+                    xf.appendFormat("  store %s %s, ptr %%%s.o%u\n", ((String*)outsTy.get(q)).cString(),
+                                    ((String*)outs.get(q)).cString(), tag.cString(), q);
+                }
+            xf.appendFormat("  ret i32 %u\n", e);
+            }
+        xf.appendCString("}\n");
+        added.append(xf);
+        // The caller: the loop's blocks give way to one that calls it.
+        Map* outRen = new Map();
+        for (u32 q = 0; q < outs.count(); q = q + 1)
+            outRen.set((Hashable*)outs.get(q), (Object*)String.withFormat("%s.xo", ((String*)outs.get(q)).cString()));
+        Array* res = new Array();
+        res.add(fn.get(0));
+        for (u32 b = 0; b < nb; b = b + 1)
+            {
+            u32 first = ((Number*)bs.get(b)).asU32();
+            if (((Number*)lp.get(b)).asU32() != 0)
+                {
+                if (b != h)
+                    continue;
+                res.add(fn.get(first - 1));
+                String* args = new String();
+                for (u32 q = 0; q < ins.count(); q = q + 1)
+                    args.appendFormat("%s%s %s", q == 0 ? "" : ", ", ((String*)insTy.get(q)).cString(), ((String*)ins.get(q)).cString());
+                for (u32 q = 0; q < outs.count(); q = q + 1)
+                    args.appendFormat("%sptr %%%s.o%u", args.byteLength() == 0 ? "" : ", ", tag.cString(), q);
+                res.add((Object*)String.withFormat("  %%%s.r = call i32 %s(%s)", tag.cString(), nf.cString(), args.cString()));
+                for (u32 q = 0; q < outs.count(); q = q + 1)
+                    res.add((Object*)String.withFormat("  %s.xo = load %s, ptr %%%s.o%u", ((String*)outs.get(q)).cString(),
+                                                       ((String*)outsTy.get(q)).cString(), tag.cString(), q));
+                if (exX.count() == 1)
+                    res.add((Object*)String.withFormat("  br label %%%s.d0", tag.cString()));
+                else
+                    {
+                    res.add((Object*)String.withFormat("  switch i32 %%%s.r, label %%%s.d0 [", tag.cString(), tag.cString()));
+                    for (u32 e = 1; e < exX.count(); e = e + 1)
+                        res.add((Object*)String.withFormat("    i32 %u, label %%%s.d%u", e, tag.cString(), e));
+                    res.add((Object*)String.withCString("  ]"));
+                    }
+                for (u32 e = 0; e < exX.count(); e = e + 1)
+                    {
+                    res.add((Object*)String.withFormat("%s.d%u:", tag.cString(), e));
+                    res.add((Object*)String.withFormat("  br label %%%s", ((String*)bl.get(((Number*)exT.get(e)).asU32())).cString()));
+                    }
+                continue;
+                }
+            res.add(fn.get(first - 1));
+            // The slots, at the top of the entry block.
+            if (b == 0)
+                for (u32 q = 0; q < outs.count(); q = q + 1)
+                    res.add((Object*)String.withFormat("  %%%s.o%u = alloca %s", tag.cString(), q, ((String*)outsTy.get(q)).cString()));
+            // An exit's phis: the edge from the loop is now the dispatch block's.
+            Map* edgeRen = new Map();
+            for (u32 e = 0; e < exT.count(); e = e + 1)
+                if (((Number*)exT.get(e)).asU32() == b)
+                    edgeRen.set((Hashable*)String.withFormat("%%%s", ((String*)bl.get(((Number*)exX.get(e)).asU32())).cString()),
+                                (Object*)String.withFormat("%%%s.d%u", tag.cString(), e));
+            for (u32 i = first; i < ((Number*)be.get(b)).asU32(); i = i + 1)
+                {
+                String* l = (String*)fn.get(i);
+                if (outRen.count() > 0)
+                    l = Languages.renamed(l, outRen);
+                if (edgeRen.count() > 0 && l.contains(String.withCString(" = phi ")))
+                    l = Languages.renamed(l, edgeRen);
+                res.add((Object*)l);
+                }
+            }
+        res.add(fn.get(fn.count() - 1));
+        return res;
+        }
+
+    // The define line's attribute groups (` #3`), for the extracted function.
+    static String* attrGroupsOf(String* d)
+        {
+        String* out = new String();
+        u32 close = Languages.paramsEnd(d);
+        if (close == String.notFound())
+            return out;
+        Array* ws = Languages.words(d.substringFromByte(close + 1));
+        for (u32 i = 0; i < ws.count(); i = i + 1)
+            {
+            String* w = (String*)ws.get(i);
+            if (w.hasPrefix(String.withCString("#")))
+                out.appendFormat(" %s", w.cString());
+            }
+        return out;
+        }
+
+    // The index of the `)` that closes the define line's parameter list.
+    static u32 paramsEnd(String* d)
+        {
+        u32 at = d.indexOfByte((u8)'@');
+        if (at == String.notFound())
+            return String.notFound();
+        u32 open = Languages.byteFrom(d, (u8)'(', at);
+        if (open == String.notFound())
+            return String.notFound();
+        u32 depth = 0;
+        for (u32 i = open; i < d.byteLength(); i = i + 1)
+            {
+            u8 c = d.byteAt(i);
+            if (c == (u8)'(')
+                depth = depth + 1;
+            else if (c == (u8)')')
+                {
+                depth = depth - 1;
+                if (depth == 0)
+                    return i;
+                }
+            }
+        return String.notFound();
+        }
+
+    // Each named parameter's type (`ptr noundef %p` -> ptr); 0 for a list
+    // not read.
+    static Map* paramTypes(String* d)
+        {
+        Map* m = new Map();
+        u32 at = d.indexOfByte((u8)'@');
+        u32 open = at != String.notFound() ? Languages.byteFrom(d, (u8)'(', at) : String.notFound();
+        u32 close = Languages.paramsEnd(d);
+        if (open == String.notFound() || close == String.notFound())
+            return (Map*)0;
+        Array* ps = Languages.topLevelSplit(d.substringBytes(open + 1, close - open - 1));
+        for (u32 i = 0; i < ps.count(); i = i + 1)
+            {
+            String* p = ((String*)ps.get(i)).trimmed();
+            if (p.byteLength() == 0 || p.equals(String.withCString("...")))
+                continue;
+            String* ty = Languages.leadingType(p);
+            u32 pc = String.notFound();
+            for (u32 q = 0; q < p.byteLength(); q = q + 1)
+                if (p.byteAt(q) == (u8)'%')
+                    pc = q;
+            if (ty == (String*)0 || pc == String.notFound())
+                continue;
+            m.set((Hashable*)p.substringFromByte(pc), (Object*)ty);
+            }
+        return m;
+        }
+
+    // s split at its top-level commas (not inside (), [], {} or <>).
+    static Array* topLevelSplit(String* s)
+        {
+        Array* out = new Array();
+        u32 depth = 0;
+        u32 start = 0;
+        for (u32 i = 0; i < s.byteLength(); i = i + 1)
+            {
+            u8 c = s.byteAt(i);
+            if (c == (u8)'(' || c == (u8)'[' || c == (u8)'{' || c == (u8)'<')
+                depth = depth + 1;
+            else if ((c == (u8)')' || c == (u8)']' || c == (u8)'}' || c == (u8)'>') && depth > 0)
+                depth = depth - 1;
+            else if (c == (u8)',' && depth == 0)
+                {
+                out.add((Object*)s.substringBytes(start, i - start));
+                start = i + 1;
+                }
+            }
+        out.add((Object*)s.substringFromByte(start));
+        return out;
+        }
+
+    // The type at the start of s: a bracketed one whole (`{ i32, i64 }`,
+    // `<4 x float>`, `[8 x i8]`), else its first word.
+    static String* leadingType(String* s)
+        {
+        String* t = s.trimmed();
+        if (t.byteLength() == 0)
+            return (String*)0;
+        u8 c = t.byteAt(0);
+        if (c == (u8)'{' || c == (u8)'<' || c == (u8)'[')
+            {
+            u32 depth = 0;
+            for (u32 i = 0; i < t.byteLength(); i = i + 1)
+                {
+                u8 d = t.byteAt(i);
+                if (d == (u8)'{' || d == (u8)'<' || d == (u8)'[' || d == (u8)'(')
+                    depth = depth + 1;
+                else if (d == (u8)'}' || d == (u8)'>' || d == (u8)']' || d == (u8)')')
+                    {
+                    depth = depth - 1;
+                    if (depth == 0)
+                        return t.substringBytes(0, i + 1);
+                    }
+                }
+            return (String*)0;
+            }
+        u32 e = 0;
+        while (e < t.byteLength() && t.byteAt(e) != (u8)' ' && t.byteAt(e) != (u8)',')
+            e = e + 1;
+        return t.substringBytes(0, e);
+        }
+
+    // The type of the value a definition line (`%x = ...`) makes; 0 for one
+    // not read (the loop then stays).
+    static String* typeOfDef(String* dl)
+        {
+        String* t = Languages.withoutMeta(dl.trimmed());
+        u32 eq = t.byteIndexOf(String.withCString(" = "));
+        if (eq == String.notFound())
+            return (String*)0;
+        String* r = t.substringFromByte(eq + 3).trimmed();
+        Array* ws = Languages.words(r);
+        if (ws.count() < 2)
+            return (String*)0;
+        String* op = (String*)ws.get(0);
+        if (op.equals(String.withCString("tail")) || op.equals(String.withCString("notail")))
+            {
+            r = r.substringFromByte(op.byteLength() + 1).trimmed();
+            ws = Languages.words(r);
+            op = (String*)ws.get(0);
+            }
+        String* rest = r.substringFromByte(op.byteLength()).trimmed();
+        Array* flags = String.withCString("nuw nsw exact disjoint nneg fast nnan ninf nsz arcp contract afn reassoc samesign volatile inbounds nusw").splitOnByte((u8)' ');
+        bool more = true;
+        while (more)
+            {
+            more = false;
+            for (u32 q = 0; q < flags.count(); q = q + 1)
+                {
+                String* f = (String*)flags.get(q);
+                if (rest.hasPrefix(f.appending(String.withCString(" "))))
+                    {
+                    rest = rest.substringFromByte(f.byteLength() + 1).trimmed();
+                    more = true;
+                    }
+                }
+            }
+        Array* same = String.withCString("add sub mul udiv sdiv urem srem shl lshr ashr and or xor fadd fsub fmul fdiv frem fneg").splitOnByte((u8)' ');
+        for (u32 q = 0; q < same.count(); q = q + 1)
+            if (op.equals((String*)same.get(q)))
+                return Languages.leadingType(rest);
+        if (op.equals(String.withCString("freeze")) || op.equals(String.withCString("load")) || op.equals(String.withCString("phi"))
+            || op.equals(String.withCString("insertvalue")) || op.equals(String.withCString("insertelement")))
+            return Languages.leadingType(rest);
+        if (op.equals(String.withCString("icmp")) || op.equals(String.withCString("fcmp")))
+            {
+            Array* cw = Languages.words(rest);
+            if (cw.count() < 2 || ((String*)cw.get(1)).hasPrefix(String.withCString("<")))
+                return (String*)0;
+            return String.withCString("i1");
+            }
+        if (op.equals(String.withCString("getelementptr")) || op.equals(String.withCString("alloca")))
+            return rest.contains(String.withCString("<")) ? (String*)0 : String.withCString("ptr");
+        if (op.equals(String.withCString("select")))
+            {
+            u32 c = rest.byteIndexOf(String.withCString(", "));
+            return c == String.notFound() ? (String*)0 : Languages.leadingType(rest.substringFromByte(c + 2));
+            }
+        Array* casts = String.withCString("trunc zext sext fptrunc fpext fptoui fptosi uitofp sitofp ptrtoint inttoptr bitcast addrspacecast").splitOnByte((u8)' ');
+        for (u32 q = 0; q < casts.count(); q = q + 1)
+            if (op.equals((String*)casts.get(q)))
+                {
+                u32 to = String.notFound();
+                String* key = String.withCString(" to ");
+                for (u32 p = rest.byteIndexOf(key); p != String.notFound(); p = rest.byteIndexOf(key, p + 1))
+                    to = p;
+                return to == String.notFound() ? (String*)0 : Languages.leadingType(rest.substringFromByte(to + 4));
+                }
+        if (op.equals(String.withCString("extractelement")))
+            {
+            String* v = Languages.leadingType(rest);
+            u32 x = v != (String*)0 ? v.byteIndexOf(String.withCString(" x ")) : String.notFound();
+            return x == String.notFound() ? (String*)0 : v.substringBytes(x + 3, v.byteLength() - x - 4).trimmed();
+            }
+        if (op.equals(String.withCString("extractvalue")))
+            {
+            String* agg = Languages.leadingType(rest);
+            if (agg == (String*)0)
+                return (String*)0;
+            Array* idx = Languages.topLevelSplit(rest.substringFromByte(agg.byteLength()));
+            if (idx.count() != 2)
+                return (String*)0;
+            i64 n = Languages.intOf(((String*)idx.get(1)).trimmed());
+            if (agg.hasPrefix(String.withCString("{")))
+                {
+                Array* fs = Languages.topLevelSplit(agg.substringBytes(1, agg.byteLength() - 2));
+                return n < (i64)fs.count() ? ((String*)fs.get((u32)n)).trimmed() : (String*)0;
+                }
+            if (agg.hasPrefix(String.withCString("[")))
+                {
+                u32 x = agg.byteIndexOf(String.withCString(" x "));
+                return x == String.notFound() ? (String*)0 : agg.substringBytes(x + 3, agg.byteLength() - x - 4).trimmed();
+                }
+            return (String*)0;
+            }
+        // A call, or an invoke (its result typed as a call's).
+        if (op.equals(String.withCString("call")) || op.equals(String.withCString("invoke")))
+            {
+            u32 at = rest.indexOfByte((u8)'@');
+            if (at == String.notFound())
+                return (String*)0;
+            String* before = rest.substringBytes(0, at).trimmed();
+            // A signature before the callee (`i32 (ptr, ...) @printf`).
+            if (before.byteLength() > 0 && before.byteAt(before.byteLength() - 1) == (u8)')')
+                {
+                u32 depth = 0;
+                u32 q = before.byteLength();
+                while (q > 0)
+                    {
+                    q = q - 1;
+                    u8 c = before.byteAt(q);
+                    if (c == (u8)')')
+                        depth = depth + 1;
+                    else if (c == (u8)'(')
+                        {
+                        depth = depth - 1;
+                        if (depth == 0)
+                            break;
+                        }
+                    }
+                before = before.substringBytes(0, q).trimmed();
+                }
+            if (before.byteLength() == 0)
+                return (String*)0;
+            u8 last = before.byteAt(before.byteLength() - 1);
+            String* ty = (String*)0;
+            if (last == (u8)'}' || last == (u8)'>' || last == (u8)']')
+                {
+                u32 depth = 0;
+                u32 q = before.byteLength();
+                while (q > 0)
+                    {
+                    q = q - 1;
+                    u8 c = before.byteAt(q);
+                    if (c == (u8)'}' || c == (u8)'>' || c == (u8)']')
+                        depth = depth + 1;
+                    else if (c == (u8)'{' || c == (u8)'<' || c == (u8)'[')
+                        {
+                        depth = depth - 1;
+                        if (depth == 0)
+                            break;
+                        }
+                    }
+                ty = before.substringFromByte(q);
+                }
+            else
+                {
+                Array* bw = Languages.words(before);
+                ty = (String*)bw.get(bw.count() - 1);
+                }
+            return ty.equals(String.withCString("void")) ? (String*)0 : ty;
+            }
+        return (String*)0;
+        }
+
     // Whether `@name` is the C++ standard library's (namespace std): a
     // template it instantiates with a lambda has internal linkage, not an
     // ODR copy's, yet it is the library's code, for clang's passes to inline
@@ -465,7 +1486,9 @@ class Languages
         for (u32 i = from; i < end; i = i + 1)
             {
             String* t = ((String*)lines.get(i)).trimmed();
-            if (!t.contains(String.withCString(" = phi i64 [ 0, ")))
+            // The start 0 in either place (an extracted loop's entry edge
+            // comes second).
+            if (!t.contains(String.withCString(" = phi i64 [")) || !t.contains(String.withCString("[ 0, ")))
                 continue;
             String* idx = t.substringBytes(0, Languages.byteFrom(t, (u8)' ', 0));
             // Its step: `add ... i64 idx, S`.
@@ -508,14 +1531,26 @@ class Languages
             i64 bound = 0;
             Array* geps = new Array();
             bool ok = true;
+            // The test and the addresses may use the count or the counted
+            // step (libstdc++ tests and indexes `idx + S`): both are counts
+            // of elements once each is a count by 1.
+            String* cmpV = (String*)0;
             for (u32 k = from; k < end && ok; k = k + 1)
                 {
                 if (k == i || k == addAt)
                     continue;
                 String* m = ((String*)lines.get(k)).trimmed();
-                if (Languages.uses(lines, k, k + 1, idx) == 0)
+                bool ui = Languages.uses(lines, k, k + 1, idx) != 0;
+                bool ua = Languages.uses(lines, k, k + 1, addv) != 0;
+                if (!ui && !ua)
                     continue;
-                String* cmpHead = String.withFormat("= icmp eq i64 %s, ", idx.cString());
+                if (ui && ua)
+                    {
+                    ok = false;
+                    continue;
+                    }
+                String* v = ui ? idx : addv;
+                String* cmpHead = String.withFormat("= icmp eq i64 %s, ", v.cString());
                 if (m.contains(cmpHead))
                     {
                     String* r = m.substringFromByte(m.byteIndexOf(cmpHead) + cmpHead.byteLength());
@@ -525,9 +1560,9 @@ class Languages
                     bound = Languages.intOf(r.substringBytes(0, e));
                     ok = bound > 0 && bound % step == 0 && cmpAt == String.notFound();
                     cmpAt = k;
+                    cmpV = v;
                     }
-                else if (m.contains(String.withCString(" = getelementptr inbounds i8, ptr "))
-                         && m.contains(String.withFormat(", i64 %s", idx.cString())))
+                else if (Languages.isByteGep(m) && m.contains(String.withFormat(", i64 %s", v.cString())))
                     geps.add((Object*)Number.with(k));
                 else
                     ok = false;
@@ -550,16 +1585,38 @@ class Languages
                 {
                 u32 k = ((Number*)geps.get(g)).asU32();
                 String* m = (String*)lines.get(k);
-                lines.set(k, (Object*)m.replacing(String.withCString(" = getelementptr inbounds i8, ptr "),
-                                                  String.withFormat(" = getelementptr inbounds %s, ptr ", ((String*)tys.get(g)).cString())));
+                lines.set(k, (Object*)Languages.typedGep(m, (String*)tys.get(g)));
                 }
             String* am = (String*)lines.get(addAt);
             lines.set(addAt, (Object*)am.replacing(String.withFormat(" i64 %s, %ld", idx.cString(), step),
                                                    String.withFormat(" i64 %s, 1", idx.cString())));
             String* cm = (String*)lines.get(cmpAt);
-            lines.set(cmpAt, (Object*)cm.replacing(String.withFormat("icmp eq i64 %s, %ld", idx.cString(), bound),
-                                                   String.withFormat("icmp eq i64 %s, %ld", idx.cString(), bound / step)));
+            lines.set(cmpAt, (Object*)cm.replacing(String.withFormat("icmp eq i64 %s, %ld", cmpV.cString(), bound),
+                                                   String.withFormat("icmp eq i64 %s, %ld", cmpV.cString(), bound / step)));
             }
+        }
+
+    // Whether m is `%x = getelementptr [inbounds] [nuw] i8, ptr ...` (LLVM
+    // 20 and later print `inbounds nuw`).
+    static bool isByteGep(String* m)
+        {
+        return m.contains(String.withCString(" = getelementptr inbounds i8, ptr ")) || m.contains(String.withCString(" = getelementptr inbounds nuw i8, ptr "))
+               || m.contains(String.withCString(" = getelementptr nuw i8, ptr ")) || m.contains(String.withCString(" = getelementptr i8, ptr "));
+        }
+
+    // A byte GEP (isByteGep) as one over elements of type t.
+    static String* typedGep(String* m, String* t)
+        {
+        String* typed = String.withFormat(" = getelementptr inbounds %s, ptr ", t.cString());
+        String* forms[4];
+        forms[0] = String.withCString(" = getelementptr inbounds nuw i8, ptr ");
+        forms[1] = String.withCString(" = getelementptr inbounds i8, ptr ");
+        forms[2] = String.withCString(" = getelementptr nuw i8, ptr ");
+        forms[3] = String.withCString(" = getelementptr i8, ptr ");
+        for (u32 q = 0; q < 4; q = q + 1)
+            if (m.contains(forms[q]))
+                return m.replacing(forms[q], typed);
+        return m;
         }
 
     // Whether a define line's linkage lets another object define it too.
@@ -1175,7 +2232,16 @@ class Languages
             // loop; b is not made in the header. Clang's passes write `i == n`
             // for `i < n` only where the start is at most n, so the test is
             // `i <u n`.
-            if (!Languages.countsFromZero(lines, blockStart, i, from, end, a, ty) || Languages.definedIn(lines, blockStart, brAt, b))
+            // Or a is that count's step (`a = add i, 1`, libstdc++'s fill
+            // testing i + 1): a counts from 1, and `a == n` there is
+            // `!(a <u n)` alike.
+            bool counts = Languages.countsFromZero(lines, blockStart, i, from, end, a, ty);
+            if (!counts)
+                {
+                String* stepOf = Languages.stepSource(lines, blockStart, i, a, ty);
+                counts = stepOf != (String*)0 && Languages.countsFromZero(lines, blockStart, i, from, end, stepOf, ty);
+                }
+            if (!counts || Languages.definedIn(lines, blockStart, brAt, b))
                 continue;
             lines.set(i, (Object*)l.replacing(String.withFormat(" = icmp %s %s ", eq ? "eq" : "ne", ty.cString()),
                                               String.withFormat(" = icmp ult %s ", ty.cString())));
@@ -1199,6 +2265,29 @@ class Languages
                 lines.set(brAt, (Object*)nm);
                 }
             }
+        }
+
+    // The count a steps (`a = add [nuw] [nsw] ty %i, 1` among lines
+    // [from, upto)): %i, or 0.
+    static String* stepSource(Array* lines, u32 from, u32 upto, String* a, String* ty)
+        {
+        String* head = a.appending(String.withCString(" = add "));
+        for (u32 k = from; k < upto; k = k + 1)
+            {
+            String* m = Languages.withoutMeta(((String*)lines.get(k)).trimmed());
+            if (!m.hasPrefix(head))
+                continue;
+            String* r = m.substringFromByte(head.byteLength());
+            if (r.hasPrefix(String.withCString("nuw ")))
+                r = r.substringFromByte(4);
+            if (r.hasPrefix(String.withCString("nsw ")))
+                r = r.substringFromByte(4);
+            Array* ws = Languages.words(r.replacing(String.withCString(","), String.withCString(" ")));
+            if (ws.count() != 3 || !((String*)ws.get(0)).equals(ty) || !((String*)ws.get(2)).equals(String.withCString("1")))
+                return (String*)0;
+            return (String*)ws.get(1);
+            }
+        return (String*)0;
         }
 
     // Loops that count with pointers (C++'s iterators, `for (p = a; p != e;
@@ -1410,7 +2499,7 @@ class Languages
             ix = ix.substringFromByte(4);
             if (!ty.equals(String.withCString("i8")))
                 {
-                if (Languages.sizeOf(ty) > 0)
+                if (Languages.sizeOf(ty) > 0 || ty.hasPrefix(String.withCString("%struct.")) || ty.hasPrefix(String.withCString("%class.")))
                     elemGep.set((Hashable*)nm, (Object*)String.withFormat("%s|%s|%s", ty.cString(), base.cString(), ix.cString()));
                 continue;
                 }
@@ -1422,6 +2511,17 @@ class Languages
             i64 sz = Languages.sizeOf(et);
             bool neg = ix.hasPrefix(String.withCString("-"));
             i64 c = Languages.intOf(neg ? ix.substringFromByte(1) : ix);
+            // A field of a struct element at its byte offset (`a[i].y` as
+            // a[i]'s address + 4): the field of element [i].
+            if (sz == 0)
+                {
+                i64 fk = neg ? (i64)-1 : Languages.structFieldAt(lines, et, c);
+                if (fk < 0)
+                    continue;
+                lines.set(i, (Object*)String.withFormat("  %s = getelementptr inbounds %s, ptr %s, i64 %s, i32 %ld", nm.cString(), et.cString(),
+                                                        ((String*)f.get(1)).cString(), ((String*)f.get(2)).cString(), fk));
+                continue;
+                }
             if (sz <= 0 || c == 0 || c % sz != 0)
                 continue;
             i64 k = (neg ? (i64)0 - c : c) / sz;
@@ -1431,6 +2531,37 @@ class Languages
                                                     tag.cString(), ((String*)f.get(2)).cString(), k,
                                                     nm.cString(), et.cString(), ((String*)f.get(1)).cString(), tag.cString()));
             }
+        }
+
+    // The field of named struct type t (its `t = type { ... }` line among
+    // lines) that starts at byte off, its fields scalars laid out naturally;
+    // -1 where there is none or the type is not read.
+    static i64 structFieldAt(Array* lines, String* t, i64 off)
+        {
+        String* head = t.appending(String.withCString(" = type { "));
+        for (u32 i = 0; i < lines.count(); i = i + 1)
+            {
+            String* l = (String*)lines.get(i);
+            if (!l.hasPrefix(head))
+                continue;
+            u32 close = l.byteIndexOf(String.withCString(" }"));
+            if (close == String.notFound())
+                return -1;
+            Array* fs = Languages.topLevelSplit(l.substringBytes(head.byteLength(), close - head.byteLength()));
+            i64 at = 0;
+            for (u32 k = 0; k < fs.count(); k = k + 1)
+                {
+                i64 sz = Languages.sizeOf(((String*)fs.get(k)).trimmed());
+                if (sz <= 0)
+                    return -1;
+                at = (at + sz - 1) / sz * sz;
+                if (at == off)
+                    return (i64)k;
+                at = at + sz;
+                }
+            return -1;
+            }
+        return -1;
         }
 
     // The `%names` a line mentions, in order (each as written, with its %).
