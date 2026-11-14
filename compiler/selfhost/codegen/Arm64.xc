@@ -4542,6 +4542,51 @@ class Arm64
         storeReg(d, n.res());
     }
 
+    // Whether a vector phi's incoming value must keep its own register (#220):
+    // it is made before the phi's block (index h) and something other than
+    // the phi reads it in that block or after (a loop's bound, read on every
+    // pass). Coalesced, the phi's updates would overwrite it: an escape loop
+    // whose accumulator started from its trip bound ran each inner loop the
+    // wrong number of times.
+    static bool vecPhiInLive(IRFunc* fn, IRInsn* p, u32 h, IRValue* v)
+        {
+        i32 dv = (i32)-1;
+        for (u32 b = (u32)0; b < fn.blocks().count() && dv < (i32)0; b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            for (u32 i = (u32)0; i < bb.phis().count() && dv < (i32)0; i = i + (u32)1)
+                if (((IRInsn*)bb.phis().get(i)).res() == v)
+                    dv = (i32)b;
+            for (u32 i = (u32)0; i < bb.insns().count() && dv < (i32)0; i = i + (u32)1)
+                if (((IRInsn*)bb.insns().get(i)).res() == v)
+                    dv = (i32)b;
+            }
+        if (dv >= (i32)h)
+            return false;
+        for (u32 b = h; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            for (u32 l = (u32)0; l < (u32)3; l = l + (u32)1)
+                {
+                Array* list = l == (u32)0 ? bb.phis() : bb.insns();
+                u32 n = l == (u32)2 ? (bb.term() != (IRInsn*)0 ? (u32)1 : (u32)0) : list.count();
+                for (u32 i = (u32)0; i < n; i = i + (u32)1)
+                    {
+                    IRInsn* u = l == (u32)2 ? bb.term() : (IRInsn*)list.get(i);
+                    if (u == p)
+                        continue;
+                    for (u32 k = (u32)0; k < u.ops().count(); k = k + (u32)1)
+                        {
+                        IROperand* o = (IROperand*)u.ops().get(k);
+                        if (o.kind() == (u8)OPK_USE && o.val() == v)
+                            return true;
+                        }
+                    }
+                }
+            }
+        return false;
+        }
+
     // Assign v18..v31 by linear scan with reuse. The pool is DISJOINT from the
     // FP allocator's homes (d8-d15) and its d0-d7/d16-d17 scratch, so a
     // function mixing float scalars with an integer reduction cannot alias.
@@ -4572,7 +4617,7 @@ class Arm64
                 if (p.res() == (IRValue*)0 || !isVecTy(p.res().ty())) continue;
                 for (u32 k = (u32)0; k < p.ops().count(); k = k + (u32)1) {
                     IROperand* o = (IROperand*)p.ops().get(k);
-                    if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0)
+                    if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0 && !vecPhiInLive(fn, p, b, o.val()))
                         _vecClass.set((Hashable*)o.val(), (Object*)p.res());
                 }
             }
