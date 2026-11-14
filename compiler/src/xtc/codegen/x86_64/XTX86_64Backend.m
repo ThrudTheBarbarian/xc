@@ -2894,6 +2894,10 @@ static void vecSlotMove(XTIRFunction* fn, XTIRValueId vid, NSString* reg, BOOL l
             if (in.result && in.result.type.kind == XTIRTypeKindVec)
                 [vecVals addObject:@(in.result.valueId)];
         }
+    // A VLoad folded into its reader has no register.
+    for (NSNumber* k in sFold)
+        if (sFold[k].opcode == XTIROpVLoad)
+            [vecVals removeObject:k];
     if (vecVals.count == 0)
         return nil;
 
@@ -3349,6 +3353,69 @@ static void vecSlotMove(XTIRFunction* fn, XTIRValueId vid, NSString* reg, BOOL l
                 if (!clean)
                     continue;
                 fold[@(ld.result.valueId)] = ld;
+                }
+            }
+        // (d) A VLoad whose one reader is an integer V-binop at 32 or 64 bytes,
+        // later in the block with nothing between that writes memory, is not
+        // made: the binop reads the memory itself (`vpxord zmm, zmm, [mem]`),
+        // one op and one register fewer (#42, array_sum), in a block with no
+        // VStore. VEX and EVEX take an unaligned memory operand; 16-byte SSE would need it aligned, and float
+        // binops may fuse into an FMA, so neither folds; nor does vpmulld, which
+        // ran 1% slower from memory in matrix_mul. The load goes in
+        // operand 1, or in operand 0 of a commutative op (emitVBin swaps them).
+        // The port's computeVecLoadFolds.
+        for (XTIRBlock* b in fn.blocks)
+            {
+            NSArray<XTIRInsn*>* ins = b.instructions;
+            // A block that stores vectors keeps its loads: in a store-bound
+            // loop (mem_copy, array_map, matrix_mul) the folded form ran 1-4%
+            // slower on Zen 5, fewer instructions in more cycles.
+            BOOL stores = NO;
+            for (XTIRInsn* m in ins)
+                if (m.opcode == XTIROpVStore)
+                    stores = YES;
+            if (stores)
+                continue;
+            for (NSUInteger i = 0; i < ins.count; i++)
+                {
+                XTIRInsn* n = ins[i];
+                XTIROpcode op = n.opcode;
+                if (!(op == XTIROpVAdd || op == XTIROpVSub || op == XTIROpVAnd || op == XTIROpVOr || op == XTIROpVXor ||
+                      op == XTIROpVMax || op == XTIROpVMin) || !n.result || n.operands.count != 2)
+                    continue;
+                XTIRType* t = n.result.type;
+                if (t.kind != XTIRTypeKindVec || !(t.byteWidth == 32 || t.byteWidth == 64) || !t.pointeeType ||
+                    t.pointeeType.kind == XTIRTypeKindF32 || t.pointeeType.kind == XTIRTypeKindF64)
+                    continue;
+
+                for (NSUInteger kk = 0; kk < 2; kk++)
+                    {
+                    NSUInteger k = 1 - kk;
+                    if (k == 0 && op == XTIROpVSub)
+                        continue;
+                    XTIROperand* o = n.operands[k];
+                    if (o.kind != XTIROperandKindUse || uc[@(o.valueId)].integerValue != 1)
+                        continue;
+                    NSUInteger j = NSNotFound;
+                    for (NSUInteger q = 0; q < i; q++)
+                        if (ins[q].result && ins[q].result.valueId == o.valueId)
+                            j = q;
+                    if (j == NSNotFound)
+                        continue;
+                    XTIRInsn* d = ins[j];
+                    XTIRType* dt = d.result.type;
+                    if (d.opcode != XTIROpVLoad || dt.kind != t.kind || dt.byteWidth != t.byteWidth || !dt.pointeeType ||
+                        dt.pointeeType.kind != t.pointeeType.kind)
+                        continue;
+                    BOOL clean = YES;
+                    for (NSUInteger q = j + 1; q < i && clean; q++)
+                        if (ins[q].memoryResult && ins[q].opcode != XTIROpLoad && ins[q].opcode != XTIROpVLoad)
+                            clean = NO;
+                    if (!clean)
+                        continue;
+                    fold[@(o.valueId)] = d;
+                    break;
+                    }
                 }
             }
         // Compare-and-branch fusion: a block ending in `CondBranch %c` where %c is
@@ -6368,13 +6435,45 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
         {
         if (!res || ops.count < 2 || ops[0].kind != XTIROperandKindUse || ops[1].kind != XTIROperandKindUse)
             return;
-        NSString *d = sVec[@(res.valueId)], *a = sVec[@(ops[0].valueId)], *b = sVec[@(ops[1].valueId)];
+        // A folded VLoad is the memory operand (fold step (d)); in operand 0
+        // only of a commutative op, so the two swap.
+        XTIROperand* o0 = ops[0];
+        XTIROperand* o1 = ops[1];
+        XTIRInsn* vl = sFold[@(o1.valueId)].opcode == XTIROpVLoad ? sFold[@(o1.valueId)] : nil;
+        if (!vl && sFold[@(o0.valueId)].opcode == XTIROpVLoad)
+            {
+            vl = sFold[@(o0.valueId)];
+            o0 = ops[1];
+            o1 = ops[0];
+            }
+        NSString *d = sVec[@(res.valueId)], *a = sVec[@(o0.valueId)], *b = vl ? @"" : sVec[@(o1.valueId)];
         if (!d || !a || !b)
             return;
         XTIRType* lane = res.type.pointeeType;
         NSString* mn = [self sseMnemForVecOp:op lane:lane];
         if (!mn)
             return;
+        if (vl && ([d hasPrefix:@"ymm"] || [d hasPrefix:@"zmm"]))
+            {
+            NSArray<XTIROperand*>* vops = vl.operands;
+            XTIRInsn* vea = vops[0].kind == XTIROperandKindUse ? sFold[@(vops[0].valueId)] : nil;
+            NSString* ph = vops[0].kind == XTIROperandKindUse ? sHome[@(vops[0].valueId)] : nil;
+            NSString* memop;
+            if (vea)
+                memop = [self foldedMemOp:vea fn:fn slot:slot out:out];
+            else if (ph && ![self isXmmHome:ph])
+                memop = [NSString stringWithFormat:@"[%@]", [self regView:ph width:8]];
+            else
+                {
+                [self loadZX:vops[0] into:'a' fn:fn slot:slot out:out];
+                memop = @"[rax]";
+                }
+            BOOL z = [d hasPrefix:@"zmm"];
+            if (z && ([mn isEqualToString:@"pand"] || [mn isEqualToString:@"por"] || [mn isEqualToString:@"pxor"]))
+                mn = [mn stringByAppendingString:@"d"];
+            [out appendFormat:@"\tv%@\t%@, %@, %@%@\n", mn, d, a, z ? @"zmmword ptr " : @"ymmword ptr ", memop];
+            return;
+            }
         BOOL flt = lane && [self isFloatKind:lane.kind];
         // 256-bit: the VEX three-operand form, which keeps both sources.
         if ([d hasPrefix:@"ymm"])

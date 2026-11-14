@@ -598,6 +598,7 @@ class X86_64
         _hasAsm = functionHasAsm(fn);
         assignSlots(fn);
         buildDefOf(fn);
+        computeVecLoadFolds(fn);
         assignVectorRegs(fn);
         computeFoldsAndFusion(fn); // both feed the allocator's exclusion set
         assignHomes(fn);
@@ -1832,6 +1833,8 @@ class X86_64
         {
         if (n.res() == (IRValue*)0 || n.ops().count() < (u32)1)
             return;
+        if (_vlFold.get((Hashable*)n.res()) != (Object*)0)
+            return; // its reader reads the memory (computeVecLoadFolds)
         String* d = vecOf(n.res());
         if (d == (String*)0)
             return;
@@ -2007,13 +2010,39 @@ class X86_64
         IROperand* o1 = (IROperand*)n.ops().get((u32)1);
         if (o0.kind() != (u8)OPK_USE || o1.kind() != (u8)OPK_USE)
             return;
+        // A folded VLoad is the memory operand (computeVecLoadFolds); in
+        // operand 0 only of a commutative op, so the two swap.
+        IRInsn* vl = (IRInsn*)_vlFold.get((Hashable*)o1.val());
+        if (vl == (IRInsn*)0)
+            {
+            vl = (IRInsn*)_vlFold.get((Hashable*)o0.val());
+            if (vl != (IRInsn*)0)
+                {
+                IROperand* sw = o0;
+                o0 = o1;
+                o1 = sw;
+                }
+            }
         String* d = vecOf(n.res());
         String* a = vecOf(o0.val());
-        String* b = vecOf(o1.val());
+        String* b = vl != (IRInsn*)0 ? String.withCString("") : vecOf(o1.val());
         if (d == (String*)0 || a == (String*)0 || b == (String*)0)
             return;
         String* lane = laneOf(n.res().ty());
         String* mn = sseMnemFor(n.op(), lane);
+        if (vl != (IRInsn*)0 && mn != (String*)0 && (isYmm(d) || isZmm(d)))
+            {
+            String* memop = vecMemOp((IROperand*)vl.ops().get((u32)0));
+            if (isZmm(d) && (mn.equals(String.withCString("pand")) || mn.equals(String.withCString("por")) || mn.equals(String.withCString("pxor"))))
+                {
+                String* m3 = String.withString(mn);
+                m3.appendByte((u8)'d');
+                mn = m3;
+                }
+            _out.appendFormat("\tv%s\t%s, %s, %s%s\n", mn.cString(), d.cString(), a.cString(),
+                              isZmm(d) ? "zmmword ptr " : "ymmword ptr ", memop.cString());
+            return;
+            }
         if (mn == (String*)0)
             {
             unsupported(String.withCString("VBin:lane"));
@@ -2903,6 +2932,15 @@ class X86_64
             IRBlock* bb = (IRBlock*)fn.blocks().get(b);
             collectVecs(vecVals, bb.phis());
             collectVecs(vecVals, bb.insns());
+            }
+        // A VLoad folded into its reader has no register.
+        if (_vlFold.count() > (u32)0)
+            {
+            Array* kept = new Array();
+            for (u32 i = (u32)0; i < vecVals.count(); i = i + (u32)1)
+                if (_vlFold.get((Hashable*)vecVals.get(i)) == (Object*)0)
+                    kept.add(vecVals.get(i));
+            vecVals = kept;
             }
         if (vecVals.count() == (u32)0)
             return;
@@ -5596,9 +5634,98 @@ class X86_64
     // OPERAND, which on this machine is a real addressing mode. A load's
     // consumer has to be adjacent; a STORE's need not be, because the base and
     // index are recomputed at the store site.
+    // A VLoad whose one reader is an integer V-binop at 32 or 64 bytes, later
+    // in the block with nothing between that writes memory, is not made: the
+    // binop reads the memory itself (`vpxord zmm, zmm, [mem]`), one op and
+    // one register fewer (#42, array_sum), in a block with no VStore. VEX and
+    // EVEX take an unaligned
+    // memory operand; 16-byte SSE would need it aligned, and float binops may
+    // fuse into an FMA, so neither folds; nor does vpmulld, which ran 1%
+    // slower from memory in matrix_mul. The load goes in operand 1, or in
+    // operand 0 of a commutative op, which emitVBin swaps. Decided before the
+    // vector registers are given out. As the reference's computeVecLoadFolds.
+    static bool vlFoldOp(String* op)
+        {
+        return op.equals(String.withCString("VAdd")) || op.equals(String.withCString("VSub")) || op.equals(String.withCString("VAnd"))
+            || op.equals(String.withCString("VOr")) || op.equals(String.withCString("VXor")) || op.equals(String.withCString("VMax"))
+            || op.equals(String.withCString("VMin"));
+        }
+
+    void computeVecLoadFolds(IRFunc* fn)
+        {
+        _vlFold = new Map();
+        if (_hasAsm)
+            return;
+        Map* uc = new Map();
+        Map* useOf = new Map();
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            countIn(uc, useOf, bb.phis());
+            countIn(uc, useOf, bb.insns());
+            if (bb.term() != (IRInsn*)0)
+                countOne(uc, useOf, bb.term());
+            }
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            Array* ins = ((IRBlock*)fn.blocks().get(b)).insns();
+            Map* at = new Map();
+            bool stores = false;
+            for (u32 i = (u32)0; i < ins.count(); i = i + (u32)1)
+                {
+                at.set((Hashable*)ins.get(i), (Object*)Number.with(i));
+                if (((IRInsn*)ins.get(i)).op().equals(String.withCString("VStore")))
+                    stores = true;
+                }
+            // A block that stores vectors keeps its loads: in a store-bound
+            // loop (mem_copy, array_map, matrix_mul) the folded form ran 1-4%
+            // slower on Zen 5, fewer instructions in more cycles.
+            if (stores)
+                continue;
+            for (u32 i = (u32)0; i < ins.count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)ins.get(i);
+                if (!vlFoldOp(n.op()) || n.res() == (IRValue*)0 || n.ops().count() != (u32)2)
+                    continue;
+                String* t = n.res().ty();
+                if (!(isWideVecTy(t) || isWide512VecTy(t)) || isFloatTy(laneOf(t)))
+                    continue;
+                for (u32 kk = (u32)0; kk < (u32)2; kk = kk + (u32)1)
+                    {
+                    u32 k = (u32)1 - kk;
+                    if (k == (u32)0 && n.op().equals(String.withCString("VSub")))
+                        continue;
+                    IROperand* o = (IROperand*)n.ops().get(k);
+                    if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0 || useCount(uc, o.val()) != (u32)1)
+                        continue;
+                    IRInsn* d = defInsnFor(o.val());
+                    if (d == (IRInsn*)0 || !d.op().equals(String.withCString("VLoad")) || d.res() == (IRValue*)0 || !d.res().ty().equals(t))
+                        continue;
+                    Object* di = at.get((Hashable*)d);
+                    if (di == (Object*)0)
+                        continue;
+                    bool clean = true;
+                    for (u32 j = ((Number*)di).asU32() + (u32)1; j < i && clean; j = j + (u32)1)
+                        {
+                        IRInsn* m = (IRInsn*)ins.get(j);
+                        if (m.memRes() != (IRValue*)0 && !m.op().equals(String.withCString("Load")) && !m.op().equals(String.withCString("VLoad")))
+                            clean = false;
+                        }
+                    if (!clean)
+                        continue;
+                    _vlFold.set((Hashable*)o.val(), (Object*)d);
+                    break;
+                    }
+                }
+            }
+        }
+
     void computeFoldsAndFusion(IRFunc* fn)
         {
         _fold = new Map();
+        Array* vk = _vlFold.allKeys();
+        for (u32 i = (u32)0; i < vk.count(); i = i + (u32)1)
+            _fold.set((Hashable*)vk.get(i), _vlFold.get((Hashable*)vk.get(i)));
         _fusedCmp = new Map();
         _selSkip = new Map();
         _selCmp = new Map();
@@ -8556,6 +8683,7 @@ class X86_64
     bool _buildFma;  // the build needs an FMA CPU (-mavx2, -msimd=avx512)
     Map* _fZero;     // the float Consts that are +0.0 (made by xorps, not loaded)
     Map* _splatVec;  // this function's VSplat results (every lane the same)
+    Map* _vlFold;    // a VLoad folded into its one vector-binop reader -> the VLoad
     bool _vexOk;     // this function is an avx2/avx512 copy: three-operand forms
     // A signed 32-bit value known to be non-negative: an And with a mask from
     // 0 to 2^31 - 1, or such a value plus a constant that keeps it under 2^31

@@ -156,6 +156,27 @@
                             recordUse(fo);
                     }
                 }
+            // A VLoad folded into a vector binop (the x86 back end's
+            // computeVecLoadFolds) is read there: its pointer, and the base and
+            // index of an address folded into it.
+            if (foldInfo.count && insn.operands.count == 2)
+                for (XTIROperand* vo in insn.operands)
+                    {
+                    if (vo.kind != XTIROperandKindUse)
+                        continue;
+                    XTIRInsn* fv = foldInfo[@(vo.valueId)];
+                    if (!fv || fv.opcode != XTIROpVLoad)
+                        continue;
+                    for (XTIROperand* fo in fv.operands)
+                        recordUse(fo);
+                    if (fv.operands.count >= 1 && fv.operands[0].kind == XTIROperandKindUse)
+                        {
+                        XTIRInsn* fea = foldInfo[@(fv.operands[0].valueId)];
+                        if (fea)
+                            for (XTIROperand* fo in fea.operands)
+                                recordUse(fo);
+                        }
+                    }
             // A Select-fused ICmp is elided and its compare re-issued AT the
             // Select, so the compare's operands are read here — extend them,
             // or the Select's own arms take their registers and the compare

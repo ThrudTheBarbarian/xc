@@ -381,6 +381,28 @@ class BitSet
                             }
                         }
                     }
+                // A VLoad folded into a vector binop is read there: its
+                // pointer, and the base and index of an address folded into it.
+                if (_foldInfo != 0 && insn.ops().count() == (u32)2)
+                    {
+                    for (u32 k = (u32)0; k < (u32)2; k = k + (u32)1)
+                        {
+                        IROperand* vo = (IROperand*)insn.ops().get(k);
+                        if (vo.kind() != (u8)OPK_USE || vo.val() == 0)
+                            continue;
+                        Object* fv = _foldInfo.get((Hashable*)Number.with(vo.val().pid()));
+                        if (fv == 0 || !((IRInsn*)fv).op().equals(String.withCString("VLoad")))
+                            continue;
+                        recordUses((IRInsn*)fv, pos, defs, ue);
+                        IROperand* q0 = (IROperand*)((IRInsn*)fv).ops().get((u32)0);
+                        if (q0.kind() == (u8)OPK_USE && q0.val() != 0)
+                            {
+                            Object* fea = _foldInfo.get((Hashable*)Number.with(q0.val().pid()));
+                            if (fea != 0)
+                                recordUses((IRInsn*)fea, pos, defs, ue);
+                            }
+                        }
+                    }
                 if (_selInfo != 0 && insn.ops().count() >= (u32)1 && insn.op().equals(String.withCString("Select")))
                     {
                     IROperand* c0 = (IROperand*)insn.ops().get((u32)0);
