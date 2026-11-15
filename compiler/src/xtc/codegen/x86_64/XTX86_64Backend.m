@@ -3999,16 +3999,30 @@ static void vecSlotMove(XTIRFunction* fn, XTIRValueId vid, NSString* reg, BOOL l
             if (pv.type.kind == XTIRTypeKindAgg)
                 {
                 // Mirror of the caller: N = ceil(size/8) consecutive GP arg regs, one
-                // 8-byte chunk each, back into the padded slot. Skip symmetrically if
-                // it would overflow past r9.
+                // 8-byte chunk each, back into the padded slot.
                 NSUInteger nregs = ([self aggSize:pv.type.layout] + 7) / 8;
-                if (s && ireg + nregs <= iregs.count)
+                if (ireg + nregs <= iregs.count)
                     {
                     for (NSUInteger k = 0; k < nregs; k++)
                         {
-                        [out appendFormat:@"\tmov\t[rbp-%ld], %@\n",
-                                          (long)(s.integerValue - 8 * (long)k), iregs[ireg]];
+                        if (s)
+                            [out appendFormat:@"\tmov\t[rbp-%ld], %@\n",
+                                              (long)(s.integerValue - 8 * (long)k), iregs[ireg]];
                         ireg++;
+                        }
+                    }
+                else
+                    {
+                    // Past the registers the caller put it whole on the stack,
+                    // its words in order from the next stack slot (#301).
+                    for (NSUInteger k = 0; k < nregs; k++)
+                        {
+                        if (s)
+                            {
+                            [out appendFormat:@"\tmov\trax, [rbp+%lu]\n", (unsigned long)(16 + 8 * sidx)];
+                            [out appendFormat:@"\tmov\t[rbp-%ld], rax\n", (long)(s.integerValue - 8 * (long)k)];
+                            }
+                        sidx++;
                         }
                     }
                 }
@@ -5084,6 +5098,8 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
                     NSUInteger nr = ([self aggSize:v.type.layout] + 7) / 8;
                     if (cIreg + nr <= 6)
                         cIreg += nr;
+                    else
+                        nstack += nr; // whole, on the stack (#301)
                     }
                 else if (v && [self isFloatVal:v] && cFreg < 8)
                     {
@@ -5114,17 +5130,33 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
                     // occupies N = ceil(size/8) consecutive GP arg registers, one
                     // per 8-byte chunk; the callee spills them back into its slot.
                     // (Slots are padded to a multiple of 8 by slotSizeOf, so the
-                    // tail chunk's over-read stays in-slot.) Overflow past r9 is
-                    // unsupported — skip symmetrically with the prologue.
+                    // tail chunk's over-read stays in-slot.) Past r9 it goes on the
+                    // stack whole (#301).
                     NSNumber* s = slot[@(a.valueId)];
                     NSUInteger nregs = ([self aggSize:v.type.layout] + 7) / 8;
-                    if (s && ireg + nregs <= 6)
+                    if (ireg + nregs <= 6)
                         {
                         for (NSUInteger k = 0; k < nregs; k++)
                             {
-                            [out appendFormat:@"\tmov\t%@, [rbp-%ld]\n", [self argRegs64][ireg],
-                                              (long)(s.integerValue - 8 * (long)k)];
+                            if (s)
+                                [out appendFormat:@"\tmov\t%@, [rbp-%ld]\n", [self argRegs64][ireg],
+                                                  (long)(s.integerValue - 8 * (long)k)];
                             ireg++;
+                            }
+                        }
+                    else
+                        {
+                        // Past the registers it goes WHOLE on the stack, its words in order
+                        // at the next outgoing slots, and the registers left stay for later
+                        // arguments, as SysV passes it (#301; the port explains).
+                        for (NSUInteger k = 0; k < nregs; k++)
+                            {
+                            if (s)
+                                {
+                                [out appendFormat:@"\tmov\trax, [rbp-%ld]\n", (long)(s.integerValue - 8 * (long)k)];
+                                [out appendFormat:@"\tmov\t[rsp+%lu], rax\n", (unsigned long)(8 * sidx)];
+                                }
+                            sidx++;
                             }
                         }
                     }
@@ -5249,6 +5281,8 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
                     NSUInteger nr = ([self aggSize:v.type.layout] + 7) / 8;
                     if (cIreg + nr <= 6)
                         cIreg += nr;
+                    else
+                        nstack += nr; // whole, on the stack (#301)
                     }
                 else if (v && [self isFloatVal:v] && cFreg < 8)
                     {
@@ -5285,13 +5319,29 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
                     // (a local call devirtualises to a direct Call and was fine).
                     NSNumber* s = slot[@(a.valueId)];
                     NSUInteger nregs = ([self aggSize:v.type.layout] + 7) / 8;
-                    if (s && ireg + nregs <= 6)
+                    if (ireg + nregs <= 6)
                         {
                         for (NSUInteger k = 0; k < nregs; k++)
                             {
-                            [out appendFormat:@"\tmov\t%@, [rbp-%ld]\n", [self argRegs64][ireg],
-                                              (long)(s.integerValue - 8 * (long)k)];
+                            if (s)
+                                [out appendFormat:@"\tmov\t%@, [rbp-%ld]\n", [self argRegs64][ireg],
+                                                  (long)(s.integerValue - 8 * (long)k)];
                             ireg++;
+                            }
+                        }
+                    else
+                        {
+                        // Past the registers it goes WHOLE on the stack, its words in order
+                        // at the next outgoing slots, and the registers left stay for later
+                        // arguments, as SysV passes it (#301; the port explains).
+                        for (NSUInteger k = 0; k < nregs; k++)
+                            {
+                            if (s)
+                                {
+                                [out appendFormat:@"\tmov\trax, [rbp-%ld]\n", (long)(s.integerValue - 8 * (long)k)];
+                                [out appendFormat:@"\tmov\t[rsp+%lu], rax\n", (unsigned long)(8 * sidx)];
+                                }
+                            sidx++;
                             }
                         }
                     }
@@ -5441,6 +5491,8 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
                 NSUInteger nr = ([self aggSize:v.type.layout] + 7) / 8;
                 if (cIreg + nr <= 6)
                     cIreg += nr;
+                else
+                    nstack += nr; // whole, on the stack (#301)
                 }
             else if (v && [self isFloatVal:v] && cFreg < 8)
                 {
@@ -5466,13 +5518,29 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
                 {
                 NSNumber* sv = slot[@(a.valueId)];
                 NSUInteger nregs = ([self aggSize:v.type.layout] + 7) / 8;
-                if (sv && ireg + nregs <= 6)
+                if (ireg + nregs <= 6)
                     {
                     for (NSUInteger k = 0; k < nregs; k++)
                         {
-                        [out appendFormat:@"\tmov\t%@, [rbp-%ld]\n", [self argRegs64][ireg],
-                                          (long)(sv.integerValue - 8 * (long)k)];
+                        if (sv)
+                            [out appendFormat:@"\tmov\t%@, [rbp-%ld]\n", [self argRegs64][ireg],
+                                              (long)(sv.integerValue - 8 * (long)k)];
                         ireg++;
+                        }
+                    }
+                else
+                    {
+                    // Past the registers it goes WHOLE on the stack, its words in order
+                    // at the next outgoing slots, and the registers left stay for later
+                    // arguments, as SysV passes it (#301; the port explains).
+                    for (NSUInteger k = 0; k < nregs; k++)
+                        {
+                        if (sv)
+                            {
+                            [out appendFormat:@"\tmov\trax, [rbp-%ld]\n", (long)(sv.integerValue - 8 * (long)k)];
+                            [out appendFormat:@"\tmov\t[rsp+%lu], rax\n", (unsigned long)(8 * sidx)];
+                            }
+                        sidx++;
                         }
                     }
                 }

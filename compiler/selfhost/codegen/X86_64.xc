@@ -1036,16 +1036,30 @@ class X86_64
             if (isAggTy(t))
                 {
                 // A struct by value rides ceil(size/8) consecutive GP argument
-                // registers, one 8-byte chunk each, mirroring the caller. It is
-                // skipped symmetrically if it would overflow past r9.
+                // registers, one 8-byte chunk each, mirroring the caller.
                 u32 nregs = (aggSize(layoutOf(t)) + (u32)7) / (u32)8;
-                if (hasSlot(pv) && ireg + nregs <= iregs.count())
+                if (ireg + nregs <= iregs.count())
                     {
                     for (u32 k = (u32)0; k < nregs; k = k + (u32)1)
                         {
-                        _out.appendFormat("\tmov\t[rbp-%lu], %s\n", s - (u32)8 * k,
-                                          ((String*)iregs.get(ireg)).cString());
+                        if (hasSlot(pv))
+                            _out.appendFormat("\tmov\t[rbp-%lu], %s\n", s - (u32)8 * k,
+                                              ((String*)iregs.get(ireg)).cString());
                         ireg = ireg + (u32)1;
+                        }
+                    }
+                else
+                    {
+                    // Past the registers the caller put it whole on the stack,
+                    // its words in order from the next stack slot (#301).
+                    for (u32 k = (u32)0; k < nregs; k = k + (u32)1)
+                        {
+                        if (hasSlot(pv))
+                            {
+                            _out.appendFormat("\tmov\trax, [rbp+%lu]\n", (u32)16 + (u32)8 * sidx);
+                            _out.appendFormat("\tmov\t[rbp-%lu], rax\n", s - (u32)8 * k);
+                            }
+                        sidx = sidx + (u32)1;
                         }
                     }
                 }
@@ -4046,6 +4060,8 @@ class X86_64
                 u32 nr = (aggSize(layoutOf(t)) + (u32)7) / (u32)8;
                 if (cIreg + nr <= (u32)6)
                     cIreg = cIreg + nr;
+                else
+                    nstack = nstack + nr; // whole, on the stack (#301)
                 }
             else if (isFloatTy(t) && cFreg < (u32)8)
                 {
@@ -4081,14 +4097,31 @@ class X86_64
                 // which only ever showed across a shared object, since a local
                 // call devirtualises to a direct one.
                 u32 nregs = (aggSize(layoutOf(t)) + (u32)7) / (u32)8;
-                if (hasSlot(a.val()) && ireg + nregs <= (u32)6)
+                if (ireg + nregs <= (u32)6)
                     {
                     for (u32 k = (u32)0; k < nregs; k = k + (u32)1)
                         {
-                        _out.appendFormat("\tmov\t%s, [rbp-%lu]\n",
-                                          ((String*)ir64.get(ireg)).cString(),
-                                          slotOf(a.val()) - (u32)8 * k);
+                        if (hasSlot(a.val()))
+                            _out.appendFormat("\tmov\t%s, [rbp-%lu]\n",
+                                              ((String*)ir64.get(ireg)).cString(),
+                                              slotOf(a.val()) - (u32)8 * k);
                         ireg = ireg + (u32)1;
+                        }
+                    }
+                else
+                    {
+                    // Past the registers it goes WHOLE on the stack, its words
+                    // in order at the next outgoing slots, and the registers
+                    // left stay for later arguments, as SysV passes it (#301).
+                    // rax is free here, as for a scalar stack argument.
+                    for (u32 k = (u32)0; k < nregs; k = k + (u32)1)
+                        {
+                        if (hasSlot(a.val()))
+                            {
+                            _out.appendFormat("\tmov\trax, [rbp-%lu]\n", slotOf(a.val()) - (u32)8 * k);
+                            _out.appendFormat("\tmov\t[rsp+%lu], rax\n", (u32)8 * sidx);
+                            }
+                        sidx = sidx + (u32)1;
                         }
                     }
                 }
@@ -4179,6 +4212,8 @@ class X86_64
                 u32 nr = (aggSize(layoutOf(t)) + (u32)7) / (u32)8;
                 if (cIreg + nr <= (u32)6)
                     cIreg = cIreg + nr;
+                else
+                    nstack = nstack + nr; // whole, on the stack (#301)
                 }
             else if (isFloatTy(t) && cFreg < (u32)8)
                 {
@@ -4206,14 +4241,31 @@ class X86_64
             if (isAggTy(t))
                 {
                 u32 nregs = (aggSize(layoutOf(t)) + (u32)7) / (u32)8;
-                if (hasSlot(a.val()) && ireg + nregs <= (u32)6)
+                if (ireg + nregs <= (u32)6)
                     {
                     for (u32 k = (u32)0; k < nregs; k = k + (u32)1)
                         {
-                        _out.appendFormat("\tmov\t%s, [rbp-%lu]\n",
-                                          ((String*)ir64.get(ireg)).cString(),
-                                          slotOf(a.val()) - (u32)8 * k);
+                        if (hasSlot(a.val()))
+                            _out.appendFormat("\tmov\t%s, [rbp-%lu]\n",
+                                              ((String*)ir64.get(ireg)).cString(),
+                                              slotOf(a.val()) - (u32)8 * k);
                         ireg = ireg + (u32)1;
+                        }
+                    }
+                else
+                    {
+                    // Past the registers it goes WHOLE on the stack, its words
+                    // in order at the next outgoing slots, and the registers
+                    // left stay for later arguments, as SysV passes it (#301).
+                    // rax is free here, as for a scalar stack argument.
+                    for (u32 k = (u32)0; k < nregs; k = k + (u32)1)
+                        {
+                        if (hasSlot(a.val()))
+                            {
+                            _out.appendFormat("\tmov\trax, [rbp-%lu]\n", slotOf(a.val()) - (u32)8 * k);
+                            _out.appendFormat("\tmov\t[rsp+%lu], rax\n", (u32)8 * sidx);
+                            }
+                        sidx = sidx + (u32)1;
                         }
                     }
                 }
@@ -6427,9 +6479,8 @@ class X86_64
     void emitSysVCall(IRFunc* fn, IRInsn* n, bool indirect, u32 argEnd)
         {
         // A pre-pass sizes the outgoing area so ONE `sub rsp` reserves it, kept
-        // 16-aligned. Only integer stack arguments are counted; a struct or
-        // float overflowing its register file is not supported here, and is
-        // skipped symmetrically with the callee's spill.
+        // 16-aligned: integer stack arguments, and a struct past the integer
+        // registers, which goes whole on the stack (#301).
         // A >16-byte aggregate RESULT is MEMORY class: rdi carries a hidden
         // pointer to the result slot, shifting the GP arguments right by one.
         bool memRet = n.res() != (IRValue*)0 && returnsSysVMemAgg(n.res().ty());
@@ -6444,6 +6495,8 @@ class X86_64
                 u32 nr = (aggSize(layoutOf(t)) + (u32)7) / (u32)8;
                 if (cIreg + nr <= (u32)6)
                     cIreg = cIreg + nr;
+                else
+                    nstack = nstack + nr; // whole, on the stack (#301)
                 }
             else if (isFloatTy(t) && cFreg < (u32)8)
                 {
@@ -6479,14 +6532,31 @@ class X86_64
                 // back. Slots are padded to a multiple of 8, so the tail
                 // chunk's over-read stays inside the slot.
                 u32 nregs = (aggSize(layoutOf(t)) + (u32)7) / (u32)8;
-                if (hasSlot(a.val()) && ireg + nregs <= (u32)6)
+                if (ireg + nregs <= (u32)6)
                     {
                     for (u32 k = (u32)0; k < nregs; k = k + (u32)1)
                         {
-                        _out.appendFormat("\tmov\t%s, [rbp-%lu]\n",
-                                          ((String*)ir64.get(ireg)).cString(),
-                                          slotOf(a.val()) - (u32)8 * k);
+                        if (hasSlot(a.val()))
+                            _out.appendFormat("\tmov\t%s, [rbp-%lu]\n",
+                                              ((String*)ir64.get(ireg)).cString(),
+                                              slotOf(a.val()) - (u32)8 * k);
                         ireg = ireg + (u32)1;
+                        }
+                    }
+                else
+                    {
+                    // Past the registers it goes WHOLE on the stack, its words
+                    // in order at the next outgoing slots, and the registers
+                    // left stay for later arguments, as SysV passes it (#301).
+                    // rax is free here, as for a scalar stack argument.
+                    for (u32 k = (u32)0; k < nregs; k = k + (u32)1)
+                        {
+                        if (hasSlot(a.val()))
+                            {
+                            _out.appendFormat("\tmov\trax, [rbp-%lu]\n", slotOf(a.val()) - (u32)8 * k);
+                            _out.appendFormat("\tmov\t[rsp+%lu], rax\n", (u32)8 * sidx);
+                            }
+                        sidx = sidx + (u32)1;
                         }
                     }
                 }
