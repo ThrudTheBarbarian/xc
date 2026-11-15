@@ -1219,7 +1219,8 @@ class IrParser
 
     static bool isTerminator(String* op)
         {
-        return op.equals(String.withCString("Return")) || op.equals(String.withCString("Branch")) || op.equals(String.withCString("CondBranch")) || op.equals(String.withCString("Switch")) || op.equals(String.withCString("Unreachable"));
+        return op.equals(String.withCString("Return")) || op.equals(String.withCString("Branch")) || op.equals(String.withCString("CondBranch")) || op.equals(String.withCString("Switch")) || op.equals(String.withCString("Unreachable"))
+            || op.equals(String.withCString("Invoke")) || op.equals(String.withCString("Resume"));
         }
 
     static bool isCallOp(String* op)
@@ -1237,6 +1238,23 @@ class IrParser
         if (IrParser.isCallOp(op))
             {
             callOperands(insn);
+            return;
+            }
+        // Invoke: a call's operands, then its normal and unwind blocks.
+        if (op.equals(String.withCString("Invoke")))
+            {
+            callOperands(insn);
+            for (u32 k = (u32)0; k < (u32)2 && !_failed; k = k + (u32)1)
+                {
+                expectChar((u8)',');
+                IROperand* b = operand();
+                if (b == 0)
+                    {
+                    giveUpAt("expected an Invoke's block");
+                    return;
+                    }
+                insn.add(b);
+                }
             return;
             }
         // ICmp / FCmp / VICmp lead with a PREDICATE, which is a bare word where

@@ -39,6 +39,10 @@ class LlvmReader
     bool _sawZext;          // the last skipAttrs() passed a `zeroext`
     Array* _zxParams;       // a function's zeroext parameters: name, value
     Map* _aggParams;        // a function's [N x iK] parameters: name -> Array of its N values
+    bool _readHandlers;     // read invoke / landingpad / resume (a target whose back end writes their tables)
+    IRInsn* _pendingInvoke; // an invoke whose `to label … unwind label …` line comes next
+    IRInsn* _lastPad;       // the landing pad whose clause lines follow
+    Array* _invokeAfter;    // what the invoke's reading added after its call: the normal block's first work
     Map* _defined;          // "@name" -> 1 for a function defined in this file
     u32 _strN;
     String* _path;          // the C file, for source lines (0: none)
@@ -172,6 +176,15 @@ class LlvmReader
     // C fuses the multiply-adds clang marks (llvm.fmuladd, its default
     // -ffp-contract=on) on every target, as GCC and clang do; -fgoal=accuracy
     // asks clang for none (owner, 2026-11-09).
+    // C++ exception handlers (option (a) phase 2): invoke, landingpad and
+    // resume read into Invoke, LandingPad + EhSelector and Resume, for a back
+    // end that writes the call-site and action tables. Off, a function with
+    // one is not read (the C++ row leaves it to clang).
+    void setReadHandlers(bool b)
+        {
+        _readHandlers = b;
+        }
+
     void setFuseMulAdd(bool b)
         {
         _fuseMulAdd = b;
@@ -1359,6 +1372,9 @@ class LlvmReader
         _fnWhy = (String*)0;
         _zxParams = new Array();
         _aggParams = new Map();
+        _pendingInvoke = (IRInsn*)0;
+        _invokeAfter = new Array();
+        _lastPad = (IRInsn*)0;
         u32 nParams = (u32)0;
         u32 gprs = (u32)0;      // integer-class parameters, an aggregate's elements each
         bool anyAgg = false;
@@ -1468,6 +1484,8 @@ class LlvmReader
                 _zxParams = new Array();
                 }
             lineOf(t);
+            if (_readHandlers && readHandlerLine(t))
+                continue;
             readInsn(t);
             }
         IRDbg.clearCurrent();
@@ -1929,7 +1947,7 @@ class LlvmReader
         // extractvalue of an aggregate parameter: that word.
         if (op.equals(String.withCString("extractvalue")))
             {
-            llType();
+            aggType();
             ws();
             String* an = word();
             eat(",");
@@ -2059,6 +2077,105 @@ class LlvmReader
                     }
                 r.add(IROperand.useVal(v));
                 }
+            r.add(IROperand.useVal(_mem));
+            _blk.setTerm(r);
+            return;
+            }
+        // llvm.eh.typeid.for(ptr @ti): the selector a catch of that type
+        // gets, which is its place in this function's type table (the back
+        // end's, EhTypeId).
+        if (_readHandlers && (op.equals(String.withCString("call")) || op.equals(String.withCString("tail")))
+            && _s.contains(String.withCString("@llvm.eh.typeid.for")))
+            {
+            u32 fa = _s.byteIndexOf(String.withCString("@llvm.eh.typeid.for"));
+            u32 pa = _s.byteIndexOf(String.withCString("("), fa);
+            u32 at = pa == String.notFound() ? String.notFound() : _s.byteIndexOf(String.withCString("@"), pa);
+            if (at == String.notFound())
+                {
+                fail("an eh.typeid.for not read");
+                return;
+                }
+            u32 b = at + (u32)1;
+            u32 e = b;
+            while (e < _s.byteLength() && _s.byteAt(e) != (u8)')' && _s.byteAt(e) != (u8)',')
+                e = e + (u32)1;
+            IRInsn* ti = IRInsn.with(String.withCString("EhTypeId"));
+            IRValue* r = valNamed(res, String.withCString("I32"));
+            r.setTy(String.withCString("I32"));
+            ti.setRes(r);
+            ti.add(IROperand.sym(_s.substringBytes(b, e - b)));
+            _blk.add(ti);
+            return;
+            }
+        if (_readHandlers && op.equals(String.withCString("invoke")))
+            {
+            readInvoke(res);
+            return;
+            }
+        if (_readHandlers && op.equals(String.withCString("landingpad")))
+            {
+            // { ptr, i32 }: the exception and its selector, which the
+            // personality hands the pad in two registers.
+            String* pt = String.withCString("Ptr(U8, unbanked)");
+            IRInsn* lp = IRInsn.with(String.withCString("LandingPad"));
+            IRValue* e = new IRValue(pt);
+            lp.setRes(e);
+            _blk.add(lp);
+            IRInsn* sl = IRInsn.with(String.withCString("EhSelector"));
+            IRValue* sv = new IRValue(String.withCString("I32"));
+            sl.setRes(sv);
+            _blk.add(sl);
+            Array* pair = new Array();
+            pair.add((Object*)e);
+            pair.add((Object*)sv);
+            _aggParams.set((Hashable*)res, (Object*)pair);
+            _lastPad = lp;
+            // `landingpad { ptr, i32 } cleanup` on one line.
+            if (_s.contains(String.withCString(" cleanup")))
+                lp.add(IROperand.immI((i64)2, String.withCString("I32")));
+            return;
+            }
+        if (_readHandlers && op.equals(String.withCString("insertvalue")))
+            {
+            // insertvalue { ptr, i32 } <agg | poison | undef>, <ty> <v>, <k>
+            aggType();
+            ws();
+            String* base = word();
+            Array* was = (Array*)_aggParams.get((Hashable*)base);
+            Array* pair = new Array();
+            pair.add(was != (Array*)0 && was.count() > (u32)0 ? was.get((u32)0) : (Object*)0);
+            pair.add(was != (Array*)0 && was.count() > (u32)1 ? was.get((u32)1) : (Object*)0);
+            eat(",");
+            IRValue* v = typedOperand();
+            eat(",");
+            ws();
+            u32 k0 = _p;
+            while (_p < _s.byteLength() && _s.byteAt(_p) >= (u8)'0' && _s.byteAt(_p) <= (u8)'9')
+                _p = _p + (u32)1;
+            u32 k = _p > k0 ? (u32)LlvmReader.decimal(_s.substringBytes(k0, _p - k0)) : (u32)$FFFFFFFF;
+            if (v == (IRValue*)0 || k > (u32)1)
+                {
+                fail("an insertvalue not read");
+                return;
+                }
+            pair.set(k, (Object*)v);
+            _aggParams.set((Hashable*)res, (Object*)pair);
+            return;
+            }
+        if (_readHandlers && op.equals(String.withCString("resume")))
+            {
+            // resume { ptr, i32 } %v: the exception goes on to the caller.
+            aggType();
+            ws();
+            String* an = word();
+            Array* pair = (Array*)_aggParams.get((Hashable*)an);
+            if (pair == (Array*)0 || pair.get((u32)0) == (Object*)0)
+                {
+                fail("a resume not read");
+                return;
+                }
+            IRInsn* r = IRInsn.with(String.withCString("Resume"));
+            r.add(IROperand.useVal((IRValue*)pair.get((u32)0)));
             r.add(IROperand.useVal(_mem));
             _blk.setTerm(r);
             return;
@@ -2339,6 +2456,121 @@ class LlvmReader
         }
 
     // `call RET [(SIG)] @f(ARGS)`.
+    // An aggregate's type: a literal struct (`{ ptr, i32 }`, a landing pad's)
+    // skipped whole, anything else as llType reads it.
+    void aggType(void)
+        {
+        ws();
+        if (_p < _s.byteLength() && _s.byteAt(_p) == (u8)'{')
+            {
+            u32 depth = (u32)0;
+            while (_p < _s.byteLength())
+                {
+                u8 c = _s.byteAt(_p);
+                _p = _p + (u32)1;
+                if (c == (u8)'{') depth = depth + (u32)1;
+                else if (c == (u8)'}') { depth = depth - (u32)1; if (depth == (u32)0) break; }
+                }
+            return;
+            }
+        llType();
+        }
+
+    // invoke <ret> @f(args): read as the call it is, which then ends the
+    // block (an Invoke) once the next line names its two blocks. What the call
+    // reading added after the call itself (a narrow result's widening) is the
+    // normal successor's first work.
+    void readInvoke(String* res)
+        {
+        u32 before = _blk.insns().count();
+        readCall(res);
+        if (_bad)
+            return;
+        if (_blk.insns().count() <= before)
+            {
+            fail("an invoke of an intrinsic");
+            return;
+            }
+        IRInsn* c = (IRInsn*)_blk.insns().get(before);
+        if (!c.isCall())
+            {
+            fail("an invoke not read as a call");
+            return;
+            }
+        IRInsn* inv = IRInsn.with(String.withCString("Invoke"));
+        inv.setCc(c.cc());
+        for (u32 i = (u32)0; i < c.ops().count(); i = i + (u32)1)
+            inv.add((IROperand*)c.ops().get(i));
+        inv.setRes(c.res());
+        inv.setMemRes(c.memRes());
+        Array* after = new Array();
+        for (u32 i = before + (u32)1; i < _blk.insns().count(); i = i + (u32)1)
+            after.add(_blk.insns().get(i));
+        while (_blk.insns().count() > before)
+            _blk.insns().removeLast();
+        _pendingInvoke = inv;
+        _invokeAfter = after;
+        }
+
+    // A line that belongs to the instruction before it: an invoke's
+    // `to label %a unwind label %b`, a landing pad's `catch ptr @ti`,
+    // `catch ptr null`, `cleanup` or `filter …`. True when it was one.
+    bool readHandlerLine(String* t)
+        {
+        if (_pendingInvoke != (IRInsn*)0 && t.hasPrefix(String.withCString("to label ")))
+            {
+            _s = t;
+            _p = (u32)0;
+            eat("to");
+            eat("label");
+            String* l1 = word().substringFromByte((u32)1);
+            eat("unwind");
+            eat("label");
+            String* l2 = word();
+            if (l2.hasSuffix(String.withCString(","))) l2 = l2.substringBytes((u32)0, l2.byteLength() - (u32)1);
+            l2 = l2.substringFromByte((u32)1);
+            if (l1.hasSuffix(String.withCString(","))) l1 = l1.substringBytes((u32)0, l1.byteLength() - (u32)1);
+            IRBlock* nb = blockNamed(l1);
+            _pendingInvoke.add(IROperand.block(nb));
+            _pendingInvoke.add(IROperand.block(blockNamed(l2)));
+            _blk.setTerm(_pendingInvoke);
+            for (u32 i = _invokeAfter.count(); i > (u32)0; i = i - (u32)1)
+                nb.insns().insert((u32)0, _invokeAfter.get(i - (u32)1));
+            _pendingInvoke = (IRInsn*)0;
+            _invokeAfter = new Array();
+            return true;
+            }
+        if (_lastPad != (IRInsn*)0)
+            {
+            if (t.hasPrefix(String.withCString("cleanup")))
+                {
+                _lastPad.add(IROperand.immI((i64)2, String.withCString("I32")));
+                return true;
+                }
+            if (t.hasPrefix(String.withCString("catch ")))
+                {
+                _lastPad.add(IROperand.immI((i64)0, String.withCString("I32")));
+                u32 at = t.byteIndexOf(String.withCString("@"));
+                if (at == String.notFound())
+                    _lastPad.add(IROperand.immI((i64)0, String.withCString("I64"))); // catch (...)
+                else
+                    {
+                    u32 e = at + (u32)1;
+                    while (e < t.byteLength() && t.byteAt(e) != (u8)',' && t.byteAt(e) != (u8)' ')
+                        e = e + (u32)1;
+                    _lastPad.add(IROperand.sym(t.substringBytes(at + (u32)1, e - at - (u32)1)));
+                    }
+                return true;
+                }
+            if (t.hasPrefix(String.withCString("filter ")))
+                {
+                fail("an exception specification (filter) not read");
+                return true;
+                }
+            }
+        return false;
+        }
+
     void readCall(String* res)
         {
         // The result's attributes (`call noundef double @f`, `call noundef

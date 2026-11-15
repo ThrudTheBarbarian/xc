@@ -57,6 +57,10 @@ bool cPathOnPath(u8* prog)
     return false;
     }
 
+// The reader takes exception handlers (phase 2; XC_C_HANDLERS=1 while no
+// back end writes their tables).
+bool gCPathHandlers;
+
 i32 cPathRelocatable(String* xo, String* out)
     {
     String* cc = String.withCString("clang");
@@ -359,6 +363,8 @@ class CPath
     // is given: a stub importing the par runtime, for the IR outliner.
     static IRModule* lowerWith(String* input, String* scratch, Array* incs, Array* defs, FeOptions* fe)
         {
+        gCPathHandlers = Platform.env(String.withCString("XC_C_HANDLERS")).equals(String.withCString("1"));
+        Languages.setReadHandlers(gCPathHandlers);
         LanguageRow* lang = CPath.language();
         // The C file, when the row is C's: a message the tests know.
         if (lang.name().equals(String.withCString("c")) && !CPath.haveClang())
@@ -522,6 +528,10 @@ class CPath
         // clang's whole IR: the names it keeps to this file.
         r.setPath(input);
         r.noteLocalNames(text);
+        // Exception handlers (phase 2): read only where a back end writes
+        // their tables; XC_C_HANDLERS=1 reads them anyway (development: the
+        // IR of such a function, --emit-ir).
+        r.setReadHandlers(gCPathHandlers);
         if (Platform.env(String.withCString("XC_C_CABI")).byteLength() > (u32)0)
             r.setCabiAll(true);
         IRModule* m = (IRModule*)0;

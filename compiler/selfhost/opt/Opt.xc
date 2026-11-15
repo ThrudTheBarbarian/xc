@@ -429,7 +429,46 @@
         return e != (u8*)0 && String.withCString(e).equals(String.withCString("outline"));
         }
 
+    // A function with an exception handler (an Invoke, a LandingPad: C++
+    // read with its handlers) goes through no optimisation yet: the passes
+    // walk successors and rewrite terminators without knowing an unwind edge.
+    // It is held out of the module while they run and put back as read.
     final void run(IRModule* m)
+        {
+        Array* held = new Array();
+        Array* kept = new Array();
+        for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
+            {
+            IRFunc* fn = (IRFunc*)m.funcs().get(f);
+            if (Opt.hasHandler(fn)) held.add((Object*)fn);
+            else kept.add((Object*)fn);
+            }
+        if (held.count() == (u32)0)
+            {
+            self.runPasses(m);
+            return;
+            }
+        m.funcs().removeAll();
+        m.funcs().addAll(kept);
+        self.runPasses(m);
+        m.funcs().addAll(held);
+        }
+
+    static bool hasHandler(IRFunc* fn)
+        {
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* blk = (IRBlock*)fn.blocks().get(b);
+            if (blk.term() != (IRInsn*)0 && (blk.term().isInvoke() || blk.term().op().equals(String.withCString("Resume"))))
+                return true;
+            for (u32 k = (u32)0; k < blk.insns().count(); k = k + (u32)1)
+                if (((IRInsn*)blk.insns().get(k)).op().equals(String.withCString("LandingPad")))
+                    return true;
+            }
+        return false;
+        }
+
+    final void runPasses(IRModule* m)
         {
         // VaArgExpand is MANDATORY at every level — the backend has no case for
         // the abstract VaStart/VaArg — but a native-varargs target has already

@@ -568,6 +568,13 @@ class IRValue
         _cc = c;
         }
 
+    // A call that ends its block (C++: a call an exception may leave by its
+    // landing pad): [callee, args..., mem, normal block, unwind block].
+    bool isInvoke(void)
+        {
+        return _op.equals(String.withCString("Invoke"));
+        }
+
     bool isCall(void)
         {
         return _op.equals(String.withCString("Call")) || _op.equals(String.withCString("CallCloaked")) || _op.equals(String.withCString("CallBanked")) || _op.equals(String.withCString("CallIndirect")) || _op.equals(String.withCString("CallBankedIndirect"));
@@ -608,12 +615,15 @@ class IRValue
             line.appendCString("]");
             return line;
             }
-        if (isCall())
+        if (isCall() || isInvoke())
             {
-            // <callee>, [args], CallConv::Kind, %mem
+            // <callee>, [args], CallConv::Kind, %mem (and an Invoke's
+            // normal and unwind blocks after it)
             u32 n = _ops.count();
-            if (n < (u32)2)
+            u32 tail = isInvoke() ? (u32)2 : (u32)0;
+            if (n < (u32)2 + tail)
                 return line;
+            n = n - tail;
             line.appendCString(" ");
             line.append(((IROperand*)_ops.get((u32)0)).text());
             line.appendCString(", [");
@@ -627,6 +637,11 @@ class IRValue
             line.append(_cc == 0 ? String.withCString("CallConv::Standard") : _cc);
             line.appendCString(", ");
             line.append(((IROperand*)_ops.get(n - (u32)1)).text());
+            for (u32 i = n; i < n + tail; i = i + (u32)1)
+                {
+                line.appendCString(", ");
+                line.append(((IROperand*)_ops.get(i)).text());
+                }
             return line;
             }
         if (_pred != 0)

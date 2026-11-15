@@ -145,6 +145,10 @@ class LlvmName
         }
     }
 
+// The reader takes exception handlers (LlvmReader.setReadHandlers): a
+// function with one is read, not left to clang.
+bool gLangReadHandlers;
+
 class Languages
     {
     u8 _unused;
@@ -280,6 +284,11 @@ class Languages
     // with a loop can gain a par block; the rest of a C++ program
     // (constructors, the standard library's templates, exception paths)
     // never reaches xcc.
+    static void setReadHandlers(bool b)
+        {
+        gLangReadHandlers = b;
+        }
+
     static String* loopFunctions(String* text)
         {
         Array* lines = text.splitOnByte((u8)10);
@@ -302,7 +311,7 @@ class Languages
                 end = end + 1;
             String* fname = Languages.calleeOf(l, 0);
             if (!Languages.notOurs(l) && (fname == (String*)0 || !Languages.isStd(fname)) && Languages.hasLoop(lines, i + 1, end)
-                && !Languages.hasHandler(lines, i + 1, end))
+                && (gLangReadHandlers || !Languages.hasHandler(lines, i + 1, end)))
                 {
                 Languages.plainLabels(lines, i + 1, end);
                 Languages.reroll(lines, i + 1, end);
