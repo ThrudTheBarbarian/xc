@@ -234,6 +234,10 @@ bool machoEhMerge(void) { return gMachOEhMerge; }
     Data* _cieIns;   // the CIE's initial instructions
     Data* _ins;      // the FDE's instructions
     u32 _objOff;     // its offset in its object's __eh_frame (what a DWARF-mode entry names)
+    u32 _pers;       // its CIE's personality (zPLR): nlist index + 1, 0 for none
+    u32 _lsda;       // its LSDA: blob offset + 1, 0 for none
+    String* _persSym; // the link's: the personality's pointer slot
+    String* _lsdaSym; // the link's: the LSDA, as a data symbol
 
     void init(void)
         {
@@ -246,9 +250,19 @@ bool machoEhMerge(void) { return gMachOEhMerge; }
     u32 ra(void) { return _ra; }
     Data* cieIns(void) { return _cieIns; }
     Data* ins(void) { return _ins; }
+    u32 pers(void) { return _pers; }
+    u32 lsda(void) { return _lsda; }
+    String* persSym(void) { return _persSym; }
+    String* lsdaSym(void) { return _lsdaSym; }
+    void setPersSym(String* s) { _persSym = s; }
+    void setLsdaSym(String* s) { _lsdaSym = s; }
     MachOFde* moved(u32 by)
         {
         MachOFde* f = new MachOFde();
+        f._pers = _pers;
+        f._lsda = _lsda;
+        f._persSym = _persSym;
+        f._lsdaSym = _lsdaSym;
         f._fn = _fn + by;
         f._len = _len;
         f._codeAlign = _codeAlign;
@@ -861,6 +875,7 @@ bool machoEhMerge(void) { return gMachOEhMerge; }
             // A field with a SUBTRACTOR (A) / UNSIGNED (B) pair holds
             // B - A + its stored value (both symbols' object addresses):
             // by field offset, B - A.
+            Map* gotAt = new Map();  // field offset -> Number(symbol index): ARM64_RELOC_POINTER_TO_GOT
             Map* subSym = new Map(); // field offset -> Number(A's address)
             Map* pairAt = new Map(); // field offset -> Number(B - A, as i64)
             for (u32 i = (u32)0; i < es._nreloc; i = i + (u32)1)
@@ -871,6 +886,8 @@ bool machoEhMerge(void) { return gMachOEhMerge; }
                 if (rl.ext() == (u32)0 || rl.symnum() >= o._symvals.count())
                     continue;
                 i64 sv = ((Number*)o._symvals.get(rl.symnum())).asI64();
+                if (rl.type() == (u32)7)
+                    gotAt.set((Hashable*)Number.withU32(rl.off()), (Object*)Number.withU32(rl.symnum()));
                 if (rl.type() == (u32)1)
                     subSym.set((Hashable*)Number.withU32(rl.off()), (Object*)Number.withI64(sv));
                 else if (rl.type() == (u32)0)
@@ -882,6 +899,7 @@ bool machoEhMerge(void) { return gMachOEhMerge; }
                 }
             Map* cies = new Map(); // offset -> MachOFde (a template: its CIE's fields), absent when not taken
             Map* encs = new Map(); // offset -> Number(pointer encoding)
+            Map* lencs = new Map(); // offset -> Number(LSDA encoding), a zPLR CIE's
             u32 pos = (u32)0;
             while (pos + (u32)8 <= es._size)
                 {
@@ -913,6 +931,27 @@ bool machoEhMerge(void) { return gMachOEhMerge; }
                         c.uleb();          // augmentation data length (1)
                         enc = c.u8v();
                         ok = enc == (u32)$1B || enc == (u32)$10 || enc == (u32)0;
+                        }
+                    // "zPLR" (C++ handlers: xcc's, clang's): the personality
+                    // through its GOT slot (4-byte, its symbol by relocation),
+                    // the LSDA's encoding, the addresses'.
+                    else if (aug.equals(String.withCString("zPLR")))
+                        {
+                        c.uleb();
+                        u32 penc = c.u8v();
+                        u32 pf = c.where() - es._foff;
+                        Number* ps = (Number*)gotAt.get((Hashable*)Number.withU32(pf));
+                        u32 psz = (penc & (u32)$0F) == (u32)$0B ? (u32)4 : (u32)8;
+                        for (u32 q = (u32)0; q < psz; q = q + (u32)1) c.u8v();
+                        u32 lenc = c.u8v();
+                        enc = c.u8v();
+                        ok = ps != (Number*)0 && (penc & (u32)$80) != (u32)0
+                             && (lenc == (u32)$10 || lenc == (u32)$1B) && (enc == (u32)$1B || enc == (u32)$10);
+                        if (ok)
+                            {
+                            t._pers = ps.asU32() + (u32)1;
+                            lencs.set((Hashable*)Number.withU32(pos), (Object*)Number.withU32(lenc));
+                            }
                         }
                     if (ok)
                         {
@@ -965,6 +1004,25 @@ bool machoEhMerge(void) { return gMachOEhMerge; }
                             u32 al = (u32)fc.uleb();   // augmentation data ("z")
                             MachOFde* f = t.moved((u32)0);
                             f._fn = (u32)fn;
+                            // Its LSDA (a zPLR CIE's FDE): resolved as the
+                            // address is, to the blob offset of what it names.
+                            Number* le = (Number*)lencs.get((Hashable*)Number.withU32(cieAt));
+                            if (le != (Number*)0 && al > (u32)0)
+                                {
+                                u32 lf = fc.where() - es._foff;
+                                i64 lv = le.asU32() == (u32)$1B ? (i64)(i32)MachOObject.rd32(b, es._foff + lf) : (i64)MachOObject.rd64(b, es._foff + lf);
+                                Number* lp = (Number*)pairAt.get((Hashable*)Number.withU32(lf));
+                                if (lp != (Number*)0)
+                                    lv = lv + lp.asI64();
+                                i64 lt = (i64)es._addr + (i64)lf + lv;
+                                for (u32 k = (u32)1; k < sects.count(); k = k + (u32)1)
+                                    {
+                                    Object* bo = blobOff.get((Hashable*)Number.withU32(k));
+                                    MachOSectHdr* ks = (MachOSectHdr*)sects.get(k);
+                                    if (bo != (Object*)0 && lt >= (i64)ks._addr && lt < (i64)ks._addr + (i64)ks._size)
+                                        f._lsda = ((Number*)bo).asU32() + (u32)(lt - (i64)ks._addr);
+                                    }
+                                }
                             f._objOff = pos;
                             f._len = range;
                             f._ins = new Data();

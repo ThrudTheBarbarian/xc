@@ -57,9 +57,12 @@ bool cPathOnPath(u8* prog)
     return false;
     }
 
-// The reader takes exception handlers (phase 2; XC_C_HANDLERS=1 while no
-// back end writes their tables).
+// The reader takes exception handlers (phase 2): where the target's back end
+// writes their tables (the driver says, cPathSetHandlers), or under
+// XC_C_HANDLERS=1 (development, on a target not there yet).
 bool gCPathHandlers;
+bool gCPathHandlersTarget;
+void cPathSetHandlers(bool b) { gCPathHandlersTarget = b; }
 
 i32 cPathRelocatable(String* xo, String* out)
     {
@@ -363,7 +366,7 @@ class CPath
     // is given: a stub importing the par runtime, for the IR outliner.
     static IRModule* lowerWith(String* input, String* scratch, Array* incs, Array* defs, FeOptions* fe)
         {
-        gCPathHandlers = Platform.env(String.withCString("XC_C_HANDLERS")).equals(String.withCString("1"));
+        gCPathHandlers = gCPathHandlersTarget || Platform.env(String.withCString("XC_C_HANDLERS")).equals(String.withCString("1"));
         Languages.setReadHandlers(gCPathHandlers);
         LanguageRow* lang = CPath.language();
         // The C file, when the row is C's: a message the tests know.

@@ -125,6 +125,13 @@ class MachOLink
             }
         }
 
+    static bool hasNameIn(Array* a, String* n)
+        {
+        for (u32 i = (u32)0; i < a.count(); i = i + (u32)1)
+            if (((String*)a.get(i)).equals(n)) return true;
+        return false;
+        }
+
     static String* taggedSym(MachOSymDef* sd, u32 oi)
         {
         bool localDef = !sd.ext() && sd.where() != (u32)0;
@@ -493,7 +500,22 @@ class MachOLink
                 // Its FDEs, at merged offsets.
                 Array* fd = machoEhMerge() ? obj.fdes() : (Array*)0;
                 for (u32 k = (u32)0; fd != (Array*)0 && k < fd.count(); k = k + (u32)1)
-                    _fdes.add((Object*)((MachOFde*)fd.get(k)).moved(base));
+                    {
+                    MachOFde* of = (MachOFde*)fd.get(k);
+                    MachOFde* mf = of.moved(base);
+                    // A zPLR FDE (C++ handlers): its personality by its pointer
+                    // slot, its LSDA as a data symbol, as an unwind entry's.
+                    if (of.pers() != (u32)0 && of.pers() - (u32)1 < obj.symdefs().count())
+                        mf.setPersSym(self.slotFor(MachOLink.taggedSym((MachOSymDef*)obj.symdefs().get(of.pers() - (u32)1), oi)));
+                    if (of.lsda() != (u32)0)
+                        {
+                        String* ln = String.withFormat("__xc_lsda$%u$%u", oi, of.lsda() - (u32)1);
+                        msyms.set((Hashable*)ln, (Object*)Number.withU32(dbase + of.lsda() - (u32)1));
+                        if (!MachOLink.hasNameIn(mdataSyms, ln)) mdataSyms.add((Object*)ln);
+                        mf.setLsdaSym(ln);
+                        }
+                    _fdes.add((Object*)mf);
+                    }
                 progress = true;
                 }
             }

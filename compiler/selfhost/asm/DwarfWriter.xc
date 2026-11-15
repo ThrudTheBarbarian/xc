@@ -879,6 +879,27 @@ class DwarfWriter
     // its own offset (the addend of a SUBTRACTOR / UNSIGNED pair against the
     // table's start and the function), whose offsets go into fields
     // (Number@, parallel to fdeOffs, -1 where a function has no FDE).
+    // The functions with an LSDA (name -> Number(the LSDA's number in the
+    // object, which names its symbol)) for the next buildEhFrameAs: their FDEs go
+    // under a second CIE, "zPLR" (the personality through its GOT slot,
+    // 4-byte pc-relative; the LSDA and the address 8-byte pc-relative), each
+    // carrying its LSDA's address. The fields to relocate: _persField (the
+    // CIE's personality) and _lsdaFields (Number@ per FDE field offset, its
+    // LSDA's offset after it, flat pairs).
+    Map* _lsdaFns;
+    i64 _persField;
+    Array* _lsdaFields;
+    void setLsdaFunctions(Map* m)
+    {
+        _lsdaFns = m;
+        // Clearing the map keeps the last table's fields for its writer.
+        if (m == (Map*)0) return;
+        _persField = (i64)-1;
+        _lsdaFields = new Array();
+    }
+    i64 persField(void) { return _persField; }
+    Array* lsdaFields(void) { return _lsdaFields; }
+
     Data* buildEhFrameAs(u64 ehAddress, u64 textAddress, u32 textSize, Array* names, Array* offs,
                          u32 minInsnLength, Array* fdeOffs, Array* fields)
     {
@@ -910,6 +931,42 @@ class DwarfWriter
             DwarfWriter.putU8(frame, (u32)0);
         DwarfWriter.patchU32(frame, (u32)0, frame.length() - (u32)4);
 
+        // The second CIE, for functions with an LSDA (wide form only: an
+        // object's table, relocated).
+        bool lsdaOn = wide && _lsdaFns != (Map*)0 && _lsdaFns.count() > (u32)0;
+        u32 cie2At = (u32)0;
+        if (lsdaOn)
+            {
+            cie2At = frame.length();
+            DwarfWriter.putU32(frame, (u32)0);      // length, patched
+            DwarfWriter.putU32(frame, (u32)0);      // CIE id
+            DwarfWriter.putU8(frame, (u32)1);
+            DwarfWriter.putU8(frame, (u32)'z');
+            DwarfWriter.putU8(frame, (u32)'P');
+            DwarfWriter.putU8(frame, (u32)'L');
+            DwarfWriter.putU8(frame, (u32)'R');
+            DwarfWriter.putU8(frame, (u32)0);
+            DwarfWriter.putULEB(frame, (u64)minInsnLength);
+            DwarfWriter.putSLEB(frame, (i64)-8);
+            DwarfWriter.putULEB(frame, (u64)raReg);
+            DwarfWriter.putULEB(frame, (u64)7);     // augmentation data: P (1 + 4), L, R
+            DwarfWriter.putU8(frame, (u32)$9B);     // personality: indirect pcrel sdata4 (its GOT slot)
+            _persField = (i64)frame.length();
+            DwarfWriter.putU32(frame, (u32)0);
+            DwarfWriter.putU8(frame, (u32)$10);     // LSDA: pcrel absptr (8)
+            DwarfWriter.putU8(frame, (u32)$10);     // FDE addresses: pcrel absptr (8)
+            DwarfWriter.putU8(frame, (u32)$0C);
+            DwarfWriter.putULEB(frame, (u64)spReg);
+            DwarfWriter.putULEB(frame, a64 ? (u64)0 : (u64)8);
+            if (!a64) {
+                DwarfWriter.putU8(frame, (u32)$80 | raReg);
+                DwarfWriter.putULEB(frame, (u64)1);
+            }
+            while ((frame.length() - cie2At) % (u32)4 != (u32)0)
+                DwarfWriter.putU8(frame, (u32)0);
+            DwarfWriter.patchU32(frame, cie2At, frame.length() - cie2At - (u32)4);
+            }
+
         // The functions in address order (functionsOf gives them unsorted;
         // sorted here in place, so fdeOffs is parallel to the sorted lists).
         DwarfWriter.sortByOffset(names, offs);
@@ -932,8 +989,9 @@ class DwarfWriter
             }
             u32 fdeAt = frame.length();
             fdeOffs.add((Object*)Number.withI64((i64)fdeAt));
+            Object* lsdaOff = lsdaOn ? _lsdaFns.get((Hashable*)names.get(i)) : (Object*)0;
             DwarfWriter.putU32(frame, (u32)0);                // length, patched
-            DwarfWriter.putU32(frame, fdeAt + (u32)4);        // back to the CIE at 0
+            DwarfWriter.putU32(frame, lsdaOff != (Object*)0 ? fdeAt + (u32)4 - cie2At : fdeAt + (u32)4); // back to its CIE
             if (wide) {
                 fields.add((Object*)Number.withI64((i64)(fdeAt + (u32)8)));
                 DwarfWriter.putU64(frame, (u64)((i64)0 - (i64)(fdeAt + (u32)8))); // the relocation's addend
@@ -943,7 +1001,16 @@ class DwarfWriter
                 DwarfWriter.putU32(frame, (u32)pc);           // initial location, pc-relative
                 DwarfWriter.putU32(frame, end - start);       // range
             }
-            DwarfWriter.putULEB(frame, (u64)0);               // augmentation data length
+            if (lsdaOff != (Object*)0) {
+                // Its LSDA, relocated as the address is (against a symbol
+                // at the LSDA's start, the field holding minus its offset).
+                DwarfWriter.putULEB(frame, (u64)8);
+                u32 lf = frame.length();
+                _lsdaFields.add((Object*)Number.withI64((i64)lf));
+                _lsdaFields.add((Object*)Number.withI64((i64)((Number*)lsdaOff).asU32()));
+                DwarfWriter.putU64(frame, (u64)((i64)0 - (i64)lf));
+            } else
+                DwarfWriter.putULEB(frame, (u64)0);           // augmentation data length
             u32 at = ((Number*)setups.get(found)).asU32();
             DwarfWriter.frameRules(frame, (at - start) / minInsnLength, ((Number*)sizes.get(found)).asU32(),
                                    (String*)saves.get(found), fpReg, raReg);

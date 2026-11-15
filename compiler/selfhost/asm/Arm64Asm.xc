@@ -135,6 +135,203 @@ class VRegRef
 
 class Arm64Asm
 {
+    // The exception tables of the last text assembled (C/C++ input): per
+    // function an Array@ [its label, the LSDA's bytes, Array@ of (Number
+    // offset, String@ typeinfo) for each type-table entry], for the object
+    // writer's __gcc_except_tab and its FDEs.
+    static Array* _lsdas;
+    static void setLsdas(Array* a) { _lsdas = a; }
+    static Array* takeLsdas(void)
+        {
+        Array* a = _lsdas;
+        _lsdas = (Array*)0;
+        return a;
+        }
+
+    static void ulebInto(Data* d, u32 v)
+        {
+        while (true)
+            {
+            u32 b = v & (u32)$7F;
+            v = v >> (u32)7;
+            if (v != (u32)0) { d.appendByte((u8)(b | (u32)$80)); continue; }
+            d.appendByte((u8)b);
+            return;
+            }
+        }
+
+    static u32 ulebLen(u32 v)
+        {
+        u32 n = (u32)1;
+        while (v >= (u32)128) { v = v >> (u32)7; n = n + (u32)1; }
+        return n;
+        }
+
+    static u32 labelAt(Map* syms, String* l)
+        {
+        Object* o = syms.get((Hashable*)l);
+        return o != (Object*)0 ? ((Number*)o).asU32() : (u32)$FFFFFFFF;
+        }
+
+    // One LSDA per function (Itanium C++ ABI): LPStart omitted, the type
+    // table indirect pc-relative 4-byte entries (0x9b, the typeinfo's GOT
+    // slot), uleb128 call sites. The call-site table covers the whole
+    // function: each Invoke's call with its pad and action, the ranges
+    // between with none (a call there passes an exception on; one outside
+    // every entry would terminate).
+    static Array* buildLsdas(Array* raw, Map* syms)
+        {
+        Array* out = new Array();
+        for (u32 r = (u32)0; raw != (Array*)0 && r < raw.count(); r = r + (u32)1)
+            {
+            Array* ls = (Array*)raw.get(r);
+            String* fnLabel = (String*)0;
+            u32 fnStart = (u32)0;
+            u32 fnEnd = (u32)0;
+            Array* sites = new Array();   // Number quads: start, len, pad, action
+            Data* actions = new Data();
+            Array* types = new Array();
+            bool bad = false;
+            for (u32 k = (u32)0; k < ls.count(); k = k + (u32)1)
+                {
+                Array* w = ((String*)ls.get(k)).trimmed().splitOnByte((u8)' ');
+                String* d = (String*)w.get((u32)0);
+                if (d.equals(String.withCString(".xc_lsda_begin")) && w.count() >= (u32)3)
+                    {
+                    fnLabel = (String*)w.get((u32)1);
+                    fnStart = Arm64Asm.labelAt(syms, fnLabel);
+                    fnEnd = Arm64Asm.labelAt(syms, (String*)w.get((u32)2));
+                    }
+                else if (d.equals(String.withCString(".xc_lsda_cs")) && w.count() >= (u32)5)
+                    {
+                    u32 b = Arm64Asm.labelAt(syms, (String*)w.get((u32)1));
+                    u32 e = Arm64Asm.labelAt(syms, (String*)w.get((u32)2));
+                    u32 p = Arm64Asm.labelAt(syms, (String*)w.get((u32)3));
+                    if (b == (u32)$FFFFFFFF || e == (u32)$FFFFFFFF || p == (u32)$FFFFFFFF) { bad = true; continue; }
+                    sites.add((Object*)Number.withU32(b - fnStart));
+                    sites.add((Object*)Number.withU32(e - b));
+                    sites.add((Object*)Number.withU32(p - fnStart));
+                    sites.add((Object*)Number.withU32(Arm64Asm.decimalOf((String*)w.get((u32)4))));
+                    }
+                else if (d.equals(String.withCString(".xc_lsda_actions")) && w.count() >= (u32)2)
+                    {
+                    String* hx = (String*)w.get((u32)1);
+                    for (u32 q = (u32)0; q + (u32)1 < hx.byteLength(); q = q + (u32)2)
+                        actions.appendByte((u8)Arm64Asm.hexByte(hx.byteAt(q), hx.byteAt(q + (u32)1)));
+                    }
+                else if (d.equals(String.withCString(".xc_lsda_type")) && w.count() >= (u32)2)
+                    types.add(w.get((u32)1));
+                }
+            if (bad || fnLabel == (String*)0 || fnStart == (u32)$FFFFFFFF || fnEnd == (u32)$FFFFFFFF || fnEnd < fnStart)
+                continue;
+            // Sorted by start (an insertion sort: a function has few).
+            for (u32 i = (u32)4; i < sites.count(); i = i + (u32)4)
+                for (u32 j = i; j >= (u32)4 && ((Number*)sites.get(j - (u32)4)).asU32() > ((Number*)sites.get(j)).asU32(); j = j - (u32)4)
+                    for (u32 f = (u32)0; f < (u32)4; f = f + (u32)1)
+                        {
+                        Object* t = sites.get(j - (u32)4 + f);
+                        sites.set(j - (u32)4 + f, sites.get(j + f));
+                        sites.set(j + f, t);
+                        }
+            Data* cs = new Data();
+            u32 cur = (u32)0;
+            u32 fnLen = fnEnd - fnStart;
+            for (u32 i = (u32)0; i < sites.count(); i = i + (u32)4)
+                {
+                u32 st = ((Number*)sites.get(i)).asU32();
+                u32 ln = ((Number*)sites.get(i + (u32)1)).asU32();
+                if (st > cur)
+                    {
+                    Arm64Asm.ulebInto(cs, cur); Arm64Asm.ulebInto(cs, st - cur);
+                    Arm64Asm.ulebInto(cs, (u32)0); Arm64Asm.ulebInto(cs, (u32)0);
+                    }
+                Arm64Asm.ulebInto(cs, st); Arm64Asm.ulebInto(cs, ln);
+                Arm64Asm.ulebInto(cs, ((Number*)sites.get(i + (u32)2)).asU32());
+                Arm64Asm.ulebInto(cs, ((Number*)sites.get(i + (u32)3)).asU32());
+                cur = st + ln;
+                }
+            if (cur < fnLen)
+                {
+                Arm64Asm.ulebInto(cs, cur); Arm64Asm.ulebInto(cs, fnLen - cur);
+                Arm64Asm.ulebInto(cs, (u32)0); Arm64Asm.ulebInto(cs, (u32)0);
+                }
+            // body: call-site encoding, its length, the table, the actions.
+            Data* body = new Data();
+            body.appendByte((u8)1);
+            Arm64Asm.ulebInto(body, cs.length());
+            for (u32 i = (u32)0; i < cs.length(); i = i + (u32)1) body.appendByte(cs.bytes()[i]);
+            for (u32 i = (u32)0; i < actions.length(); i = i + (u32)1) body.appendByte(actions.bytes()[i]);
+            Data* lsda = new Data();
+            lsda.appendByte((u8)$FF);   // LPStart: the function's start
+            Array* refs = new Array();
+            if (types.count() == (u32)0)
+                {
+                lsda.appendByte((u8)$FF);
+                for (u32 i = (u32)0; i < body.length(); i = i + (u32)1) lsda.appendByte(body.bytes()[i]);
+                }
+            else
+                {
+                // TType base: from after its own uleb to the type table's
+                // end, the table 4-aligned (entries n..1 before that end).
+                u32 tsz = (u32)4 * types.count();
+                u32 ul = (u32)1;
+                u32 pad = (u32)0;
+                u32 off = (u32)0;
+                for (u32 it = (u32)0; it < (u32)4; it = it + (u32)1)
+                    {
+                    u32 head = (u32)2 + ul;
+                    pad = ((u32)4 - ((head + body.length()) % (u32)4)) % (u32)4;
+                    off = body.length() + pad + tsz;
+                    if (Arm64Asm.ulebLen(off) == ul) break;
+                    ul = Arm64Asm.ulebLen(off);
+                    }
+                lsda.appendByte((u8)$9B);
+                // a uleb of exactly ul bytes
+                u32 v = off;
+                for (u32 b = (u32)0; b < ul; b = b + (u32)1)
+                    {
+                    u32 byte = v & (u32)$7F;
+                    v = v >> (u32)7;
+                    lsda.appendByte((u8)(b + (u32)1 < ul ? (byte | (u32)$80) : byte));
+                    }
+                for (u32 i = (u32)0; i < body.length(); i = i + (u32)1) lsda.appendByte(body.bytes()[i]);
+                for (u32 i = (u32)0; i < pad; i = i + (u32)1) lsda.appendByte((u8)0);
+                // index n first, index 1 last (just before the base).
+                for (u32 t = types.count(); t > (u32)0; t = t - (u32)1)
+                    {
+                    String* sym = (String*)types.get(t - (u32)1);
+                    if (!sym.equals(String.withCString("0")))
+                        {
+                        refs.add((Object*)Number.withU32(lsda.length()));
+                        refs.add((Object*)sym);
+                        }
+                    for (u32 b = (u32)0; b < (u32)4; b = b + (u32)1) lsda.appendByte((u8)0);
+                    }
+                }
+            Array* rec = new Array();
+            rec.add((Object*)fnLabel);
+            rec.add((Object*)lsda);
+            rec.add((Object*)refs);
+            out.add((Object*)rec);
+            }
+        return out;
+        }
+
+    static u32 decimalOf(String* s)
+        {
+        u32 v = (u32)0;
+        for (u32 i = (u32)0; i < s.byteLength(); i = i + (u32)1)
+            v = v * (u32)10 + (u32)(s.byteAt(i) - (u8)'0');
+        return v;
+        }
+
+    static u32 hexByte(u8 a, u8 b)
+        {
+        u32 hi = a >= (u8)'a' ? (u32)(a - (u8)'a') + (u32)10 : (u32)(a - (u8)'0');
+        u32 lo = b >= (u8)'a' ? (u32)(b - (u8)'a') + (u32)10 : (u32)(b - (u8)'0');
+        return (hi << (u32)4) | lo;
+        }
+
     Array*  _fixups;        // Arm64Fixup@
     Map*    _symbols;       // name -> offset within its own section
     SectionBytes* _dataBytes; // the __data image
@@ -3240,6 +3437,8 @@ class Arm64Asm
         bool inModInit = false;      // bug 066: inside __DATA,__mod_init_func
         DwarfWriter* dwarf = (DwarfWriter*)0;  // -g: the line table, if the text has one
         u32 pendingFrame = (u32)16;  // -g: the call frame's distance above x29 (.xc_frame)
+        Array* lsdaRaw = new Array();    // each function's .xc_lsda lines
+        Array* lsdaCur = (Array*)0;
 
         for (u32 li = (u32)0; li < lines.count(); li = li + (u32)1) {
             String* l = stripComment((String*)lines.get(li)).trimmed();
@@ -3346,6 +3545,17 @@ class Arm64Asm
                 // `.xc_saves <reg>:<cfa offset> ...` (C/C++ input) — where the
                 // frame just set up keeps x29, x30 and each callee-saved
                 // register, for the unwind tables.
+                // `.xc_lsda_begin/_cs/_actions/_type/_end` (C/C++ input): a
+                // function's exception tables, built once its labels are placed.
+                if (l.hasPrefix(String.withCString(".xc_lsda_"))) {
+                    if (l.hasPrefix(String.withCString(".xc_lsda_begin"))) lsdaCur = new Array();
+                    if (lsdaCur != (Array*)0) lsdaCur.add((Object*)l);
+                    if (l.hasPrefix(String.withCString(".xc_lsda_end")) && lsdaCur != (Array*)0) {
+                        lsdaRaw.add((Object*)lsdaCur);
+                        lsdaCur = (Array*)0;
+                    }
+                    continue;
+                }
                 if (l.hasPrefix(String.withCString(".xc_saves"))) {
                     if (dwarf != (DwarfWriter*)0) dwarf.addSaves(l.substringFromByte((u32)9).trimmed());
                     continue;
@@ -3447,6 +3657,8 @@ class Arm64Asm
 
         // The source lines are all consumed: pass 2 reads `insns`.
         lines = (Array*)0;
+        // The functions' exception tables, now every text label has its place.
+        Arm64Asm.setLsdas(Arm64Asm.buildLsdas(lsdaRaw, _symbols));
 
         // Pass 2. Only TEXT symbols resolve as local: a data symbol reaches
         // code through an adrp/add pair, never a relative branch.

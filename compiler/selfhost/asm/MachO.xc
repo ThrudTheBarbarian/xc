@@ -920,11 +920,51 @@ class MachOSha256
         bool hasMi0 = mi.length() > (u32)0;
         u32 ehAddr = MachO.roundUp(hasMi0 ? MachO.roundUp(text.length() + data.length(), (u32)8) + mi.length()
                                           : text.length() + data.length(), (u32)8);
+        // Functions with C++ handlers (Arm64Asm's LSDAs): __gcc_except_tab
+        // after __eh_frame, each LSDA 4-aligned, named by its FDE (under the
+        // zPLR CIE, the personality __gxx_personality_v0 through its GOT
+        // slot); each type-table entry a typeinfo's GOT slot, pc-relative.
+        Array* lsdas = hasEh ? Arm64Asm.takeLsdas() : (Array*)0;
+        Data* gcc = new Data();
+        Map* lsdaFns = new Map();
+        Array* lsdaOffs = new Array();   // Number@: each LSDA's offset in __gcc_except_tab
+        Array* typeRefs = new Array();
+        for (u32 i = (u32)0; lsdas != (Array*)0 && i < lsdas.count(); i = i + (u32)1)
+            {
+            Array* rec = (Array*)lsdas.get(i);
+            while (gcc.length() % (u32)4 != (u32)0) gcc.appendByte((u8)0);
+            u32 off = gcc.length();
+            String* fl = (String*)rec.get((u32)0);
+            lsdaFns.set((Hashable*)(fl.hasPrefix(String.withCString("_")) ? fl.substringFromByte((u32)1) : fl), (Object*)Number.withU32(lsdaOffs.count()));
+            lsdaOffs.add((Object*)Number.withU32(off));
+            Data* b = (Data*)rec.get((u32)1);
+            for (u32 k = (u32)0; k < b.length(); k = k + (u32)1) gcc.appendByte(b.bytes()[k]);
+            Array* refs = (Array*)rec.get((u32)2);
+            for (u32 k = (u32)0; k + (u32)1 < refs.count(); k = k + (u32)2)
+                {
+                typeRefs.add((Object*)Number.withU32(off + ((Number*)refs.get(k)).asU32()));
+                typeRefs.add(refs.get(k + (u32)1));
+                }
+            }
+        bool hasGcc = gcc.length() > (u32)0;
+        if (hasGcc)
+            dwEh.setLsdaFunctions(lsdaFns);
         Data* eh = hasEh ? dwEh.buildEhFrameAs((u64)ehAddr, (u64)0, text.length(), ehNames, ehOffs, (u32)4, new Array(), ehFields)
                          : (Data*)0;
+        if (hasGcc)
+            dwEh.setLsdaFunctions((Map*)0);
+        u32 gccAddr = hasGcc ? MachO.roundUp(ehAddr + eh.length(), (u32)4) : (u32)0;
         String* ehSym = String.withCString("ltmp_eh");
+        String* gccSym = String.withCString("ltmp_gcc");
+        String* persSym = String.withCString("___gxx_personality_v0");
         if (hasEh)
             locData.add((Object*)ehSym);
+        if (hasGcc)
+            {
+            locData.add((Object*)gccSym);
+            for (u32 i = (u32)0; i < lsdaOffs.count(); i = i + (u32)1)
+                locData.add((Object*)String.withFormat("GCC_except_table_xc%u", i));
+            }
         u32 nLocals = locText.count() + locData.count();
         Array* undef = new Array();
         for (u32 i = (u32)0; i < fixups.count(); i = i + (u32)1)
@@ -944,6 +984,17 @@ class MachOSha256
         for (u32 i = (u32)0; i < cks.count(); i = i + (u32)1)
             if (!MachO.hasName(undef, (String*)cks.get(i)))
                 undef.add(cks.get(i));
+        if (hasGcc)
+            {
+            if (!MachO.hasName(undef, persSym) && symbols.get((Hashable*)persSym) == (Object*)0)
+                undef.add((Object*)persSym);
+            for (u32 i = (u32)1; i < typeRefs.count(); i = i + (u32)2)
+                {
+                String* ts = String.withFormat("_%s", ((String*)typeRefs.get(i)).cString());
+                if (!MachO.hasName(undef, ts) && symbols.get((Hashable*)ts) == (Object*)0)
+                    undef.add((Object*)ts);
+                }
+            }
         MachO.sortNames(undef);
 
         Array* order = new Array();
@@ -1050,7 +1101,7 @@ class MachOSha256
         // A __mod_init_func section (S_MOD_INIT_FUNC_POINTERS) after __data
         // when there are constructors; without them the object is as before.
         bool hasMi = mi.length() > (u32)0;
-        u32 nsects = (hasMi ? (u32)3 : (u32)2) + (hasEh ? (u32)1 : (u32)0);
+        u32 nsects = (hasMi ? (u32)3 : (u32)2) + (hasEh ? (u32)1 : (u32)0) + (hasGcc ? (u32)1 : (u32)0);
         u32 hdrSize = (u32)32;
         u32 segCmd = (u32)72 + (u32)80 * nsects;
         // LC_LINKER_OPTION commands: count, then the NUL-ended arguments,
@@ -1091,12 +1142,50 @@ class MachOSha256
             MachO.put32In(ehRel, ((u32)1 << (u32)27) | ((u32)3 << (u32)25) | (fs.asU32() & (u32)$FFFFFF));
             nEhRel = nEhRel + (u32)2;
             }
-        u32 textRelOff = hasEh ? ehOff + eh.length() : (hasMi ? miOff + mi.length() : dataOff + data.length());
+        // The zPLR CIE's personality: ARM64_RELOC_POINTER_TO_GOT, pc-relative,
+        // 4 bytes; each LSDA field: SUBTRACTOR (ltmp_eh) then UNSIGNED (the
+        // LSDA's own symbol, GCC_except_table_xc<n>, as clang names each),
+        // 8 bytes, the field holding minus its offset, as the address does.
+        if (hasGcc)
+            {
+            Number* ps = (Number*)symIndex.get((Hashable*)persSym);
+            if (dwEh.persField() >= (i64)0 && ps != (Number*)0)
+                {
+                MachO.put32In(ehRel, (u32)dwEh.persField());
+                MachO.put32In(ehRel, ((u32)7 << (u32)28) | ((u32)1 << (u32)27) | ((u32)2 << (u32)25) | ((u32)1 << (u32)24) | (ps.asU32() & (u32)$FFFFFF));
+                nEhRel = nEhRel + (u32)1;
+                }
+            u32 es = ((Number*)symIndex.get((Hashable*)ehSym)).asU32();
+            Array* lf = dwEh.lsdaFields();
+            for (u32 i = (u32)0; lf != (Array*)0 && i + (u32)1 < lf.count(); i = i + (u32)2)
+                {
+                u32 fo = (u32)((Number*)lf.get(i)).asI64();
+                u32 gs = ((Number*)symIndex.get((Hashable*)String.withFormat("GCC_except_table_xc%u", (u32)((Number*)lf.get(i + (u32)1)).asI64()))).asU32();
+                MachO.put32In(ehRel, fo);
+                MachO.put32In(ehRel, ((u32)1 << (u32)28) | ((u32)1 << (u32)27) | ((u32)3 << (u32)25) | (es & (u32)$FFFFFF));
+                MachO.put32In(ehRel, fo);
+                MachO.put32In(ehRel, ((u32)1 << (u32)27) | ((u32)3 << (u32)25) | (gs & (u32)$FFFFFF));
+                nEhRel = nEhRel + (u32)2;
+                }
+            }
+        Data* gccRel = new Data();
+        u32 nGccRel = (u32)0;
+        for (u32 i = (u32)0; i + (u32)1 < typeRefs.count(); i = i + (u32)2)
+            {
+            Number* ts = (Number*)symIndex.get((Hashable*)String.withFormat("_%s", ((String*)typeRefs.get(i + (u32)1)).cString()));
+            if (ts == (Number*)0) continue;
+            MachO.put32In(gccRel, ((Number*)typeRefs.get(i)).asU32());
+            MachO.put32In(gccRel, ((u32)7 << (u32)28) | ((u32)1 << (u32)27) | ((u32)2 << (u32)25) | ((u32)1 << (u32)24) | (ts.asU32() & (u32)$FFFFFF));
+            nGccRel = nGccRel + (u32)1;
+            }
+        u32 gccOff = hasGcc ? MachO.roundUp(ehOff + eh.length(), (u32)4) : (u32)0;
+        u32 textRelOff = hasGcc ? gccOff + gcc.length() : (hasEh ? ehOff + eh.length() : (hasMi ? miOff + mi.length() : dataOff + data.length()));
         u32 dataRelOff = textRelOff + textRel.length();
         u32 miRelOff = dataRelOff + dataRel.length();
         u32 ehRelOff = miRelOff + miRel.length();
-        u32 symOff = MachO.roundUp(ehRelOff + ehRel.length(), (u32)8);
-        u32 segSize = hasEh ? ehAddr + eh.length() : (hasMi ? miAddr + mi.length() : text.length() + data.length());
+        u32 gccRelOff = ehRelOff + ehRel.length();
+        u32 symOff = MachO.roundUp(gccRelOff + gccRel.length(), (u32)8);
+        u32 segSize = hasGcc ? gccAddr + gcc.length() : (hasEh ? ehAddr + eh.length() : (hasMi ? miAddr + mi.length() : text.length() + data.length()));
         u32 strOff = symOff + order.count() * (u32)16;
 
         Data* strtab = new Data();
@@ -1191,6 +1280,21 @@ class MachOSha256
             put32((u32)0);
             put32((u32)0);
             }
+        if (hasGcc)
+            {
+            putFixed(String.withCString("__gcc_except_tab"), (u32)16);
+            putFixed(String.withCString("__TEXT"), (u32)16);
+            put64(gccAddr, (u32)0);
+            put64(gcc.length(), (u32)0);
+            put32(gccOff);
+            put32((u32)2); // align 4
+            put32(nGccRel != (u32)0 ? gccRelOff : (u32)0);
+            put32(nGccRel);
+            put32((u32)0); // S_REGULAR
+            put32((u32)0);
+            put32((u32)0);
+            put32((u32)0);
+            }
 
         put32((u32)2);
         put32(symCmd); // LC_SYMTAB
@@ -1263,15 +1367,44 @@ class MachOSha256
             padTo(ehOff);
             _out.append(eh);
             }
+        if (hasGcc)
+            {
+            padTo(gccOff);
+            _out.append(gcc);
+            }
         _out.append(textRel);
         _out.append(dataRel);
         _out.append(miRel);
         _out.append(ehRel);
+        _out.append(gccRel);
         padTo(symOff);
         for (u32 i = (u32)0; i < order.count(); i = i + (u32)1)
             {
             String* n = (String*)order.get(i);
             // ltmp_eh: the __eh_frame's start, a local of that section.
+            // ltmp_gcc: __gcc_except_tab's start, a local of that section.
+            if (hasGcc && n.hasPrefix(String.withCString("GCC_except_table_xc")))
+                {
+                u32 li = (u32)0;
+                for (u32 k = (u32)19; k < n.byteLength(); k = k + (u32)1) li = li * (u32)10 + (u32)(n.byteAt(k) - (u8)'0');
+                put32(((Number*)strx.get(i)).asU32());
+                put8((u32)$0E);
+                put8((hasMi ? (u32)4 : (u32)3) + (u32)1);
+                put8((u32)0);
+                put8((u32)0);
+                put64(gccAddr + ((Number*)lsdaOffs.get(li)).asU32(), (u32)0);
+                continue;
+                }
+            if (hasGcc && n.equals(gccSym))
+                {
+                put32(((Number*)strx.get(i)).asU32());
+                put8((u32)$0E);
+                put8((hasMi ? (u32)4 : (u32)3) + (u32)1);
+                put8((u32)0);
+                put8((u32)0);
+                put64(gccAddr, (u32)0);
+                continue;
+                }
             if (hasEh && n.equals(ehSym))
                 {
                 put32(((Number*)strx.get(i)).asU32());
@@ -1677,7 +1810,8 @@ class MachOSha256
         L.ehOffset = ehOffset;
         L.ehSize = ehSize;
         L.ehBytes = ehSize > (u32)0
-                  ? MachO.ehFrameFrom(ehFdes, ((u64)1 << (u64)32) + (u64)ehOffset, ((u64)1 << (u64)32) + (u64)textOffset, new Array())
+                  ? MachO.ehFrameWith(ehFdes, ((u64)1 << (u64)32) + (u64)ehOffset, ((u64)1 << (u64)32) + (u64)textOffset, new Array(),
+                                      symbols, dataSyms, textOffset, dataProgOffset)
                   : (Data*)0;
         L.unwindBytes = unwindSize > (u32)0
                       ? MachO.unwindInfo(uwRows, uwPers, symbols, dataSyms, textOffset, dataProgOffset, text.length())
@@ -2393,12 +2527,23 @@ class MachOSha256
     // into fdeAt (Number@, parallel to fdes), which __unwind_info names.
     static Data* ehFrameFrom(Array* fdes, u64 ehAddr, u64 textAddr, Array* fdeAt)
         {
+        return MachO.ehFrameWith(fdes, ehAddr, textAddr, fdeAt, (Map*)0, (Array*)0, (u32)0, (u32)0);
+        }
+
+    // The same, an FDE with a personality (C++ handlers) under a "zPLR" CIE
+    // for that personality: its pointer slot indirect pc-relative 4-byte, the
+    // LSDA's address pc-relative 4-byte in the FDE. The symbols' places come
+    // from symbols / dataSyms as the image lays them (0: the sizing pass).
+    static Data* ehFrameWith(Array* fdes, u64 ehAddr, u64 textAddr, Array* fdeAt,
+                             Map* symbols, Array* dataSyms, u32 textOffset, u32 dataProgOffset)
+        {
         Data* out = new Data();
         Map* cieAt = new Map(); // key -> Number(offset)
         for (u32 i = (u32)0; i < fdes.count(); i = i + (u32)1)
             {
             MachOFde* f = (MachOFde*)fdes.get(i);
-            String* key = String.withFormat("%u/%ld/%u/", f.codeAlign(), f.dataAlign(), f.ra());
+            bool eh = f.persSym() != (String*)0;
+            String* key = String.withFormat("%u/%ld/%u/%s/", f.codeAlign(), f.dataAlign(), f.ra(), eh ? f.persSym().cString() : "");
             for (u32 q = (u32)0; q < f.cieIns().length(); q = q + (u32)1)
                 key.appendFormat("%02x", (u32)f.cieIns().byteAt(q));
             Number* ca = (Number*)cieAt.get((Hashable*)key);
@@ -2411,13 +2556,29 @@ class MachOSha256
                 DwarfWriter.putU32(out, (u32)0);
                 DwarfWriter.putU8(out, (u32)1);
                 DwarfWriter.putU8(out, (u32)'z');
+                if (eh) { DwarfWriter.putU8(out, (u32)'P'); DwarfWriter.putU8(out, (u32)'L'); }
                 DwarfWriter.putU8(out, (u32)'R');
                 DwarfWriter.putU8(out, (u32)0);
                 DwarfWriter.putULEB(out, (u64)f.codeAlign());
                 DwarfWriter.putSLEB(out, f.dataAlign());
                 DwarfWriter.putULEB(out, (u64)f.ra());
-                DwarfWriter.putULEB(out, (u64)1);
-                DwarfWriter.putU8(out, (u32)$1B);
+                if (eh)
+                    {
+                    DwarfWriter.putULEB(out, (u64)7);
+                    DwarfWriter.putU8(out, (u32)$9B);   // the personality's slot, indirect pcrel sdata4
+                    i64 slot = symbols != (Map*)0
+                             ? (i64)((u64)1 << (u64)32) + (i64)MachO.symOffset(symbols, dataSyms, f.persSym(), textOffset, dataProgOffset)
+                             : (i64)0;
+                    i64 pf = (i64)ehAddr + (i64)out.length();
+                    DwarfWriter.putU32(out, symbols != (Map*)0 ? (u32)(slot - pf) : (u32)0);
+                    DwarfWriter.putU8(out, (u32)$1B);   // LSDA: pcrel sdata4
+                    DwarfWriter.putU8(out, (u32)$1B);   // addresses
+                    }
+                else
+                    {
+                    DwarfWriter.putULEB(out, (u64)1);
+                    DwarfWriter.putU8(out, (u32)$1B);
+                    }
                 out.append(f.cieIns());
                 while ((out.length() - at) % (u32)4 != (u32)0)
                     DwarfWriter.putU8(out, (u32)0);
@@ -2430,7 +2591,17 @@ class MachOSha256
             i64 pc = (i64)(textAddr + (u64)f.fn()) - (i64)(ehAddr + (u64)fa + (u64)8);
             DwarfWriter.putU32(out, (u32)pc);
             DwarfWriter.putU32(out, f.len());
-            DwarfWriter.putULEB(out, (u64)0);
+            if (eh)
+                {
+                DwarfWriter.putULEB(out, (u64)4);
+                i64 la = (symbols != (Map*)0 && f.lsdaSym() != (String*)0)
+                       ? (i64)((u64)1 << (u64)32) + (i64)MachO.symOffset(symbols, dataSyms, f.lsdaSym(), textOffset, dataProgOffset)
+                       : (i64)0;
+                i64 lf = (i64)ehAddr + (i64)out.length();
+                DwarfWriter.putU32(out, la != (i64)0 ? (u32)(la - lf) : (u32)0);
+                }
+            else
+                DwarfWriter.putULEB(out, (u64)0);
             out.append(f.ins());
             while ((out.length() - fa) % (u32)4 != (u32)0)
                 DwarfWriter.putU8(out, (u32)0);

@@ -222,7 +222,8 @@ class BitSet
     // only nudges a value to callee-saved.
     static bool isCallOp(String* op)
         {
-        return op.equals(String.withCString("Call")) || op.equals(String.withCString("CallBanked")) || op.equals(String.withCString("CallCloaked")) || op.equals(String.withCString("CallIndirect")) || op.equals(String.withCString("CallBankedIndirect")) || op.equals(String.withCString("VTblDispatch")) || op.equals(String.withCString("ProtoDispatch")) || op.equals(String.withCString("MemCopy")) || op.equals(String.withCString("MemSet")) || op.equals(String.withCString("Release")) || op.equals(String.withCString("Autorelease")) || op.equals(String.withCString("WeakRegister")) || op.equals(String.withCString("WeakUnregister")) || op.equals(String.withCString("WeakLoad"));
+        return op.equals(String.withCString("Call")) || op.equals(String.withCString("CallBanked")) || op.equals(String.withCString("CallCloaked")) || op.equals(String.withCString("CallIndirect")) || op.equals(String.withCString("CallBankedIndirect")) || op.equals(String.withCString("VTblDispatch")) || op.equals(String.withCString("ProtoDispatch")) || op.equals(String.withCString("MemCopy")) || op.equals(String.withCString("MemSet")) || op.equals(String.withCString("Release")) || op.equals(String.withCString("Autorelease")) || op.equals(String.withCString("WeakRegister")) || op.equals(String.withCString("WeakUnregister")) || op.equals(String.withCString("WeakLoad"))
+            || op.equals(String.withCString("Invoke"));
         }
 
     static bool isFloatTy(String* t)
@@ -449,6 +450,13 @@ class BitSet
                 recordUses(b.term(), pos, defs, ue);
                 if (Homing.isCallOp(b.term().op()))
                     _callPos.add((Object*)Number.with(pos));
+                // An Invoke's result is defined where it ends its block (it
+                // lives on into its normal successor).
+                if (b.term().res() != 0)
+                    {
+                    _defPos.set(b.term().res().pid(), (Object*)Number.with(pos));
+                    defs.add(b.term().res().pid());
+                    }
                 pos = pos + (u32)1;
                 }
             _blkEnd.set(bi, (Object*)Number.with(pos - (u32)1));

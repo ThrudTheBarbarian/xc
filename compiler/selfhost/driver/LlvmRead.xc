@@ -1488,6 +1488,18 @@ class LlvmReader
                 continue;
             readInsn(t);
             }
+        // A landing pad with phis: nothing runs on the way from the throw to
+        // the pad, so no copies can feed them. Such a function stays clang's.
+        for (u32 bi = (u32)0; _readHandlers && !_bad && bi < _fn.blocks().count(); bi = bi + (u32)1)
+            {
+            IRBlock* ib = (IRBlock*)_fn.blocks().get(bi);
+            IRInsn* it = ib.term();
+            if (it == (IRInsn*)0 || !it.isInvoke() || it.ops().count() < (u32)1)
+                continue;
+            IROperand* uo = (IROperand*)it.ops().get(it.ops().count() - (u32)1);
+            if (uo.kind() == (u8)OPK_BLOCK && uo.blk() != (IRBlock*)0 && uo.blk().phis().count() > (u32)0)
+                fail("a landing pad with a phi");
+            }
         IRDbg.clearCurrent();
         if (_bad)
             {

@@ -4948,6 +4948,12 @@ String* iosRuntimeSource(DriverOptions* d)
 void cSplitLink(DriverOptions* d)
 {
     String* xo = d.fe().output();
+    // XC_C_KEEP=<prefix>: xcc's half as an object too (<prefix>.x.o).
+    String* keepPrefix = Platform.env(String.withCString("XC_C_KEEP"));
+    if (keepPrefix.byteLength() > (u32)0) {
+        Data* xd = Files.readData(xo);
+        if (xd != (Data*)0) Files.writeData(keepPrefix.appending(String.withCString(".x.o")), xd);
+    }
     if (gCSplitRelocatable && gCSplitPair) {
         // win64's two objects, side by side (--c-pair).
         String* out = gCSplitOut;
@@ -5478,6 +5484,9 @@ void main(void)
         // can pass through one (arm64: the back end reports its saves).
         arm64SetEhTables(true);
         x86SetEhTables(true);
+        // C++ handlers compiled by xcc (option (a) phase 2) where the back end
+        // writes their tables: arm64 macOS.
+        cPathSetHandlers(crow != (TargetRow*)0 && crow.name().equals(String.withCString("arm64-macos")));
         machoSetEhMerge(true);
         // This file's suffix for the outliner's symbols, as the reader's for
         // its internal names: two C/C++ objects in one program stay apart.

@@ -1025,6 +1025,7 @@ class Arm64
             }
         _coldStubs = String.withCString("");
         _innerBody = innermostLoopBodies(fn);
+        ehPrepare(fn);
         for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
             {
             if (((Number*)head.get(b)).asU32() != (u32)0)
@@ -1035,6 +1036,7 @@ class Arm64
         _nextBB = (IRBlock*)0;
         _out.append(_coldStubs);
         _coldStubs = String.withCString("");
+        ehFinish();
     }
 
     // The checked-build parameter map (private:docs/Design/memory-safety.md). Collected
@@ -1441,6 +1443,11 @@ class Arm64
         if (op.equals(String.withCString("Neg")))    { emitUnary(n, String.withCString("neg")); return true; }
         if (op.equals(String.withCString("Not")))    { emitUnary(n, String.withCString("mvn")); return true; }
         if (op.equals(String.withCString("Unreachable"))) { _out.appendCString("    brk #0\n"); return true; }
+        if (op.equals(String.withCString("Invoke")))      { emitInvoke(n); return true; }
+        if (op.equals(String.withCString("Resume")))      { emitResume(n); return true; }
+        if (op.equals(String.withCString("LandingPad")))  { storeReg(String.withCString("x0"), n.res()); return true; }
+        if (op.equals(String.withCString("EhSelector")))  { storeReg(String.withCString("w1"), n.res()); return true; }
+        if (op.equals(String.withCString("EhTypeId")))    { emitEhTypeId(n); return true; }
         if (op.equals(String.withCString("SExt")) || op.equals(String.withCString("ZExt"))
          || op.equals(String.withCString("Trunc")) || op.equals(String.withCString("Bitcast")))
             { emitCast(n); return true; }
@@ -6237,6 +6244,10 @@ class Arm64
         u32 argc = (u32)0;
         u32 startGP = (u32)0;
         String* op = n.op();
+        if (op.equals(String.withCString("Invoke"))) {
+            if (n.ops().count() < (u32)4) return (u32)0;
+            first = (u32)1; argc = n.ops().count() - (u32)4;
+        } else
         if (op.equals(String.withCString("Call")) || op.equals(String.withCString("CallBanked"))
          || op.equals(String.withCString("CallCloaked")) || op.equals(String.withCString("CallIndirect"))) {
             if (n.ops().count() < (u32)2) return (u32)0;
@@ -8346,6 +8357,148 @@ class Arm64
         storeReg(r0, n.res());
     }
 
+    // ── C++ exception handlers (C/C++ input, option (a) phase 2) ─────────
+    // A function with landing pads gets its LSDA: the call-site table (each
+    // Invoke's call and its pad, the rest of the function with none, so a
+    // call there passes an exception on), the action table (each pad's
+    // clauses, a catch's type index or 0 for a cleanup, chained) and the type
+    // table (the typeinfo each catch names, 0 for catch (...)), written as
+    // .xc_lsda directives the assembler turns into bytes once the labels are
+    // placed. The personality is __gxx_personality_v0, named by the CIE.
+    Array* _ehSites;    // String@ quads: begin label, end label, pad label, action index
+    Array* _ehTypes;    // String@ typeinfo symbols ("0" for catch-all), index i+1
+    Map* _ehPadAction;  // pad block name -> Number(action index, 1-based; 0 for none)
+    String* _ehActions; // the action table as hex bytes
+    u32 _ehN;
+
+    static void slebInto(String* hex, i64 v)
+    {
+        bool more = true;
+        while (more) {
+            u32 b = (u32)(v & (i64)$7F);
+            v = v >> (i64)7;
+            if ((v == (i64)0 && (b & (u32)$40) == (u32)0) || (v == (i64)-1 && (b & (u32)$40) != (u32)0)) more = false;
+            else b = b | (u32)$80;
+            hex.appendFormat("%02x", b);
+        }
+    }
+
+    // The tables a function's pads need, before its blocks are emitted (an
+    // EhTypeId may come before the pad it belongs to).
+    void ehPrepare(IRFunc* fn)
+    {
+        _ehSites = new Array();
+        _ehTypes = new Array();
+        _ehPadAction = new Map();
+        _ehActions = new String();
+        _ehN = (u32)0;
+        u32 bytes = (u32)0;
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1) {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            IRInsn* lp = (IRInsn*)0;
+            for (u32 k = (u32)0; k < bb.insns().count() && lp == (IRInsn*)0; k = k + (u32)1)
+                if (((IRInsn*)bb.insns().get(k)).op().equals(String.withCString("LandingPad")))
+                    lp = (IRInsn*)bb.insns().get(k);
+            if (lp == (IRInsn*)0) continue;
+            // Clauses: (#kind, then a typeinfo for a catch).
+            Array* filters = new Array();
+            u32 q = (u32)0;
+            bool cleanup = false;
+            while (q < lp.ops().count()) {
+                IROperand* ko = (IROperand*)lp.ops().get(q);
+                i64 kind = ko.imm();
+                q = q + (u32)1;
+                if (kind == (i64)2) { cleanup = true; continue; }
+                if (q >= lp.ops().count()) break;
+                IROperand* to = (IROperand*)lp.ops().get(q);
+                q = q + (u32)1;
+                String* ty = to.kind() == (u8)OPK_SYM ? to.name() : String.withCString("0");
+                u32 idx = (u32)0;
+                for (u32 t = (u32)0; t < _ehTypes.count(); t = t + (u32)1)
+                    if (((String*)_ehTypes.get(t)).equals(ty)) idx = t + (u32)1;
+                if (idx == (u32)0) { _ehTypes.add((Object*)ty); idx = _ehTypes.count(); }
+                filters.add((Object*)Number.with(idx));
+            }
+            // A cleanup's record comes last (filter 0), as clang orders them.
+            if (cleanup) filters.add((Object*)Number.with((u32)0));
+            if (filters.count() == (u32)0) { _ehPadAction.set((Hashable*)bb.name(), (Object*)Number.with((u32)0)); continue; }
+            _ehPadAction.set((Hashable*)bb.name(), (Object*)Number.with(bytes + (u32)1));
+            for (u32 r = (u32)0; r < filters.count(); r = r + (u32)1) {
+                String* rec = new String();
+                Arm64.slebInto(rec, (i64)((Number*)filters.get(r)).asU32());
+                // The displacement to the next record, from this field: the
+                // next record starts right after it (1); 0 ends the chain.
+                Arm64.slebInto(rec, r + (u32)1 < filters.count() ? (i64)1 : (i64)0);
+                _ehActions.append(rec);
+                bytes = bytes + rec.byteLength() / (u32)2;
+            }
+        }
+    }
+
+    void emitInvoke(IRInsn* n)
+    {
+        u32 nops = n.ops().count();
+        if (nops < (u32)4) { unsupported(n.op()); return; }
+        IROperand* callee = (IROperand*)n.ops().get((u32)0);
+        if (callee.kind() != (u8)OPK_SYM) { unsupported(String.withCString("Invoke:indirect")); return; }
+        IROperand* normal = (IROperand*)n.ops().get(nops - (u32)2);
+        IROperand* unwind = (IROperand*)n.ops().get(nops - (u32)1);
+        if (normal.kind() != (u8)OPK_BLOCK || unwind.kind() != (u8)OPK_BLOCK) { unsupported(n.op()); return; }
+        if (!marshalArgs(n, (u32)1, nops - (u32)4, (u32)0)) return;
+        bool sret = emitSretSetupIfNeeded(n);
+        _ehN = _ehN + (u32)1;
+        String* lb = String.withFormat("Lxceh_%s_%ub", _fn.name().cString(), _ehN);
+        String* le = String.withFormat("Lxceh_%s_%ue", _fn.name().cString(), _ehN);
+        _out.appendFormat("%s:\n    bl _%s\n%s:\n", lb.cString(), callee.name().cString(), le.cString());
+        Object* act = _ehPadAction != (Map*)0 ? _ehPadAction.get((Hashable*)unwind.blk().name()) : (Object*)0;
+        _ehSites.add((Object*)lb);
+        _ehSites.add((Object*)le);
+        _ehSites.add((Object*)blockLabel(unwind.blk()));
+        _ehSites.add((Object*)Number.with(act != (Object*)0 ? ((Number*)act).asU32() : (u32)0));
+        captureResult(n, sret);
+        emitPhiCopies(_bb, normal.blk());
+        _out.appendFormat("    b %s\n", blockLabel(normal.blk()).cString());
+    }
+
+    void emitResume(IRInsn* n)
+    {
+        if (n.ops().count() < (u32)1) { unsupported(n.op()); return; }
+        String* r = operandReg((IROperand*)n.ops().get((u32)0), String.withCString("x0"));
+        if (!r.equals(String.withCString("x0")))
+            _out.appendFormat("    mov x0, %s\n", r.cString());
+        _out.appendCString("    bl __Unwind_Resume\n    brk #1\n");
+    }
+
+    void emitEhTypeId(IRInsn* n)
+    {
+        IROperand* t = n.ops().count() > (u32)0 ? (IROperand*)n.ops().get((u32)0) : (IROperand*)0;
+        u32 idx = (u32)0;
+        for (u32 i = (u32)0; t != (IROperand*)0 && _ehTypes != (Array*)0 && i < _ehTypes.count(); i = i + (u32)1)
+            if (((String*)_ehTypes.get(i)).equals(t.name())) idx = i + (u32)1;
+        if (idx == (u32)0) { unsupported(String.withCString("EhTypeId:unknown type")); return; }
+        String* d = resultReg(n.res(), String.withCString("w16"));
+        _out.appendFormat("    mov %s, #%u\n", d.cString(), idx);
+        storeReg(d, n.res());
+    }
+
+    // The LSDA directives, after the function's last instruction.
+    void ehFinish(void)
+    {
+        if (_ehSites == (Array*)0 || _ehSites.count() == (u32)0) return;
+        _out.appendFormat("Lxceh_%s_end:\n", _fn.name().cString());
+        _out.appendFormat("    .xc_lsda_begin _%s Lxceh_%s_end\n", _fn.name().cString(), _fn.name().cString());
+        for (u32 i = (u32)0; i + (u32)3 < _ehSites.count(); i = i + (u32)4)
+            _out.appendFormat("    .xc_lsda_cs %s %s %s %u\n", ((String*)_ehSites.get(i)).cString(),
+                              ((String*)_ehSites.get(i + (u32)1)).cString(), ((String*)_ehSites.get(i + (u32)2)).cString(),
+                              ((Number*)_ehSites.get(i + (u32)3)).asU32());
+        if (_ehActions.byteLength() > (u32)0)
+            _out.appendFormat("    .xc_lsda_actions %s\n", _ehActions.cString());
+        for (u32 i = (u32)0; i < _ehTypes.count(); i = i + (u32)1)
+            _out.appendFormat("    .xc_lsda_type %s\n", ((String*)_ehTypes.get(i)).cString());
+        _out.appendCString("    .xc_lsda_end\n");
+        _ehSites = (Array*)0;
+    }
+
     // ── Branches ─────────────────────────────────────────────────────────
     String* blockLabel(IRBlock* b)
     {
@@ -9727,7 +9880,7 @@ class Arm64
     // caller-saved tier and change which registers get used.
     static bool emitsCall(String* op)
     {
-        return op.equals(String.withCString("Call"))
+        return op.equals(String.withCString("Call")) || op.equals(String.withCString("Invoke"))
             || op.equals(String.withCString("CallBanked"))
             || op.equals(String.withCString("CallCloaked"))
             || op.equals(String.withCString("CallIndirect"))
@@ -9820,6 +9973,11 @@ class Arm64
             if (b.term() != (IRInsn*)0) {
                 noteUses(b.term(), defs, ue, lastUse, pos);
                 if (emitsCall(b.term().op())) _callPos.add((Object*)Number.withI32(pos));
+                // An Invoke's result is defined where it ends its block.
+                if (b.term().res() != (IRValue*)0) {
+                    defPos.set((Hashable*)b.term().res(), (Object*)Number.withI32(pos));
+                    defs.add(b.term().res());
+                }
                 pos = pos + (i32)1;
             }
             blkEnd.set(bi, (Object*)Number.withI32(pos - (i32)1));
@@ -11023,6 +11181,10 @@ class Arm64
             IRBlock* bb = (IRBlock*)fn.blocks().get(b);
             for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1) {
                 u32 want = outStackBytesFor((IRInsn*)bb.insns().get(i));
+                if (want > _maxOutStack) _maxOutStack = want;
+            }
+            if (bb.term() != (IRInsn*)0) {
+                u32 want = outStackBytesFor(bb.term());
                 if (want > _maxOutStack) _maxOutStack = want;
             }
         }
