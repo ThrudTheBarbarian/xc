@@ -2350,6 +2350,7 @@ void emitWin64(DriverOptions* d, IRModule* mod)
         }
         Pe* pw = new Pe();
         pw.setDirectives(objectDepLibs(d));
+        pw.setSeh(oa.sehFunctions());
         Data* od = pw.objectFromText(oa.text(), oa.data(), oa.symbols(), oa.dataSyms(),
                                      oa.globalSyms(), oa.fixups());
         if (pw.failed() || od == (Data*)0) {

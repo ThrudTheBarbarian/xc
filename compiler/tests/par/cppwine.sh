@@ -3,7 +3,8 @@
 # an exception thrown through clang's frames and caught (typed, catch-all,
 # in the same function), a thread_local (libc++abi keeps its exception
 # globals in one), a virtual call, a global object's constructor (__main),
-# and a loop xcc lifts into a par block next to a throw; then the C++ corpus
+# and a loop xcc lifts into a par block next to a throw; programs of several
+# files, one with an exception through xcc's own function; then the C++ corpus
 # (tests/par/cpp/) against the mingw toolchain's clang++. The program's
 # exception directory and TLS directory are xcc's. Skipped without Wine, a
 # clang++, or the mingw root's libc++ (/opt/clang/win64).
@@ -78,6 +79,9 @@ multi() { # name, want, files...
 }
 multi multifile "multi-file 7493500 1496500 main" tests/par/c-multi/main.cpp tests/par/c-multi/part.cpp tests/par/c-multi/csum.c
 multi ehmulti "m1,k-odd;m2,o20;c-three,k-odd;m4,o40;m5,k-odd;c-three,o60;escaped-negative" tests/par/c-ehmulti/main.cpp tests/par/c-ehmulti/other.cpp
+# An exception through a function xcc compiled (tests/par/c-unwind/apply.c),
+# its callee-saved values intact: xcc's functions carry .pdata/.xdata.
+multi unwind "1133 ok" tests/par/c-unwind/thrower.cpp tests/par/c-unwind/apply.c
 # The C++ corpus (tests/par/cpp/), each program against the mingw
 # toolchain's clang++ where it is there to build the reference.
 REF=${ROOT%/x86_64-w64-mingw32}/bin/x86_64-w64-mingw32-clang++

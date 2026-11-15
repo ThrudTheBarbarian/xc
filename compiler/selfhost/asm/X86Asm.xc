@@ -240,6 +240,8 @@ class X86Fixup
     String* _why;
     bool _skipSect; // inside a CodeView .debug$ section — emit nothing
     DwarfWriter* _dwarf; // -g: the line table, if the text has one
+    Array* _seh;        // win64 unwind entries, one Array@ per function (sehFunctions)
+    Array* _sehCur;     // the function between .seh_proc and .seh_endproc
     Map* _evex;     // EVEX forms: mnemonic -> packed form/map/pp/W/opcode/N
     Map* _evexX;    // the shifts whose count is an xmm register
 
@@ -257,6 +259,7 @@ class X86Fixup
         _dataSyms = new Array();
         _globalSyms = new Array();
         _commonSyms = new Map();
+        _seh = new Array();
         _bss = new SectionBytes();
         _bssAlign = (u32)16;
         _bssLabels = new Array();
@@ -272,6 +275,32 @@ class X86Fixup
         {
         return _data;
         }
+    // win64 unwind entries (`.seh_proc` … `.seh_endproc`, C/C++ input): per
+    // function an Array@ of [name, start, prologue size, end, codes], codes a
+    // flat Number@ list of (offset in the function, UWOP_*, register, value).
+    Array* sehFunctions(void)
+        {
+        return _seh;
+        }
+
+    static u32 sehRegister(String* r)
+        {
+        if (r.hasPrefix(String.withCString("xmm")))
+            {
+            u32 n = (u32)0;
+            for (u32 k = (u32)3; k < r.byteLength(); k = k + (u32)1)
+                n = n * (u32)10 + (u32)(r.byteAt(k) - (u8)'0');
+            return n;
+            }
+        Array* names = String.withCString("rax rcx rdx rbx rsp rbp rsi rdi").splitOnByte((u8)' ');
+        for (u32 k = (u32)0; k < names.count(); k = k + (u32)1)
+            if (((String*)names.get(k)).equals(r)) return k;
+        u32 n = (u32)0;
+        for (u32 k = (u32)1; k < r.byteLength(); k = k + (u32)1)
+            n = n * (u32)10 + (u32)(r.byteAt(k) - (u8)'0');
+        return n;
+        }
+
     Array* fixups(void)
         {
         return _fixups;
@@ -3456,6 +3485,62 @@ class X86Fixup
         // table, recorded against the text offset they precede.
         // -g: `.xc_var "<name>" <reg> <offset> "<type>"` (`.xc_param` for a
         // parameter) — a variable of the function being assembled.
+        // win64 unwind entries (C/C++ input), as GNU as spells them: each
+        // prologue step at the offset it ends, for Pe's .pdata/.xdata.
+        if (d.hasPrefix(String.withCString(".seh_")))
+            {
+            u32 here = _text.length();
+            if (d.equals(String.withCString(".seh_proc")))
+                {
+                _sehCur = new Array();
+                _sehCur.add((Object*)rest);
+                _sehCur.add((Object*)Number.withU32(here));
+                _sehCur.add((Object*)Number.withU32((u32)0));
+                _sehCur.add((Object*)Number.withU32(here));
+                _sehCur.add((Object*)new Array());
+                return section;
+                }
+            if (_sehCur == (Array*)0)
+                return section;
+            u32 at = here - ((Number*)_sehCur.get((u32)1)).asU32();
+            Array* codes = (Array*)_sehCur.get((u32)4);
+            Array* ops = rest.splitOnByte((u8)',');
+            String* r0 = ops.count() > (u32)0 ? ((String*)ops.get((u32)0)).trimmed() : String.withCString("");
+            u32 v = (u32)0;
+            if (ops.count() > (u32)1)
+                {
+                String* vs = ((String*)ops.get((u32)1)).trimmed();
+                for (u32 k = (u32)0; k < vs.byteLength(); k = k + (u32)1)
+                    v = v * (u32)10 + (u32)(vs.byteAt(k) - (u8)'0');
+                }
+            u32 op = (u32)$FFFF;
+            u32 reg = (u32)0;
+            if (d.equals(String.withCString(".seh_pushreg"))) { op = (u32)0; reg = X86Asm.sehRegister(r0); }
+            else if (d.equals(String.withCString(".seh_stackalloc")))
+                {
+                op = (u32)1;
+                for (u32 k = (u32)0; k < r0.byteLength(); k = k + (u32)1)
+                    v = v * (u32)10 + (u32)(r0.byteAt(k) - (u8)'0');
+                }
+            else if (d.equals(String.withCString(".seh_savereg"))) { op = (u32)4; reg = X86Asm.sehRegister(r0); }
+            else if (d.equals(String.withCString(".seh_savexmm"))) { op = (u32)8; reg = X86Asm.sehRegister(r0); }
+            else if (d.equals(String.withCString(".seh_endprologue")))
+                _sehCur.set((u32)2, (Object*)Number.withU32(at));
+            else if (d.equals(String.withCString(".seh_endproc")))
+                {
+                _sehCur.set((u32)3, (Object*)Number.withU32(here));
+                _seh.add((Object*)_sehCur);
+                _sehCur = (Array*)0;
+                }
+            if (op != (u32)$FFFF)
+                {
+                codes.add((Object*)Number.withU32(at));
+                codes.add((Object*)Number.withU32(op));
+                codes.add((Object*)Number.withU32(reg));
+                codes.add((Object*)Number.withU32(v));
+                }
+            return section;
+            }
         // `.xc_saves <reg>:<cfa offset> ...` (C/C++ input): where the frame
         // just set up keeps rbp, the return address and each callee-saved
         // register, for the unwind tables.

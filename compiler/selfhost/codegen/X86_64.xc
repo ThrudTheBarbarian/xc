@@ -597,6 +597,8 @@ class X86_64
     bool _canary;      // this frame keeps a stack canary at [rbp-8]
     u32 _canaryN;      // the module's canary-check labels, numbered from 1
     Homing* _homing;
+    bool _seh;         // win64 unwind tables for this function (C/C++ input)
+    u32 _sehResv;      // its largest call area, folded into the frame (_seh)
     Array* _homeSaves; // callee-saved registers used, in pool order
     Map* _homeSaveOff; // register -> its [rbp-off]
     u32 _sretOff;      // Win64's hidden result pointer, or 0
@@ -607,6 +609,19 @@ class X86_64
         {
         _fn = fn;
         _hasAsm = functionHasAsm(fn);
+        // win64 unwind tables (C/C++ input): rsp fixed after the prologue, so
+        // a call site's frame is the prologue's (a function whose rsp moved
+        // at run time could not be described so; xcc has none: every alloca
+        // is a fixed slot). Inline asm may move rsp: no table there.
+        _seh = gX86EhTables && _win64 && !_hasAsm;
+        _sehResv = (u32)0;
+        // The function's own text, rewritten by finishSeh, then added.
+        String* sehOuter = (String*)0;
+        if (_seh)
+            {
+            sehOuter = _out;
+            _out = new String();
+            }
         assignSlots(fn);
         buildDefOf(fn);
         computeVecLoadFolds(fn);
@@ -663,6 +678,8 @@ class X86_64
         else
             _out.appendFormat("\t.globl\t%s\n\t.type\t%s, @function\n%s:\n",
                               fname.cString(), fname.cString(), fname.cString());
+        if (_seh)
+            _out.appendFormat("\t.seh_proc\t%s\n", fname.cString());
         // -g: the prologue belongs to the function's first line, not to
         // whatever line the previous function ended on.
         Array* dbgFiles = IRDbg.files();
@@ -705,7 +722,7 @@ class X86_64
                               slotOf(pl.val()), pl.ty().cString());
             }
         _lastDbg = false;
-        _out.appendCString("\tpush\trbp\n\tmov\trbp, rsp\n");
+        _out.appendCString(_seh ? "\tpush\trbp\n\t.seh_pushreg\trbp\n\tmov\trbp, rsp\n" : "\tpush\trbp\n\tmov\trbp, rsp\n");
         // Windows commits a thread's stack one guard page at a time, so a
         // frame over a page must touch each page in order: one `sub rsp, N`
         // lands past the guard page and faults (bug 599: 0xC0000005 on real
@@ -713,13 +730,17 @@ class X86_64
         // Unrolled, so it needs no labels; r11 is volatile and holds no
         // argument here.
         u32 rest = _frame;
-        if (_win64)
+        if (_win64 && !_seh)
             while (rest > (u32)4096)
                 {
                 _out.appendCString("\tsub\trsp, 4096\n\tmov\tr11, [rsp]\n");
                 rest = rest - (u32)4096;
                 }
-        if (rest != (u32)0)
+        // _seh: the whole frame, call area included, known at the end
+        // (finishSeh writes the probes and the sub there).
+        if (_seh)
+            _out.appendCString("\t@@XC_SEH_ALLOC@@\n");
+        else if (rest != (u32)0)
             _out.appendFormat("\tsub\trsp, %lu\n", rest);
         // r11 is volatile and carries no argument on either ABI.
         if (_canary)
@@ -729,6 +750,8 @@ class X86_64
             String* r = (String*)_homeSaves.get(i);
             _out.appendFormat("\tmov\t[rbp-%lu], %s\n",
                               ((Number*)_homeSaveOff.get((Hashable*)r)).asU32(), r.cString());
+            if (_seh)
+                _out.appendFormat("\t@@XC_SEH_SAVE %s@@\n", r.cString());
             }
         // The call frame is rbp + 16: rbp at its bottom, the return address
         // above it, each saved register at rbp - off. DWARF numbers: rbx 3,
@@ -761,7 +784,11 @@ class X86_64
             String* x = (String*)_xmmSaves.get(i);
             _out.appendFormat("\tmovups\t[rbp-%lu], %s\n",
                               ((Number*)_xmmSaveOff.get((Hashable*)x)).asU32(), x.cString());
+            if (_seh)
+                _out.appendFormat("\t@@XC_SEH_SAVE %s@@\n", x.cString());
             }
+        if (_seh)
+            _out.appendCString("\t.seh_endprologue\n");
         if (hasSret)
             _out.appendFormat("\tmov\t[rbp-%lu], %s\n", _sretOff,
                               _win64 ? "rcx" : "rdi");
@@ -796,6 +823,52 @@ class X86_64
                       ((Number*)loopHead.get(b)).asU32() != (u32)0);
         _out.append(_edgeStubs);
         _edgeStubs = (String*)0;
+        if (_seh)
+            {
+            finishSeh();
+            sehOuter.append(_out);
+            _out = sehOuter;
+            }
+        }
+
+    // win64 unwind tables: the frame is now known, the call area folded in
+    // (rspReserve). The prologue's allocation, page by page as Windows
+    // commits its stack and all of it inside the prologue, each save's
+    // offset from the fixed rsp, and the epilogue's add (left the plain
+    // add / pop rbp / ret the unwinder recognises).
+    void finishSeh(void)
+        {
+        u32 total = (_frame + _sehResv + (u32)15) & ~(u32)15;
+        String* body = _out;
+        String* alloc = new String();
+        u32 rest = total;
+        while (rest > (u32)4096)
+            {
+            alloc.appendCString("\tsub\trsp, 4096\n\tmov\tr11, [rsp]\n");
+            rest = rest - (u32)4096;
+            }
+        if (rest != (u32)0)
+            alloc.appendFormat("\tsub\trsp, %lu\n", rest);
+        if (total != (u32)0)
+            alloc.appendFormat("\t.seh_stackalloc\t%lu\n", total);
+        body = body.replacing(String.withCString("\t@@XC_SEH_ALLOC@@\n"), alloc);
+        body = body.replacing(String.withCString("@@XC_SEH_TOTAL@@"), String.withFormat("%lu", total));
+        for (u32 i = (u32)0; i < _homeSaves.count(); i = i + (u32)1)
+            {
+            String* r = (String*)_homeSaves.get(i);
+            u32 off = ((Number*)_homeSaveOff.get((Hashable*)r)).asU32();
+            body = body.replacing(String.withFormat("\t@@XC_SEH_SAVE %s@@\n", r.cString()),
+                                  String.withFormat("\t.seh_savereg\t%s, %lu\n", r.cString(), total - off));
+            }
+        for (u32 i = (u32)0; i < _xmmSaves.count(); i = i + (u32)1)
+            {
+            String* x = (String*)_xmmSaves.get(i);
+            u32 off = ((Number*)_xmmSaveOff.get((Hashable*)x)).asU32();
+            body = body.replacing(String.withFormat("\t@@XC_SEH_SAVE %s@@\n", x.cString()),
+                                  String.withFormat("\t.seh_savexmm\t%s, %lu\n", x.cString(), total - off));
+            }
+        body.appendCString("\t.seh_endproc\n");
+        _out = body;
         }
 
     // rbx and r12-r15 are the callee-saved pool; there is no caller-saved tier
@@ -3535,10 +3608,35 @@ class X86_64
     // A fixed-target runtime call. Win64 requires the caller to reserve the
     // 32-byte shadow store around it; System V is a bare call. The argument
     // registers must already be loaded — this only frames the call.
+    // A call's stack area (its arguments, win64's 32-byte home space): below
+    // rsp for the call, given back after it. Under win64's unwind tables
+    // (_seh) rsp stays where the prologue left it, so the largest of a
+    // function's areas is part of its frame instead (_sehResv).
+    void rspReserve(u32 n)
+        {
+        if (_seh)
+            {
+            if (n > _sehResv) _sehResv = n;
+            return;
+            }
+        _out.appendFormat("\tsub\trsp, %lu\n", n);
+        }
+
+    void rspRelease(u32 n)
+        {
+        if (_seh)
+            return;
+        _out.appendFormat("\tadd\trsp, %lu\n", n);
+        }
+
     void emitRTCall(String* target)
         {
         if (_win64)
-            _out.appendFormat("\tsub\trsp, 32\n\tcall\t%s\n\tadd\trsp, 32\n", target.cString());
+            {
+            rspReserve((u32)32);
+            _out.appendFormat("\tcall\t%s\n", target.cString());
+            rspRelease((u32)32);
+            }
         else
             _out.appendFormat("\tcall\t%s\n", target.cString());
         }
@@ -3964,7 +4062,7 @@ class X86_64
             }
         u32 vResv = ((nstack * (u32)8) + (u32)15) & ~(u32)15; // 16-align
         if (vResv != (u32)0)
-            _out.appendFormat("\tsub\trsp, %lu\n", vResv);
+            rspReserve(vResv);
 
         u32 ireg = vMemRet ? (u32)1 : (u32)0;
         u32 freg = (u32)0;
@@ -4026,7 +4124,7 @@ class X86_64
         // Reclaim the outgoing stack-argument area (uxkit/033 — this path used
         // to reserve none).
         if (vResv != (u32)0)
-            _out.appendFormat("\tadd\trsp, %lu\n", vResv);
+            rspRelease(vResv);
         if (vMemRet)
             return; // result already written through sret into its slot
         captureResult(n);
@@ -4097,7 +4195,7 @@ class X86_64
             }
         u32 vResv = ((nstack * (u32)8) + (u32)15) & ~(u32)15;
         if (vResv != (u32)0)
-            _out.appendFormat("\tsub\trsp, %lu\n", vResv);
+            rspReserve(vResv);
         u32 ireg = vMemRet ? (u32)1 : (u32)0;
         u32 freg = (u32)0;
         u32 sidx = (u32)0;
@@ -4164,7 +4262,7 @@ class X86_64
             _out.appendFormat("\tlea\trdi, [rbp-%lu]\n", slotOf(n.res()));
         _out.appendCString("\tcall\tr11\n");
         if (vResv != (u32)0)
-            _out.appendFormat("\tadd\trsp, %lu\n", vResv);
+            rspRelease(vResv);
         if (vMemRet)
             return;
         captureResult(n);
@@ -4217,7 +4315,7 @@ class X86_64
             }
         u32 copyBase = (u32)32 + wstack * (u32)8;
         u32 resv = ((copyBase + copyBytes) + (u32)15) & ~(u32)15;
-        _out.appendFormat("\tsub\trsp, %lu\n", resv);
+        rspReserve(resv);
 
         Array* ir4 = win64ArgRegs();
         Array* ir4d = win64ArgRegs32();
@@ -4338,7 +4436,7 @@ class X86_64
         if (bigRet && hasSlot(n.res())) // the hidden result pointer
             _out.appendFormat("\tlea\trcx, [rbp-%lu]\n", slotOf(n.res()));
         _out.appendCString("\tcall\tr11\n");
-        _out.appendFormat("\tadd\trsp, %lu\n", resv);
+        rspRelease(resv);
         if (bigRet)
             return; // already written through the sret
         captureResult(n);
@@ -6207,7 +6305,7 @@ class X86_64
             }
         u32 copyBase = (u32)32 + wstack * (u32)8;
         u32 resv = ((copyBase + copyBytes) + (u32)15) & ~(u32)15;
-        _out.appendFormat("\tsub\trsp, %lu\n", resv);
+        rspReserve(resv);
 
         Array* ir4 = win64ArgRegs();
         Array* ir4d = win64ArgRegs32();
@@ -6304,7 +6402,7 @@ class X86_64
             _out.appendCString("\tcall\tr11\n");
         else
             _out.appendFormat("\tcall\t%s\n", safeSym(((IROperand*)n.ops().get((u32)0)).name()).cString());
-        _out.appendFormat("\tadd\trsp, %lu\n", resv);
+        rspRelease(resv);
         if (bigRet)
             return; // already written through the sret
         captureResult(n);
@@ -6361,7 +6459,7 @@ class X86_64
             }
         u32 resv = ((nstack * (u32)8) + (u32)15) & ~(u32)15;
         if (resv != (u32)0)
-            _out.appendFormat("\tsub\trsp, %lu\n", resv);
+            rspReserve(resv);
 
         Array* ir64 = sysvArgRegs();
         Array* ir32 = sysvArgRegs32();
@@ -6428,7 +6526,7 @@ class X86_64
         else
             _out.appendFormat("\tcall\t%s\n", safeSym(((IROperand*)n.ops().get((u32)0)).name()).cString());
         if (resv != (u32)0)
-            _out.appendFormat("\tadd\trsp, %lu\n", resv);
+            rspRelease(resv);
         if (memRet)
             return; // result already written through sret into its slot
         captureResult(n);
@@ -7001,7 +7099,9 @@ class X86_64
                               nm.cString(), _canaryN, nm.cString(), _canaryN);
             }
         emitHomeRestore();
-        if (_frame != (u32)0)
+        if (_seh)
+            _out.appendCString("\tadd\trsp, @@XC_SEH_TOTAL@@\n");
+        else if (_frame != (u32)0)
             _out.appendFormat("\tadd\trsp, %lu\n", _frame);
         _out.appendCString("\tpop\trbp\n\tret\n");
         }

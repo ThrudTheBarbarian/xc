@@ -38,6 +38,7 @@ class Pe
     {
     Data* _out;
     Array* _directives; // String@: the libraries the next object asks its link for (.drectve)
+    Array* _seh;        // win64 unwind entries for the next object (X86Asm.sehFunctions)
     bool _failed;
     String* _why;
 
@@ -161,6 +162,72 @@ class Pe
             a.set(j, v);
             }
         }
+    // The next object's unwind entries (`.seh_proc` … `.seh_endproc`, C/C++
+    // input): written as its .xdata and .pdata. None, and the object is as
+    // before.
+    void setSeh(Array* funcs)
+        {
+        _seh = funcs;
+        }
+
+    static void slot(Data* x, u32 off, u32 op, u32 info)
+        {
+        x.appendByte((u8)(off > (u32)255 ? (u32)255 : off));
+        x.appendByte((u8)(op | (info << (u32)4)));
+        }
+
+    static void slot16(Data* x, u32 v)
+        {
+        x.appendByte((u8)(v & (u32)$FF));
+        x.appendByte((u8)((v >> (u32)8) & (u32)$FF));
+        }
+
+    // One function's UNWIND_INFO (version 1, no handler): its codes, latest
+    // prologue step first, each in the shortest form that holds its value.
+    static void unwindInfo(Data* x, Array* f)
+        {
+        Array* codes = (Array*)f.get((u32)4);
+        Data* sl = new Data();
+        u32 nslots = (u32)0;
+        for (u32 i = codes.count(); i >= (u32)4; i = i - (u32)4)
+            {
+            u32 off = ((Number*)codes.get(i - (u32)4)).asU32();
+            u32 op = ((Number*)codes.get(i - (u32)3)).asU32();
+            u32 reg = ((Number*)codes.get(i - (u32)2)).asU32();
+            u32 v = ((Number*)codes.get(i - (u32)1)).asU32();
+            if (op == (u32)0)
+                { Pe.slot(sl, off, (u32)0, reg); nslots = nslots + (u32)1; }
+            else if (op == (u32)1)
+                {
+                if (v >= (u32)8 && v <= (u32)128)
+                    { Pe.slot(sl, off, (u32)2, (v - (u32)8) / (u32)8); nslots = nslots + (u32)1; }
+                else if (v / (u32)8 <= (u32)$FFFF)
+                    { Pe.slot(sl, off, (u32)1, (u32)0); Pe.slot16(sl, v / (u32)8); nslots = nslots + (u32)2; }
+                else
+                    { Pe.slot(sl, off, (u32)1, (u32)1); Pe.slot16(sl, v & (u32)$FFFF); Pe.slot16(sl, v >> (u32)16); nslots = nslots + (u32)3; }
+                }
+            else
+                {
+                // op 4 SAVE_NONVOL (scaled by 8) / 5 its FAR form, op 8
+                // SAVE_XMM128 (scaled by 16) / 9 its FAR form.
+                u32 scale = op == (u32)4 ? (u32)8 : (u32)16;
+                if (v % scale == (u32)0 && v / scale <= (u32)$FFFF)
+                    { Pe.slot(sl, off, op, reg); Pe.slot16(sl, v / scale); nslots = nslots + (u32)2; }
+                else
+                    { Pe.slot(sl, off, op + (u32)1, reg); Pe.slot16(sl, v & (u32)$FFFF); Pe.slot16(sl, v >> (u32)16); nslots = nslots + (u32)3; }
+                }
+            }
+        u32 prolog = ((Number*)f.get((u32)2)).asU32();
+        x.appendByte((u8)1);
+        x.appendByte((u8)(prolog > (u32)255 ? (u32)255 : prolog));
+        x.appendByte((u8)nslots);
+        x.appendByte((u8)0);
+        for (u32 b = (u32)0; b < sl.length(); b = b + (u32)1)
+            x.appendByte(sl.bytes()[b]);
+        if (nslots % (u32)2 != (u32)0)
+            Pe.slot16(x, (u32)0);
+        }
+
     // The libraries the next object asks its link for (`/DEFAULTLIB:c++`), as
     // a .drectve section: a C/C++ object's. None, and the object is as before.
     void setDirectives(Array* libs)
@@ -280,7 +347,49 @@ class Pe
                 drectve.appendByte(dv.byteAt(b));
             }
         _directives = (Array*)0;
+        // .xdata and .pdata: each function's UNWIND_INFO, and its
+        // RUNTIME_FUNCTION (start, end, info), three ADDR32NB relocations
+        // against the function and the .xdata section's symbol.
+        Data* xdata = new Data();
+        Data* pdata = new Data();
+        Data* pRel = new Data();
+        u32 nPRel = (u32)0;
+        u32 xdataSym = order.count();
+        for (u32 i = (u32)0; _seh != (Array*)0 && i < _seh.count(); i = i + (u32)1)
+            {
+            Array* f = (Array*)_seh.get(i);
+            Object* fs = symIndex.get((Hashable*)f.get((u32)0));
+            if (fs == (Object*)0)
+                continue;
+            u32 fsi = ((Number*)fs).asU32() - (u32)1;
+            u32 start = ((Number*)f.get((u32)1)).asU32();
+            u32 end = ((Number*)f.get((u32)3)).asU32();
+            Object* fv = symbols.get((Hashable*)f.get((u32)0));
+            if (fv == (Object*)0 || ((Number*)fv).asU32() != start || end <= start)
+                continue;
+            while (xdata.length() % (u32)4 != (u32)0)
+                xdata.appendByte((u8)0);
+            u32 xoff = xdata.length();
+            Pe.unwindInfo(xdata, f);
+            u32 at = pdata.length();
+            u32 words[3];
+            words[0] = (u32)0;
+            words[1] = end - start;
+            words[2] = xoff;
+            for (u32 w = (u32)0; w < (u32)3; w = w + (u32)1)
+                for (u32 b = (u32)0; b < (u32)4; b = b + (u32)1)
+                    pdata.appendByte((u8)((words[w] >> (b * (u32)8)) & (u32)$FF));
+            Pe.rel(pRel, at, fsi, (u32)3);
+            Pe.rel(pRel, at + (u32)4, fsi, (u32)3);
+            Pe.rel(pRel, at + (u32)8, xdataSym, (u32)3);
+            nPRel = nPRel + (u32)3;
+            }
+        _seh = (Array*)0;
+        bool hasSeh = pdata.length() > (u32)0;
         u32 nsect = drectve.length() > (u32)0 ? (u32)3 : (u32)2;
+        u32 secXdata = nsect + (u32)1;
+        if (hasSeh)
+            nsect = nsect + (u32)2;
         u32 off = (u32)20 + nsect * (u32)PE_SECT_HDR_SIZE;
         u32 textOff = off;
         off = off + mtext.length();
@@ -288,17 +397,23 @@ class Pe
         off = off + mdata.length();
         u32 drOff = off;
         off = off + drectve.length();
+        u32 xOff = off;
+        off = off + xdata.length();
+        u32 pOff = off;
+        off = off + pdata.length();
         u32 trelOff = off;
         off = off + textRel.length();
         u32 drelOff = off;
         off = off + dataRel.length();
+        u32 prelOff = off;
+        off = off + pRel.length();
         u32 symOff = off;
         _out = new Data();
         p16((u32)COFF_MACHINE_AMD64);
         p16(nsect);
         p32((u32)0); // TimeDateStamp: zero keeps it reproducible
         p32(symOff);
-        p32(order.count());
+        p32(order.count() + (hasSeh ? (u32)1 : (u32)0));
         p16((u32)0);
         p16((u32)0);
         Pe.sectHdr(self, String.withCString(".text"), mtext.length(), textOff, trelOff, nTextRel,
@@ -309,11 +424,22 @@ class Pe
         if (drectve.length() > (u32)0)
             Pe.sectHdr(self, String.withCString(".drectve"), drectve.length(), drOff, (u32)0, (u32)0,
                        (u32)$00100A00);
+        // IMAGE_SCN_CNT_INITIALIZED_DATA | MEM_READ | ALIGN_4BYTES
+        if (hasSeh)
+            {
+            Pe.sectHdr(self, String.withCString(".xdata"), xdata.length(), xOff, (u32)0, (u32)0,
+                       (u32)$40300040);
+            Pe.sectHdr(self, String.withCString(".pdata"), pdata.length(), pOff, prelOff, nPRel,
+                       (u32)$40300040);
+            }
         appendSection(mtext);
         appendSection(mdata);
         appendAll(drectve);
+        appendAll(xdata);
+        appendAll(pdata);
         appendAll(textRel);
         appendAll(dataRel);
+        appendAll(pRel);
         for (u32 i = (u32)0; i < order.count(); i = i + (u32)1)
             {
             String* n = (String*)order.get(i);
@@ -335,6 +461,18 @@ class Pe
             p16(isUndef ? (u32)0 : (inData ? (u32)2 : (u32)1));
             p16((u32)0);
             p8((isUndef || Pe.inArray(globalSyms, n)) ? (u32)2 : (u32)3);
+            p8((u32)0);
+            }
+        // .xdata's section symbol (static), named by .pdata's relocations.
+        if (hasSeh)
+            {
+            String* xn = String.withCString(".xdata");
+            for (u32 b = (u32)0; b < (u32)8; b = b + (u32)1)
+                p8(b < xn.byteLength() ? (u32)xn.byteAt(b) : (u32)0);
+            p32((u32)0);
+            p16(secXdata);
+            p16((u32)0);
+            p8((u32)3);
             p8((u32)0);
             }
         appendAll(strtab);
