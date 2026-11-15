@@ -528,6 +528,19 @@ class Par
     // and the block runs on the CPU as before. On a target without the
     // aligned allocator a `simd:` pointer is trusted to be its block's start
     // and sized from the header, as it was; elem is the element's size.
+    // Bring an array a GPU run kept on the device back to the host now
+    // (XC_PAR_RESIDENT=1, #15): any host access does so by itself, but a
+    // system call or a C library given the array (write(), memcpy inside
+    // libc) does not fault into the runtime and fails instead, so a program
+    // that hands such an array on calls this first. Nothing happens for an
+    // array that is not kept on a device.
+    static void sync(pointer p)
+        {
+#if OS_windows || (ARCH_x86_64 && LIBC_glibc && !OS_android)
+        ParCuda.fetchResident(ParDevice.simdBase(p) != (pointer)0 ? ParDevice.simdBase(p) : p, false);
+#endif
+        }
+
     static i64 spanOf(pointer p, i64 elem, bool simdType)
         {
         if (p == (pointer)0)

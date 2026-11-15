@@ -95,6 +95,31 @@ void parCudaUnpin(pointer payload);
 i32 _xtc_simd_watch(pointer p);
 void _xtc_simd_unwatch(pointer p);
 i32 _xtc_simd_dirty(pointer p);
+// Resident outputs (#15, XC_PAR_RESIDENT=1): after a single-shot run on one
+// CUDA device, an output the run wrote whole (a page-aligned block of 1 MB
+// and more, pinned) is not copied back. Its slot keeps the only current copy
+// and the block is parked (rt-freestanding.c, rt.c): its pages no-access, so
+// any host access faults into ParCudaFetch.fetch, which copies it back (a DMA
+// into the pinned pages, which their protection does not stop), unparks it
+// and lets the access run again. A later run that reads it from the same
+// slot finds it there and sends nothing; any other use (another slot, the
+// tiled or multi-device paths, a slot taken by another array) fetches it
+// first. A block passed to a system call or a C library while parked makes
+// the call fail (write() gets EFAULT) instead of faulting here: Par.sync(p)
+// first, or leave this off.
+i32 _xtc_simd_park(pointer p);
+void _xtc_simd_unpark(pointer p);
+void _xtc_simd_on_fetch(pointer code, pointer recv);
+i32 _xt_atomic_cas_i32(pointer slot, i32 expected, i32 desired);
+void _xt_atomic_store_i32(pointer slot, i32 v);
+u32 _xt_thread_self_id(void);
+void _xt_thread_yield(void);
+void abort(void);
+pointer gParCuRes[52];         // the resident block slot k holds the only current copy of, or 0
+i32 gParCuResLock;             // 1 while a fetch, or a run starting or ending, holds it
+u32 gParCuRunTid;              // the thread inside a single-shot CUDA run, plus one; 0 when none
+i32 gParCuResOn;               // XC_PAR_RESIDENT: 0 not read yet, 1 on, 2 off
+Object* gParCuFetcher;         // the fault hook's receiver, kept reachable
 pointer gParCuUpHost[52];      // the host block slot k holds a copy of
 i64 gParCuUpLen[52];
 i64 gParCuUpGen[52];           // and the block's generation it copied
@@ -449,6 +474,19 @@ class ParCuda
     // remembered, and not sent again while it has not changed.
     static u64 uploadKeeping(u32 k, pointer host, i64 bytes, bool readOnly)
         {
+        // Resident blocks (#15): this slot's own resident copy is current;
+        // another block resident in this slot, or this block resident in
+        // another, comes back first.
+        if (gParCuRes[k] != (pointer)0 && gParCuRes[k] != host)
+            fetchResident(gParCuRes[k], false);
+        if (host != (pointer)0 && gParCuRes[k] != host)
+            fetchResident(host, false);
+        if (host != (pointer)0 && gParCuRes[k] == host && gParCuUpLen[k] == bytes)
+            {
+            if (ParDevice.reporting())
+                Log.info("par: %ld bytes already on the GPU (kept there)", bytes);
+            return gParCuDev[k];
+            }
         bool keep = readOnly && host != (pointer)0 && bytes > (i64)0 && bytes <= (i64)65536;
         if (keep && gParCuDev[k] != (u64)0 && gParCuShadow[k] != (u8*)0 && gParCuShadowHost[k] == host &&
             gParCuShadowLen[k] == bytes && memcmp((pointer)gParCuShadow[k], host, (u64)bytes) == (i32)0)
@@ -642,6 +680,108 @@ class ParCuda
     // Whether [host, host+bytes) is registered (pinned), registering it when
     // it is a megabyte or more and the driver has the call. A range already
     // inside a registered one counts.
+    // XC_PAR_RESIDENT=1 (#15), read once.
+    static bool residentOn(void)
+        {
+        if (gParCuResOn == (i32)0)
+            gParCuResOn = Platform.env(String.withCString("XC_PAR_RESIDENT")).equals(String.withCString("1")) ? (i32)1 : (i32)2;
+        return gParCuResOn == (i32)1;
+        }
+
+    static void resLock(void)
+        {
+        while (_xt_atomic_cas_i32((pointer)&gParCuResLock, (i32)0, (i32)1) != (i32)0)
+            _xt_thread_yield();
+        }
+
+    static void resUnlock(void)
+        {
+        _xt_atomic_store_i32((pointer)&gParCuResLock, (i32)0);
+        }
+
+    // Whether host is a resident block (any slot's).
+    static bool resident(pointer host)
+        {
+        if (host == (pointer)0)
+            return false;
+        for (u32 k = (u32)0; k < (u32)52; k = k + (u32)1)
+            if (gParCuRes[k] == host)
+                return true;
+        return false;
+        }
+
+    // Copy a resident block back to the host and unpark it: the fault hook
+    // (fromFault), Par.sync, or a run that needs it on the host. True when it
+    // was resident and is now back. A fault on the thread inside its own
+    // CUDA run is the runtime touching a block it set aside, a bug: a fetch
+    // there would call into the driver from inside a call to it. A fault on
+    // another thread waits for that run to end; it cannot need these pages.
+    static bool fetchResident(pointer host, bool fromFault)
+        {
+        if (!resident(host))
+            return false;
+        u32 me = _xt_thread_self_id() + (u32)1;
+        while (true)
+            {
+            resLock();
+            if (gParCuRunTid == (u32)0 || gParCuRunTid == me)
+                break;
+            resUnlock();
+            _xt_thread_yield();
+            }
+        if (fromFault && gParCuRunTid == me)
+            {
+            resUnlock();
+            Log.error("par: an array kept on the GPU was read inside its own GPU run (#15)");
+            abort();
+            }
+        bool back = false;
+        for (u32 k = (u32)0; k < (u32)52 && !back; k = k + (u32)1)
+            if (gParCuRes[k] == host)
+                {
+                if (_ctxSetCurrent != (cuCtxSetCurrent_t*)0)
+                    _ctxSetCurrent(_ctx);
+                // Into the pinned pages while they are still no-access: no
+                // other thread sees the block until it is whole.
+                bool ok = _toHost(host, gParCuDev[k], (u64)gParCuUpLen[k]) == (i32)0;
+                _xtc_simd_unpark(host);
+                gParCuRes[k] = (pointer)0;
+                if (!ok)
+                    {
+                    resUnlock();
+                    Log.error("par: an array kept on the GPU could not be copied back (#15)");
+                    abort();
+                    }
+                gParCuUpGen[k] = ParDevice.generation(host);
+                if (ParDevice.reporting())
+                    Log.info("par: %ld bytes fetched from the GPU", gParCuUpLen[k]);
+                back = true;
+                }
+        resUnlock();
+        return back;
+        }
+
+    // Every resident block a run over l uses comes back (the tiled and
+    // multi-device paths, which keep nothing resident).
+    static void fetchUsed(u8* obj, ParLayout* l)
+        {
+        for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
+            fetchResident(*(pointer*)(obj + l.bufOff[i]), false);
+        for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
+            fetchResident(l.globPtr[i], false);
+        }
+
+    // The fault hook, set once.
+    static void hookFetch(void)
+        {
+        if (gParCuFetcher != (Object*)0)
+            return;
+        ParCudaFetch* f = new ParCudaFetch();
+        gParCuFetcher = (Object*)f;
+        callback cb i32(pointer base, i32 why) = &f.fetch;
+        _xtc_simd_on_fetch((pointer)cb.code, (pointer)cb.recv);
+        }
+
     static bool pinned(pointer host, i64 bytes)
         {
         if (host == (pointer)0 || bytes <= (i64)0)
@@ -672,10 +812,15 @@ class ParCuda
             host = base;
             bytes = Par.spanOf(base, (i64)1, true);
             }
-        u32 slot = (u32)0;
+        // A resident block keeps its registration: its fetch is a DMA into
+        // pages the CPU cannot touch (#15).
+        i32 slot = (i32)-1;
         for (u32 i = (u32)0; i < (u32)PAR_CU_REG; i = i + (u32)1)
-            if (gParCuRegHost[i] == (pointer)0 || gParCuRegUsed[i] < gParCuRegUsed[slot])
-                slot = i;
+            if (!resident(gParCuRegHost[i])
+                && (slot < (i32)0 || gParCuRegHost[i] == (pointer)0 || gParCuRegUsed[i] < gParCuRegUsed[(u32)slot]))
+                slot = (i32)i;
+        if (slot < (i32)0)
+            return false;
         if (gParCuRegHost[slot] != (pointer)0)
             {
             _hostUnregister(gParCuRegHost[slot]);
@@ -695,6 +840,16 @@ class ParCuda
     // registration goes with it.
     static void unpin(pointer payload)
         {
+        // A resident block going: nothing to copy back (#15), but its pages
+        // are made accessible again for the allocator.
+        for (u32 k = (u32)0; k < (u32)52; k = k + (u32)1)
+            if (gParCuRes[k] == payload)
+                {
+                gParCuRes[k] = (pointer)0;
+                gParCuUpHost[k] = (pointer)0;
+                gParCuUpLen[k] = (i64)0;
+                _xtc_simd_unpark(payload);
+                }
         for (u32 i = (u32)0; i < (u32)PAR_CU_REG; i = i + (u32)1)
             if (gParCuRegHost[i] == payload)
                 {
@@ -747,6 +902,7 @@ class ParCuda
     // failed single shot leaves them.
     static bool runTiled(ParChunk* proto, pointer fn, ParLayout* l, i64 lo, i64 hi, i64 started)
         {
+        fetchUsed(proto.objBytes(), l);
         i64 n = hi - lo;
         // One copy engine: a tile's download and the next tile's upload never
         // overlap, so a block whose kernel is cheap beside its copies gains
@@ -1171,7 +1327,20 @@ class ParCuda
     // Run [lo, hi) of the block on the GPU. False when the block cannot go
     // there (no kernel, a buffer of unknown size, no device): the caller then
     // runs it on the CPU, which gives the same answer.
+    // The single-shot run, with the thread inside it known to the fetch (#15).
     static bool run(ParChunk* proto, u8* src, i64 lo, i64 hi)
+        {
+        resLock();
+        gParCuRunTid = _xt_thread_self_id() + (u32)1;
+        resUnlock();
+        bool ok = runOne(proto, src, lo, hi);
+        resLock();
+        gParCuRunTid = (u32)0;
+        resUnlock();
+        return ok;
+        }
+
+    static bool runOne(ParChunk* proto, u8* src, i64 lo, i64 hi)
         {
         // The PTX section, or none (SPIR-V alone, say: that is for Vulkan,
         // which Par tries next).
@@ -1196,7 +1365,9 @@ class ParCuda
         // issue #14); 2^30 keeps the thread index well inside 32 bits.
         l.maxThreads = (i64)1 << (i64)30;
         l.plan(lo, hi);
-        if (tileable(l) && ParDevice.tilesWanted() && runTiled(proto, fn, l, lo, hi, started))
+        // Kept on the GPU between runs (#15), an array has no copies for tiles
+        // to overlap: the single-shot path, which keeps it.
+        if (tileable(l) && ParDevice.tilesWanted() && !residentOn() && runTiled(proto, fn, l, lo, hi, started))
             return true;
         u8* obj = proto.objBytes();
 
@@ -1286,7 +1457,38 @@ class ParCuda
                     // pageable memory the watch has just made writable again
                     // ran at a third of the card's rate (3.3 ms for 16 MB on
                     // a 5080 whose copy engine does it in 1.2).
-                    pinned(h, l.bufLen[i]);
+                    // Kept on the GPU from an earlier run and still there:
+                    // this run's result is in the same slot (#15).
+                    if (gParCuRes[at] == h)
+                        {
+                        if (ParDevice.reporting())
+                            Log.info("par: %ld bytes kept on the GPU", l.bufLen[i]);
+                        at = at + (u32)1;
+                        continue;
+                        }
+                    bool pin = pinned(h, l.bufLen[i]);
+                    // Resident instead (#15): the whole block, in its own slot,
+                    // when auto is not measuring.
+                    if (pin && residentOn() && dev[at] == gParCuDev[at] && ParDevice.simdBase(h) == h
+                        && Par.spanOf(h, (i64)1, true) == l.bufLen[i] && !ParDevice.wouldMeasure(proto, hi - lo))
+                        {
+                        hookFetch();
+                        resLock();
+                        gParCuUpHost[at] = h;
+                        gParCuUpLen[at] = l.bufLen[i];
+                        gParCuUpGen[at] = ParDevice.generation(h);
+                        bool kept = _xtc_simd_park(h) != (i32)0;
+                        if (kept)
+                            gParCuRes[at] = h;
+                        resUnlock();
+                        if (kept)
+                            {
+                            if (ParDevice.reporting())
+                                Log.info("par: %ld bytes kept on the GPU", l.bufLen[i]);
+                            at = at + (u32)1;
+                            continue;
+                            }
+                        }
                     ok = _toHost(h, dev[at], (u64)l.bufLen[i]) == (i32)0;
                     // The slot's copy and the host agree again.
                     if (ok && gParCuUpHost[at] == h)
@@ -1634,6 +1836,7 @@ class ParCudaWorker : ParWorker
 
     bool prepare(ParChunk* proto, u8* src, ParLayout* l, i64 tile)
         {
+        ParCuda.fetchUsed(proto.objBytes(), l);
         gCu_ctxSetCurrent(_ctx);
         src = ParDevice.sectionFor(src, "ptx", true, (String*)0);
         if (src == (u8*)0)
@@ -2053,6 +2256,17 @@ class ParCudaWorker : ParWorker
                 }
             complete(d);
             }
+        }
+    }
+
+// The receiver of the fault hook for resident blocks (#15): the runtime calls
+// fetch(base, 0) on a host access to a parked block, and the access runs
+// again when it answers 1.
+class ParCudaFetch
+    {
+    i32 fetch(pointer base, i32 why)
+        {
+        return ParCuda.fetchResident(base, true) ? (i32)1 : (i32)0;
         }
     }
 

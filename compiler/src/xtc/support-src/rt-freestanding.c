@@ -625,6 +625,7 @@ static uint8_t** xt_simd_tab;
 static uint8_t* xt_simd_flag;
 static uint64_t xt_simd_n, xt_simd_cap;
 #define XT_SIMD_WATCHED 1
+#define XT_SIMD_ONDEV 2
 /* The first entry whose payload is above p. */
 static uint64_t xt_simd_find(const uint8_t* p)
     {
@@ -752,7 +753,7 @@ extern void* AddVectoredExceptionHandler(uint32_t first, void* handler);
 static int xt_simd_protect(uint8_t* p, uint64_t n, int ro)
     {
     uint32_t old = 0;
-    return VirtualProtect(p, n, ro ? 2u : 4u, &old) ? 0 : -1;   /* PAGE_READONLY : PAGE_READWRITE */
+    return VirtualProtect(p, n, ro == 2 ? 1u : (ro ? 2u : 4u), &old) ? 0 : -1;   /* PAGE_NOACCESS : PAGE_READONLY : PAGE_READWRITE */
     }
 #else
 /* The kernel's own sigaction, with a restorer of our own (the libc wrapper
@@ -775,7 +776,7 @@ extern void xt_sigrestore(void);
 static struct xt_ksa xt_simd_old[2];
 static int xt_simd_protect(uint8_t* p, uint64_t n, int ro)
     {
-    return xt_sys_mprotect(p, n, ro ? 1 : 3) == 0 ? 0 : -1;   /* PROT_READ : PROT_READ|PROT_WRITE */
+    return xt_sys_mprotect(p, n, ro == 2 ? 0 : (ro ? 1 : 3)) == 0 ? 0 : -1;   /* PROT_NONE : PROT_READ : PROT_READ|PROT_WRITE */
     }
 #endif
 static int xt_simd_installed;
@@ -786,21 +787,47 @@ static int xt_simd_installed;
    CPU lanes writing an array a GPU run had watched all fault at once, and
    every one after the first was taken for a real access violation
    (0xC0000005 on Windows, 2026-10-26). */
-static int xt_simd_hit(uint8_t* a)
+/* A GPU runtime's resident outputs (#15): a block left on a device after a
+   run is PARKED, its pages no-access, and any host access, read or write,
+   faults into the hook the par runtime set (a callback's code and
+   receiver), which copies it back, unparks it and answers 1. The state, the
+   copy and every device call are the par runtime's; here there is only the
+   flag and the call, made outside the lock. Same contract as rt.c's. */
+static void* xt_simd_hook_code;
+static void* xt_simd_hook_recv;
+void _xtc_simd_on_fetch(void* code, void* recv)
+    {
+    xt_simd_hook_recv = recv;
+    xt_simd_hook_code = code;
+    }
+/* write: whether the access was a write. A read only ever faults in a parked
+   block; anywhere else it is not ours. */
+static int xt_simd_hit(uint8_t* a, int write)
     {
     int ours = 0;
+    uint8_t* fb = 0;
     _xt_rt_lock();
     uint64_t i = xt_simd_find(a);
     if (i > 0 && a < xt_simd_tab[2 * (i - 1) + 1])
         {
-        ours = 1;
-        if (xt_simd_flag[i - 1] & XT_SIMD_WATCHED)
+        if (xt_simd_flag[i - 1] & XT_SIMD_ONDEV)
             {
-            xt_simd_flag[i - 1] &= (uint8_t)~XT_SIMD_WATCHED;
-            xt_simd_protect(xt_simd_tab[2 * (i - 1)], xt_simd_pages(i - 1), 0);
+            ours = 1;
+            fb = xt_simd_tab[2 * (i - 1)];
+            }
+        else if (write)
+            {
+            ours = 1;
+            if (xt_simd_flag[i - 1] & XT_SIMD_WATCHED)
+                {
+                xt_simd_flag[i - 1] &= (uint8_t)~XT_SIMD_WATCHED;
+                xt_simd_protect(xt_simd_tab[2 * (i - 1)], xt_simd_pages(i - 1), 0);
+                }
             }
         }
     _xt_rt_unlock();
+    if (fb && !(xt_simd_hook_code && ((int (*)(void*, void*, int))xt_simd_hook_code)(xt_simd_hook_recv, fb, 0)))
+        ours = 0;
     return ours;
     }
 #ifdef XT_WIN64
@@ -810,9 +837,9 @@ static long xt_simd_veh(void* ep)
     if (*(uint32_t*)rec != 0xC0000005u)                /* EXCEPTION_ACCESS_VIOLATION */
         return 0;                                      /* EXCEPTION_CONTINUE_SEARCH */
     uint64_t* info = (uint64_t*)(rec + 32);            /* ExceptionInformation: 1 = a write, then the address */
-    if (info[0] != 1)
+    if (info[0] != 1 && info[0] != 0)                  /* a read or a write; not an execute */
         return 0;
-    return xt_simd_hit((uint8_t*)info[1]) ? -1 : 0;    /* EXCEPTION_CONTINUE_EXECUTION */
+    return xt_simd_hit((uint8_t*)info[1], info[0] == 1) ? -1 : 0;    /* EXCEPTION_CONTINUE_EXECUTION */
     }
 static void xt_simd_install(void)
     {
@@ -826,7 +853,7 @@ static void xt_simd_fault(int sig, void* si, void* uc)
     {
     (void)uc;
     uint8_t* a = *(uint8_t**)((uint8_t*)si + 16);     /* siginfo_t.si_addr */
-    if (!xt_simd_hit(a))
+    if (!xt_simd_hit(a, 1))
         xt_sys_rt_sigaction(sig, &xt_simd_old[sig == 11 ? 0 : 1], 0);
     }
 static void xt_simd_install(void)
@@ -850,7 +877,8 @@ int _xtc_simd_watch(void* p)
     int ok = 0;
     _xt_rt_lock();
     uint64_t i = xt_simd_find((uint8_t*)p);
-    if (i > 0 && xt_simd_tab[2 * (i - 1)] == (uint8_t*)p)
+    /* A parked block stays no-access: it is the par runtime's to fetch. */
+    if (i > 0 && xt_simd_tab[2 * (i - 1)] == (uint8_t*)p && !(xt_simd_flag[i - 1] & XT_SIMD_ONDEV))
         {
         xt_simd_install();
         if (xt_simd_protect((uint8_t*)p, xt_simd_pages(i - 1), 1) == 0)
@@ -861,6 +889,37 @@ int _xtc_simd_watch(void* p)
         }
     _xt_rt_unlock();
     return ok;
+    }
+/* Park the block at payload p on a device (#15): no access until the hook
+   copies it back. 1 when it is one and its pages could be protected. */
+int _xtc_simd_park(void* p)
+    {
+    int ok = 0;
+    _xt_rt_lock();
+    uint64_t i = xt_simd_find((uint8_t*)p);
+    if (i > 0 && xt_simd_tab[2 * (i - 1)] == (uint8_t*)p)
+        {
+        xt_simd_install();
+        if (xt_simd_protect((uint8_t*)p, xt_simd_pages(i - 1), 2) == 0)
+            {
+            xt_simd_flag[i - 1] = (uint8_t)((xt_simd_flag[i - 1] & ~XT_SIMD_WATCHED) | XT_SIMD_ONDEV);
+            ok = 1;
+            }
+        }
+    _xt_rt_unlock();
+    return ok;
+    }
+/* Back on the host: read-write, not parked (the hook, once it has copied). */
+void _xtc_simd_unpark(void* p)
+    {
+    _xt_rt_lock();
+    uint64_t i = xt_simd_find((uint8_t*)p);
+    if (i > 0 && xt_simd_tab[2 * (i - 1)] == (uint8_t*)p && (xt_simd_flag[i - 1] & XT_SIMD_ONDEV))
+        {
+        xt_simd_protect((uint8_t*)p, xt_simd_pages(i - 1), 0);
+        xt_simd_flag[i - 1] &= (uint8_t)~XT_SIMD_ONDEV;
+        }
+    _xt_rt_unlock();
     }
 /* The block is about to be written by the runtime itself (a copy back): its
    pages are made writable and it reads as written until watched again. */
