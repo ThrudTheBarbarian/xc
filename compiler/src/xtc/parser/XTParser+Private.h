@@ -81,6 +81,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (NSMutableArray*)blkFrames;
 - (void)parNoteWriteTarget:(nullable XTASTNode*)target;
 - (void)parNoteUpdate:(nullable XTASTNode*)target op:(XTAssignOp)aop rhs:(nullable XTASTNode*)rhs;
+- (BOOL)parArrReducible:(nullable XTType*)t op:(NSString*)op;
 - (void)parNoteExit;
 - (void)parNoteSubscriptBase:(XTASTNode*)base;
 - (void)parNoteAddressOf:(XTASTNode*)operand;

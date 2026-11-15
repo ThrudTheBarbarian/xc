@@ -3273,6 +3273,9 @@ class Parser
         Map* accWant = new Map();
         Map* uses = new Map();
         Array* names = new Array();
+        Map* arrOps = new Map();
+        Map* arrWant = new Map();
+        Array* arrNames = new Array();
         Array* innerAt = new Array();
         bool pendingInner = false;
         u32 bd = (u32)0;
@@ -3340,6 +3343,26 @@ class Parser
                 continue;
             }
             if ((next == (u16)tokPlusPlus || next == (u16)tokMinusMinus || prev == (u16)tokPlusPlus || prev == (u16)tokMinusMinus) && !own) return false;
+            // `h[k] op= e`, `h[k]++` or `h[k] = h[k] op e`, op one of + | & ^,
+            // on an outer name: an array reduction (:reduce(op h[])) when
+            // every use of h in the loop is such an update with the one op,
+            // and h is an array of integers of a size known when the program
+            // is built (both checked after the walk). As the reference.
+            if (stmtStart && next == (u16)tokLBracket && !own && !name.equals(var)) {
+                u32 want = (u32)0;
+                String* sym = parAutoArrUpdate(i, be, name, &want);
+                if (sym != (String*)0) {
+                    String* had = (String*)arrOps.get((Hashable*)name);
+                    if (had == (String*)0) {
+                        arrOps.set((Hashable*)name, (Object*)sym);
+                        arrNames.add((Object*)name);
+                    } else if (!had.equals(sym))
+                        arrOps.set((Hashable*)name, (Object*)String.withCString("?"));
+                    Number* w = (Number*)arrWant.get((Hashable*)name);
+                    arrWant.set((Hashable*)name, (Object*)Number.with((w == (Number*)0 ? (u32)0 : w.asU32()) + want));
+                }
+                continue;
+            }
             if (stmtStart && parAutoAnyAssignOp(next)) {
                 if (name.equals(var)) return false;
                 if (own) continue;
@@ -3362,7 +3385,7 @@ class Parser
                     // `h = h * C + x` the + binds outside the *, and the
                     // iterations depend on each other (a Horner hash came
                     // out 0 under --par-style=auto, par_gpu_wide, 2026-10-17).
-                    if (sym != (String*)0 && !parAutoTailIsOp(i + (u32)4, be, o)) sym = (String*)0;
+                    if (sym != (String*)0 && !parAutoTailIsOp(i + (u32)4, be, o, true)) sym = (String*)0;
                     want = (u32)2;
                 }
                 // `if (x < acc) acc = x;`: a min (or max) reduction (as the reference).
@@ -3410,14 +3433,76 @@ class Parser
             r.setName(acc);
             reds.add((Object*)r);
         }
+        // The array reductions, after the scalar ones. An array that fails a
+        // test is no reduction, and the loop goes on as it would without one.
+        for (u32 i = (u32)0; i < arrNames.count(); i = i + (u32)1) {
+            String* h = (String*)arrNames.get(i);
+            String* sym = (String*)arrOps.get((Hashable*)h);
+            Number* want = (Number*)arrWant.get((Hashable*)h);
+            Number* have = (Number*)uses.get((Hashable*)h);
+            if (have == (Number*)0 || want == (Number*)0 || have.asU32() != want.asU32()) continue;
+            u32 depth2 = (u32)0;
+            String* ty = blkTyOf(blkLookup(h, &depth2));
+            if (ty == (String*)0 && _parTopVars != (Map*)0) ty = (String*)_parTopVars.get((Hashable*)h);
+            if (Parser.parArrCode(ty, sym) == (i64)0) continue;
+            Node* r = mk((u16)nkParReduce);
+            r.setOp(sym);
+            r.setName(h);
+            r.setNum((i64)1);
+            reds.add((Object*)r);
+        }
         return true;
     }
 
+    // At token i, a name followed by `[` at a statement's start: the
+    // operator of `h[k] op= e` (op one of + | & ^), of `h[k]++;` (+), or of
+    // `h[k] = h[k] op e` with the same index token for token and op binding
+    // all of e, else 0. *wantOut is the uses of h the statement makes.
+    String* parAutoArrUpdate(u32 i, u32 be, String* name, u32* wantOut)
+    {
+        u32 d = (u32)0;
+        u32 rb = (u32)0;
+        for (u32 j = i + (u32)1; j < be; j = j + (u32)1) {
+            u16 t = parTokType(j);
+            if (t == (u16)tokLBracket || t == (u16)tokLParen) d = d + (u32)1;
+            else if (t == (u16)tokRBracket || t == (u16)tokRParen) {
+                d = d - (u32)1;
+                if (d == (u32)0) { rb = j; break; }
+            }
+        }
+        if (rb == (u32)0) return (String*)0;
+        u16 t = parTokType(rb + (u32)1);
+        *wantOut = (u32)1;
+        if (t == (u16)tokPlusAssign) return String.withCString("+");
+        if (t == (u16)tokPipeAssign) return String.withCString("|");
+        if (t == (u16)tokAmpAssign) return String.withCString("&");
+        if (t == (u16)tokCaretAssign) return String.withCString("^");
+        if (t == (u16)tokPlusPlus && parTokType(rb + (u32)2) == (u16)tokSemicolon) return String.withCString("+");
+        if (t != (u16)tokAssign || parTokType(rb + (u32)2) != (u16)tokIdentifier || !parTokValue(rb + (u32)2).equals(name))
+            return (String*)0;
+        // The same index on the right, token for token, with no call or
+        // member in it (the parser compares the two as trees, parSameIndex).
+        u32 at = rb + (u32)2;
+        for (u32 q = (u32)1; q <= rb - i; q = q + (u32)1) {
+            u16 ta = parTokType(i + q);
+            if (ta != parTokType(at + q) || !parTokValue(i + q).equals(parTokValue(at + q))) return (String*)0;
+            if (ta == (u16)tokDot || ta == (u16)tokArrow) return (String*)0;
+            if (ta == (u16)tokIdentifier && parTokType(i + q + (u32)1) == (u16)tokLParen) return (String*)0;
+        }
+        u32 o = at + (rb - i) + (u32)1;
+        u16 ot = parTokType(o);
+        String* sym = ot == (u16)tokPlus ? String.withCString("+") : ot == (u16)tokPipe ? String.withCString("|")
+                    : ot == (u16)tokAmpersand ? String.withCString("&") : ot == (u16)tokCaret ? String.withCString("^") : (String*)0;
+        if (sym == (String*)0 || !parAutoTailIsOp(o + (u32)1, be, ot, false)) return (String*)0;
+        *wantOut = (u32)2;
+        return sym;
+    }
+
     // Whether the statement's tail, from token `from` to its `;`, is one
-    // operand of `op`: every binary operator at its top level is `op` or binds
-    // more tightly (unary ones, after an operator or an opening bracket, do
-    // not count).
-    bool parAutoTailIsOp(u32 from, u32 be, u16 op)
+    // operand of `op`: every binary operator at its top level is `op` (when
+    // `again`) or binds more tightly (unary ones, after an operator or an
+    // opening bracket, do not count).
+    bool parAutoTailIsOp(u32 from, u32 be, u16 op, bool again)
     {
         u32 depth = (u32)0;
         for (u32 j = from; j < be; j = j + (u32)1) {
@@ -3438,7 +3523,7 @@ class Parser
             if (unary) continue;
             // `op` again, or an operator that binds more tightly (part of the
             // operand): anything else takes `acc op …` as its own operand.
-            if (t != op && parAutoPrec(t) <= parAutoPrec(op)) return false;
+            if ((t != op || !again) && parAutoPrec(t) <= parAutoPrec(op)) return false;
         }
         return true;
     }
@@ -3801,8 +3886,8 @@ class Parser
         ((Set*)frame.get((Hashable*)String.withCString("written"))).add((Hashable*)t.name());
     }
 
-    // `a[k] op= x`, or `a[k] = a[k] op x` with the same index, op one of
-    // + | & ^, inside a `par` body: counted on every enclosing par frame
+    // `a[k] op= x`, `a[k]++`, or `a[k] = a[k] op x` with the same index,
+    // op one of + | & ^, inside a `par` body: counted on every enclosing par frame
     // under "<op><a>", once per use of a, so an array reduction
     // (:reduce(+ a[])) can check that the body uses a in no other way. As
     // the reference.
@@ -6212,6 +6297,8 @@ class Parser
                 Node* n = mk((u16)nkPostfix);
                 n.setOp(op.value());
                 parNoteWrite(node);
+                // `h[k]++`: an update of h by + (an array reduction may take it).
+                if (t == (u16)tokPlusPlus) parNoteUpdate(node, String.withCString("+="), (Node*)0);
                 n.add(node);
                 node = n;
             } else if (t == (u16)tokLBracket) {

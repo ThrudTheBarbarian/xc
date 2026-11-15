@@ -215,5 +215,55 @@ XC
 grep -q "horner.xc:10:.*became a 'par' block" "$W/b8" && { echo "FAIL auto: a Horner hash became a block"; fail=1; }
 grep -q "horner.xc:13:.*became a 'par' block" "$W/b8" || { echo "FAIL auto: s = s + xs[i] * 3 (a + reduction) did not become a block"; cat "$W/b8"; fail=1; }
 [ "$("$W/horner0")" = "$("$W/horner1")" ] || { echo "FAIL auto: the Horner program's output differs under --par-style=auto"; fail=1; }
+# A loop that updates an outer integer array through an index read from data,
+# and uses it in no other way, is a block with an array reduction
+# (:reduce(op h[])), on the CPU's threads; its CPU-only warning is -Wpar-auto's
+# like every lifted loop's. A loop that also reads the array, or updates a
+# float array, is no reduction: wrapped, then demoted as before.
+cat > "$W/hist.xc" <<'XC'
+#import "Stdio.xc"
+#import "Par.xc"
+#define N 262144
+u32 keys[N];
+u8 seen[64];
+i32 main(void)
+    {
+    for (u32 i in 0..N) keys[i] = (i * (u32)2654435761) >> 8;
+    u32 hist[256];
+    for (u32 b in 0..256) hist[b] = (u32)0;
+    for (u32 i in 0..N)
+        hist[keys[i] & (u32)255] += (u32)1;
+    for (u32 i in 0..N)
+        seen[keys[i] % (u32)64] |= (u8)1;
+    u32 run[256];
+    for (u32 b in 0..256) run[b] = (u32)0;
+    for (u32 i in 0..N)
+        run[keys[i] & (u32)255] += run[(keys[i] >> (u32)8) & (u32)255] & (u32)1;
+    float fh[16];
+    for (u32 b in 0..16) fh[b] = 0.0f;
+    for (u32 i in 0..N)
+        fh[keys[i] & (u32)15] += 0.5f;
+    u32 s = (u32)0;
+    for (u32 b in 0..256) s = s * (u32)31 + hist[b] + run[b];
+    for (u32 b in 0..64) s = s * (u32)31 + (u32)seen[b];
+    Stdio.printf("%u %u\n", s, (u32)fh[3]);
+    return 0;
+    }
+XC
+"$XC" -q -H . -O2 --par-style=cpu "$W/hist.xc" -o "$W/hist0" >/dev/null 2>&1 || { echo "FAIL auto: hist.xc does not build with --par-style=cpu"; fail=1; }
+"$XC" -q -H . -O2 --par-style=auto "$W/hist.xc" -o "$W/hist1" >"$W/b9" 2>&1 || { echo "FAIL auto: hist.xc does not build"; head -3 "$W/b9"; fail=1; }
+[ -s "$W/b9" ] && { echo "FAIL auto: hist.xc without -Wpar-auto printed:"; cat "$W/b9"; fail=1; }
+"$XC" -q -H . -O2 --par-style=auto -Wpar-auto "$W/hist.xc" -o "$W/hist2" >"$W/b10" 2>&1 || { echo "FAIL auto: hist.xc -Wpar-auto does not build"; fail=1; }
+for k in 11 13; do
+    grep -q "hist.xc:$k:.*runs on the CPU only (--par-style), because it has an array reduction" "$W/b10" \
+        || { echo "FAIL auto: the array update at line $k is not an array-reduction block"; cat "$W/b10"; fail=1; }
+done
+for k in 17 21; do
+    grep -q "hist.xc:$k:.*runs serially" "$W/b10" || { echo "FAIL auto: the loop at line $k (array read too / float array) was not demoted"; cat "$W/b10"; fail=1; }
+done
+XC_PAR_REPORT=1 "$W/hist1" > "$W/rep5" 2>&1
+for k in 11 13; do grep -q "hist\.xc:$k:" "$W/rep5" || { echo "FAIL auto: the array reduction at line $k did not run as a block"; cat "$W/rep5"; fail=1; }; done
+for k in 17 21; do grep -q "hist\.xc:$k:" "$W/rep5" && { echo "FAIL auto: the loop at line $k ran as a block"; fail=1; }; done
+[ "$("$W/hist0")" = "$(grep -v '^par: ' "$W/rep5" | tail -1)" ] || { echo "FAIL auto: hist.xc's output differs under --par-style=auto"; fail=1; }
 [ $fail = 0 ] && echo "--- auto: pass ---"
 exit $fail

@@ -3656,6 +3656,9 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
     NSMutableDictionary<NSString*, NSNumber*>* accWant = [NSMutableDictionary dictionary];
     NSMutableDictionary<NSString*, NSNumber*>* uses = [NSMutableDictionary dictionary];
     NSMutableArray<NSString*>* names = [NSMutableArray array];
+    NSMutableDictionary<NSString*, NSString*>* arrOps = [NSMutableDictionary dictionary];
+    NSMutableDictionary<NSString*, NSNumber*>* arrWant = [NSMutableDictionary dictionary];
+    NSMutableArray<NSString*>* arrNames = [NSMutableArray array];
     NSMutableArray<NSNumber*>* innerAt = [NSMutableArray array];
     BOOL pendingInner = NO;
     NSUInteger bd = 0;
@@ -3751,6 +3754,29 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
             }
         if ((next == XTTokenPlusPlus || next == XTTokenMinusMinus || prev == XTTokenPlusPlus || prev == XTTokenMinusMinus) && !own)
             return NO;
+        // `h[k] op= e`, `h[k]++` or `h[k] = h[k] op e`, op one of + | & ^, on
+        // an outer name: an array reduction (:reduce(op h[])) when every use
+        // of h in the loop is such an update with the one op, and h is an
+        // array of integers of a size known when the program is built (both
+        // checked after the walk). Mirrored in the port.
+        if (stmtStart && next == XTTokenLBracket && !own && ![name isEqualToString:var])
+            {
+            NSUInteger want = 0;
+            NSString* sym = [self parAutoArrUpdateAt:i limit:be name:name want:&want];
+            if (sym)
+                {
+                NSString* had = arrOps[name];
+                if (!had)
+                    {
+                    arrOps[name] = sym;
+                    [arrNames addObject:name];
+                    }
+                else if (![had isEqualToString:sym])
+                    arrOps[name] = @"?";
+                arrWant[name] = @([arrWant[name] unsignedIntegerValue] + want);
+                }
+            continue;
+            }
         if (stmtStart && parAutoAnyAssignOp(next))
             {
             if ([name isEqualToString:var])
@@ -3778,7 +3804,7 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
                 // `h = h * C + x` the + binds outside the *, and the
                 // iterations depend on each other (a Horner hash came out 0
                 // under --par-style=auto, par_gpu_wide, 2026-10-17).
-                if (sym && ![self parAutoTailFrom:i + 4 limit:be isOp:o]) sym = nil;
+                if (sym && ![self parAutoTailFrom:i + 4 limit:be isOp:o again:YES]) sym = nil;
                 want = 2;
                 }
             // `if (x < acc) acc = x;`: a min (or max) reduction (from 0.8.1).
@@ -3837,7 +3863,83 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
             return NO;
         [reds addObject:@[ accOps[acc], acc ]];
         }
+    // The array reductions, after the scalar ones. An array that fails a test
+    // is no reduction, and the loop goes on as it would without one.
+    for (NSString* h in arrNames)
+        {
+        NSString* sym = arrOps[h];
+        NSNumber* want = arrWant[h];
+        NSNumber* have = uses[h];
+        if (!have || !want || have.unsignedIntegerValue != want.unsignedIntegerValue)
+            continue;
+        NSUInteger depth2 = 0;
+        NSDictionary* info = [self blkLookup:h depth:&depth2];
+        XTType* ty = info[@"type"];
+        if (![ty isKindOfClass:[XTType class]])
+            ty = self.blkState[@"topVars"][h];
+        if (![self parArrReducible:ty op:sym])
+            continue;
+        [reds addObject:@[ sym, h, @"[]" ]];
+        }
     return YES;
+    }
+
+// At token i, a name followed by `[` at a statement's start: the operator of
+// `h[k] op= e` (op one of + | & ^), of `h[k]++;` (+), or of `h[k] = h[k] op e`
+// with the same index token for token and op binding all of e, else nil.
+// *wantOut is the uses of h the statement makes. Mirrored in the port
+// (parAutoArrUpdate).
+- (nullable NSString*)parAutoArrUpdateAt:(NSUInteger)i limit:(NSUInteger)be name:(NSString*)name want:(NSUInteger*)wantOut
+    {
+    NSUInteger d = 0;
+    NSUInteger rb = 0;
+    for (NSUInteger j = i + 1; j < be; j++)
+        {
+        XTTokenType t = [self parTokType:j];
+        if (t == XTTokenLBracket || t == XTTokenLParen)
+            d++;
+        else if (t == XTTokenRBracket || t == XTTokenRParen)
+            {
+            d--;
+            if (d == 0)
+                {
+                rb = j;
+                break;
+                }
+            }
+        }
+    if (rb == 0)
+        return nil;
+    XTTokenType t = [self parTokType:rb + 1];
+    *wantOut = 1;
+    if (t == XTTokenPlusAssign) return @"+";
+    if (t == XTTokenPipeAssign) return @"|";
+    if (t == XTTokenAmpAssign) return @"&";
+    if (t == XTTokenCaretAssign) return @"^";
+    if (t == XTTokenPlusPlus && [self parTokType:rb + 2] == XTTokenSemicolon) return @"+";
+    if (t != XTTokenAssign || [self parTokType:rb + 2] != XTTokenIdentifier || ![[self parTokValue:rb + 2] isEqualToString:name])
+        return nil;
+    // The same index on the right, token for token, with no call or member
+    // in it (the parser compares the two as trees, parSameIndex).
+    NSUInteger at = rb + 2;
+    for (NSUInteger q = 1; q <= rb - i; q++)
+        {
+        XTTokenType ta = [self parTokType:i + q];
+        if (ta != [self parTokType:at + q] || ![[self parTokValue:i + q] isEqualToString:[self parTokValue:at + q]])
+            return nil;
+        if (ta == XTTokenDot || ta == XTTokenArrow)
+            return nil;
+        if (ta == XTTokenIdentifier && [self parTokType:i + q + 1] == XTTokenLParen)
+            return nil;
+        }
+    NSUInteger o = at + (rb - i) + 1;
+    XTTokenType ot = [self parTokType:o];
+    NSString* sym = ot == XTTokenPlus ? @"+" : ot == XTTokenPipe ? @"|" : ot == XTTokenAmpersand ? @"&"
+                    : ot == XTTokenCaret ? @"^" : nil;
+    if (!sym || ![self parAutoTailFrom:o + 1 limit:be isOp:ot again:NO])
+        return nil;
+    *wantOut = 2;
+    return sym;
     }
 
 // At `acc = E;` (the cursor's token i is acc, at a statement's start): "min"
@@ -3849,7 +3951,8 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
 |* Whether the statement's tail, from token `from` to its `;`, is one operand
 |* of `op`: every binary operator at its top level is `op` or binds more
 |* tightly (unary ones, after an operator or an opening bracket, do not
-|* count). `acc = acc op e` is a reduction only then.
+|* count). `acc = acc op e` is a reduction only then. Without `again`, `op`
+|* itself ends the operand too: `h[k] = h[k] + a + b` adds to h[k] + a.
 \****************************************************************************/
 static BOOL parAutoIsBinOp(XTTokenType t)
     {
@@ -3873,7 +3976,7 @@ static NSUInteger parAutoPrec(XTTokenType t)
     return 0;
     }
 
-- (BOOL)parAutoTailFrom:(NSUInteger)from limit:(NSUInteger)be isOp:(XTTokenType)op
+- (BOOL)parAutoTailFrom:(NSUInteger)from limit:(NSUInteger)be isOp:(XTTokenType)op again:(BOOL)again
     {
     NSUInteger depth = 0;
     for (NSUInteger j = from; j < be; j++)
@@ -3904,7 +4007,7 @@ static NSUInteger parAutoPrec(XTTokenType t)
             continue;
         // `op` again, or an operator that binds more tightly (part of the
         // operand): anything else takes `acc op …` as its own operand.
-        if (t != op && parAutoPrec(t) <= parAutoPrec(op))
+        if ((t != op || !again) && parAutoPrec(t) <= parAutoPrec(op))
             return NO;
         }
     return YES;

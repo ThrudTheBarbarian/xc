@@ -1,0 +1,7 @@
++=: bad=0 hist[7]=30902
+|=: bad=0 bits[3]=255
+++: bad=0 count[9]=16384
+= +: bad=0
+&= ^=: bad=0 total ok=1
+read too: bad=0
+float: bad=0

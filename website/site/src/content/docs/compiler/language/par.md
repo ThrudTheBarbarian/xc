@@ -141,8 +141,8 @@ par count :reduce(+ hist[])
 The operator is `+`, `|`, `&` or `^`, and the array is a local or global
 one-dimensional array of integers whose size is known when the program is
 built. The body may use the array only to update an element with the
-operator, as `h[k] op= x` or `h[k] = h[k] op x` with the same index on both
-sides. Each thread updates its own copy of the array, filled with the
+operator, as `h[k] op= x`, `h[k]++` (for `+`) or `h[k] = h[k] op x` with the
+same index on both sides. Each thread updates its own copy of the array, filled with the
 operator's identity, and the copies are combined into the array when the block
 ends, so the result is the sequential loop's. Such a block runs on the CPU's
 threads; it has no GPU version yet.
@@ -684,6 +684,17 @@ reduction is left alone (its sum would reassociate across the items) unless
 the goal is speed, as is any other write to an outer variable. The decision
 is made before parsing, from the loop's tokens, so it is the same in every
 build.
+
+A loop that updates an outer array through an index read from data, as
+`h[k] += e`, `h[k]++` or `h[k] = h[k] + e` with `+`, `|`, `&` or `^`, becomes a
+block with `:reduce(op h[])` when `h` is a one-dimensional array of integers of
+a size known when the program is built and the loop uses `h` in no other way
+(see [Reductions](#reductions)). Such a block runs on the CPU's threads:
+
+```c
+for (u32 i in 0..N)
+    hist[key[i] & 255] += 1;                // becomes par prog.xc:1 :reduce(+ hist[]) { … }
+```
 
 **The goal.** A loop's `:goal(speed)` or `:goal(accuracy)` holds for the block
 it becomes. Without one, the file's `#goal speed` or `#goal accuracy` line

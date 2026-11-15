@@ -419,6 +419,8 @@ static XTOpInfo operatorInfo(XTTokenType type)
             {
             [self advance];
             [self parNoteWriteTarget:base];
+            // `h[k]++`: an update of h by + (an array reduction may take it).
+            [self parNoteUpdate:base op:XTAssignOpAdd rhs:nil];
             base = [[XTPostfixExprNode alloc] initWithOp:XTPostfixOpInc operand:base location:cur.location];
             }
         else if (cur.type == XTTokenMinusMinus)

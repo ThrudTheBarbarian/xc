@@ -1042,10 +1042,20 @@ static BOOL parSameIndex(XTASTNode* a, XTASTNode* b)
     }
 
 /****************************************************************************\
-|* `a[k] op= x`, or `a[k] = a[k] op x` with the same index, op one of + | & ^,
-|* inside a `par` body: counted on every enclosing par frame under "<op><a>",
-|* once per use of a, so an array reduction (:reduce(+ a[])) can check that
-|* the body uses a in no other way.
+|* Whether t is an array op can reduce into (:reduce(op t[])): one dimension
+|* of integers, of a size known when the program is built, op one of + | & ^.
+|* parAutoScan asks before it lifts a loop with an array reduction.
+\****************************************************************************/
+- (BOOL)parArrReducible:(nullable XTType*)t op:(NSString*)op
+    {
+    return parArrCode(t, op) != 0;
+    }
+
+/****************************************************************************\
+|* `a[k] op= x`, `a[k]++`, or `a[k] = a[k] op x` with the same index, op one
+|* of + | & ^, inside a `par` body: counted on every enclosing par frame under
+|* "<op><a>", once per use of a, so an array reduction (:reduce(+ a[])) can
+|* check that the body uses a in no other way.
 \****************************************************************************/
 - (void)parNoteUpdate:(nullable XTASTNode*)target op:(XTAssignOp)aop rhs:(nullable XTASTNode*)rhs
     {
