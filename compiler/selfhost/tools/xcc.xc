@@ -5485,8 +5485,9 @@ void main(void)
         arm64SetEhTables(true);
         x86SetEhTables(true);
         // C++ handlers compiled by xcc (option (a) phase 2) where the back end
-        // writes their tables: arm64 macOS.
-        cPathSetHandlers(crow != (TargetRow*)0 && crow.name().equals(String.withCString("arm64-macos")));
+        // writes their tables: arm64 macOS and Linux.
+        cPathSetHandlers(crow != (TargetRow*)0 && (crow.name().equals(String.withCString("arm64-macos"))
+                                                  || crow.name().equals(String.withCString("arm64-linux"))));
         machoSetEhMerge(true);
         // This file's suffix for the outliner's symbols, as the reader's for
         // its internal names: two C/C++ objects in one program stay apart.
@@ -5536,7 +5537,11 @@ void main(void)
             d.setCompileOnly(true);
         else if (mod != (IRModule*)0 && platformLink)
             gLangLinker = lang.linker();
-        else if (mod != (IRModule*)0 && cElfArm64 && !gCSplitRelocatable)
+        // android: clang's object joins the image xcc writes. arm64 Linux
+        // takes the general route below (xcc's half an object, the two
+        // linked as objects are), where its unwind and exception tables are
+        // written (ElfArm64.objectFromText) and gathered (ElfLinkArm64).
+        else if (mod != (IRModule*)0 && cElfArm64 && !gCSplitRelocatable && isAndroid(d))
             d.linkInputs().add((Object*)cRestObject());
         else if (mod != (IRModule*)0)
             {
@@ -5933,7 +5938,9 @@ void emitModule(DriverOptions* d, IRModule* mod)
         one0.append(prog);
         String* one = stripLeadingUnderscore(one0);
         Arm64Asm* oas = new Arm64Asm();
+        Arm64Asm.setLsdaElf(true);
         oas.assemble(Arm64Asm.machoDialectFromElf(one));
+        Arm64Asm.setLsdaElf(false);
         if (oas.failed()) {
             Stdio.printf("xcc: assembly failed: %s\n", oas.why().cString());
             Process.exit((i32)1); return;

@@ -141,6 +141,10 @@ class Arm64Asm
     // writer's __gcc_except_tab and its FDEs.
     static Array* _lsdas;
     static void setLsdas(Array* a) { _lsdas = a; }
+    // ELF type tables: 8-byte entries (0x9c, a data word holding the
+    // typeinfo, as clang's DW.stub), not Mach-O's 4-byte GOT slots (0x9b).
+    static bool _lsdaElf;
+    static void setLsdaElf(bool b) { _lsdaElf = b; }
     static Array* takeLsdas(void)
         {
         Array* a = _lsdas;
@@ -273,7 +277,8 @@ class Arm64Asm
                 {
                 // TType base: from after its own uleb to the type table's
                 // end, the table 4-aligned (entries n..1 before that end).
-                u32 tsz = (u32)4 * types.count();
+                u32 esz = _lsdaElf ? (u32)8 : (u32)4;
+                u32 tsz = esz * types.count();
                 u32 ul = (u32)1;
                 u32 pad = (u32)0;
                 u32 off = (u32)0;
@@ -285,7 +290,7 @@ class Arm64Asm
                     if (Arm64Asm.ulebLen(off) == ul) break;
                     ul = Arm64Asm.ulebLen(off);
                     }
-                lsda.appendByte((u8)$9B);
+                lsda.appendByte(_lsdaElf ? (u8)$9C : (u8)$9B);
                 // a uleb of exactly ul bytes
                 u32 v = off;
                 for (u32 b = (u32)0; b < ul; b = b + (u32)1)
@@ -305,7 +310,7 @@ class Arm64Asm
                         refs.add((Object*)Number.withU32(lsda.length()));
                         refs.add((Object*)sym);
                         }
-                    for (u32 b = (u32)0; b < (u32)4; b = b + (u32)1) lsda.appendByte((u8)0);
+                    for (u32 b = (u32)0; b < esz; b = b + (u32)1) lsda.appendByte((u8)0);
                     }
                 }
             Array* rec = new Array();

@@ -8493,8 +8493,12 @@ class Arm64
                               ((Number*)_ehSites.get(i + (u32)3)).asU32());
         if (_ehActions.byteLength() > (u32)0)
             _out.appendFormat("    .xc_lsda_actions %s\n", _ehActions.cString());
-        for (u32 i = (u32)0; i < _ehTypes.count(); i = i + (u32)1)
-            _out.appendFormat("    .xc_lsda_type %s\n", ((String*)_ehTypes.get(i)).cString());
+        // In the assembly's spelling (Mach-O's leading underscore, which an
+        // ELF row's text loses as every symbol's does); "0" for catch (...).
+        for (u32 i = (u32)0; i < _ehTypes.count(); i = i + (u32)1) {
+            String* t = (String*)_ehTypes.get(i);
+            _out.appendFormat(t.equals(String.withCString("0")) ? "    .xc_lsda_type %s\n" : "    .xc_lsda_type _%s\n", t.cString());
+        }
         _out.appendCString("    .xc_lsda_end\n");
         _ehSites = (Array*)0;
     }

@@ -933,7 +933,11 @@ class DwarfWriter
 
         // The second CIE, for functions with an LSDA (wide form only: an
         // object's table, relocated).
-        bool lsdaOn = wide && _lsdaFns != (Map*)0 && _lsdaFns.count() > (u32)0;
+        // Mach-O (wide): the personality's GOT slot 4-byte (0x9b), LSDA and
+        // addresses 8-byte (0x10). ELF: a data word holding the personality
+        // 8-byte (0x9c, as clang's DW.ref), the LSDA 8-byte (0x1c), addresses
+        // 4-byte (0x1b); every field relocated (RELA).
+        bool lsdaOn = _lsdaFns != (Map*)0 && _lsdaFns.count() > (u32)0;
         u32 cie2At = (u32)0;
         if (lsdaOn)
             {
@@ -949,12 +953,13 @@ class DwarfWriter
             DwarfWriter.putULEB(frame, (u64)minInsnLength);
             DwarfWriter.putSLEB(frame, (i64)-8);
             DwarfWriter.putULEB(frame, (u64)raReg);
-            DwarfWriter.putULEB(frame, (u64)7);     // augmentation data: P (1 + 4), L, R
-            DwarfWriter.putU8(frame, (u32)$9B);     // personality: indirect pcrel sdata4 (its GOT slot)
+            DwarfWriter.putULEB(frame, wide ? (u64)7 : (u64)11); // augmentation data: P, L, R
+            DwarfWriter.putU8(frame, wide ? (u32)$9B : (u32)$9C); // personality: indirect pcrel
             _persField = (i64)frame.length();
-            DwarfWriter.putU32(frame, (u32)0);
-            DwarfWriter.putU8(frame, (u32)$10);     // LSDA: pcrel absptr (8)
-            DwarfWriter.putU8(frame, (u32)$10);     // FDE addresses: pcrel absptr (8)
+            if (wide) DwarfWriter.putU32(frame, (u32)0);
+            else DwarfWriter.putU64(frame, (u64)0);
+            DwarfWriter.putU8(frame, wide ? (u32)$10 : (u32)$1C); // LSDA: pcrel, 8 bytes
+            DwarfWriter.putU8(frame, wide ? (u32)$10 : (u32)$1B); // FDE addresses
             DwarfWriter.putU8(frame, (u32)$0C);
             DwarfWriter.putULEB(frame, (u64)spReg);
             DwarfWriter.putULEB(frame, a64 ? (u64)0 : (u64)8);
@@ -1008,7 +1013,7 @@ class DwarfWriter
                 u32 lf = frame.length();
                 _lsdaFields.add((Object*)Number.withI64((i64)lf));
                 _lsdaFields.add((Object*)Number.withI64((i64)((Number*)lsdaOff).asU32()));
-                DwarfWriter.putU64(frame, (u64)((i64)0 - (i64)lf));
+                DwarfWriter.putU64(frame, wide ? (u64)((i64)0 - (i64)lf) : (u64)0);
             } else
                 DwarfWriter.putULEB(frame, (u64)0);           // augmentation data length
             u32 at = ((Number*)setups.get(found)).asU32();

@@ -1004,7 +1004,7 @@ class MachOSha256
                 undef.add((Object*)persSym);
             for (u32 i = (u32)1; i < typeRefs.count(); i = i + (u32)2)
                 {
-                String* ts = String.withFormat("_%s", ((String*)typeRefs.get(i)).cString());
+                String* ts = (String*)typeRefs.get(i);
                 if (!MachO.hasName(undef, ts) && symbols.get((Hashable*)ts) == (Object*)0)
                     undef.add((Object*)ts);
                 }
@@ -1186,7 +1186,7 @@ class MachOSha256
         u32 nGccRel = (u32)0;
         for (u32 i = (u32)0; i + (u32)1 < typeRefs.count(); i = i + (u32)2)
             {
-            Number* ts = (Number*)symIndex.get((Hashable*)String.withFormat("_%s", ((String*)typeRefs.get(i + (u32)1)).cString()));
+            Number* ts = (Number*)symIndex.get((Hashable*)(String*)typeRefs.get(i + (u32)1));
             if (ts == (Number*)0) continue;
             MachO.put32In(gccRel, ((Number*)typeRefs.get(i)).asU32());
             MachO.put32In(gccRel, ((u32)7 << (u32)28) | ((u32)1 << (u32)27) | ((u32)2 << (u32)25) | ((u32)1 << (u32)24) | (ts.asU32() & (u32)$FFFFFF));
