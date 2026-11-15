@@ -18,7 +18,8 @@
     //
     // Loop-invariant code motion: an instruction inside a loop whose operands
     // are all defined outside it (or already hoisted) moves to the preheader.
-    // Field LOADS come too, but only when nothing in the loop writes memory.
+    // Field LOADS come too, but only when nothing in the loop writes memory
+    // and their block runs at every iteration.
     //
     // Termination is structural: each hoist moves instructions to the
     // preheader, which strictly dominates the header — strictly closer to the
@@ -214,6 +215,12 @@
                     if (inHoist.get((Hashable*)n) != (Object*)0)
                         continue;
                     if (!licmHoistable(n, hasMemWrite, defOf))
+                        continue;
+                    // A load runs in the preheader only if its block runs at
+                    // every iteration (dominates the latch): one under an `if`
+                    // may be the guard's whole point (`if (p != null) s +=
+                    // p.x`), and hoisted it loads through null. As the reference.
+                    if (n.op().equals(String.withCString("Load")) && !self.hasBlock((Array*)dom.get((Hashable*)latch), bb))
                         continue;
                     if (keepSplats && n.op().equals(String.withCString("VSplat")))
                         continue;

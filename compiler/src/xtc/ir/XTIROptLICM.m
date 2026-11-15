@@ -329,6 +329,13 @@ static BOOL pureHoistable(XTIRInsn* insn)
                         {
                         if ([hoistSet containsObject:insn] || !isHoistable(insn))
                             continue;
+                        // A load runs in the preheader only if its block runs
+                        // at every iteration (dominates the latch): one under
+                        // an `if` may be the guard's whole point (`if (p !=
+                        // null) s += p.x`), and hoisted it loads through null.
+                        // Mirrored in the port.
+                        if (insn.opcode == XTIROpLoad && ![dom[li] containsIndex:bn.unsignedIntegerValue])
+                            continue;
                         if (keepSplats && insn.opcode == XTIROpVSplat)
                             continue;
                         if (hasCall && insn.result && insn.result.type.kind == XTIRTypeKindVec)
