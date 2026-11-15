@@ -4467,13 +4467,13 @@ class X86_64
         u32 lbl = _arcLabel;
         _arcLabel = _arcLabel + (u32)1;
         loadZX((IROperand*)n.ops().get((u32)0), (u8)'a');
-        _out.appendCString("\txor\tr11, r11\n"); // the default: null
+        _out.appendCString("\txor\trdx, rdx\n"); // the default: null
         _out.appendCString("\ttest\trax, rax\n");
         _out.appendFormat("\tjz\t.L_vtl_%lu\n", lbl);
-        _out.appendCString("\tmov\tr11, [rax]\n");
-        _out.appendFormat("\tmov\tr11, [r11 + %ld]\n", slotOp.imm() * (i32)8);
+        _out.appendCString("\tmov\trdx, [rax]\n");
+        _out.appendFormat("\tmov\trdx, [rdx + %ld]\n", slotOp.imm() * (i32)8);
         _out.appendFormat(".L_vtl_%lu:\n", lbl);
-        _out.appendCString("\tmov\trax, r11\n");
+        _out.appendCString("\tmov\trax, rdx\n");
         store((u8)'a', n.res());
         }
 
@@ -4481,8 +4481,9 @@ class X86_64
     // (bug 201). Same unit-independent walk as ProtoDispatch, but STORE the
     // resolved pointer instead of calling it. Null receiver, absent itable, a
     // miss (unimplemented optional), or a null slot all yield null — which is
-    // exactly what a `&s.method` null test / respondsTo relies on. r10 is the
-    // walk cursor, r11 the result, rax scratch.
+    // exactly what a `&s.method` null test / respondsTo relies on. rcx is the
+    // walk cursor, rdx the result, rax scratch: none is ever a home register
+    // (r10/r11 are, so a value homed there across the load survives).
     void emitProtoLoadX86(IRInsn* n)
         {
         if (n.ops().count() < (u32)3)
@@ -4496,26 +4497,26 @@ class X86_64
         u32 lbl = _arcLabel;
         _arcLabel = _arcLabel + (u32)1;
         loadZX((IROperand*)n.ops().get((u32)0), (u8)'a'); // rax = recv
-        _out.appendCString("\txor\tr11d, r11d\n");        // result default null
+        _out.appendCString("\txor\tedx, edx\n");        // result default null
         _out.appendCString("\ttest\trax, rax\n");
         _out.appendFormat("\tjz\t.L_pld_%lu\n", lbl);  // null recv
-        _out.appendCString("\tmov\tr10, [rax]\n");     // vtable
-        _out.appendCString("\tmov\tr10, [r10 + 8]\n"); // itable ptr (header entry 1)
-        _out.appendCString("\ttest\tr10, r10\n");
+        _out.appendCString("\tmov\trcx, [rax]\n");     // vtable
+        _out.appendCString("\tmov\trcx, [rcx + 8]\n"); // itable ptr (header entry 1)
+        _out.appendCString("\ttest\trcx, rcx\n");
         _out.appendFormat("\tjz\t.L_pld_%lu\n", lbl); // no itable
         _out.appendFormat(".L_pli_%lu:\n", lbl);
-        _out.appendCString("\tmov\trax, [r10]\n"); // entry protoId
+        _out.appendCString("\tmov\trax, [rcx]\n"); // entry protoId
         _out.appendFormat("\tcmp\teax, %lu\n", pidOp.imm() & (u32)$FFFF_FFFF);
         _out.appendFormat("\tje\t.L_plh_%lu\n", lbl);
         _out.appendCString("\ttest\trax, rax\n");
         _out.appendFormat("\tjz\t.L_pld_%lu\n", lbl); // terminator -> miss
-        _out.appendCString("\tadd\tr10, 16\n");
+        _out.appendCString("\tadd\trcx, 16\n");
         _out.appendFormat("\tjmp\t.L_pli_%lu\n", lbl);
         _out.appendFormat(".L_plh_%lu:\n", lbl);
-        _out.appendCString("\tmov\tr10, [r10 + 8]\n");                        // &table
-        _out.appendFormat("\tmov\tr11, [r10 + %ld]\n", idxOp.imm() * (i32)8); // method ptr
+        _out.appendCString("\tmov\trcx, [rcx + 8]\n");                        // &table
+        _out.appendFormat("\tmov\trdx, [rcx + %ld]\n", idxOp.imm() * (i32)8); // method ptr
         _out.appendFormat(".L_pld_%lu:\n", lbl);
-        _out.appendCString("\tmov\trax, r11\n");
+        _out.appendCString("\tmov\trax, rdx\n");
         store((u8)'a', n.res());
         }
 

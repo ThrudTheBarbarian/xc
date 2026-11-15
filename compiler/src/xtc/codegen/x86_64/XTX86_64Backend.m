@@ -5553,26 +5553,26 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
             return;
         NSUInteger lbl = sArcLabel++;
         [self loadZX:ops[0] into:'a' fn:fn slot:slot out:out];
-        [out appendString:@"\txor\tr11d, r11d\n"];
+        [out appendString:@"\txor\tedx, edx\n"];
         [out appendString:@"\ttest\trax, rax\n"];
         [out appendFormat:@"\tjz\t.L_pld_%lu\n", (unsigned long)lbl];
-        [out appendString:@"\tmov\tr10, [rax]\n"];
-        [out appendString:@"\tmov\tr10, [r10 + 8]\n"];
-        [out appendString:@"\ttest\tr10, r10\n"];
+        [out appendString:@"\tmov\trcx, [rax]\n"];
+        [out appendString:@"\tmov\trcx, [rcx + 8]\n"];
+        [out appendString:@"\ttest\trcx, rcx\n"];
         [out appendFormat:@"\tjz\t.L_pld_%lu\n", (unsigned long)lbl];
         [out appendFormat:@".L_pli_%lu:\n", (unsigned long)lbl];
-        [out appendString:@"\tmov\trax, [r10]\n"];
+        [out appendString:@"\tmov\trax, [rcx]\n"];
         [out appendFormat:@"\tcmp\teax, %lu\n", (unsigned long)(uint32_t)ops[1].intValue];
         [out appendFormat:@"\tje\t.L_plh_%lu\n", (unsigned long)lbl];
         [out appendString:@"\ttest\trax, rax\n"];
         [out appendFormat:@"\tjz\t.L_pld_%lu\n", (unsigned long)lbl];
-        [out appendString:@"\tadd\tr10, 16\n"];
+        [out appendString:@"\tadd\trcx, 16\n"];
         [out appendFormat:@"\tjmp\t.L_pli_%lu\n", (unsigned long)lbl];
         [out appendFormat:@".L_plh_%lu:\n", (unsigned long)lbl];
-        [out appendString:@"\tmov\tr10, [r10 + 8]\n"];
-        [out appendFormat:@"\tmov\tr11, [r10 + %lld]\n", (long long)(ops[2].intValue * 8)];
+        [out appendString:@"\tmov\trcx, [rcx + 8]\n"];
+        [out appendFormat:@"\tmov\trdx, [rcx + %lld]\n", (long long)(ops[2].intValue * 8)];
         [out appendFormat:@".L_pld_%lu:\n", (unsigned long)lbl];
-        [out appendString:@"\tmov\trax, r11\n"];
+        [out appendString:@"\tmov\trax, rdx\n"];
         [self store:'a' into:res slot:slot out:out];
         return;
         }
@@ -5593,14 +5593,14 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
             return;
         NSUInteger n = sArcLabel++;
         [self loadZX:ops[0] into:'a' fn:fn slot:slot out:out]; // rax = receiver
-        [out appendString:@"\txor\tr11, r11\n"];               // default null
+        [out appendString:@"\txor\trdx, rdx\n"];               // default null
         [out appendString:@"\ttest\trax, rax\n"];
         [out appendFormat:@"\tjz\t.L_vtl_%lu\n", (unsigned long)n];
-        [out appendString:@"\tmov\tr11, [rax]\n"]; // vtable ptr
-        [out appendFormat:@"\tmov\tr11, [r11 + %lld]\n",
+        [out appendString:@"\tmov\trdx, [rax]\n"]; // vtable ptr
+        [out appendFormat:@"\tmov\trdx, [rdx + %lld]\n",
                           (long long)(ops[1].intValue * 8)];
         [out appendFormat:@".L_vtl_%lu:\n", (unsigned long)n];
-        [out appendString:@"\tmov\trax, r11\n"];
+        [out appendString:@"\tmov\trax, rdx\n"];
         [self store:'a' into:res slot:slot out:out];
         return;
         }
