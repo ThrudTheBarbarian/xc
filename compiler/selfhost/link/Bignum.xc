@@ -381,9 +381,64 @@ class Bignum
         return r;
         }
 
+    // a*b*R^-1 mod n for a, b < n: the multiply and the reduction interleaved
+    // a limb at a time (CIOS), so nothing wider than k+2 limbs is formed. The
+    // full product first, then montReduce, needed 2k+1 limbs: past 160 the
+    // product was cut short with no error, so a modulus over about 2528 bits
+    // (a 3072-bit signing key) signed wrong (#291).
     static Bignum* montMul(Bignum* a, Bignum* b, Bignum* n, u32 nprime)
         {
-        return Bignum.montReduce(Bignum.mul(a, b), n, nprime);
+        u32 k = n.count();
+        u32 t[162];
+        for (u32 i = (u32)0; i < k + (u32)2; i = i + (u32)1)
+            t[i] = (u32)0;
+        for (u32 i = (u32)0; i < k; i = i + (u32)1)
+            {
+            u64 bi = (u64)b.limb(i);
+            u64 c = (u64)0;
+            for (u32 j = (u32)0; j < k; j = j + (u32)1)
+                {
+                u64 cur = (u64)t[j] + (u64)a.limb(j) * bi + c;
+                t[j] = (u32)(cur & (u64)$FFFFFFFF);
+                c = cur >> (u64)32;
+                }
+            u64 top = (u64)t[k] + c;
+            t[k] = (u32)(top & (u64)$FFFFFFFF);
+            t[k + (u32)1] = (u32)(top >> (u64)32);
+            u64 m = ((u64)t[0] * (u64)nprime) & (u64)$FFFFFFFF;
+            u64 cur0 = (u64)t[0] + m * (u64)n.limb((u32)0);
+            c = cur0 >> (u64)32;
+            for (u32 j = (u32)1; j < k; j = j + (u32)1)
+                {
+                u64 cur = (u64)t[j] + m * (u64)n.limb(j) + c;
+                t[j - (u32)1] = (u32)(cur & (u64)$FFFFFFFF);
+                c = cur >> (u64)32;
+                }
+            u64 hi = (u64)t[k] + c;
+            t[k - (u32)1] = (u32)(hi & (u64)$FFFFFFFF);
+            t[k] = t[k + (u32)1] + (u32)(hi >> (u64)32);
+            }
+        Bignum* r = new Bignum();
+        for (u32 i = (u32)0; i <= k; i = i + (u32)1)
+            r.setLimb(i, t[i]);
+        r.trim();
+        if (Bignum.cmp(r, n) >= (i32)0)
+            Bignum.subInto(r, n);
+        return r;
+        }
+
+    // (a * 2^bits) mod m for a < m, a doubling at a time: R mod m and R^2 mod
+    // m with no product wider than m (#291).
+    static Bignum* shlMod(Bignum* a, u32 bits, Bignum* m)
+        {
+        Bignum* r = Bignum.copyOf(a);
+        for (u32 i = (u32)0; i < bits; i = i + (u32)1)
+            {
+            Bignum.dbl(r);
+            if (Bignum.cmp(r, m) >= (i32)0)
+                Bignum.subInto(r, m);
+            }
+        return r;
         }
 
     // base^exp mod m. Montgomery when m is odd — which is every case this
@@ -409,12 +464,11 @@ class Bignum
         u32 k = m.count();
         u32 nprime = Bignum.montInv(m.limb((u32)0));
 
-        // R mod m and R^2 mod m, computed once with the slow reduction — the
-        // only two divisions in the whole exponentiation.
-        Bignum* rr = new Bignum();
-        rr.setLimb(k, (u32)1); // R = 2^(32k)
-        Bignum* rmod = Bignum.mod(rr, m);
-        Bignum* r2 = Bignum.mod(Bignum.mul(rmod, rmod), m);
+        // R mod m and R^2 mod m (R = 2^(32k)), once, by doubling: R itself
+        // needs limb k, which a 160-limb modulus does not have, and R^2 the
+        // 2k-limb product (#291).
+        Bignum* rmod = Bignum.shlMod(Bignum.fromU32((u32)1), (u32)32 * k, m);
+        Bignum* r2 = Bignum.shlMod(rmod, (u32)32 * k, m);
 
         Bignum* x = Bignum.montMul(Bignum.mod(base, m), r2, m, nprime); // to Montgomery form
         Bignum* acc = Bignum.copyOf(rmod);                              // 1, in that form
