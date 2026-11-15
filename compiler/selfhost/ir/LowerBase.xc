@@ -5354,6 +5354,26 @@ class ClassInfo
         return rv;
         }
 
+    // `lhs op= rhs` as the reference rewrites it: `lhs = lhs op rhs`, the
+    // binary typed at the left side's type and the left node shared between
+    // the read and the store.
+    Node* compoundAsPlain(Node* n, Node* lhs)
+        {
+        Node* bin = Node.with((u16)nkBinary);
+        bin.setOp(n.op().substringBytes((u32)0, n.op().byteLength() - (u32)1));
+        bin.add(lhs);
+        bin.add(n.kid((u32)1));
+        bin.setTy(lhs.ty() != 0 ? lhs.ty() : n.ty());
+        bin.setPos(n.fileId(), n.line(), n.col());
+        Node* plain = Node.with((u16)nkAssign);
+        plain.setOp(String.withCString("="));
+        plain.add(lhs);
+        plain.add(bin);
+        plain.setTy(n.ty() != 0 ? n.ty() : lhs.ty());
+        plain.setPos(n.fileId(), n.line(), n.col());
+        return plain;
+        }
+
     IRValue* lowerAssign(Node* n)
         {
         Node* lhs = n.kid((u32)0);
@@ -5458,18 +5478,7 @@ class ClassInfo
         // once.
         if (!isName(n.op(), "=") && (lhs.kind() == (u16)nkSubscript || (lhs.kind() == (u16)nkUnary && isName(lhs.op(), "*"))))
             {
-            Node* cbin = Node.with((u16)nkBinary);
-            cbin.setOp(n.op().substringBytes((u32)0, n.op().byteLength() - (u32)1));
-            cbin.add(lhs);
-            cbin.add(n.kid((u32)1));
-            cbin.setTy(lhs.ty() != 0 ? lhs.ty() : n.ty());
-            cbin.setPos(n.fileId(), n.line(), n.col());
-            Node* cplain = Node.with((u16)nkAssign);
-            cplain.setOp(String.withCString("="));
-            cplain.add(lhs);
-            cplain.add(cbin);
-            cplain.setTy(n.ty() != 0 ? n.ty() : lhs.ty());
-            cplain.setPos(n.fileId(), n.line(), n.col());
+            Node* cplain = compoundAsPlain(n, lhs);
             Node* savedLhs = _cmpLhs;
             IRValue* savedAddr = _cmpAddr;
             _cmpLhs = lhs;
@@ -5514,6 +5523,27 @@ class ClassInfo
                 }
             if (_failed)
                 return (IRValue*)0;
+            // A rotate has no single instruction: `m <:= k` is lowered as the
+            // reference lowers `m = m <: k`, the binary at the field's type
+            // reading the member through the base just formed.
+            if (isName(mbop, "<:") || isName(mbop, ":>"))
+                {
+                Node* rplain = compoundAsPlain(n, lhs);
+                Node* rbin = rplain.kid((u32)1);
+                Node* rsavedLhs = _cmpLhs;
+                IRValue* rsavedAddr = _cmpAddr;
+                _cmpLhs = lhs;
+                _cmpAddr = sbase;
+                IRValue* rres = lowerExpr(rbin);
+                _cmpLhs = rsavedLhs;
+                _cmpAddr = rsavedAddr;
+                if (_failed)
+                    return (IRValue*)0;
+                rres = coerce(rres, rbin.ty(), mft);
+                IRValue* rfa = fieldAddr(sbase, mfidx, ptrTo(irType(mft)));
+                storeThrough(rfa, rres);
+                return rres;
+                }
             // (2) read the current member value through the base just
             // formed, so an index inside the base is evaluated once.
             Node* savedLhs = _cmpLhs;
@@ -5566,6 +5596,11 @@ class ClassInfo
         if (!isName(n.op(), "="))
             {
             String* bop = n.op().substringBytes((u32)0, n.op().byteLength() - (u32)1);
+            // `x <:= k` / `x :>= k`: as the reference does, `x = x <: k` at
+            // x's type, lowered as the plain assignment, which finds the name
+            // the way the read and the store find it.
+            if (isName(bop, "<:") || isName(bop, ":>"))
+                return lowerAssign(compoundAsPlain(n, lhs));
             IRPinned* cpin = pinOf(lhs.name());
             Object* cty = cpin != 0 ? _pinAst.get((Hashable*)lhs.name())
                                     : _localTypes.get((Hashable*)lhs.name());
@@ -5587,21 +5622,7 @@ class ClassInfo
                 // and goes the plain assignment's way, which reads the ivar,
                 // applies the op and stores through self.
                 else if (ivarIndexOf(lhs.name()) >= (i32)0)
-                    {
-                    Node* ibin = Node.with((u16)nkBinary);
-                    ibin.setOp(n.op().substringBytes((u32)0, n.op().byteLength() - (u32)1));
-                    ibin.add(lhs);
-                    ibin.add(n.kid((u32)1));
-                    ibin.setTy(lhs.ty() != 0 ? lhs.ty() : n.ty());
-                    ibin.setPos(n.fileId(), n.line(), n.col());
-                    Node* iplain = Node.with((u16)nkAssign);
-                    iplain.setOp(String.withCString("="));
-                    iplain.add(lhs);
-                    iplain.add(ibin);
-                    iplain.setTy(n.ty() != 0 ? n.ty() : lhs.ty());
-                    iplain.setPos(n.fileId(), n.line(), n.col());
-                    return lowerAssign(iplain);
-                    }
+                    return lowerAssign(compoundAsPlain(n, lhs));
                 }
             if (cty == 0)
                 cty = _globals.get((Hashable*)lhs.name());
