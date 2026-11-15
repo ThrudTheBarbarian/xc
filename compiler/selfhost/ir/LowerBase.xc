@@ -5569,9 +5569,10 @@ class ClassInfo
             IRPinned* cpin = pinOf(lhs.name());
             Object* cty = cpin != 0 ? _pinAst.get((Hashable*)lhs.name())
                                     : _localTypes.get((Hashable*)lhs.name());
-            if (cty == 0)
-                cty = _globals.get((Hashable*)lhs.name());
-            if (cty == 0 && _curClass != 0)
+            // The name is looked up as the plain assignment and the read look
+            // it up: a local or parameter, then a static ivar, then an ivar of
+            // self, then a global.
+            if (cty == 0 && _locals.get((Hashable*)lhs.name()) == 0 && _curClass != 0)
                 {
                 String* sg = staticIvarFor(_curClass, lhs.name());
                 if (sg != 0)
@@ -5581,7 +5582,29 @@ class ClassInfo
                     lhs.setName(sg);
                     cty = _globals.get((Hashable*)sg);
                     }
+                // `n op= x` on an ivar named bare in a method: as the
+                // reference does, it becomes `n = n op x` at the ivar's type
+                // and goes the plain assignment's way, which reads the ivar,
+                // applies the op and stores through self.
+                else if (ivarIndexOf(lhs.name()) >= (i32)0)
+                    {
+                    Node* ibin = Node.with((u16)nkBinary);
+                    ibin.setOp(n.op().substringBytes((u32)0, n.op().byteLength() - (u32)1));
+                    ibin.add(lhs);
+                    ibin.add(n.kid((u32)1));
+                    ibin.setTy(lhs.ty() != 0 ? lhs.ty() : n.ty());
+                    ibin.setPos(n.fileId(), n.line(), n.col());
+                    Node* iplain = Node.with((u16)nkAssign);
+                    iplain.setOp(String.withCString("="));
+                    iplain.add(lhs);
+                    iplain.add(ibin);
+                    iplain.setTy(n.ty() != 0 ? n.ty() : lhs.ty());
+                    iplain.setPos(n.fileId(), n.line(), n.col());
+                    return lowerAssign(iplain);
+                    }
                 }
+            if (cty == 0)
+                cty = _globals.get((Hashable*)lhs.name());
             // located (bug 35)
             if (cty == 0)
                 {
@@ -5600,8 +5623,12 @@ class ClassInfo
             IRValue* v = lowerExpr(n.kid((u32)1));
             if (_failed)
                 return (IRValue*)0;
+            // A shift count is narrowed to U8, as the reference's shift
+            // lowering does.
             bool isShift = isName(bop, "<<") || isName(bop, ">>");
-            if (!isShift)
+            if (isShift)
+                v = coerce(v, n.kid((u32)1).ty(), String.withCString("u8"));
+            else
                 v = coerce(v, n.kid((u32)1).ty(), ty);
             String* mn = arithOp(bop, ty);
             if (mn == 0)
