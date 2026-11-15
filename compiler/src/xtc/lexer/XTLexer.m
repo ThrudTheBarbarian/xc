@@ -1,4 +1,5 @@
 #import "XTLexer.h"
+#include <errno.h>
 #import "XTFloatEncoding.h"
 
 @interface XTLexer ()
@@ -541,7 +542,12 @@ static NSDictionary<NSString *, NSNumber *> *sKeywordMap = nil;
                                                            displayPrefix] at:loc];
         return;
     }
+    errno = 0;
     int64_t val = (int64_t)strtoull(raw.UTF8String, NULL, 16);
+    // Past u64 (#292): strtoull saturates; say so.
+    if (errno == ERANGE)
+        [_diagnostics emitError:[NSString stringWithFormat:@"integer literal '%@%@' does not fit in 64 bits", displayPrefix, raw]
+                             at:loc];
     // The token keeps the spelling as WRITTEN, so a `--dump-tokens` of `0xFF`
     // says `0xFF` rather than silently reporting `$FF`.
     NSString *disp = [NSString stringWithFormat:@"%@%@", displayPrefix, raw];
@@ -566,7 +572,12 @@ static NSDictionary<NSString *, NSNumber *> *sKeywordMap = nil;
         [_diagnostics emitError:@"Expected binary digits after %" at:loc];
         return;
     }
+    errno = 0;
     int64_t val = (int64_t)strtoull(raw.UTF8String, NULL, 2);
+    // Past u64 (#292): strtoull saturates; say so.
+    if (errno == ERANGE)
+        [_diagnostics emitError:[NSString stringWithFormat:@"integer literal '%@%@' does not fit in 64 bits", @"%", raw]
+                             at:loc];
     NSString *disp = [NSString stringWithFormat:@"%%%@", raw];
     XTToken *tok = [[XTToken alloc] initWithType:XTTokenIntLiteral value:disp intValue:val location:loc];
     [_tokens addObject:tok];
@@ -643,7 +654,12 @@ static NSDictionary<NSString *, NSNumber *> *sKeywordMap = nil;
                                             location:loc];
         [_tokens addObject:tok];
     } else {
-        int64_t val = (int64_t)strtoull(raw.UTF8String, NULL, 10);
+        errno = 0;
+    int64_t val = (int64_t)strtoull(raw.UTF8String, NULL, 10);
+    // Past u64 (#292): strtoull saturates; say so.
+    if (errno == ERANGE)
+        [_diagnostics emitError:[NSString stringWithFormat:@"integer literal '%@%@' does not fit in 64 bits", @"", raw]
+                             at:loc];
         XTToken *tok = [[XTToken alloc] initWithType:XTTokenIntLiteral
                                                value:raw
                                             intValue:val

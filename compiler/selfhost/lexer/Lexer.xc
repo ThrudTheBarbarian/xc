@@ -122,6 +122,16 @@ class Lexer
         out.appendCString(msg);
         _diags.add((Object*)out);
         }
+    // An integer literal past u64 (#292): it wrapped with no word. As the
+    // reference.
+    void _overflow(String* prefix, String* raw)
+        {
+        String* m = String.withCString("integer literal '");
+        m.append(prefix);
+        m.append(raw);
+        m.appendCString("' does not fit in 64 bits");
+        _err(m.cString());
+        }
     String* filename(void)
         {
         return _file;
@@ -587,9 +597,17 @@ class Lexer
             return;
             }
 
-        i64 val = (i64)0;
+        u64 uv = (u64)0;
+        bool over = false;
         for (u32 i = (u32)0; i < raw.byteLength(); i = i + (u32)1)
-            val = val * (i64)16 + (i64)Lexer._hexValue(raw.byteAt(i));
+            {
+            if ((uv >> (u64)60) != (u64)0)
+                over = true;
+            uv = (uv << (u64)4) | (u64)Lexer._hexValue(raw.byteAt(i));
+            }
+        if (over)
+            _overflow(displayPrefix, raw);
+        i64 val = (i64)uv;
 
         // The token keeps the spelling as WRITTEN, so a token dump of `0xFF`
         // says `0xFF` rather than silently reporting `$FF`.
@@ -633,9 +651,17 @@ class Lexer
             return;
             }
 
-        i64 val = (i64)0;
+        u64 uv = (u64)0;
+        bool over = false;
         for (u32 i = (u32)0; i < raw.byteLength(); i = i + (u32)1)
-            val = val * (i64)2 + (i64)(raw.byteAt(i) - (u8)'0');
+            {
+            if ((uv >> (u64)63) != (u64)0)
+                over = true;
+            uv = (uv << (u64)1) | (u64)(raw.byteAt(i) - (u8)'0');
+            }
+        if (over)
+            _overflow(String.withCString("%"), raw);
+        i64 val = (i64)uv;
 
         String* disp = String.withCString("%");
         disp.append(raw);
@@ -721,9 +747,18 @@ class Lexer
             return;
             }
 
-        i64 val = (i64)0;
+        u64 uv = (u64)0;
+        bool over = false;
         for (u32 i = (u32)0; i < raw.byteLength(); i = i + (u32)1)
-            val = val * (i64)10 + (i64)(raw.byteAt(i) - (u8)'0');
+            {
+            u64 d = (u64)(raw.byteAt(i) - (u8)'0');
+            if (uv > ((u64)$FFFFFFFFFFFFFFFF - d) / (u64)10)
+                over = true;
+            uv = uv * (u64)10 + d;
+            }
+        if (over)
+            _overflow(String.withCString(""), raw);
+        i64 val = (i64)uv;
         _add(Token.withInt((u16)tokIntLiteral, raw, val, line, col));
         }
 
