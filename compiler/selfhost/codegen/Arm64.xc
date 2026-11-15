@@ -1567,6 +1567,16 @@ class Arm64
          && k >= (i32)0 && (u32)k < dw) {
             String* ar = operandReg((IROperand*)n.ops().get((u32)0), scratchName((u32)16, n.res().ty()));
             String* dr = resultReg(n.res(), scratchName((u32)16, n.res().ty()));
+            // A narrow signed value sits sign-extended in its w register, so
+            // a logical shift zero-extends it to the type's width first, as
+            // the register-count form below does (C's `(uint8_t)b >> 4` read
+            // from clang's `lshr i8`: 0x80 shifted 0xFFFFFF80 and indexed far
+            // past a 16-entry table).
+            if (op.equals(String.withCString("LShr")) && isSignedTy(n.res().ty())
+                && width(n.res().ty()) < (u32)4 && ar.hasPrefix(String.withCString("w"))) {
+                _out.appendFormat("    %s w16, %s\n", width(n.res().ty()) == (u32)1 ? "uxtb" : "uxth", ar.cString());
+                ar = String.withCString("w16");
+            }
             _out.appendFormat("    %s %s, %s, #%ld\n", mnem.cString(), dr.cString(), ar.cString(), k);
             canonicaliseUnlessProven(dr, n.res());
             storeReg(dr, n.res());
