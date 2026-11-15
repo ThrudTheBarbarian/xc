@@ -264,6 +264,7 @@ class ElfArm64
         Data* ehRel = new Data();
         if (dwEh != (DwarfWriter*)0 && dwEh.hasSaves())
             {
+            DwarfWriter.setPending((DwarfWriter*)0);
             Array* ehNames = new Array();
             Array* ehOffs = new Array();
             Array* fdeOffs = new Array();

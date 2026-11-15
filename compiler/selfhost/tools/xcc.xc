@@ -5375,6 +5375,7 @@ void main(void)
         // C and C++: unwind tables for xcc's functions, so a C++ exception
         // can pass through one (arm64: the back end reports its saves).
         arm64SetEhTables(true);
+        x86SetEhTables(true);
         machoSetEhMerge(true);
         // This file's suffix for the outliner's symbols, as the reader's for
         // its internal names: two C/C++ objects in one program stay apart.

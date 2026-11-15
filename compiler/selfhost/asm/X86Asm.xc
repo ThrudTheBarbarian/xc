@@ -3417,7 +3417,7 @@ class X86Fixup
                 _dwarf.addFrameSetup(_text.length(), (u32)16);
                 }
             }
-        if (_dwarf != (DwarfWriter*)0 && _dwarf.hasRows())
+        if (_dwarf != (DwarfWriter*)0 && (_dwarf.hasRows() || _dwarf.hasSaves()))
             DwarfWriter.setPending(_dwarf);
         // The bss, after all the data (bug 642): its labels become data symbols
         // at their final offsets. Before the branch resolution, which must see
@@ -3456,6 +3456,15 @@ class X86Fixup
         // table, recorded against the text offset they precede.
         // -g: `.xc_var "<name>" <reg> <offset> "<type>"` (`.xc_param` for a
         // parameter) — a variable of the function being assembled.
+        // `.xc_saves <reg>:<cfa offset> ...` (C/C++ input): where the frame
+        // just set up keeps rbp, the return address and each callee-saved
+        // register, for the unwind tables.
+        if (d.equals(String.withCString(".xc_saves")))
+            {
+            if (_dwarf != (DwarfWriter*)0)
+                _dwarf.addSaves(rest.trimmed());
+            return section;
+            }
         if (d.equals(String.withCString(".xc_var")) || d.equals(String.withCString(".xc_param")))
             {
             _dwarf = DwarfWriter.variableDirective(_dwarf, rest, d.equals(String.withCString(".xc_param")),

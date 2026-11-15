@@ -5,8 +5,7 @@
 # values it keeps in callee-saved registers survived (1133 ok). Each file is
 # compiled with -c and the objects linked by xcc, nothing named (each object
 # says what it links). xcc's functions carry an __eh_frame / .eh_frame (C/C++
-# input), which the link merges. Skipped without clang++; on x86-64 Linux
-# until its back end reports its saves.
+# input), which the link merges. Skipped without clang++.
 #
 #   bash tests/par/cpp-unwind.sh
 set -u
@@ -15,10 +14,6 @@ PLAT=$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )
 XC=${XC:-bin/$PLAT/xcc-xc}
 if ! clang++ --version >/dev/null 2>&1; then
     echo "--- cpp-unwind: skipped (no clang++) ---"
-    exit 0
-fi
-if [ "$PLAT" = linux ] && [ "$(uname -m)" = x86_64 ]; then
-    echo "--- cpp-unwind: skipped (x86-64 Linux: the back end reports no saves yet) ---"
     exit 0
 fi
 W=$(mktemp -d); trap 'rm -rf "$W"' EXIT

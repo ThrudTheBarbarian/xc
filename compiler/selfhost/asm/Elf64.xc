@@ -1732,6 +1732,38 @@ class ElfSharedInfo
             Elf64.putI64In(textRel, f.addend());
             }
 
+        // C/C++ input: xcc's functions' unwind tables (the back end's saves,
+        // .xc_saves) as the object's .eh_frame, each FDE's start a PC32
+        // against its function; without its terminator, which the link adds
+        // once after every object's table (ElfMerge.placeEh, gathered).
+        Data* eh = new Data();
+        Data* ehRel = new Data();
+        DwarfWriter* dwEh = DwarfWriter.pending();
+        if (dwEh != (DwarfWriter*)0 && dwEh.hasSaves())
+            {
+            DwarfWriter.setPending((DwarfWriter*)0);
+            Array* ehNames = new Array();
+            Array* ehOffs = new Array();
+            Array* fdeOffs = new Array();
+            DwarfWriter.functionsOf(symbols, dataSyms, String.withCString(""), text.length(), ehNames, ehOffs);
+            eh = dwEh.buildEhFrame((u64)0, (u64)0, text.length(), ehNames, ehOffs, (u32)1, fdeOffs);
+            eh.setLength(eh.length() - (u32)4);
+            for (u32 i = (u32)0; i < fdeOffs.count(); i = i + (u32)1)
+                {
+                i64 fo = ((Number*)fdeOffs.get(i)).asI64();
+                Object* sio = symIndex.get((Hashable*)ehNames.get(i));
+                if (fo < (i64)0 || sio == (Object*)0)
+                    continue;
+                u32 si = ((Number*)sio).asU32();
+                DwarfWriter.patchU32(eh, (u32)fo + (u32)8, (u32)0);
+                Elf64.put64In(ehRel, (u32)fo + (u32)8);
+                Elf64.put32In(ehRel, (u32)R_X86_64_PC32);
+                Elf64.put32In(ehRel, si);
+                Elf64.putI64In(ehRel, (i64)0);
+                }
+            }
+        bool hasEh = eh.length() > (u32)0;
+
         Array* secNames = new Array();
         secNames.add((Object*)String.withCString(""));
         secNames.add((Object*)String.withCString(".text"));
@@ -1742,9 +1774,16 @@ class ElfSharedInfo
         secNames.add((Object*)String.withCString(".strtab"));
         u32 secShstr = secNames.count();
         secNames.add((Object*)String.withCString(".shstrtab"));
-        // .deplibs last, so no other section's index moves.
+        // .eh_frame and .deplibs last, so no other section's index moves.
+        u32 secEh = secNames.count();
+        if (hasEh)
+            {
+            secNames.add((Object*)String.withCString(".eh_frame"));
+            secNames.add((Object*)String.withCString(".rela.eh_frame"));
+            }
         Data* dep = Elf64.depLibsBytes(_depLibs);
         bool hasDep = dep.length() > (u32)0;
+        u32 secDep = secNames.count();
         if (hasDep)
             secNames.add((Object*)String.withCString(".deplibs"));
         Data* shstr = new Data();
@@ -1777,6 +1816,14 @@ class ElfSharedInfo
         off = strOff + strtab.length();
         u32 shstOff = off;
         off = shstOff + shstr.length();
+        u32 ehOff = off;
+        u32 erelOff = off;
+        if (hasEh)
+            {
+            ehOff = Elf64.roundUpTo(off, (u32)8);
+            erelOff = Elf64.roundUpTo(ehOff + eh.length(), (u32)8);
+            off = erelOff + ehRel.length();
+            }
         u32 depOff = off;
         off = depOff + dep.length();
         u32 shOff = Elf64.roundUpTo(off, (u32)8);
@@ -1819,6 +1866,13 @@ class ElfSharedInfo
         Elf64.appendAll(_out, strtab);
         padTo(shstOff);
         Elf64.appendAll(_out, shstr);
+        if (hasEh)
+            {
+            padTo(ehOff);
+            Elf64.appendAll(_out, eh);
+            padTo(erelOff);
+            Elf64.appendAll(_out, ehRel);
+            }
         Elf64.appendAll(_out, dep);
         padTo(shOff);
 
@@ -1835,8 +1889,14 @@ class ElfSharedInfo
         objShdr(shName, (u32)6, (u32)3, (u32)0, strOff, strtab.length(), (u32)0, (u32)0, (u32)1, (u32)0);
         objShdr(shName, (u32)7, (u32)3, (u32)0, shstOff, shstr.length(), (u32)0, (u32)0, (u32)1, (u32)0);
         // SHT_LLVM_DEPENDENT_LIBRARIES, SHF_MERGE|SHF_STRINGS.
+        // SHT_X86_64_UNWIND (as clang's), SHF_ALLOC; its RELA table.
+        if (hasEh)
+            {
+            objShdr(shName, secEh, (u32)$70000001, (u32)2, ehOff, eh.length(), (u32)0, (u32)0, (u32)8, (u32)0);
+            objShdr(shName, secEh + (u32)1, (u32)4, (u32)$40, erelOff, ehRel.length(), (u32)5, secEh, (u32)8, (u32)RELA_SZ);
+            }
         if (hasDep)
-            objShdr(shName, secShstr + (u32)1, (u32)$6FFF4C04, (u32)$30, depOff, dep.length(), (u32)0, (u32)0, (u32)1, (u32)1);
+            objShdr(shName, secDep, (u32)$6FFF4C04, (u32)$30, depOff, dep.length(), (u32)0, (u32)0, (u32)1, (u32)1);
         _depLibs = (Array*)0;
         return _out;
         }

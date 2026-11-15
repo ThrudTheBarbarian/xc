@@ -30,6 +30,14 @@
 #import "IrDefs.xc"
 #import <Homing>
 
+// C/C++ input (the driver sets it): after each prologue, where the frame keeps
+// rbp, the return address and each callee-saved register, as `.xc_saves`,
+// from which the assembler and the object writer build the unwind tables a
+// C++ exception reads through xcc's functions (arm64: arm64SetEhTables). Off,
+// the assembly is byte for byte as before.
+bool gX86EhTables;
+void x86SetEhTables(bool on) { gX86EhTables = on; }
+
 class X86_64
     {
     IRModule* _m;
@@ -721,6 +729,32 @@ class X86_64
             String* r = (String*)_homeSaves.get(i);
             _out.appendFormat("\tmov\t[rbp-%lu], %s\n",
                               ((Number*)_homeSaveOff.get((Hashable*)r)).asU32(), r.cString());
+            }
+        // The call frame is rbp + 16: rbp at its bottom, the return address
+        // above it, each saved register at rbp - off. DWARF numbers: rbx 3,
+        // rsi 4, rdi 5, rbp 6, r8-r15 8-15, the return address 16.
+        if (gX86EhTables && !_win64)
+            {
+            String* sv = String.withCString("\t.xc_saves 6:-16 16:-8");
+            for (u32 i = (u32)0; i < _homeSaves.count(); i = i + (u32)1)
+                {
+                String* r = (String*)_homeSaves.get(i);
+                i64 dw = (i64)-1;
+                if (r.equals(String.withCString("rbx"))) dw = (i64)3;
+                else if (r.equals(String.withCString("rsi"))) dw = (i64)4;
+                else if (r.equals(String.withCString("rdi"))) dw = (i64)5;
+                else if (r.byteLength() >= (u32)2 && r.byteAt((u32)0) == (u8)'r' && r.byteAt((u32)1) >= (u8)'0' && r.byteAt((u32)1) <= (u8)'9')
+                    {
+                    dw = (i64)0;
+                    for (u32 k = (u32)1; k < r.byteLength(); k = k + (u32)1)
+                        dw = dw * (i64)10 + (i64)(r.byteAt(k) - (u8)'0');
+                    }
+                if (dw < (i64)0) continue;
+                sv.appendFormat(" %ld:%ld", dw,
+                                (i64)0 - (i64)16 - (i64)((Number*)_homeSaveOff.get((Hashable*)r)).asU32());
+                }
+            sv.appendCString("\n");
+            _out.append(sv);
             }
         for (u32 i = (u32)0; i < _xmmSaves.count(); i = i + (u32)1)
             {
