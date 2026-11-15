@@ -389,6 +389,11 @@ class LlvmReader
         {
         Array* lines = text.splitOnByte((u8)10);
         String* out = new String();
+        // The functions read, as a set (#335): a scan per `define` made this
+        // O(functions^2) on a large C file.
+        Map* readSet = new Map();
+        for (u32 k = (u32)0; k < _readFns.count(); k = k + (u32)1)
+            readSet.set((Hashable*)_readFns.get(k), _readFns.get(k));
         u32 i = (u32)0;
         while (i < lines.count())
             {
@@ -408,9 +413,7 @@ class LlvmReader
                     _p = atSign;
                     name = word();
                     }
-                bool isRead = false;
-                for (u32 k = (u32)0; name != (String*)0 && k < _readFns.count() && !isRead; k = k + (u32)1)
-                    isRead = ((String*)_readFns.get(k)).equals(name);
+                bool isRead = name != (String*)0 && readSet.get((Hashable*)name) != (Object*)0;
                 if (isRead)
                     {
                     out.append(renamed((String*)_declOf.get((Hashable*)name)));

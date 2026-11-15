@@ -1510,17 +1510,22 @@ void injectCInterface(Node* program, FeOptions* o, Array* tokens, Set* ambient, 
     // program, as the driver's `[protos addObjectsFromArray:ast.declarations]`
     // does.
     Array* picked = Array.withCapacity((u32)8);
+    // The unit's identifiers and the program's function names, as sets
+    // (#335): one token scan and one declaration scan per libc function made
+    // this O(libc functions x tokens) on every compile that reaches libc.
+    Map* idents = identifierSet(tokens);
+    Map* declared = functionNameSet(program);
     for (u32 i = (u32)0; i < iface.kidCount(); i = i + (u32)1)
         {
         Node* d = iface.kid(i);
         if (d.kind() != (u16)nkFunctionDecl)
             continue;
-        if (!mentions(tokens, d.name()))
+        if (d.name() == (String*)0 || idents.get((Hashable*)d.name()) == (Object*)0)
             continue;
         // Named at all, shadowed or not, is what makes libc a dependency:
         // the reference's "is any of its functions referenced" test.
         o.setLibcReferenced(true);
-        if (declaresFunction(program, d.name()))
+        if (declared.get((Hashable*)d.name()) != (Object*)0)
             continue;
         d.addFlag((u32)NF_CABI);
         picked.add((Object*)d);
@@ -1602,24 +1607,26 @@ void noteStructRef(Node* iface, Array* outNeeded, String* spelling)
         }
     }
 
-// Does any identifier token in the unit spell this name? The driver's test is
-// exactly this — a token scan, not a resolved call — so an unused libc symbol
-// never reaches the IR.
-bool mentions(Array* tokens, String* name)
+// Every name an identifier token in the unit spells. The driver's test of
+// whether a libc function is used is exactly this — a token scan, not a
+// resolved call — so an unused libc symbol never reaches the IR.
+Map* identifierSet(Array* tokens)
     {
+    Map* set = new Map();
     for (u32 i = (u32)0; i < tokens.count(); i = i + (u32)1)
         {
         Token* t = (Token*)tokens.get(i);
-        if (t.type() != (u16)tokIdentifier)
+        if (t.type() != (u16)tokIdentifier || t.value() == 0)
             continue;
-        if (t.value() != 0 && t.value().equals(name))
-            return true;
+        set.set((Hashable*)t.value(), (Object*)t.value());
         }
-    return false;
+    return set;
     }
 
-bool declaresFunction(Node* program, String* name)
+// The names of the functions the program declares.
+Map* functionNameSet(Node* program)
     {
+    Map* set = new Map();
     for (u32 i = (u32)0; i < program.kidCount(); i = i + (u32)1)
         {
         Node* d = program.kid(i);
@@ -1628,10 +1635,10 @@ bool declaresFunction(Node* program, String* name)
         // The accessor is read ONCE: calling it twice in one `&&` on a
         // downcast result miscompiles on arm64 (private:docs/bugs/025).
         String* dn = d.name();
-        if (dn != 0 && dn.equals(name))
-            return true;
+        if (dn != 0)
+            set.set((Hashable*)dn, (Object*)dn);
         }
-    return false;
+    return set;
     }
 
 // The conformance itable is emitted by the native backends; the 6502 does not
