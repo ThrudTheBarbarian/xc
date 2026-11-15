@@ -2230,6 +2230,10 @@ static NSString* parRootName(XTASTNode* n)
         // written one.
         if (frame[@"auto"])
             [tagText appendString:@"auto;"];
+        // …and `scan;` for a pass of a rewritten :scan (#144): par-check
+        // takes its chunks as apart, and it stays on the CPU.
+        if (frame[@"scanpass"])
+            [tagText appendString:@"scan;"];
         // An array reduction is `a<field>=<op>;`: it has no GPU form yet, and
         // par-check keeps it on the CPU.
         for (NSUInteger j = 0; j < reductions.count; j++)

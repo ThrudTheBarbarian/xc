@@ -4522,8 +4522,433 @@ static int64_t parAutoConst(XTASTNode* e)
     return out;
     }
 
+/****************************************************************************\
+|* :scan (#144): `par [name] :scan(op acc) [:goal(…)] { for (T i in a..b) {
+|* … } }`, a running total. The tokens are rewritten, before parsing, into
+|* pieces a par block already has: a block over 256 chunks (each runs its
+|* slice serially with its own accumulator from the operator's identity,
+|* stores the per-item values and records its total), a serial scan of the
+|* totals from acc (acc ends as the overall total), and a block over the
+|* chunks that combines each chunk's offset into its slice of every array
+|* the loop stored acc into. acc may only be updated (acc += e, acc = acc +
+|* e, acc++, and `if (e < acc) acc = e;` / `if (e > acc) acc = e;` for min
+|* and max) and stored (a[i] = acc;), the output arrays used nowhere else.
+|* The generated blocks carry `:__scanpass` (chunks own disjoint slices: no
+|* dependence test, CPU only). A float scan under the accuracy goal stays a
+|* serial loop. YES when it rewrote. Mirrored in the port.
+\****************************************************************************/
+- (NSUInteger)scClose:(NSUInteger)i
+    {
+    XTTokenType o = [self parTokType:i];
+    XTTokenType c = o == XTTokenLParen ? XTTokenRParen : o == XTTokenLBrace ? XTTokenRBrace : XTTokenRBracket;
+    NSInteger d = 0;
+    for (NSUInteger k = i; k < _tokens.count; k++)
+        {
+        XTTokenType t = [self parTokType:k];
+        if (t == o)
+            d++;
+        else if (t == c && --d == 0)
+            return k;
+        }
+    return 0;
+    }
+
+- (BOOL)scStmtStart:(NSUInteger)p body:(NSUInteger)bo
+    {
+    XTTokenType t = [self parTokType:p];
+    return p == bo || t == XTTokenSemicolon || t == XTTokenLBrace || t == XTTokenRBrace;
+    }
+
+- (NSUInteger)scExprEnd:(NSUInteger)q limit:(NSUInteger)lim acc:(NSString*)acc
+    {
+    NSInteger d = 0;
+    for (NSUInteger k = q; k < lim; k++)
+        {
+        XTTokenType t = [self parTokType:k];
+        if (t == XTTokenLParen || t == XTTokenLBracket)
+            d++;
+        else if (t == XTTokenRParen || t == XTTokenRBracket)
+            d--;
+        else if (t == XTTokenSemicolon && d == 0)
+            return k == q ? 0 : k;
+        else if (t == XTTokenIdentifier && [[self parTokValue:k] isEqualToString:acc])
+            return 0;
+        }
+    return 0;
+    }
+
+- (BOOL)scSame:(NSUInteger)a as:(NSUInteger)b count:(NSUInteger)n
+    {
+    for (NSUInteger k = 0; k < n; k++)
+        if ([self parTokType:a + k] != [self parTokType:b + k] || ![[self parTokValue:a + k] isEqualToString:[self parTokValue:b + k]])
+            return NO;
+    return YES;
+    }
+
+static BOOL scIntType(NSString* t)
+    {
+    return [@[ @"u8", @"i8", @"u16", @"i16", @"u32", @"i32", @"u64", @"i64" ] containsObject:t ?: @""];
+    }
+
+static BOOL scSigned(NSString* t)
+    {
+    return [@[ @"i8", @"i16", @"i32", @"i64" ] containsObject:t ?: @""];
+    }
+
+static NSString* scIdentity(NSString* op, NSString* t)
+    {
+    if ([op isEqualToString:@"&"] || ([op isEqualToString:@"min"] && !scSigned(t) && scIntType(t)))
+        return [NSString stringWithFormat:@"~(%@)0", t];
+    if ([op isEqualToString:@"min"] || [op isEqualToString:@"max"])
+        {
+        NSString* big = [t isEqualToString:@"i8"] ? @"127" : [t isEqualToString:@"i16"] ? @"32767"
+                       : [t isEqualToString:@"i32"] ? @"2147483647" : @"9223372036854775807";
+        if ([op isEqualToString:@"min"])
+            return [NSString stringWithFormat:@"(%@)%@", t, big];
+        if (scSigned(t))
+            return [NSString stringWithFormat:@"((%@)0 - (%@)%@ - (%@)1)", t, t, big, t];
+        return [NSString stringWithFormat:@"(%@)0", t];
+        }
+    return [NSString stringWithFormat:@"(%@)0", t];
+    }
+
+static NSString* scCombine(NSString* op, NSString* r, NSString* v)
+    {
+    if ([op isEqualToString:@"min"])
+        return [NSString stringWithFormat:@"if (%@ < %@) %@ = %@;", v, r, r, v];
+    if ([op isEqualToString:@"max"])
+        return [NSString stringWithFormat:@"if (%@ > %@) %@ = %@;", v, r, r, v];
+    return [NSString stringWithFormat:@"%@ = %@ %@ %@;", r, r, op, v];
+    }
+
+- (BOOL)parScanRewrite
+    {
+    NSUInteger at = _pos;
+    XTToken* pt = _tokens[at];
+    NSUInteger k = at + 1;
+    NSString* name = nil;
+    if ([self parTokType:k] == XTTokenIdentifier && [self parTokType:k + 1] != XTTokenAssign)
+        name = [self parTokValue:k++];
+    NSString *op = nil, *acc = nil;
+    NSUInteger s0 = 0, s1 = 0;
+    NSMutableArray* goal = [NSMutableArray array];
+    BOOL other = NO;
+    while ([self parTokType:k] == XTTokenColon && [self parTokType:k + 1] == XTTokenIdentifier)
+        {
+        NSUInteger d0 = k, dEnd = k + 2;
+        if ([self parTokType:dEnd] == XTTokenLParen)
+            {
+            NSUInteger c = [self scClose:dEnd];
+            if (c == 0)
+                return NO;
+            dEnd = c + 1;
+            }
+        NSString* dn = [self parTokValue:d0 + 1];
+        if ([dn isEqualToString:@"scan"])
+            {
+            s0 = d0;
+            s1 = dEnd;
+            NSUInteger q = d0 + 3;
+            XTTokenType t = [self parTokType:q];
+            if (t == XTTokenPlus)
+                op = @"+";
+            else if (t == XTTokenPipe)
+                op = @"|";
+            else if (t == XTTokenAmpersand)
+                op = @"&";
+            else if (t == XTTokenCaret)
+                op = @"^";
+            else if (t == XTTokenIdentifier && ([[self parTokValue:q] isEqualToString:@"min"] || [[self parTokValue:q] isEqualToString:@"max"]))
+                op = [self parTokValue:q];
+            if (op && [self parTokType:q + 1] == XTTokenIdentifier && dEnd == q + 3)
+                acc = [self parTokValue:q + 1];
+            }
+        else if ([dn isEqualToString:@"goal"])
+            [goal addObjectsFromArray:[_tokens subarrayWithRange:NSMakeRange(d0, dEnd - d0)]];
+        else
+            other = YES;
+        k = dEnd;
+        }
+    if (s1 == 0)
+        return NO;
+    XTToken* st = _tokens[s0 + 1];
+    // The block then parses on as written, its :scan(…) skipped.
+    void (^fail)(NSString*, XTToken*) = ^(NSString* msg, XTToken* t) {
+      [self->_diagnostics emitError:msg at:t.location];
+    };
+    if (!acc)
+        {
+        fail(@"':scan' wants an operator (+ | & ^ min max) and a variable: :scan(+ total)", st);
+        return NO;
+        }
+    if (other)
+        {
+        fail(@"':scan' combines only with ':goal'", st);
+        return NO;
+        }
+    NSString* shape = @"a ':scan' block is one loop: par :scan(+ acc) { for (T i in a..b) { … } }";
+    if ([self parTokType:k] != XTTokenLBrace)
+        {
+        fail(shape, st);
+        return NO;
+        }
+    NSUInteger be = [self scClose:k];
+    NSUInteger f = k + 1;
+    BOOL ok = be != 0 && [self parTokType:f] == XTTokenFor && [self parTokType:f + 1] == XTTokenLParen &&
+              [self parTokType:f + 3] == XTTokenIdentifier && [self parTokType:f + 4] == XTTokenIn &&
+              scIntType([self parTokValue:f + 2]);
+    NSUInteger fc = ok ? [self scClose:f + 1] : 0;
+    NSUInteger rg = 0;
+    BOOL incl = NO;
+    if (fc != 0)
+        {
+        NSInteger d = 0;
+        for (NSUInteger q = f + 5; q < fc; q++)
+            {
+            XTTokenType t = [self parTokType:q];
+            if (t == XTTokenLParen || t == XTTokenLBracket)
+                d++;
+            else if (t == XTTokenRParen || t == XTTokenRBracket)
+                d--;
+            else if (d == 0 && (t == XTTokenDotDot || t == XTTokenEllipsis))
+                {
+                rg = q;
+                incl = t == XTTokenEllipsis;
+                break;
+                }
+            }
+        }
+    NSUInteger bo = fc + 1;
+    NSUInteger bc = rg != 0 && [self parTokType:bo] == XTTokenLBrace ? [self scClose:bo] : 0;
+    if (rg == 0 || rg == f + 5 || rg + 1 == fc || bc == 0 || bc + 1 != be)
+        {
+        fail(shape, st);
+        return NO;
+        }
+    NSString* ity = [self parTokValue:f + 2];
+    NSString* iv = [self parTokValue:f + 3];
+    NSUInteger dd = 0;
+    NSDictionary* info = [self blkLookup:acc depth:&dd];
+    XTType* atyT = [info[@"type"] isKindOfClass:[XTType class]] ? info[@"type"] : nil;
+    NSString* aty = atyT.displayName;
+    BOOL isFloat = [aty isEqualToString:@"float"] || [aty isEqualToString:@"double"];
+    if (!aty || (!isFloat && !scIntType(aty)))
+        {
+        fail([NSString stringWithFormat:@"':scan' wants '%@' to be a local variable of an integer or floating type", acc], st);
+        return NO;
+        }
+    if (isFloat && ![op isEqualToString:@"+"])
+        {
+        fail(@"a floating-point ':scan' takes only +", st);
+        return NO;
+        }
+    BOOL mm = [op isEqualToString:@"min"] || [op isEqualToString:@"max"];
+    NSMutableArray<NSString*>* outs = [NSMutableArray array];
+    NSUInteger updates = 0;
+    for (NSUInteger q = bo + 1; q < bc; q++)
+        {
+        XTTokenType t = [self parTokType:q];
+        if (t == XTTokenBreak || t == XTTokenReturn || t == XTTokenGoto)
+            {
+            fail(@"a ':scan' loop has no break, return or goto", _tokens[q]);
+            return NO;
+            }
+        if (t != XTTokenIdentifier || ![[self parTokValue:q] isEqualToString:acc])
+            continue;
+        XTTokenType pv = [self parTokType:q - 1];
+        if (pv == XTTokenDot || pv == XTTokenArrow)
+            continue;
+        if (q >= bo + 6 && pv == XTTokenAssign && [self parTokType:q - 2] == XTTokenRBracket &&
+            [self parTokType:q - 3] == XTTokenIdentifier && [[self parTokValue:q - 3] isEqualToString:iv] &&
+            [self parTokType:q - 4] == XTTokenLBracket && [self parTokType:q - 5] == XTTokenIdentifier &&
+            [self parTokType:q + 1] == XTTokenSemicolon && [self scStmtStart:q - 6 body:bo])
+            {
+            if (![outs containsObject:[self parTokValue:q - 5]])
+                [outs addObject:[self parTokValue:q - 5]];
+            q++;
+            continue;
+            }
+        NSUInteger e = 0;
+        if ([self scStmtStart:q - 1 body:bo])
+            {
+            XTTokenType t1 = [self parTokType:q + 1];
+            BOOL opAssign = ([op isEqualToString:@"+"] && t1 == XTTokenPlusAssign) || ([op isEqualToString:@"|"] && t1 == XTTokenPipeAssign) ||
+                            ([op isEqualToString:@"&"] && t1 == XTTokenAmpAssign) || ([op isEqualToString:@"^"] && t1 == XTTokenCaretAssign);
+            if (opAssign)
+                e = [self scExprEnd:q + 2 limit:bc acc:acc];
+            else if ([op isEqualToString:@"+"] && t1 == XTTokenPlusPlus && [self parTokType:q + 2] == XTTokenSemicolon)
+                e = q + 2;
+            else if (t1 == XTTokenAssign && [self parTokType:q + 2] == XTTokenIdentifier && [[self parTokValue:q + 2] isEqualToString:acc] && !mm)
+                {
+                XTTokenType t3 = [self parTokType:q + 3];
+                BOOL same = ([op isEqualToString:@"+"] && t3 == XTTokenPlus) || ([op isEqualToString:@"|"] && t3 == XTTokenPipe) ||
+                            ([op isEqualToString:@"&"] && t3 == XTTokenAmpersand) || ([op isEqualToString:@"^"] && t3 == XTTokenCaret);
+                if (same)
+                    e = [self scExprEnd:q + 4 limit:bc acc:acc];
+                }
+            }
+        if (e == 0 && [op isEqualToString:@"+"] && pv == XTTokenPlusPlus && [self scStmtStart:q - 2 body:bo] &&
+            [self parTokType:q + 1] == XTTokenSemicolon)
+            e = q + 1;
+        if (e == 0 && mm && pv == ([op isEqualToString:@"min"] ? XTTokenLess : XTTokenGreater) &&
+            [self parTokType:q + 1] == XTTokenRParen && [self parTokType:q + 2] == XTTokenIdentifier &&
+            [[self parTokValue:q + 2] isEqualToString:acc] && [self parTokType:q + 3] == XTTokenAssign)
+            {
+            NSUInteger p = 0;
+            for (NSUInteger j = q - 2; j > bo; j--)
+                if ([self parTokType:j] == XTTokenLParen && [self scClose:j] == q + 1)
+                    {
+                    p = j;
+                    break;
+                    }
+            NSUInteger e2 = [self scExprEnd:q + 4 limit:bc acc:acc];
+            if (p != 0 && [self parTokType:p - 1] == XTTokenIf && [self scStmtStart:p - 2 body:bo] && e2 != 0 &&
+                q - 1 - (p + 1) == e2 - (q + 4) && q - 1 > p + 1 && [self scSame:p + 1 as:q + 4 count:e2 - (q + 4)])
+                {
+                BOOL clean = YES;
+                for (NSUInteger j = p + 1; j < q - 1; j++)
+                    if ([self parTokType:j] == XTTokenIdentifier && [[self parTokValue:j] isEqualToString:acc])
+                        clean = NO;
+                if (clean)
+                    e = e2;
+                }
+            }
+        if (e == 0)
+            {
+            NSString* upd = mm ? [NSString stringWithFormat:@": if (e %@ %@) %@ = e;", [op isEqualToString:@"min"] ? @"<" : @">", acc, acc]
+                               : [NSString stringWithFormat:@" %@= e", op];
+            fail([NSString stringWithFormat:@"in a ':scan' loop '%@' may only be updated (%@%@) and stored (a[i] = %@;)", acc, acc, upd, acc],
+                 _tokens[q]);
+            return NO;
+            }
+        updates++;
+        q = e;
+        }
+    if (updates == 0 || outs.count == 0)
+        {
+        fail(updates == 0 ? @"a ':scan' loop updates its variable"
+                          : [NSString stringWithFormat:@"a ':scan' loop stores its running value (a[i] = %@;); with no store it is a :reduce", acc],
+             st);
+        return NO;
+        }
+    for (NSUInteger q = bo + 1; q < bc; q++)
+        {
+        if ([self parTokType:q] != XTTokenIdentifier || ![outs containsObject:[self parTokValue:q]])
+            continue;
+        if ([self parTokType:q - 1] == XTTokenDot || [self parTokType:q - 1] == XTTokenArrow)
+            continue;
+        if ([self parTokType:q + 1] == XTTokenLBracket && [self parTokType:q + 2] == XTTokenIdentifier &&
+            [[self parTokValue:q + 2] isEqualToString:iv] && [self parTokType:q + 3] == XTTokenRBracket &&
+            [self parTokType:q + 4] == XTTokenAssign && [self parTokType:q + 5] == XTTokenIdentifier &&
+            [[self parTokValue:q + 5] isEqualToString:acc] && [self parTokType:q + 6] == XTTokenSemicolon)
+            continue;
+        NSString* X = [self parTokValue:q];
+        fail([NSString stringWithFormat:@"a ':scan' loop's output array '%@' is only stored, by %@[i] = %@;", X, X, acc], _tokens[q]);
+        return NO;
+        }
+    BOOL accuracy = (self.goalNow ?: self.goalDefault) == 2;
+    for (XTToken* g in goal)
+        {
+        if (g.type == XTTokenIdentifier && [g.value isEqualToString:@"accuracy"])
+            accuracy = YES;
+        if (g.type == XTTokenIdentifier && [g.value isEqualToString:@"speed"])
+            accuracy = NO;
+        }
+    XTSourceLocation* loc = pt.location;
+    NSMutableArray* out = [NSMutableArray array];
+    if (isFloat && accuracy)
+        {
+        [out addObject:[[XTToken alloc] initWithType:XTTokenLBrace value:@"{" location:loc]];
+        [out addObjectsFromArray:[_tokens subarrayWithRange:NSMakeRange(f, be - f)]];
+        [out addObject:[[XTToken alloc] initWithType:XTTokenRBrace value:@"}" location:loc]];
+        NSMutableArray<XTToken*>* spliced = [_tokens mutableCopy];
+        [spliced replaceObjectsInRange:NSMakeRange(at, be + 1 - at) withObjectsFromArray:out];
+        _tokens = spliced;
+        return YES;
+        }
+    NSUInteger n = ++self.scanSeq;
+    NSString *T = ity, *A = aty;
+    NSMutableString* src = [NSMutableString string];
+    [src appendFormat:@"{ %@ __xs_a%lu = (__XC_SCAN_A__); %@ __xs_e%lu = (__XC_SCAN_B__)%@;\n", T, (unsigned long)n, T, (unsigned long)n,
+                      incl ? @" + 1" : @""];
+    [src appendFormat:@"u64 __xs_n%lu = __xs_e%lu > __xs_a%lu ? (u64)(__xs_e%lu - __xs_a%lu) : (u64)0;\n", (unsigned long)n, (unsigned long)n,
+                      (unsigned long)n, (unsigned long)n, (unsigned long)n];
+    [src appendFormat:@"%@ __xs_t%lu[256];\n", A, (unsigned long)n];
+    NSString* lohi = [NSString stringWithFormat:@"%@ __xs_lo = __xs_a%lu + (%@)(__xs_n%lu * (u64)__xs_c / (u64)256); "
+                                                 "%@ __xs_hi = __xs_a%lu + (%@)(__xs_n%lu * (u64)(__xs_c + (u32)1) / (u64)256);\n",
+                                                T, (unsigned long)n, T, (unsigned long)n, T, (unsigned long)n, T, (unsigned long)n];
+    [src appendFormat:@"par %@ :device(cpu) :__scanpass __XC_SCAN_GOAL__ { for (u32 __xs_c in 0..256) {\n", name ?: @""];
+    [src appendString:lohi];
+    [src appendFormat:@"%@ __xs_s = %@;\n", A, scIdentity(op, aty)];
+    [src appendFormat:@"for (%@ %@ in __xs_lo..__xs_hi) { __XC_SCAN_BODY__ }\n", T, iv];
+    [src appendFormat:@"__xs_t%lu[__xs_c] = __xs_s; } }\n", (unsigned long)n];
+    [src appendFormat:@"%@ __xs_r%lu = %@;\n", A, (unsigned long)n, acc];
+    NSString* rn = [NSString stringWithFormat:@"__xs_r%lu", (unsigned long)n];
+    [src appendFormat:@"for (u32 __xs_c in 0..256) { %@ __xs_v = __xs_t%lu[__xs_c]; __xs_t%lu[__xs_c] = __xs_r%lu; %@ }\n", A, (unsigned long)n,
+                      (unsigned long)n, (unsigned long)n, scCombine(op, rn, @"__xs_v")];
+    NSString* name2 = name ? [name stringByAppendingString:@"_offsets"] : @"";
+    [src appendFormat:@"par %@ :device(cpu) :__scanpass __XC_SCAN_GOAL__ { for (u32 __xs_c in 0..256) {\n", name2];
+    [src appendString:lohi];
+    [src appendFormat:@"%@ __xs_o = __xs_t%lu[__xs_c];\n", A, (unsigned long)n];
+    [src appendFormat:@"for (%@ %@ in __xs_lo..__xs_hi) {", T, iv];
+    for (NSString* X in outs)
+        {
+        if (mm)
+            [src appendFormat:@" if (__xs_o %@ (%@)%@[%@]) %@[%@] = __xs_o;", [op isEqualToString:@"min"] ? @"<" : @">", A, X, iv, X, iv];
+        else
+            [src appendFormat:@" %@[%@] = (%@)(__xs_o %@ (%@)%@[%@]);", X, iv, A, op, A, X, iv];
+        }
+    [src appendString:@" } } }\n"];
+    [src appendFormat:@"%@ = __xs_r%lu; }\n", acc, (unsigned long)n];
+    XTLexer* lexer = [[XTLexer alloc] initWithSource:src filename:@"<scan>" diagnostics:_diagnostics];
+    for (XTToken* g in [lexer tokenise])
+        {
+        if (g.type == XTTokenEOF)
+            break;
+        if (g.type == XTTokenIdentifier && [g.value isEqualToString:@"__XC_SCAN_A__"])
+            {
+            [out addObjectsFromArray:[_tokens subarrayWithRange:NSMakeRange(f + 5, rg - (f + 5))]];
+            continue;
+            }
+        if (g.type == XTTokenIdentifier && [g.value isEqualToString:@"__XC_SCAN_B__"])
+            {
+            [out addObjectsFromArray:[_tokens subarrayWithRange:NSMakeRange(rg + 1, fc - (rg + 1))]];
+            continue;
+            }
+        if (g.type == XTTokenIdentifier && [g.value isEqualToString:@"__XC_SCAN_GOAL__"])
+            {
+            [out addObjectsFromArray:goal];
+            continue;
+            }
+        if (g.type == XTTokenIdentifier && [g.value isEqualToString:@"__XC_SCAN_BODY__"])
+            {
+            for (NSUInteger q = bo + 1; q < bc; q++)
+                {
+                XTToken* b = _tokens[q];
+                XTTokenType pv = [self parTokType:q - 1];
+                if (b.type == XTTokenIdentifier && [b.value isEqualToString:acc] && pv != XTTokenDot && pv != XTTokenArrow)
+                    [out addObject:[[XTToken alloc] initWithType:XTTokenIdentifier value:@"__xs_s" location:b.location]];
+                else
+                    [out addObject:b];
+                }
+            continue;
+            }
+        if (g.type == XTTokenIntLiteral)
+            [out addObject:[[XTToken alloc] initWithType:g.type value:g.value intValue:g.intValue location:loc]];
+        else
+            [out addObject:[[XTToken alloc] initWithType:g.type value:g.value location:loc]];
+        }
+    NSMutableArray<XTToken*>* spliced = [_tokens mutableCopy];
+        [spliced replaceObjectsInRange:NSMakeRange(at, be + 1 - at) withObjectsFromArray:out];
+        _tokens = spliced;
+    return YES;
+    }
+
 - (nullable XTASTNode*)parsePar
     {
+    // :scan (#144): rewritten into plain blocks first.
+    if ([self parScanRewrite])
+        return [self parseStatement];
     XTSourceLocation* loc = [self currentLocation];
     [self advance]; // consume 'par'
     NSString* name = nil;
@@ -4544,6 +4969,7 @@ static int64_t parAutoConst(XTASTNode* e)
     // XC_PAR, the user's settings and Par.device, above auto (which then does
     // not measure the block): ParDevice's codes, 0 for auto, -1 when absent.
     NSInteger device = -1;
+    BOOL scanPass = NO;
     while ([self check:XTTokenColon])
         {
         [self advance];
@@ -4641,10 +5067,35 @@ static int64_t parAutoConst(XTASTNode* e)
                 return nil;
             continue;
             }
+        // :__scanpass: a block a :scan was rewritten into (parScanRewrite);
+        // its chunks own disjoint slices.
+        if ([dec.value isEqualToString:@"__scanpass"])
+            {
+            scanPass = YES;
+            continue;
+            }
+        // :scan(…) here: parScanRewrite has already said what is wrong.
+        if ([dec.value isEqualToString:@"scan"])
+            {
+            if ([self check:XTTokenLParen])
+                {
+                NSInteger d = 1;
+                [self advance];
+                while (d > 0 && ![self check:XTTokenEOF])
+                    {
+                    if ([self check:XTTokenLParen])
+                        d++;
+                    else if ([self check:XTTokenRParen])
+                        d--;
+                    [self advance];
+                    }
+                }
+            continue;
+            }
         if (![dec.value isEqualToString:@"reduce"])
             {
             [_diagnostics emitError:[NSString stringWithFormat:@"'par' has no decorator ':%@' "
-                                                                 "(it takes :reduce(op var), :grid(w, h[, d]), "
+                                                                 "(it takes :reduce(op var), :scan(op var), :grid(w, h[, d]), "
                                                                  ":goal(speed|accuracy), :constant(a, b) and "
                                                                  ":device(cpu|gpu|gpus|all|auto))",
                                                                dec.value]
@@ -4737,6 +5188,8 @@ static int64_t parAutoConst(XTASTNode* e)
         frame[@"constant"] = constants;
     if (device > 0)
         frame[@"device"] = @(device);
+    if (scanPass)
+        frame[@"scanpass"] = @YES;
     return [self parDesugarBody:body frame:frame name:name reductions:reductions at:loc];
     }
 

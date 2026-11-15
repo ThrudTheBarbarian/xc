@@ -1471,7 +1471,10 @@ static BOOL gEmitsWGSL = NO;
         BOOL arrRed = !serialBlock && !lost && arrFields.count > 0;
         if (arrRed)
             mslWhy = ptxWhy = wgslWhy = spvWhy = @"it has an array reduction (:reduce(op a[])), which has no GPU version yet";
-        BOOL noForms = serialBlock || lost || arrRed;
+        BOOL scanPass = !serialBlock && !lost && !arrRed && [self isScanBlock:module number:[fcls substringFromIndex:8]];
+        if (scanPass)
+            mslWhy = ptxWhy = wgslWhy = spvWhy = @"it is a pass of a :scan block, which has no GPU version yet";
+        BOOL noForms = serialBlock || lost || arrRed || scanPass;
         NSString* msl = gEmitsMetal && !noForms ? metalOf(&mslWhy) : nil;
         NSString* ptx = gEmitsPTX && !noForms ? ptxOf(&ptxWhy) : nil;
         NSString* wgsl = gEmitsWGSL && !noForms ? wgslOf(&wgslWhy) : nil;
@@ -1573,6 +1576,9 @@ static BOOL gEmitsWGSL = NO;
             // -Wpar-auto: a plain program is not told about a block it never
             // wrote. Mirrored in the port.
             BOOL lifted = [self isAutoBlock:module number:[cls substringFromIndex:8]];
+            // A :scan's passes are the compiler's, not written blocks: they
+            // say nothing (#144).
+            if (![self isScanBlock:module number:[cls substringFromIndex:8]])
             [diag emitWarning:[NSString stringWithFormat:lifted ? @"this loop runs on the CPU only (--par-style), because %@"
                                                                 : @"this 'par' block runs on the CPU only, because %@",
                                                          why ?: @"its GPU version cannot express something it uses yet"]
@@ -1662,6 +1668,9 @@ static BOOL gEmitsWGSL = NO;
                 why = r;
             }
         XTClassDeclNode* decl = classDecls[cls];
+        // A :scan pass: its chunks own disjoint slices (#144).
+        if (!why && [self isScanBlock:module number:[cls substringFromIndex:8]])
+            continue;
         if (!why)
             {
             // §4: the work items must not touch each other's data.
@@ -1772,6 +1781,38 @@ static BOOL gEmitsWGSL = NO;
 
 // Whether block <n> (its class ParImpl$<n>) is one --par-style=auto made from a
 // plain loop: its GPU placeholder literal carries `auto;` after the tag.
+// A pass of a rewritten :scan (#144): its placeholder's words hold `scan;`.
+// Its chunks own disjoint slices of what it writes, so the dependence test
+// does not apply, and it has no GPU form. Mirrored in the port.
++ (BOOL)isScanBlock:(XTIRModule*)module number:(NSString*)n
+    {
+    NSData* plain = [[NSString stringWithFormat:@"__XC_PAR_MSL_%@__", n] dataUsingEncoding:NSUTF8StringEncoding];
+    NSData* fastTag = [[NSString stringWithFormat:@"__XC_PAR_FAST_%@__", n] dataUsingEncoding:NSUTF8StringEncoding];
+    for (XTIRSymbol* sym in module.symbols)
+        {
+        NSData* b = sym.stringBytes;
+        if (sym.kind != XTIRSymbolKindStringLit)
+            continue;
+        NSData* tag = nil;
+        if (b.length >= fastTag.length && memcmp(b.bytes, fastTag.bytes, fastTag.length) == 0)
+            tag = fastTag;
+        else if (b.length >= plain.length && memcmp(b.bytes, plain.bytes, plain.length) == 0)
+            tag = plain;
+        if (!tag)
+            continue;
+        const char* p = (const char*)b.bytes + tag.length;
+        NSUInteger len = 0;
+        while (tag.length + len < b.length && p[len] != 0)
+            len++;
+        NSString* rest = [[NSString alloc] initWithBytes:p length:len encoding:NSUTF8StringEncoding];
+        for (NSString* w in [rest componentsSeparatedByString:@";"])
+            if ([w isEqualToString:@"scan"])
+                return YES;
+        return NO;
+        }
+    return NO;
+    }
+
 + (BOOL)isAutoBlock:(XTIRModule*)module number:(NSString*)n
     {
     NSData* plain = [[NSString stringWithFormat:@"__XC_PAR_MSL_%@__", n] dataUsingEncoding:NSUTF8StringEncoding];

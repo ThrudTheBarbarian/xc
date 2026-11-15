@@ -41,6 +41,8 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, strong, nullable) XTType* lastBlockRet;
 // v2: the declaration just parsed carried the `block:` write-back qualifier.
 @property(nonatomic) BOOL lastTypeIsBlockWb;
+// :scan blocks rewritten so far (#144): their generated names' suffix.
+@property(nonatomic) NSUInteger scanSeq;
 @end
 
 // Callbacks (0.5) — the named spelling of a bound method

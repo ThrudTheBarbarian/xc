@@ -33,6 +33,8 @@ A program that uses `par` imports `Par.xc`, its runtime.
 
 `par [name] (:reduce(op variable))* { for (T i in a..b) { … } }`
 
+or, for a running total, `par [name] :scan(op variable) [:goal(…)] { for (T i in a..b) { … } }`
+
 or, `par [name] :grid(w, h[, d]) (:reduce(op variable))* { … }`
 over the points of a grid (see [Grids](#grids)).
 
@@ -146,6 +148,49 @@ same index on both sides. Each thread updates its own copy of the array, filled 
 operator's identity, and the copies are combined into the array when the block
 ends, so the result is the sequential loop's. Such a block runs on the CPU's
 threads; it has no GPU version yet.
+
+## Running totals: `:scan`
+
+`:scan(op variable)` turns a running total into a block: a loop that updates
+a variable and stores its value at each element.
+
+```c
+i64 total = 0;
+par prefix :scan(+ total)
+{
+    for (u32 i in 0..n)
+    {
+        total += x[i];      // inclusive: out[i] includes x[i]
+        out[i] = total;
+    }
+}
+```
+
+Storing before the update (`out[i] = total; total += x[i];`) gives the
+exclusive form, where `out[i]` holds the total of the elements before `i`.
+After the block `total` holds the overall total, as with `:reduce`.
+
+The operator is `+`, `|`, `&`, `^`, `min` or `max`. In the body the variable
+is updated with the operator (`total += e`, `total = total + e` or `total++`
+for `+`; `if (e < low) low = e;` for `min` and `if (e > high) high = e;` for
+`max`) and stored with `a[i] = total;`, where `i` is the loop's counter and
+`a` an array the body uses for nothing else. The compiler reports any other
+use. The block's body is the one loop, and the loop has no `break`,
+`return` or `goto`.
+
+The loop runs as two blocks on the CPU's threads. The range is split into
+256 slices. The first block runs each slice in order, with its own running
+value starting at the operator's identity, and stores those values. The
+slices' totals are then combined in order, and the second block combines
+each slice's starting offset into its elements. The body runs once per
+element. Integer results match the sequential loop exactly. A `float` or
+`double` scan takes `+` only. Under `:goal(speed)`, the default, it runs as
+blocks, and like a floating-point reduction it can differ from the
+sequential loop in its last bits. Under `:goal(accuracy)` the loop runs
+sequentially. A scan has no GPU version yet.
+
+A scan with nothing else in its loop is limited by memory bandwidth, and it
+gains most when the loop also does work around the running total.
 
 ## Threads
 
@@ -946,7 +991,7 @@ par { for (u32 i in 1..n) { b[i] = a[i] + b[i - 1]; } }   // error: a scan, not 
 ```
 
 Each `b[i - 1]` is another item's result, which may not have been computed yet.
-That loop is a scan (a running sum); write it as an ordinary `for` loop.
+That loop is a scan (a running sum): write it with `:scan` (see Running totals: `:scan`), carrying the total in a variable, `t += a[i]; b[i] = t;`.
 
 The test is the usual one for an index that is linear in the item (`k * i + c`):
 two accesses can meet across items only when the difference of their offsets

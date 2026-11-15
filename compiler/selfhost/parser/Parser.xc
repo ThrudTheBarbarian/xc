@@ -72,6 +72,7 @@ class Parser
     u32     _loopDepth;     // loops open in the code being parsed (an auto par wraps an outermost one)
     String* _parFn;         // the top-level function whose body is being parsed, or 0
     u32     _goalDefault;   // the unit's default goal: 0 built-in, 1 speed, 2 accuracy (#goal, else -fgoal=)
+    u32     _scanSeq;       // :scan blocks rewritten so far (#144): their generated names' suffix
     u32     _goalNow;       // the goal of the loop or block being parsed: 0 none yet, 1 speed, 2 accuracy
     u32     _parDeviceDefault; // --par-style's device for a block with no :device (1 cpu, 2 gpu), or 0
     Set*    _libFiles;      // the standard library's and prelude's files, which --par-style=auto leaves alone
@@ -3548,8 +3549,426 @@ class Parser
         return t == (u16)tokPlus || t == (u16)tokMinus || t == (u16)tokStar || t == (u16)tokSlash || t == (u16)tokPercent || t == (u16)tokShiftLeft || t == (u16)tokShiftRight || t == (u16)tokLess || t == (u16)tokLessEq || t == (u16)tokGreater || t == (u16)tokGreaterEq || t == (u16)tokEqual || t == (u16)tokNotEqual || t == (u16)tokAmpersand || t == (u16)tokPipe || t == (u16)tokCaret || t == (u16)tokLogicalAnd || t == (u16)tokLogicalOr || t == (u16)tokQuestion;
     }
 
+    // ---- :scan (#144) -------------------------------------------------
+    // `par [name] :scan(op acc) [:goal(…)] { for (T i in a..b) { … } }`: a
+    // running total. The tokens are rewritten, before parsing, into pieces a
+    // par block already has (so no runtime or back-end change):
+    //   1. a block over 256 chunks; each runs its slice serially with its own
+    //      accumulator starting at the operator's identity, stores the
+    //      per-item values, and records the chunk's total;
+    //   2. a serial scan of the totals from acc (acc ends as the overall total);
+    //   3. a block over the chunks that combines each chunk's offset into its
+    //      slice of every array the loop stored acc into.
+    // In the body acc may only be updated (acc += e, acc = acc + e, acc++,
+    // and the `if (e < acc) acc = e;` / `if (e > acc) acc = e;` forms for min
+    // and max) and stored (a[i] = acc;), the output arrays used nowhere
+    // else. The two generated blocks carry `:__scanpass`: their chunks own
+    // disjoint slices, so par-check takes them as they are, and they stay on
+    // the CPU. A float scan under the accuracy goal stays a serial loop.
+    // Mirrored in the reference (parScanRewrite).
+    u16 scT(u32 i)
+    {
+        if (i >= _tokens.count()) return (u16)0;
+        return ((Token*)_tokens.get(i)).type();
+    }
+    String* scV(u32 i)
+    {
+        return ((Token*)_tokens.get(i)).value();
+    }
+    // The token that closes the bracket opened at i, or 0.
+    u32 scClose(u32 i)
+    {
+        u16 o = scT(i);
+        u16 c = o == (u16)tokLParen ? (u16)tokRParen : o == (u16)tokLBrace ? (u16)tokRBrace : (u16)tokRBracket;
+        i32 d = (i32)0;
+        for (u32 k = i; k < _tokens.count(); k = k + (u32)1) {
+            u16 t = scT(k);
+            if (t == o) d = d + (i32)1;
+            else if (t == c) {
+                d = d - (i32)1;
+                if (d == (i32)0) return k;
+            }
+        }
+        return (u32)0;
+    }
+    bool scStmtStart(u32 p, u32 bo)
+    {
+        u16 t = scT(p);
+        return p == bo || t == (u16)tokSemicolon || t == (u16)tokLBrace || t == (u16)tokRBrace;
+    }
+    // The `;` that ends the expression starting at q (depth 0), or 0; with
+    // `acc` in it, 0 too.
+    u32 scExprEnd(u32 q, u32 lim, String* acc)
+    {
+        i32 d = (i32)0;
+        for (u32 k = q; k < lim; k = k + (u32)1) {
+            u16 t = scT(k);
+            if (t == (u16)tokLParen || t == (u16)tokLBracket) d = d + (i32)1;
+            else if (t == (u16)tokRParen || t == (u16)tokRBracket) d = d - (i32)1;
+            else if (t == (u16)tokSemicolon && d == (i32)0) return k == q ? (u32)0 : k;
+            else if (t == (u16)tokIdentifier && scV(k).equals(acc)) return (u32)0;
+        }
+        return (u32)0;
+    }
+    bool scSameToks(u32 a, u32 b, u32 n)
+    {
+        for (u32 k = (u32)0; k < n; k = k + (u32)1)
+            if (scT(a + k) != scT(b + k) || !scV(a + k).equals(scV(b + k))) return false;
+        return true;
+    }
+    static bool scIntType(String* t)
+    {
+        return Parser._same(t, "u8") || Parser._same(t, "i8") || Parser._same(t, "u16") || Parser._same(t, "i16")
+            || Parser._same(t, "u32") || Parser._same(t, "i32") || Parser._same(t, "u64") || Parser._same(t, "i64");
+    }
+    static bool scSigned(String* t)
+    {
+        return Parser._same(t, "i8") || Parser._same(t, "i16") || Parser._same(t, "i32") || Parser._same(t, "i64");
+    }
+    // The operator's identity for type t, as source.
+    static String* scIdentity(String* op, String* t)
+    {
+        String* s = new String();
+        if (Parser._same(op, "&") || (Parser._same(op, "min") && !Parser.scSigned(t) && Parser.scIntType(t))) {
+            s.appendFormat("~(%s)0", t.cString());
+            return s;
+        }
+        if (Parser._same(op, "min") || Parser._same(op, "max")) {
+            String* big = (String*)0;
+            if (Parser._same(t, "i8")) big = String.withCString("127");
+            else if (Parser._same(t, "i16")) big = String.withCString("32767");
+            else if (Parser._same(t, "i32")) big = String.withCString("2147483647");
+            else big = String.withCString("9223372036854775807");
+            if (Parser._same(op, "min")) s.appendFormat("(%s)%s", t.cString(), big.cString());
+            else if (Parser.scSigned(t)) s.appendFormat("((%s)0 - (%s)%s - (%s)1)", t.cString(), t.cString(), big.cString(), t.cString());
+            else s.appendFormat("(%s)0", t.cString());
+            return s;
+        }
+        s.appendFormat("(%s)0", t.cString());
+        return s;
+    }
+    // `r = r op v;` (or the min/max form), as source.
+    static String* scCombine(String* op, String* r, String* v)
+    {
+        String* s = new String();
+        if (Parser._same(op, "min")) s.appendFormat("if (%s < %s) %s = %s;", v.cString(), r.cString(), r.cString(), v.cString());
+        else if (Parser._same(op, "max")) s.appendFormat("if (%s > %s) %s = %s;", v.cString(), r.cString(), r.cString(), v.cString());
+        else s.appendFormat("%s = %s %s %s;", r.cString(), r.cString(), op.cString(), v.cString());
+        return s;
+    }
+    void scFail(String* msg, Token* t, u32 from, u32 to)
+    {
+        // The block then parses on as written, its :scan(…) skipped.
+        _errorAtTok(msg, t);
+    }
+    // At `par`: true when the tokens were rewritten (the parser goes on at
+    // the `{` that now stands there).
+    bool parScanRewrite(void)
+    {
+        u32 at = _pos;
+        Token* pt = (Token*)_tokens.get(at);
+        u32 k = at + (u32)1;
+        String* name = (String*)0;
+        if (scT(k) == (u16)tokIdentifier && scT(k + (u32)1) != (u16)tokAssign) {
+            name = scV(k);
+            k = k + (u32)1;
+        }
+        String* op = (String*)0;
+        String* acc = (String*)0;
+        u32 s0 = (u32)0;
+        u32 s1 = (u32)0;
+        Array* goal = new Array();
+        bool other = false;
+        while (scT(k) == (u16)tokColon && scT(k + (u32)1) == (u16)tokIdentifier) {
+            u32 d0 = k;
+            u32 dEnd = k + (u32)2;
+            if (scT(dEnd) == (u16)tokLParen) {
+                u32 c = scClose(dEnd);
+                if (c == (u32)0) return false;
+                dEnd = c + (u32)1;
+            }
+            String* dn = scV(d0 + (u32)1);
+            if (Parser._same(dn, "scan")) {
+                s0 = d0;
+                s1 = dEnd;
+                u32 q = d0 + (u32)3;
+                u16 t = scT(q);
+                if (t == (u16)tokPlus) op = String.withCString("+");
+                else if (t == (u16)tokPipe) op = String.withCString("|");
+                else if (t == (u16)tokAmpersand) op = String.withCString("&");
+                else if (t == (u16)tokCaret) op = String.withCString("^");
+                else if (t == (u16)tokIdentifier && (Parser._same(scV(q), "min") || Parser._same(scV(q), "max"))) op = scV(q);
+                if (op != (String*)0 && scT(q + (u32)1) == (u16)tokIdentifier && dEnd == q + (u32)3)
+                    acc = scV(q + (u32)1);
+            }
+            else if (Parser._same(dn, "goal")) goal.addAll(_tokens.subarray(d0, dEnd - d0));
+            else other = true;
+            k = dEnd;
+        }
+        if (s1 == (u32)0) return false;
+        Token* st = (Token*)_tokens.get(s0 + (u32)1);
+        if (acc == (String*)0) {
+            scFail(String.withCString("':scan' wants an operator (+ | & ^ min max) and a variable: :scan(+ total)"), st, s0, s1);
+            return false;
+        }
+        if (other) {
+            scFail(String.withCString("':scan' combines only with ':goal'"), st, s0, s1);
+            return false;
+        }
+        String* shape = String.withCString("a ':scan' block is one loop: par :scan(+ acc) { for (T i in a..b) { … } }");
+        if (scT(k) != (u16)tokLBrace) { scFail(shape, st, s0, s1); return false; }
+        u32 be = scClose(k);
+        u32 f = k + (u32)1;
+        bool ok = be != (u32)0 && scT(f) == (u16)tokFor && scT(f + (u32)1) == (u16)tokLParen
+            && scT(f + (u32)3) == (u16)tokIdentifier && scT(f + (u32)4) == (u16)tokIn
+            && Parser.scIntType(scV(f + (u32)2));
+        u32 fc = ok ? scClose(f + (u32)1) : (u32)0;
+        u32 rg = (u32)0;
+        bool incl = false;
+        if (fc != (u32)0) {
+            i32 d = (i32)0;
+            for (u32 q = f + (u32)5; q < fc; q = q + (u32)1) {
+                u16 t = scT(q);
+                if (t == (u16)tokLParen || t == (u16)tokLBracket) d = d + (i32)1;
+                else if (t == (u16)tokRParen || t == (u16)tokRBracket) d = d - (i32)1;
+                else if (d == (i32)0 && (t == (u16)tokDotDot || t == (u16)tokEllipsis)) {
+                    rg = q;
+                    incl = t == (u16)tokEllipsis;
+                    break;
+                }
+            }
+        }
+        u32 bo = fc + (u32)1;
+        u32 bc = rg != (u32)0 && scT(bo) == (u16)tokLBrace ? scClose(bo) : (u32)0;
+        if (rg == (u32)0 || rg == f + (u32)5 || rg + (u32)1 == fc || bc == (u32)0 || bc + (u32)1 != be) {
+            scFail(shape, st, s0, s1);
+            return false;
+        }
+        String* ity = scV(f + (u32)2);
+        String* iv = scV(f + (u32)3);
+        // acc: a local of an integer or floating type.
+        u32 dd = (u32)0;
+        String* aty = blkTyOf(blkLookup(acc, &dd));
+        bool isFloat = aty != (String*)0 && (Parser._same(aty, "float") || Parser._same(aty, "double"));
+        if (aty == (String*)0 || (!isFloat && !Parser.scIntType(aty))) {
+            String* m = String.withCString("':scan' wants '");
+            m.append(acc);
+            m.appendCString("' to be a local variable of an integer or floating type");
+            scFail(m, st, s0, s1);
+            return false;
+        }
+        if (isFloat && !Parser._same(op, "+")) {
+            scFail(String.withCString("a floating-point ':scan' takes only +"), st, s0, s1);
+            return false;
+        }
+        // The body: acc updated and stored only.
+        Array* outs = new Array();
+        u32 updates = (u32)0;
+        for (u32 q = bo + (u32)1; q < bc; q = q + (u32)1) {
+            u16 t = scT(q);
+            if (t == (u16)tokBreak || t == (u16)tokReturn || t == (u16)tokGoto) {
+                scFail(String.withCString("a ':scan' loop has no break, return or goto"), (Token*)_tokens.get(q), s0, s1);
+                return false;
+            }
+            if (t != (u16)tokIdentifier || !scV(q).equals(acc)) continue;
+            u16 pv = scT(q - (u32)1);
+            if (pv == (u16)tokDot || pv == (u16)tokArrow) continue;
+            // a[i] = acc;
+            if (q >= bo + (u32)6 && pv == (u16)tokAssign && scT(q - (u32)2) == (u16)tokRBracket
+                && scT(q - (u32)3) == (u16)tokIdentifier && scV(q - (u32)3).equals(iv)
+                && scT(q - (u32)4) == (u16)tokLBracket && scT(q - (u32)5) == (u16)tokIdentifier
+                && scT(q + (u32)1) == (u16)tokSemicolon && scStmtStart(q - (u32)6, bo)) {
+                bool seen = false;
+                for (u32 j = (u32)0; j < outs.count(); j = j + (u32)1)
+                    if (((String*)outs.get(j)).equals(scV(q - (u32)5))) seen = true;
+                if (!seen) outs.add((Object*)scV(q - (u32)5));
+                q = q + (u32)1;
+                continue;
+            }
+            u32 e = (u32)0;
+            if (scStmtStart(q - (u32)1, bo)) {
+                u16 t1 = scT(q + (u32)1);
+                bool opAssign = (Parser._same(op, "+") && t1 == (u16)tokPlusAssign) || (Parser._same(op, "|") && t1 == (u16)tokPipeAssign)
+                    || (Parser._same(op, "&") && t1 == (u16)tokAmpAssign) || (Parser._same(op, "^") && t1 == (u16)tokCaretAssign);
+                if (opAssign)
+                    e = scExprEnd(q + (u32)2, bc, acc);
+                else if (Parser._same(op, "+") && t1 == (u16)tokPlusPlus && scT(q + (u32)2) == (u16)tokSemicolon)
+                    e = q + (u32)2;
+                else if (t1 == (u16)tokAssign && scT(q + (u32)2) == (u16)tokIdentifier && scV(q + (u32)2).equals(acc)
+                         && !Parser._same(op, "min") && !Parser._same(op, "max")) {
+                    u16 t3 = scT(q + (u32)3);
+                    bool same = (Parser._same(op, "+") && t3 == (u16)tokPlus) || (Parser._same(op, "|") && t3 == (u16)tokPipe)
+                        || (Parser._same(op, "&") && t3 == (u16)tokAmpersand) || (Parser._same(op, "^") && t3 == (u16)tokCaret);
+                    if (same) e = scExprEnd(q + (u32)4, bc, acc);
+                }
+            }
+            // ++acc;
+            if (e == (u32)0 && Parser._same(op, "+") && pv == (u16)tokPlusPlus && scStmtStart(q - (u32)2, bo)
+                && scT(q + (u32)1) == (u16)tokSemicolon)
+                e = q + (u32)1;
+            // if (E < acc) acc = E;   (min; > for max)
+            if (e == (u32)0 && (Parser._same(op, "min") || Parser._same(op, "max"))
+                && pv == (Parser._same(op, "min") ? (u16)tokLess : (u16)tokGreater)
+                && scT(q + (u32)1) == (u16)tokRParen && scT(q + (u32)2) == (u16)tokIdentifier && scV(q + (u32)2).equals(acc)
+                && scT(q + (u32)3) == (u16)tokAssign) {
+                u32 p = (u32)0;
+                for (u32 j = q - (u32)2; j > bo; j = j - (u32)1)
+                    if (scT(j) == (u16)tokLParen && scClose(j) == q + (u32)1) { p = j; break; }
+                u32 e2 = scExprEnd(q + (u32)4, bc, acc);
+                if (p != (u32)0 && scT(p - (u32)1) == (u16)tokIf && scStmtStart(p - (u32)2, bo) && e2 != (u32)0
+                    && q - (u32)1 - (p + (u32)1) == e2 - (q + (u32)4) && q - (u32)1 > p + (u32)1
+                    && scSameToks(p + (u32)1, q + (u32)4, e2 - (q + (u32)4))) {
+                    bool clean = true;
+                    for (u32 j = p + (u32)1; j < q - (u32)1; j = j + (u32)1)
+                        if (scT(j) == (u16)tokIdentifier && scV(j).equals(acc)) clean = false;
+                    if (clean) e = e2;
+                }
+            }
+            if (e == (u32)0) {
+                String* m = String.withCString("in a ':scan' loop '");
+                m.append(acc);
+                m.appendCString("' may only be updated (");
+                m.append(acc);
+                if (Parser._same(op, "min") || Parser._same(op, "max")) {
+                    m.appendFormat(": if (e %s %s) %s = e;", Parser._same(op, "min") ? "<" : ">", acc.cString(), acc.cString());
+                } else {
+                    m.appendFormat(" %s= e", op.cString());
+                }
+                m.appendCString(") and stored (a[i] = ");
+                m.append(acc);
+                m.appendCString(";)");
+                scFail(m, (Token*)_tokens.get(q), s0, s1);
+                return false;
+            }
+            updates = updates + (u32)1;
+            q = e;
+        }
+        if (updates == (u32)0 || outs.count() == (u32)0) {
+            String* m = String.withCString(updates == (u32)0 ? "a ':scan' loop updates its variable" : "a ':scan' loop stores its running value (a[i] = ");
+            if (updates != (u32)0) { m.append(acc); m.appendCString(";); with no store it is a :reduce"); }
+            scFail(m, st, s0, s1);
+            return false;
+        }
+        // The output arrays: used only by those stores.
+        for (u32 q = bo + (u32)1; q < bc; q = q + (u32)1) {
+            if (scT(q) != (u16)tokIdentifier) continue;
+            bool isOut = false;
+            for (u32 j = (u32)0; j < outs.count(); j = j + (u32)1)
+                if (((String*)outs.get(j)).equals(scV(q))) isOut = true;
+            if (!isOut || scT(q - (u32)1) == (u16)tokDot || scT(q - (u32)1) == (u16)tokArrow) continue;
+            if (scT(q + (u32)1) == (u16)tokLBracket && scT(q + (u32)2) == (u16)tokIdentifier && scV(q + (u32)2).equals(iv)
+                && scT(q + (u32)3) == (u16)tokRBracket && scT(q + (u32)4) == (u16)tokAssign && scT(q + (u32)5) == (u16)tokIdentifier
+                && scV(q + (u32)5).equals(acc) && scT(q + (u32)6) == (u16)tokSemicolon)
+                continue;
+            String* m = String.withCString("a ':scan' loop's output array '");
+            m.append(scV(q));
+            m.appendCString("' is only stored, by ");
+            m.append(scV(q));
+            m.appendCString("[i] = ");
+            m.append(acc);
+            m.appendCString(";");
+            scFail(m, (Token*)_tokens.get(q), s0, s1);
+            return false;
+        }
+        // The goal: the block's own :goal, else the inherited one.
+        u32 inherited = _goalNow != (u32)0 ? _goalNow : _goalDefault;
+        bool accuracy = inherited == (u32)2;
+        for (u32 j = (u32)0; j < goal.count(); j = j + (u32)1) {
+            Token* g = (Token*)goal.get(j);
+            if (g.type() == (u16)tokIdentifier && Parser._same(g.value(), "accuracy")) accuracy = true;
+            if (g.type() == (u16)tokIdentifier && Parser._same(g.value(), "speed")) accuracy = false;
+        }
+        Array* out = new Array();
+        if (isFloat && accuracy) {
+            // Serial: the loop as written, in a block of its own.
+            out.add((Object*)parSynTok((u16)tokLBrace, String.withCString("{"), pt));
+            out.addAll(_tokens.subarray(f, be - f));
+            out.add((Object*)parSynTok((u16)tokRBrace, String.withCString("}"), pt));
+            _tokens.removeRange(at, be + (u32)1 - at);
+            _tokens.insertAll(at, out);
+            return true;
+        }
+        _scanSeq = _scanSeq + (u32)1;
+        u32 n = _scanSeq;
+        u8* T = ity.cString();
+        u8* A = aty.cString();
+        String* src = new String();
+        src.appendFormat("{ %s __xs_a%u = (__XC_SCAN_A__); %s __xs_e%u = (__XC_SCAN_B__)%s;\n", T, n, T, n, incl ? " + 1" : "");
+        src.appendFormat("u64 __xs_n%u = __xs_e%u > __xs_a%u ? (u64)(__xs_e%u - __xs_a%u) : (u64)0;\n", n, n, n, n, n);
+        src.appendFormat("%s __xs_t%u[256];\n", A, n);
+        String* lohi = new String();
+        lohi.appendFormat("%s __xs_lo = __xs_a%u + (%s)(__xs_n%u * (u64)__xs_c / (u64)256); ", T, n, T, n);
+        lohi.appendFormat("%s __xs_hi = __xs_a%u + (%s)(__xs_n%u * (u64)(__xs_c + (u32)1) / (u64)256);\n", T, n, T, n);
+        src.appendFormat("par %s :device(cpu) :__scanpass __XC_SCAN_GOAL__ { for (u32 __xs_c in 0..256) {\n", name != (String*)0 ? name.cString() : "");
+        src.append(lohi);
+        src.appendFormat("%s __xs_s = %s;\n", A, Parser.scIdentity(op, aty).cString());
+        src.appendFormat("for (%s %s in __xs_lo..__xs_hi) { __XC_SCAN_BODY__ }\n", T, iv.cString());
+        src.appendFormat("__xs_t%u[__xs_c] = __xs_s; } }\n", n);
+        src.appendFormat("%s __xs_r%u = %s;\n", A, n, acc.cString());
+        String* rn = new String();
+        rn.appendFormat("__xs_r%u", n);
+        src.appendFormat("for (u32 __xs_c in 0..256) { %s __xs_v = __xs_t%u[__xs_c]; __xs_t%u[__xs_c] = __xs_r%u; %s }\n",
+                         A, n, n, n, Parser.scCombine(op, rn, String.withCString("__xs_v")).cString());
+        String* name2 = new String();
+        if (name != (String*)0) { name2.append(name); name2.appendCString("_offsets"); }
+        src.appendFormat("par %s :device(cpu) :__scanpass __XC_SCAN_GOAL__ { for (u32 __xs_c in 0..256) {\n", name2.cString());
+        src.append(lohi);
+        src.appendFormat("%s __xs_o = __xs_t%u[__xs_c];\n", A, n);
+        src.appendFormat("for (%s %s in __xs_lo..__xs_hi) {", T, iv.cString());
+        for (u32 j = (u32)0; j < outs.count(); j = j + (u32)1) {
+            u8* X = ((String*)outs.get(j)).cString();
+            if (Parser._same(op, "min") || Parser._same(op, "max"))
+                src.appendFormat(" if (__xs_o %s (%s)%s[%s]) %s[%s] = __xs_o;", Parser._same(op, "min") ? "<" : ">", A, X, iv.cString(), X, iv.cString());
+            else
+                src.appendFormat(" %s[%s] = (%s)(__xs_o %s (%s)%s[%s]);", X, iv.cString(), A, op.cString(), A, X, iv.cString());
+        }
+        src.appendCString(" } } }\n");
+        src.appendFormat("%s = __xs_r%u; }\n", acc.cString(), n);
+        // Lex it, then put the user's own tokens in at the markers, and give
+        // every token the `par`'s position.
+        Lexer* lx = Lexer.with(src, String.withCString("<scan>"));
+        Array* gen = lx.tokenise();
+        for (u32 j = (u32)0; j < gen.count(); j = j + (u32)1) {
+            Token* g = (Token*)gen.get(j);
+            if (g.type() == (u16)tokEOF) break;
+            if (g.type() == (u16)tokIdentifier && Parser._same(g.value(), "__XC_SCAN_A__")) {
+                out.addAll(_tokens.subarray(f + (u32)5, rg - (f + (u32)5)));
+                continue;
+            }
+            if (g.type() == (u16)tokIdentifier && Parser._same(g.value(), "__XC_SCAN_B__")) {
+                out.addAll(_tokens.subarray(rg + (u32)1, fc - (rg + (u32)1)));
+                continue;
+            }
+            if (g.type() == (u16)tokIdentifier && Parser._same(g.value(), "__XC_SCAN_GOAL__")) {
+                out.addAll(goal);
+                continue;
+            }
+            if (g.type() == (u16)tokIdentifier && Parser._same(g.value(), "__XC_SCAN_BODY__")) {
+                for (u32 q = bo + (u32)1; q < bc; q = q + (u32)1) {
+                    Token* b = (Token*)_tokens.get(q);
+                    u16 pv = scT(q - (u32)1);
+                    if (b.type() == (u16)tokIdentifier && b.value().equals(acc) && pv != (u16)tokDot && pv != (u16)tokArrow) {
+                        Token* r = Token.with((u16)tokIdentifier, String.withCString("__xs_s"), b.line(), b.col());
+                        r.setFileId(b.fileId());
+                        out.add((Object*)r);
+                    }
+                    else out.add((Object*)b);
+                }
+                continue;
+            }
+            Token* r = Token.withInt(g.type(), g.value(), g.intValue(), pt.line(), pt.col());
+            r.setFileId(pt.fileId());
+            out.add((Object*)r);
+        }
+        _tokens.removeRange(at, be + (u32)1 - at);
+        _tokens.insertAll(at, out);
+        return true;
+    }
+
     Node* parsePar(void)
     {
+        // :scan (#144): rewritten into plain blocks first.
+        if (parScanRewrite()) return parseStatement();
         _parTok = cur();
         Token* parAt = _parTok; // a nested `par` in the body moves _parTok
         advance(); // 'par'
@@ -3568,6 +3987,7 @@ class Parser
         i32 device = (i32)-1;   // :device(…): ParDevice's code, auto 0; -1 when absent
         // :constant(a, b): captured arrays the GPU reads as constants.
         Array* constants = new Array();
+        bool scanPass = false;
         while (check((u16)tokColon)) {
             advance();
             if (!check((u16)tokIdentifier)) {
@@ -3663,10 +4083,29 @@ class Parser
                 expect((u16)tokRParen);
                 continue;
             }
+            // :__scanpass: a block a :scan was rewritten into (parScanRewrite);
+            // its chunks own disjoint slices.
+            if (dec.equals(String.withCString("__scanpass"))) {
+                scanPass = true;
+                continue;
+            }
+            // :scan(…) here: parScanRewrite has already said what is wrong.
+            if (dec.equals(String.withCString("scan"))) {
+                if (check((u16)tokLParen)) {
+                    i32 d = (i32)1;
+                    advance();
+                    while (d > (i32)0 && !check((u16)tokEOF)) {
+                        if (check((u16)tokLParen)) d = d + (i32)1;
+                        else if (check((u16)tokRParen)) d = d - (i32)1;
+                        advance();
+                    }
+                }
+                continue;
+            }
             if (!dec.equals(String.withCString("reduce"))) {
                 String* m = String.withCString("'par' has no decorator ':");
                 m.append(dec);
-                m.appendCString("' (it takes :reduce(op var), :grid(w, h[, d]), :goal(speed|accuracy), :constant(a, b) and :device(cpu|gpu|gpus|all|auto))");
+                m.appendCString("' (it takes :reduce(op var), :scan(op var), :grid(w, h[, d]), :goal(speed|accuracy), :constant(a, b) and :device(cpu|gpu|gpus|all|auto))");
                 _error(m);
                 return (Node*)0;
             }
@@ -3733,6 +4172,8 @@ class Parser
             frame.set((Hashable*)String.withCString("fast"), (Object*)Number.with((u32)1));
         if (constants.count() > (u32)0)
             frame.set((Hashable*)String.withCString("constant"), (Object*)constants);
+        if (scanPass)
+            frame.set((Hashable*)String.withCString("scanpass"), (Object*)Number.with((u32)1));
         if (device > (i32)0)
             frame.set((Hashable*)String.withCString("device"), (Object*)Number.with((u32)device));
         _blkFrames.add((Object*)frame);
@@ -5138,6 +5579,10 @@ class Parser
             // refused a written one.
             if (frame.get((Hashable*)String.withCString("auto")) != 0)
                 tag.appendCString("auto;");
+            // …and `scan;` for a pass of a rewritten :scan (#144): par-check
+            // takes its chunks as apart, and it stays on the CPU.
+            if (frame.get((Hashable*)String.withCString("scanpass")) != 0)
+                tag.appendCString("scan;");
             // An array reduction is `a<field>=<op>;`: it has no GPU form yet,
             // and par-check keeps it on the CPU.
             for (u32 i = (u32)0; i < reds.count(); i = i + (u32)1) {

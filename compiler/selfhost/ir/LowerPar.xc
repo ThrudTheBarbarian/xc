@@ -71,6 +71,9 @@
                 if (r.byteLength() > (u32)0)
                     why = r;
                 }
+            // A :scan pass: its chunks own disjoint slices (#144).
+            if (why == (String*)0 && parIsScanBlock(cls.substringBytes((u32)8, cls.byteLength() - (u32)8)))
+                continue;
             if (why == (String*)0)
                 {
                 // §4: the work items must not touch each other's data.
@@ -318,6 +321,47 @@
                 if (((Number*)sym.bytes().get(at + q)).asU32() != (u32)autoWord.byteAt(q))
                     return false;
             return true;
+            }
+        return false;
+        }
+    // A pass of a rewritten :scan (#144): its placeholder's words hold
+    // `scan;`. Its chunks own disjoint slices of what it writes, so the
+    // dependence test does not apply, and it has no GPU form. Mirrors the
+    // reference's isScanBlock.
+    final bool parIsScanBlock(String* n)
+        {
+        String* plain = String.withCString("__XC_PAR_MSL_");
+        plain.append(n);
+        plain.appendCString("__");
+        String* fastTag = String.withCString("__XC_PAR_FAST_");
+        fastTag.append(n);
+        fastTag.appendCString("__");
+        for (u32 j = (u32)0; j < _m.syms().count(); j = j + (u32)1)
+            {
+            IRSymbol* sym = (IRSymbol*)_m.syms().get(j);
+            if (sym.kind() != (u8)SYM_STRINGLIT || sym.bytes() == (Array*)0)
+                continue;
+            String* tag = (String*)0;
+            if (parBytesHavePrefix(sym.bytes(), fastTag)) tag = fastTag;
+            else if (parBytesHavePrefix(sym.bytes(), plain)) tag = plain;
+            if (tag == (String*)0)
+                continue;
+            String* word = new String();
+            for (u32 q = tag.byteLength(); q < sym.bytes().count(); q = q + (u32)1)
+                {
+                u8 c = (u8)((Number*)sym.bytes().get(q)).asU32();
+                if (c == (u8)0)
+                    break;
+                if (c == (u8)';')
+                    {
+                    if (word.equals(String.withCString("scan")))
+                        return true;
+                    word = new String();
+                    }
+                else
+                    word.appendByte(c);
+                }
+            return false;
             }
         return false;
         }
@@ -2970,6 +3014,8 @@
         // CPU's threads. As the reference.
         if (!serialBlock && lost == (String*)0 && _mArrRed.count() > (u32)0)
             lostWhy = String.withCString("it has an array reduction (:reduce(op a[])), which has no GPU version yet");
+        if (!serialBlock && lost == (String*)0 && lostWhy == (String*)0 && parIsScanBlock(fcls.substringBytes((u32)8, fcls.byteLength() - (u32)8)))
+            lostWhy = String.withCString("it is a pass of a :scan block, which has no GPU version yet");
         bool noForms = serialBlock || lostWhy != (String*)0;
         _mWhy = lostWhy;
         String* mslText = _parMetal && !noForms ? parMslK(f, kfUse, kmod) : (String*)0;
@@ -3082,7 +3128,10 @@
             String* w = String.withCString(lifted ? "this loop runs on the CPU only (--par-style), because "
                                                   : "this 'par' block runs on the CPU only, because ");
             w.append(_mWhy != (String*)0 ? _mWhy : String.withCString("its GPU version cannot express something it uses yet"));
-            self.warnAtNode(String.withCString(lifted ? "par-auto" : "par-gpu"), w, (Node*)_classDecls.get((Hashable*)cls));
+            // A :scan's passes are the compiler's, not written blocks: they
+            // say nothing (#144).
+            if (!parIsScanBlock(cls.substringBytes((u32)8, cls.byteLength() - (u32)8)))
+                self.warnAtNode(String.withCString(lifted ? "par-auto" : "par-gpu"), w, (Node*)_classDecls.get((Hashable*)cls));
             }
         // No form to run, but the run still checks the block's arrays against
         // each other (ParDevice.bufferOverlap) from the header line: a block
