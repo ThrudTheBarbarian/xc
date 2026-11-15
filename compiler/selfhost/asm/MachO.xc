@@ -1569,6 +1569,10 @@ class MachOSha256
         // executable itself.
         DwarfWriter* dwarf = DwarfWriter.pending();
         DwarfWriter.setPending((DwarfWriter*)0);
+        // Frame records alone (C/C++ input without -g) are for the unwind
+        // tables, not debug information.
+        if (dwarf != (DwarfWriter*)0 && !dwarf.hasRows())
+            dwarf = (DwarfWriter*)0;
         u32 dwarfOff = dataSegEnd;
         u32 dwarfSize = (u32)0;
         if (dwarf != (DwarfWriter*)0)

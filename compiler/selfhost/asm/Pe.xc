@@ -980,8 +980,11 @@ class Pe
         // named through the COFF string table (".debug_abbrev" does not fit in
         // eight bytes).
         _dwarf = _isDll ? (DwarfWriter*)0 : DwarfWriter.pending();
+        // Frame records alone (the unwind tables' saves) are not -g.
         if (_dwarf != (DwarfWriter*)0)
             DwarfWriter.setPending((DwarfWriter*)0);
+        if (_dwarf != (DwarfWriter*)0 && !_dwarf.hasRows())
+            _dwarf = (DwarfWriter*)0;
         _vtRun = data.length() > (u32)0 ? Pe.vtblRun(symbols) : (Array*)0;
         _nSect = (data.length() > (u32)0 ? (u32)3 : (u32)2) + (_vtRun != (Array*)0 ? (u32)1 : (u32)0)
                  + (_hasIface ? (u32)1 : (u32)0)

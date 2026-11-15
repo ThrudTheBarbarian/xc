@@ -3432,7 +3432,8 @@ class Arm64Asm
         }
 
         // -g: hand the line table to whichever writer places this text.
-        if (dwarf != (DwarfWriter*)0 && dwarf.hasRows()) DwarfWriter.setPending(dwarf);
+        // …and the unwind tables' frame records (C/C++ input), with or without.
+        if (dwarf != (DwarfWriter*)0 && (dwarf.hasRows() || dwarf.hasSaves())) DwarfWriter.setPending(dwarf);
 
         // The source lines are all consumed: pass 2 reads `insns`.
         lines = (Array*)0;

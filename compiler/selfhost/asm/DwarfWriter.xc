@@ -213,11 +213,17 @@ class DwarfWriter
         _frameSaves.add((Object*)String.withCString(""));
     }
 
-    // The registers the last frame set up saves (`.xc_saves`, C/C++ input).
+    // The registers the last frame set up saves (`.xc_saves`, C/C++ input),
+    // once: a function whose frame setup the code no longer has (a leaf the
+    // back end left frameless) still names its saves, and they belong to no
+    // setup, least of all the previous function's. Such a function needs no
+    // entry: the CIE's rules (the call frame is sp, the return address in
+    // its register) are its.
     void addSaves(String* list)
     {
-        if (_frameSaves.count() > (u32)0)
-            _frameSaves.set(_frameSaves.count() - (u32)1, (Object*)list);
+        u32 n = _frameSaves.count();
+        if (n > (u32)0 && ((String*)_frameSaves.get(n - (u32)1)).byteLength() == (u32)0)
+            _frameSaves.set(n - (u32)1, (Object*)list);
     }
 
     // True when any frame records its saves: the unwind tables are wanted.

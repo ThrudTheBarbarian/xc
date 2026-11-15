@@ -2257,6 +2257,9 @@ class ElfSharedInfo
         if (dwarf == (DwarfWriter*)0)
             return dwarf;
         DwarfWriter.setPending((DwarfWriter*)0);
+        // Frame records alone (the unwind tables' saves) are not -g.
+        if (!dwarf.hasRows())
+            return (DwarfWriter*)0;
         Array* names = new Array();
         Array* offs = new Array();
         DwarfWriter.functionsOf(symbols, dataSyms, String.withCString(""), textLen, names, offs);

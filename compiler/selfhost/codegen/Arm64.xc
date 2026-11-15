@@ -1094,6 +1094,10 @@ class Arm64
                 }
             }
         }
+        // C/C++ input without a line here (a wrapper xcc writes, a build
+        // without -g): the frame for the unwind tables all the same.
+        if (!haveLoc && gArm64EhTables)
+            _out.appendFormat("    .xc_frame %lu\n", _frame - _maxOutStack);
         if (haveLoc) {
             _out.appendFormat("    .loc %lu %lu %lu\n", lf + (u32)1, ll, lc);
             // -g: the frame, and each variable's slot, for the debug
@@ -1142,7 +1146,7 @@ class Arm64
         // C/C++ input: where each callee-saved register (and x29/x30) sits,
         // as offsets from the call frame (the caller's sp, sp + frame), for
         // the unwind tables. DWARF numbers: x0-x30 0-30, v0-v31 64-95.
-        if (gArm64EhTables && haveLoc) {
+        if (gArm64EhTables) {
             String* sv = String.withFormat("    .xc_saves 29:%ld 30:%ld", (i64)_maxOutStack - (i64)_frame,
                                            (i64)_maxOutStack + (i64)8 - (i64)_frame);
             for (u32 si = (u32)0; si < _savedRegs.count(); si = si + (u32)1) {
