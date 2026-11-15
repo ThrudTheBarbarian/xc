@@ -51,6 +51,9 @@ body may:
 - assign its own locals freely;
 - write the outer program's state only as a **reduction**: `acc += e`, `acc *= e`, `&=`,
   `|=`, `^=`, `acc++`, or a minimum or maximum written as `if (e < acc) acc = e;`;
+- or as a **running total**: one such variable (not `*=`) that the body also stores at
+  every element, `out[i] = acc;`, into arrays it uses for nothing else. That loop becomes a
+  [`:scan`](/compiler/language/par/#running-totals-scan) block;
 - not `return`, `goto` or `break` out of the loop, use varargs, or take an outer name's
   address.
 
@@ -79,6 +82,11 @@ where it must.
   including if-converted conditional updates and chains like `t = t + x1 + x2`. A float sum
   is reassociated only when [`:goal(speed)`](/compiler/language/par/#which-goal-applies)
   is asked for explicitly, so by default a sum gives the plain loop's result.
+  The exception is a running total: one accumulator, read in the loop only by unconditional
+  stores of it at the iteration's element of arrays the loop uses for nothing else. It runs
+  in two passes over 256 ordered slices: each slice from the operator's identity, then each
+  slice's offset (the earlier slices' totals) combined into what it stored. A range under
+  65536 items runs as the loop.
 - **Dependence analysis.** Each array index is reduced to an affine form `k·i + c`, or a
   symbolic one over captured integers, and every read is tested against every write to the
   same array with the **GCD test**. Pairs the compiler cannot settle become **run-time

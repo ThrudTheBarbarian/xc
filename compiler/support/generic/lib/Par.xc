@@ -336,6 +336,150 @@ class ParFnChunk : ParChunk
         c.mergeCtx(before.bytes(), c._ctx.bytes());
         memcpy((pointer)c._ctx.bytes(), (pointer)before.bytes(), (u64)before.length());
         }
+
+    // A running total (#272): the loop stores its accumulator at every
+    // element. Its block runs in two passes over 256 slices in order. The
+    // first runs each slice from the operator's identity (a copy, as for a
+    // reduction), which stores the slice's own running values and leaves its
+    // total in the copy's record; the totals are folded in order from the
+    // value before the loop, which gives each slice its offset; the second
+    // pass combines each slice's offset into what it stored (fixCtx). A short
+    // range, or one the call site found overlapping, runs as the loop.
+    void fixCtx(u8* off, i64 from, i64 to)
+        {
+        }
+    static void runScanOn(ParFnChunk* c, i64 from, i64 to, bool serial)
+        {
+        if (serial || to - from < (i64)65536)
+            {
+            ParFnChunk.runOn(c, from, to, true);
+            return;
+            }
+        u32 k = (u32)256;
+        Array* parts = new Array();
+        for (u32 j = (u32)0; j < k; j = j + (u32)1)
+            {
+            ParFnChunk* p = (ParFnChunk*)c.copyChunk();
+            p.lo = from + (to - from) * (i64)j / (i64)k;
+            p.hi = from + (to - from) * (i64)(j + (u32)1) / (i64)k;
+            parts.add((Object*)p);
+            }
+        ParScanPass* one = ParScanPass.with(c, parts, (Array*)0);
+        Par.run((ParChunk*)one, (i64)0, (i64)k);
+        Data* run = Data.withData(c._ctx);
+        Array* offs = new Array();
+        for (u32 j = (u32)0; j < k; j = j + (u32)1)
+            {
+            offs.add((Object*)Data.withData(run));
+            c.mergeCtx(run.bytes(), ((ParFnChunk*)parts.get(j))._ctx.bytes());
+            }
+        ParScanPass* two = ParScanPass.with(c, parts, offs);
+        Par.run((ParChunk*)two, (i64)0, (i64)k);
+        memcpy((pointer)c._ctx.bytes(), (pointer)run.bytes(), (u64)run.length());
+        }
+    // One stored array's slice [from, to) combined with the slice's offset,
+    // for a block's fixCtx. code: bits 0-15 the array pointer's byte offset
+    // in the record, 16-31 the accumulator's; 32-33 the element's size as
+    // log2, 34 signed, 35 float; 36-37 the accumulator's size as log2, 38
+    // signed, 39 float; 40-43 the operator (1 +, 2 |, 3 &, 4 ^, 5 min, 6 max).
+    static void fixRange(u8* off, i64 from, i64 to, i64 code)
+        {
+        u8* base = *(u8**)(pointer)(off + (code & (i64)65535));
+        u8* ap = off + ((code >> (i64)16) & (i64)65535);
+        u32 esz = (u32)1 << (u32)((code >> (i64)32) & (i64)3);
+        bool esg = ((code >> (i64)34) & (i64)1) != (i64)0;
+        bool efl = ((code >> (i64)35) & (i64)1) != (i64)0;
+        u32 asz = (u32)1 << (u32)((code >> (i64)36) & (i64)3);
+        bool asg = ((code >> (i64)38) & (i64)1) != (i64)0;
+        bool afl = ((code >> (i64)39) & (i64)1) != (i64)0;
+        u32 op = (u32)((code >> (i64)40) & (i64)15);
+        if (efl)
+            {
+            // + only, the accumulator of the element's type.
+            if (esz == (u32)4)
+                {
+                float o = *(float*)(pointer)ap;
+                float* e = (float*)(pointer)base;
+                for (i64 i = from; i < to; i = i + (i64)1)
+                    e[i] = o + e[i];
+                }
+            else
+                {
+                double o = *(double*)(pointer)ap;
+                double* e = (double*)(pointer)base;
+                for (i64 i = from; i < to; i = i + (i64)1)
+                    e[i] = o + e[i];
+                }
+            return;
+            }
+        // The accumulator, widened by its own signedness.
+        i64 a = (i64)0;
+        if (asz == (u32)1) a = asg ? (i64)*(i8*)(pointer)ap : (i64)*(u8*)(pointer)ap;
+        else if (asz == (u32)2) a = asg ? (i64)*(i16*)(pointer)ap : (i64)*(u16*)(pointer)ap;
+        else if (asz == (u32)4) a = asg ? (i64)*(i32*)(pointer)ap : (i64)*(u32*)(pointer)ap;
+        else a = *(i64*)(pointer)ap;
+        for (i64 i = from; i < to; i = i + (i64)1)
+            {
+            u8* q = base + i * (i64)esz;
+            i64 v = (i64)0;
+            if (esz == (u32)1) v = esg ? (i64)*(i8*)(pointer)q : (i64)*(u8*)(pointer)q;
+            else if (esz == (u32)2) v = esg ? (i64)*(i16*)(pointer)q : (i64)*(u16*)(pointer)q;
+            else if (esz == (u32)4) v = esg ? (i64)*(i32*)(pointer)q : (i64)*(u32*)(pointer)q;
+            else v = *(i64*)(pointer)q;
+            i64 r = v;
+            if (op == (u32)1) r = a + v;
+            else if (op == (u32)2) r = a | v;
+            else if (op == (u32)3) r = a & v;
+            else if (op == (u32)4) r = a ^ v;
+            else if (op == (u32)5) r = (esg ? a < v : (u64)a < (u64)v) ? a : v;
+            else if (op == (u32)6) r = (esg ? a > v : (u64)a > (u64)v) ? a : v;
+            if (esz == (u32)1) *(u8*)(pointer)q = (u8)r;
+            else if (esz == (u32)2) *(u16*)(pointer)q = (u16)r;
+            else if (esz == (u32)4) *(u32*)(pointer)q = (u32)r;
+            else *(i64*)(pointer)q = r;
+            }
+        }
+    }
+
+// A pass of a running total's run (ParFnChunk.runScanOn): work item j is
+// slice j. Without offsets it runs the slices (each its own copy); with them
+// it combines each slice's offset into what the slice stored.
+class ParScanPass : ParChunk
+    {
+    ParFnChunk* _c;
+    Array* _parts;
+    Array* _offs;
+
+    static ParScanPass* with(ParFnChunk* c, Array* parts, Array* offs)
+        {
+        ParScanPass* s = new ParScanPass();
+        s._c = c;
+        s._parts = parts;
+        s._offs = offs;
+        return s;
+        }
+    void run(void)
+        {
+        for (i64 j = lo; j < hi; j = j + (i64)1)
+            {
+            ParFnChunk* p = (ParFnChunk*)_parts.get((u32)j);
+            if (_offs == (Array*)0)
+                p.run();
+            else
+                _c.fixCtx(((Data*)_offs.get((u32)j)).bytes(), p.lo, p.hi);
+            }
+        }
+    ParChunk* copyChunk(void)
+        {
+        return (ParChunk*)ParScanPass.with(_c, _parts, _offs);
+        }
+    void merge(ParChunk* other)
+        {
+        }
+    u8* parName(void)
+        {
+        return _c.parName();
+        }
     }
 
 // Never made. A second class that overrides the three per-block methods, so
@@ -367,6 +511,9 @@ class ParFnChunkBase : ParFnChunk
         {
         }
     void mergeCtx(u8* into, u8* from)
+        {
+        }
+    void fixCtx(u8* off, i64 from, i64 to)
         {
         }
     }

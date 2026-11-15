@@ -1682,6 +1682,8 @@ class BeFact : Object
     Array* _ppGHiIv;
     Array* _ppGHiC;
     Array* _ppBodyBlocks;  // IRBlock@: the loop being judged's
+    Array* _ppScanSt;      // IRInsn@: a running total's stores (#272), or 0
+    Array* _ppScanAt;      // Number@: their arrays' capture positions
     IRFunc* _ppFn;         // and its function
     Array* _ppRangeA;      // Number@: a stored array...
     Array* _ppRangeB;      // Number@: ...a read-only one read away from [i] within bounds: a range test
