@@ -7091,13 +7091,24 @@ class Arm64
     // vanishes: rewrite that consumer to read src directly. Only when the
     // scratch is dead afterwards — it is overwritten there, or nothing reads it
     // again before a rewrite or a branch.
+    //
+    // reach[k]: the furthest line candidate k read, for the candidates already
+    // tried in this pass (#333; x86-64's bug 621). A rewrite at line i removes
+    // line i and changes line i + 1, so a candidate that never read as far as
+    // i fails again exactly as before: the scan resumes at the first one that
+    // did, instead of at line 0. Same rewrites, in the same order.
+    u32 _cpFar;
     String* peepholeCopyProp(String* text)
     {
         Array* lines = linesOf(text);
+        Array* reach = new Array();
+        u32 start = (u32)0;
         bool again = true;
         while (again) {
             again = false;
-            for (u32 i = (u32)0; i + (u32)1 < lines.count() && !again; i = i + (u32)1) {
+            for (u32 i = start; i + (u32)1 < lines.count() && !again; i = i + (u32)1) {
+                while (reach.count() <= i) reach.add((Object*)Number.withU32((u32)0));
+                reach.set(i, (Object*)Number.withU32(i));
                 String* mm = (String*)0;
                 Array* mo = parseAsmLine((String*)lines.get(i));
                 mm = takeMnem(mo);
@@ -7113,6 +7124,7 @@ class Arm64
                  || src.indexOfByte((u8)' ') != (u32)$FFFF_FFFF) continue;
 
                 String* cm = (String*)0;
+                reach.set(i, (Object*)Number.withU32(i + (u32)1));
                 Array* co = parseAsmLine((String*)lines.get(i + (u32)1));
                 cm = takeMnem(co);
                 if (co == (Array*)0 || co.count() == (u32)0) continue;
@@ -7177,7 +7189,10 @@ class Arm64
                         }
                     }
                 if (!used) continue;
-                if (!scratchDeadAfter(lines, i, dst, cm, co)) continue;
+                _cpFar = i + (u32)1;
+                bool dead = scratchDeadAfter(lines, i, dst, cm, co);
+                reach.set(i, (Object*)Number.withU32(_cpFar));
+                if (!dead) continue;
                 // Rebuild the consumer, keeping its indentation, and drop the
                 // move.
                 String* cons = (String*)lines.get(i + (u32)1);
@@ -7189,16 +7204,22 @@ class Arm64
                 }
                 lines.set(i + (u32)1, (Object*)rebuilt);
                 lines.removeAt(i);
+                u32 from = (u32)0;
+                while (((Number*)reach.get(from)).asU32() < i) from = from + (u32)1;
+                while (reach.count() > from) reach.removeAt(reach.count() - (u32)1);
+                start = from;
                 again = true;
             }
         }
         return joinLines(lines);
     }
 
-    static bool scratchDeadAfter(Array* lines, u32 i, String* dst, String* cm, Array* co)
+    // Sets _cpFar to the furthest line it read.
+    bool scratchDeadAfter(Array* lines, u32 i, String* dst, String* cm, Array* co)
     {
         if (mnemWritesReg0(cm) && ((String*)co.get((u32)0)).equals(dst)) return true;
         for (u32 j = i + (u32)2; j < lines.count(); j = j + (u32)1) {
+            if (j > _cpFar) _cpFar = j;
             String* line = (String*)lines.get(j);
             String* t = line.trimmed();
             if (t.byteLength() == (u32)0) continue;
