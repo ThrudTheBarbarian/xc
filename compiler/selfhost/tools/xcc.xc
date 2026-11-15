@@ -88,6 +88,10 @@
 // A C program's own output while xcc's part is compiled to an object (the
 // C path): set, the object is linked with clang's into it (cSplitLink).
 String* gCSplitOut;
+// --c-pair (internal: a several-source build on win64, whose COFF link has no
+// relocatable form): -c of a C/C++ file writes its two objects, xcc's at the
+// output and clang's beside it (<name>.rest.o), for the one link to take both.
+bool gCSplitPair;
 bool gHalfXcArgs;       // the C path: xcc's half has a par block (--xc-* options, #148)
 // -c of a C file: cSplitLink makes one relocatable object, not a program.
 bool gCSplitRelocatable;
@@ -2345,6 +2349,7 @@ void emitWin64(DriverOptions* d, IRModule* mod)
             Process.exit((i32)1); return;
         }
         Pe* pw = new Pe();
+        pw.setDirectives(objectDepLibs(d));
         Data* od = pw.objectFromText(oa.text(), oa.data(), oa.symbols(), oa.dataSyms(),
                                      oa.globalSyms(), oa.fixups());
         if (pw.failed() || od == (Data*)0) {
@@ -4500,8 +4505,12 @@ bool addObjectDepLibs(DriverOptions* d)
     for (u32 i = (u32)0; i < d.objectInputs().count(); i = i + (u32)1) {
         String* op = (String*)d.objectInputs().get(i);
         if (!op.hasSuffix(String.withCString(".o"))) continue;
-        ElfObject* o = ElfObject.parse(Files.readData(op));
-        Array* dl = o.depLibs();
+        Data* od = Files.readData(op);
+        Array* dl = (Array*)0;
+        if (d.arch().equals(String.withCString("win64")))
+            dl = CoffObject.defaultLibsOf(od);
+        else
+            dl = ElfObject.parse(od).depLibs();
         for (u32 k = (u32)0; dl != (Array*)0 && k < dl.count(); k = k + (u32)1) {
             String* nm = (String*)dl.get(k);
             any = true;
@@ -4898,6 +4907,21 @@ String* iosRuntimeSource(DriverOptions* d)
 void cSplitLink(DriverOptions* d)
 {
     String* xo = d.fe().output();
+    if (gCSplitRelocatable && gCSplitPair) {
+        // win64's two objects, side by side (--c-pair).
+        String* out = gCSplitOut;
+        gCSplitOut = (String*)0;
+        String* rest = stripExtension(out);
+        rest.appendCString(".rest.o");
+        Data* xd = Files.readData(xo);
+        Data* rd = Files.readData(cRestObject());
+        if (xd == (Data*)0 || rd == (Data*)0 || !Files.writeData(out, xd) || !Files.writeData(rest, rd)) {
+            Stdio.printf("xcc: error: cannot write '%s' and '%s'\n", out.cString(), rest.cString());
+            Process.exit((i32)1); return;
+        }
+        d.fe().setOutput(out);
+        return;
+    }
     if (gCSplitRelocatable) {
         String* out = gCSplitOut;
         gCSplitOut = (String*)0;
@@ -5019,10 +5043,16 @@ void linkObjects(DriverOptions* d)
         emitModule(d, mod);
         return;
     }
-    // ELF objects that say what they link (a C/C++ object's .deplibs).
+    // Objects that say what they link (a C/C++ object's ELF .deplibs, COFF
+    // .drectve).
     bool askers = false;
-    if (d.targetRow() != (TargetRow*)0 && d.targetRow().exeFormat().hasPrefix(String.withCString("elf")))
+    if ((d.targetRow() != (TargetRow*)0 && d.targetRow().exeFormat().hasPrefix(String.withCString("elf")))
+        || d.arch().equals(String.withCString("win64")))
         askers = addObjectDepLibs(d);
+    // win64: a C++ program's objects keep clang's SEH tables (.pdata/.xdata),
+    // as the one-step C path does.
+    if (askers && d.arch().equals(String.withCString("win64")))
+        CoffObject.setKeepUnwind(true);
     // A C/C++ program's objects: their frame tables gathered, as the C path's.
     if (askers) elfSetEhGather(true);
     if (d.targetRow() != (TargetRow*)0 && d.targetRow().exeFormat().equals(String.withCString("elf-pie"))) {
@@ -5140,11 +5170,17 @@ i32 multiSourceBuild(DriverOptions* d)
             argv.add((Object*)f);
         }
         argv.add((Object*)String.withCString("-c"));
+        // win64 has no relocatable COFF link: a C/C++ file's two objects.
+        if (!cOnly && d.arch().equals(String.withCString("win64")))
+            argv.add((Object*)String.withCString("--c-pair"));
         argv.add((Object*)String.withCString("-o"));
         argv.add((Object*)obj);
         argv.add((Object*)src);
         if (External.run(argv) != (i32)0) return (i32)1;
         objs.add((Object*)obj);
+        String* rest = stripExtension(obj);
+        rest.appendCString(".rest.o");
+        if (Files.exists(rest)) objs.add((Object*)rest);
     }
     if (cOnly) return (i32)0;
     Array* link = new Array();
@@ -5375,7 +5411,7 @@ void main(void)
         // win64's link has no relocatable form: there, build in one step.
         if (d.compileOnly() && !d.keepAsm())
             {
-            if (d.arch().equals(String.withCString("win64")))
+            if (d.arch().equals(String.withCString("win64")) && !gCSplitPair)
                 {
                 Stdio.printf("xcc: error: -c of a C file is not done for %s: build the program in one step\n",
                              crow != (TargetRow*)0 ? crow.name().cString() : d.arch().cString());
@@ -8081,6 +8117,10 @@ DriverOptions* parseDriverArgs(void)
         }
         if (a.equals(String.withCString("-du")) || a.equals(String.withCString("--dump-usage"))) {
             d.setDumpUsage(true);
+            i = i + (u32)1; continue;
+        }
+        if (a.equals(String.withCString("--c-pair"))) {
+            gCSplitPair = true;
             i = i + (u32)1; continue;
         }
         // An unrecognised flag is an ERROR, not something to skip. A driver that

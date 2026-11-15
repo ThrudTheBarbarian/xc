@@ -65,6 +65,19 @@ check() { # name, want
 check throw "1 5 3 7"
 check misc "42 21 9"
 check lift "1 7.000000"
+# Programs of several files, built in one command (each file's two objects,
+# --c-pair, and objects that ask for libc++ and keep clang's SEH tables):
+# three files with static helpers of one name, and two files each throwing
+# and catching, one exception crossing between them.
+multi() { # name, want, files...
+    n=$1; want=$2; shift 2
+    "$XC" -q -O3 -std=c++17 -A win64 -H . -o "$W/$n.exe" "$@" > "$W/$n.b" 2>&1 \
+        || { echo "FAIL cppwine: $n does not build"; grep -v 'warning\|In file\|^ *[0-9]* |\|^ *|' "$W/$n.b" | head -3; fail=1; return; }
+    got=$(XC_PAR=cpu timeout 60 wine "$W/$n.exe" 2>/dev/null | tr -d '\r')
+    [ "$got" = "$want" ] || { echo "FAIL cppwine: $n gives '$got', want '$want'"; fail=1; }
+}
+multi multifile "multi-file 7493500 1496500 main" tests/par/c-multi/main.cpp tests/par/c-multi/part.cpp tests/par/c-multi/csum.c
+multi ehmulti "m1,k-odd;m2,o20;c-three,k-odd;m4,o40;m5,k-odd;c-three,o60;escaped-negative" tests/par/c-ehmulti/main.cpp tests/par/c-ehmulti/other.cpp
 # The C++ corpus (tests/par/cpp/), each program against the mingw
 # toolchain's clang++ where it is there to build the reference.
 REF=${ROOT%/x86_64-w64-mingw32}/bin/x86_64-w64-mingw32-clang++

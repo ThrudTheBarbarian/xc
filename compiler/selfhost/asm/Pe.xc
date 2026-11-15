@@ -37,6 +37,7 @@
 class Pe
     {
     Data* _out;
+    Array* _directives; // String@: the libraries the next object asks its link for (.drectve)
     bool _failed;
     String* _why;
 
@@ -160,6 +161,13 @@ class Pe
             a.set(j, v);
             }
         }
+    // The libraries the next object asks its link for (`/DEFAULTLIB:c++`), as
+    // a .drectve section: a C/C++ object's. None, and the object is as before.
+    void setDirectives(Array* libs)
+        {
+        _directives = libs;
+        }
+
     Data* objectFromText(SectionBytes* text, SectionBytes* data, Map* symbols, Array* dataSyms,
                          Array* globalSyms, Array* fixups)
         {
@@ -262,11 +270,24 @@ class Pe
         u32 stsz = strtab.length();
         for (u32 b = (u32)0; b < (u32)4; b = b + (u32)1)
             strtab.setByteAt(b, (u8)((stsz >> (b * (u32)8)) & (u32)$FF));
-        u32 off = (u32)20 + (u32)2 * (u32)PE_SECT_HDR_SIZE;
+        // .drectve: the linker's directives, a third section when there are
+        // any (the symbols name sections 1 and 2 as before).
+        Data* drectve = new Data();
+        for (u32 i = (u32)0; _directives != (Array*)0 && i < _directives.count(); i = i + (u32)1)
+            {
+            String* dv = String.withFormat(" /DEFAULTLIB:%s", ((String*)_directives.get(i)).cString());
+            for (u32 b = (u32)0; b < dv.byteLength(); b = b + (u32)1)
+                drectve.appendByte(dv.byteAt(b));
+            }
+        _directives = (Array*)0;
+        u32 nsect = drectve.length() > (u32)0 ? (u32)3 : (u32)2;
+        u32 off = (u32)20 + nsect * (u32)PE_SECT_HDR_SIZE;
         u32 textOff = off;
         off = off + mtext.length();
         u32 dataOff = off;
         off = off + mdata.length();
+        u32 drOff = off;
+        off = off + drectve.length();
         u32 trelOff = off;
         off = off + textRel.length();
         u32 drelOff = off;
@@ -274,7 +295,7 @@ class Pe
         u32 symOff = off;
         _out = new Data();
         p16((u32)COFF_MACHINE_AMD64);
-        p16((u32)2);
+        p16(nsect);
         p32((u32)0); // TimeDateStamp: zero keeps it reproducible
         p32(symOff);
         p32(order.count());
@@ -284,8 +305,13 @@ class Pe
                    (u32)COFF_SCN_CODE | (u32)$20000000 | (u32)$40000000 | (u32)$00500000);
         Pe.sectHdr(self, String.withCString(".data"), mdata.length(), dataOff, drelOff, nDataRel,
                    (u32)COFF_SCN_INIT_DATA | (u32)$40000000 | (u32)$80000000 | (u32)$00400000);
+        // IMAGE_SCN_LNK_INFO | IMAGE_SCN_LNK_REMOVE | IMAGE_SCN_ALIGN_1BYTES
+        if (drectve.length() > (u32)0)
+            Pe.sectHdr(self, String.withCString(".drectve"), drectve.length(), drOff, (u32)0, (u32)0,
+                       (u32)$00100A00);
         appendSection(mtext);
         appendSection(mdata);
+        appendAll(drectve);
         appendAll(textRel);
         appendAll(dataRel);
         for (u32 i = (u32)0; i < order.count(); i = i + (u32)1)

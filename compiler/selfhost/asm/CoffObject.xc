@@ -218,6 +218,45 @@ bool gCoffKeepUnwind;
         return _tlsDataRelocs;
         }
 
+    // The libraries an object's .drectve asks for (`/DEFAULTLIB:x`, `-l x`
+    // spelled either way), as `-l` would name them: a C/C++ object xcc wrote.
+    static Array* defaultLibsOf(Data* d)
+        {
+        Array* out = new Array();
+        if (d == 0 || d.length() < (u32)20 || CoffObject._rd16(d, (u32)0) != (u32)COFF_MACHINE_AMD64
+            || CoffObject._rd16(d, (u32)16) != (u32)0)
+            return out;
+        u32 nsect = CoffObject._rd16(d, (u32)2);
+        u32 strOff = CoffObject._rd32(d, (u32)8) + CoffObject._rd32(d, (u32)12) * (u32)COFF_SYM_SZ;
+        for (u32 i = (u32)0; i < nsect; i = i + (u32)1)
+            {
+            u32 s = (u32)20 + i * (u32)COFF_SECT_HDR_SIZE;
+            if (!CoffObject._sectionName(d, s, strOff).equals(String.withCString(".drectve")))
+                continue;
+            u32 size = CoffObject._rd32(d, s + (u32)16);
+            u32 raw = CoffObject._rd32(d, s + (u32)20);
+            if (raw + size > d.length())
+                continue;
+            String* text = new String();
+            for (u32 b = (u32)0; b < size; b = b + (u32)1)
+                text.appendByte(d.bytes()[raw + b]);
+            Array* ws = text.splitOnByte((u8)' ');
+            for (u32 k = (u32)0; k < ws.count(); k = k + (u32)1)
+                {
+                String* w = (String*)ws.get(k);
+                String* up = w.uppercased();
+                if (up.hasPrefix(String.withCString("/DEFAULTLIB:")) || up.hasPrefix(String.withCString("-DEFAULTLIB:")))
+                    {
+                    String* nm = w.substringFromByte((u32)12);
+                    if (nm.hasPrefix(String.withCString("\"")) && nm.hasSuffix(String.withCString("\"")) && nm.byteLength() >= (u32)2)
+                        nm = nm.substringBytes((u32)1, nm.byteLength() - (u32)2);
+                    if (nm.byteLength() > (u32)0) out.add((Object*)nm);
+                    }
+                }
+            }
+        return out;
+        }
+
     static CoffObject* parse(Data* d)
         {
         CoffObject* o = new CoffObject();
