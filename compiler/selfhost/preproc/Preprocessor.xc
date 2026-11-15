@@ -1197,7 +1197,7 @@ class IfFrame
             f.setActive(false);
             return;
             }
-        i32 v = evaluateIfExpression(expr);
+        i64 v = evaluateIfExpression(expr);
         f.setActive(v != (i32)0);
         f.setTaken(f.active());
         }
@@ -1222,14 +1222,25 @@ class IfFrame
     // ── #if expression evaluation ────────────────────────────────
     // `defined X` resolves BEFORE macro expansion, so its argument is not
     // substituted away; every identifier still standing afterwards is 0, per C.
-    i32 evaluateIfExpression(String* expr)
+    // In 64 bits, as C's intmax_t, with anything left after the expression
+    // reported (#279). As the reference.
+    i64 evaluateIfExpression(String* expr)
         {
         String* e = resolveDefinedIn(expr);
         e = expandMacrosInText(e);
         e = substituteUndefinedIdentifiers(e);
 
-        u32 pos = (u32)0;
-        i32 v = _parseExpr(e, pos);
+        u32 p[1];
+        p[0] = (u32)0;
+        i64 v = _parseLogicalOr(e, &p[0]);
+        _skipSpaces(e, &p[0]);
+        if (p[0] < e.byteLength())
+            {
+            String* m = String.withCString("trailing tokens in #if expression: '");
+            m.append(e.substringFromByte(p[0]));
+            m.appendCString("'");
+            _error(m);
+            }
         return v;
         }
 
@@ -1292,7 +1303,19 @@ class IfFrame
         while (i < len)
             {
             u8 c = expr.byteAt(i);
-            if ((c >= (u8)'A' && c <= (u8)'Z') || (c >= (u8)'a' && c <= (u8)'z') || c == (u8)'_')
+            // A number (a digit or `$`, then letters and digits) is copied
+            // whole: its letters (0x10, 10UL, $FF) are not names (#279).
+            if ((c >= (u8)'0' && c <= (u8)'9') || c == (u8)'$')
+                {
+                out.appendByte(c);
+                i = i + (u32)1;
+                while (i < len && Preprocessor.isIdentChar(expr.byteAt(i)))
+                    {
+                    out.appendByte(expr.byteAt(i));
+                    i = i + (u32)1;
+                    }
+                }
+            else if ((c >= (u8)'A' && c <= (u8)'Z') || (c >= (u8)'a' && c <= (u8)'z') || c == (u8)'_')
                 {
                 while (i < len && Preprocessor.isIdentChar(expr.byteAt(i)))
                     i = i + (u32)1;
@@ -1323,86 +1346,86 @@ class IfFrame
         pos[0] = p;
         }
 
-    i32 _parseExpr(String* s, u32 startPos)
+    i64 _parseExpr(String* s, u32 startPos)
         {
         u32 p[1];
         p[0] = startPos;
         return _parseLogicalOr(s, &p[0]);
         }
 
-    i32 _parseLogicalOr(String* s, u32* pos)
+    i64 _parseLogicalOr(String* s, u32* pos)
         {
-        i32 a = _parseLogicalAnd(s, pos);
+        i64 a = _parseLogicalAnd(s, pos);
         _skipSpaces(s, pos);
         while (pos[0] + (u32)1 < s.byteLength() && s.byteAt(pos[0]) == (u8)'|' && s.byteAt(pos[0] + (u32)1) == (u8)'|')
             {
             pos[0] = pos[0] + (u32)2;
-            i32 b = _parseLogicalAnd(s, pos);
-            a = ((a != (i32)0) || (b != (i32)0)) ? (i32)1 : (i32)0;
+            i64 b = _parseLogicalAnd(s, pos);
+            a = ((a != (i64)0) || (b != (i64)0)) ? (i64)1 : (i64)0;
             _skipSpaces(s, pos);
             }
         return a;
         }
 
-    i32 _parseLogicalAnd(String* s, u32* pos)
+    i64 _parseLogicalAnd(String* s, u32* pos)
         {
-        i32 a = _parseBitOr(s, pos);
+        i64 a = _parseBitOr(s, pos);
         _skipSpaces(s, pos);
         while (pos[0] + (u32)1 < s.byteLength() && s.byteAt(pos[0]) == (u8)'&' && s.byteAt(pos[0] + (u32)1) == (u8)'&')
             {
             pos[0] = pos[0] + (u32)2;
-            i32 b = _parseBitOr(s, pos);
-            a = ((a != (i32)0) && (b != (i32)0)) ? (i32)1 : (i32)0;
+            i64 b = _parseBitOr(s, pos);
+            a = ((a != (i64)0) && (b != (i64)0)) ? (i64)1 : (i64)0;
             _skipSpaces(s, pos);
             }
         return a;
         }
 
-    i32 _parseBitOr(String* s, u32* pos)
+    i64 _parseBitOr(String* s, u32* pos)
         {
-        i32 a = _parseBitXor(s, pos);
+        i64 a = _parseBitXor(s, pos);
         _skipSpaces(s, pos);
         while (pos[0] < s.byteLength() && s.byteAt(pos[0]) == (u8)'|' && !(pos[0] + (u32)1 < s.byteLength() && s.byteAt(pos[0] + (u32)1) == (u8)'|'))
             {
             pos[0] = pos[0] + (u32)1;
-            i32 b = _parseBitXor(s, pos);
+            i64 b = _parseBitXor(s, pos);
             a = a | b;
             _skipSpaces(s, pos);
             }
         return a;
         }
 
-    i32 _parseBitXor(String* s, u32* pos)
+    i64 _parseBitXor(String* s, u32* pos)
         {
-        i32 a = _parseBitAnd(s, pos);
+        i64 a = _parseBitAnd(s, pos);
         _skipSpaces(s, pos);
         while (pos[0] < s.byteLength() && s.byteAt(pos[0]) == (u8)'^')
             {
             pos[0] = pos[0] + (u32)1;
-            i32 b = _parseBitAnd(s, pos);
+            i64 b = _parseBitAnd(s, pos);
             a = a ^ b;
             _skipSpaces(s, pos);
             }
         return a;
         }
 
-    i32 _parseBitAnd(String* s, u32* pos)
+    i64 _parseBitAnd(String* s, u32* pos)
         {
-        i32 a = _parseEquality(s, pos);
+        i64 a = _parseEquality(s, pos);
         _skipSpaces(s, pos);
         while (pos[0] < s.byteLength() && s.byteAt(pos[0]) == (u8)'&' && !(pos[0] + (u32)1 < s.byteLength() && s.byteAt(pos[0] + (u32)1) == (u8)'&'))
             {
             pos[0] = pos[0] + (u32)1;
-            i32 b = _parseEquality(s, pos);
+            i64 b = _parseEquality(s, pos);
             a = a & b;
             _skipSpaces(s, pos);
             }
         return a;
         }
 
-    i32 _parseEquality(String* s, u32* pos)
+    i64 _parseEquality(String* s, u32* pos)
         {
-        i32 a = _parseRelational(s, pos);
+        i64 a = _parseRelational(s, pos);
         _skipSpaces(s, pos);
         while (pos[0] + (u32)1 < s.byteLength())
             {
@@ -1411,14 +1434,14 @@ class IfFrame
             if (c0 == (u8)'=' && c1 == (u8)'=')
                 {
                 pos[0] = pos[0] + (u32)2;
-                i32 b = _parseRelational(s, pos);
-                a = (a == b) ? (i32)1 : (i32)0;
+                i64 b = _parseRelational(s, pos);
+                a = (a == b) ? (i64)1 : (i64)0;
                 }
             else if (c0 == (u8)'!' && c1 == (u8)'=')
                 {
                 pos[0] = pos[0] + (u32)2;
-                i32 b = _parseRelational(s, pos);
-                a = (a != b) ? (i32)1 : (i32)0;
+                i64 b = _parseRelational(s, pos);
+                a = (a != b) ? (i64)1 : (i64)0;
                 }
             else
                 {
@@ -1429,9 +1452,9 @@ class IfFrame
         return a;
         }
 
-    i32 _parseRelational(String* s, u32* pos)
+    i64 _parseRelational(String* s, u32* pos)
         {
-        i32 a = _parseShift(s, pos);
+        i64 a = _parseShift(s, pos);
         _skipSpaces(s, pos);
         while (pos[0] < s.byteLength())
             {
@@ -1440,26 +1463,26 @@ class IfFrame
             if (c0 == (u8)'<' && c1 == (u8)'=')
                 {
                 pos[0] = pos[0] + (u32)2;
-                i32 b = _parseShift(s, pos);
-                a = (a <= b) ? (i32)1 : (i32)0;
+                i64 b = _parseShift(s, pos);
+                a = (a <= b) ? (i64)1 : (i64)0;
                 }
             else if (c0 == (u8)'>' && c1 == (u8)'=')
                 {
                 pos[0] = pos[0] + (u32)2;
-                i32 b = _parseShift(s, pos);
-                a = (a >= b) ? (i32)1 : (i32)0;
+                i64 b = _parseShift(s, pos);
+                a = (a >= b) ? (i64)1 : (i64)0;
                 }
             else if (c0 == (u8)'<' && c1 != (u8)'<')
                 {
                 pos[0] = pos[0] + (u32)1;
-                i32 b = _parseShift(s, pos);
-                a = (a < b) ? (i32)1 : (i32)0;
+                i64 b = _parseShift(s, pos);
+                a = (a < b) ? (i64)1 : (i64)0;
                 }
             else if (c0 == (u8)'>' && c1 != (u8)'>')
                 {
                 pos[0] = pos[0] + (u32)1;
-                i32 b = _parseShift(s, pos);
-                a = (a > b) ? (i32)1 : (i32)0;
+                i64 b = _parseShift(s, pos);
+                a = (a > b) ? (i64)1 : (i64)0;
                 }
             else
                 {
@@ -1470,9 +1493,9 @@ class IfFrame
         return a;
         }
 
-    i32 _parseShift(String* s, u32* pos)
+    i64 _parseShift(String* s, u32* pos)
         {
-        i32 a = _parseAdditive(s, pos);
+        i64 a = _parseAdditive(s, pos);
         _skipSpaces(s, pos);
         while (pos[0] + (u32)1 < s.byteLength())
             {
@@ -1481,13 +1504,13 @@ class IfFrame
             if (c0 == (u8)'<' && c1 == (u8)'<')
                 {
                 pos[0] = pos[0] + (u32)2;
-                i32 b = _parseAdditive(s, pos);
+                i64 b = _parseAdditive(s, pos);
                 a = a << b;
                 }
             else if (c0 == (u8)'>' && c1 == (u8)'>')
                 {
                 pos[0] = pos[0] + (u32)2;
-                i32 b = _parseAdditive(s, pos);
+                i64 b = _parseAdditive(s, pos);
                 a = a >> b;
                 }
             else
@@ -1499,9 +1522,9 @@ class IfFrame
         return a;
         }
 
-    i32 _parseAdditive(String* s, u32* pos)
+    i64 _parseAdditive(String* s, u32* pos)
         {
-        i32 a = _parseMultiplicative(s, pos);
+        i64 a = _parseMultiplicative(s, pos);
         _skipSpaces(s, pos);
         while (pos[0] < s.byteLength())
             {
@@ -1525,9 +1548,9 @@ class IfFrame
         return a;
         }
 
-    i32 _parseMultiplicative(String* s, u32* pos)
+    i64 _parseMultiplicative(String* s, u32* pos)
         {
-        i32 a = _parseUnary(s, pos);
+        i64 a = _parseUnary(s, pos);
         _skipSpaces(s, pos);
         while (pos[0] < s.byteLength())
             {
@@ -1540,14 +1563,14 @@ class IfFrame
             else if (c == (u8)'/')
                 {
                 pos[0] = pos[0] + (u32)1;
-                i32 b = _parseUnary(s, pos);
-                a = (b == (i32)0) ? (i32)0 : (a / b); // no division by zero
+                i64 b = _parseUnary(s, pos);
+                a = (b == (i64)0) ? (i64)0 : (a / b); // no division by zero
                 }
             else if (c == (u8)'%')
                 {
                 pos[0] = pos[0] + (u32)1;
-                i32 b = _parseUnary(s, pos);
-                a = (b == (i32)0) ? (i32)0 : (a % b);
+                i64 b = _parseUnary(s, pos);
+                a = (b == (i64)0) ? (i64)0 : (a % b);
                 }
             else
                 {
@@ -1558,7 +1581,7 @@ class IfFrame
         return a;
         }
 
-    i32 _parseUnary(String* s, u32* pos)
+    i64 _parseUnary(String* s, u32* pos)
         {
         _skipSpaces(s, pos);
         if (pos[0] < s.byteLength())
@@ -1567,12 +1590,12 @@ class IfFrame
             if (c == (u8)'!')
                 {
                 pos[0] = pos[0] + (u32)1;
-                return (_parseUnary(s, pos) == (i32)0) ? (i32)1 : (i32)0;
+                return (_parseUnary(s, pos) == (i64)0) ? (i64)1 : (i64)0;
                 }
             if (c == (u8)'-')
                 {
                 pos[0] = pos[0] + (u32)1;
-                return (i32)0 - _parseUnary(s, pos);
+                return (i64)0 - _parseUnary(s, pos);
                 }
             if (c == (u8)'+')
                 {
@@ -1588,20 +1611,20 @@ class IfFrame
         return _parsePrimary(s, pos);
         }
 
-    i32 _parsePrimary(String* s, u32* pos)
+    i64 _parsePrimary(String* s, u32* pos)
         {
         _skipSpaces(s, pos);
         if (pos[0] >= s.byteLength())
             {
             _error(String.withCString("unexpected end of #if expression"));
-            return (i32)0;
+            return (i64)0;
             }
         u8 c = s.byteAt(pos[0]);
 
         if (c == (u8)'(')
             {
             pos[0] = pos[0] + (u32)1;
-            i32 v = _parseLogicalOr(s, pos);
+            i64 v = _parseLogicalOr(s, pos);
             _skipSpaces(s, pos);
             if (pos[0] < s.byteLength() && s.byteAt(pos[0]) == (u8)')')
                 pos[0] = pos[0] + (u32)1;
@@ -1612,32 +1635,36 @@ class IfFrame
 
         if (c >= (u8)'0' && c <= (u8)'9')
             {
-            i32 v = (i32)0;
-            i32 base = (i32)10;
+            i64 v = (i64)0;
+            i64 base = (i64)10;
             if (c == (u8)'0' && pos[0] + (u32)1 < s.byteLength())
                 {
                 u8 c1 = s.byteAt(pos[0] + (u32)1);
                 if (c1 == (u8)'x' || c1 == (u8)'X')
                     {
-                    base = (i32)16;
+                    base = (i64)16;
                     pos[0] = pos[0] + (u32)2;
                     }
                 }
             while (pos[0] < s.byteLength())
                 {
                 u8 d = s.byteAt(pos[0]);
-                i32 digit = (i32)-1;
+                i64 digit = (i64)-1;
                 if (d >= (u8)'0' && d <= (u8)'9')
-                    digit = (i32)(d - (u8)'0');
-                else if (base == (i32)16 && d >= (u8)'A' && d <= (u8)'F')
-                    digit = (i32)10 + (i32)(d - (u8)'A');
-                else if (base == (i32)16 && d >= (u8)'a' && d <= (u8)'f')
-                    digit = (i32)10 + (i32)(d - (u8)'a');
-                if (digit < (i32)0)
+                    digit = (i64)(d - (u8)'0');
+                else if (base == (i64)16 && d >= (u8)'A' && d <= (u8)'F')
+                    digit = (i64)10 + (i64)(d - (u8)'A');
+                else if (base == (i64)16 && d >= (u8)'a' && d <= (u8)'f')
+                    digit = (i64)10 + (i64)(d - (u8)'a');
+                if (digit < (i64)0)
                     break;
                 v = v * base + digit;
                 pos[0] = pos[0] + (u32)1;
                 }
+            // C's integer suffixes (10UL, 0x10u): the value is the same (#279).
+            while (pos[0] < s.byteLength() && (s.byteAt(pos[0]) == (u8)'u' || s.byteAt(pos[0]) == (u8)'U'
+                                               || s.byteAt(pos[0]) == (u8)'l' || s.byteAt(pos[0]) == (u8)'L'))
+                pos[0] = pos[0] + (u32)1;
             return v;
             }
 
@@ -1645,20 +1672,20 @@ class IfFrame
         if (c == (u8)'$')
             {
             pos[0] = pos[0] + (u32)1;
-            i32 v = (i32)0;
+            i64 v = (i64)0;
             while (pos[0] < s.byteLength())
                 {
                 u8 d = s.byteAt(pos[0]);
-                i32 digit = (i32)-1;
+                i64 digit = (i64)-1;
                 if (d >= (u8)'0' && d <= (u8)'9')
-                    digit = (i32)(d - (u8)'0');
+                    digit = (i64)(d - (u8)'0');
                 else if (d >= (u8)'A' && d <= (u8)'F')
-                    digit = (i32)10 + (i32)(d - (u8)'A');
+                    digit = (i64)10 + (i64)(d - (u8)'A');
                 else if (d >= (u8)'a' && d <= (u8)'f')
-                    digit = (i32)10 + (i32)(d - (u8)'a');
-                if (digit < (i32)0)
+                    digit = (i64)10 + (i64)(d - (u8)'a');
+                if (digit < (i64)0)
                     break;
-                v = v * (i32)16 + digit;
+                v = v * (i64)16 + digit;
                 pos[0] = pos[0] + (u32)1;
                 }
             return v;
@@ -1666,7 +1693,7 @@ class IfFrame
 
         _error(String.withCString("unexpected character in #if expression"));
         pos[0] = pos[0] + (u32)1;
-        return (i32)0;
+        return (i64)0;
         }
 
     // ── Directives ───────────────────────────────────────────────
@@ -1805,7 +1832,7 @@ class IfFrame
         if (Preprocessor._hasCPrefix(content, "if") && (content.byteLength() == (u32)2 || !Preprocessor.isIdentChar(content.byteAt((u32)2))))
             {
             String* expr = content.substringFromByte((u32)2).trimmed();
-            i32 v = evaluateIfExpression(expr);
+            i64 v = evaluateIfExpression(expr);
             pushIf(v != (i32)0);
             output.appendByte((u8)10);
             return;

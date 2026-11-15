@@ -724,7 +724,19 @@
     while (i < len)
         {
         unichar c = [expr characterAtIndex:i];
-        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_')
+        // A number (a digit or `$`, then letters and digits) is copied whole:
+        // its letters (0x10, 10UL, $FF) are not names (#279).
+        if ((c >= '0' && c <= '9') || c == '$')
+            {
+            [out appendFormat:@"%C", c];
+            i++;
+            while (i < len && [self isIdentChar:[expr characterAtIndex:i]])
+                {
+                [out appendFormat:@"%C", [expr characterAtIndex:i]];
+                i++;
+                }
+            }
+        else if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_')
             {
             while (i < len && [self isIdentChar:[expr characterAtIndex:i]])
                 i++;
@@ -987,6 +999,9 @@
             v = v * base + digit;
             (*pp)++;
             }
+        // C's integer suffixes (10UL, 0x10u): the value is the same (#279).
+        while (*pp < len && (s[*pp] == 'u' || s[*pp] == 'U' || s[*pp] == 'l' || s[*pp] == 'L'))
+            (*pp)++;
         return v;
         }
     if (c == '$')
