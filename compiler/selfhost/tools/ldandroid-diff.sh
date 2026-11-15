@@ -47,6 +47,13 @@ for f in $FILES; do
          >/dev/null 2>&1 || [ ! -s "$WORK/a.s" ]; then
         oracle=$((oracle+1)); continue
     fi
+    # The stack canary's guard word lives in the runtime (rt-android.s),
+    # which every real android image links in, so a function's absolute
+    # adrp/ldr of it resolves inside the image. This link takes the one
+    # unit alone: it gets the runtime's definition, as the image has it.
+    if grep -q '___xt_stack_guard' "$WORK/a.s" && ! grep -q '^___xt_stack_guard:' "$WORK/a.s"; then
+        printf '    .section __DATA,__data\n    .p2align 3\n    .globl ___xt_stack_guard\n___xt_stack_guard:\n    .quad 0\n' >> "$WORK/a.s"
+    fi
     if ! "$BIN/xcc-ln-arm64" --android so libdiff.so - "$NEEDED" \
          "$WORK/a.s" "$WORK/a.so" >/dev/null 2>&1; then
         oracle=$((oracle+1)); continue
