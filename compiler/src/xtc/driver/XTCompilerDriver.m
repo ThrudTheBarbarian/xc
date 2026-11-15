@@ -46,6 +46,7 @@
     NSSet<NSString*>* _libraryFiles;   // the library's files, which --par-style=auto leaves alone
     BOOL _parAutoImport;               // --par-style=auto wraps a loop in a program without Par.xc: import it
     NSArray<NSString*>* _stdlibDirs;   // the preprocessor's standard-library directories
+    NSMutableSet<NSString*>* _noDebugInfoWarned;   // libraries already warned about, once across a --par-style=auto restart
     }
 
 #pragma mark - Standard-library state across a library boundary
@@ -788,8 +789,12 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
                 }
             continue;
             }
-        if (iface.functions.count == 0 && iface.types.count == 0)
+        if (iface.functions.count == 0 && iface.types.count == 0 &&
+            ![_noDebugInfoWarned containsObject:p])
             {
+            if (!_noDebugInfoWarned)
+                _noDebugInfoWarned = [NSMutableSet set];
+            [_noDebugInfoWarned addObject:p];
             // A stripped C library, with no separate debug file either (see
             // XTDwarfReader's locateElfDebugFileFor:): every call into it
             // would otherwise fail on its own as an undeclared function.

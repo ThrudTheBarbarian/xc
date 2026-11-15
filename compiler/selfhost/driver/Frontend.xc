@@ -508,6 +508,11 @@ class FeOptions
                   String.withCString(hasAt ? "1" : "0"));
 
         String* source = pp.preprocessFile(o.input());
+        // What this pass says before the parse is held here and printed after
+        // it, once --par-style=auto has decided not to start again. A restart
+        // drops it, as the reference truncates its diagnostics to the mark, so
+        // each warning prints once (#294). Every exit before then prints it.
+        Array* early = new Array();
         // Preprocessor warnings are "<category>\t<diagnostic>", filtered by
         // `-Wno-<category>` as the parser's are.
         for (u32 w = (u32)0; w < pp.warnings().count(); w = w + (u32)1)
@@ -518,7 +523,7 @@ class FeOptions
                 continue;
             if (tab > (u32)0 && o.warningSuppressed(raw.substringBytes((u32)0, tab)))
                 continue;
-            Frontend.printDiagnostic(raw.substringFromByte(tab + (u32)1));
+            Frontend.holdEarly(early, raw.substringFromByte(tab + (u32)1), true);
             }
         // PREPROCESSOR errors are errors. They were collected and thrown away
         // here — the same shape as bug 077 one stage later — so a missing
@@ -527,6 +532,7 @@ class FeOptions
         // pointing at a line that used the missing type, forty lines away.
         if (pp.errors().count() > (u32)0)
             {
+            Frontend.flushEarly(early);
             for (u32 e = (u32)0; e < pp.errors().count(); e = e + (u32)1)
                 Frontend.printDiagnostic((String*)pp.errors().get(e));
             Process.exit((i32)1);
@@ -534,6 +540,7 @@ class FeOptions
             }
         if (source == 0)
             {
+            Frontend.flushEarly(early);
             Stdio.printf("xc-fe: error: cannot read '%s'\n", o.input().cString());
             Process.exit((i32)1);
             return (IRModule*)0;
@@ -544,6 +551,7 @@ class FeOptions
         // further on still leaves it behind to look at.
         if (o.preprocessedPath() != (String*)0 && !Files.writeText(o.preprocessedPath(), source))
             {
+            Frontend.flushEarly(early);
             Stdio.printf("xcc: error: cannot write -E output to '%s'\n",
                          o.preprocessedPath().cString());
             Process.exit((i32)1);
@@ -560,6 +568,7 @@ class FeOptions
         // not information.
         if (lex.diagnostics().count() > (u32)0)
             {
+            Frontend.flushEarly(early);
             for (u32 e = (u32)0; e < lex.diagnostics().count(); e = e + (u32)1)
                 Frontend.printDiagnostic((String*)lex.diagnostics().get(e));
             Process.exit((i32)1);
@@ -639,6 +648,7 @@ class FeOptions
                     }
                 if (!mp.hasSuffix(String.withCString(".xtc.iface")) && !mp.hasSuffix(String.withCString(".wasm")) && !mp.hasSuffix(String.withCString(".dylib")) && !mp.hasSuffix(String.withCString(".so")) && !mp.lowercased().hasSuffix(String.withCString(".dll")))
                     {
+                    Frontend.flushEarly(early);
                     Stdio.printf("xc-fe: error: '%s' is a binary library; the ported "
                                  "front end reads .wasm modules, .dylib, .so and .dll "
                                  "libraries, and bare .xtc.iface files\n",
@@ -687,7 +697,7 @@ class FeOptions
                                             "separate debug file, so its functions and types are unknown and a call "
                                             "to one needs a declaration; install the library's debug package "
                                             "(-dbgsym, -debuginfo) or set XCC_DEBUG_DIR to where its debug files are\n");
-                            Stdio.error(w);
+                            Frontend.holdEarly(early, w, false);
                             }
                         }
                     }
@@ -710,7 +720,7 @@ class FeOptions
                     w.appendCString("' carries no interface section; its "
                                     "declarations must come from an imported "
                                     "header. Linking against it anyway.\n");
-                    Stdio.error(w);
+                    Frontend.holdEarly(early, w, false);
                     continue;
                     }
                 // A wasm LIBRARY's symbols resolve as imports in that
@@ -761,6 +771,7 @@ class FeOptions
             o.setParAutoImport(true);
             return Frontend.lower(o);
             }
+        Frontend.flushEarly(early);
         // A PARSE ERROR MUST FAIL THE BUILD. The parser collected these all
         // along and nothing ever read them, so the shipped compiler took
         // `i32 x = ;`, said nothing, exited 0 and wrote a runnable binary —
@@ -1261,6 +1272,29 @@ class FeOptions
             v = v * (u32)10 + (ch - (u32)48);
             }
         return v;
+        }
+
+    // A diagnostic held until the --par-style=auto restart is decided: 'D' and
+    // the message for printDiagnostic, 'R' and the text for Stdio.error.
+    static void holdEarly(Array* early, String* msg, bool diagnostic)
+        {
+        String* held = String.withCString(diagnostic ? "D" : "R");
+        held.append(msg);
+        early.add((Object*)held);
+        }
+
+    static void flushEarly(Array* early)
+        {
+        for (u32 i = (u32)0; i < early.count(); i = i + (u32)1)
+            {
+            String* held = (String*)early.get(i);
+            String* msg = held.substringFromByte((u32)1);
+            if (held.byteAt((u32)0) == (u8)'D')
+                Frontend.printDiagnostic(msg);
+            else
+                Stdio.error(msg);
+            }
+        early.removeAll();
         }
 
     // Stdio.error writes exactly what it is given; a diagnostic is a line.
