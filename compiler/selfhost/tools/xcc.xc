@@ -730,6 +730,15 @@ void resolveRuntimeLib(DriverOptions* d)
         String* t = (String*)li.get(i);
         if (t.hasSuffix(String.withCString(".o")) || t.hasSuffix(String.withCString(".a"))) return;
     }
+    // An xc file's x86-64 -c object is compiled without it: it carries the
+    // classes it uses and reads the guard directly, so the dynamic and the
+    // -static object link can both take it. Such an object link keeps the
+    // runtime its own; a C or C++ object's xcc half reads the guard through
+    // the GOT, compiled for the library, and its link takes it. An -flto link
+    // compiles the program again and takes it as a build from source does.
+    if (isX86_64(d) && d.compileOnly() && d.fe().input() != (String*)0
+        && Languages.forFile(d.fe().input()) == (LanguageRow*)0) return;
+    if (!d.lto() && isX86_64(d) && objectsReadGuardDirectly(d)) return;
     // A C or C++ program takes it too (2026-11-14): its xc half's objects
     // then share one runtime, so a program of several C/C++ objects has one.
     String* dir = String.withString(root);
@@ -4987,6 +4996,33 @@ Map* cAllocExports(void)
 }
 
 // Whether an object of the link carries the heap (CAlloc.xc's _xc_malloc).
+// Whether an x86-64 object of the link reads the runtime's canary guard
+// other than through the GOT: one written by -c from an xc file, which
+// expects the runtime in the image.
+bool objectsReadGuardDirectly(DriverOptions* d)
+{
+    String* guard = String.withCString("__xt_stack_guard");
+    for (u32 i = (u32)0; i < d.objectInputs().count(); i = i + (u32)1) {
+        String* op = (String*)d.objectInputs().get(i);
+        if (!op.hasSuffix(String.withCString(".o"))) continue;
+        Data* od = Files.readData(op);
+        if (od == (Data*)0) continue;
+        ElfObject* o = ElfObject.parse(od);
+        if (!o.ok()) continue;
+        Array* syms = o.symdefs();
+        Array* rs = o.relocs();
+        for (u32 k = (u32)0; k < rs.count(); k = k + (u32)1) {
+            ElfReloc* r = (ElfReloc*)rs.get(k);
+            if (r.sym() >= syms.count()) continue;
+            String* n = ((ElfSymDef*)syms.get(r.sym())).name();
+            // R_X86_64_GOTPCREL, GOTPCRELX, REX_GOTPCRELX
+            if (n != (String*)0 && n.equals(guard)
+                && r.type() != (u32)9 && r.type() != (u32)41 && r.type() != (u32)42) return true;
+        }
+    }
+    return false;
+}
+
 bool objectsCarryHeap(DriverOptions* d)
 {
     Map* heap = new Map();
@@ -5213,10 +5249,9 @@ void linkObjects(DriverOptions* d)
         linkObjectsArm64Elf(d); return;
     }
     if (d.arch().equals(String.withCString("arm64")) || isIos(d)) { linkObjectsArm64(d); return; }
-    // An object-only link is the static musl one, as the reference's (which has
-    // no glibc object link yet), unless -dynamic asks for glibc, or the objects
-    // are a C/C++ program's (linked as one: glibc, dynamic).
-    if (isX86_64(d) && (d.caps().dynamicExplicit() || (askers && !d.caps().staticLink()))) {
+    // An object link is the dynamic glibc one, as a build from source is
+    // (-c compiled the objects for glibc); -static gives the static musl one.
+    if (isX86_64(d) && !d.caps().staticLink()) {
         linkX86_64Glibc(d, String.withCString("")); return;
     }
     if (isX86_64(d)) { linkX86_64(d, String.withCString("")); return; }

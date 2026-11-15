@@ -223,6 +223,10 @@ static NSString *runtimeLibFile(const char *argv0, XTCommandLineOptions *opts) {
     // which the rewrite of the program's text cannot reach. As the port.
     for (NSString *t in appendLinkerFlags(opts, NO))
         if ([t hasSuffix:@".o"] || [t hasSuffix:@".a"]) return nil;
+    // An x86-64 -c object is compiled without it: it carries the classes it
+    // uses, so the dynamic and the -static object link can both take it. As
+    // the port.
+    if (opts.compileOnly && opts.useX86_64Backend) return nil;
     // …and so does a C program: its xc half is linked as an object, with clang's.
     if ([opts.inputFiles.firstObject hasSuffix:@".c"]) return nil;
     const char *e = getenv("XCC_NO_RUNTIME_LIB");
@@ -2759,7 +2763,8 @@ static void x86XcArgsInputs(XTCommandLineOptions *opts, NSString *support, NSStr
 }
 
 static int linkX86_64Glibc(const char *argv0, XTCommandLineOptions *opts, NSString *asmPath,
-                           NSString *outPath, NSArray<NSString *> *neededLibs) {
+                           NSArray<NSString *> *objects, NSString *outPath,
+                           NSArray<NSString *> *neededLibs) {
     NSFileManager *fm = [NSFileManager defaultManager];
     NSString *support = resolveSupportRoot(argv0, opts);
     NSString *ln = resolveSiblingTool(argv0, @"xcc-ln-x86_64");
@@ -2772,7 +2777,9 @@ static int linkX86_64Glibc(const char *argv0, XTCommandLineOptions *opts, NSStri
     // libRuntime (owner, 2026-11-03): the crt only, its argc/argv stores and
     // the program's canaries through the GOT, the runtime the library's. As
     // the port.
-    NSString *rtLibF = runtimeLibFile(argv0, opts);
+    // An object link keeps the runtime its own: an xcc -c object reads the
+    // canary guard directly. As the port.
+    NSString *rtLibF = objects.count ? nil : runtimeLibFile(argv0, opts);
     NSString *prog = [NSString stringWithContentsOfFile:asmPath encoding:NSUTF8StringEncoding error:NULL];
     // The --xc-* options (#148): the filter after the crt, which calls it.
     BOOL xcArgs = xcArgsWanted(opts, prog);
@@ -2806,6 +2813,7 @@ static int linkX86_64Glibc(const char *argv0, XTCommandLineOptions *opts, NSStri
                                         encoding:NSUTF8StringEncoding error:NULL];
     [args addObject:stubPath];
     [args addObject:asmPath];
+    if (objects) [args addObjectsFromArray:objects];
     if (!x86GlibcLinkInputs(opts, fm, args)) return 1;
     // libgcc as a pool: the helpers C compiled by gcc or clang calls where the
     // ISA has no instruction (__udivti3, Mbed TLS's 128-bit divide). A member
@@ -4651,6 +4659,9 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
                 if (opts.quiet) [cgArgs2 insertObject:@"-q" atIndex:0];
                 int crc = runChild(cg, cgArgs2);
                 if (crc != 0) return crc;
+                // Linked as a build from source is: glibc, dynamic, unless -static.
+                if (!opts.staticLink)
+                    return linkX86_64Glibc(argv0, opts, ltoAsm, nil, opts.outputPath, @[]);
                 NSString *prog2 = [NSString stringWithContentsOfFile:ltoAsm
                                                            encoding:NSUTF8StringEncoding error:NULL];
                 NSString *stubPath = [xtcTempDir() stringByAppendingPathComponent:@"xtc-lto-x86-stubs.s"];
@@ -4676,12 +4687,20 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
             // symbols really are absent, but the reason is the library.
             if (objNeeds.count) {
                 fprintf(stderr, "xcc: error: these objects import xtc librar%s (%s), "
-                        "but an x86-64 object link is a STATIC ELF and cannot record "
-                        "a shared-library dependency.\n  Link from source, or compile "
+                        "but an x86-64 object link cannot record a shared-library "
+                        "dependency yet.\n  Link from source, or compile "
                         "the modules together.\n",
                         objNeeds.count == 1 ? "y" : "ies",
                         [objNeeds componentsJoinedByString:@", "].UTF8String);
                 return 1;
+            }
+            // The objects were compiled for glibc (the default), and are linked
+            // as a build from source is: glibc, dynamic. -static gives the
+            // static musl link below. As the port.
+            if (!opts.staticLink) {
+                NSString *none = [xtcTempDir() stringByAppendingPathComponent:@"xtc-x86_64-objlink.s"];
+                [@"" writeToFile:none atomically:YES encoding:NSUTF8StringEncoding error:NULL];
+                return linkX86_64Glibc(argv0, opts, none, opts.inputFiles, opts.outputPath, @[]);
             }
             [args addObjectsFromArray:opts.inputFiles];
             // The libc pool, exactly as the ordinary static-exec link appends
@@ -5295,7 +5314,7 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
             : (x86Exe && opts.emitLib && !opts.compileOnly)
             ? linkX86_64Shared(argv0, opts, tmpAsm, opts.outputPath, ifaceJson, neededLibs)
             : (x86Exe && x86GlibcLink(opts, neededLibs) && !opts.compileOnly)
-            ? linkX86_64Glibc(argv0, opts, tmpAsm, opts.outputPath, neededLibs)
+            ? linkX86_64Glibc(argv0, opts, tmpAsm, nil, opts.outputPath, neededLibs)
             : (x86Exe && neededLibs.count > 0 && !opts.compileOnly)
             ? linkX86_64Dynamic(argv0, opts, tmpAsm, opts.outputPath, neededLibs)
             : x86Exe
