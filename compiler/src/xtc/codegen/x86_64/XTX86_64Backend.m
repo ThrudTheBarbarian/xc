@@ -4358,6 +4358,57 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
     return nil;
     }
 
+// A value's compile-time constant through the ZExt/SExt/Trunc the lowering
+// wraps a narrowed literal in, each conversion APPLIED at its result type
+// (#308): `(i32)(i8)300` is 44, where returning the Const's 300 made the
+// magic-number division divide by the wrong constant at -O0/-O1. As the
+// port's constThrough.
+static int64_t xtFitConst(int64_t v, XTIRType* t, BOOL sgn)
+    {
+    uint32_t b = (t && XTIRTypeKindIsInteger(t.kind)) || (t && t.kind == XTIRTypeKindBool) ? t.byteWidth : 8;
+    if (b == 0 || b >= 8)
+        return v;
+    unsigned sh = 64 - b * 8;
+    if (sgn)
+        return (int64_t)((uint64_t)v << sh) >> sh;
+    return (int64_t)(((uint64_t)v << sh) >> sh);
+    }
+
+static BOOL xtConstThrough(XTIRValueId v, XTIRInsn* (^defOf)(XTIRValueId), int depth,
+                           int64_t* out, XTIRType** outTy)
+    {
+    if (depth >= 8)
+        return NO;
+    XTIRInsn* d = defOf(v);
+    if (!d || d.operands.count < 1 || !d.result)
+        return NO;
+    XTIROperand* a0 = d.operands[0];
+    XTIRType* rt = d.result.type;
+    BOOL rs = rt && XTIRTypeKindIsSigned(rt.kind);
+    if (d.opcode == XTIROpConst)
+        {
+        if (a0.kind != XTIROperandKindImmI)
+            return NO;
+        *out = xtFitConst(a0.intValue, rt, rs);
+        *outTy = rt;
+        return YES;
+        }
+    BOOL sx = d.opcode == XTIROpSExt, zx = d.opcode == XTIROpZExt;
+    if (!(sx || zx || d.opcode == XTIROpTrunc) || a0.kind != XTIROperandKindUse)
+        return NO;
+    int64_t s = 0;
+    XTIRType* st = nil;
+    if (!xtConstThrough(a0.valueId, defOf, depth + 1, &s, &st))
+        return NO;
+    // An extension reads its source at the source's width: sign bits for
+    // SExt, zero bits for ZExt, whatever the source's own signedness.
+    if (sx || zx)
+        s = xtFitConst(s, st, sx);
+    *out = xtFitConst(s, rt, rs);
+    *outTy = rt;
+    return YES;
+    }
+
 // A compile-time constant divisor: a direct immediate, or a Const reached through
 // the ZExt/SExt/Trunc the lowering wraps a widened literal in (`x / 7`).
 + (BOOL)x86ConstDivisor:(XTIROperand*)op fn:(XTIRFunction*)fn out:(int64_t*)outC
@@ -4370,27 +4421,13 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
         }
     if (op.kind != XTIROperandKindUse)
         return NO;
-    XTIRValueId cur = op.valueId;
-    for (int g = 0; g < 8; g++)
-        {
-        XTIRInsn* dd = [self x86DefInsnFor:cur inFn:fn];
-        if (!dd || dd.operands.count < 1)
-            return NO;
-        if (dd.opcode == XTIROpConst && dd.operands[0].kind == XTIROperandKindImmI)
-            {
-            if (outC)
-                *outC = dd.operands[0].intValue;
-            return YES;
-            }
-        if ((dd.opcode == XTIROpZExt || dd.opcode == XTIROpSExt || dd.opcode == XTIROpTrunc) &&
-            dd.operands[0].kind == XTIROperandKindUse)
-            {
-            cur = dd.operands[0].valueId;
-            continue;
-            }
+    int64_t c = 0;
+    XTIRType* ct = nil;
+    if (!xtConstThrough(op.valueId, ^XTIRInsn*(XTIRValueId v) { return [self x86DefInsnFor:v inFn:fn]; }, 0, &c, &ct))
         return NO;
-        }
-    return NO;
+    if (outC)
+        *outC = c;
+    return YES;
     }
 
 /****************************************************************************\

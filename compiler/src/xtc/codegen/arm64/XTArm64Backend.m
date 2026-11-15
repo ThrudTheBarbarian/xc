@@ -4645,6 +4645,57 @@ static XTIROperand *icmpZeroTestValue(XTIRInsn *icmp, XTArm64FnCtx *ctx) {
 // and return the fused arm64 addressing operand. Base lands in x16 (or its home);
 // the ElementAddr index is zero-extended into x17. Callers must keep x16/x17 off
 // the value/dest register when folding an ElementAddr.
+// A value's compile-time constant through the ZExt/SExt/Trunc the lowering
+// wraps a narrowed literal in, each conversion APPLIED at its result type
+// (#308): `(i32)(i8)300` is 44, where returning the Const's 300 made the
+// magic-number division divide by the wrong constant at -O0/-O1. As the
+// port's constThrough.
+static int64_t xtFitConst(int64_t v, XTIRType* t, BOOL sgn)
+    {
+    uint32_t b = (t && XTIRTypeKindIsInteger(t.kind)) || (t && t.kind == XTIRTypeKindBool) ? t.byteWidth : 8;
+    if (b == 0 || b >= 8)
+        return v;
+    unsigned sh = 64 - b * 8;
+    if (sgn)
+        return (int64_t)((uint64_t)v << sh) >> sh;
+    return (int64_t)(((uint64_t)v << sh) >> sh);
+    }
+
+static BOOL xtConstThrough(XTIRValueId v, XTIRInsn* (^defOf)(XTIRValueId), int depth,
+                           int64_t* out, XTIRType** outTy)
+    {
+    if (depth >= 8)
+        return NO;
+    XTIRInsn* d = defOf(v);
+    if (!d || d.operands.count < 1 || !d.result)
+        return NO;
+    XTIROperand* a0 = d.operands[0];
+    XTIRType* rt = d.result.type;
+    BOOL rs = rt && XTIRTypeKindIsSigned(rt.kind);
+    if (d.opcode == XTIROpConst)
+        {
+        if (a0.kind != XTIROperandKindImmI)
+            return NO;
+        *out = xtFitConst(a0.intValue, rt, rs);
+        *outTy = rt;
+        return YES;
+        }
+    BOOL sx = d.opcode == XTIROpSExt, zx = d.opcode == XTIROpZExt;
+    if (!(sx || zx || d.opcode == XTIROpTrunc) || a0.kind != XTIROperandKindUse)
+        return NO;
+    int64_t s = 0;
+    XTIRType* st = nil;
+    if (!xtConstThrough(a0.valueId, defOf, depth + 1, &s, &st))
+        return NO;
+    // An extension reads its source at the source's width: sign bits for
+    // SExt, zero bits for ZExt, whatever the source's own signedness.
+    if (sx || zx)
+        s = xtFitConst(s, st, sx);
+    *out = xtFitConst(s, rt, rs);
+    *outTy = rt;
+    return YES;
+    }
+
 // Resolve an ElementAddr's index to a compile-time constant (immI, or a Const
 // reached through ZExt/SExt/Trunc — the widened-literal form). Used to fold a
 // pointer-IV copy's constant element offset into an immediate addressing mode.
@@ -4653,16 +4704,8 @@ static XTIROperand *icmpZeroTestValue(XTIRInsn *icmp, XTArm64FnCtx *ctx) {
     XTIROperand *idx = ea.operands[1];
     if (idx.kind == XTIROperandKindImmI) { *out = idx.intValue; return YES; }
     if (idx.kind != XTIROperandKindUse) return NO;
-    XTIRValueId cur = idx.valueId;
-    for (int g = 0; g < 8; g++) {
-        XTIRInsn *d = ctx.defOf[@(cur)];
-        if (!d || d.operands.count < 1) return NO;
-        if (d.opcode == XTIROpConst && d.operands[0].kind == XTIROperandKindImmI) { *out = d.operands[0].intValue; return YES; }
-        if ((d.opcode == XTIROpZExt || d.opcode == XTIROpSExt || d.opcode == XTIROpTrunc) &&
-            d.operands[0].kind == XTIROperandKindUse) { cur = d.operands[0].valueId; continue; }
-        return NO;
-    }
-    return NO;
+    XTIRType *ct = nil;
+    return xtConstThrough(idx.valueId, ^XTIRInsn *(XTIRValueId v) { return ctx.defOf[@(v)]; }, 0, out, &ct);
 }
 
 + (NSString *)foldedAddrOperandFor:(XTIRInsn *)insn ctx:(XTArm64FnCtx *)ctx {
@@ -5457,17 +5500,8 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
                 else if (dv.kind == XTIROperandKindUse) {
                     // Walk through the ZExt/SExt/Trunc of a Const (the widened-
                     // literal form the lowering emits for `x / 7`).
-                    XTIRValueId cur = dv.valueId;
-                    for (int g = 0; g < 8; g++) {
-                        XTIRInsn *dd = ctx.defOf[@(cur)];
-                        if (!dd || dd.operands.count < 1) break;
-                        if (dd.opcode == XTIROpConst && dd.operands[0].kind == XTIROperandKindImmI) {
-                            dC = dd.operands[0].intValue; haveD = YES; break;
-                        }
-                        if ((dd.opcode == XTIROpZExt || dd.opcode == XTIROpSExt || dd.opcode == XTIROpTrunc) &&
-                            dd.operands[0].kind == XTIROperandKindUse) { cur = dd.operands[0].valueId; continue; }
-                        break;
-                    }
+                    XTIRType *ct = nil;
+                    haveD = xtConstThrough(dv.valueId, ^XTIRInsn *(XTIRValueId v) { return ctx.defOf[@(v)]; }, 0, &dC, &ct);
                 }
                 int W = (int)(insn.result.type.byteWidth * 8);
                 if (haveD && dC >= 2 && ((uint64_t)dC & ((uint64_t)dC - 1)) != 0 &&
@@ -5511,17 +5545,8 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
                 XTIROperand *dv = insn.operands[1];
                 if (dv.kind == XTIROperandKindImmI) { dC = dv.intValue; haveD = YES; }
                 else if (dv.kind == XTIROperandKindUse) {
-                    XTIRValueId cur = dv.valueId;
-                    for (int g = 0; g < 8; g++) {
-                        XTIRInsn *dd = ctx.defOf[@(cur)];
-                        if (!dd || dd.operands.count < 1) break;
-                        if (dd.opcode == XTIROpConst && dd.operands[0].kind == XTIROperandKindImmI) {
-                            dC = dd.operands[0].intValue; haveD = YES; break;
-                        }
-                        if ((dd.opcode == XTIROpZExt || dd.opcode == XTIROpSExt || dd.opcode == XTIROpTrunc) &&
-                            dd.operands[0].kind == XTIROperandKindUse) { cur = dd.operands[0].valueId; continue; }
-                        break;
-                    }
+                    XTIRType *ct = nil;
+                    haveD = xtConstThrough(dv.valueId, ^XTIRInsn *(XTIRValueId v) { return ctx.defOf[@(v)]; }, 0, &dC, &ct);
                 }
                 int W = (int)(insn.result.type.byteWidth * 8);
                 uint64_t adC = (uint64_t)(dC < 0 ? -dC : dC);

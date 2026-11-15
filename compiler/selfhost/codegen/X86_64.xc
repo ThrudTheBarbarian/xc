@@ -1250,29 +1250,60 @@ class X86_64
             }
         if (op.kind() != (u8)OPK_USE || op.val() == (IRValue*)0)
             return false;
-        IRValue* cur = op.val();
-        for (u32 g = (u32)0; g < (u32)8; g = g + (u32)1)
-            {
-            IRInsn* d = defInsnFor(cur);
-            if (d == (IRInsn*)0 || d.ops().count() < (u32)1)
-                return false;
-            IROperand* a0 = (IROperand*)d.ops().get((u32)0);
-            if (d.op().equals(String.withCString("Const")))
-                {
-                if (a0.kind() != (u8)OPK_IMMI)
-                    return false;
-                *out = a0.imm();
-                return true;
-                }
-            if ((d.op().equals(String.withCString("ZExt")) || d.op().equals(String.withCString("SExt")) || d.op().equals(String.withCString("Trunc"))) && a0.kind() == (u8)OPK_USE)
-                {
-                cur = a0.val();
-                continue;
-                }
+        i64 c = (i64)0;
+        if (!constThrough(op.val(), &c, (u32)0))
             return false;
-            }
-        return false;
+        *out = (i32)c;
+        return true;
         }
+
+    // A value's compile-time constant through the ZExt/SExt/Trunc the lowering
+    // wraps a narrowed literal in, each conversion APPLIED at its result type
+    // (#308): `(i32)(i8)300` is 44, where returning the Const's 300 made the
+    // magic-number division divide by the wrong constant at -O0/-O1.
+    bool constThrough(IRValue* v, i64* out, u32 depth)
+    {
+        if (v == (IRValue*)0 || depth >= (u32)8) return false;
+        IRInsn* d = defInsnFor(v);
+        if (d == (IRInsn*)0 || d.ops().count() < (u32)1 || d.res() == (IRValue*)0) return false;
+        IROperand* a0 = (IROperand*)d.ops().get((u32)0);
+        String* rt = d.res().ty();
+        if (d.op().equals(String.withCString("Const"))) {
+            if (a0.kind() != (u8)OPK_IMMI) return false;
+            *out = fitConst((i64)a0.imm(), rt, constSigned(rt));
+            return true;
+        }
+        bool sx = d.op().equals(String.withCString("SExt"));
+        bool zx = d.op().equals(String.withCString("ZExt"));
+        if (!(sx || zx || d.op().equals(String.withCString("Trunc"))) || a0.kind() != (u8)OPK_USE) return false;
+        i64 s = (i64)0;
+        if (!constThrough(a0.val(), &s, depth + (u32)1)) return false;
+        // An extension reads its source at the source's width: sign bits for
+        // SExt, zero bits for ZExt, whatever the source's own signedness.
+        if (sx || zx) s = fitConst(s, a0.val().ty(), sx);
+        *out = fitConst(s, rt, constSigned(rt));
+        return true;
+    }
+
+    static bool constSigned(String* t)
+    {
+        return t != (String*)0 && t.hasPrefix(String.withCString("I"));
+    }
+
+    // `v` as a value of type `t`'s width: its low bits, sign- or zero-extended.
+    static i64 fitConst(i64 v, String* t, bool sgn)
+    {
+        u32 b = (u32)8;
+        if (t != (String*)0) {
+            if (t.equals(String.withCString("I8")) || t.equals(String.withCString("U8")) || t.equals(String.withCString("Bool"))) b = (u32)1;
+            else if (t.equals(String.withCString("I16")) || t.equals(String.withCString("U16"))) b = (u32)2;
+            else if (t.equals(String.withCString("I32")) || t.equals(String.withCString("U32"))) b = (u32)4;
+        }
+        if (b == (u32)8) return v;
+        u32 sh = (u32)64 - b * (u32)8;
+        if (sgn) return (v << sh) >> sh;
+        return (i64)(((u64)v << sh) >> sh);
+    }
 
     Map* _defOf;
 
