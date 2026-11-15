@@ -12478,13 +12478,7 @@ class ClassInfo
 
     IRSymbol* symbolNamed(String* name)
         {
-        for (u32 i = (u32)0; i < _m.syms().count(); i = i + (u32)1)
-            {
-            IRSymbol* s = (IRSymbol*)_m.syms().get(i);
-            if (s.name().equals(name))
-                return s;
-            }
-        return (IRSymbol*)0;
+        return _m.symNamed(name);
         }
 
     // The method a call resolved to. The ANALYSER already chose among the

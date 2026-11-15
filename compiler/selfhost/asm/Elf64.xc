@@ -1972,15 +1972,7 @@ class ElfSharedInfo
         a.sort();
         }
 
-    static bool inArray(Array* a, String* nm)
-        {
-        for (u32 i = (u32)0; i < a.count(); i = i + (u32)1)
-            if (((String*)a.get(i)).equals(nm))
-                return true;
-        return false;
-        }
-
-    // A name-set for O(1) membership — the linear inArray above is O(n) per
+    // A name-set for O(1) membership — a linear scan is O(n) per
     // check, so scanning it once per symbol/fixup is O(n^2) and dominated a big
     // static link (blewit: minutes of String.equals). Build the set once.
     static Map* setOf(Array* a)

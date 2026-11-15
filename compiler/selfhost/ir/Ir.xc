@@ -2130,9 +2130,24 @@ class IRValue
         {
         return _name;
         }
+    // Symbols by name, the first of each name (#335): symbolNamed scanned
+    // every symbol for every method call. Filled by addSym, the one way a
+    // symbol joins the module while it is lowered; a code generator that
+    // removes symbols afterwards does not look them up by name.
+    Map* _symByName;
     void addSym(IRSymbol* s)
         {
         _syms.add((Object*)s);
+        if (_symByName == (Map*)0)
+            _symByName = new Map();
+        if (s.name() != (String*)0 && _symByName.get((Hashable*)s.name()) == (Object*)0)
+            _symByName.set((Hashable*)s.name(), (Object*)s);
+        }
+    IRSymbol* symNamed(String* name)
+        {
+        if (_symByName == (Map*)0 || name == (String*)0)
+            return (IRSymbol*)0;
+        return (IRSymbol*)_symByName.get((Hashable*)name);
         }
     void addFunc(IRFunc* f)
         {

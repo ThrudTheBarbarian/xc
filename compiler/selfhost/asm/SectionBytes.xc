@@ -217,3 +217,36 @@ class SectionBytes
             out.increaseLengthBy(n - k);
         }
     }
+
+// A set of symbol names (#335). The writers asked "is this name in that list"
+// with a scan, once per symbol or per fixup, which is quadratic on a large
+// link; a NameSet answers in one hash lookup. Built from a list, or grown
+// alongside one that is kept for its order.
+class NameSet
+    {
+    Map* _m;
+    void init(void)
+        {
+        _m = new Map();
+        }
+    static NameSet* of(Array* names)
+        {
+        NameSet* s = new NameSet();
+        if (names != (Array*)0)
+            for (u32 i = (u32)0; i < names.count(); i = i + (u32)1)
+                s._m.set((Hashable*)names.get(i), names.get(i));
+        return s;
+        }
+    bool has(String* name)
+        {
+        return name != (String*)0 && _m.get((Hashable*)name) != (Object*)0;
+        }
+    // Adds `name`; true when it was not there yet.
+    bool add(String* name)
+        {
+        if (has(name))
+            return false;
+        _m.set((Hashable*)name, (Object*)name);
+        return true;
+        }
+    }

@@ -912,7 +912,7 @@ class Arm64Asm
     // `resolveLocal` is filled in by the caller's symbol table: a TEXT label
     // gives its address and a relative branch; anything else becomes a fixup.
     Map*  _resolveSyms;
-    Array* _resolveDataSyms;
+    Map*  _resolveDataSyms;   // the data symbols, as a set
     bool  _lastWasLocal;
 
     u32 resolveTarget(String* name)
@@ -921,8 +921,7 @@ class Arm64Asm
         if (_resolveSyms == (Map*)0) return (u32)0;
         Object* a = _resolveSyms.get((Hashable*)name);
         if (a == (Object*)0) return (u32)0;
-        for (u32 i = (u32)0; i < _resolveDataSyms.count(); i = i + (u32)1)
-            if (((String*)_resolveDataSyms.get(i)).equals(name)) return (u32)0;
+        if (_resolveDataSyms != (Map*)0 && _resolveDataSyms.get((Hashable*)name) != (Object*)0) return (u32)0;
         _lastWasLocal = true;
         return ((Number*)a).asU32();
     }
@@ -3663,7 +3662,11 @@ class Arm64Asm
         // Pass 2. Only TEXT symbols resolve as local: a data symbol reaches
         // code through an adrp/add pair, never a relative branch.
         _resolveSyms = _symbols;
-        _resolveDataSyms = _dataSyms;
+        // As a set (#335): every branch asked whether its target was data,
+        // and a scan of the data symbols made that O(branches x data).
+        _resolveDataSyms = new Map();
+        for (u32 i = (u32)0; i < _dataSyms.count(); i = i + (u32)1)
+            _resolveDataSyms.set((Hashable*)_dataSyms.get(i), (Object*)_dataSyms.get(i));
         u32 pc = (u32)0;
         for (u32 i = (u32)0; i < insns.count(); i = i + (u32)1) {
             String* insn = (String*)insns.get(i);

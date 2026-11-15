@@ -238,6 +238,9 @@ class Pe
     Data* objectFromText(SectionBytes* text, SectionBytes* data, Map* symbols, Array* dataSyms,
                          Array* globalSyms, Array* fixups)
         {
+        // The name lists as sets (#335): each was scanned once per symbol.
+        NameSet* dataSet = NameSet.of(dataSyms);
+        NameSet* globalSet = NameSet.of(globalSyms);
         SectionBytes* mtext = text.copy();
         SectionBytes* mdata = data.copy();
         Array* defText = new Array();
@@ -249,7 +252,7 @@ class Pe
             String* n = (String*)names.get(i);
             if (n.hasPrefix(String.withCString(".L")))
                 continue;
-            if (Pe.inArray(dataSyms, n))
+            if (dataSet.has(n))
                 defData.add((Object*)n);
             else
                 defText.add((Object*)n);
@@ -445,7 +448,7 @@ class Pe
             String* n = (String*)order.get(i);
             Object* val = symbols.get((Hashable*)n);
             bool isUndef = val == (Object*)0;
-            bool inData = Pe.inArray(dataSyms, n);
+            bool inData = dataSet.has(n);
             u32 sx = ((Number*)strx.get(i)).asU32();
             if (sx == (u32)0)
                 {
@@ -460,7 +463,7 @@ class Pe
             p32(isUndef ? (u32)0 : ((Number*)val).asU32());
             p16(isUndef ? (u32)0 : (inData ? (u32)2 : (u32)1));
             p16((u32)0);
-            p8((isUndef || Pe.inArray(globalSyms, n)) ? (u32)2 : (u32)3);
+            p8((isUndef || globalSet.has(n)) ? (u32)2 : (u32)3);
             p8((u32)0);
             }
         // .xdata's section symbol (static), named by .pdata's relocations.
@@ -1219,6 +1222,7 @@ class Pe
 
     bool resolveFixups(SectionBytes* text, SectionBytes* data, Map* symbols, Array* dataSyms, Array* fixups)
         {
+        NameSet* dataSet = NameSet.of(dataSyms);   // #335: was a scan per fixup
         for (u32 i = (u32)0; i < fixups.count(); i = i + (u32)1)
             {
             X86Fixup* f = (X86Fixup*)fixups.get(i);
@@ -1226,7 +1230,7 @@ class Pe
             String* viaImp = Pe.impTarget(f.symbol());
             u32 target;
             if (off != (Object*)0)
-                target = (inArray(dataSyms, f.symbol()) ? _dataRVA : _textRVA) + ((Number*)off).asU32();
+                target = (dataSet.has(f.symbol()) ? _dataRVA : _textRVA) + ((Number*)off).asU32();
             else if (viaImp != (String*)0)
                 target = _iatRVA + ((Number*)_iatSlot.get((Hashable*)viaImp)).asU32() * (u32)8;
             else if (f.kind() == (u32)X86FIX_ABS64)
@@ -1515,6 +1519,7 @@ class Pe
 
     void emitExports(Map* symbols, Array* dataSyms)
         {
+        NameSet* dataSet = NameSet.of(dataSyms);   // #335: was a scan per export
         padTo(_rdataRaw + (_expRVA - _rdataRVA));
         u32 ne = _exports.count();
         p32((u32)0); // ExportFlags
@@ -1531,7 +1536,7 @@ class Pe
         for (u32 i = (u32)0; i < ne; i = i + (u32)1)
             {
             String* n = (String*)_exports.get(i);
-            p32((inArray(dataSyms, n) ? _dataRVA : _textRVA)
+            p32((dataSet.has(n) ? _dataRVA : _textRVA)
                 + ((Number*)symbols.get((Hashable*)n)).asU32());
             }
         u32 nm = _expNamesRVA;

@@ -201,6 +201,8 @@ class ElfArm64
         Array* locals = new Array();
         Array* defText = new Array();
         Array* defData = new Array();
+        NameSet* exportSet = exports != (Array*)0 ? NameSet.of(exports) : (NameSet*)0;
+        NameSet* dataSet = NameSet.of(dataSyms);
         for (u32 i = (u32)0; i < names.count(); i = i + (u32)1)
             {
             String* n = (String*)names.get(i);
@@ -210,17 +212,18 @@ class ElfArm64
             // for both.
             if (commons.get((Hashable*)n) != (Object*)0)
                 continue;
-            if (exports != (Array*)0 && !ElfArm64.inArray(exports, n))
+            if (exportSet != (NameSet*)0 && !exportSet.has(n))
                 {
                 locals.add((Object*)n);
                 continue;
                 }
-            if (ElfArm64.inArray(dataSyms, n))
+            if (dataSet.has(n))
                 defData.add((Object*)n);
             else
                 defText.add((Object*)n);
             }
         Array* undef = new Array();
+        NameSet* undefSet = new NameSet();
         for (u32 pass = (u32)0; pass < (u32)2; pass = pass + (u32)1)
             {
             Array* fl = pass == (u32)0 ? fixups : modInitFix;
@@ -231,7 +234,7 @@ class ElfArm64
                     continue;
                 if (symbols.get((Hashable*)f.symbol()) != (Object*)0 || commons.get((Hashable*)f.symbol()) != (Object*)0)
                     continue;
-                if (!ElfArm64.inArray(undef, f.symbol()))
+                if (undefSet.add(f.symbol()))
                     undef.add((Object*)f.symbol());
                 }
             }
@@ -325,8 +328,8 @@ class ElfArm64
                 }
             Object* at = symbols.get((Hashable*)n);
             bool isUndef = at == (Object*)0;
-            bool inData = ElfArm64.inArray(dataSyms, n);
-            bool isGlobal = isUndef || exports == (Array*)0 || ElfArm64.inArray(exports, n);
+            bool inData = dataSet.has(n);
+            bool isGlobal = isUndef || exportSet == (NameSet*)0 || exportSet.has(n);
             u32 type = isUndef ? (u32)0 : (inData ? (u32)1 : (u32)2);   // NOTYPE / OBJECT / FUNC
             symtab.appendByte((u8)(((isGlobal ? (u32)1 : (u32)0) << (u32)4) | type));
             symtab.appendByte((u8)0);
@@ -711,9 +714,12 @@ class ElfArm64
                Array* exportsIn, Array* fixups, String* soname, Array* needed,
                String* entry, u32 modInitLength, Array* iface)
         {
+        // The name lists as sets (#335): each was scanned once per symbol or
+        // fixup below.
+        NameSet* dataSet = NameSet.of(dataSyms);
         bool isExec = entry != (String*)0 && entry.byteLength() > (u32)0;
         bool hasIface = iface != (Array*)0 && iface.count() > (u32)0;
-        if (isExec && (symbols.get((Hashable*)entry) == (Object*)0 || inArray(dataSyms, entry)))
+        if (isExec && (symbols.get((Hashable*)entry) == (Object*)0 || dataSet.has(entry)))
             {
             failWith(String.withCString("entry symbol is not defined in .text:"), entry);
             return;
@@ -728,12 +734,15 @@ class ElfArm64
         // against zero, which would be a null call at run time.
         Array* imports = new Array();
         Array* dataImports = new Array();
+        NameSet* importSet = new NameSet();
+        NameSet* dataImportSet = new NameSet();
         // A `.quad` naming an import — a vtable word for another library's
         // class or method, when a library subclasses a class it imported —
         // takes an R_AARCH64_ABS64 against the symbol, which the loader fills
         // with its address. It needs a dynamic symbol but no GOT slot or
         // thunk (bug 460).
         Array* wordCand = new Array();
+        NameSet* wordSet = new NameSet();
         for (u32 i = (u32)0; i < fixups.count(); i = i + (u32)1)
             {
             Arm64Fixup* f = (Arm64Fixup*)fixups.get(i);
@@ -742,7 +751,7 @@ class ElfArm64
             bool isGot = f.kind() == (u32)FIXUP_GOTPAGE21 || f.kind() == (u32)FIXUP_GOTPAGEOFF12;
             if (f.kind() == (u32)FIXUP_POINTER64)
                 {
-                if (!inArray(wordCand, f.symbol()))
+                if (wordSet.add(f.symbol()))
                     wordCand.add((Object*)f.symbol());
                 continue;
                 }
@@ -759,15 +768,15 @@ class ElfArm64
                          f.symbol());
                 return;
                 }
-            if (isGot && !inArray(dataImports, f.symbol()))
+            if (isGot && dataImportSet.add(f.symbol()))
                 dataImports.add((Object*)f.symbol());
-            if (!inArray(imports, f.symbol()))
+            if (importSet.add(f.symbol()))
                 imports.add((Object*)f.symbol());
             }
         // Imports named only by data words, after the GOT imports in .dynsym.
         Array* wordImports = new Array();
         for (u32 i = (u32)0; i < wordCand.count(); i = i + (u32)1)
-            if (!inArray(imports, (String*)wordCand.get(i)))
+            if (!importSet.has((String*)wordCand.get(i)))
                 wordImports.add(wordCand.get(i));
         // An executable's imports, checked against what its libraries define:
         // a symbol none of them has is an error here rather than at load.
@@ -796,10 +805,11 @@ class ElfArm64
 
         // ── 2. exports ───────────────────────────────────────────────────
         Array* exports = new Array();
+        NameSet* exportSet = new NameSet();
         for (u32 i = (u32)0; i < exportsIn.count(); i = i + (u32)1)
             {
             String* n = (String*)exportsIn.get(i);
-            if (symbols.get((Hashable*)n) != (Object*)0 && !inArray(exports, n))
+            if (symbols.get((Hashable*)n) != (Object*)0 && exportSet.add(n))
                 exports.add((Object*)n);
             }
         // In NAME order, as the reference writer sorts them: the caller's order
@@ -914,7 +924,7 @@ class ElfArm64
             bool isGot = f.kind() == (u32)FIXUP_GOTPAGE21 || f.kind() == (u32)FIXUP_GOTPAGEOFF12;
             u32 target;
             if (off != (Object*)0)
-                target = (inArray(dataSyms, f.symbol()) ? dataAddr : textAddr) + ((Number*)off).asU32();
+                target = (dataSet.has(f.symbol()) ? dataAddr : textAddr) + ((Number*)off).asU32();
             else if (isGot)
                 target = gotOff + indexIn(imports, f.symbol()) * (u32)8;
             else
@@ -1071,8 +1081,8 @@ class ElfArm64
             String* n = (String*)symOrder.get(i);
             bool isNull = i == (u32)0;
             Object* off = isNull ? (Object*)0 : symbols.get((Hashable*)n);
-            bool inData = off != (Object*)0 ? inArray(dataSyms, n)
-                                            : (!isNull && inArray(dataImports, n));
+            bool inData = off != (Object*)0 ? dataSet.has(n)
+                                            : (!isNull && dataImportSet.has(n));
             // An import named only by data words may be either: STT_NOTYPE.
             bool wordOnly = !isNull && off == (Object*)0 && i >= (u32)1 + exports.count() + imports.count();
             u32 stt = wordOnly ? (u32)0 : (inData ? (u32)1 : (u32)2);
@@ -1129,7 +1139,7 @@ class ElfArm64
                 p32(f.addend() < 0 ? (u32)$FFFFFFFF : (u32)0);
                 continue;
                 }
-            u32 target = (inArray(dataSyms, f.symbol()) ? dataAddr : textAddr) + ((Number*)off).asU32() + (u32)f.addend();
+            u32 target = (dataSet.has(f.symbol()) ? dataAddr : textAddr) + ((Number*)off).asU32() + (u32)f.addend();
             p64(dataAddr + f.offset());
             p64((u32)1027);
             p64(target);

@@ -513,6 +513,20 @@ class MachOSha256
         {
         return _syms;
         }
+    // Whether the library exports `sym`, from a set built on first use
+    // (#335): ordinalFor asked it for every import, by a scan of every
+    // symbol the library exports (libRuntime's, in every program).
+    Map* _set;
+    bool exports(String* sym)
+        {
+        if (_set == (Map*)0)
+            {
+            _set = new Map();
+            for (u32 i = (u32)0; i < _syms.count(); i = i + (u32)1)
+                _set.set((Hashable*)_syms.get(i), _syms.get(i));
+            }
+        return _set.get((Hashable*)sym) != (Object*)0;
+        }
     }
 
     // Everything the layout pass decided, in one place. It exists so the emitters
@@ -682,7 +696,7 @@ class MachOSha256
     u32 ordinalFor(String* sym)
         {
         for (u32 i = (u32)0; i < _deps.count(); i = i + (u32)1)
-            if (inArray(((MachODep*)_deps.get(i)).syms(), sym))
+            if (((MachODep*)_deps.get(i)).exports(sym))
                 return (u32)2 + i;
         return _flatBind ? (u32)$FE : (u32)1;
         }
@@ -2492,14 +2506,6 @@ class MachOSha256
             return textOffset + off;
         // past the data blob: a __bss symbol (bug 642)
         return off >= gMachOBssFrom ? gMachOBssBase + (off - gMachOBssFrom) : dataProgOffset + off;
-        }
-
-    static bool inArray(Array* a, String* nm)
-        {
-        for (u32 i = (u32)0; i < a.count(); i = i + (u32)1)
-            if (((String*)a.get(i)).equals(nm))
-                return true;
-        return false;
         }
 
     static void sortNumbers(Array* a)

@@ -3854,17 +3854,16 @@ class X86Fixup
     void resolveLocalBranches(void)
         {
         Array* unresolved = new Array();
+        // The data symbols as a set (#335): a scan per fixup made this
+        // O(fixups x data symbols).
+        Map* dataSet = new Map();
+        for (u32 k = (u32)0; k < _dataSyms.count(); k = k + (u32)1)
+            dataSet.set((Hashable*)_dataSyms.get(k), _dataSyms.get(k));
         for (u32 i = (u32)0; i < _fixups.count(); i = i + (u32)1)
             {
             X86Fixup* f = (X86Fixup*)_fixups.get(i);
             Object* target = _symbols.get((Hashable*)f.symbol());
-            bool isData = false;
-            for (u32 k = (u32)0; k < _dataSyms.count(); k = k + (u32)1)
-                if (((String*)_dataSyms.get(k)).equals(f.symbol()))
-                    {
-                    isData = true;
-                    break;
-                    }
+            bool isData = dataSet.get((Hashable*)f.symbol()) != (Object*)0;
             if (f.kind() == (u32)X86FIX_REL32 && target != (Object*)0 && !isData)
                 {
                 i32 rel = (i32)((Number*)target).asU32() - (i32)f.offset() + f.addend();
