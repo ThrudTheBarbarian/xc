@@ -232,6 +232,32 @@ class CPath
         return r != (String*)0 ? Languages.plainCallingConv(r) : r;
         }
 
+    // A load-time function that calls mingw's __main (the program's
+    // constructors), for a main of xcc's.
+    static void callMingwMain(IRModule* m)
+        {
+        m.addSym(IRSymbol.func(String.withCString("__main"), String.withCString("() -> Void"), false, true));
+        IRFunc* f = new IRFunc();
+        f.setName(String.withCString("__xc_mingw_main"));
+        IRValue* mem = new IRValue(String.withCString("Mem"));
+        f.addParam(mem);
+        IRBlock* b = new IRBlock(String.withCString("bb_entry"));
+        IRInsn* c = IRInsn.with(String.withCString("Call"));
+        c.setCc(String.withCString("CallConv::Standard"));
+        c.add(IROperand.sym(String.withCString("__main")));
+        c.add(IROperand.useVal(mem));
+        IRValue* mo = new IRValue(String.withCString("Mem"));
+        c.setMemRes(mo);
+        b.add(c);
+        IRInsn* r = IRInsn.with(String.withCString("Return"));
+        r.add(IROperand.useVal(mo));
+        b.setTerm(r);
+        f.addBlock(b);
+        m.addFunc(f);
+        m.addSym(IRSymbol.func(String.withCString("__xc_mingw_main"), String.withCString("() -> Void"), false, false));
+        m.modinits().add((Object*)String.withCString("__xc_mingw_main"));
+        }
+
     // A load-time function that calls __register_frame(&__xc_eh_frame_start)
     // once per program: every C/C++ object carries one, and the link gathers
     // their tables under that one symbol, so each checks and sets a flag that
@@ -526,6 +552,11 @@ class CPath
         bool hasMain = false;
         for (u32 i = (u32)0; i < m.funcs().count() && !hasMain; i = i + (u32)1)
             hasMain = ((IRFunc*)m.funcs().get(i)).name().equals(String.withCString("main"));
+        // mingw: clang's back end makes main call __main first, which runs
+        // the program's constructors (.ctors); the call is not in the IR. When
+        // main is xcc's, a load-time function makes it, before main.
+        if (hasMain && gCPathTarget != (String*)0 && gCPathTarget.contains(String.withCString("mingw")))
+            CPath.callMingwMain(m);
         if (!hasMain)
             {
             IRFunc* ctor = new IRFunc();
