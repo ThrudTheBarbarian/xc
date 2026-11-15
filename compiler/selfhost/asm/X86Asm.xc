@@ -280,13 +280,17 @@ class X86Fixup
         }
     // The exception tables of the last text assembled (C++ handlers): as
     // Arm64Asm's, per function [its label, the LSDA, the type-table entries'
-    // (offset, typeinfo)], 4-byte type entries (0x9b).
-    static Array* _lsdas;
-    static Array* takeLsdas(void)
+    // (offset, typeinfo)]. The object writer names the type entries' form
+    // (ELF 0x9b, PE 0x00); the labels are this text's.
+    static Array* _lsdaLines;
+    static Map* _lsdaSyms;
+    static Array* takeLsdas(u32 ttEnc)
         {
-        Array* a = _lsdas;
-        _lsdas = (Array*)0;
-        return a;
+        Array* raw = _lsdaLines;
+        _lsdaLines = (Array*)0;
+        if (raw == (Array*)0 || raw.count() == (u32)0)
+            return (Array*)0;
+        return DwarfWriter.buildLsdas(raw, _lsdaSyms, ttEnc);
         }
 
     // win64 unwind entries (`.seh_proc` … `.seh_endproc`, C/C++ input): per
@@ -3461,7 +3465,8 @@ class X86Fixup
                 }
             }
         // The functions' exception tables, every label placed.
-        _lsdas = _lsdaRaw.count() > (u32)0 ? DwarfWriter.buildLsdas(_lsdaRaw, _symbols, (u32)$9B) : (Array*)0;
+        _lsdaLines = _lsdaRaw;
+        _lsdaSyms = _symbols;
         if (_dwarf != (DwarfWriter*)0 && (_dwarf.hasRows() || _dwarf.hasSaves()))
             DwarfWriter.setPending(_dwarf);
         // The bss, after all the data (bug 642): its labels become data symbols

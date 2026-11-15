@@ -5485,10 +5485,11 @@ void main(void)
         arm64SetEhTables(true);
         x86SetEhTables(true);
         // C++ handlers compiled by xcc (option (a) phase 2) where the back end
-        // writes their tables: arm64 macOS and Linux, x86-64 Linux.
+        // writes their tables: arm64 macOS and Linux, x86-64 Linux and win64.
         cPathSetHandlers(crow != (TargetRow*)0 && (crow.name().equals(String.withCString("arm64-macos"))
                                                   || crow.name().equals(String.withCString("arm64-linux"))
-                                                  || crow.name().equals(String.withCString("x86_64-linux"))));
+                                                  || crow.name().equals(String.withCString("x86_64-linux"))
+                                                  || crow.name().equals(String.withCString("x86_64-windows"))));
         machoSetEhMerge(true);
         // This file's suffix for the outliner's symbols, as the reader's for
         // its internal names: two C/C++ objects in one program stay apart.

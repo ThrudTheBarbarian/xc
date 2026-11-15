@@ -66,6 +66,13 @@ check() { # name, want
 check throw "1 5 3 7"
 check misc "42 21 9"
 check lift "1 7.000000"
+# A loop around a try with two catches, compiled by xcc: its LSDA is the
+# handler data of its UNWIND_INFO, after __gxx_personality_seh0's RVA.
+cp tests/par/c-handlers/sumsafe.cpp "$W/sumsafe.cpp"
+check sumsafe "8058"
+if XC_C_TRACE=1 "$XC" -q -O2 -A win64 -H . -o "$W/s2.exe" "$W/sumsafe.cpp" 2>&1 | grep -q 'left to clang: @_Z7sumsafei'; then
+    echo "FAIL cppwine: sumsafe was left to clang"; fail=1
+fi
 # Programs of several files, built in one command (each file's two objects,
 # --c-pair, and objects that ask for libc++ and keep clang's SEH tables):
 # three files with static helpers of one name, and two files each throwing

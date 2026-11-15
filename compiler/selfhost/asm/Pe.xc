@@ -182,9 +182,11 @@ class Pe
         x.appendByte((u8)((v >> (u32)8) & (u32)$FF));
         }
 
-    // One function's UNWIND_INFO (version 1, no handler): its codes, latest
-    // prologue step first, each in the shortest form that holds its value.
-    static void unwindInfo(Data* x, Array* f)
+    // One function's UNWIND_INFO (version 1): its codes, latest prologue
+    // step first, each in the shortest form that holds its value. handler:
+    // an exception and termination handler follows (UNW_FLAG_EHANDLER |
+    // UNW_FLAG_UHANDLER), its RVA and data written by the caller.
+    static void unwindInfo(Data* x, Array* f, bool handler)
         {
         Array* codes = (Array*)f.get((u32)4);
         Data* sl = new Data();
@@ -218,7 +220,7 @@ class Pe
                 }
             }
         u32 prolog = ((Number*)f.get((u32)2)).asU32();
-        x.appendByte((u8)1);
+        x.appendByte((u8)(handler ? (u32)$19 : (u32)1));
         x.appendByte((u8)(prolog > (u32)255 ? (u32)255 : prolog));
         x.appendByte((u8)nslots);
         x.appendByte((u8)0);
@@ -259,6 +261,29 @@ class Pe
             }
         Array* undef = new Array();
         Map* undefSeen = new Map();
+        // C++ handlers (X86Asm's LSDAs): each its function's handler data in
+        // .xdata, after the RVA of __gxx_personality_seh0, as clang writes
+        // them for mingw; the type entries 8-byte absolute (0x00).
+        Array* lsdas = X86Asm.takeLsdas((u32)0);
+        Map* lsdaOf = new Map();
+        for (u32 i = (u32)0; lsdas != (Array*)0 && i < lsdas.count(); i = i + (u32)1)
+            {
+            Array* rec = (Array*)lsdas.get(i);
+            lsdaOf.set((Hashable*)rec.get((u32)0), (Object*)rec);
+            Array* want = new Array();
+            want.add((Object*)String.withCString("__gxx_personality_seh0"));
+            Array* refs = (Array*)rec.get((u32)2);
+            for (u32 k = (u32)1; k < refs.count(); k = k + (u32)2)
+                want.add(refs.get(k));
+            for (u32 k = (u32)0; k < want.count(); k = k + (u32)1)
+                {
+                String* w = (String*)want.get(k);
+                if (symbols.get((Hashable*)w) != (Object*)0 || undefSeen.get((Hashable*)w) != (Object*)0)
+                    continue;
+                undefSeen.set((Hashable*)w, (Object*)Number.withU32((u32)1));
+                undef.add((Object*)w);
+                }
+            }
         for (u32 i = (u32)0; i < fixups.count(); i = i + (u32)1)
             {
             X86Fixup* f = (X86Fixup*)fixups.get(i);
@@ -357,6 +382,8 @@ class Pe
         Data* pdata = new Data();
         Data* pRel = new Data();
         u32 nPRel = (u32)0;
+        Data* xRel = new Data();
+        u32 nXRel = (u32)0;
         u32 xdataSym = order.count();
         for (u32 i = (u32)0; _seh != (Array*)0 && i < _seh.count(); i = i + (u32)1)
             {
@@ -373,7 +400,26 @@ class Pe
             while (xdata.length() % (u32)4 != (u32)0)
                 xdata.appendByte((u8)0);
             u32 xoff = xdata.length();
-            Pe.unwindInfo(xdata, f);
+            Array* lrec = (Array*)lsdaOf.get((Hashable*)f.get((u32)0));
+            Pe.unwindInfo(xdata, f, lrec != (Array*)0);
+            if (lrec != (Array*)0)
+                {
+                // The handler's RVA, then its data: the LSDA.
+                Pe.rel(xRel, xdata.length(), ((Number*)symIndex.get((Hashable*)String.withCString("__gxx_personality_seh0"))).asU32() - (u32)1, (u32)3);
+                nXRel = nXRel + (u32)1;
+                for (u32 b = (u32)0; b < (u32)4; b = b + (u32)1) xdata.appendByte((u8)0);
+                u32 lat = xdata.length();
+                Data* lb = (Data*)lrec.get((u32)1);
+                for (u32 b = (u32)0; b < lb.length(); b = b + (u32)1) xdata.appendByte(lb.bytes()[b]);
+                Array* refs = (Array*)lrec.get((u32)2);
+                for (u32 k = (u32)0; k + (u32)1 < refs.count(); k = k + (u32)2)
+                    {
+                    Object* ti = symIndex.get((Hashable*)refs.get(k + (u32)1));
+                    if (ti == (Object*)0) continue;
+                    Pe.rel(xRel, lat + ((Number*)refs.get(k)).asU32(), ((Number*)ti).asU32() - (u32)1, (u32)COFF_REL_ADDR64);
+                    nXRel = nXRel + (u32)1;
+                    }
+                }
             u32 at = pdata.length();
             u32 words[3];
             words[0] = (u32)0;
@@ -410,6 +456,8 @@ class Pe
         off = off + dataRel.length();
         u32 prelOff = off;
         off = off + pRel.length();
+        u32 xrelOff = off;
+        off = off + xRel.length();
         u32 symOff = off;
         _out = new Data();
         p16((u32)COFF_MACHINE_AMD64);
@@ -430,7 +478,7 @@ class Pe
         // IMAGE_SCN_CNT_INITIALIZED_DATA | MEM_READ | ALIGN_4BYTES
         if (hasSeh)
             {
-            Pe.sectHdr(self, String.withCString(".xdata"), xdata.length(), xOff, (u32)0, (u32)0,
+            Pe.sectHdr(self, String.withCString(".xdata"), xdata.length(), xOff, nXRel > (u32)0 ? xrelOff : (u32)0, nXRel,
                        (u32)$40300040);
             Pe.sectHdr(self, String.withCString(".pdata"), pdata.length(), pOff, prelOff, nPRel,
                        (u32)$40300040);
@@ -443,6 +491,7 @@ class Pe
         appendAll(textRel);
         appendAll(dataRel);
         appendAll(pRel);
+        appendAll(xRel);
         for (u32 i = (u32)0; i < order.count(); i = i + (u32)1)
             {
             String* n = (String*)order.get(i);

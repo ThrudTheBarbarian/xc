@@ -1065,7 +1065,8 @@ class DwarfWriter
     // between with none (a call there passes an exception on; one outside
     // every entry would terminate).
     // ttEnc: the type table's entries, 0x9b (4 bytes: Mach-O's GOT slot,
-    // x86-64 ELF's data word) or 0x9c (8 bytes: arm64 ELF's data word).
+    // x86-64 ELF's data word), 0x9c (8 bytes: arm64 ELF's data word) or
+    // 0x00 (8-byte absolute: PE, the typeinfo itself).
     static Array* buildLsdas(Array* raw, Map* syms, u32 ttEnc)
         {
         Array* out = new Array();
@@ -1160,7 +1161,8 @@ class DwarfWriter
                 {
                 // TType base: from after its own uleb to the type table's
                 // end, the table 4-aligned (entries n..1 before that end).
-                u32 esz = (ttEnc & (u32)$0F) == (u32)$0C ? (u32)8 : (u32)4;
+                // 8-byte entries: udata8 (0x?c) and absptr (0x00, PE).
+                u32 esz = ((ttEnc & (u32)$0F) == (u32)$0C || ttEnc == (u32)0) ? (u32)8 : (u32)4;
                 u32 tsz = esz * types.count();
                 u32 ul = (u32)1;
                 u32 pad = (u32)0;

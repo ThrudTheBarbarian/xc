@@ -1493,7 +1493,7 @@ class ElfSharedInfo
         // under a local symbol (xc.lsda.<n>), a data word per typeinfo the
         // type table names (xc.ti.<name>, its entries 4-byte pc-relative to
         // it, 0x9b) and one holding __gxx_personality_v0 (xc.pers).
-        Array* lsdas = X86Asm.takeLsdas();
+        Array* lsdas = X86Asm.takeLsdas((u32)$9B);
         Map* lsdaFns = new Map();
         if (lsdas != (Array*)0 && lsdas.count() > (u32)0)
             {

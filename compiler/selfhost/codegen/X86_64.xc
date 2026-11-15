@@ -7330,7 +7330,7 @@ class X86_64
             {
             // The exception goes on to the caller.
             load((IROperand*)t.ops().get((u32)0), (u8)'a');
-            _out.appendCString("\tmov\trdi, rax\n\tcall\t_Unwind_Resume\n\tud2\n");
+            _out.appendFormat("\tmov\t%s, rax\n\tcall\t_Unwind_Resume\n\tud2\n", _win64 ? "rcx" : "rdi");
             return;
             }
         if (op.equals(String.withCString("Return")))
@@ -8209,8 +8209,13 @@ class X86_64
         String* lb = String.withFormat(".Lxceh_%s_%ub", safeSym(fn.name()).cString(), _ehN);
         String* le = String.withFormat(".Lxceh_%s_%ue", safeSym(fn.name()).cString(), _ehN);
         _out.appendFormat("%s:\n", lb.cString());
-        // The arguments end before the memory token and the two blocks.
-        emitSysVCall(fn, t, false, nops - (u32)3);
+        // The arguments end before the memory token and the two blocks. On
+        // win64 the frame keeps rsp fixed after the prologue, so the pad
+        // starts with the rsp the unwinder restores.
+        if (_win64)
+            emitWin64Call(fn, t, false, nops - (u32)3);
+        else
+            emitSysVCall(fn, t, false, nops - (u32)3);
         _out.appendFormat("%s:\n", le.cString());
         Object* act = _ehPadAction != (Map*)0 ? _ehPadAction.get((Hashable*)unwind.blk().name()) : (Object*)0;
         _ehSites.add((Object*)lb);
@@ -8513,7 +8518,7 @@ class X86_64
             return true;
             }
         // C++ handlers: the personality hands the pad the exception in rax
-        // and the selector in edx (SysV).
+        // and the selector in edx (SysV and win64 alike).
         if (op.equals(String.withCString("LandingPad")))
             {
             store((u8)'a', n.res());
