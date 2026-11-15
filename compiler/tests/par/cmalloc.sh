@@ -64,9 +64,9 @@ for t in 1 16; do
 done
 # A program that defines its own malloc, calloc, realloc and free keeps them,
 # in one file or as a second object: its blocks are its pool's, nothing is
-# renamed, and (Linux) the executable exports nothing. On the CPU: the pool is
-# a global of 64 KB and more, which the runtime knows as one block, and its
-# arrays are pointers into it.
+# renamed, and (Linux) the executable exports nothing. The pool is a global of
+# 64 KB and more, which the runtime knows as one block, and its arrays are
+# pointers into it (cpool.sh runs it on the GPU too).
 # Each with the target's libRuntime, when one is built, and without it.
 RL=$( [ "$PLAT" = osx ] && echo support/runtime-lib/arm64-macos/libRuntime.dylib || echo support/runtime-lib/x86_64-linux/libRuntime.so )
 links="--no-runtime-lib"
@@ -85,7 +85,8 @@ for link in $links; do
             "$XC" -q -O2 -H . $opt -o "$W/own.$shape" $D/ownmain.c $D/ownheap.c > "$W/own.b" 2>&1
         fi
         [ $? = 0 ] || { echo "  FAIL: own allocator ($shape, $link) does not build"; head -5 "$W/own.b"; fail=1; continue; }
-        got=$(XC_PAR=cpu "$W/own.$shape" 2>&1)
+        mkdir -p "$W/home.$shape.$link"
+        got=$(HOME="$W/home.$shape.$link" "$W/own.$shape" 2>&1)
         [ "$got" = "$wantown" ] && echo "  ok: own allocator ($shape object(s), $link) gives clang's answer ($got)" \
             || { echo "  FAIL: own allocator ($shape, $link) gives '$got', clang's '$wantown'"; fail=1; }
         if [ "$PLAT" = linux ] && command -v nm > /dev/null; then

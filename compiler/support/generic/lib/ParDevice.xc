@@ -2761,6 +2761,47 @@ class ParDevice
         return false;
         }
 
+    // Whether two of the layout's device buffers (an array's bytes from its
+    // pointer, a global's whole) cover common memory, one of them written. A
+    // GPU copies each in and back on its own, so the second copy back puts
+    // the bytes from before the run over what the kernel wrote through the
+    // first, and a buffer read sees none of another's writes (#325: arrays
+    // inside a program's own pool; an array inside a global the block also
+    // uses).
+    static bool deviceOverlap(ParChunk* proto, ParLayout* l)
+        {
+        u8* obj = proto.objBytes();
+        u64 a0s[32];
+        u64 a1s[32];
+        bool ro[32];
+        u32 n = (u32)0;
+        for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
+            {
+            u64 p = (u64)*(pointer*)((pointer)((u64)obj + (u64)l.bufOff[i]));
+            a0s[n] = p;
+            a1s[n] = p + (u64)l.bufLen[i];
+            ro[n] = l.bufIn[i] != (i64)0;
+            n = n + (u32)1;
+            }
+        for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
+            {
+            u64 p = (u64)l.globPtr[i];
+            a0s[n] = p;
+            a1s[n] = p + (u64)l.globLen[i];
+            ro[n] = l.globIn[i] != (i64)0;
+            n = n + (u32)1;
+            }
+        for (u32 i = (u32)0; i < n; i = i + (u32)1)
+            for (u32 j = i + (u32)1; j < n; j = j + (u32)1)
+                {
+                if (a0s[i] == (u64)0 || a0s[j] == (u64)0 || (ro[i] && ro[j]))
+                    continue;
+                if (a0s[i] < a1s[j] && a0s[j] < a1s[i])
+                    return true;
+                }
+        return false;
+        }
+
     static ParLayout* layout(ParChunk* proto, u8* src, i64 lo, i64 hi)
         {
         return layoutOver(proto, src, lo, hi, lo, hi);
@@ -2997,15 +3038,20 @@ class ParDevice
             }
         for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
             {
-            // Memory the runtime did not allocate (C's malloc) has no span.
-            // Where every iteration touches the array across its footprint
-            // (whole=), the run reaches from element min(k*lo, k*(hi-1)) + c0
-            // to max(k*lo, k*(hi-1)) + c1 (exclusive), and the buffer is the
-            // bytes up to there: all of them are the program's, so the copy in
-            // reads none past the array, and the copy back returns what the
-            // kernel did not write as it was. Not when the lowest is below the
+            // With a footprint, the run reaches from element
+            // min(k*lo, k*(hi-1)) + c0 to max(k*lo, k*(hi-1)) + c1
+            // (exclusive), and the buffer is the bytes up to there. Memory
+            // the runtime did not allocate (C's malloc) has no span: there
+            // only where every iteration touches the array across its
+            // footprint (whole=), so all of the bytes are the program's and
+            // the copy in reads none past the array. A span (the rest of a
+            // heap block, or of a global with pages of its own) is cut to the
+            // footprint too: two arrays in one block each had the rest of the
+            // block as their buffer, and the second one's copy back put the
+            // bytes from before the run over what the kernel had written
+            // through the first (#325). Not when the lowest is below the
             // pointer.
-            if (l.bufLen[i] < (i64)0 && l.bufWhole[i] != (i64)0 && l.bufFp[i] != (i64)0 && l.runHi > l.runLo)
+            if (l.bufFp[i] != (i64)0 && l.runHi > l.runLo)
                 {
                 i64 e0 = l.bufFpK[i] * l.runLo;
                 i64 e1 = l.bufFpK[i] * (l.runHi - (i64)1);
@@ -3015,8 +3061,10 @@ class ParDevice
                     e0 = e1;
                     e1 = t;
                     }
-                if (e0 + l.bufFpLo[i] >= (i64)0 && e1 + l.bufFpHi[i] > (i64)0)
-                    l.bufLen[i] = (e1 + l.bufFpHi[i]) * l.bufElem[i];
+                i64 reach = (e1 + l.bufFpHi[i]) * l.bufElem[i];
+                if (e0 + l.bufFpLo[i] >= (i64)0 && e1 + l.bufFpHi[i] > (i64)0
+                    && ((l.bufLen[i] < (i64)0 && l.bufWhole[i] != (i64)0) || l.bufLen[i] > reach))
+                    l.bufLen[i] = reach;
                 }
             // No bytes is no size too: a device buffer of length 0 is no
             // buffer (Metal's is nil), and the kernel's writes to it were
@@ -3049,6 +3097,11 @@ class ParDevice
                 cpu("it uses an array shorter than the elements the loop reaches");
                 return (ParLayout*)0;
                 }
+            }
+        if (deviceOverlap(proto, l))
+            {
+            cpu("two of its arrays share memory on the device and one is written");
+            return (ParLayout*)0;
             }
         l.plan(lo, hi);
         if (reporting())
