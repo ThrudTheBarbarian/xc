@@ -953,12 +953,15 @@ class DwarfWriter
             DwarfWriter.putULEB(frame, (u64)minInsnLength);
             DwarfWriter.putSLEB(frame, (i64)-8);
             DwarfWriter.putULEB(frame, (u64)raReg);
-            DwarfWriter.putULEB(frame, wide ? (u64)7 : (u64)11); // augmentation data: P, L, R
-            DwarfWriter.putU8(frame, wide ? (u32)$9B : (u32)$9C); // personality: indirect pcrel
+            // ELF arm64: 8-byte personality and LSDA fields (0x9c, 0x1c);
+            // ELF x86-64: 4-byte (0x9b, 0x1b), as clang writes each.
+            bool e8 = !wide && a64;
+            DwarfWriter.putULEB(frame, wide ? (u64)7 : (e8 ? (u64)11 : (u64)7)); // augmentation data: P, L, R
+            DwarfWriter.putU8(frame, (wide || !e8) ? (u32)$9B : (u32)$9C); // personality: indirect pcrel
             _persField = (i64)frame.length();
-            if (wide) DwarfWriter.putU32(frame, (u32)0);
+            if (wide || !e8) DwarfWriter.putU32(frame, (u32)0);
             else DwarfWriter.putU64(frame, (u64)0);
-            DwarfWriter.putU8(frame, wide ? (u32)$10 : (u32)$1C); // LSDA: pcrel, 8 bytes
+            DwarfWriter.putU8(frame, wide ? (u32)$10 : (e8 ? (u32)$1C : (u32)$1B)); // LSDA: pcrel
             DwarfWriter.putU8(frame, wide ? (u32)$10 : (u32)$1B); // FDE addresses
             DwarfWriter.putU8(frame, (u32)$0C);
             DwarfWriter.putULEB(frame, (u64)spReg);
@@ -1009,11 +1012,13 @@ class DwarfWriter
             if (lsdaOff != (Object*)0) {
                 // Its LSDA, relocated as the address is (against a symbol
                 // at the LSDA's start, the field holding minus its offset).
-                DwarfWriter.putULEB(frame, (u64)8);
+                bool l4 = !wide && !a64;   // x86-64 ELF: a 4-byte LSDA field
+                DwarfWriter.putULEB(frame, l4 ? (u64)4 : (u64)8);
                 u32 lf = frame.length();
                 _lsdaFields.add((Object*)Number.withI64((i64)lf));
                 _lsdaFields.add((Object*)Number.withI64((i64)((Number*)lsdaOff).asU32()));
-                DwarfWriter.putU64(frame, wide ? (u64)((i64)0 - (i64)lf) : (u64)0);
+                if (l4) DwarfWriter.putU32(frame, (u32)0);
+                else DwarfWriter.putU64(frame, wide ? (u64)((i64)0 - (i64)lf) : (u64)0);
             } else
                 DwarfWriter.putULEB(frame, (u64)0);           // augmentation data length
             u32 at = ((Number*)setups.get(found)).asU32();
@@ -1026,6 +1031,194 @@ class DwarfWriter
         DwarfWriter.putU32(frame, (u32)0); // the terminator
         return frame;
     }
+
+    // ── LSDAs (C++ exception tables) ────────────────────────────────────
+    static void ulebInto(Data* d, u32 v)
+        {
+        while (true)
+            {
+            u32 b = v & (u32)$7F;
+            v = v >> (u32)7;
+            if (v != (u32)0) { d.appendByte((u8)(b | (u32)$80)); continue; }
+            d.appendByte((u8)b);
+            return;
+            }
+        }
+
+    static u32 ulebLen(u32 v)
+        {
+        u32 n = (u32)1;
+        while (v >= (u32)128) { v = v >> (u32)7; n = n + (u32)1; }
+        return n;
+        }
+
+    static u32 labelAt(Map* syms, String* l)
+        {
+        Object* o = syms.get((Hashable*)l);
+        return o != (Object*)0 ? ((Number*)o).asU32() : (u32)$FFFFFFFF;
+        }
+
+    // One LSDA per function (Itanium C++ ABI): LPStart omitted, the type
+    // table indirect pc-relative 4-byte entries (0x9b, the typeinfo's GOT
+    // slot), uleb128 call sites. The call-site table covers the whole
+    // function: each Invoke's call with its pad and action, the ranges
+    // between with none (a call there passes an exception on; one outside
+    // every entry would terminate).
+    // ttEnc: the type table's entries, 0x9b (4 bytes: Mach-O's GOT slot,
+    // x86-64 ELF's data word) or 0x9c (8 bytes: arm64 ELF's data word).
+    static Array* buildLsdas(Array* raw, Map* syms, u32 ttEnc)
+        {
+        Array* out = new Array();
+        for (u32 r = (u32)0; raw != (Array*)0 && r < raw.count(); r = r + (u32)1)
+            {
+            Array* ls = (Array*)raw.get(r);
+            String* fnLabel = (String*)0;
+            u32 fnStart = (u32)0;
+            u32 fnEnd = (u32)0;
+            Array* sites = new Array();   // Number quads: start, len, pad, action
+            Data* actions = new Data();
+            Array* types = new Array();
+            bool bad = false;
+            for (u32 k = (u32)0; k < ls.count(); k = k + (u32)1)
+                {
+                Array* w = ((String*)ls.get(k)).trimmed().splitOnByte((u8)' ');
+                String* d = (String*)w.get((u32)0);
+                if (d.equals(String.withCString(".xc_lsda_begin")) && w.count() >= (u32)3)
+                    {
+                    fnLabel = (String*)w.get((u32)1);
+                    fnStart = DwarfWriter.labelAt(syms, fnLabel);
+                    fnEnd = DwarfWriter.labelAt(syms, (String*)w.get((u32)2));
+                    }
+                else if (d.equals(String.withCString(".xc_lsda_cs")) && w.count() >= (u32)5)
+                    {
+                    u32 b = DwarfWriter.labelAt(syms, (String*)w.get((u32)1));
+                    u32 e = DwarfWriter.labelAt(syms, (String*)w.get((u32)2));
+                    u32 p = DwarfWriter.labelAt(syms, (String*)w.get((u32)3));
+                    if (b == (u32)$FFFFFFFF || e == (u32)$FFFFFFFF || p == (u32)$FFFFFFFF) { bad = true; continue; }
+                    sites.add((Object*)Number.withU32(b - fnStart));
+                    sites.add((Object*)Number.withU32(e - b));
+                    sites.add((Object*)Number.withU32(p - fnStart));
+                    sites.add((Object*)Number.withU32(DwarfWriter.decimalOf((String*)w.get((u32)4))));
+                    }
+                else if (d.equals(String.withCString(".xc_lsda_actions")) && w.count() >= (u32)2)
+                    {
+                    String* hx = (String*)w.get((u32)1);
+                    for (u32 q = (u32)0; q + (u32)1 < hx.byteLength(); q = q + (u32)2)
+                        actions.appendByte((u8)DwarfWriter.hexByte(hx.byteAt(q), hx.byteAt(q + (u32)1)));
+                    }
+                else if (d.equals(String.withCString(".xc_lsda_type")) && w.count() >= (u32)2)
+                    types.add(w.get((u32)1));
+                }
+            if (bad || fnLabel == (String*)0 || fnStart == (u32)$FFFFFFFF || fnEnd == (u32)$FFFFFFFF || fnEnd < fnStart)
+                continue;
+            // Sorted by start (an insertion sort: a function has few).
+            for (u32 i = (u32)4; i < sites.count(); i = i + (u32)4)
+                for (u32 j = i; j >= (u32)4 && ((Number*)sites.get(j - (u32)4)).asU32() > ((Number*)sites.get(j)).asU32(); j = j - (u32)4)
+                    for (u32 f = (u32)0; f < (u32)4; f = f + (u32)1)
+                        {
+                        Object* t = sites.get(j - (u32)4 + f);
+                        sites.set(j - (u32)4 + f, sites.get(j + f));
+                        sites.set(j + f, t);
+                        }
+            Data* cs = new Data();
+            u32 cur = (u32)0;
+            u32 fnLen = fnEnd - fnStart;
+            for (u32 i = (u32)0; i < sites.count(); i = i + (u32)4)
+                {
+                u32 st = ((Number*)sites.get(i)).asU32();
+                u32 ln = ((Number*)sites.get(i + (u32)1)).asU32();
+                if (st > cur)
+                    {
+                    DwarfWriter.ulebInto(cs, cur); DwarfWriter.ulebInto(cs, st - cur);
+                    DwarfWriter.ulebInto(cs, (u32)0); DwarfWriter.ulebInto(cs, (u32)0);
+                    }
+                DwarfWriter.ulebInto(cs, st); DwarfWriter.ulebInto(cs, ln);
+                DwarfWriter.ulebInto(cs, ((Number*)sites.get(i + (u32)2)).asU32());
+                DwarfWriter.ulebInto(cs, ((Number*)sites.get(i + (u32)3)).asU32());
+                cur = st + ln;
+                }
+            if (cur < fnLen)
+                {
+                DwarfWriter.ulebInto(cs, cur); DwarfWriter.ulebInto(cs, fnLen - cur);
+                DwarfWriter.ulebInto(cs, (u32)0); DwarfWriter.ulebInto(cs, (u32)0);
+                }
+            // body: call-site encoding, its length, the table, the actions.
+            Data* body = new Data();
+            body.appendByte((u8)1);
+            DwarfWriter.ulebInto(body, cs.length());
+            for (u32 i = (u32)0; i < cs.length(); i = i + (u32)1) body.appendByte(cs.bytes()[i]);
+            for (u32 i = (u32)0; i < actions.length(); i = i + (u32)1) body.appendByte(actions.bytes()[i]);
+            Data* lsda = new Data();
+            lsda.appendByte((u8)$FF);   // LPStart: the function's start
+            Array* refs = new Array();
+            if (types.count() == (u32)0)
+                {
+                lsda.appendByte((u8)$FF);
+                for (u32 i = (u32)0; i < body.length(); i = i + (u32)1) lsda.appendByte(body.bytes()[i]);
+                }
+            else
+                {
+                // TType base: from after its own uleb to the type table's
+                // end, the table 4-aligned (entries n..1 before that end).
+                u32 esz = (ttEnc & (u32)$0F) == (u32)$0C ? (u32)8 : (u32)4;
+                u32 tsz = esz * types.count();
+                u32 ul = (u32)1;
+                u32 pad = (u32)0;
+                u32 off = (u32)0;
+                for (u32 it = (u32)0; it < (u32)4; it = it + (u32)1)
+                    {
+                    u32 head = (u32)2 + ul;
+                    pad = ((u32)4 - ((head + body.length()) % (u32)4)) % (u32)4;
+                    off = body.length() + pad + tsz;
+                    if (DwarfWriter.ulebLen(off) == ul) break;
+                    ul = DwarfWriter.ulebLen(off);
+                    }
+                lsda.appendByte((u8)ttEnc);
+                // a uleb of exactly ul bytes
+                u32 v = off;
+                for (u32 b = (u32)0; b < ul; b = b + (u32)1)
+                    {
+                    u32 byte = v & (u32)$7F;
+                    v = v >> (u32)7;
+                    lsda.appendByte((u8)(b + (u32)1 < ul ? (byte | (u32)$80) : byte));
+                    }
+                for (u32 i = (u32)0; i < body.length(); i = i + (u32)1) lsda.appendByte(body.bytes()[i]);
+                for (u32 i = (u32)0; i < pad; i = i + (u32)1) lsda.appendByte((u8)0);
+                // index n first, index 1 last (just before the base).
+                for (u32 t = types.count(); t > (u32)0; t = t - (u32)1)
+                    {
+                    String* sym = (String*)types.get(t - (u32)1);
+                    if (!sym.equals(String.withCString("0")))
+                        {
+                        refs.add((Object*)Number.withU32(lsda.length()));
+                        refs.add((Object*)sym);
+                        }
+                    for (u32 b = (u32)0; b < esz; b = b + (u32)1) lsda.appendByte((u8)0);
+                    }
+                }
+            Array* rec = new Array();
+            rec.add((Object*)fnLabel);
+            rec.add((Object*)lsda);
+            rec.add((Object*)refs);
+            out.add((Object*)rec);
+            }
+        return out;
+        }
+
+    static u32 decimalOf(String* s)
+        {
+        u32 v = (u32)0;
+        for (u32 i = (u32)0; i < s.byteLength(); i = i + (u32)1)
+            v = v * (u32)10 + (u32)(s.byteAt(i) - (u8)'0');
+        return v;
+        }
+
+    static u32 hexByte(u8 a, u8 b)
+        {
+        u32 hi = a >= (u8)'a' ? (u32)(a - (u8)'a') + (u32)10 : (u32)(a - (u8)'0');
+        u32 lo = b >= (u8)'a' ? (u32)(b - (u8)'a') + (u32)10 : (u32)(b - (u8)'0');
+        return (hi << (u32)4) | lo;
+        }
 
     // The total size of the five sections.
     u32 totalSize(void)

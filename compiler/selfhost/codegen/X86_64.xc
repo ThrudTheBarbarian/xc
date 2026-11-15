@@ -818,11 +818,13 @@ class X86_64
                 }
             }
         _edgeStubs = new String();
+        ehPrepare(fn);
         for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
             emitBlock(fn, (IRBlock*)fn.blocks().get(b),
                       ((Number*)loopHead.get(b)).asU32() != (u32)0);
         _out.append(_edgeStubs);
         _edgeStubs = (String*)0;
+        ehFinish(fn);
         if (_seh)
             {
             finishSeh();
@@ -7319,6 +7321,18 @@ class X86_64
     void emitTerminator(IRFunc* fn, IRBlock* bb, IRInsn* t)
         {
         String* op = t.op();
+        if (op.equals(String.withCString("Invoke")))
+            {
+            emitInvoke(fn, bb, t);
+            return;
+            }
+        if (op.equals(String.withCString("Resume")))
+            {
+            // The exception goes on to the caller.
+            load((IROperand*)t.ops().get((u32)0), (u8)'a');
+            _out.appendCString("\tmov\trdi, rax\n\tcall\t_Unwind_Resume\n\tud2\n");
+            return;
+            }
         if (op.equals(String.withCString("Return")))
             {
             emitReturn(fn, t);
@@ -8110,6 +8124,122 @@ class X86_64
         _lastDbgLine = n.dbgLine();
         }
 
+    // ── C++ exception handlers (C/C++ input, option (a) phase 2) ─────────
+    // As the arm64 back end: each Invoke's call between two labels, its pad
+    // and action; the function's call-site, action and type tables as
+    // .xc_lsda directives, which the assembler turns into the LSDA.
+    Array* _ehSites;
+    Array* _ehTypes;
+    Map* _ehPadAction;
+    String* _ehActions;
+    u32 _ehN;
+
+    static void slebInto(String* hex, i64 v)
+        {
+        bool more = true;
+        while (more)
+            {
+            u32 b = (u32)(v & (i64)$7F);
+            v = v >> (i64)7;
+            if ((v == (i64)0 && (b & (u32)$40) == (u32)0) || (v == (i64)-1 && (b & (u32)$40) != (u32)0)) more = false;
+            else b = b | (u32)$80;
+            hex.appendFormat("%02x", b);
+            }
+        }
+
+    void ehPrepare(IRFunc* fn)
+        {
+        _ehSites = new Array();
+        _ehTypes = new Array();
+        _ehPadAction = new Map();
+        _ehActions = new String();
+        _ehN = (u32)0;
+        u32 bytes = (u32)0;
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            IRInsn* lp = (IRInsn*)0;
+            for (u32 k = (u32)0; k < bb.insns().count() && lp == (IRInsn*)0; k = k + (u32)1)
+                if (((IRInsn*)bb.insns().get(k)).op().equals(String.withCString("LandingPad")))
+                    lp = (IRInsn*)bb.insns().get(k);
+            if (lp == (IRInsn*)0)
+                continue;
+            Array* filters = new Array();
+            u32 q = (u32)0;
+            bool cleanup = false;
+            while (q < lp.ops().count())
+                {
+                i64 kind = ((IROperand*)lp.ops().get(q)).imm();
+                q = q + (u32)1;
+                if (kind == (i64)2) { cleanup = true; continue; }
+                if (q >= lp.ops().count()) break;
+                IROperand* to = (IROperand*)lp.ops().get(q);
+                q = q + (u32)1;
+                String* ty = to.kind() == (u8)OPK_SYM ? to.name() : String.withCString("0");
+                u32 idx = (u32)0;
+                for (u32 t = (u32)0; t < _ehTypes.count(); t = t + (u32)1)
+                    if (((String*)_ehTypes.get(t)).equals(ty)) idx = t + (u32)1;
+                if (idx == (u32)0) { _ehTypes.add((Object*)ty); idx = _ehTypes.count(); }
+                filters.add((Object*)Number.with(idx));
+                }
+            if (cleanup) filters.add((Object*)Number.with((u32)0));
+            if (filters.count() == (u32)0) { _ehPadAction.set((Hashable*)bb.name(), (Object*)Number.with((u32)0)); continue; }
+            _ehPadAction.set((Hashable*)bb.name(), (Object*)Number.with(bytes + (u32)1));
+            for (u32 r = (u32)0; r < filters.count(); r = r + (u32)1)
+                {
+                String* rec = new String();
+                X86_64.slebInto(rec, (i64)((Number*)filters.get(r)).asU32());
+                X86_64.slebInto(rec, r + (u32)1 < filters.count() ? (i64)1 : (i64)0);
+                _ehActions.append(rec);
+                bytes = bytes + rec.byteLength() / (u32)2;
+                }
+            }
+        }
+
+    void emitInvoke(IRFunc* fn, IRBlock* bb, IRInsn* t)
+        {
+        u32 nops = t.ops().count();
+        if (nops < (u32)4)
+            return;
+        IROperand* normal = (IROperand*)t.ops().get(nops - (u32)2);
+        IROperand* unwind = (IROperand*)t.ops().get(nops - (u32)1);
+        if (normal.kind() != (u8)OPK_BLOCK || unwind.kind() != (u8)OPK_BLOCK)
+            return;
+        _ehN = _ehN + (u32)1;
+        String* lb = String.withFormat(".Lxceh_%s_%ub", safeSym(fn.name()).cString(), _ehN);
+        String* le = String.withFormat(".Lxceh_%s_%ue", safeSym(fn.name()).cString(), _ehN);
+        _out.appendFormat("%s:\n", lb.cString());
+        // The arguments end before the memory token and the two blocks.
+        emitSysVCall(fn, t, false, nops - (u32)3);
+        _out.appendFormat("%s:\n", le.cString());
+        Object* act = _ehPadAction != (Map*)0 ? _ehPadAction.get((Hashable*)unwind.blk().name()) : (Object*)0;
+        _ehSites.add((Object*)lb);
+        _ehSites.add((Object*)le);
+        _ehSites.add((Object*)blockLabel(fn, unwind.blk()));
+        _ehSites.add((Object*)Number.with(act != (Object*)0 ? ((Number*)act).asU32() : (u32)0));
+        phiEdges(fn, bb, normal.blk());
+        _out.appendFormat("\tjmp\t%s\n", blockLabel(fn, normal.blk()).cString());
+        }
+
+    void ehFinish(IRFunc* fn)
+        {
+        if (_ehSites == (Array*)0 || _ehSites.count() == (u32)0)
+            return;
+        String* nm = safeSym(fn.name());
+        _out.appendFormat(".Lxceh_%s_end:\n", nm.cString());
+        _out.appendFormat("\t.xc_lsda_begin %s .Lxceh_%s_end\n", nm.cString(), nm.cString());
+        for (u32 i = (u32)0; i + (u32)3 < _ehSites.count(); i = i + (u32)4)
+            _out.appendFormat("\t.xc_lsda_cs %s %s %s %lu\n", ((String*)_ehSites.get(i)).cString(),
+                              ((String*)_ehSites.get(i + (u32)1)).cString(), ((String*)_ehSites.get(i + (u32)2)).cString(),
+                              ((Number*)_ehSites.get(i + (u32)3)).asU32());
+        if (_ehActions.byteLength() > (u32)0)
+            _out.appendFormat("\t.xc_lsda_actions %s\n", _ehActions.cString());
+        for (u32 i = (u32)0; i < _ehTypes.count(); i = i + (u32)1)
+            _out.appendFormat("\t.xc_lsda_type %s\n", ((String*)_ehTypes.get(i)).cString());
+        _out.appendCString("\t.xc_lsda_end\n");
+        _ehSites = (Array*)0;
+        }
+
     String* blockLabel(IRFunc* fn, IRBlock* bb)
         {
         String* s = String.withCString(".L_");
@@ -8380,6 +8510,28 @@ class X86_64
         if (op.equals(String.withCString("FieldAddr")))
             {
             emitFieldAddr(n);
+            return true;
+            }
+        // C++ handlers: the personality hands the pad the exception in rax
+        // and the selector in edx (SysV).
+        if (op.equals(String.withCString("LandingPad")))
+            {
+            store((u8)'a', n.res());
+            return true;
+            }
+        if (op.equals(String.withCString("EhSelector")))
+            {
+            store((u8)'d', n.res());
+            return true;
+            }
+        if (op.equals(String.withCString("EhTypeId")))
+            {
+            IROperand* tt = n.ops().count() > (u32)0 ? (IROperand*)n.ops().get((u32)0) : (IROperand*)0;
+            u32 idx = (u32)0;
+            for (u32 i = (u32)0; tt != (IROperand*)0 && _ehTypes != (Array*)0 && i < _ehTypes.count(); i = i + (u32)1)
+                if (((String*)_ehTypes.get(i)).equals(tt.name())) idx = i + (u32)1;
+            _out.appendFormat("\tmov\teax, %lu\n", idx);
+            store((u8)'a', n.res());
             return true;
             }
         if (op.equals(String.withCString("Load")))

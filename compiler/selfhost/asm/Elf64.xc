@@ -1489,6 +1489,60 @@ class ElfSharedInfo
             data = new SectionBytes();
         if (commons == (Map*)0)
             commons = new Map();
+        // C++ handlers (X86Asm's LSDAs): as on arm64 ELF, each LSDA in .data
+        // under a local symbol (xc.lsda.<n>), a data word per typeinfo the
+        // type table names (xc.ti.<name>, its entries 4-byte pc-relative to
+        // it, 0x9b) and one holding __gxx_personality_v0 (xc.pers).
+        Array* lsdas = X86Asm.takeLsdas();
+        Map* lsdaFns = new Map();
+        if (lsdas != (Array*)0 && lsdas.count() > (u32)0)
+            {
+            data = data.copy();
+            Map* syms2 = new Map();
+            Array* ks = symbols.allKeys();
+            for (u32 i = (u32)0; i < ks.count(); i = i + (u32)1)
+                syms2.set((Hashable*)ks.get(i), symbols.get((Hashable*)ks.get(i)));
+            symbols = syms2;
+            Array* ds2 = new Array();
+            ds2.addAll(dataSyms);
+            dataSyms = ds2;
+            Array* fx2 = new Array();
+            fx2.addAll(fixups);
+            fixups = fx2;
+            data.padTo((u32)8);
+            String* ps = String.withCString("xc.pers");
+            symbols.set((Hashable*)ps, (Object*)Number.withU32(data.length()));
+            dataSyms.add((Object*)ps);
+            fixups.add((Object*)X86Fixup.make(data.length(), (u32)X86FIX_ABS64, String.withCString("__gxx_personality_v0"), (i32)0));
+            data.appendZeros((u32)8);
+            for (u32 i = (u32)0; i < lsdas.count(); i = i + (u32)1)
+                {
+                Array* rec = (Array*)lsdas.get(i);
+                lsdaFns.set((Hashable*)rec.get((u32)0), (Object*)Number.withU32(i));
+                data.padTo((u32)8);
+                u32 off = data.length();
+                String* ln = String.withFormat("xc.lsda.%u", i);
+                symbols.set((Hashable*)ln, (Object*)Number.withU32(off));
+                dataSyms.add((Object*)ln);
+                Data* b = (Data*)rec.get((u32)1);
+                for (u32 k = (u32)0; k < b.length(); k = k + (u32)1) data.appendByte(b.bytes()[k]);
+                Array* refs = (Array*)rec.get((u32)2);
+                for (u32 k = (u32)0; k + (u32)1 < refs.count(); k = k + (u32)2)
+                    {
+                    String* ti = (String*)refs.get(k + (u32)1);
+                    String* st = String.withFormat("xc.ti.%s", ti.cString());
+                    if (symbols.get((Hashable*)st) == (Object*)0)
+                        {
+                        data.padTo((u32)8);
+                        symbols.set((Hashable*)st, (Object*)Number.withU32(data.length()));
+                        dataSyms.add((Object*)st);
+                        fixups.add((Object*)X86Fixup.make(data.length(), (u32)X86FIX_ABS64, ti, (i32)0));
+                        data.appendZeros((u32)8);
+                        }
+                    fixups.add((Object*)X86Fixup.make(off + ((Number*)refs.get(k)).asU32(), (u32)X86FIX_PC32DATA, st, (i32)0));
+                    }
+                }
+            }
 
         // ELF requires every STB_LOCAL symbol to precede every global, and
         // `sh_info` of .symtab to be the index of the FIRST global — so the
@@ -1709,6 +1763,15 @@ class ElfSharedInfo
                 Elf64.putI64In(dataRel, f.addend());
                 continue;
                 }
+            // A pc-relative word in .data (an LSDA's type-table entry).
+            if (f.kind() == (u32)X86FIX_PC32DATA)
+                {
+                Elf64.put64In(dataRel, f.offset());
+                Elf64.put32In(dataRel, (u32)R_X86_64_PC32);
+                Elf64.put32In(dataRel, idx);
+                Elf64.putI64In(dataRel, f.addend());
+                continue;
+                }
             if (f.offset() + (u32)4 > text.length())
                 {
                 fail(String.withCString("pc32 fixup past the end of .text: ")
@@ -1746,7 +1809,32 @@ class ElfSharedInfo
             Array* ehOffs = new Array();
             Array* fdeOffs = new Array();
             DwarfWriter.functionsOf(symbols, dataSyms, String.withCString(""), text.length(), ehNames, ehOffs);
+            if (lsdaFns.count() > (u32)0)
+                dwEh.setLsdaFunctions(lsdaFns);
             eh = dwEh.buildEhFrame((u64)0, (u64)0, text.length(), ehNames, ehOffs, (u32)1, fdeOffs);
+            if (lsdaFns.count() > (u32)0)
+                {
+                dwEh.setLsdaFunctions((Map*)0);
+                // The zPLR CIE's personality word and each FDE's LSDA: PC32.
+                Object* pso = symIndex.get((Hashable*)String.withCString("xc.pers"));
+                if (dwEh.persField() >= (i64)0 && pso != (Object*)0)
+                    {
+                    Elf64.put64In(ehRel, (u32)dwEh.persField());
+                    Elf64.put32In(ehRel, (u32)R_X86_64_PC32);
+                    Elf64.put32In(ehRel, ((Number*)pso).asU32());
+                    Elf64.putI64In(ehRel, (i64)0);
+                    }
+                Array* lf = dwEh.lsdaFields();
+                for (u32 q = (u32)0; lf != (Array*)0 && q + (u32)1 < lf.count(); q = q + (u32)2)
+                    {
+                    Object* lso = symIndex.get((Hashable*)String.withFormat("xc.lsda.%u", (u32)((Number*)lf.get(q + (u32)1)).asI64()));
+                    if (lso == (Object*)0) continue;
+                    Elf64.put64In(ehRel, (u32)((Number*)lf.get(q)).asI64());
+                    Elf64.put32In(ehRel, (u32)R_X86_64_PC32);
+                    Elf64.put32In(ehRel, ((Number*)lso).asU32());
+                    Elf64.putI64In(ehRel, (i64)0);
+                    }
+                }
             eh.setLength(eh.length() - (u32)4);
             for (u32 i = (u32)0; i < fdeOffs.count(); i = i + (u32)1)
                 {

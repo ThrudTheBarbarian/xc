@@ -241,6 +241,8 @@ class X86Fixup
     bool _skipSect; // inside a CodeView .debug$ section — emit nothing
     DwarfWriter* _dwarf; // -g: the line table, if the text has one
     Array* _seh;        // win64 unwind entries, one Array@ per function (sehFunctions)
+    Array* _lsdaRaw;    // each function's .xc_lsda lines (C++ handlers)
+    Array* _lsdaCur;
     Array* _sehCur;     // the function between .seh_proc and .seh_endproc
     Map* _evex;     // EVEX forms: mnemonic -> packed form/map/pp/W/opcode/N
     Map* _evexX;    // the shifts whose count is an xmm register
@@ -260,6 +262,7 @@ class X86Fixup
         _globalSyms = new Array();
         _commonSyms = new Map();
         _seh = new Array();
+        _lsdaRaw = new Array();
         _bss = new SectionBytes();
         _bssAlign = (u32)16;
         _bssLabels = new Array();
@@ -275,6 +278,17 @@ class X86Fixup
         {
         return _data;
         }
+    // The exception tables of the last text assembled (C++ handlers): as
+    // Arm64Asm's, per function [its label, the LSDA, the type-table entries'
+    // (offset, typeinfo)], 4-byte type entries (0x9b).
+    static Array* _lsdas;
+    static Array* takeLsdas(void)
+        {
+        Array* a = _lsdas;
+        _lsdas = (Array*)0;
+        return a;
+        }
+
     // win64 unwind entries (`.seh_proc` … `.seh_endproc`, C/C++ input): per
     // function an Array@ of [name, start, prologue size, end, codes], codes a
     // flat Number@ list of (offset in the function, UWOP_*, register, value).
@@ -3446,6 +3460,8 @@ class X86Fixup
                 _dwarf.addFrameSetup(_text.length(), (u32)16);
                 }
             }
+        // The functions' exception tables, every label placed.
+        _lsdas = _lsdaRaw.count() > (u32)0 ? DwarfWriter.buildLsdas(_lsdaRaw, _symbols, (u32)$9B) : (Array*)0;
         if (_dwarf != (DwarfWriter*)0 && (_dwarf.hasRows() || _dwarf.hasSaves()))
             DwarfWriter.setPending(_dwarf);
         // The bss, after all the data (bug 642): its labels become data symbols
@@ -3487,6 +3503,17 @@ class X86Fixup
         // parameter) — a variable of the function being assembled.
         // win64 unwind entries (C/C++ input), as GNU as spells them: each
         // prologue step at the offset it ends, for Pe's .pdata/.xdata.
+        if (d.hasPrefix(String.withCString(".xc_lsda_")))
+            {
+            if (d.equals(String.withCString(".xc_lsda_begin"))) _lsdaCur = new Array();
+            if (_lsdaCur != (Array*)0) _lsdaCur.add((Object*)l);
+            if (d.equals(String.withCString(".xc_lsda_end")) && _lsdaCur != (Array*)0)
+                {
+                _lsdaRaw.add((Object*)_lsdaCur);
+                _lsdaCur = (Array*)0;
+                }
+            return section;
+            }
         if (d.hasPrefix(String.withCString(".seh_")))
             {
             u32 here = _text.length();
