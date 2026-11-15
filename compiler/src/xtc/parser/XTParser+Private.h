@@ -43,6 +43,13 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic) BOOL lastTypeIsBlockWb;
 // :scan blocks rewritten so far (#144): their generated names' suffix.
 @property(nonatomic) NSUInteger scanSeq;
+// parScanRewrite for --par-style=auto: a loop that does not fit stays a loop, unreported.
+@property(nonatomic) BOOL scanQuiet;
+// Parsing what parScanRewrite made: its own loops (the short-range one) are not scans again.
+@property(nonatomic) NSUInteger scanInside;
+// parAutoScan found a running total (#144): its variable and operator.
+@property(nonatomic, copy, nullable) NSString* parScanAcc;
+@property(nonatomic, copy, nullable) NSString* parScanOp;
 @end
 
 // Callbacks (0.5) — the named spelling of a bound method

@@ -5,7 +5,8 @@
 # shapes, every operator, signed and unsigned types, lengths around the 256
 # chunks (0, 1, 255, 256, 257) and a long one, an inclusive range, a float +
 # under the speed goal (and under accuracy, where it stays serial). Then the
-# forms the rewrite refuses, each with its message.
+# forms the rewrite refuses, each with its message. --par-style=auto lifts
+# plain running totals the same way, and leaves short ones and others loops.
 #
 #   bash tests/par/scan.sh
 set -u
@@ -126,6 +127,64 @@ else
     echo "  FAIL: the passes did not run as blocks"; XC_PAR_REPORT=1 "$W/add_long" 2>&1 | sed 's/^/    /' | head -6; fail=1
 fi
 if grep -q "warning" "$W/add_long.err"; then echo "  FAIL: a :scan warned"; sed 's/^/    /' "$W/add_long.err" | head -3; fail=1; fi
+
+# --par-style=auto (the default) lifts plain running totals: the same loops
+# with no par, long ones as two blocks, a short one (under 65536) as the loop,
+# one whose total is used otherwise as the loop, all with the serial answer.
+cat > "$W/auto.xc" <<'XC'
+#import "Stdio.xc"
+i32 main(void)
+    {
+    u32 n = (u32)1000003;
+    i64* x = new i64[n];
+    i64* a = new i64[n];
+    i64* b = new i64[n];
+    i64* c = new i64[n];
+    i64* d = new i64[100];
+    for (u32 i in 0..n) x[i] = (i64)((i * (u32)7) % (u32)13) - (i64)6;
+    i64 s1 = (i64)5;
+    for (u32 i in 0..n) { s1 += x[i]; a[i] = s1; }
+    i64 s2 = (i64)0;
+    for (u32 i in 0..n) { b[i] = s2; if (x[i] > s2) s2 = x[i]; }
+    i64 s3 = (i64)0;
+    for (u32 i in 0..n) { s3 += x[i]; c[i] = s3 * (i64)2; }
+    i64 s4 = (i64)0;
+    for (u32 i in 0..(u32)100) { s4 += x[i]; d[i] = s4; }
+    i64 r1 = (i64)5;
+    i64 r2 = (i64)0;
+    i64 r3 = (i64)0;
+    u32 bad = (u32)0;
+    for (u32 i in 0..n)
+        {
+        r1 += x[i];
+        if (a[i] != r1) bad++;
+        if (b[i] != r2) bad++;
+        if (x[i] > r2) r2 = x[i];
+        r3 += x[i];
+        if (c[i] != r3 * (i64)2) bad++;
+        if (i < (u32)100 && d[i] != r3) bad++;
+        }
+    Stdio.printf("bad=%u same=%u\n", bad, s1 == r1 && s2 == r2 && s3 == r3 && s4 == d[99] ? (u32)1 : (u32)0);
+    return 0;
+    }
+XC
+if "$XC" -q -O2 -o "$W/auto" "$W/auto.xc" 2> "$W/auto.err"; then
+    got=$(XC_PAR_REPORT=1 "$W/auto" 2>&1)
+    blocks=$(echo "$got" | grep -c "256 items on the CPU")
+    if echo "$got" | grep -q "^bad=0 same=1" && [ "$blocks" = 4 ]; then
+        echo "  ok: --par-style=auto lifts the two running totals, keeps the short and the other-use loops"
+    else
+        echo "  FAIL: auto: $(echo "$got" | grep bad=), $blocks scan passes (want 4)"; echo "$got" | sed 's/^/    /' | head -8; fail=1
+    fi
+else
+    echo "  FAIL: auto: build"; sed 's/^/    /' "$W/auto.err" | head -5; fail=1
+fi
+if "$XC" -q -O2 --par-style=cpu -o "$W/auto.cpu" "$W/auto.xc" 2>/dev/null \
+   && [ "$(XC_PAR_REPORT=1 "$W/auto.cpu" 2>&1 | grep -c 'items on')" = 0 ]; then
+    echo "  ok: --par-style=cpu leaves them loops"
+else
+    echo "  FAIL: --par-style=cpu lifted a running total"; fail=1
+fi
 
 # Refused forms.
 refuse() {

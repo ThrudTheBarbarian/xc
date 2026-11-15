@@ -187,7 +187,9 @@ element. Integer results match the sequential loop exactly. A `float` or
 `double` scan takes `+` only. Under `:goal(speed)`, the default, it runs as
 blocks, and like a floating-point reduction it can differ from the
 sequential loop in its last bits. Under `:goal(accuracy)` the loop runs
-sequentially. A scan has no GPU version yet.
+sequentially. A scan has no GPU version yet. A range of fewer than 65536
+elements runs as the loop, sequentially, since waking the threads would
+cost more than the work.
 
 A scan with nothing else in its loop is limited by memory bandwidth, and it
 gains most when the loop also does work around the running total.
@@ -739,6 +741,16 @@ a size known when the program is built and the loop uses `h` in no other way
 ```c
 for (u32 i in 0..N)
     hist[key[i] & 255] += 1;                // becomes par prog.xc:1 :reduce(+ hist[]) { … }
+```
+
+A running total, a loop that updates a local integer with one of the
+reduction operators and stores it as `a[i] = total;`, becomes a `:scan`
+block (see [Running totals](#running-totals-scan)) when the loop is written
+`for (T i in a..b) { … }` with braces, has no other reduction, and uses
+`total` and `a` in no other way:
+
+```c
+for (u32 i in 0..n) { total += x[i]; out[i] = total; }   // becomes par :scan(+ total) { … }
 ```
 
 **The goal.** A loop's `:goal(speed)` or `:goal(accuracy)` holds for the block

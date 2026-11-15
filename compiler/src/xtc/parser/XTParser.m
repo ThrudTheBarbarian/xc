@@ -3467,11 +3467,51 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
 
 // The scan behind parAutoFor: the cursor is at the `for`. Fills `reds`
 // (op, name pairs) and says whether the loop qualifies.
+- (nullable XTASTNode*)parAutoScanFor:(XTASTNode*)plain at:(NSUInteger)forPos
+    {
+    NSUInteger plainEnd = _pos;
+    NSUInteger diagMark = _diagnostics.diagnostics.count;
+    NSUInteger errMark = _diagnostics.errorCount;
+    NSArray<XTToken*>* saved = [_tokens copy];
+    XTSourceLocation* loc = ((XTToken*)_tokens[forPos]).location;
+    XTToken* (^T)(XTTokenType, NSString*) = ^XTToken*(XTTokenType ty, NSString* val) {
+      return [[XTToken alloc] initWithType:ty value:val location:loc];
+    };
+    NSString* op = self.parScanOp;
+    XTTokenType ot = [op isEqualToString:@"+"] ? XTTokenPlus : [op isEqualToString:@"|"] ? XTTokenPipe
+                   : [op isEqualToString:@"&"] ? XTTokenAmpersand : [op isEqualToString:@"^"] ? XTTokenCaret : XTTokenIdentifier;
+    NSArray* head = @[ T(XTTokenIdentifier, @"par"), T(XTTokenColon, @":"), T(XTTokenIdentifier, @"scan"), T(XTTokenLParen, @"("),
+                       T(ot, op), T(XTTokenIdentifier, self.parScanAcc), T(XTTokenRParen, @")"), T(XTTokenLBrace, @"{") ];
+    NSMutableArray<XTToken*>* spliced = [_tokens mutableCopy];
+    [spliced insertObject:T(XTTokenRBrace, @"}") atIndex:plainEnd];
+    [spliced insertObjects:head atIndexes:[NSIndexSet indexSetWithIndexesInRange:NSMakeRange(forPos, head.count)]];
+    _tokens = spliced;
+    _pos = forPos;
+    self.scanQuiet = YES;
+    BOOL ok = [self parScanRewrite];
+    self.scanQuiet = NO;
+    self.parScanAcc = nil;
+    if (ok)
+        {
+        self.scanInside++;
+        XTASTNode* s = [self parseStatement];
+        self.scanInside--;
+        if (s && _diagnostics.errorCount == errMark)
+            return s;
+        }
+    _tokens = saved;
+    [_diagnostics truncateToCount:diagMark];
+    _pos = plainEnd;
+    return plain;
+    }
+
 - (BOOL)parAutoScan:(NSMutableArray<NSArray<NSString*>*>*)reds goal:(NSUInteger*)goalOut
     {
     NSUInteger at = _pos;
     NSUInteger n = _tokens.count;
     *goalOut = self.goalNow ?: self.goalDefault;
+    self.parScanAcc = nil;
+    self.parScanOp = nil;
     if ([self parTokType:at + 1] != XTTokenLParen)
         return NO;
     // Not in the standard library or the prelude: a loop of the par runtime
@@ -3859,9 +3899,29 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
             return NO;
         NSNumber* want = accWant[acc];
         NSNumber* have = uses[acc];
-        if (!have || !want || have.unsignedIntegerValue != want.unsignedIntegerValue)
+        if (!have || !want)
             return NO;
+        if (have.unsignedIntegerValue != want.unsignedIntegerValue)
+            {
+            // A running total (#144): the other uses are stores `X[i] = acc;`,
+            // X an outer array used for nothing else. The loop becomes a
+            // :scan, alone (no other reduction with it). Mirrored in the port.
+            NSString* op = accOps[acc];
+            if (self.scanInside || self.parScanAcc || [op isEqualToString:@"*"])
+                return NO;
+            NSUInteger stores = [self parAutoScanStoresFrom:bs to:be acc:acc var:var uses:uses declared:declared];
+            if (stores == 0 || have.unsignedIntegerValue != want.unsignedIntegerValue + stores)
+                return NO;
+            self.parScanAcc = acc;
+            self.parScanOp = op;
+            continue;
+            }
         [reds addObject:@[ accOps[acc], acc ]];
+        }
+    if (self.parScanAcc && (names.count != 1 || arrNames.count != 0))
+        {
+        self.parScanAcc = nil;
+        return NO;
         }
     // The array reductions, after the scalar ones. An array that fails a test
     // is no reduction, and the loop goes on as it would without one.
@@ -3882,6 +3942,44 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
         [reds addObject:@[ sym, h, @"[]" ]];
         }
     return YES;
+    }
+
+// For a running total in [bs, be): the stores `X[var] = acc;` at a
+// statement's start, X an outer name whose every use is such a store; their
+// number, else 0. Mirrored in the port (parAutoScanStores).
+- (NSUInteger)parAutoScanStoresFrom:(NSUInteger)bs to:(NSUInteger)be acc:(NSString*)acc var:(NSString*)var
+                               uses:(NSDictionary<NSString*, NSNumber*>*)uses declared:(NSSet<NSString*>*)declared
+    {
+    NSMutableDictionary<NSString*, NSNumber*>* per = [NSMutableDictionary dictionary];
+    NSMutableArray<NSString*>* order = [NSMutableArray array];
+    NSUInteger total = 0;
+    for (NSUInteger i = bs; i < be; i++)
+        {
+        if ([self parTokType:i] != XTTokenIdentifier || ![[self parTokValue:i] isEqualToString:acc])
+            continue;
+        XTTokenType pv = [self parTokType:i - 1];
+        if (pv == XTTokenDot || pv == XTTokenArrow)
+            continue;
+        if (i < bs + 5 || pv != XTTokenAssign || [self parTokType:i - 2] != XTTokenRBracket ||
+            [self parTokType:i - 3] != XTTokenIdentifier || ![[self parTokValue:i - 3] isEqualToString:var] ||
+            [self parTokType:i - 4] != XTTokenLBracket || [self parTokType:i - 5] != XTTokenIdentifier ||
+            [self parTokType:i + 1] != XTTokenSemicolon)
+            continue;
+        XTTokenType st = [self parTokType:i - 6];
+        if (i - 5 != bs && st != XTTokenSemicolon && st != XTTokenLBrace && st != XTTokenRBrace)
+            continue;
+        NSString* x = [self parTokValue:i - 5];
+        if ([x isEqualToString:acc] || [x isEqualToString:var] || [declared containsObject:x])
+            return 0;
+        if (!per[x])
+            [order addObject:x];
+        per[x] = @(per[x].unsignedIntegerValue + 1);
+        total++;
+        }
+    for (NSString* x in order)
+        if (!uses[x] || uses[x].unsignedIntegerValue != per[x].unsignedIntegerValue)
+            return 0;
+    return total;
     }
 
 // At token i, a name followed by `[` at a statement's start: the operator of
@@ -4442,6 +4540,11 @@ static int64_t parAutoConst(XTASTNode* e)
     [self parGridLoop:-1];
     if (!plain || [self parAutoSmall:plain from:forPos to:_pos])
         return plain;
+    // A running total (#144): the loop's tokens become
+    // `par :scan(op acc) { for … }`, which parScanRewrite turns into blocks;
+    // a loop the rewrite does not take stays the loop. As the port.
+    if (self.parScanAcc)
+        return [self parAutoScanFor:plain at:forPos];
     // A loop the block form refuses stays the loop: an error the block's parse
     // or its desugaring reports (a capture of self or of an ivar, say) is
     // taken back, and the loop as parsed above is the statement. A loop of a
@@ -4530,7 +4633,8 @@ static int64_t parAutoConst(XTASTNode* e)
 |* stores the per-item values and records its total), a serial scan of the
 |* totals from acc (acc ends as the overall total), and a block over the
 |* chunks that combines each chunk's offset into its slice of every array
-|* the loop stored acc into. acc may only be updated (acc += e, acc = acc +
+|* the loop stored acc into (a range under 65536 items runs as the loop,
+|* over the same bounds). acc may only be updated (acc += e, acc = acc +
 |* e, acc++, and `if (e < acc) acc = e;` / `if (e > acc) acc = e;` for min
 |* and max) and stored (a[i] = acc;), the output arrays used nowhere else.
 |* The generated blocks carry `:__scanpass` (chunks own disjoint slices: no
@@ -4673,8 +4777,10 @@ static NSString* scCombine(NSString* op, NSString* r, NSString* v)
         return NO;
     XTToken* st = _tokens[s0 + 1];
     // The block then parses on as written, its :scan(…) skipped.
+    // For --par-style=auto (quiet) the loop stays a loop.
     void (^fail)(NSString*, XTToken*) = ^(NSString* msg, XTToken* t) {
-      [self->_diagnostics emitError:msg at:t.location];
+      if (!self.scanQuiet)
+          [self->_diagnostics emitError:msg at:t.location];
     };
     if (!acc)
         {
@@ -4873,6 +4979,9 @@ static NSString* scCombine(NSString* op, NSString* r, NSString* v)
                       incl ? @" + 1" : @""];
     [src appendFormat:@"u64 __xs_n%lu = __xs_e%lu > __xs_a%lu ? (u64)(__xs_e%lu - __xs_a%lu) : (u64)0;\n", (unsigned long)n, (unsigned long)n,
                       (unsigned long)n, (unsigned long)n, (unsigned long)n];
+    // Short ranges run as the loop (waking the threads costs more).
+    [src appendFormat:@"if (__xs_n%lu < (u64)65536) { for (%@ %@ in __xs_a%lu..__xs_e%lu) { __XC_SCAN_PLAIN__ } } else {\n", (unsigned long)n, T, iv,
+                      (unsigned long)n, (unsigned long)n];
     [src appendFormat:@"%@ __xs_t%lu[256];\n", A, (unsigned long)n];
     NSString* lohi = [NSString stringWithFormat:@"%@ __xs_lo = __xs_a%lu + (%@)(__xs_n%lu * (u64)__xs_c / (u64)256); "
                                                  "%@ __xs_hi = __xs_a%lu + (%@)(__xs_n%lu * (u64)(__xs_c + (u32)1) / (u64)256);\n",
@@ -4899,7 +5008,7 @@ static NSString* scCombine(NSString* op, NSString* r, NSString* v)
             [src appendFormat:@" %@[%@] = (%@)(__xs_o %@ (%@)%@[%@]);", X, iv, A, op, A, X, iv];
         }
     [src appendString:@" } } }\n"];
-    [src appendFormat:@"%@ = __xs_r%lu; }\n", acc, (unsigned long)n];
+    [src appendFormat:@"%@ = __xs_r%lu; } }\n", acc, (unsigned long)n];
     XTLexer* lexer = [[XTLexer alloc] initWithSource:src filename:@"<scan>" diagnostics:_diagnostics];
     for (XTToken* g in [lexer tokenise])
         {
@@ -4918,6 +5027,11 @@ static NSString* scCombine(NSString* op, NSString* r, NSString* v)
         if (g.type == XTTokenIdentifier && [g.value isEqualToString:@"__XC_SCAN_GOAL__"])
             {
             [out addObjectsFromArray:goal];
+            continue;
+            }
+        if (g.type == XTTokenIdentifier && [g.value isEqualToString:@"__XC_SCAN_PLAIN__"])
+            {
+            [out addObjectsFromArray:[_tokens subarrayWithRange:NSMakeRange(bo + 1, bc - (bo + 1))]];
             continue;
             }
         if (g.type == XTTokenIdentifier && [g.value isEqualToString:@"__XC_SCAN_BODY__"])
@@ -4948,7 +5062,12 @@ static NSString* scCombine(NSString* op, NSString* r, NSString* v)
     {
     // :scan (#144): rewritten into plain blocks first.
     if ([self parScanRewrite])
-        return [self parseStatement];
+        {
+        self.scanInside++;
+        XTASTNode* sc = [self parseStatement];
+        self.scanInside--;
+        return sc;
+        }
     XTSourceLocation* loc = [self currentLocation];
     [self advance]; // consume 'par'
     NSString* name = nil;
