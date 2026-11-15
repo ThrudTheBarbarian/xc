@@ -1,0 +1,6 @@
+n=1 rot4=664 rot8=2739128 rotd=5344 swap64=21
+n=1 twoSwaps=8985 swapPair=3412 rotOdd=456789
+n=2 rot4=1217 rot8=5135809 rotd=9985 swap64=12
+n=2 twoSwaps=5346 swapPair=1234 rotOdd=789123
+n=3 rot4=1546 rot8=7532042 rotd=14346 swap64=21
+n=3 twoSwaps=8985 swapPair=3412 rotOdd=123456

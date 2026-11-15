@@ -3718,59 +3718,91 @@ static BOOL arm64LogicalImm(uint64_t v, int width) {
             [pending removeIndex:(NSUInteger)pick];
             continue;
         }
-        // Residual cycle: every pending copy's DEST is read by another pending
-        // copy, so no single-step order is safe -- a swap `%a<-%b, %b<-%a` copied
-        // in place loses one value (bug 199: loop-swapped class-pointer locals
-        // came back unchanged). A parallel assignment sequentialises correctly by
-        // reading EVERY source into a scratch register first, then writing every
-        // dest -- SP is untouched, so slot-homed members stay addressable. GP
-        // members use x15/x16/x17 (never home registers; spMemForOff's address
-        // temp is x9, so it can't clobber them); FP members use s/d16, 17 and 7.
-        // The third was d18, which IS a home (the first of the caller-saved FP
-        // tier): a loop rotating three floats had one of them homed there, and
-        // phase 2 wrote that member's new value over the third staged source,
-        // so `t = a; a = b; b = c; c = t` came out wrong. d0-d7 are FP scratch
-        // and never homes, and no argument is live at a block's phi copies.
-        // Aggregate cycles (never seen -- a struct phi lives in a slot and does
-        // not participate in a register swap) and cycles wider than the scratch
-        // pool fall back to the in-place single step, no worse than pre-fix.
+        // Only cycles are left: every pending copy's destination is read by
+        // exactly one other pending copy. Break one (emitPhiCycle) and go round
+        // again for the next.
         NSMutableArray<NSNumber *> *cyc = [NSMutableArray array];
-        NSUInteger gpNeed = 0, fpNeed = 0; BOOL bail = NO;
-        for (NSUInteger idx = pending.firstIndex; idx != NSNotFound;
-             idx = [pending indexGreaterThanIndex:idx]) {
-            XTIRType *pty = phis[idx].result.type;
-            if (pty && pty.kind == XTIRTypeKindAgg) { bail = YES; break; }
-            if (pty && XTIRTypeKindIsFloating(pty.kind)) fpNeed++; else gpNeed++;
-            [cyc addObject:@(idx)];
+        NSUInteger first = pending.firstIndex;
+        NSUInteger cur = first;
+        while (YES) {
+            [cyc addObject:@(cur)];
+            XTIRValueId want = srcs[cur].valueId;
+            NSUInteger next = NSNotFound;
+            for (NSUInteger j = pending.firstIndex; j != NSNotFound && next == NSNotFound;
+                 j = [pending indexGreaterThanIndex:j])
+                if (phis[j].result.valueId == want) next = j;
+            if (next == NSNotFound || next == first) break;
+            cur = next;
         }
-        if (bail || gpNeed > 3 || fpNeed > 3) {
-            NSUInteger fb = pending.firstIndex;          // last-resort single step
-            [self emitOnePhiCopy:phis[fb] source:srcs[fb] ctx:ctx];
-            [pending removeIndex:fb];
-            continue;
-        }
-        int gpScratch[3] = { 15, 16, 17 };
-        int fpScratch[3] = { 16, 17, 7 };
-        NSUInteger gpUsed = 0, fpUsed = 0;
-        NSMutableArray<NSString *> *staged = [NSMutableArray array];
-        // Phase 1: read every source into its own scratch register.
-        for (NSNumber *ix in cyc) {
-            NSUInteger idx = ix.unsignedIntegerValue;
-            XTIRType *pty = phis[idx].result.type;
-            NSString *reg = (pty && XTIRTypeKindIsFloating(pty.kind))
-                ? [self fregName:fpScratch[fpUsed++] forType:pty]
-                : [self regName:gpScratch[gpUsed++] forType:pty];
-            [self materialiseOperand:srcs[idx] intoReg:reg ctx:ctx];
-            [staged addObject:reg];
-        }
-        // Phase 2: write every dest from its scratch register.
-        NSUInteger si = 0;
-        for (NSNumber *ix in cyc) {
-            NSUInteger idx = ix.unsignedIntegerValue;
-            [self storeReg:staged[si++] intoValue:phis[idx].result.valueId ctx:ctx];
-            [pending removeIndex:idx];
-        }
+        [self emitPhiCycle:cyc phis:phis srcs:srcs ctx:ctx];
+        for (NSNumber *c in cyc) [pending removeIndex:c.unsignedIntegerValue];
     }
+}
+
+// One phi-copy cycle, c0 <- c1 <- ... <- ck-1 <- c0 (copy c(i) reads the
+// destination of c(i+1)). The first destination is saved, the chain runs, and
+// the saved value goes into the last destination, so a cycle of any length
+// needs one register and SP never moves. Every member has the same type. A
+// scalar is saved in x15/w15 or d17/s17: neither is a home, and emitOnePhiCopy
+// stages through x16/d16, with x9 as the address temp for a far slot. (The old
+// scheme read every member into its own scratch first; with three per class it
+// fell back to an in-place copy for a longer cycle or an aggregate one, and a
+// rotation of eight ints or five doubles came out wrong.) An aggregate lives in
+// a slot and goes chunk by chunk (8, 4, 2, then 1 bytes), each chunk a cycle of
+// its own through x15 with x17 carrying the data and x9 the address.
++ (void)emitPhiCycle:(NSArray<NSNumber *> *)cyc phis:(NSArray<XTIRInsn *> *)phis
+                srcs:(NSArray<XTIROperand *> *)srcs ctx:(XTArm64FnCtx *)ctx
+{
+    NSUInteger k = cyc.count;
+    NSUInteger last = cyc[k - 1].unsignedIntegerValue;
+    XTIRType *pty = phis[last].result.type;
+    if (pty && pty.kind == XTIRTypeKindAgg) {
+        NSUInteger sz = [self arm64AggSize:pty.layout];
+        NSUInteger off = 0;
+        off = [self phiCycleChunks:cyc phis:phis srcs:srcs size:sz off:off width:8 ld:@"ldr" st:@"str" view:@"x" ctx:ctx];
+        off = [self phiCycleChunks:cyc phis:phis srcs:srcs size:sz off:off width:4 ld:@"ldr" st:@"str" view:@"w" ctx:ctx];
+        off = [self phiCycleChunks:cyc phis:phis srcs:srcs size:sz off:off width:2 ld:@"ldrh" st:@"strh" view:@"w" ctx:ctx];
+        off = [self phiCycleChunks:cyc phis:phis srcs:srcs size:sz off:off width:1 ld:@"ldrb" st:@"strb" view:@"w" ctx:ctx];
+        return;
+    }
+    NSString *save = (pty && XTIRTypeKindIsFloating(pty.kind))
+        ? [self fregName:17 forType:pty]
+        : [self regName:15 forType:pty];
+    [self materialiseOperand:srcs[last] intoReg:save ctx:ctx];
+    for (NSUInteger i = 0; i + 1 < k; i++) {
+        NSUInteger c = cyc[i].unsignedIntegerValue;
+        [self emitOnePhiCopy:phis[c] source:srcs[c] ctx:ctx];
+    }
+    [self storeReg:save intoValue:phis[last].result.valueId ctx:ctx];
+}
+
+// The `width`-byte chunks of an aggregate cycle from `off` while they fit;
+// returns the offset after them.
++ (NSUInteger)phiCycleChunks:(NSArray<NSNumber *> *)cyc phis:(NSArray<XTIRInsn *> *)phis
+                        srcs:(NSArray<XTIROperand *> *)srcs size:(NSUInteger)sz
+                         off:(NSUInteger)off width:(NSUInteger)w
+                          ld:(NSString *)ld st:(NSString *)st view:(NSString *)view
+                         ctx:(XTArm64FnCtx *)ctx
+{
+    NSUInteger k = cyc.count;
+    NSUInteger last = cyc[k - 1].unsignedIntegerValue;
+    NSString *save = [view stringByAppendingString:@"15"];
+    NSString *data = [view stringByAppendingString:@"17"];
+    while (sz - off >= w) {
+        [self emitSpAddr:[self slotOffsetForValue:srcs[last].valueId ctx:ctx] + off into:@"x9" ctx:ctx];
+        [ctx.out appendFormat:@"    %@ %@, [x9]\n", ld, save];
+        for (NSUInteger i = 0; i + 1 < k; i++) {
+            NSUInteger c = cyc[i].unsignedIntegerValue;
+            [self emitSpAddr:[self slotOffsetForValue:srcs[c].valueId ctx:ctx] + off into:@"x9" ctx:ctx];
+            [ctx.out appendFormat:@"    %@ %@, [x9]\n", ld, data];
+            [self emitSpAddr:[self slotOffsetForValue:phis[c].result.valueId ctx:ctx] + off into:@"x9" ctx:ctx];
+            [ctx.out appendFormat:@"    %@ %@, [x9]\n", st, data];
+        }
+        [self emitSpAddr:[self slotOffsetForValue:phis[last].result.valueId ctx:ctx] + off into:@"x9" ctx:ctx];
+        [ctx.out appendFormat:@"    %@ %@, [x9]\n", st, save];
+        off += w;
+    }
+    return off;
 }
 
 #pragma mark - ICmp predicate → AArch64 condition

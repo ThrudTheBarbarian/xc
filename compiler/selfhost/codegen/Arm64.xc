@@ -8731,74 +8731,93 @@ class Arm64
                 removePending(pending, (IRInsn*)phis.get(pick));
                 continue;
             }
-            // Residual cycle: every pending copy's DEST is read by another
-            // pending copy, so no single-step order is safe — a swap
-            // `%a<-%b, %b<-%a` copied in place loses one value (bug 199:
-            // loop-swapped class-pointer locals came back unchanged). A parallel
-            // assignment sequentialises correctly by reading EVERY source into a
-            // scratch register first, then writing every dest — SP is untouched,
-            // so slot-homed members stay addressable. GP members use x15/x16/x17
-            // (never home registers; spMemForOff's address temp is x9, so it
-            // can't clobber them); FP members use s/d16, 17 and 7 (d18, the
-            // third until 2026-10-30, is a home register: a three-float
-            // rotation came out wrong). Aggregate cycles
-            // (never seen — a struct phi lives in a slot, not a register swap)
-            // and cycles wider than the scratch pool fall back to the in-place
-            // single step, no worse than pre-fix.
-            u32 gpNeed = (u32)0; u32 fpNeed = (u32)0; bool bail = false;
-            for (u32 i = (u32)0; i < phis.count() && !bail; i = i + (u32)1) {
-                if (!isPending(pending, (IRInsn*)phis.get(i))) continue;
-                String* pty = ((IRInsn*)phis.get(i)).res().ty();
-                if (isAggTy(pty)) { bail = true; }
-                else if (isFloatTy(pty)) fpNeed = fpNeed + (u32)1;
-                else gpNeed = gpNeed + (u32)1;
+            // Only cycles are left: every pending copy's destination is read
+            // by exactly one other pending copy. Break one (emitPhiCycle) and
+            // go round again for the next.
+            Array* cyc = new Array();
+            u32 first = (u32)0;
+            while (!isPending(pending, (IRInsn*)phis.get(first))) first = first + (u32)1;
+            u32 cur = first;
+            while (true) {
+                cyc.add((Object*)Number.with(cur));
+                IRValue* want = ((IROperand*)srcs.get(cur)).val();
+                u32 next = phis.count();
+                for (u32 j = (u32)0; j < phis.count() && next == phis.count(); j = j + (u32)1)
+                    if (isPending(pending, (IRInsn*)phis.get(j)) && ((IRInsn*)phis.get(j)).res() == want)
+                        next = j;
+                if (next == phis.count() || next == first) break;
+                cur = next;
             }
-            if (bail || gpNeed > (u32)3 || fpNeed > (u32)3) {
-                u32 fb = (u32)$FFFF_FFFF;                 // last-resort single step
-                for (u32 i = (u32)0; i < phis.count() && fb == (u32)$FFFF_FFFF; i = i + (u32)1)
-                    if (isPending(pending, (IRInsn*)phis.get(i))) fb = i;
-                emitOnePhiCopy((IRInsn*)phis.get(fb), (IROperand*)srcs.get(fb));
-                removePending(pending, (IRInsn*)phis.get(fb));
-                continue;
-            }
-            // Phase 1: read every source into its own scratch register.
-            Array* staged = new Array();
-            u32 gpUsed = (u32)0; u32 fpUsed = (u32)0;
-            for (u32 i = (u32)0; i < phis.count(); i = i + (u32)1) {
-                if (!isPending(pending, (IRInsn*)phis.get(i))) continue;
-                String* pty = ((IRInsn*)phis.get(i)).res().ty();
-                String* reg;
-                if (isFloatTy(pty)) { reg = phiCycleScratch(fpUsed, pty); fpUsed = fpUsed + (u32)1; }
-                else { reg = phiCycleScratch(gpUsed, pty); gpUsed = gpUsed + (u32)1; }
-                materialise((IROperand*)srcs.get(i), reg);
-                staged.add((Object*)reg);
-            }
-            // Phase 2: write every dest from its scratch register.
-            u32 si = (u32)0;
-            for (u32 i = (u32)0; i < phis.count(); i = i + (u32)1) {
-                if (!isPending(pending, (IRInsn*)phis.get(i))) continue;
-                storeReg((String*)staged.get(si), ((IRInsn*)phis.get(i)).res());
-                si = si + (u32)1;
-                removePending(pending, (IRInsn*)phis.get(i));
-            }
+            emitPhiCycle(phis, srcs, cyc);
+            for (u32 k = (u32)0; k < cyc.count(); k = k + (u32)1)
+                removePending(pending, (IRInsn*)phis.get(((Number*)cyc.get(k)).asU32()));
         }
     }
 
-    // Scratch register for a residual phi-copy cycle: slot 0..2. GP members ride
-    // x15/x16/x17 (or w-views), FP members s/d16, 17 and 7 — none is a home register,
-    // so reading all sources then writing all dests cannot clobber a live value.
-    static String* phiCycleScratch(u32 slot, String* pty)
+    // One phi-copy cycle, c0 <- c1 <- ... <- ck-1 <- c0 (copy c(i) reads the
+    // destination of c(i+1)). The first destination is saved, the chain runs,
+    // and the saved value goes into the last destination, so a cycle of any
+    // length needs one register and sp never moves. Every member has the same
+    // type. A scalar is saved in x15/w15 or d17/s17: neither is a home, and
+    // emitOnePhiCopy stages through x16/d16, with x9 as the address temp for a
+    // far slot. An aggregate lives in a slot and goes chunk by chunk (8, 4, 2,
+    // then 1 bytes), each chunk a cycle of its own through x15 with x17
+    // carrying the data and x9 the address.
+    void emitPhiCycle(Array* phis, Array* srcs, Array* cyc)
     {
-        if (isFloatTy(pty)) {
-            bool d = pty.equals(String.withCString("F64"));
-            if (slot == (u32)0) return String.withCString(d ? "d16" : "s16");
-            if (slot == (u32)1) return String.withCString(d ? "d17" : "s17");
-            return String.withCString(d ? "d7" : "s7");
+        u32 k = cyc.count();
+        u32 last = ((Number*)cyc.get(k - (u32)1)).asU32();
+        String* pty = ((IRInsn*)phis.get(last)).res().ty();
+        if (isAggTy(pty)) {
+            u32 sz = aggSize(layoutOf(pty));
+            u32 off = (u32)0;
+            off = phiCycleChunks(phis, srcs, cyc, sz, off, (u32)8, String.withCString("ldr"), String.withCString("str"), String.withCString("x"));
+            off = phiCycleChunks(phis, srcs, cyc, sz, off, (u32)4, String.withCString("ldr"), String.withCString("str"), String.withCString("w"));
+            off = phiCycleChunks(phis, srcs, cyc, sz, off, (u32)2, String.withCString("ldrh"), String.withCString("strh"), String.withCString("w"));
+            off = phiCycleChunks(phis, srcs, cyc, sz, off, (u32)1, String.withCString("ldrb"), String.withCString("strb"), String.withCString("w"));
+            return;
         }
-        bool x = needsXReg(pty);
-        if (slot == (u32)0) return String.withCString(x ? "x15" : "w15");
-        if (slot == (u32)1) return String.withCString(x ? "x16" : "w16");
-        return String.withCString(x ? "x17" : "w17");
+        String* save;
+        if (isFloatTy(pty))
+            save = String.withCString(pty.equals(String.withCString("F64")) ? "d17" : "s17");
+        else
+            save = String.withCString(needsXReg(pty) ? "x15" : "w15");
+        materialise((IROperand*)srcs.get(last), save);
+        for (u32 i = (u32)0; i + (u32)1 < k; i = i + (u32)1) {
+            u32 c = ((Number*)cyc.get(i)).asU32();
+            emitOnePhiCopy((IRInsn*)phis.get(c), (IROperand*)srcs.get(c));
+        }
+        storeReg(save, ((IRInsn*)phis.get(last)).res());
+    }
+
+    // The `w`-byte chunks of an aggregate cycle from `off` while they fit;
+    // returns the offset after them.
+    u32 phiCycleChunks(Array* phis, Array* srcs, Array* cyc, u32 sz, u32 off, u32 w,
+                       String* ld, String* st, String* view)
+    {
+        u32 k = cyc.count();
+        u32 last = ((Number*)cyc.get(k - (u32)1)).asU32();
+        String* save = String.withCString("");
+        save.append(view);
+        save.appendCString("15");
+        String* data = String.withCString("");
+        data.append(view);
+        data.appendCString("17");
+        while (sz - off >= w) {
+            emitSpAddr(slotOf(((IROperand*)srcs.get(last)).val()) + off, String.withCString("x9"));
+            _out.appendFormat("    %s %s, [x9]\n", ld.cString(), save.cString());
+            for (u32 i = (u32)0; i + (u32)1 < k; i = i + (u32)1) {
+                u32 c = ((Number*)cyc.get(i)).asU32();
+                emitSpAddr(slotOf(((IROperand*)srcs.get(c)).val()) + off, String.withCString("x9"));
+                _out.appendFormat("    %s %s, [x9]\n", ld.cString(), data.cString());
+                emitSpAddr(slotOf(((IRInsn*)phis.get(c)).res()) + off, String.withCString("x9"));
+                _out.appendFormat("    %s %s, [x9]\n", st.cString(), data.cString());
+            }
+            emitSpAddr(slotOf(((IRInsn*)phis.get(last)).res()) + off, String.withCString("x9"));
+            _out.appendFormat("    %s %s, [x9]\n", st.cString(), save.cString());
+            off = off + w;
+        }
+        return off;
     }
 
     static bool isPending(Array* pending, IRInsn* n)
