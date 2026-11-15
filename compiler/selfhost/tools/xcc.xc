@@ -1735,7 +1735,10 @@ void packageApk(DriverOptions* d, String* name, String* soname, Data* soBytes)
         Stdio.printf("xcc: error: apk signing failed\n");
         Process.exit((i32)1); return;
     }
-    Files.writeData(out, signedApk);
+    if (!Files.writeData(out, signedApk)) {
+        Stdio.printf("xcc: error: cannot write '%s'\n", out.cString());
+        Process.exit((i32)1); return;
+    }
     Stdio.printf("xcc: android APK -> '%s'  (adb install -r %s)\n",
                  out.cString(), out.cString());
 }
@@ -2631,14 +2634,14 @@ void linkWin64(DriverOptions* d, String* prog)
 //     in, not loaded, and recording one made every object link refuse itself.
 //   * `.xtc.ir` — so a later link can re-run the inliner across module
 //     boundaries, which per-object compilation otherwise gives up.
+//
+// A sidecar with nothing to say is removed, so one left by an earlier build of
+// the same object cannot be read as this one's: `-flto` would otherwise build
+// the old program from a stale `.xtc.ir`.
 void writeObjectSidecars(DriverOptions* d)
 {
     String* base = stripExtension(d.fe().output());
-    String* ij = d.fe().ifaceJson();
-    if (ij != (String*)0 && ij.byteLength() > (u32)0) {
-        String* p = String.withString(base); p.appendCString(".xtc.iface");
-        Files.writeText(p, ij);
-    }
+    writeSidecar(base, ".xtc.iface", d.fe().ifaceJson());
     String* needs = new String();
     Array* nl = d.fe().neededLibs();
     // arm9's libc is auto-imported rather than `#import`ed, and the reference
@@ -2666,12 +2669,49 @@ void writeObjectSidecars(DriverOptions* d)
         needs.append(l);
     }
     String* np = String.withString(base); np.appendCString(".xtc.needs");
-    Files.writeText(np, needs);
-
-    if (d.irText() != (String*)0 && d.irText().byteLength() > (u32)0) {
-        String* ip = String.withString(base); ip.appendCString(".xtc.ir");
-        Files.writeText(ip, d.irText());
+    if (!Files.writeText(np, needs)) {
+        Stdio.error(String.withFormat("xcc: error: cannot write '%s'\n", np.cString()));
+        Process.exit((i32)1); return;
     }
+    writeSidecar(base, ".xtc.ir", d.irText());
+}
+
+// <base><ext> holds text when there is any; otherwise it is removed. Either
+// failing stops the build.
+void writeSidecar(String* base, string ext, String* text)
+{
+    String* p = String.withString(base); p.appendCString(ext);
+    if (text != (String*)0 && text.byteLength() > (u32)0) {
+        if (!Files.writeText(p, text)) {
+            Stdio.error(String.withFormat("xcc: error: cannot write '%s'\n", p.cString()));
+            Process.exit((i32)1);
+        }
+        return;
+    }
+    if (Files.exists(p) && !Directory._unlink(p)) {
+        Stdio.error(String.withFormat("xcc: error: cannot remove the stale '%s'\n", p.cString()));
+        Process.exit((i32)1);
+    }
+}
+
+// A C file's object, made from xcc's half (at xo) and clang's: its sidecars.
+// The needs are xcc's half's, so an object link adds the libraries and
+// frameworks its par runtime calls. It has no interface, and the IR covers
+// only xcc's half, so `-flto` refuses the object rather than build part of it.
+void writeCObjectSidecars(String* xo, String* out)
+{
+    String* xbase = stripExtension(xo);
+    String* base = stripExtension(out);
+    String* xn = String.withString(xbase); xn.appendCString(".xtc.needs");
+    String* needs = Files.readText(xn);
+    if (needs == (String*)0) needs = new String();
+    String* np = String.withString(base); np.appendCString(".xtc.needs");
+    if (!Files.writeText(np, needs)) {
+        Stdio.error(String.withFormat("xcc: error: cannot write '%s'\n", np.cString()));
+        Process.exit((i32)1); return;
+    }
+    writeSidecar(base, ".xtc.iface", (String*)0);
+    writeSidecar(base, ".xtc.ir", (String*)0);
 }
 
 // `a/b.o` -> `a/b`. The LAST dot only, and only after the last separator, so a
@@ -4920,6 +4960,7 @@ void cSplitLink(DriverOptions* d)
             Stdio.printf("xcc: error: cannot write '%s' and '%s'\n", out.cString(), rest.cString());
             Process.exit((i32)1); return;
         }
+        writeCObjectSidecars(xo, out);
         d.fe().setOutput(out);
         return;
     }
@@ -4930,6 +4971,7 @@ void cSplitLink(DriverOptions* d)
             Stdio.printf("xcc: error: clang -r could not make '%s' from the two halves of the C file\n", out.cString());
             Process.exit((i32)1); return;
         }
+        writeCObjectSidecars(xo, out);
         d.fe().setOutput(out);
         return;
     }
@@ -5762,7 +5804,10 @@ void signedLine(String* dir, Data* seed, String* where, bool made, String* spec)
     if (!Files.exists(pubPath)) {
         String* ph = BundleSign._hex(pub.bytes(), (u32)32);
         ph.appendByte((u8)10);
-        Files.writeText(pubPath, ph);
+        if (!Files.writeText(pubPath, ph)) {
+            Stdio.printf("xcc: error: cannot write the public key '%s'\n", pubPath.cString());
+            Process.exit((i32)1); return;
+        }
     }
     Stdio.printf("xcc: %s/ signed by key %s (%s%s); keep it: losing it means an update needs a key rotation\n",
                  dir.cString(), Sha256.hex(pub.bytes(), (u32)32).substringBytes((u32)0, (u32)16).cString(),

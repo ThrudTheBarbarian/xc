@@ -180,6 +180,23 @@ static int runChild(NSString *exe, NSArray<NSString *> *args) {
 // the driver and every subprocess it spawns agree on which tree is
 // authoritative; the extra candidates here are the ones only a bundled layout
 // needs (a `resources` subdir, and two levels up from the binary).
+// A -c sidecar: written when there is text, removed when there is none.
+// NO, with the error said, when either fails.
+static BOOL writeSidecar(NSString *path, NSString *_Nullable text) {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    if (text.length) {
+        if ([text writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:NULL])
+            return YES;
+        fprintf(stderr, "xcc: error: cannot write '%s'\n", path.UTF8String);
+        return NO;
+    }
+    if ([fm fileExistsAtPath:path] && ![fm removeItemAtPath:path error:NULL]) {
+        fprintf(stderr, "xcc: error: cannot remove the stale '%s'\n", path.UTF8String);
+        return NO;
+    }
+    return YES;
+}
+
 static NSString *resolveSupportRoot(const char *argv0, XTCommandLineOptions *opts) {
     NSString *r = [XTCommandLineOptions resolveSupportRoot:opts.xtcHome];
     if (r) return r;
@@ -5005,11 +5022,15 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
     // -c keeps it beside the object as `<out>.xtc.iface`: the interface is a
     // BUILD ARTIFACT of compiling the module, exactly as the .o is, and whoever
     // compiles against this module reads it rather than its source.
-    if (opts.compileOnly && ifaceJson.length) {
+    // A sidecar with nothing to say is removed, so one left by an earlier
+    // build of the same object cannot be read as this one's (-flto would build
+    // the old program from a stale .xtc.ir). Every write is checked.
+    if (opts.compileOnly) {
         NSString *side = [[opts.outputPath stringByDeletingPathExtension]
                              stringByAppendingPathExtension:@"xtc.iface"];
-        [ifaceJson writeToFile:side atomically:YES encoding:NSUTF8StringEncoding error:NULL];
-        if (!opts.quiet) fprintf(stderr, "xcc: interface -> '%s'\n", side.UTF8String);
+        if (!writeSidecar(side, ifaceJson)) return 1;
+        if (ifaceJson.length && !opts.quiet)
+            fprintf(stderr, "xcc: interface -> '%s'\n", side.UTF8String);
     }
     // ...and the same for the DT_NEEDED list. `#import <Lib>` is a FRONT-END
     // fact, discovered when the module was compiled, and an object link has no
@@ -5036,8 +5057,11 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
         }
         NSString *needSide = [[opts.outputPath stringByDeletingPathExtension]
                                  stringByAppendingPathExtension:@"xtc.needs"];
-        [[shared componentsJoinedByString:@"\n"] writeToFile:needSide atomically:YES
-                                                    encoding:NSUTF8StringEncoding error:NULL];
+        if (![[shared componentsJoinedByString:@"\n"] writeToFile:needSide atomically:YES
+                                                      encoding:NSUTF8StringEncoding error:NULL]) {
+            fprintf(stderr, "xcc: error: cannot write '%s'\n", needSide.UTF8String);
+            return 1;
+        }
         if (!opts.quiet && shared.count)
             fprintf(stderr, "xcc: needs -> '%s' (%lu librar%s)\n", needSide.UTF8String,
                     (unsigned long)shared.count, shared.count == 1 ? "y" : "ies");
@@ -5053,10 +5077,8 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
                                stringByAppendingPathExtension:@"xtc.ir"];
         NSString *irText = [NSString stringWithContentsOfFile:irPath
                                                      encoding:NSUTF8StringEncoding error:NULL];
-        if (irText.length) {
-            [irText writeToFile:irSide atomically:YES encoding:NSUTF8StringEncoding error:NULL];
-            if (!opts.quiet) fprintf(stderr, "xcc: ir -> '%s'\n", irSide.UTF8String);
-        }
+        if (!writeSidecar(irSide, irText)) return 1;
+        if (irText.length && !opts.quiet) fprintf(stderr, "xcc: ir -> '%s'\n", irSide.UTF8String);
     }
     [[NSFileManager defaultManager] removeItemAtPath:ifaceSidecar error:NULL];
 
