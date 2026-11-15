@@ -882,11 +882,17 @@ static uint32_t xtProtocolId(NSString* name)
 // skip a single declaration cleanly (e.g. a method whose float
 // parameter we can't lower yet) without polluting the module-level
 // diagnostic state.
+// The diagnostics a quiet lowering set aside: an array past 4 GB is an error
+// however its layout was first asked for (#293), and the layout is cached.
+static XTDiagnosticEngine* sQuietDiag;
 - (nullable XTIRType*)irTypeForASTTypeQuiet:(XTType*)ty
     {
     if (!ty)
         return nil;
     XTDiagnosticEngine* saved = self.diag;
+    XTDiagnosticEngine* outerQuiet = sQuietDiag;
+    if (saved)
+        sQuietDiag = saved;
     self.diag = nil;
     BOOL savedAborted = self.aborted;
     // Nothing in the IR or type layers raises, so this needed no exception
@@ -894,6 +900,7 @@ static uint32_t xtProtocolId(NSString* name)
     // a caught throw. (xtc has no exceptions; see exceptions-and-defer.md E3.)
     XTIRType* result = [self irTypeForASTType:ty at:nil];
     self.diag = saved;
+    sQuietDiag = outerQuiet;
     self.aborted = savedAborted;
     return result;
     }
@@ -1103,6 +1110,13 @@ static NSString* XTDescribeNodeKind(XTASTNodeKind k)
     if (cached)
         return cached;
 
+    // Past 4 GB the size wrapped, and the storage with it, while .length
+    // kept the count (#293). The port's layoutFor says the same.
+    if ((uint64_t)elemW * (uint64_t)at.elementCount > 0xFFFFFFFFull)
+        [(self.diag ?: sQuietDiag) emitError:[NSString stringWithFormat:@"an array of %lu elements of %u bytes is %llu bytes, more than 4 GB",
+                                                        (unsigned long)at.elementCount, elemW,
+                                                        (unsigned long long)elemW * (unsigned long long)at.elementCount]
+                          at:nil];
     // The array form: one element type and a count, no field objects.
     XTIRLayout* L = [[XTIRLayout alloc] initArrayOf:elemIR
                                               count:(uint32_t)at.elementCount

@@ -1710,6 +1710,14 @@ class ClassInfo
             bool weakElem = isWeakSlot(elem);
             String* eIr = weakElem ? preElem : irType(elem);
             u32 w = weakElem ? layoutSizeOf(eIr) : sizeOf(elem);
+            // Past 4 GB the size wrapped, and the storage with it, while
+            // .length kept the count (#293).
+            if ((u64)w * (u64)n > (u64)$FFFFFFFF)
+                {
+                String* m = String.withCString("an array of ");
+                m.appendFormat("%u elements of %u bytes is %llu bytes, more than 4 GB", n, w, (u64)w * (u64)n);
+                errorAtNode(m, (Node*)0);
+                }
             arrayL = IRLayout.array(eIr, n, w, (u32)1);
             size = w * n;
             }

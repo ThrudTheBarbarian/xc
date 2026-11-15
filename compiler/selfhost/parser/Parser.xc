@@ -1065,7 +1065,16 @@ class Parser
     {
         i64 v = (i64)0;
         Node* sz = parseExpression();
-        if (foldIntConst(sz, &v) && v >= (i64)0)
+        if (foldIntConst(sz, &v) && v >= (i64)0 && v > (i64)$FFFFFFFF)
+            {
+            // Past 32 bits the count wrapped, and the array with it (#293).
+            String* m = String.withCString("Array size ");
+            m.appendFormat("%lld", v);
+            m.appendCString(" does not fit in 32 bits");
+            _errorAt(m, sz);
+            _fatal = true;
+            }
+        else if (foldIntConst(sz, &v) && v >= (i64)0)
             ty.append(String.withU32((u32)v));
         else
             _badArraySize(sz);

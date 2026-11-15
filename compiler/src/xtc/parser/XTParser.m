@@ -200,6 +200,13 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
 - (NSUInteger)resolveArraySizeExpr:(XTASTNode*)sizeExpr
     {
     int64_t v = 0;
+    if ([self foldIntConstExpr:sizeExpr into:&v] && v > 0xFFFFFFFFLL)
+        {
+        // Past 32 bits the count wrapped, and the array with it (#293).
+        [_diagnostics emitError:[NSString stringWithFormat:@"Array size %lld does not fit in 32 bits", (long long)v]
+                             at:sizeExpr.location ?: [self currentLocation]];
+        return 0;
+        }
     if ([self foldIntConstExpr:sizeExpr into:&v] && v >= 0)
         {
         return (NSUInteger)v;
