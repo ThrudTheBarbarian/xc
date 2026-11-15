@@ -4373,9 +4373,10 @@ void linkObjectsArm64Elf(DriverOptions* d)
     if (xcArgsFor(d, (String*)0)) crt = crtArm64WithXcArgs(d, crt, lrow.crt());
     // Already in the ELF spelling, as the image path takes them.
     combined.append(crt); combined.appendByte((u8)'\n');
-    // A program that takes libRuntime (a C/C++ program, objects that ask for
-    // it) links the library's runtime, not one of its own: one per process.
-    if (!(lrow.os().equals(String.withCString("linux")) && runtimeTaken(d))) {
+    // A program whose objects ask for libRuntime (C/C++ objects, .deplibs)
+    // links the library's runtime, not one of its own: one per process. xc
+    // objects read the runtime directly: their link keeps its own.
+    if (!(lrow.os().equals(String.withCString("linux")) && gObjWantRuntime && runtimeTaken(d))) {
         combined.append(rt);  combined.appendByte((u8)'\n');
     }
     Arm64Asm* as = new Arm64Asm();
@@ -4470,6 +4471,12 @@ Array* objectDepLibs(DriverOptions* d)
 // An object-only ELF link: each object's .deplibs. `Runtime` is this target's
 // libRuntime, taken as a C/C++ program takes it (resolveRuntimeLib); any other
 // name is a `-l` input. Whether any object asked for something.
+// Whether an object of this link asked for the runtime library (`Runtime` in
+// its .deplibs): a C/C++ object, whose xcc half reads libRuntime's canary
+// guard through the GOT. An xc object reads the runtime directly, so its link
+// keeps a runtime of its own even where the target has a libRuntime.
+bool gObjWantRuntime;
+
 bool addObjectDepLibs(DriverOptions* d)
 {
     bool any = false;
@@ -4482,7 +4489,7 @@ bool addObjectDepLibs(DriverOptions* d)
         for (u32 k = (u32)0; dl != (Array*)0 && k < dl.count(); k = k + (u32)1) {
             String* nm = (String*)dl.get(k);
             any = true;
-            if (nm.equals(String.withCString("Runtime"))) { wantRt = true; continue; }
+            if (nm.equals(String.withCString("Runtime"))) { wantRt = true; gObjWantRuntime = true; continue; }
             String* li = String.withCString("-l").appending(nm);
             bool have = false;
             for (u32 q = (u32)0; q < d.linkInputs().count(); q = q + (u32)1)
