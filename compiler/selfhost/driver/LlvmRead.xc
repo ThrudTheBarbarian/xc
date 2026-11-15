@@ -1685,6 +1685,19 @@ class LlvmReader
                 fail("an alloca of a type not read");
                 return;
                 }
+            // `alloca T, iN <count>`: one T is the slot xcc reads. Any other
+            // count — __builtin_alloca(n)'s run-time size, or a constant
+            // many T under one T's type, which the slot's promotion would
+            // read as one — leaves the function to clang.
+            if (eat(",") && !eat("align"))
+                {
+                llType();
+                if (!word().equals(String.withCString("1")))
+                    {
+                    fail("an alloca of more than one element");
+                    return;
+                    }
+                }
             u32 pa = alignOf(t);
             if (pa < (u32)8)
                 pa = (u32)8;
