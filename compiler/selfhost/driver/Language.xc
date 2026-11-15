@@ -273,8 +273,10 @@ class Languages
     // The IR the reader is given: each function without a loop, each ODR
     // copy (linkonce, weak, available_externally: another object may define
     // it too, and xcc's objects have no weak definitions) and each function
-    // an exception could pass through (xcc writes no unwind tables) becomes
-    // a declaration, so it stays with the IR's compiler. Only a function
+    // with an exception handler (an invoke, a landing pad: xcc reads none)
+    // becomes a declaration, so it stays with the IR's compiler. One that
+    // only lets an exception pass through is xcc's: its unwind tables say
+    // how to leave its frame. Only a function
     // with a loop can gain a par block; the rest of a C++ program
     // (constructors, the standard library's templates, exception paths)
     // never reaches xcc.
@@ -300,7 +302,7 @@ class Languages
                 end = end + 1;
             String* fname = Languages.calleeOf(l, 0);
             if (!Languages.notOurs(l) && (fname == (String*)0 || !Languages.isStd(fname)) && Languages.hasLoop(lines, i + 1, end)
-                && !Languages.mayThrow(lines, i + 1, end, nounwind))
+                && !Languages.hasHandler(lines, i + 1, end))
                 {
                 Languages.plainLabels(lines, i + 1, end);
                 Languages.reroll(lines, i + 1, end);
@@ -338,11 +340,11 @@ class Languages
         }
 
     // ── Loop extraction ─────────────────────────────────────────────────
-    // A function xcc leaves to clang (one an exception may pass through:
-    // main with its vectors, anything that allocates) keeps its loops out of
+    // A function xcc leaves to clang (one with an exception handler: main
+    // with its vectors' destructors on the unwind path) keeps its loops out of
     // xcc's reach. Each outermost loop of such a function whose own body xcc
-    // could take (no invoke or landing pad, nothing called that may throw,
-    // no alloca) is moved into a function of its own,
+    // could take (no invoke or landing pad, no alloca; a call that may throw
+    // is fine, the exception passes through) is moved into a function of its own,
     //     define internal i32 @<f>$xcl<k>(<live-ins>, ptr <live-out slots>)
     // which xcc reads and lifts like any other; the loop's place in <f> is a
     // block that calls it, loads what the loop leaves for later (each
@@ -383,7 +385,7 @@ class Languages
             for (u32 k = i; k <= end && k < lines.count(); k = k + 1)
                 fn.add(lines.get(k));
             if (fname != (String*)0 && !fname.hasPrefix(String.withCString("@\"")) && !Languages.notOurs(l) && !Languages.isStd(fname)
-                && end < lines.count() && Languages.hasLoop(lines, i + 1, end) && Languages.mayThrow(lines, i + 1, end, nounwind))
+                && end < lines.count() && Languages.hasLoop(lines, i + 1, end) && Languages.hasHandler(lines, i + 1, end))
                 {
                 Array* named = Languages.numberedNamed(fn);
                 if (named != (Array*)0)
@@ -892,7 +894,7 @@ class Languages
             for (u32 q = 0; q < bad.count(); q = q + 1)
                 if (((String*)ll.get(i)).contains((String*)bad.get(q)))
                     return (Array*)0;
-        if (Languages.mayThrow(ll, 0, ll.count(), nounwind))
+        if (Languages.hasHandler(ll, 0, ll.count()))
             return (Array*)0;
         // The parameters' types, from the define line.
         Map* argTy = Languages.paramTypes((String*)fn.get(0));
@@ -1690,27 +1692,19 @@ class Languages
         return m;
         }
 
-    // Whether a body line of [from, end) calls what may throw: a call is
-    // safe to an llvm.* intrinsic, or with nounwind on the call or on the
-    // function called.
-    static bool mayThrow(Array* lines, u32 from, u32 end, Map* nounwind)
+    // Whether [from, end) has an exception handler: an invoke (a call with a
+    // landing pad), a landing pad, a resume, or a Windows funclet pad. xcc
+    // reads none of them; a function without one only lets an exception
+    // pass through it, which its unwind tables (every target) describe.
+    static bool hasHandler(Array* lines, u32 from, u32 end)
         {
-        String* key = String.withCString(" call ");
         for (u32 i = from; i < end; i = i + 1)
             {
             String* l = (String*)lines.get(i);
-            // An invoke has a landing pad: the call it makes can throw.
-            if (l.contains(String.withCString(" invoke ")))
+            if (l.contains(String.withCString(" invoke ")) || l.contains(String.withCString(" landingpad "))
+                || l.contains(String.withCString("resume ")) || l.contains(String.withCString(" cleanuppad "))
+                || l.contains(String.withCString(" catchpad ")) || l.contains(String.withCString(" catchswitch ")))
                 return true;
-            u32 c = l.byteIndexOf(key);
-            if (c == String.notFound())
-                continue;
-            String* name = Languages.calleeOf(l, c);
-            if (name != (String*)0 && (name.hasPrefix(String.withCString("@llvm.")) || nounwind.get((Hashable*)name) != (Object*)0))
-                continue;
-            if (Languages.hasGroupIn(l, nounwind))
-                continue;
-            return true;
             }
         return false;
         }
