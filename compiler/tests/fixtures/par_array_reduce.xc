@@ -11,6 +11,7 @@
 // into the array itself is checked too.
 //
 //xtc-na: xt6502, m68k — par has no threads there
+//xtc-warn: because it has an array reduction (:reduce(op a[])), which has no GPU version yet
 #import "Stdio.xc"
 #import "Par.xc"
 
