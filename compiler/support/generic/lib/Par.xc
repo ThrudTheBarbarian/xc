@@ -490,6 +490,16 @@ class Par
             return;
             }
 #if (ARCH_arm64 && !OS_ios) || ARCH_x86_64 || ARCH_wasm32
+        // One array passed twice and written runs on the CPU's threads: a
+        // device binds each of the two as its own buffer (#264).
+        if (ParDevice.bufferAliased(proto, proto.gpuSource()))
+            {
+            if (ParDevice.reporting())
+                Log.info("par: %s: one array is passed twice and written, so it runs on the CPU", proto.parName());
+            Par.runCpu(proto, lo, hi);
+            ParDevice.ranAdd(proto, String.withCString("cpu"));
+            return;
+            }
         // The GPU's identity, for the hardware key auto keeps its choices
         // under, asked of the runtime only when choose() will look them up.
         if (ParDevice.needsHardware(proto))

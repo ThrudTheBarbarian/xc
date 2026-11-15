@@ -2724,6 +2724,43 @@ class ParDevice
         return false;
         }
 
+    // Whether two of the block's arrays are one pointer, one of them written:
+    // bufferOverlap lets such a pair run as a block where each item touches
+    // its own element in both, which holds for the CPU's threads. A GPU binds
+    // each array as a buffer of its own, so an item that writes an element
+    // through one and then reads it through the other reads the value from
+    // before the run (#264).
+    static bool bufferAliased(ParChunk* proto, u8* src)
+        {
+        if (src == (u8*)0 || src[0] == (u8)0)
+            return false;
+        u8* obj = proto.objBytes();
+        pointer ptr[16];
+        bool ro[16];
+        u32 nbuf = (u32)0;
+        u32 at = (u32)0;
+        while (src[at] != (u8)0 && src[at] != (u8)10)
+            {
+            if (src[at] == (u8)'b' && src[at + (u32)1] == (u8)'u' && src[at + (u32)3] == (u8)'=' && nbuf < (u32)16)
+                {
+                at = at + (u32)4;
+                i64 off = num(src, &at);
+                at = at + (u32)1;
+                i64 ivar = num(src, &at);
+                ptr[nbuf] = *(pointer*)((pointer)((u64)obj + (u64)off));
+                ro[nbuf] = proto.gpuReadsOnly((i32)ivar);
+                nbuf = nbuf + (u32)1;
+                continue;
+                }
+            at = at + (u32)1;
+            }
+        for (u32 i = (u32)0; i < nbuf; i = i + (u32)1)
+            for (u32 j = i + (u32)1; j < nbuf; j = j + (u32)1)
+                if (ptr[i] != (pointer)0 && ptr[i] == ptr[j] && !(ro[i] && ro[j]))
+                    return true;
+        return false;
+        }
+
     static ParLayout* layout(ParChunk* proto, u8* src, i64 lo, i64 hi)
         {
         return layoutOver(proto, src, lo, hi, lo, hi);
