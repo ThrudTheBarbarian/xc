@@ -47,6 +47,14 @@ bool optWarnParAuto(void) { return gOptWarnParAuto; }
 String* gOptModTag;
 void optSetModTag(String* t) { gOptModTag = t; }
 String* optModTag(void) { return gOptModTag != (String*)0 ? gOptModTag : String.withCString(""); }
+// A function's name as its source spells it, for a message: without the
+// file's suffix the reader gives a name the file keeps to itself.
+String* optSourceName(String* n)
+{
+    String* t = optModTag();
+    if (t.byteLength() == (u32)0 || n == (String*)0) return n;
+    return n.replacing(t, String.withCString(""));
+}
 
 // The IR outliner on for this compile without XC_PAR_PROPOSE: a C file
 // built with --par-style=auto (the C path has no parser scan; the outliner is

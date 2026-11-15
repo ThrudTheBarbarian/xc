@@ -128,8 +128,38 @@
         for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
             if (((IRFunc*)m.funcs().get(f)).name().equals(String.withCString("main")))
                 mainF = (IRFunc*)m.funcs().get(f);
+        // main is not this module's (a C program's main is clang's when xcc
+        // does not read it): a load-time function hands it over instead,
+        // before main, as the C path's module keeps its constructors.
         if (mainF == (IRFunc*)0 || mainF.blocks().count() == (u32)0)
+            {
+            IRFunc* h = new IRFunc();
+            h.setName(String.withCString("__xt_gpu_globals_handover"));
+            IRValue* hm = new IRValue(String.withCString("Mem"));
+            h.addParam(hm);
+            IRBlock* hb = new IRBlock(String.withCString("bb_entry"));
+            IRValue* ha = new IRValue(String.withCString("Ptr(U8, unbanked)"));
+            IRInsn* hao = IRInsn.with(String.withCString("AddrOf"));
+            hao.setRes(ha);
+            hao.add(IROperand.sym(fnName));
+            hb.add(hao);
+            IRInsn* hc = IRInsn.with(String.withCString("Call"));
+            hc.setCc(String.withCString("CallConv::Standard"));
+            hc.add(IROperand.sym(hook));
+            hc.add(IROperand.useVal(ha));
+            hc.add(IROperand.useVal(hm));
+            IRValue* hmo = new IRValue(String.withCString("Mem"));
+            hc.setMemRes(hmo);
+            hb.add(hc);
+            IRInsn* hr = IRInsn.with(String.withCString("Return"));
+            hr.add(IROperand.useVal(hmo));
+            hb.setTerm(hr);
+            h.addBlock(hb);
+            m.addFunc(h);
+            m.addSym(IRSymbol.func(String.withCString("__xt_gpu_globals_handover"), String.withCString("() -> Void"), false, false));
+            m.modinits().add((Object*)String.withCString("__xt_gpu_globals_handover"));
             return;
+            }
         IRValue* m0 = (IRValue*)0;
         for (u32 i = (u32)0; i < mainF.params().count() && m0 == (IRValue*)0; i = i + (u32)1)
             {

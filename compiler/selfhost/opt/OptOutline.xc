@@ -92,7 +92,7 @@
                     String* verdict = ppVerdict(fn, L);
                     if (verdict != (String*)0)
                         {
-                        _ppWhere = fn.name();
+                        _ppWhere = optSourceName(fn.name());
                         ppNo(verdict.cString());
                         self.ppWarnAuto(verdict);
                         continue;
@@ -175,9 +175,9 @@
 
     final bool ppOutlineLoop(IRModule* m, IRFunc* fn, LRCLoop* L, IRInsn* at)
         {
-        _ppWhere = fn.name();
+        _ppWhere = optSourceName(fn.name());
         if (at != (IRInsn*)0)
-            _ppWhere = String.withFormat("%s:%ld", fn.name().cString(), (i32)at.dbgLine());
+            _ppWhere = String.withFormat("%s:%ld", optSourceName(fn.name()).cString(), (i32)at.dbgLine());
         IRBlock* P = L.pre();
         IRBlock* H = L.header();
         Array* body = L.body();
@@ -312,9 +312,9 @@
             return ppNo("cut 9");
         // Stage 3: a block of its own, run by the par runtime, where the shape
         // is one it can split (ppOutlinePar says which).
-        _ppWhere = fn.name();
+        _ppWhere = optSourceName(fn.name());
         if (at != (IRInsn*)0)
-            _ppWhere = String.withFormat("%s:%ld", fn.name().cString(), (i32)at.dbgLine());
+            _ppWhere = String.withFormat("%s:%ld", optSourceName(fn.name()).cString(), (i32)at.dbgLine());
         if (ppOutlinePar(m, fn, L, at, E, liveIns, (IRValue*)memIns.get((u32)0),
                          memOuts.count() == (u32)1 ? (IRValue*)memOuts.get((u32)0) : (IRValue*)0, liveOuts))
             {

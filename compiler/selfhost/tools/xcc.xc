@@ -826,6 +826,11 @@ String* crtArgsThroughGot(String* crt)
 bool xcArgsWanted(DriverOptions* d, String* prog)
 {
     if (d.noXcArgs() || d.emitLib() || d.emitRuntime() || prog == (String*)0) return false;
+    // A block the outliner made (a C/C++ loop, --par-style=auto) runs
+    // through its ParImpl$o<n> class, not Par.run: the program has one too.
+    // (Its name was found before only because the runtime's own source,
+    // Par.run's definition, was in the same text, which libRuntime is not.)
+    if (prog.byteIndexOf(String.withCString("ParImpl$o")) != String.notFound()) return true;
     String* run = String.withCString("Par$run");
     u32 at = prog.byteIndexOf(run);
     while (at != String.notFound()) {

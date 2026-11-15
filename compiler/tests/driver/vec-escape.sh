@@ -114,7 +114,7 @@ for O in -O2 -O3; do
 done
 if [ "$PLAT" = osx ] && command -v otool > /dev/null; then
     "$XC" -q --par-style=cpu -O2 -H . -o "$W/s" "$W/s.c" > /dev/null 2>&1
-    n=$(otool -tv "$W/s" | awk '/^_mand:/{f=1;next} f&&/^_[A-Za-z_][A-Za-z0-9_$]*:$/{exit} f' | grep -cE 'fcmgt|fcmge')
+    n=$(otool -tv "$W/s" | awk '/^_mand(\$m[0-9a-f]*)?:/{f=1;next} f&&/^_[A-Za-z_][A-Za-z0-9_$]*:$/{exit} f' | grep -cE 'fcmgt|fcmge')
     [ "$n" -ge 1 ] || { echo "FAIL vec-escape: mand's escape loop is not vectorised"; fail=1; }
 fi
 # The AVX copies reduce the lane mask every iteration, and must do it in VEX
