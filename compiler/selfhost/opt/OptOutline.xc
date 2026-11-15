@@ -1806,6 +1806,17 @@
         liveIns = ins;
         for (u32 q = (u32)0; q < _ppInvLoads.count(); q = q + (u32)1)
             {
+            // A second load of one address is the first's capture.
+            IRValue* first = (IRValue*)_ppInvSame.get((Hashable*)((IRInsn*)_ppInvLoads.get(q)).res());
+            u32 fq = (u32)$FFFFFFFF;
+            for (u32 e = (u32)0; first != (IRValue*)0 && e < q && fq == (u32)$FFFFFFFF; e = e + (u32)1)
+                if (((IRInsn*)_ppInvLoads.get(e)).res() == first)
+                    fq = e;
+            if (fq != (u32)$FFFFFFFF)
+                {
+                hoistAt.add(hoistAt.get(fq));
+                continue;
+                }
             hoistAt.add((Object*)Number.with(liveIns.count()));
             liveIns.add((Object*)((IRInsn*)_ppInvLoads.get(q)).res());
             }
@@ -1830,6 +1841,13 @@
             {
             IRInsn* n = (IRInsn*)_ppInvLoads.get(q);
             u32 ci = ((Number*)hoistAt.get(q)).asU32();
+            IRValue* first = (IRValue*)_ppInvSame.get((Hashable*)n.res());
+            if (first != (IRValue*)0 && _ppHoisted.get((Hashable*)first) != (Object*)0)
+                {
+                _ppHoisted.set((Hashable*)n.res(), _ppHoisted.get((Hashable*)first));
+                castTo.set((Hashable*)n.res(), (Object*)Number.with(ci));
+                continue;
+                }
             IRInsn* c = IRInsn.with(String.withCString("Load"));
             IRValue* r = new IRValue(n.res().ty());
             c.setRes(r);
@@ -1849,11 +1867,14 @@
             IRValue* v = (IRValue*)liveIns.get(i);
             if (!v.ty().equals(String.withCString("Ptr(U8, unbanked)")))
                 continue;
-            // A hoisted load's casts are of its result in the loop.
-            IRValue* inLoop = v;
+            // A hoisted load's casts are of its result in the loop (of each
+            // load of its address).
+            Array* inLoop = new Array();
             for (u32 q = (u32)0; q < hoistAt.count(); q = q + (u32)1)
                 if (((Number*)hoistAt.get(q)).asU32() == i)
-                    inLoop = ((IRInsn*)_ppInvLoads.get(q)).res();
+                    inLoop.add((Object*)((IRInsn*)_ppInvLoads.get(q)).res());
+            if (inLoop.count() == (u32)0)
+                inLoop.add((Object*)v);
             String* tt = (String*)0;
             bool ok = true;
             Array* casts = new Array();
@@ -1866,7 +1887,7 @@
                     for (u32 k = (u32)0; k < n.ops().count() && ok; k = k + (u32)1)
                         {
                         IROperand* o = (IROperand*)n.ops().get(k);
-                        if (o.kind() != (u8)OPK_USE || o.val() != inLoop)
+                        if (o.kind() != (u8)OPK_USE || inLoop.indexOf((Object*)o.val()) == (u32)$FFFFFFFF)
                             continue;
                         if (n.res() != (IRValue*)0 && hoistOnly.contains((Hashable*)n.res()))
                             continue;
@@ -3256,6 +3277,9 @@
             base = ((IROperand*)bc.ops().get((u32)0)).val();
             bc = (IRInsn*)defOf.get((Hashable*)base);
             }
+        // A second load of an address the loop does not move: the first's.
+        if (_ppInvSame != (Map*)0 && _ppInvSame.get((Hashable*)base) != (Object*)0)
+            base = (IRValue*)_ppInvSame.get((Hashable*)base);
         _ppBase = base;
         IRInsn* bd = (IRInsn*)defOf.get((Hashable*)base);
         if (bd != (IRInsn*)0 && bd.op().equals(String.withCString("AddrOf")) && bd.ops().count() == (u32)1
@@ -3608,6 +3632,7 @@
         _ppGHiIv = new Array();
         _ppGHiC = new Array();
         _ppInvLoads = new Array();
+        _ppInvSame = new Map();
         Array* body = L.body();
         self.ppFindHist(L, iv, defOf);
         _ppBodyBlocks = body;
@@ -3651,6 +3676,21 @@
                         && self.ppScalarLoad(n.res().ty())
                         && ppInvariant(addr, L, defOf, defBlk, (u32)0) && !self.ppHasCall(L))
                         {
+                        // The same address read again (clang reloads a
+                        // vector's begin after each store that might reach
+                        // it): one value at the call site, so the loop's one
+                        // array is one array of the block, not two that the
+                        // block must keep apart (#258).
+                        for (u32 q = (u32)0; q < _ppInvLoads.count(); q = q + (u32)1)
+                            {
+                            IRInsn* e = (IRInsn*)_ppInvLoads.get(q);
+                            if (_ppInvSame.get((Hashable*)e.res()) == (Object*)0 && e.res().ty().equals(n.res().ty())
+                                && self.ppSameAddr(((IROperand*)e.ops().get((u32)0)).val(), addr, defOf, (u32)0))
+                                {
+                                _ppInvSame.set((Hashable*)n.res(), (Object*)e.res());
+                                break;
+                                }
+                            }
                         _ppInvLoads.add((Object*)n);
                         continue;
                         }
@@ -4294,6 +4334,64 @@
             if ((IRInsn*)_ppInvLoads.get(q) == d)
                 return true;
         return false;
+        }
+
+    // Whether two addresses are one: the same value, or the same field or
+    // constant element of one, through casts.
+    final bool ppSameAddr(IRValue* a, IRValue* b, Map* defOf, u32 depth)
+        {
+        for (u32 w = (u32)0; w < (u32)2; w = w + (u32)1)
+            {
+            IRValue* x = w == (u32)0 ? a : b;
+            IRInsn* d = (IRInsn*)defOf.get((Hashable*)x);
+            while (d != (IRInsn*)0 && d.op().equals(String.withCString("Bitcast")) && d.ops().count() == (u32)1
+                   && ((IROperand*)d.ops().get((u32)0)).kind() == (u8)OPK_USE)
+                {
+                x = ((IROperand*)d.ops().get((u32)0)).val();
+                d = (IRInsn*)defOf.get((Hashable*)x);
+                }
+            if (w == (u32)0)
+                a = x;
+            else
+                b = x;
+            }
+        if (a == b)
+            return true;
+        if (depth > (u32)4)
+            return false;
+        IRInsn* da = (IRInsn*)defOf.get((Hashable*)a);
+        IRInsn* db = (IRInsn*)defOf.get((Hashable*)b);
+        if (da == (IRInsn*)0 || db == (IRInsn*)0 || !da.op().equals(db.op()) || da.ops().count() != db.ops().count()
+            || da.res() == (IRValue*)0 || db.res() == (IRValue*)0 || !da.res().ty().equals(db.res().ty())
+            || !(da.op().equals(String.withCString("FieldAddr")) || da.op().equals(String.withCString("ElementAddr"))))
+            return false;
+        for (u32 k = (u32)0; k < da.ops().count(); k = k + (u32)1)
+            {
+            IROperand* oa = (IROperand*)da.ops().get(k);
+            IROperand* ob = (IROperand*)db.ops().get(k);
+            if (oa.kind() != ob.kind())
+                return false;
+            if (oa.kind() == (u8)OPK_USE)
+                {
+                i64 ca = (i64)0;
+                i64 cb = (i64)0;
+                if (k > (u32)0 && self.constValue(defOf, oa, &ca) && self.constValue(defOf, ob, &cb))
+                    {
+                    if (ca != cb)
+                        return false;
+                    }
+                else if (!self.ppSameAddr(oa.val(), ob.val(), defOf, depth + (u32)1))
+                    return false;
+                }
+            else if (oa.kind() == (u8)OPK_IMMI)
+                {
+                if (oa.imm() != ob.imm())
+                    return false;
+                }
+            else
+                return false;
+            }
+        return true;
         }
 
     // Whether v is pure arithmetic over values from outside the loop and

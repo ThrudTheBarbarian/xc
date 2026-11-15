@@ -32,6 +32,15 @@ for d in cpu gpu; do
     got=$(XC_PAR=$d "$W/x")
     [ "$got" = "$want" ] || { echo "FAIL vector-bound: vbound.cpp on $d gives $got, clang++'s $want"; fail=1; }
 done
+# both() reads the vector's begin twice, around its store: one array, not two
+# that overlap, so it runs as a block. macOS sizes the vector's block (Linux:
+# serial until #235).
+if [ "$PLAT" = osx ]; then
+    XC_PAR=gpu XC_PAR_REPORT=1 "$W/x" > "$W/r" 2>&1
+    if grep -q 'overlap and one is written\|passed twice' "$W/r"; then
+        echo "FAIL vector-bound: a loop of vbound.cpp ran serially"; grep 'overlap\|twice' "$W/r"; fail=1
+    fi
+fi
 # The C loop, its bound inside the array it stores for one of its two calls.
 SRC=tests/par/c-vbound/bound.c
 clang -O2 -w -o "$W/cref" "$SRC" || { echo "FAIL vector-bound: clang does not build bound.c"; exit 1; }
