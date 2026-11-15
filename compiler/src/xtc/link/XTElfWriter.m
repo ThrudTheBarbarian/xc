@@ -840,7 +840,10 @@ static NSDictionary<NSString*, NSData*>* _Nullable XTElfDwarfSections(BOOL isExe
             continue;
         if (!(sflg(i) & SHF_ALLOC))
             continue;
-        if (styp(i) != SHT_PROGBITS && styp(i) != SHT_NOBITS)
+        // SHT_X86_64_UNWIND: x86-64's .eh_frame, kept for an object link
+        // (a C++ program's exceptions read it), as the port keeps it.
+        BOOL unwind = styp(i) == 0x70000001;
+        if (styp(i) != SHT_PROGBITS && styp(i) != SHT_NOBITS && !unwind)
             continue;
         if (sflg(i) & SHF_EXECINSTR)
             continue;
@@ -868,6 +871,10 @@ static NSDictionary<NSString*, NSData*>* _Nullable XTElfDwarfSections(BOOL isExe
             [data appendData:[NSMutableData dataWithLength:(NSUInteger)ssz(i)]];
         else
             [data appendBytes:b + soff(i) length:(NSUInteger)ssz(i)];
+        // A frame table ends with a zero length word, which the section
+        // itself does not carry.
+        if (unwind)
+            [data appendData:[NSMutableData dataWithLength:4]];
         }
 
     NSUInteger symIdx = 0;

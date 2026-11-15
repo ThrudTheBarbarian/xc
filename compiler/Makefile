@@ -1786,8 +1786,9 @@ ORACLE_ELFOBJ_BIN = $(BIN_DIR)/oracle-elfobj
 .PHONY: oracle-elfobj
 oracle-elfobj: $(ORACLE_ELFOBJ_BIN)
 $(ORACLE_ELFOBJ_BIN): tests/link-elfobj/oracle-diff/harness.m \
-                      src/xtc/link/XTElfWriter.m src/xtc/link/XTArArchive.m | $(BIN_DIR)
-	$(CC) $(CFLAGS) -I src/xtc/link -I src/xtc/asm/x86_64 $(LDFLAGS) -o $@ $^
+                      src/xtc/link/XTElfWriter.m src/xtc/link/XTArArchive.m \
+                      src/xtc/dwarf/XTDwarfWriter.m | $(BIN_DIR)
+	$(CC) $(CFLAGS) -I src/xtc/link -I src/xtc/asm/x86_64 -I src/xtc/dwarf $(LDFLAGS) -o $@ $^
 
 ORACLE_X8664_BIN = $(BIN_DIR)/oracle-x86_64
 .PHONY: oracle-x86_64
@@ -1906,5 +1907,6 @@ selfhost-x86_64-corpus: $(CORPUS_BIN) $(XTC_BIN) $(XTCLN_X8664_BIN) $(XTCG_X8664
 elf-smoke: $(BIN_DIR)/elf-smoke
 $(BIN_DIR)/elf-smoke: tests/asm-x86_64/elf-smoke.m \
                       src/xtc/asm/x86_64/XAX86_64Assembler.m \
-                      src/xtc/link/XTElfWriter.m src/xtc/link/XTArArchive.m | $(BIN_DIR)
-	$(CC) $(CFLAGS) -I src/xtc/asm/x86_64 -I src/xtc/link $(LDFLAGS) -o $@ $^
+                      src/xtc/link/XTElfWriter.m src/xtc/link/XTArArchive.m \
+                      src/xtc/dwarf/XTDwarfWriter.m | $(BIN_DIR)
+	$(CC) $(CFLAGS) -I src/xtc/asm/x86_64 -I src/xtc/link -I src/xtc/dwarf $(LDFLAGS) -o $@ $^
