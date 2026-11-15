@@ -6002,7 +6002,7 @@ void signBundle(DriverOptions* d)
 // objects' MERGED module where a normal build enters with the front end's.
 void emitModule(DriverOptions* d, IRModule* mod)
 {
-    if (!d.keepAsm() && !d.compileOnly()) noteLinkFlags(d);
+    if (!d.keepAsm() && !d.compileOnly() && !linksExternally(d)) noteLinkFlags(d);
 
     // A link input this target's path does not consume must not be dropped.
     // arm64 and x86_64 honour them below, and win64 takes objects and archives
@@ -6467,15 +6467,40 @@ void writeTempOrDie(String* path, String* text)
     }
 }
 
-// The link inputs the command line named, in the form clang takes them: -L
-// dirs, -l names and files as given, -framework pairs, then $XTC_LDFLAGS.
+// Whether an earlier argument of a vendor link is this string.
+bool argsHave(Array* a, String* s)
+{
+    for (u32 i = (u32)0; i < a.count(); i = i + (u32)1)
+        if (((String*)a.get(i)).equals(s)) return true;
+    return false;
+}
+
+// Whether a vendor link already records the run-path dir (as the pair
+// `-Wl,-rpath -Wl,<dir>`).
+bool argsHaveRpath(Array* a, String* dir)
+{
+    String* w = String.withCString("-Wl,");
+    w.append(dir);
+    for (u32 i = (u32)0; i + (u32)1 < a.count(); i = i + (u32)1)
+        if (((String*)a.get(i)).equals(String.withCString("-Wl,-rpath"))
+            && ((String*)a.get(i + (u32)1)).equals(w)) return true;
+    return false;
+}
+
+// The link arguments of the command line and $XTC_LDFLAGS, in the form clang
+// takes them: -L dirs, -l names and files as given, -framework pairs, run
+// paths, then the other linker flags. $XTC_LDFLAGS is already merged into
+// these lists (addLdFlagsFromEnvironment), so it is not read again here.
 void addLinkerFlags(DriverOptions* d, Array* a)
 {
+    Array* dirs = new Array();
     Array* ls = d.fe().libs();
-    for (u32 i = (u32)0; ls != (Array*)0 && i < ls.count(); i = i + (u32)1) {
+    for (u32 i = (u32)0; ls != (Array*)0 && i < ls.count(); i = i + (u32)1) dirs.add(ls.get(i));
+    for (u32 i = (u32)0; i < d.ldDirs().count(); i = i + (u32)1) dirs.add(d.ldDirs().get(i));
+    for (u32 i = (u32)0; i < dirs.count(); i = i + (u32)1) {
         String* f = String.withCString("-L");
-        f.append((String*)ls.get(i));
-        a.add((Object*)f);
+        f.append((String*)dirs.get(i));
+        if (!argsHave(a, f)) a.add((Object*)f);
     }
     for (u32 i = (u32)0; i < d.linkInputs().count(); i = i + (u32)1)
         a.add(d.linkInputs().get(i));
@@ -6483,14 +6508,29 @@ void addLinkerFlags(DriverOptions* d, Array* a)
         a.add((Object*)String.withCString("-framework"));
         a.add(d.frameworks().get(i));
     }
-    String* env = Platform.env(String.withCString("XTC_LDFLAGS"));
-    if (env != (String*)0) {
-        Array* toks = env.splitOnByte((u8)' ');
-        for (u32 i = (u32)0; i < toks.count(); i = i + (u32)1) {
-            String* t = ((String*)toks.get(i)).trimmed();
-            if (t.byteLength() > (u32)0) a.add((Object*)t);
-        }
+    for (u32 i = (u32)0; i < d.rpaths().count(); i = i + (u32)1) {
+        String* dir = (String*)d.rpaths().get(i);
+        if (argsHaveRpath(a, dir)) continue;
+        a.add((Object*)String.withCString("-Wl,-rpath"));
+        String* r = String.withCString("-Wl,");
+        r.append(dir);
+        a.add((Object*)r);
     }
+    for (u32 i = (u32)0; i < d.rawLinkFlags().count(); i = i + (u32)1) {
+        String* f = String.withCString("-Wl,");
+        f.append((String*)d.rawLinkFlags().get(i));
+        a.add((Object*)f);
+    }
+}
+
+// Whether this build's link goes to a vendor driver (clang on arm64 macOS,
+// the NDK's clang for android), which takes the linker flags itself
+// (addLinkerFlags), so none of them is reported as ignored.
+bool linksExternally(DriverOptions* d)
+{
+    if (isAndroid(d)) return d.caps().noSelfHost() && (d.emitApk() || !d.emitLib());
+    if (!d.arch().equals(String.withCString("arm64")) || d.emitLib()) return false;
+    return d.caps().noSelfHost() || gLangLinker != (String*)0;
 }
 
 // Run a vendor tool, and stop the build with its status if it failed.
