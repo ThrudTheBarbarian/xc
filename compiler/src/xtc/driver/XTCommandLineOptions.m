@@ -1391,6 +1391,13 @@ static NSString* sExecutablePath = nil;
             {
             opts.optimisationLevel = 0;
             }
+        else if ([arg hasPrefix:@"-O"])
+            {
+            // -O0 to -O3 and nothing else: -Os, -Oz, -Og and -O9 are errors.
+            fprintf(stderr, "xcc: error: unsupported optimisation level '%s' (use -O0, -O1, -O2 or -O3)\n",
+                    argv[i]);
+            return nil;
+            }
         else if ([arg hasPrefix:@"-x-"])
             {
             // -x-<arch>,<opt>[,<opt>...] — target-specific options.

@@ -7843,8 +7843,15 @@ DriverOptions* parseDriverArgs(void)
         // exactly the failure this compiler refuses everywhere else.
         // A bare `-O` is `-O1`, as cc reads it.
         if (a.equals(String.withCString("-O"))) { d.setOpt((u32)1); i = i + (u32)1; continue; }
-        if (a.hasPrefix(String.withCString("-O")) && a.byteLength() == (u32)3) {
-            d.setOpt((u32)(a.byteAt((u32)2) - (u8)'0')); i = i + (u32)1; continue;
+        // -O0 to -O3 and nothing else: -Os, -Oz, -Og and -O9 are errors, not
+        // levels computed from whatever byte follows the O.
+        if (a.hasPrefix(String.withCString("-O"))) {
+            if (a.byteLength() == (u32)3 && a.byteAt((u32)2) >= (u8)'0' && a.byteAt((u32)2) <= (u8)'3') {
+                d.setOpt((u32)(a.byteAt((u32)2) - (u8)'0')); i = i + (u32)1; continue;
+            }
+            Stdio.error(String.withFormat("xcc: error: unsupported optimisation level '%s' (use -O0, -O1, -O2 or -O3)\n", a.cString()));
+            Process.exit((i32)1);
+            return (DriverOptions*)0;
         }
         // -Wanalyze: the static analyser. Off by default — an unknown
         // false-positive rate must not destabilise the corpus.

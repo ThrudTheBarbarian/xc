@@ -169,7 +169,7 @@ See [Memory models](/compiler/usage/memory-models/).
 | `-O0` | No optimisation. A debug aid; the production level is `-O3`. |
 | `-O1`, `-O` | Removes unreachable functions. |
 | `-O2` | The full optimiser: inlining, constant folding, dead-code elimination, if-conversion, loop unrolling, vectorisation on `arm64`, `x86_64`, `win64`, `arm9` and `wasm32`, strength reduction, loop-invariant code motion and block layout. |
-| `-O3` | **The default.** Currently the same pipeline as `-O2`. |
+| `-O3` | **The default.** Currently the same pipeline as `-O2`. Any other `-O` spelling, such as `-Os` or `-O4`, is an error. |
 | `-Flu <n>`, `--fn-loop-unroll <n>` | Fully unroll counted loops whose constant trip count is at most `n`. The default depends on the target; see [Optimisation](/compiler/usage/optimization/#-flu--loop-unroll-cap). |
 | `-Fli <n>`, `--fn-leaf-inline <n>` | Max leaf-function size (instructions) eligible for inlining. Default 64; needs `-O2+`. |
 | `--par-style=auto\|threads\|gpu\|cpu` | How plain loops run. `auto`, the default, makes a `par` block of each loop whose iterations are independent, and each block picks CPU threads, the GPU or both as it runs; `threads` keeps the blocks on the CPU's threads; `gpu` starts them on the GPU; `cpu` leaves every loop as written, on one thread. See [Loops that become blocks](/compiler/language/par/#loops-that-become-blocks---par-style). |
