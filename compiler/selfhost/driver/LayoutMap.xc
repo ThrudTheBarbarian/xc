@@ -48,12 +48,14 @@ class LayoutMap
     u32 _regCRegionSpan;
 
     bool _hasShadow;
+    Array* _chain;         // the files including this one (#298)
     u32 _shadowRegAddr;    u32 _shadowRegMask;
     u32 _trampolineStart;  u32 _trampolineEnd;
 
     String* _stackBase;
     u32 _heapTop;
     u32 _entryAddress;
+    bool _hasEntry;        // address = $0000 is an entry too (#298)
 
     void init(void)
     {
@@ -69,6 +71,8 @@ class LayoutMap
         _hasSplit = false;
         _hasRegionC = false;
         _hasShadow = false;
+        _hasEntry = false;
+        _chain = (Array*)0;
     }
 
     bool failed(void) { return _failed; }
@@ -76,8 +80,31 @@ class LayoutMap
 
     static LayoutMap* read(String* path)
     {
+        return readIncluded(path, new Array());
+    }
+
+    // `chain` holds the files that include this one, outermost first: a file
+    // already on it includes itself, which recursed until the stack overflowed
+    // (#298). Paths are compared as spelled, so a cycle through a different
+    // spelling (`../layouts/a.lnk`) is caught by the depth limit instead.
+    static LayoutMap* readIncluded(String* path, Array* chain)
+    {
         LayoutMap* m = new LayoutMap();
+        for (u32 i = (u32)0; i < chain.count(); i = i + (u32)1)
+            if (((String*)chain.get(i)).equals(path) || chain.count() >= (u32)16) {
+                String* w = String.withCString("layout #include cycle: ");
+                for (u32 j = (u32)0; j < chain.count(); j = j + (u32)1) {
+                    w.append((String*)chain.get(j));
+                    w.appendCString(" -> ");
+                }
+                w.append(path);
+                m.fail(w);
+                return m;
+            }
+        chain.add((Object*)path);
+        m._chain = chain;
         m.parseFile(path);
+        chain.removeLast();
         return m;
     }
 
@@ -115,7 +142,7 @@ class LayoutMap
                                                 String.withCString("layouts")), inc);
                 if (Files.exists(sib)) incPath = sib;
             }
-            LayoutMap* base = LayoutMap.read(incPath);
+            LayoutMap* base = LayoutMap.readIncluded(incPath, _chain != (Array*)0 ? _chain : new Array());
             if (base.failed()) { fail(base.why()); return; }
             mergeDefaults(base);
         }
@@ -215,7 +242,7 @@ class LayoutMap
         if (_trampolineEnd == (u32)0) _trampolineEnd = b._trampolineEnd;
         if (_stackBase == (String*)0) _stackBase = b._stackBase;
         if (_heapTop == (u32)0) _heapTop = b._heapTop;
-        if (_entryAddress == (u32)0) _entryAddress = b._entryAddress;
+        if (!_hasEntry && b._hasEntry) { _entryAddress = b._entryAddress; _hasEntry = true; }
     }
 
     void apply(String* section, String* key, String* val)
@@ -234,7 +261,7 @@ class LayoutMap
         }
         else if (section.equals(String.withCString("entry"))) {
             u32 v = (u32)0;
-            if (key.equals(String.withCString("address")) && number16(val, &v)) _entryAddress = v;
+            if (key.equals(String.withCString("address")) && number16(val, &v)) { _entryAddress = v; _hasEntry = true; }
         }
     }
 
@@ -736,7 +763,7 @@ class LayoutMap
             d.appendCString("# Shadow mode: $"); d.append(hex(_shadowRegAddr, (u32)4));
             d.appendCString(":$"); d.append(hex(_shadowRegMask, (u32)2)); d.appendCString(".\n");
         }
-        if (_entryAddress != (u32)0) {
+        if (_hasEntry) {
             d.appendCString("# Entry: $"); d.append(hex(_entryAddress, (u32)4)); d.appendCString("\n");
         }
         return d;

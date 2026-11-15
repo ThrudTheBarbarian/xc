@@ -927,8 +927,34 @@ static void handleLibrary(XTMemoryModel* model, NSString* key, NSString* value)
 |* @param error  On failure, receives an NSError with filename and line info.
 |* @return  A populated memory model, or nil on parse error.
 \****************************************************************************/
+// The files including the one being parsed, outermost first: a file already
+// on it includes itself, which recursed until the stack overflowed (#298).
+// Paths are compared as spelled; a cycle through another spelling is caught by
+// the depth limit. As the port's LayoutMap.readIncluded.
+static NSMutableArray<NSString*>* sLnkChain;
 + (nullable XTMemoryModel*)parseFile:(NSString*)path
                                error:(NSError* _Nullable*)error
+    {
+    if (!sLnkChain)
+        sLnkChain = [NSMutableArray array];
+    if ([sLnkChain containsObject:path] || sLnkChain.count >= 16)
+        {
+        if (error)
+            *error = [NSError errorWithDomain:@"XTLinkerScript"
+                                         code:1
+                                     userInfo:@{NSLocalizedDescriptionKey :
+                                                    [NSString stringWithFormat:@"layout #include cycle: %@ -> %@",
+                                                                               [sLnkChain componentsJoinedByString:@" -> "], path]}];
+        return nil;
+        }
+    [sLnkChain addObject:path];
+    XTMemoryModel* m = [self parseFileUnguarded:path error:error];
+    [sLnkChain removeLastObject];
+    return m;
+    }
+
++ (nullable XTMemoryModel*)parseFileUnguarded:(NSString*)path
+                                        error:(NSError* _Nullable*)error
     {
     NSString* contents = [NSString stringWithContentsOfFile:path
                                                    encoding:NSUTF8StringEncoding
