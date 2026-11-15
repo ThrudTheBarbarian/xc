@@ -43,7 +43,6 @@ void _xt_atomic_store_i32(pointer slot, i32 v);
 #endif
 // 1 while a thread's block holds the runtime (Par.run).
 i32 gParActive;
-bool gParSiteChecked;   // a ParFnChunk.runOn whose call site checked its arrays apart (#219)
 
 #if ARCH_arm64 || ARCH_x86_64 || OS_windows
 // The bytes from p to the end of the page-aligned heap block it points into,
@@ -333,15 +332,7 @@ class ParFnChunk : ParChunk
         // runs from the identity and the value before is folded in after.
         Data* before = Data.withData(c._ctx);
         c.resetCtx(c._ctx.bytes());
-        // The call site has already checked every pair of the block's arrays
-        // that may overlap (the outliner's guard, which sent `serial` true
-        // where they do): the run need not size them again, which it cannot
-        // for a C program's malloc'd blocks on Linux (#219). Only a flag for
-        // this call: another block's runOn meanwhile runs serially (Par.run
-        // holds one run at a time) and at worst clears it, which re-checks.
-        gParSiteChecked = true;
         Par.run((ParChunk*)c, from, to);
-        gParSiteChecked = false;
         c.mergeCtx(before.bytes(), c._ctx.bytes());
         memcpy((pointer)c._ctx.bytes(), (pointer)before.bytes(), (u64)before.length());
         }
@@ -488,7 +479,7 @@ class Par
             ParDevice.ranAdd(proto, String.withCString("cpu"));
             return;
             }
-        if (!gParSiteChecked && ParDevice.bufferOverlap(proto, proto.gpuSource(), lo, hi))
+        if (ParDevice.bufferOverlap(proto, proto.gpuSource(), lo, hi))
             {
             if (ParDevice.reporting())
                 Log.info("par: %s: two of its arrays overlap and one is written, so it runs serially", proto.parName());
