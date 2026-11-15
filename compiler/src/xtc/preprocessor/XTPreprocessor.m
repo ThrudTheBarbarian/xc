@@ -251,10 +251,19 @@
                     warnedNested = YES;
                     }
                 // Preserve newlines so line numbering is unaffected;
-                // replace everything else with a space.
+                // replace everything else with a space — one per UTF-8 BYTE,
+                // as the port does, so the columns after a comment holding an
+                // em dash agree (a surrogate pair is 4 bytes, 2 per half).
                 if (c == '\n')
+                    {
                     line++;
-                [out appendFormat:@"%C", (unichar)((c == '\n') ? c : ' ')];
+                    [out appendString:@"\n"];
+                    }
+                else
+                    {
+                    NSUInteger w = c < 0x80 ? 1 : c < 0x800 ? 2 : (c >= 0xD800 && c <= 0xDFFF) ? 2 : 3;
+                    [out appendString:[@"" stringByPaddingToLength:w withString:@" " startingAtIndex:0]];
+                    }
                 i++;
                 }
             continue;

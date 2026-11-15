@@ -878,7 +878,7 @@
     |* "Defines" is wider than an instruction's result, and the reference got it
     |* wrong in both directions it could:
     |*
-    final |*   * a MULTI-RESULT instruction (`%50:Agg, %51 = Load`) defines its memory
+    |*   * a MULTI-RESULT instruction (`%50:Agg, %51 = Load`) defines its memory
     |*     token as `memRes`, which walking `res` alone never sees;
     |*   * a FRAME-PINNED local is defined by the frame, not by any instruction —
     |*     dropping one removed the whole pinned area, and on one function that
