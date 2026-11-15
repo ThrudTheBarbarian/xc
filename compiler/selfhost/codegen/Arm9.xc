@@ -362,7 +362,7 @@ class Arm9
     String* assembly(IRModule* mod)
         {
         _m = mod;
-        _atomicArc = _arcOverride >= (i32)0 ? _arcOverride != (i32)0 : spawnsThreads(mod);
+        _atomicArc = _arcOverride >= (i32)0 ? _arcOverride != (i32)0 : arcAtomic(mod);
         _out = String.withCString("");
         // A `.file` naming the MODULE, not the temp `.s`: without one gas falls
         // back to whatever temporary object name it was handed, which is random
@@ -3321,7 +3321,26 @@ class Arm9
     // The instruction stream is the question, not the symbol table.
     bool spawnsThreads(IRModule* m)
         {
-        String* want = String.withCString("_xt_thread_create");
+        return referencesSymbol(m, String.withCString("_xt_thread_create"));
+        }
+
+    // Atomic reference counts, as x86-64's arcAtomic (the security review,
+    // #303): on when the module spawns a thread, has no main (a library or a
+    // plugin, whose caller may have threads of its own), or loads a plugin.
+    bool arcAtomic(IRModule* m)
+        {
+        if (spawnsThreads(m))
+            return true;
+        bool hasMain = false;
+        for (u32 f = (u32)0; f < m.funcs().count() && !hasMain; f = f + (u32)1)
+            hasMain = ((IRFunc*)m.funcs().get(f)).name().equals(String.withCString("main"));
+        if (!hasMain)
+            return true;
+        return referencesSymbol(m, String.withCString("Plugin$load"));
+        }
+
+    bool referencesSymbol(IRModule* m, String* want)
+        {
         for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
             {
             IRFunc* fn = (IRFunc*)m.funcs().get(f);

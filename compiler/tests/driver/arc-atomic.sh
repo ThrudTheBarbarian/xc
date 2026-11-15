@@ -6,6 +6,9 @@
 #   - x86-64: atomic when the module spawns a thread, has no main (a library
 #     or plugin, whose caller may have threads), or loads a plugin; plain
 #     otherwise (a locked add costs arc_alloc 3.2x there);
+#   - arm9: the same rule as x86-64 (#303: it used to look at threads only,
+#     so an arm9 library loaded by a threaded host raced on its counts);
+#   - wasm32: threads only, as a wasm library cannot be used with threads;
 #   - -fno-thread-safe-arc still turns them off, -fthread-safe-arc on.
 #
 #   bash tests/driver/arc-atomic.sh
@@ -54,5 +57,17 @@ fi
 [ "${n:-0}" -gt 0 ] || { echo "FAIL arc-atomic: -fthread-safe-arc gave no atomic counts on x86-64"; fail=1; }
 "$XC" -q -O2 -A x86_64 -H . -c -S -o "$W/l.s" "$W/lib.xc" && n=$(atomics "$W/l.s")
 [ "${n:-0}" -gt 0 ] || { echo "FAIL arc-atomic: an x86-64 library (no main) keeps plain reference counts"; fail=1; }
+# arm9 (#303): a library has ldrexh/strexh counts, a threadless program
+# plain ones. The C library search path, where the build needs one.
+L9=()
+[ -n "${XTC_ARM9_SYSROOT:-}" ] && L9=(-L "$XTC_ARM9_SYSROOT")
+if "$XC" -q -O2 -A arm9 ${L9[@]+"${L9[@]}"} -H . -S -o "$W/r.s" "$W/p.xc" 2>/dev/null; then
+    n=$(grep -c ldrexh "$W/r.s")
+    [ "$n" = 0 ] || { echo "FAIL arc-atomic: arm9 made a threadless program's counts atomic ($n)"; fail=1; }
+    "$XC" -q -O2 -A arm9 ${L9[@]+"${L9[@]}"} -H . -c -S -o "$W/r9.s" "$W/lib.xc" && n=$(grep -c ldrexh "$W/r9.s")
+    [ "${n:-0}" -gt 0 ] || { echo "FAIL arc-atomic: an arm9 library (no main) keeps plain reference counts"; fail=1; }
+else
+    echo "arc-atomic: arm9 not checked (no arm9 C library: set XTC_ARM9_SYSROOT)"
+fi
 [ $fail = 0 ] && echo "--- arc-atomic: pass ---" || echo "--- arc-atomic: FAIL ---"
 exit $fail

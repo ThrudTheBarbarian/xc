@@ -3780,9 +3780,17 @@ static NSInteger sArm9ThreadSafeARCOverride = -1;
 
 + (NSString*)assemblyFromModule:(XTIRModule*)mod
     {
+    // Atomic reference counts, as x86-64's (the security review, #303): on
+    // when the module spawns a thread, has no main (a library or plugin, whose
+    // caller may have threads), or loads a plugin. The port's arcAtomic.
+    BOOL arcHasMain = NO;
+    for (XTIRFunction* f in mod.functions)
+        if ([f.name isEqualToString:@"main"])
+            arcHasMain = YES;
     sArm9ThreadSafeARC = sArm9ThreadSafeARCOverride >= 0
                              ? (sArm9ThreadSafeARCOverride != 0)
-                             : [mod referencesSymbolNamed:@"_xt_thread_create"];
+                             : ([mod referencesSymbolNamed:@"_xt_thread_create"] || !arcHasMain
+                                || [mod referencesSymbolNamed:@"Plugin$load"]);
     NSMutableString* out = [NSMutableString string];
     BOOL needsItable = NO;
     for (XTIRFunction* f in mod.functions)

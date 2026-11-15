@@ -725,6 +725,10 @@ class Wasm32
         }
         prescanRuntime(mod);
         placeData(mod);
+        // Atomic counts only for a module that starts threads: unlike arm9 and
+        // x86-64, a wasm library (no main) needs none, as threads do not
+        // combine with wasm libraries (refused below), so no threaded host
+        // can share its objects (#303).
         bool safeArc = _arcOverride >= (i32)0 ? _arcOverride != (i32)0 : spawnsThreads(mod);
         _threaded = safeArc && !_emitLib && !_linkLibs;
         // A module that starts threads and is, or links, a library would
