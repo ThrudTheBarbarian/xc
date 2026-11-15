@@ -1512,6 +1512,10 @@ static int xaEncodeSME(NSString *mn, NSArray<NSString *> *ops, uint32_t *out, NS
     if ([mn isEqualToString:@"umull"]||[mn isEqualToString:@"smull"]) { NEED(3);
         BOOL w; REG(0,rd,w,dSP); REG(1,rn,w,nSP); REG(2,rm,w,mSP);
         return encMul([mn isEqualToString:@"umull"]?0x9BA00000u:0x9B200000u, rd,rn,rm,31); }
+    // The high 64 bits of a 64x64 product (#309); Ra is 31.
+    if ([mn isEqualToString:@"umulh"]||[mn isEqualToString:@"smulh"]) { NEED(3);
+        BOOL w; REG(0,rd,w,dSP); REG(1,rn,w,nSP); REG(2,rm,w,mSP);
+        return encMul([mn isEqualToString:@"umulh"]?0x9BC00000u:0x9B400000u, rd,rn,rm,31); }
     if ([mn isEqualToString:@"umaddl"]||[mn isEqualToString:@"smaddl"]||[mn isEqualToString:@"msubl"]) { NEED(4);
         BOOL w;BOOL s; REG(0,rd,w,dSP);REG(1,rn,w,nSP);REG(2,rm,w,mSP);REG(3,ra,w,s);
         return encMul([mn isEqualToString:@"smaddl"]?0x9B200000u:0x9BA00000u, rd,rn,rm,ra); }

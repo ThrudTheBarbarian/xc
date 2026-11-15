@@ -2584,6 +2584,16 @@ class Arm64Asm
             return encMul3(mn.equals(String.withCString("umull")) ? (u32)$9BA00000 : (u32)$9B200000,
                            d.num(), n.num(), m.num(), (u32)31);
         }
+        // The high 64 bits of a 64x64 product (#309: 64-bit division by a
+        // constant). Ra is 31.
+        if (mn.equals(String.withCString("umulh")) || mn.equals(String.withCString("smulh"))) {
+            RegRef* d = parseReg(opAt(ops, (u32)0));
+            RegRef* n = parseReg(opAt(ops, (u32)1));
+            RegRef* m = parseReg(opAt(ops, (u32)2));
+            _hit = true;
+            return encMul3(mn.equals(String.withCString("umulh")) ? (u32)$9BC00000 : (u32)$9B400000,
+                           d.num(), n.num(), m.num(), (u32)31);
+        }
         if (mn.equals(String.withCString("umaddl")) || mn.equals(String.withCString("smaddl"))
          || mn.equals(String.withCString("msubl"))) {
             RegRef* d = parseReg(opAt(ops, (u32)0));

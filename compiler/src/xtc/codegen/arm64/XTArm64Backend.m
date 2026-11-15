@@ -5229,6 +5229,79 @@ static uint64_t satMul64(uint64_t a, uint64_t b) {
 
 // Unsigned magic-number division (Hacker's Delight §10-9), W ∈ {8,16,32}.
 // x/d == (a==0) ? mulhu(x,M) >>u s : (t + ((x-t)>>u 1)) >>u (s-1), t=mulhu(x,M).
+// A 64-bit pattern into an x-register (the port's emitImm64).
+static void xtArm64Imm64(NSMutableString* out, uint64_t bits, NSString* reg)
+    {
+    [out appendFormat:@"    movz %@, #%llu\n", reg, (unsigned long long)(bits & 0xffff)];
+    for (unsigned k = 1; k < 4; k++)
+        {
+        uint64_t c = (bits >> (k * 16)) & 0xffff;
+        if (c)
+            [out appendFormat:@"    movk %@, #%llu, lsl #%u\n", reg, (unsigned long long)c, k * 16];
+        }
+    }
+
+// The unsigned and signed magic numbers at W = 64 (#309), as the port's
+// magicU64/magicS64: 64-bit arithmetic with q1's overflow flagged, where
+// the reference would need 128 bits.
+static void xtMagicU64(uint64_t d, uint64_t* Mout, int* aout, int* sout)
+    {
+    uint64_t twoWm1 = 0x8000000000000000ull, maxu = ~0ull;
+    int a = 0, p = 63;
+    uint64_t nc = maxu - ((maxu % d) + 1) % d;
+    uint64_t q1 = twoWm1 / nc, r1 = twoWm1 - q1 * nc;
+    BOOL q1over = NO;
+    uint64_t q2 = (twoWm1 - 1) / d, r2 = (twoWm1 - 1) - q2 * d;
+    uint64_t delta;
+    BOOL again = YES;
+    while (again)
+        {
+        p++;
+        if (q1 >= twoWm1)
+            q1over = YES;
+        if (r1 >= nc - r1) { q1 = q1 + q1 + 1; r1 = r1 - (nc - r1); }
+        else               { q1 = q1 + q1;     r1 = r1 + r1; }
+        if (r2 + 1 >= d - r2) { if (q2 >= twoWm1 - 1) a = 1; q2 = q2 + q2 + 1; r2 = r2 - (d - r2 - 1); }
+        else                  { if (q2 >= twoWm1)     a = 1; q2 = q2 + q2;     r2 = r2 + r2 + 1; }
+        delta = d - 1 - r2;
+        again = p < 128 && !q1over && (q1 < delta || (q1 == delta && r1 == 0));
+        }
+    *Mout = q2 + 1;
+    *aout = a;
+    *sout = p - 64;
+    }
+
+static void xtMagicS64(int64_t dIn, int64_t* Mout, int* sout)
+    {
+    uint64_t twoWm1 = 0x8000000000000000ull;
+    uint64_t ad = dIn < 0 ? 0 - (uint64_t)dIn : (uint64_t)dIn;
+    uint64_t t = twoWm1 + (dIn < 0 ? 1 : 0);
+    uint64_t anc = t - 1 - t % ad;
+    int p = 63;
+    uint64_t q1 = twoWm1 / anc, r1 = twoWm1 - q1 * anc;
+    BOOL q1over = NO;
+    uint64_t q2 = twoWm1 / ad, r2 = twoWm1 - q2 * ad;
+    uint64_t delta;
+    BOOL again = YES;
+    while (again)
+        {
+        p++;
+        if (q1 >= twoWm1)
+            q1over = YES;
+        q1 = q1 + q1; r1 = r1 + r1;
+        if (r1 >= anc) { q1++; r1 -= anc; }
+        q2 = q2 + q2; r2 = r2 + r2;
+        if (r2 >= ad) { q2++; r2 -= ad; }
+        delta = ad - r2;
+        again = !q1over && (q1 < delta || (q1 == delta && r1 == 0));
+        }
+    int64_t M = (int64_t)(q2 + 1);
+    if (dIn < 0)
+        M = (int64_t)(0 - (uint64_t)M);
+    *Mout = M;
+    *sout = p - 64;
+    }
+
 static void xtMagicU(uint64_t d, int W, uint64_t *Mout, int *aout, int *sout) {
     uint64_t twoWm1 = (uint64_t)1 << (W - 1);
     uint64_t maxu   = ((uint64_t)1 << W) - 1;
@@ -5504,6 +5577,30 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
                     haveD = xtConstThrough(dv.valueId, ^XTIRInsn *(XTIRValueId v) { return ctx.defOf[@(v)]; }, 0, &dC, &ct);
                 }
                 int W = (int)(insn.result.type.byteWidth * 8);
+                // 64 bits (#309): umulh gives the high half directly.
+                if (haveD && W == 64 && dC >= 2 && ((uint64_t)dC & ((uint64_t)dC - 1)) != 0) {
+                    uint64_t M; int aa, s;
+                    xtMagicU64((uint64_t)dC, &M, &aa, &s);
+                    NSString *x = [self operandReg:insn.operands[0] intoScratch:@"x16" ctx:ctx];
+                    NSString *dst = [self resultReg:insn.result.valueId scratch:@"x16" ctx:ctx];
+                    xtArm64Imm64(ctx.out, M, @"x17");
+                    [ctx.out appendFormat:@"    umulh x15, %@, x17\n", x];
+                    NSString *q = (insn.opcode == XTIROpUDiv) ? dst : @"x15";
+                    if (aa == 0) {
+                        [ctx.out appendFormat:@"    lsr %@, x15, #%d\n", q, s];
+                    } else {
+                        [ctx.out appendFormat:@"    sub x17, %@, x15\n", x];
+                        [ctx.out appendString:@"    lsr x17, x17, #1\n"];
+                        [ctx.out appendString:@"    add x15, x15, x17\n"];
+                        [ctx.out appendFormat:@"    lsr %@, x15, #%d\n", q, s - 1];
+                    }
+                    if (insn.opcode == XTIROpURem) {
+                        xtArm64Imm64(ctx.out, (uint64_t)dC, @"x17");
+                        [ctx.out appendFormat:@"    msub %@, %@, x17, %@\n", dst, q, x];
+                    }
+                    [self storeReg:dst intoValue:insn.result.valueId ctx:ctx];
+                    break;
+                }
                 if (haveD && dC >= 2 && ((uint64_t)dC & ((uint64_t)dC - 1)) != 0 &&
                     (W == 8 || W == 16 || W == 32)) {
                     uint64_t M; int aa, s;
@@ -5549,7 +5646,27 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
                     haveD = xtConstThrough(dv.valueId, ^XTIRInsn *(XTIRValueId v) { return ctx.defOf[@(v)]; }, 0, &dC, &ct);
                 }
                 int W = (int)(insn.result.type.byteWidth * 8);
-                uint64_t adC = (uint64_t)(dC < 0 ? -dC : dC);
+                uint64_t adC = dC < 0 ? 0 - (uint64_t)dC : (uint64_t)dC;
+                // 64 bits (#309), with smulh.
+                if (haveD && W == 64 && adC >= 2 && (adC & (adC - 1)) != 0) {
+                    int64_t M; int s;
+                    xtMagicS64(dC, &M, &s);
+                    NSString *x = [self operandReg:insn.operands[0] intoScratch:@"x16" ctx:ctx];
+                    NSString *dst = [self resultReg:insn.result.valueId scratch:@"x16" ctx:ctx];
+                    xtArm64Imm64(ctx.out, (uint64_t)M, @"x17");
+                    [ctx.out appendFormat:@"    smulh x15, %@, x17\n", x];
+                    if (dC > 0 && M < 0) [ctx.out appendFormat:@"    add x15, x15, %@\n", x];
+                    if (dC < 0 && M > 0) [ctx.out appendFormat:@"    sub x15, x15, %@\n", x];
+                    [ctx.out appendFormat:@"    asr x15, x15, #%d\n", s];
+                    NSString *q = (insn.opcode == XTIROpSDiv) ? dst : @"x15";
+                    [ctx.out appendFormat:@"    add %@, x15, x15, lsr #63\n", q];
+                    if (insn.opcode == XTIROpSRem) {
+                        xtArm64Imm64(ctx.out, (uint64_t)dC, @"x17");
+                        [ctx.out appendFormat:@"    msub %@, %@, x17, %@\n", dst, q, x];
+                    }
+                    [self storeReg:dst intoValue:insn.result.valueId ctx:ctx];
+                    break;
+                }
                 if (haveD && W == 32 && adC >= 2 && (adC & (adC - 1)) != 0) {
                     int64_t M; int s;
                     xtMagicS(dC, W, &M, &s);

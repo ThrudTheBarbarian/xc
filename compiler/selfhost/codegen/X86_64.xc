@@ -1243,6 +1243,15 @@ class X86_64
     // to wrap, so its natural u32 wraparound at W=32 is exactly right.
     bool constDivisor(IROperand* op, i32* out)
         {
+        i64 c = (i64)0;
+        if (!constDivisor64(op, &c))
+            return false;
+        *out = (i32)c;
+        return true;
+        }
+
+    bool constDivisor64(IROperand* op, i64* out)
+        {
         if (op.kind() == (u8)OPK_IMMI)
             {
             *out = op.imm();
@@ -1253,7 +1262,7 @@ class X86_64
         i64 c = (i64)0;
         if (!constThrough(op.val(), &c, (u32)0))
             return false;
-        *out = (i32)c;
+        *out = c;
         return true;
         }
 
@@ -1509,6 +1518,158 @@ class X86_64
             M = -M;
         *Mout = M;
         *sout = p - (u32)32;
+        }
+
+    // The unsigned magic number, add-indicator and shift for `d` at W = 64
+    // (#309; Hacker's Delight 10-10). The reference works in 128-bit
+    // arithmetic; here the two places that need it are handled as magicU
+    // does at W = 32: 2^64 mod d is ((2^64 - 1) mod d + 1) mod d, and q1's
+    // doubling carries an overflow flag (an overflowed q1 is never less than
+    // delta, so the loop ends). q2 is meant to wrap.
+    static void magicU64(u64 d, u64* Mout, u32* aout, u32* sout)
+    {
+        u64 twoWm1 = (u64)$8000_0000_0000_0000;
+        u64 maxu = (u64)$FFFF_FFFF_FFFF_FFFF;
+        u32 a = (u32)0;
+        u32 p = (u32)63;
+        u64 nc = maxu - ((maxu % d) + (u64)1) % d;
+        u64 q1 = twoWm1 / nc;
+        u64 r1 = twoWm1 - q1 * nc;
+        bool q1over = false;
+        u64 q2 = (twoWm1 - (u64)1) / d;
+        u64 r2 = (twoWm1 - (u64)1) - q2 * d;
+        u64 delta = (u64)0;
+        bool again = true;
+        while (again) {
+            p = p + (u32)1;
+            if (q1 >= twoWm1) q1over = true;
+            if (r1 >= nc - r1) { q1 = q1 + q1 + (u64)1; r1 = r1 - (nc - r1); }
+            else { q1 = q1 + q1; r1 = r1 + r1; }
+            if (r2 + (u64)1 >= d - r2) {
+                if (q2 >= twoWm1 - (u64)1) a = (u32)1;
+                q2 = q2 + q2 + (u64)1;
+                r2 = r2 - (d - r2 - (u64)1);
+            } else {
+                if (q2 >= twoWm1) a = (u32)1;
+                q2 = q2 + q2;
+                r2 = r2 + r2 + (u64)1;
+            }
+            delta = d - (u64)1 - r2;
+            again = p < (u32)128 && !q1over && (q1 < delta || (q1 == delta && r1 == (u64)0));
+        }
+        *Mout = q2 + (u64)1;
+        *aout = a;
+        *sout = p - (u32)64;
+    }
+
+    // The signed magic number and shift for `dIn` at W = 64 (#309; Hacker's
+    // Delight 10-1), |dIn| >= 2 and not a power of two.
+    static void magicS64(i64 dIn, i64* Mout, u32* sout)
+    {
+        u64 twoWm1 = (u64)$8000_0000_0000_0000;
+        u64 ad = dIn < (i64)0 ? (u64)0 - (u64)dIn : (u64)dIn;
+        u64 t = twoWm1 + (dIn < (i64)0 ? (u64)1 : (u64)0);
+        u64 anc = t - (u64)1 - t % ad;
+        u32 p = (u32)63;
+        u64 q1 = twoWm1 / anc;
+        u64 r1 = twoWm1 - q1 * anc;
+        bool q1over = false;
+        u64 q2 = twoWm1 / ad;
+        u64 r2 = twoWm1 - q2 * ad;
+        u64 delta = (u64)0;
+        bool again = true;
+        while (again) {
+            p = p + (u32)1;
+            if (q1 >= twoWm1) q1over = true;
+            q1 = q1 + q1; r1 = r1 + r1;
+            if (r1 >= anc) { q1 = q1 + (u64)1; r1 = r1 - anc; }
+            q2 = q2 + q2; r2 = r2 + r2;
+            if (r2 >= ad) { q2 = q2 + (u64)1; r2 = r2 - ad; }
+            delta = ad - r2;
+            again = !q1over && (q1 < delta || (q1 == delta && r1 == (u64)0));
+        }
+        i64 M = (i64)(q2 + (u64)1);
+        if (dIn < (i64)0) M = (i64)0 - M;
+        *Mout = M;
+        *sout = p - (u32)64;
+    }
+
+    // r = x - q*d for a 64-bit remainder, q in rdx: d in an imul immediate
+    // when it fits 32 signed bits, else in rcx.
+    void emitRem64(IROperand* x, i64 d, bool sgn, IRValue* res)
+        {
+        if (d >= (i64)0 - (i64)2147483648 && d <= (i64)2147483647)
+            _out.appendFormat("\timul\trcx, rdx, %lld\n", d);
+        else
+            {
+            _out.appendFormat("\tmovabs\trcx, %lld\n", d);
+            _out.appendCString("\timul\trcx, rdx\n");
+            }
+        loadExt(x, (u8)'a', sgn, (u32)8);
+        _out.appendCString("\tsub\trax, rcx\n");
+        store((u8)'a', res);
+        }
+
+    // Unsigned 64-bit division by a constant (#309).
+    void emitMagicUnsigned64(IRInsn* n, u64 d, bool rem)
+        {
+        u64 M = (u64)0;
+        u32 addInd = (u32)0;
+        u32 sh = (u32)0;
+        magicU64(d, &M, &addInd, &sh);
+        IROperand* x = (IROperand*)n.ops().get((u32)0);
+        loadExt(x, (u8)'a', false, (u32)8);
+        _out.appendFormat("\tmovabs\trcx, %llu\n", M);
+        _out.appendCString("\tmul\trcx\n"); // rdx = mulhu(x, M)
+        if (addInd == (u32)0)
+            {
+            if (sh > (u32)0)
+                _out.appendFormat("\tshr\trdx, %lu\n", sh);
+            }
+        else
+            {
+            loadExt(x, (u8)'a', false, (u32)8);
+            _out.appendCString("\tsub\trax, rdx\n");
+            _out.appendCString("\tshr\trax, 1\n");
+            _out.appendCString("\tadd\trdx, rax\n");
+            if (sh > (u32)1)
+                _out.appendFormat("\tshr\trdx, %lu\n", sh - (u32)1);
+            }
+        if (rem)
+            emitRem64(x, (i64)d, false, n.res());
+        else
+            store((u8)'d', n.res());
+        }
+
+    // Signed 64-bit division by a constant (#309).
+    void emitMagicSigned64(IRInsn* n, i64 dC, bool rem)
+        {
+        i64 Ms = (i64)0;
+        u32 sh = (u32)0;
+        magicS64(dC, &Ms, &sh);
+        IROperand* x = (IROperand*)n.ops().get((u32)0);
+        loadExt(x, (u8)'a', true, (u32)8);
+        _out.appendFormat("\tmovabs\trcx, %lld\n", Ms);
+        _out.appendCString("\timul\trcx\n"); // rdx = mulhs(x, M)
+        if (dC > (i64)0 && Ms < (i64)0)
+            {
+            loadExt(x, (u8)'a', true, (u32)8);
+            _out.appendCString("\tadd\trdx, rax\n");
+            }
+        if (dC < (i64)0 && Ms > (i64)0)
+            {
+            loadExt(x, (u8)'a', true, (u32)8);
+            _out.appendCString("\tsub\trdx, rax\n");
+            }
+        if (sh > (u32)0)
+            _out.appendFormat("\tsar\trdx, %lu\n", sh);
+        _out.appendCString("\tmov\trax, rdx\n");
+        _out.appendCString("\tshr\trax, 63\n");
+        _out.appendCString("\tadd\trdx, rax\n");
+        if (rem)
+            emitRem64(x, dC, true, n.res());
+        else
+            store((u8)'d', n.res());
         }
 
     // ── Floating point (SSE) ─────────────────────────────────────────────
@@ -9471,6 +9632,23 @@ class X86_64
         // A constant divisor becomes a reciprocal multiply, avoiding the
         // 20-to-40-cycle div. Every xtc integer type is at most 32 bits, so the
         // dividend extends to 32 and one W=32 magic serves every width.
+        // 64 bits (#309): mul/imul by a 64-bit magic leave the high half in rdx.
+        i64 dC64 = (i64)0;
+        if (w == (u32)8 && constDivisor64((IROperand*)n.ops().get((u32)1), &dC64))
+            {
+            u64 ad64 = dC64 < (i64)0 ? (u64)0 - (u64)dC64 : (u64)dC64;
+            bool nonPow2 = ad64 >= (u64)2 && (ad64 & (ad64 - (u64)1)) != (u64)0;
+            if (nonPow2 && !sgned && dC64 > (i64)0)
+                {
+                emitMagicUnsigned64(n, (u64)dC64, rem);
+                return;
+                }
+            if (nonPow2 && sgned)
+                {
+                emitMagicSigned64(n, dC64, rem);
+                return;
+                }
+            }
         i32 dC = (i32)0;
         if (w == (u32)4 && constDivisor((IROperand*)n.ops().get((u32)1), &dC))
             {

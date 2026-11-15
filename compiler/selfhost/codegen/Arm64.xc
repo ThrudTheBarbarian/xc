@@ -1693,9 +1693,22 @@ class Arm64
         bool uns = op.equals(String.withCString("UDiv")) || op.equals(String.withCString("URem"));
         bool sgn = op.equals(String.withCString("SDiv")) || op.equals(String.withCString("SRem"));
         if (!uns && !sgn) return false;
-        i32 dC = constDivisor(n);
-        if (dC == (i32)0) return false;
+        i64 dC64 = constDivisor(n);
         u32 W = width(n.res().ty()) * (u32)8;
+        // 64 bits (#309): umulh/smulh give the high half directly.
+        if (W == (u32)64) {
+            if (uns) {
+                if (dC64 < (i64)2 || ((u64)dC64 & ((u64)dC64 - (u64)1)) == (u64)0) return false;
+                emitMagicUnsigned64(n, (u64)dC64);
+                return true;
+            }
+            u64 ad64 = dC64 < (i64)0 ? (u64)0 - (u64)dC64 : (u64)dC64;
+            if (ad64 < (u64)2 || (ad64 & (ad64 - (u64)1)) == (u64)0) return false;
+            emitMagicSigned64(n, dC64);
+            return true;
+        }
+        i32 dC = (i32)dC64;
+        if (dC == (i32)0) return false;
         if (uns) {
             u32 d = (u32)dC;
             if (d < (u32)2 || (d & (d - (u32)1)) == (u32)0) return false;   // a power of two is a shift
@@ -1847,6 +1860,80 @@ class Arm64
         *sout = p - (u32)32;
     }
 
+    // The unsigned magic number, add-indicator and shift for `d` at W = 64
+    // (#309; Hacker's Delight 10-10). The reference works in 128-bit
+    // arithmetic; here the two places that need it are handled as magicU
+    // does at W = 32: 2^64 mod d is ((2^64 - 1) mod d + 1) mod d, and q1's
+    // doubling carries an overflow flag (an overflowed q1 is never less than
+    // delta, so the loop ends). q2 is meant to wrap.
+    static void magicU64(u64 d, u64* Mout, u32* aout, u32* sout)
+    {
+        u64 twoWm1 = (u64)$8000_0000_0000_0000;
+        u64 maxu = (u64)$FFFF_FFFF_FFFF_FFFF;
+        u32 a = (u32)0;
+        u32 p = (u32)63;
+        u64 nc = maxu - ((maxu % d) + (u64)1) % d;
+        u64 q1 = twoWm1 / nc;
+        u64 r1 = twoWm1 - q1 * nc;
+        bool q1over = false;
+        u64 q2 = (twoWm1 - (u64)1) / d;
+        u64 r2 = (twoWm1 - (u64)1) - q2 * d;
+        u64 delta = (u64)0;
+        bool again = true;
+        while (again) {
+            p = p + (u32)1;
+            if (q1 >= twoWm1) q1over = true;
+            if (r1 >= nc - r1) { q1 = q1 + q1 + (u64)1; r1 = r1 - (nc - r1); }
+            else { q1 = q1 + q1; r1 = r1 + r1; }
+            if (r2 + (u64)1 >= d - r2) {
+                if (q2 >= twoWm1 - (u64)1) a = (u32)1;
+                q2 = q2 + q2 + (u64)1;
+                r2 = r2 - (d - r2 - (u64)1);
+            } else {
+                if (q2 >= twoWm1) a = (u32)1;
+                q2 = q2 + q2;
+                r2 = r2 + r2 + (u64)1;
+            }
+            delta = d - (u64)1 - r2;
+            again = p < (u32)128 && !q1over && (q1 < delta || (q1 == delta && r1 == (u64)0));
+        }
+        *Mout = q2 + (u64)1;
+        *aout = a;
+        *sout = p - (u32)64;
+    }
+
+    // The signed magic number and shift for `dIn` at W = 64 (#309; Hacker's
+    // Delight 10-1), |dIn| >= 2 and not a power of two.
+    static void magicS64(i64 dIn, i64* Mout, u32* sout)
+    {
+        u64 twoWm1 = (u64)$8000_0000_0000_0000;
+        u64 ad = dIn < (i64)0 ? (u64)0 - (u64)dIn : (u64)dIn;
+        u64 t = twoWm1 + (dIn < (i64)0 ? (u64)1 : (u64)0);
+        u64 anc = t - (u64)1 - t % ad;
+        u32 p = (u32)63;
+        u64 q1 = twoWm1 / anc;
+        u64 r1 = twoWm1 - q1 * anc;
+        bool q1over = false;
+        u64 q2 = twoWm1 / ad;
+        u64 r2 = twoWm1 - q2 * ad;
+        u64 delta = (u64)0;
+        bool again = true;
+        while (again) {
+            p = p + (u32)1;
+            if (q1 >= twoWm1) q1over = true;
+            q1 = q1 + q1; r1 = r1 + r1;
+            if (r1 >= anc) { q1 = q1 + (u64)1; r1 = r1 - anc; }
+            q2 = q2 + q2; r2 = r2 + r2;
+            if (r2 >= ad) { q2 = q2 + (u64)1; r2 = r2 - ad; }
+            delta = ad - r2;
+            again = !q1over && (q1 < delta || (q1 == delta && r1 == (u64)0));
+        }
+        i64 M = (i64)(q2 + (u64)1);
+        if (dIn < (i64)0) M = (i64)0 - M;
+        *Mout = M;
+        *sout = p - (u32)64;
+    }
+
     // rem = a - (a / b) * b. Register 15 is the quotient scratch — never a
     // home — and it is named at the RESULT's width: a 64-bit remainder needs
     // `sdiv x15`, and `sdiv w15, x10, x11` is a mixed-width form clang rejects.
@@ -1872,13 +1959,76 @@ class Arm64
     // Trunc of a Const that the lowering emits for a widened literal. Zero when
     // there isn't one (a zero divisor would trap anyway, so it is safe as the
     // "no constant" answer).
-    i32 constDivisor(IRInsn* n)
+    i64 constDivisor(IRInsn* n)
     {
         IROperand* dv = (IROperand*)n.ops().get((u32)1);
         if (dv.kind() == (u8)OPK_IMMI) return dv.imm();
-        if (dv.kind() != (u8)OPK_USE) return (i32)0;
+        if (dv.kind() != (u8)OPK_USE) return (i64)0;
         i64 c = (i64)0;
-        return constThrough(dv.val(), &c, (u32)0) ? (i32)c : (i32)0;
+        return constThrough(dv.val(), &c, (u32)0) ? c : (i64)0;
+    }
+
+    // A 64-bit pattern into an x-register: movz, then movk for each non-zero
+    // higher 16 bits.
+    void emitImm64(u64 bits, String* reg)
+    {
+        _out.appendFormat("    movz %s, #%llu\n", reg.cString(), bits & (u64)$FFFF);
+        for (u32 k = (u32)1; k < (u32)4; k = k + (u32)1) {
+            u64 c = (bits >> (u64)(k * (u32)16)) & (u64)$FFFF;
+            if (c != (u64)0) _out.appendFormat("    movk %s, #%llu, lsl #%lu\n", reg.cString(), c, k * (u32)16);
+        }
+    }
+
+    // Unsigned 64-bit division by a constant (#309): the 32-bit form with
+    // umulh for the high half of the product.
+    void emitMagicUnsigned64(IRInsn* n, u64 d)
+    {
+        u64 M = (u64)0;
+        u32 addIndicator = (u32)0;
+        u32 sh = (u32)0;
+        magicU64(d, &M, &addIndicator, &sh);
+        bool isDiv = n.op().equals(String.withCString("UDiv"));
+        String* x = operandReg((IROperand*)n.ops().get((u32)0), String.withCString("x16"));
+        String* dst = resultReg(n.res(), String.withCString("x16"));
+        emitImm64(M, String.withCString("x17"));
+        _out.appendFormat("    umulh x15, %s, x17\n", x.cString());
+        String* q = isDiv ? dst : String.withCString("x15");
+        if (addIndicator == (u32)0) {
+            _out.appendFormat("    lsr %s, x15, #%lu\n", q.cString(), sh);
+        } else {
+            _out.appendFormat("    sub x17, %s, x15\n", x.cString());
+            _out.appendCString("    lsr x17, x17, #1\n");
+            _out.appendCString("    add x15, x15, x17\n");
+            _out.appendFormat("    lsr %s, x15, #%lu\n", q.cString(), sh - (u32)1);
+        }
+        if (!isDiv) {
+            emitImm64(d, String.withCString("x17"));
+            _out.appendFormat("    msub %s, %s, x17, %s\n", dst.cString(), q.cString(), x.cString());
+        }
+        storeReg(dst, n.res());
+    }
+
+    // Signed 64-bit division by a constant (#309), with smulh.
+    void emitMagicSigned64(IRInsn* n, i64 d)
+    {
+        i64 M = (i64)0;
+        u32 sh = (u32)0;
+        magicS64(d, &M, &sh);
+        bool isDiv = n.op().equals(String.withCString("SDiv"));
+        String* x = operandReg((IROperand*)n.ops().get((u32)0), String.withCString("x16"));
+        String* dst = resultReg(n.res(), String.withCString("x16"));
+        emitImm64((u64)M, String.withCString("x17"));
+        _out.appendFormat("    smulh x15, %s, x17\n", x.cString());
+        if (d > (i64)0 && M < (i64)0) _out.appendFormat("    add x15, x15, %s\n", x.cString());
+        if (d < (i64)0 && M > (i64)0) _out.appendFormat("    sub x15, x15, %s\n", x.cString());
+        _out.appendFormat("    asr x15, x15, #%lu\n", sh);
+        String* q = isDiv ? dst : String.withCString("x15");
+        _out.appendFormat("    add %s, x15, x15, lsr #63\n", q.cString());
+        if (!isDiv) {
+            emitImm64((u64)d, String.withCString("x17"));
+            _out.appendFormat("    msub %s, %s, x17, %s\n", dst.cString(), q.cString(), x.cString());
+        }
+        storeReg(dst, n.res());
     }
 
     // A value's compile-time constant through the ZExt/SExt/Trunc the lowering

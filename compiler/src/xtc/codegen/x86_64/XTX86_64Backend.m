@@ -4262,6 +4262,67 @@ static void vecSlotMove(XTIRFunction* fn, XTIRValueId vid, NSString* reg, BOOL l
 
 // Unsigned magic-number division (Hacker's Delight §10-9), W ∈ {8,16,32}.
 // x/d == (a==0) ? mulhu(x,M) >>u s : (t + ((x-t)>>u 1)) >>u (s-1), t=mulhu(x,M).
+// The unsigned and signed magic numbers at W = 64 (#309), as the port's
+// magicU64/magicS64: 64-bit arithmetic with q1's overflow flagged, where
+// the reference would need 128 bits.
+static void xtMagicU64(uint64_t d, uint64_t* Mout, int* aout, int* sout)
+    {
+    uint64_t twoWm1 = 0x8000000000000000ull, maxu = ~0ull;
+    int a = 0, p = 63;
+    uint64_t nc = maxu - ((maxu % d) + 1) % d;
+    uint64_t q1 = twoWm1 / nc, r1 = twoWm1 - q1 * nc;
+    BOOL q1over = NO;
+    uint64_t q2 = (twoWm1 - 1) / d, r2 = (twoWm1 - 1) - q2 * d;
+    uint64_t delta;
+    BOOL again = YES;
+    while (again)
+        {
+        p++;
+        if (q1 >= twoWm1)
+            q1over = YES;
+        if (r1 >= nc - r1) { q1 = q1 + q1 + 1; r1 = r1 - (nc - r1); }
+        else               { q1 = q1 + q1;     r1 = r1 + r1; }
+        if (r2 + 1 >= d - r2) { if (q2 >= twoWm1 - 1) a = 1; q2 = q2 + q2 + 1; r2 = r2 - (d - r2 - 1); }
+        else                  { if (q2 >= twoWm1)     a = 1; q2 = q2 + q2;     r2 = r2 + r2 + 1; }
+        delta = d - 1 - r2;
+        again = p < 128 && !q1over && (q1 < delta || (q1 == delta && r1 == 0));
+        }
+    *Mout = q2 + 1;
+    *aout = a;
+    *sout = p - 64;
+    }
+
+static void xtMagicS64(int64_t dIn, int64_t* Mout, int* sout)
+    {
+    uint64_t twoWm1 = 0x8000000000000000ull;
+    uint64_t ad = dIn < 0 ? 0 - (uint64_t)dIn : (uint64_t)dIn;
+    uint64_t t = twoWm1 + (dIn < 0 ? 1 : 0);
+    uint64_t anc = t - 1 - t % ad;
+    int p = 63;
+    uint64_t q1 = twoWm1 / anc, r1 = twoWm1 - q1 * anc;
+    BOOL q1over = NO;
+    uint64_t q2 = twoWm1 / ad, r2 = twoWm1 - q2 * ad;
+    uint64_t delta;
+    BOOL again = YES;
+    while (again)
+        {
+        p++;
+        if (q1 >= twoWm1)
+            q1over = YES;
+        q1 = q1 + q1; r1 = r1 + r1;
+        if (r1 >= anc) { q1++; r1 -= anc; }
+        q2 = q2 + q2; r2 = r2 + r2;
+        if (r2 >= ad) { q2++; r2 -= ad; }
+        delta = ad - r2;
+        again = !q1over && (q1 < delta || (q1 == delta && r1 == 0));
+        }
+    int64_t M = (int64_t)(q2 + 1);
+    if (dIn < 0)
+        M = (int64_t)(0 - (uint64_t)M);
+    *Mout = M;
+    *sout = p - 64;
+    }
+
 static void xtMagicU(uint64_t d, int W, uint64_t* Mout, int* aout, int* sout)
     {
     uint64_t twoWm1 = (uint64_t)1 << (W - 1);
@@ -6161,6 +6222,79 @@ static BOOL xtConstThrough(XTIRValueId v, XTIRInsn* (^defOf)(XTIRValueId), int d
         // type is <=32-bit, so the dividend is extended to 32 and a W=32 magic
         // serves all widths. (Hacker's Delight §10-3/§10-9, same as arm64.)
         int64_t dC = 0;
+        // 64 bits (#309): mul/imul by a 64-bit magic leave the high half in
+        // rdx. As the port's emitMagicUnsigned64/emitMagicSigned64.
+        if (w == 8 && [self x86ConstDivisor:ops[1] fn:fn out:&dC])
+            {
+            uint64_t ad = dC < 0 ? 0 - (uint64_t)dC : (uint64_t)dC;
+            BOOL nonPow2 = (ad >= 2) && ((ad & (ad - 1)) != 0);
+            if (nonPow2 && (sgned || dC > 0))
+                {
+                if (!sgned)
+                    {
+                    uint64_t M;
+                    int aa, s;
+                    xtMagicU64((uint64_t)dC, &M, &aa, &s);
+                    [self loadExt:ops[0] into:'a' signed:NO width:8 fn:fn slot:slot out:out];
+                    [out appendFormat:@"\tmovabs\trcx, %llu\n", (unsigned long long)M];
+                    [out appendString:@"\tmul\trcx\n"];
+                    if (aa == 0)
+                        {
+                        if (s > 0)
+                            [out appendFormat:@"\tshr\trdx, %d\n", s];
+                        }
+                    else
+                        {
+                        [self loadExt:ops[0] into:'a' signed:NO width:8 fn:fn slot:slot out:out];
+                        [out appendString:@"\tsub\trax, rdx\n"];
+                        [out appendString:@"\tshr\trax, 1\n"];
+                        [out appendString:@"\tadd\trdx, rax\n"];
+                        if (s > 1)
+                            [out appendFormat:@"\tshr\trdx, %d\n", s - 1];
+                        }
+                    }
+                else
+                    {
+                    int64_t Ms;
+                    int s;
+                    xtMagicS64(dC, &Ms, &s);
+                    [self loadExt:ops[0] into:'a' signed:YES width:8 fn:fn slot:slot out:out];
+                    [out appendFormat:@"\tmovabs\trcx, %lld\n", (long long)Ms];
+                    [out appendString:@"\timul\trcx\n"];
+                    if (dC > 0 && Ms < 0)
+                        {
+                        [self loadExt:ops[0] into:'a' signed:YES width:8 fn:fn slot:slot out:out];
+                        [out appendString:@"\tadd\trdx, rax\n"];
+                        }
+                    if (dC < 0 && Ms > 0)
+                        {
+                        [self loadExt:ops[0] into:'a' signed:YES width:8 fn:fn slot:slot out:out];
+                        [out appendString:@"\tsub\trdx, rax\n"];
+                        }
+                    if (s > 0)
+                        [out appendFormat:@"\tsar\trdx, %d\n", s];
+                    [out appendString:@"\tmov\trax, rdx\n"];
+                    [out appendString:@"\tshr\trax, 63\n"];
+                    [out appendString:@"\tadd\trdx, rax\n"];
+                    }
+                if (rem)
+                    {
+                    if (dC >= INT32_MIN && dC <= INT32_MAX)
+                        [out appendFormat:@"\timul\trcx, rdx, %lld\n", (long long)dC];
+                    else
+                        {
+                        [out appendFormat:@"\tmovabs\trcx, %lld\n", (long long)dC];
+                        [out appendString:@"\timul\trcx, rdx\n"];
+                        }
+                    [self loadExt:ops[0] into:'a' signed:sgned width:8 fn:fn slot:slot out:out];
+                    [out appendString:@"\tsub\trax, rcx\n"];
+                    [self store:'a' into:res slot:slot out:out];
+                    }
+                else
+                    [self store:'d' into:res slot:slot out:out];
+                return;
+                }
+            }
         if (w == 4 && [self x86ConstDivisor:ops[1] fn:fn out:&dC])
             {
             uint64_t ad = (uint64_t)(dC < 0 ? -dC : dC);
