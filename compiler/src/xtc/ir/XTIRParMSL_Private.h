@@ -80,6 +80,15 @@ typedef NS_ENUM(uint8_t, XTParSpace) {
 // the block's gpuSource placeholder (bug 645). A printer that has them all
 // combines the reductions on the device; nil keeps the per-thread partials.
 @property(nonatomic, nullable) NSDictionary<NSNumber*, NSString*>* redOps;
+// An array reduction in the Metal kernel (arrayCheck): the loads of its
+// array's pointer (value -> field index), the element addresses taken from
+// them, the loads and operations an update's atomic replaces (printed as
+// nothing), each value's uses, and the fields whose arrays the kernel binds.
+@property(nonatomic) NSMutableDictionary<NSNumber*, NSNumber*>* arrOf;
+@property(nonatomic) NSMutableDictionary<NSNumber*, NSNumber*>* arrEl;
+@property(nonatomic) NSMutableSet<NSNumber*>* arrSkip;
+@property(nonatomic) NSMutableDictionary<NSNumber*, NSNumber*>* arrUses;
+@property(nonatomic) NSMutableIndexSet* arrUsed;
 @end
 
 @interface XTIRParMSL (Analysis)

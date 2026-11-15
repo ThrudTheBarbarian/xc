@@ -1,0 +1,8 @@
++ 256: bad=0 sum=55335683
++ 65536: bad=0 sum=1532016152
+| 128: bad=0 sum=2682265536
+& 64: bad=0 sum=2249725856
+& 8192: bad=0 sum=3742302208
+^ 4096: bad=0 sum=800924139
++ i32: bad=0 delta[7]=-5400
+scalar and array: bad=0 total ok=1 sum=4950528

@@ -399,6 +399,45 @@
         if (m.equals(String.withCString("max"))) return String.withCString("max");
         return (String*)0;
         }
+    // An array reduction's array fits the kernel's threadgroup copy: at most
+    // 16 KB of 32-bit elements (the `<op>:<elements>` word), half of what a
+    // Metal threadgroup has on Apple silicon. As the reference.
+    final bool mslArrTg(i64 k)
+        {
+        String* w = (String*)_mArrRed.get((Hashable*)String.withI64(k));
+        return w != (String*)0 && self.mslArrNum(w, (u32)2) * (i64)4 <= (i64)16384;
+        }
+    // The atomic that folds x into an element for an operator.
+    final String* mslArrFn(u8 c)
+        {
+        if (c == (u8)'+') return String.withCString("atomic_fetch_add_explicit(");
+        if (c == (u8)'|') return String.withCString("atomic_fetch_or_explicit(");
+        if (c == (u8)'&') return String.withCString("atomic_fetch_and_explicit(");
+        return String.withCString("atomic_fetch_xor_explicit(");
+        }
+    // An update a[k] = a[k] op x (mslArrMatch has just matched it): one
+    // atomic on the threadgroup's copy of the array, or on the array itself.
+    final String* mslArrStore(IRInsn* st)
+        {
+        String* w = (String*)_mArrRed.get((Hashable*)String.withI64(_mArrK));
+        IROperand* a = (IROperand*)st.ops().get((u32)0);
+        String* x = mslExpr(_mArrX, self.mslPointee(mslTypeOf(a)));
+        if (x == (String*)0) return (String*)0;
+        String* s = mslArrFn(w.byteAt((u32)0));
+        if (mslArrTg(_mArrK))
+            {
+            IRInsn* ea = self.mslDefOf(a);
+            String* idx = mslExpr((IROperand*)ea.ops().get((u32)1), (String*)0);
+            if (idx == (String*)0) return (String*)0;
+            s.appendCString("&ta_"); s.append(String.withI64(_mArrK)); s.appendCString("["); s.append(idx); s.appendCString("]");
+            }
+        else
+            {
+            s.appendCString("(device atomic_uint*)"); s.append(self.mslName(a.val()));
+            }
+        s.appendCString(", uint("); s.append(x); s.appendCString("), memory_order_relaxed);");
+        return s;
+        }
     final String* mslAssign(IRValue* r, String* e)
         {
         if (e == (String*)0) return (String*)0;
@@ -410,6 +449,15 @@
         IRValue* r = ip.res();
         String* rt = r != (IRValue*)0 ? r.ty() : (String*)0;
         IROperand* o0 = ip.ops().count() > (u32)0 ? (IROperand*)ip.ops().get((u32)0) : (IROperand*)0;
+        // An array reduction's update (mslArrCheck): its load and operation
+        // print as nothing, its store as one atomic.
+        if (!_mHelper && _mArrSkip != (Map*)0)
+            {
+            if (r != (IRValue*)0 && _mArrSkip.get((Hashable*)self.mslKey(r)) != (Object*)0)
+                return String.withCString("");
+            if (op.equals(String.withCString("Store")) && self.mslArrMatch(ip))
+                return mslArrStore(ip);
+            }
         if (op.equals(String.withCString("Const")))
             return mslAssign(r, mslExpr(o0, rt));
         if (op.equals(String.withCString("Add")) || op.equals(String.withCString("Sub")) || op.equals(String.withCString("Mul")) || op.equals(String.withCString("UDiv")) || op.equals(String.withCString("SDiv")) || op.equals(String.withCString("URem")) || op.equals(String.withCString("SRem")) || op.equals(String.withCString("And")) || op.equals(String.withCString("Or")) || op.equals(String.withCString("Xor")) || op.equals(String.withCString("Shl")) || op.equals(String.withCString("LShr")) || op.equals(String.withCString("AShr")) || op.equals(String.withCString("FAdd")) || op.equals(String.withCString("FSub")) || op.equals(String.withCString("FMul")) || op.equals(String.withCString("FDiv")))
@@ -502,6 +550,8 @@
             {
             String* buf = (String*)_mBufOf.get((Hashable*)self.mslKey(r));
             if (buf != (String*)0) return mslAssign(r, mslCat3(String.withCString("buf_"), "", buf));
+            String* arr = !_mHelper && _mArrOf != (Map*)0 ? (String*)_mArrOf.get((Hashable*)self.mslKey(r)) : (String*)0;
+            if (arr != (String*)0) return mslAssign(r, mslCat3(String.withCString("arr_"), "", arr));
             if (mslScalar(rt) == (String*)0) return (String*)0;
             if (parSinitFlag(o0)) return mslAssign(r, mslCat3(mslScalar(rt), "", String.withCString("(2)")));
             return mslAssign(r, mslCat3(String.withCString("*"), "", self.mslName(o0.val())));

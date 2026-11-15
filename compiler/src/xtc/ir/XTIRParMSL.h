@@ -26,6 +26,9 @@ NS_ASSUME_NONNULL_BEGIN
 + (void)setExtraMeta:(nullable NSString*)words;
 // The block's :constant captures by field index, for the next kernel printed.
 + (void)setConstantFields:(nullable NSIndexSet*)fields;
+// The block's array reductions by field index, each `<op>:<elements>` (the
+// placeholder's `a<field>=` words), for the next kernel printed.
++ (void)setArrayReductions:(nullable NSDictionary<NSNumber*, NSString*>*)words;
 + (NSString*)extraMeta;
 
 // The kernel's MSL, or nil when this block cannot run on Metal: it uses f64

@@ -302,9 +302,20 @@ class ParMetal
             }
         for (u32 i = (u32)0; i < nred; i = i + (u32)1)
             reds[i] = withLen(_dev, sel("newBufferWithLength:options:"), (u64)(l.nparts * l.redStride[i]), (u64)0);
+        // An array reduction's array: its contents go in (the kernel's atomics
+        // add to them) and the result comes back, unless the GPU shares it in
+        // place.
+        u32 narr = l.narr;
+        pointer arrs[16];
+        bool arrShared[16];
+        u64 arrAt[16];
+        for (u32 i = (u32)0; i < narr; i = i + (u32)1)
+            arrs[i] = bufferFor(*(pointer*)(obj + l.arrOff[i]), (u64)l.arrLen[i], &arrShared[i], &arrAt[i]);
         // A buffer Metal did not make is nil, and a kernel bound to nil
         // writes nowhere: the block runs on the CPU instead.
         bool made = args != (pointer)0 && spanB != (pointer)0;
+        for (u32 i = (u32)0; i < narr; i = i + (u32)1)
+            made = made && arrs[i] != (pointer)0;
         for (u32 i = (u32)0; i < nbuf; i = i + (u32)1)
             made = made && bufs[i] != (pointer)0;
         for (u32 i = (u32)0; i < nglob; i = i + (u32)1)
@@ -322,6 +333,9 @@ class ParMetal
             for (u32 i = (u32)0; i < nred; i = i + (u32)1)
                 if (reds[i] != (pointer)0)
                     send0(reds[i], sel("release"));
+            for (u32 i = (u32)0; i < narr; i = i + (u32)1)
+                if (arrs[i] != (pointer)0)
+                    send0(arrs[i], sel("release"));
             if (args != (pointer)0)
                 send0(args, sel("release"));
             if (spanB != (pointer)0)
@@ -350,6 +364,11 @@ class ParMetal
             setBuf(enc, sel("setBuffer:offset:atIndex:"), reds[i], (u64)0, slot);
             slot = slot + (u64)1;
             }
+        for (u32 i = (u32)0; i < narr; i = i + (u32)1)
+            {
+            setBuf(enc, sel("setBuffer:offset:atIndex:"), arrs[i], arrAt[i], slot);
+            slot = slot + (u64)1;
+            }
         u64 width = ((parMsgU_t*)_send)(pso, sel("maxTotalThreadsPerThreadgroup"));
         ParMTLSize grid;
         grid.w = (u64)threads;
@@ -366,6 +385,15 @@ class ParMetal
             // threads past the range hold their starting values.
             grid.w = (u64)l.nparts;
             group.w = (u64)256;
+            ((parMsgDispatch_t*)_send)(enc, sel("dispatchThreadgroups:threadsPerThreadgroup:"), &grid, &group);
+            }
+        else if (l.arrTg != (i64)0)
+            {
+            // A threadgroup copy of an array is filled and folded by every
+            // thread of the group, so the groups are whole; the threads past
+            // the range do no items.
+            group.w = width;
+            grid.w = ((u64)threads + width - (u64)1) / width;
             ((parMsgDispatch_t*)_send)(enc, sel("dispatchThreadgroups:threadsPerThreadgroup:"), &grid, &group);
             }
         else
@@ -405,6 +433,14 @@ class ParMetal
             if (l.globIn[i] == (i64)0 && !globShared[i])
                 memcpy(l.globPtr[i], send0(globs[i], sel("contents")), (u64)l.globLen[i]);
             send0(globs[i], sel("release"));
+            }
+        for (u32 i = (u32)0; i < narr; i = i + (u32)1)
+            {
+            pointer host = *(pointer*)(obj + l.arrOff[i]);
+            if (!arrShared[i])
+                memcpy(host, send0(arrs[i], sel("contents")), (u64)l.arrLen[i]);
+            ParDevice.wrote(host);
+            send0(arrs[i], sel("release"));
             }
         u8* parts[16];
         for (u32 i = (u32)0; i < nred; i = i + (u32)1)
@@ -484,6 +520,9 @@ class ParMetalWorker : ParWorker
         if (pso == (pointer)0)
             return false;
         if (l.devred != (i64)0 && ((parMsgU_t*)gMtlSend)(pso, ParMetal.sel("maxTotalThreadsPerThreadgroup")) < (u64)256)
+            return false;
+        // An array reduction runs in one launch on one device.
+        if (l.narr > (u32)0)
             return false;
         // Every written buffer needs a footprint, so a tile knows which slice
         // to copy back; a read-only one is whole in any case, and a `simd:`

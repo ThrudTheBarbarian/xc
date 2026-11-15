@@ -5705,14 +5705,19 @@ class Parser
             // takes its chunks as apart, and it stays on the CPU.
             if (frame.get((Hashable*)String.withCString("scanpass")) != 0)
                 tag.appendCString("scan;");
-            // An array reduction is `a<field>=<op>;`: it has no GPU form yet,
-            // and par-check keeps it on the CPU.
+            // An array reduction is `a<field>=<op>:<elements>;`: the Metal
+            // printer sizes the kernel's threadgroup copy of the array from it.
             for (u32 i = (u32)0; i < reds.count(); i = i + (u32)1) {
                 Node* r = (Node*)reds.get(i);
                 if (r.num() != (i64)0) tag.appendCString("a");
                 tag.append(String.withU32((u32)3 + caps.count() + i));
                 tag.appendCString("=");
                 tag.append(r.op());
+                if (r.num() != (i64)0) {
+                    i64 code = Parser.parArrCode((String*)redTypes.get((Hashable*)r.name()), r.op());
+                    tag.appendCString(":");
+                    tag.append(String.withI64((code >> (i64)8) / (code & (i64)15)));
+                }
                 tag.appendCString(";");
             }
             // …and `c<field>;` for each :constant capture (the Metal printer

@@ -133,6 +133,14 @@
         }
     final bool mslAnalyse(IRFunc* f)
         {
+        if (!_mHelper)
+            {
+            _mArrOf = new Map();
+            _mArrEl = new Map();
+            _mArrSkip = new Map();
+            _mArrUses = new Map();
+            _mArrUsed = new Map();
+            }
         for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
             {
             IRBlock* bb = (IRBlock*)f.blocks().get(b);
@@ -174,6 +182,25 @@
                     if (r == (IRValue*)0 || !mslIsPtr(r.ty())) continue;
                     i64 k = mslSelfField(mslDefOf((IROperand*)ip.ops().get((u32)0)));
                     if (k <= (i64)0) { parBecause(String.withCString("it reads a pointer from memory, which its GPU version cannot follow")); return false; }
+                    // An array reduction's array (:reduce(op a[])): updated
+                    // with 32-bit atomics (mslArrCheck), not a captured array.
+                    // As the reference.
+                    if (_mArrRed != (Map*)0 && _mArrRed.get((Hashable*)String.withI64(k)) != (Object*)0)
+                        {
+                        String* pe = mslPointee(r.ty());
+                        if (!pe.equals(String.withCString("U32")) && !pe.equals(String.withCString("I32")))
+                            {
+                            String* w = String.withCString("its array reduction (:reduce(op a[])) is over ");
+                            w.append(String.withU32(mslWidth(pe) * (u32)8));
+                            w.appendCString("-bit integers, and its GPU version takes 32-bit ones");
+                            parBecause(w);
+                            return false;
+                            }
+                        _mArrOf.set((Hashable*)mslKey(r), (Object*)String.withI64(k));
+                        _mArrUsed.set((Hashable*)String.withI64(k), (Object*)String.withCString("1"));
+                        _mSpace.set((Hashable*)mslKey(r), (Object*)String.withCString("device"));
+                        continue;
+                        }
                     _mBufs.set((Hashable*)String.withI64(k), (Object*)String.withCString("1"));
                     _mSpace.set((Hashable*)mslKey(r), (Object*)String.withCString(mslIsConst(k) ? "constant" : "device"));
                     _mBufOf.set((Hashable*)mslKey(r), (Object*)String.withI64(k));
@@ -297,6 +324,209 @@
                 IRInsn* ip = (IRInsn*)bb.insns().get(i);
                 if (ip.res() != (IRValue*)0 && mslIsPtr(ip.res().ty()) && _mSpace.get((Hashable*)mslKey(ip.res())) == (Object*)0)
                     { parBecause(String.withCString("it uses a pointer its GPU version cannot place")); return false; }
+                }
+            }
+        if (!_mHelper && _mArrOf.count() > (u32)0 && !mslArrCheck(f))
+            {
+            parBecause(String.withCString("its GPU version cannot express its array reduction's updates (a[k] op= x)"));
+            return false;
+            }
+        return true;
+        }
+
+    // ── an array reduction in the Metal kernel (:reduce(op a[])) ──────────
+    // The body may use the array only as a[k] = a[k] op x: an element
+    // address taken from the loaded pointer, a load from it whose one use is
+    // op, and a store of op's result (its one use) to the same element. The
+    // store prints as one atomic (mslArrStore); the load and op print as
+    // nothing. Anything else keeps the block on the CPU. As the reference.
+
+    // The IR operation of an array reduction's operator.
+    final String* mslArrOpName(u8 c)
+        {
+        if (c == (u8)'+') return String.withCString("Add");
+        if (c == (u8)'|') return String.withCString("Or");
+        if (c == (u8)'&') return String.withCString("And");
+        return String.withCString("Xor");
+        }
+    // The decimal number in s from byte `at`.
+    final i64 mslArrNum(String* s, u32 at)
+        {
+        i64 n = (i64)0;
+        for (u32 q = at; q < s.byteLength() && s.byteAt(q) >= (u8)'0' && s.byteAt(q) <= (u8)'9'; q = q + (u32)1)
+            n = n * (i64)10 + (i64)(s.byteAt(q) - (u8)'0');
+        return n;
+        }
+    // A value's uses, outside debug records.
+    final u32 mslArrUseCount(IRValue* v)
+        {
+        Object* n = _mArrUses.get((Hashable*)mslKey(v));
+        return n != (Object*)0 ? ((Number*)n).asU32() : (u32)0;
+        }
+    final void mslArrCount(IROperand* o)
+        {
+        if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0)
+            return;
+        _mArrUses.set((Hashable*)mslKey(o.val()), (Object*)Number.withU32(mslArrUseCount(o.val()) + (u32)1));
+        }
+    // Two element addresses alike: one value, or the same index from the
+    // same loaded pointer.
+    final bool mslArrSame(IROperand* p, IROperand* q)
+        {
+        if (p.kind() != (u8)OPK_USE || q.kind() != (u8)OPK_USE || p.val() == (IRValue*)0 || q.val() == (IRValue*)0)
+            return false;
+        if (p.val().seq() == q.val().seq())
+            return true;
+        IRInsn* a = mslDefOf(p);
+        IRInsn* b = mslDefOf(q);
+        if (a == (IRInsn*)0 || b == (IRInsn*)0 || !a.op().equals(String.withCString("ElementAddr")) || !b.op().equals(String.withCString("ElementAddr"))
+            || a.ops().count() < (u32)2 || b.ops().count() < (u32)2)
+            return false;
+        IROperand* a0 = (IROperand*)a.ops().get((u32)0);
+        IROperand* b0 = (IROperand*)b.ops().get((u32)0);
+        IROperand* a1 = (IROperand*)a.ops().get((u32)1);
+        IROperand* b1 = (IROperand*)b.ops().get((u32)1);
+        if (a0.kind() != (u8)OPK_USE || b0.kind() != (u8)OPK_USE || a0.val().seq() != b0.val().seq() || a1.kind() != b1.kind())
+            return false;
+        if (a1.kind() == (u8)OPK_USE)
+            return a1.val().seq() == b1.val().seq();
+        return a1.kind() == (u8)OPK_IMMI && a1.imm() == b1.imm();
+        }
+    // A store that is an update a[k] = a[k] op x: the field in _mArrK, the
+    // load and op in _mArrLd and _mArrBin, x in _mArrX.
+    final bool mslArrMatch(IRInsn* st)
+        {
+        if (st.ops().count() < (u32)2)
+            return false;
+        IROperand* a = (IROperand*)st.ops().get((u32)0);
+        if (a.kind() != (u8)OPK_USE || a.val() == (IRValue*)0)
+            return false;
+        String* ks = (String*)_mArrEl.get((Hashable*)mslKey(a.val()));
+        if (ks == (String*)0)
+            return false;
+        String* w = (String*)_mArrRed.get((Hashable*)ks);
+        if (w == (String*)0 || w.byteLength() == (u32)0)
+            return false;
+        String* want = mslArrOpName(w.byteAt((u32)0));
+        IRInsn* b = mslDefOf((IROperand*)st.ops().get((u32)1));
+        if (b == (IRInsn*)0 || !b.op().equals(want) || b.ops().count() < (u32)2 || b.res() == (IRValue*)0)
+            return false;
+        for (u32 side = (u32)0; side < (u32)2; side = side + (u32)1)
+            {
+            IRInsn* ld = mslDefOf((IROperand*)b.ops().get(side));
+            if (ld == (IRInsn*)0 || !ld.op().equals(String.withCString("Load")) || ld.ops().count() < (u32)1 || ld.res() == (IRValue*)0)
+                continue;
+            if (!mslArrSame((IROperand*)ld.ops().get((u32)0), a))
+                continue;
+            if (mslArrUseCount(ld.res()) != (u32)1 || mslArrUseCount(b.res()) != (u32)1)
+                return false;
+            _mArrK = mslArrNum(ks, (u32)0);
+            _mArrLd = ld.res();
+            _mArrBin = b.res();
+            _mArrX = (IROperand*)b.ops().get((u32)1 - side);
+            return true;
+            }
+        return false;
+        }
+    final bool mslArrCheck(IRFunc* f)
+        {
+        // The element addresses, and every value's uses.
+        for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)f.blocks().get(b);
+            for (u32 i = (u32)0; i < bb.phis().count(); i = i + (u32)1)
+                {
+                IRInsn* ip = (IRInsn*)bb.phis().get(i);
+                for (u32 q = (u32)0; q < ip.ops().count(); q = q + (u32)1)
+                    mslArrCount((IROperand*)ip.ops().get(q));
+                }
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* ip = (IRInsn*)bb.insns().get(i);
+                if (ip.op().equals(String.withCString("DbgValue")))
+                    continue;
+                for (u32 q = (u32)0; q < ip.ops().count(); q = q + (u32)1)
+                    mslArrCount((IROperand*)ip.ops().get(q));
+                if (ip.op().equals(String.withCString("ElementAddr")) && ip.res() != (IRValue*)0 && ip.ops().count() > (u32)0)
+                    {
+                    IROperand* o = (IROperand*)ip.ops().get((u32)0);
+                    if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0 && _mArrOf.get((Hashable*)mslKey(o.val())) != (Object*)0)
+                        _mArrEl.set((Hashable*)mslKey(ip.res()), _mArrOf.get((Hashable*)mslKey(o.val())));
+                    }
+                }
+            if (bb.term() != (IRInsn*)0)
+                for (u32 q = (u32)0; q < bb.term().ops().count(); q = q + (u32)1)
+                    mslArrCount((IROperand*)bb.term().ops().get(q));
+            }
+        // Each use of the array's pointer or of an element address is one
+        // the kernel prints: the pointer indexed, an element loaded by an
+        // update, an update's store.
+        for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)f.blocks().get(b);
+            for (u32 i = (u32)0; i < bb.phis().count(); i = i + (u32)1)
+                {
+                IRInsn* ip = (IRInsn*)bb.phis().get(i);
+                for (u32 q = (u32)0; q < ip.ops().count(); q = q + (u32)1)
+                    {
+                    IROperand* o = (IROperand*)ip.ops().get(q);
+                    if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0
+                        && (_mArrOf.get((Hashable*)mslKey(o.val())) != (Object*)0 || _mArrEl.get((Hashable*)mslKey(o.val())) != (Object*)0))
+                        return false;
+                    }
+                }
+            if (bb.term() != (IRInsn*)0)
+                for (u32 q = (u32)0; q < bb.term().ops().count(); q = q + (u32)1)
+                    {
+                    IROperand* o = (IROperand*)bb.term().ops().get(q);
+                    if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0
+                        && (_mArrOf.get((Hashable*)mslKey(o.val())) != (Object*)0 || _mArrEl.get((Hashable*)mslKey(o.val())) != (Object*)0))
+                        return false;
+                    }
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* ip = (IRInsn*)bb.insns().get(i);
+                String* op = ip.op();
+                if (op.equals(String.withCString("DbgValue")))
+                    continue;
+                if (op.equals(String.withCString("Store")) && mslArrMatch(ip))
+                    {
+                    _mArrSkip.set((Hashable*)mslKey(_mArrLd), (Object*)String.withCString("1"));
+                    _mArrSkip.set((Hashable*)mslKey(_mArrBin), (Object*)String.withCString("1"));
+                    // The store's value is op's result; its address is the
+                    // element's, which needs no check beyond the match.
+                    continue;
+                    }
+                for (u32 q = (u32)0; q < ip.ops().count(); q = q + (u32)1)
+                    {
+                    IROperand* o = (IROperand*)ip.ops().get(q);
+                    if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0)
+                        continue;
+                    bool base = _mArrOf.get((Hashable*)mslKey(o.val())) != (Object*)0;
+                    bool elem = _mArrEl.get((Hashable*)mslKey(o.val())) != (Object*)0;
+                    if (!base && !elem)
+                        continue;
+                    if (q == (u32)0 && base && op.equals(String.withCString("ElementAddr")))
+                        continue;
+                    if (q == (u32)0 && elem && op.equals(String.withCString("Load")))
+                        continue;
+                    return false;
+                    }
+                }
+            }
+        // And every element load is one an update replaces.
+        for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)f.blocks().get(b);
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* ip = (IRInsn*)bb.insns().get(i);
+                if (!ip.op().equals(String.withCString("Load")) || ip.res() == (IRValue*)0 || ip.ops().count() < (u32)1)
+                    continue;
+                IROperand* o = (IROperand*)ip.ops().get((u32)0);
+                if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0 && _mArrEl.get((Hashable*)mslKey(o.val())) != (Object*)0
+                    && _mArrSkip.get((Hashable*)mslKey(ip.res())) == (Object*)0)
+                    return false;
                 }
             }
         return true;

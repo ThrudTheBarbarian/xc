@@ -80,6 +80,12 @@ static NSString* gParExtraMeta = nil;
 // the placeholder's `c<field>;` words): bound in Metal's constant address
 // space, which is read-only and broadcast to every thread.
 static NSIndexSet* gParConstFields = nil;
+// The block's array reductions by field index, `<op>:<elements>` each
+// (par-check reads them from the placeholder's `a<field>=` words).
+static NSDictionary<NSNumber*, NSString*>* gParArrWords = nil;
+// An array of at most this many bytes of 32-bit elements is updated in a
+// threadgroup copy: half of what a Metal threadgroup has on Apple silicon.
+static const int64_t kParArrTgBytes = 16384;
 // How a pointer's address space is spelt.
 static NSString* spaceName(XTParSpace s)
     {
@@ -95,6 +101,10 @@ static NSString* spaceName(XTParSpace s)
 + (void)setConstantFields:(nullable NSIndexSet*)fields
     {
     gParConstFields = fields;
+    }
++ (void)setArrayReductions:(nullable NSDictionary<NSNumber*, NSString*>*)words
+    {
+    gParArrWords = words;
     }
 + (NSString*)extraMeta
     {
@@ -310,6 +320,11 @@ static BOOL isTranscendental(NSString* callee)
 // Classify every pointer value, and find the buffers and the reductions.
 - (BOOL)analyse
     {
+    self.arrOf = [NSMutableDictionary dictionary];
+    self.arrEl = [NSMutableDictionary dictionary];
+    self.arrSkip = [NSMutableSet set];
+    self.arrUses = [NSMutableDictionary dictionary];
+    self.arrUsed = [NSMutableIndexSet indexSet];
     for (XTIRBlock* b in self.fn.blocks)
         {
         for (XTIRInsn* i in b.phiNodes)
@@ -354,6 +369,23 @@ static BOOL isTranscendental(NSString* callee)
                         // a pointer read from anywhere else
                         [self because:@"it reads a pointer from memory, which its GPU version cannot follow"];
                         return NO;
+                        }
+                    // An array reduction's array (:reduce(op a[])): updated
+                    // with 32-bit atomics (arrayCheck), not a captured array.
+                    if (gParArrWords[@(k)])
+                        {
+                        XTIRType* pe = i.result.type.pointeeType;
+                        if (pe.kind != XTIRTypeKindU32 && pe.kind != XTIRTypeKindI32)
+                            {
+                            [self because:[NSString stringWithFormat:@"its array reduction (:reduce(op a[])) is over "
+                                                                      @"%u-bit integers, and its GPU version takes 32-bit ones",
+                                                                      (unsigned)(pe.byteWidth * 8)]];
+                            return NO;
+                            }
+                        self.arrOf[@(r)] = @(k);
+                        [self.arrUsed addIndex:(NSUInteger)k];
+                        self.space[@(r)] = @(XTParSpaceDevice);
+                        break;
                         }
                     [self.bufferFields addIndex:(NSUInteger)k];
                     self.space[@(r)] = @([gParConstFields containsIndex:(NSUInteger)k] ? XTParSpaceConstant : XTParSpaceDevice);
@@ -477,7 +509,194 @@ static BOOL isTranscendental(NSString* callee)
             return NO;
             }
         }
+    if (!self.helperMode && self.arrOf.count && ![self arrayCheck])
+        {
+        [self because:@"its GPU version cannot express its array reduction's updates (a[k] op= x)"];
+        return NO;
+        }
     return YES;
+    }
+
+// ── an array reduction in the Metal kernel (:reduce(op a[])) ──────────────
+// The body may use the array only as a[k] = a[k] op x: an element address
+// taken from the loaded pointer, a load from it whose one use is op, and a
+// store of op's result (its one use) to the same element. The store prints
+// as one atomic (arrayStore:); the load and op print as nothing. Anything
+// else keeps the block on the CPU. Mirrored in the port.
+static XTIROpcode arrOpcode(unichar c)
+    {
+    return c == '+' ? XTIROpAdd : c == '|' ? XTIROpOr : c == '&' ? XTIROpAnd : XTIROpXor;
+    }
+
+- (NSUInteger)arrUseCount:(XTIRValueId)v
+    {
+    return [self.arrUses[@(v)] unsignedIntegerValue];
+    }
+
+- (void)arrCount:(XTIROperand*)o
+    {
+    if (o.kind == XTIROperandKindUse)
+        self.arrUses[@(o.valueId)] = @([self arrUseCount:o.valueId] + 1);
+    }
+
+// Two element addresses alike: one value, or the same index from the same
+// loaded pointer.
+- (BOOL)arrSame:(XTIROperand*)p as:(XTIROperand*)q
+    {
+    if (p.kind != XTIROperandKindUse || q.kind != XTIROperandKindUse)
+        return NO;
+    if (p.valueId == q.valueId)
+        return YES;
+    XTIRInsn* a = self.def[@(p.valueId)];
+    XTIRInsn* b = self.def[@(q.valueId)];
+    if (a.opcode != XTIROpElementAddr || b.opcode != XTIROpElementAddr || a.operands.count < 2 || b.operands.count < 2)
+        return NO;
+    XTIROperand *a0 = a.operands[0], *b0 = b.operands[0], *a1 = a.operands[1], *b1 = b.operands[1];
+    if (a0.kind != XTIROperandKindUse || b0.kind != XTIROperandKindUse || a0.valueId != b0.valueId || a1.kind != b1.kind)
+        return NO;
+    if (a1.kind == XTIROperandKindUse)
+        return a1.valueId == b1.valueId;
+    return a1.kind == XTIROperandKindImmI && a1.intValue == b1.intValue;
+    }
+
+// A store that is an update a[k] = a[k] op x: its field, load, op and x.
+- (BOOL)arrMatch:(XTIRInsn*)st field:(NSInteger*)fk load:(XTIRValueId*)ldv op:(XTIRValueId*)binv
+               x:(XTIROperand* _Nullable* _Nullable)x
+    {
+    if (st.operands.count < 2 || st.operands[0].kind != XTIROperandKindUse)
+        return NO;
+    XTIROperand* a = st.operands[0];
+    NSNumber* k = self.arrEl[@(a.valueId)];
+    NSString* w = k ? gParArrWords[k] : nil;
+    if (!w.length || st.operands[1].kind != XTIROperandKindUse)
+        return NO;
+    XTIRInsn* b = self.def[@(st.operands[1].valueId)];
+    if (!b || b.opcode != arrOpcode([w characterAtIndex:0]) || b.operands.count < 2 || !b.result)
+        return NO;
+    for (NSUInteger side = 0; side < 2; side++)
+        {
+        XTIROperand* lo = b.operands[side];
+        XTIRInsn* ld = lo.kind == XTIROperandKindUse ? self.def[@(lo.valueId)] : nil;
+        if (!ld || ld.opcode != XTIROpLoad || ld.operands.count < 1 || !ld.result)
+            continue;
+        if (![self arrSame:ld.operands[0] as:a])
+            continue;
+        if ([self arrUseCount:ld.result.valueId] != 1 || [self arrUseCount:b.result.valueId] != 1)
+            return NO;
+        *fk = k.integerValue;
+        *ldv = ld.result.valueId;
+        *binv = b.result.valueId;
+        *x = b.operands[1 - side];
+        return YES;
+        }
+    return NO;
+    }
+
+- (BOOL)arrayCheck
+    {
+    // The element addresses, and every value's uses.
+    for (XTIRBlock* b in self.fn.blocks)
+        {
+        for (XTIRInsn* i in b.phiNodes)
+            for (XTIROperand* o in i.operands)
+                [self arrCount:o];
+        for (XTIRInsn* i in b.instructions)
+            {
+            if (i.opcode == XTIROpDbgValue)
+                continue;
+            for (XTIROperand* o in i.operands)
+                [self arrCount:o];
+            if (i.opcode == XTIROpElementAddr && i.result && i.operands.count && i.operands[0].kind == XTIROperandKindUse
+                && self.arrOf[@(i.operands[0].valueId)])
+                self.arrEl[@(i.result.valueId)] = self.arrOf[@(i.operands[0].valueId)];
+            }
+        for (XTIROperand* o in b.terminator.operands)
+            [self arrCount:o];
+        }
+    // Each use of the array's pointer or of an element address is one the
+    // kernel prints: the pointer indexed, an element loaded by an update, an
+    // update's store.
+    BOOL (^isArr)(XTIROperand*) = ^BOOL(XTIROperand* o) {
+        return o.kind == XTIROperandKindUse && (self.arrOf[@(o.valueId)] || self.arrEl[@(o.valueId)]);
+    };
+    for (XTIRBlock* b in self.fn.blocks)
+        {
+        for (XTIRInsn* i in b.phiNodes)
+            for (XTIROperand* o in i.operands)
+                if (isArr(o))
+                    return NO;
+        for (XTIROperand* o in b.terminator.operands)
+            if (isArr(o))
+                return NO;
+        for (XTIRInsn* i in b.instructions)
+            {
+            if (i.opcode == XTIROpDbgValue)
+                continue;
+            NSInteger fk = 0;
+            XTIRValueId ldv = 0, binv = 0;
+            XTIROperand* x = nil;
+            if (i.opcode == XTIROpStore && [self arrMatch:i field:&fk load:&ldv op:&binv x:&x])
+                {
+                [self.arrSkip addObject:@(ldv)];
+                [self.arrSkip addObject:@(binv)];
+                continue;
+                }
+            for (NSUInteger q = 0; q < i.operands.count; q++)
+                {
+                XTIROperand* o = i.operands[q];
+                if (!isArr(o))
+                    continue;
+                if (q == 0 && self.arrOf[@(o.valueId)] && i.opcode == XTIROpElementAddr)
+                    continue;
+                if (q == 0 && self.arrEl[@(o.valueId)] && i.opcode == XTIROpLoad)
+                    continue;
+                return NO;
+                }
+            }
+        }
+    // And every element load is one an update replaces.
+    for (XTIRBlock* b in self.fn.blocks)
+        for (XTIRInsn* i in b.instructions)
+            if (i.opcode == XTIROpLoad && i.result && i.operands.count && i.operands[0].kind == XTIROperandKindUse
+                && self.arrEl[@(i.operands[0].valueId)] && ![self.arrSkip containsObject:@(i.result.valueId)])
+                return NO;
+    return YES;
+    }
+
+// An array reduction's array fits the kernel's threadgroup copy.
+static BOOL arrTg(NSString* w)
+    {
+    return w && [w substringFromIndex:2].longLongValue * 4 <= kParArrTgBytes;
+    }
+
+// The atomic that folds x into an element for an operator.
+static NSString* arrFn(unichar c)
+    {
+    return c == '+' ? @"atomic_fetch_add_explicit(" : c == '|' ? @"atomic_fetch_or_explicit("
+           : c == '&' ? @"atomic_fetch_and_explicit(" : @"atomic_fetch_xor_explicit(";
+    }
+
+// An update a[k] = a[k] op x (arrMatch: has matched it): one atomic on the
+// threadgroup's copy of the array, or on the array itself.
+- (nullable NSString*)arrayStore:(XTIRInsn*)st field:(NSInteger)k x:(XTIROperand*)xo
+    {
+    NSString* w = gParArrWords[@(k)];
+    XTIROperand* a = st.operands[0];
+    NSString* x = [self expr:xo type:[self typeOf:a.valueId].pointeeType];
+    if (!x)
+        return nil;
+    NSString* at;
+    if (arrTg(w))
+        {
+        XTIRInsn* ea = self.def[@(a.valueId)];
+        NSString* idx = [self expr:ea.operands[1] type:nil];
+        if (!idx)
+            return nil;
+        at = [NSString stringWithFormat:@"&ta_%ld[%@]", (long)k, idx];
+        }
+    else
+        at = [NSString stringWithFormat:@"(device atomic_uint*)%@", [self name:a.valueId]];
+    return [NSString stringWithFormat:@"%@%@, uint(%@), memory_order_relaxed);", arrFn([w characterAtIndex:0]), at, x];
     }
 
 - (nullable NSString*)declOf:(XTIRValue*)v
@@ -1001,6 +1220,18 @@ static NSString* intrinsicFor(NSString* callee)
     {
     XTIRType* rt = i.result.type;
     NSString* r = i.result ? [self name:i.result.valueId] : nil;
+    // An array reduction's update (arrayCheck): its load and operation print
+    // as nothing, its store as one atomic.
+    if (!self.helperMode && self.arrSkip)
+        {
+        if (i.result && [self.arrSkip containsObject:@(i.result.valueId)])
+            return @"";
+        NSInteger fk = 0;
+        XTIRValueId ldv = 0, binv = 0;
+        XTIROperand* x = nil;
+        if (i.opcode == XTIROpStore && [self arrMatch:i field:&fk load:&ldv op:&binv x:&x])
+            return [self arrayStore:i field:fk x:x];
+        }
     switch (i.opcode)
         {
         case XTIROpConst:
@@ -1113,6 +1344,9 @@ static NSString* intrinsicFor(NSString* callee)
             NSNumber* buf = self.bufferOf[@(i.result.valueId)];
             if (buf)
                 return [NSString stringWithFormat:@"%@ = buf_%@;", r, buf];
+            NSNumber* arr = self.helperMode ? nil : self.arrOf[@(i.result.valueId)];
+            if (arr)
+                return [NSString stringWithFormat:@"%@ = arr_%@;", r, arr];
             if (!scalarName(rt))
                 return nil;
             if ([self.sinitOf[@(i.operands[0].valueId)] boolValue])
@@ -1655,6 +1889,45 @@ static NSString* intrinsicFor(NSString* callee)
     if (bad)
         return nil;
 
+    // The array reductions (arrayCheck), each bound after the reductions'
+    // partials as `arr_<k>`, which the GPU updates in place: `arr=<off>:
+    // <bytes>:<1 a threadgroup copy | 0 atomics on the array>`. A threadgroup
+    // copy starts as the operator's identity and is folded into the array
+    // with one atomic per bin it changed. Mirrored in the port.
+    BOOL tgAny = NO;
+    NSMutableString* arrShared = [NSMutableString string];
+    NSMutableString* arrInit = [NSMutableString string];
+    NSMutableString* arrMerge = [NSMutableString string];
+    for (NSUInteger k = 0; k < fl.count; k++)
+        {
+        if (![self.arrUsed containsIndex:k])
+            continue;
+        NSString* aw = gParArrWords[@(k)];
+        NSString* et = scalarName(fl[k].type.pointeeType);
+        if (!aw || !et)
+            return nil;
+        long long count = [aw substringFromIndex:2].longLongValue;
+        BOOL tg = arrTg(aw);
+        NSString* idv = [aw characterAtIndex:0] == '&' ? @"0xffffffffu" : @"0u";
+        [meta appendFormat:@" arr=%u:%lld:%u", fl[k].byteOffset, count * 4, tg ? 1u : 0u];
+        [params appendFormat:@", device %@* arr_%lu [[buffer(%lu)]]", et, (unsigned long)k, (unsigned long)slot++];
+        if (!tg)
+            continue;
+        tgAny = YES;
+        [arrShared appendFormat:@"    threadgroup atomic_uint ta_%lu[%lld];\n", (unsigned long)k, count];
+        [arrInit appendFormat:@"    for (uint q = lid; q < %lldu; q += lsz) atomic_store_explicit(&ta_%lu[q], %@, memory_order_relaxed);\n",
+                              count, (unsigned long)k, idv];
+        [arrMerge appendFormat:@"    for (uint q = lid; q < %lldu; q += lsz) {\n"
+                               @"        uint w = atomic_load_explicit(&ta_%lu[q], memory_order_relaxed);\n"
+                               @"        if (w != %@) %@(device atomic_uint*)arr_%lu + q, w, memory_order_relaxed);\n    }\n",
+                               count, (unsigned long)k, idv, arrFn([aw characterAtIndex:0]), (unsigned long)k];
+        }
+    if (tgAny)
+        {
+        [arrInit appendString:@"    threadgroup_barrier(mem_flags::mem_threadgroup);\n"];
+        [arrMerge insertString:@"    threadgroup_barrier(mem_flags::mem_threadgroup);\n" atIndex:0];
+        }
+
     NSMutableString* out = [NSMutableString string];
     if (devred)
         // devlast: the module carries a fold kernel the host dispatches after
@@ -1669,17 +1942,25 @@ static NSString* intrinsicFor(NSString* callee)
         [out appendString:h];
     if (devred)
         [out appendFormat:@"kernel void par_kernel(%@, uint tid [[thread_position_in_grid]], "
-                          @"uint lid [[thread_position_in_threadgroup]], uint gid [[threadgroup_position_in_grid]])\n{\n",
+                          @"uint lid [[thread_position_in_threadgroup]], uint gid [[threadgroup_position_in_grid]]",
                           params];
+    else if (tgAny)
+        [out appendFormat:@"kernel void par_kernel(%@, uint tid [[thread_position_in_grid]], "
+                          @"uint lid [[thread_position_in_threadgroup]]", params];
     else
-        [out appendFormat:@"kernel void par_kernel(%@, uint tid [[thread_position_in_grid]])\n{\n", params];
+        [out appendFormat:@"kernel void par_kernel(%@, uint tid [[thread_position_in_grid]]", params];
+    if (tgAny)
+        [out appendString:@", uint lsz [[threads_per_threadgroup]]"];
+    [out appendString:@")\n{\n"];
     [out appendString:shared];
+    [out appendString:arrShared];
     [out appendFormat:@"    thread uchar st[%u];\n", self.objLayout.size];
     [out appendFormat:@"    for (uint q = 0; q < %uu; q++) st[q] = args[q];\n", self.objLayout.size];
     [out appendString:@"    long lo = span[0] + long(tid) * span[2];\n"];
     [out appendString:@"    long hi = min(lo + span[2], span[1]);\n"];
     [out appendFormat:@"    *(thread long*)(st + %u) = lo;\n    *(thread long*)(st + %u) = hi;\n",
                       fl[1].byteOffset, fl[2].byteOffset];
+    [out appendString:arrInit];
     if (laneBody)
         [out appendString:laneBody];
     else
@@ -1699,6 +1980,7 @@ static NSString* intrinsicFor(NSString* callee)
             [out appendString:@"        default: pc = 0xffffffffu; continue;\n        }\n    }\n"];
             }
         }
+    [out appendString:arrMerge];
     if (devred)
         // Every thread reaches every barrier: one past the range holds its
         // reductions' starting values, which leave the result unchanged.

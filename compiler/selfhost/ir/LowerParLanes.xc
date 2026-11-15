@@ -337,6 +337,44 @@
                 mDtail.appendFormat("    if (lid == 0) red_%u[gid] = sh_%u[0];\n", k, k);
                 }
             }
+        // The array reductions (mslArrCheck), each bound after the reductions'
+        // partials as `arr_<k>`, which the GPU updates in place: `arr=<off>:
+        // <bytes>:<1 a threadgroup copy | 0 atomics on the array>`. A
+        // threadgroup copy starts as the operator's identity and is folded
+        // into the array with one atomic per bin it changed. As the reference.
+        bool mTg = false;
+        String* mArrShared = new String();
+        String* mArrInit = new String();
+        String* mArrMerge = new String();
+        for (u32 k = (u32)0; _mArrUsed != (Map*)0 && k < _mObj.fieldCount(); k = k + (u32)1)
+            {
+            if (_mArrUsed.get((Hashable*)String.withI64((i64)k)) == (Object*)0) continue;
+            String* aw = (String*)_mArrRed.get((Hashable*)String.withI64((i64)k));
+            String* et = self.mslScalar(self.mslPointee(_mObj.typeAt(k)));
+            if (aw == (String*)0 || et == (String*)0) return (String*)0;
+            i64 count = self.mslArrNum(aw, (u32)2);
+            bool tg = self.mslArrTg((i64)k);
+            String* idv = String.withCString(aw.byteAt((u32)0) == (u8)'&' ? "0xffffffffu" : "0u");
+            meta.appendFormat(" arr=%u:%ld:%u", _mObj.offsetAt(k), count * (i64)4, tg ? (u32)1 : (u32)0);
+            params.appendFormat(", device %s* arr_%u [[buffer(%u)]]", et.cString(), k, slot);
+            slot = slot + (u32)1;
+            if (!tg) continue;
+            mTg = true;
+            mArrShared.appendFormat("    threadgroup atomic_uint ta_%u[%ld];\n", k, count);
+            mArrInit.appendFormat("    for (uint q = lid; q < %ldu; q += lsz) atomic_store_explicit(&ta_%u[q], %s, memory_order_relaxed);\n",
+                                  count, k, idv.cString());
+            mArrMerge.appendFormat("    for (uint q = lid; q < %ldu; q += lsz) {\n        uint w = atomic_load_explicit(&ta_%u[q], memory_order_relaxed);\n",
+                                   count, k);
+            mArrMerge.appendFormat("        if (w != %s) %s(device atomic_uint*)arr_%u + q, w, memory_order_relaxed);\n    }\n",
+                                   idv.cString(), self.mslArrFn(aw.byteAt((u32)0)).cString(), k);
+            }
+        if (mTg)
+            {
+            mArrInit.appendCString("    threadgroup_barrier(mem_flags::mem_threadgroup);\n");
+            String* m = String.withCString("    threadgroup_barrier(mem_flags::mem_threadgroup);\n");
+            m.append(mArrMerge);
+            mArrMerge = m;
+            }
         if (mDevred) meta.appendCString(" devred devlast");
         // A speed-goal block's runtime compiles it with fast maths (MTLMathModeFast).
         if (_mFast) meta.appendCString(" fast");
@@ -346,16 +384,23 @@
             out.append((String*)_mHelperText.get(i));
         out.appendCString("kernel void par_kernel("); out.append(params);
         if (mDevred)
-            out.appendCString(", uint tid [[thread_position_in_grid]], uint lid [[thread_position_in_threadgroup]], uint gid [[threadgroup_position_in_grid]])\n{\n");
+            out.appendCString(", uint tid [[thread_position_in_grid]], uint lid [[thread_position_in_threadgroup]], uint gid [[threadgroup_position_in_grid]]");
+        else if (mTg)
+            out.appendCString(", uint tid [[thread_position_in_grid]], uint lid [[thread_position_in_threadgroup]]");
         else
-            out.appendCString(", uint tid [[thread_position_in_grid]])\n{\n");
+            out.appendCString(", uint tid [[thread_position_in_grid]]");
+        if (mTg)
+            out.appendCString(", uint lsz [[threads_per_threadgroup]]");
+        out.appendCString(")\n{\n");
         out.append(mShared);
+        out.append(mArrShared);
         out.appendCString("    thread uchar st["); out.append(String.withU32(_mObj.size())); out.appendCString("];\n");
         out.appendCString("    for (uint q = 0; q < "); out.append(String.withU32(_mObj.size())); out.appendCString("u; q++) st[q] = args[q];\n");
         out.appendCString("    long lo = span[0] + long(tid) * span[2];\n");
         out.appendCString("    long hi = min(lo + span[2], span[1]);\n");
         out.appendCString("    *(thread long*)(st + "); out.append(String.withU32(_mObj.offsetAt((u32)1))); out.appendCString(") = lo;\n");
         out.appendCString("    *(thread long*)(st + "); out.append(String.withU32(_mObj.offsetAt((u32)2))); out.appendCString(") = hi;\n");
+        out.append(mArrInit);
         if (laneBody != (String*)0)
             out.append(laneBody);
         else
@@ -375,6 +420,7 @@
                 out.appendCString("        default: pc = 0xffffffffu; continue;\n        }\n    }\n");
                 }
             }
+        out.append(mArrMerge);
         if (mDevred)
             // Every thread reaches every barrier: one past the range holds its
             // reductions' starting values, which leave the result unchanged.

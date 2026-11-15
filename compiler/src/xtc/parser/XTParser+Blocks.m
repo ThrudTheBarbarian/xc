@@ -2234,11 +2234,19 @@ static NSString* parRootName(XTASTNode* n)
         // takes its chunks as apart, and it stays on the CPU.
         if (frame[@"scanpass"])
             [tagText appendString:@"scan;"];
-        // An array reduction is `a<field>=<op>;`: it has no GPU form yet, and
-        // par-check keeps it on the CPU.
+        // An array reduction is `a<field>=<op>:<elements>;`: the Metal
+        // printer sizes the kernel's threadgroup copy of the array from it.
         for (NSUInteger j = 0; j < reductions.count; j++)
-            [tagText appendFormat:@"%@%lu=%@;", reductions[j].count > 2 ? @"a" : @"", (unsigned long)(3 + caps.count + j),
-                                  reductions[j][0]];
+            {
+            if (reductions[j].count > 2)
+                {
+                int64_t code = parArrCode(redTypes[reductions[j][1]], reductions[j][0]);
+                [tagText appendFormat:@"a%lu=%@:%lld;", (unsigned long)(3 + caps.count + j), reductions[j][0],
+                                      (long long)((code >> 8) / (code & 15))];
+                continue;
+                }
+            [tagText appendFormat:@"%lu=%@;", (unsigned long)(3 + caps.count + j), reductions[j][0]];
+            }
         // …and `c<field>;` for each :constant capture, which the Metal
         // printer binds in the constant address space.
         for (NSString* cn in constants)

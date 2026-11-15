@@ -2,8 +2,9 @@
 // an array through an index read from data. Each chunk updates a private copy
 // of the array, filled with the operator's identity, and the copies are
 // folded into the array when the block ends, so the result is the serial
-// loop's whatever the thread count (XC_PAR_THREADS). Such a block has no GPU
-// version yet and runs on the CPU's threads.
+// loop's whatever the thread count (XC_PAR_THREADS). Over 32-bit integers the
+// block has a Metal version (par_array_reduce_gpu); over 8-, 16- and 64-bit
+// ones it runs on the CPU's threads, and the compiler says why.
 //
 // A local u32 histogram with +, a global u16 array with |, a global u8 array
 // with & (identity all ones) and a local u64 array with ^; each checked
@@ -12,6 +13,9 @@
 //
 //xtc-na: xt6502, m68k — par has no threads there
 //xtc-warn: because it has an array reduction (:reduce(op a[])), which has no GPU version yet
+//xtc-warn: because its array reduction (:reduce(op a[])) is over 16-bit integers, and its GPU version takes 32-bit ones
+//xtc-warn: because its array reduction (:reduce(op a[])) is over 8-bit integers, and its GPU version takes 32-bit ones
+//xtc-warn: because its array reduction (:reduce(op a[])) is over 64-bit integers, and its GPU version takes 32-bit ones
 #import "Stdio.xc"
 #import "Par.xc"
 

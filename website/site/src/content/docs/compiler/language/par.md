@@ -146,8 +146,17 @@ built. The body may use the array only to update an element with the
 operator, as `h[k] op= x`, `h[k]++` (for `+`) or `h[k] = h[k] op x` with the
 same index on both sides. Each thread updates its own copy of the array, filled with the
 operator's identity, and the copies are combined into the array when the block
-ends, so the result is the sequential loop's. Such a block runs on the CPU's
-threads; it has no GPU version yet.
+ends, so the result is the sequential loop's.
+
+On macOS, a block whose array holds 32-bit integers (`u32` or `i32`) also has a
+Metal version. An array of up to 16 KB (4096 elements) is updated in a copy
+each threadgroup keeps in its own memory, with atomic operations, and each
+copy is folded into the array with one atomic operation per element it
+changed. A larger array is updated with atomic operations on the array
+itself. The GPU updates the array in place, so such a block runs on one
+device at a time: the GPU or the CPU's threads, never split between them.
+Over 8-, 16- or 64-bit integers, and on CUDA, Vulkan and WebGPU, the block
+runs on the CPU's threads, and the compiler says why.
 
 ## Running totals: `:scan`
 
@@ -736,7 +745,7 @@ A loop that updates an outer array through an index read from data, as
 `h[k] += e`, `h[k]++` or `h[k] = h[k] + e` with `+`, `|`, `&` or `^`, becomes a
 block with `:reduce(op h[])` when `h` is a one-dimensional array of integers of
 a size known when the program is built and the loop uses `h` in no other way
-(see [Reductions](#reductions)). Such a block runs on the CPU's threads:
+(see [Reductions](#reductions)), which says where it runs:
 
 ```c
 for (u32 i in 0..N)

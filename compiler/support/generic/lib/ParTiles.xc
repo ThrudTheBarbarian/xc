@@ -489,7 +489,7 @@ class ParTiles
         if (_workers.count() == (u32)0 || !ParDevice.hasKernel(src))
             return false;
         ParLayout* l = ParDevice.layout(proto, src, lo, hi);
-        if (l == (ParLayout*)0)
+        if (l == (ParLayout*)0 || l.narr > (u32)0)
             return false;
         i64 n = hi - lo;
         Array* ws = new Array();
@@ -718,6 +718,17 @@ class ParTiles
         {
         i64 started = ParDevice.nowUs();
         ParLayout* l = ParDevice.layout(proto, src, lo, hi);
+        // An array reduction runs on one device: the GPU's atomics update
+        // the array in place, which a CPU worker's private copy or a second
+        // device beside it would not see. Auto's sets decline it.
+        if (l != (ParLayout*)0 && l.narr > (u32)0)
+            {
+            if (ParDevice.reporting())
+                Log.info("par: %s: it has an array reduction, so it runs on one device, not as tiles", proto.parName());
+            if (set != (i32)0)
+                ParDevice.setDeclined(proto, set);
+            return false;
+            }
         Array* ws = new Array();
         i64 floor = (i64)1;
         u32 totalDepth = (u32)0;

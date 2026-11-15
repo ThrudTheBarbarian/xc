@@ -217,9 +217,11 @@ grep -q "horner.xc:13:.*became a 'par' block" "$W/b8" || { echo "FAIL auto: s = 
 [ "$("$W/horner0")" = "$("$W/horner1")" ] || { echo "FAIL auto: the Horner program's output differs under --par-style=auto"; fail=1; }
 # A loop that updates an outer integer array through an index read from data,
 # and uses it in no other way, is a block with an array reduction
-# (:reduce(op h[])), on the CPU's threads; its CPU-only warning is -Wpar-auto's
-# like every lifted loop's. A loop that also reads the array, or updates a
-# float array, is no reduction: wrapped, then demoted as before.
+# (:reduce(op h[])); its CPU-only warning is -Wpar-auto's like every lifted
+# loop's. On macOS the u32 one has a Metal version and the u8 one says why it
+# has none; elsewhere both run on the CPU's threads. A loop that also reads
+# the array, or updates a float array, is no reduction: wrapped, then demoted
+# as before.
 cat > "$W/hist.xc" <<'XC'
 #import "Stdio.xc"
 #import "Par.xc"
@@ -255,9 +257,20 @@ XC
 [ -s "$W/b9" ] && { echo "FAIL auto: hist.xc without -Wpar-auto printed:"; cat "$W/b9"; fail=1; }
 "$XC" -q -H . -O2 --par-style=auto -Wpar-auto "$W/hist.xc" -o "$W/hist2" >"$W/b10" 2>&1 || { echo "FAIL auto: hist.xc -Wpar-auto does not build"; fail=1; }
 for k in 11 13; do
-    grep -q "hist.xc:$k:.*runs on the CPU only (--par-style), because it has an array reduction" "$W/b10" \
-        || { echo "FAIL auto: the array update at line $k is not an array-reduction block"; cat "$W/b10"; fail=1; }
+    grep -q "hist.xc:$k:.*became a 'par' block" "$W/b10" \
+        || { echo "FAIL auto: the array update at line $k did not become a block"; cat "$W/b10"; fail=1; }
 done
+if [ "$(uname -s)" = Darwin ] && [ "$(uname -m)" = arm64 ]; then
+    grep -q "hist.xc:11:.*runs on the CPU only" "$W/b10" \
+        && { echo "FAIL auto: the u32 array update at line 11 has no Metal version"; cat "$W/b10"; fail=1; }
+    grep -q "hist.xc:13:.*runs on the CPU only (--par-style), because its array reduction (:reduce(op a\[\])) is over 8-bit integers" "$W/b10" \
+        || { echo "FAIL auto: the u8 array update at line 13 does not say why it stays on the CPU"; cat "$W/b10"; fail=1; }
+else
+    for k in 11 13; do
+        grep -q "hist.xc:$k:.*runs on the CPU only (--par-style), because it has an array reduction" "$W/b10" \
+            || { echo "FAIL auto: the array update at line $k is not an array-reduction block"; cat "$W/b10"; fail=1; }
+    done
+fi
 for k in 17 21; do
     grep -q "hist.xc:$k:.*runs serially" "$W/b10" || { echo "FAIL auto: the loop at line $k (array read too / float array) was not demoted"; cat "$W/b10"; fail=1; }
 done

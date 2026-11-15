@@ -689,7 +689,21 @@ class ClassInfo
     Map* _mConst;           // the :constant capture fields, by field index (String), from the placeholder's `c<field>;` words
     i64 _mGridW;            // a grid's constant width and height from the placeholder's `gw=`/`gh=` words, else 0
     i64 _mGridH;
-    Map* _mArrRed;          // the array reductions' fields, by field index (String), from the placeholder's `a<field>=<op>;` words
+    Map* _mArrRed;          // the array reductions' fields, by field index (String), from the placeholder's `a<field>=<op>:<elements>;` words: `<op>:<elements>`
+    // An array reduction in the Metal kernel (mslArrCheck): the loads of
+    // its array's pointer (value seq -> field index), the element addresses
+    // taken from them, the loads and operations an update's atomic replaces
+    // (printed as nothing), each value's uses, and the fields whose arrays
+    // the kernel binds. mslArrMatch leaves its findings in the _mArr* below.
+    Map* _mArrOf;
+    Map* _mArrEl;
+    Map* _mArrSkip;
+    Map* _mArrUses;
+    Map* _mArrUsed;
+    i64 _mArrK;
+    IRValue* _mArrLd;
+    IRValue* _mArrBin;
+    IROperand* _mArrX;
     // The static-init guard of a class the kernel calls (Math, say): value seq
     // of the AddrOf naming its flag ("1"), its init function or its static
     // data ("0"). The host ran every init before the block started, so the

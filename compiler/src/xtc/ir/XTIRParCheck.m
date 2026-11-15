@@ -1390,6 +1390,7 @@ static BOOL gEmitsWGSL = NO;
         NSMutableDictionary<NSNumber*, NSString*>* redOps = nil;
         NSMutableIndexSet* constFields = [NSMutableIndexSet indexSet];
         NSMutableIndexSet* arrFields = [NSMutableIndexSet indexSet];
+        NSMutableDictionary<NSNumber*, NSString*>* arrWords = [NSMutableDictionary dictionary];
         gParGridW = 0;
         gParGridH = 0;
         NSUInteger litEnd = lit.length;
@@ -1412,10 +1413,12 @@ static BOOL gEmitsWGSL = NO;
                 // `gw=<n>` / `gh=<n>`: a grid's constant width and height.
                 if ([pair hasPrefix:@"gw="]) { gParGridW = [pair substringFromIndex:3].longLongValue; continue; }
                 if ([pair hasPrefix:@"gh="]) { gParGridH = [pair substringFromIndex:3].longLongValue; continue; }
-                // `a<field>=<op>`: an array reduction, not a scalar one.
+                // `a<field>=<op>:<elements>`: an array reduction, not a scalar one.
                 if (pair.length > 1 && [pair hasPrefix:@"a"] && [pair rangeOfString:@"="].location != NSNotFound)
                     {
-                    [arrFields addIndex:(NSUInteger)[pair substringFromIndex:1].integerValue];
+                    NSUInteger fk = (NSUInteger)[pair substringFromIndex:1].integerValue;
+                    [arrFields addIndex:fk];
+                    arrWords[@(fk)] = [pair substringFromIndex:[pair rangeOfString:@"="].location + 1];
                     continue;
                     }
                 NSRange eq = [pair rangeOfString:@"="];
@@ -1425,6 +1428,7 @@ static BOOL gEmitsWGSL = NO;
                 }
             }
         [XTIRParMSL setConstantFields:constFields];
+        [XTIRParMSL setArrayReductions:arrWords];
         // The buffers' footprints, as words on the header line every printer
         // writes (step 1 of par-tiles-and-devices.md).
         XTIRParCheck* fc = [XTIRParCheck new];
@@ -1482,19 +1486,20 @@ static BOOL gEmitsWGSL = NO;
         NSString* lost = serialBlock ? nil : unlocatedGlobal(f, module, module, fcls);
         if (lost)
             mslWhy = ptxWhy = wgslWhy = spvWhy = [@"it uses the global " stringByAppendingString:shownName(lost)];
-        // An array reduction has no GPU form yet: the block runs on the CPU's
+        // An array reduction has a Metal form only (its atomics, in
+        // arrayStore:): the other printers keep the block on the CPU's
         // threads. Mirrored in the port.
         BOOL arrRed = !serialBlock && !lost && arrFields.count > 0;
         if (arrRed)
-            mslWhy = ptxWhy = wgslWhy = spvWhy = @"it has an array reduction (:reduce(op a[])), which has no GPU version yet";
+            ptxWhy = wgslWhy = spvWhy = @"it has an array reduction (:reduce(op a[])), which has no GPU version yet";
         BOOL scanPass = !serialBlock && !lost && !arrRed && [self isScanBlock:module number:[fcls substringFromIndex:8]];
         if (scanPass)
             mslWhy = ptxWhy = wgslWhy = spvWhy = @"it is a pass of a :scan block, which has no GPU version yet";
-        BOOL noForms = serialBlock || lost || arrRed || scanPass;
+        BOOL noForms = serialBlock || lost || scanPass;
         NSString* msl = gEmitsMetal && !noForms ? metalOf(&mslWhy) : nil;
-        NSString* ptx = gEmitsPTX && !noForms ? ptxOf(&ptxWhy) : nil;
-        NSString* wgsl = gEmitsWGSL && !noForms ? wgslOf(&wgslWhy) : nil;
-        NSData* spv = gEmitsSPIRV && !noForms ? spirvOf(&spvWhy) : nil;
+        NSString* ptx = gEmitsPTX && !noForms && !arrRed ? ptxOf(&ptxWhy) : nil;
+        NSString* wgsl = gEmitsWGSL && !noForms && !arrRed ? wgslOf(&wgslWhy) : nil;
+        NSData* spv = gEmitsSPIRV && !noForms && !arrRed ? spirvOf(&spvWhy) : nil;
         // The variant of each form there is (`trips=<n>` on its header line),
         // from the copy whose escape loop runs several trips per exit test, for
         // the runtime to choose (gpu-kernel-variants.md). Only where the plain

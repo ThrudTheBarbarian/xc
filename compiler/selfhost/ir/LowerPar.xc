@@ -3044,25 +3044,26 @@
             lostWhy = String.withCString("it uses the global ");
             lostWhy.append(self.parShown(lost));
             }
-        // An array reduction has no GPU form yet: the block runs on the
-        // CPU's threads. As the reference.
-        if (!serialBlock && lost == (String*)0 && _mArrRed.count() > (u32)0)
-            lostWhy = String.withCString("it has an array reduction (:reduce(op a[])), which has no GPU version yet");
-        if (!serialBlock && lost == (String*)0 && lostWhy == (String*)0 && parIsScanBlock(fcls.substringBytes((u32)8, fcls.byteLength() - (u32)8)))
+        // An array reduction has a Metal form only (its atomics, in
+        // mslArrStore): the other printers keep the block on the CPU's
+        // threads. As the reference.
+        bool arrRed = !serialBlock && lost == (String*)0 && _mArrRed.count() > (u32)0;
+        String* arrWhy = arrRed ? String.withCString("it has an array reduction (:reduce(op a[])), which has no GPU version yet") : (String*)0;
+        if (!serialBlock && lost == (String*)0 && !arrRed && parIsScanBlock(fcls.substringBytes((u32)8, fcls.byteLength() - (u32)8)))
             lostWhy = String.withCString("it is a pass of a :scan block, which has no GPU version yet");
         bool noForms = serialBlock || lostWhy != (String*)0;
         _mWhy = lostWhy;
         String* mslText = _parMetal && !noForms ? parMslK(f, kfUse, kmod) : (String*)0;
         mslWhy = _mWhy;
         _mMslWhy = mslWhy;
-        _mWhy = lostWhy;
-        String* ptx = _parPTX && !noForms ? parPtxK(f, kfUse, kmod) : (String*)0;
+        _mWhy = arrRed ? arrWhy : lostWhy;
+        String* ptx = _parPTX && !noForms && !arrRed ? parPtxK(f, kfUse, kmod) : (String*)0;
         ptxWhy = _mWhy;
-        _mWhy = lostWhy;
-        String* wgsl = _parWGSL && !noForms ? parWgslK(f, kfUse, kmod) : (String*)0;
+        _mWhy = arrRed ? arrWhy : lostWhy;
+        String* wgsl = _parWGSL && !noForms && !arrRed ? parWgslK(f, kfUse, kmod) : (String*)0;
         wgslWhy = _mWhy;
-        _mWhy = lostWhy;
-        Array* spv = _parSPIRV && !noForms ? parSpirvK(f, kfUse, kmod) : (Array*)0;
+        _mWhy = arrRed ? arrWhy : lostWhy;
+        Array* spv = _parSPIRV && !noForms && !arrRed ? parSpirvK(f, kfUse, kmod) : (Array*)0;
         spvWhy = _mWhy;
         // The variant of each form there is (`trips=<n>` on its header line),
         // printed from the variant copy with no fallback. As the reference.

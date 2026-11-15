@@ -299,6 +299,16 @@ class ParLayout : Object
     // (the Raspberry Pi 5's V3D allows just that): 2^22 threads in groups of
     // 64 are 65536, which it silently does not run.
     i64 maxThreads;
+    // The array reductions (header words `arr=<off>:<bytes>:<tg>`, Metal
+    // only): where the block object keeps each array's pointer, its bytes,
+    // and 1 when the kernel updates a threadgroup copy of it (arrTg: any
+    // does), which the run launches as whole threadgroups. The GPU updates
+    // the array in place with atomics, so such a block runs on one device:
+    // never as tiles (ParTiles.runLocked).
+    i64 arrOff[16];
+    i64 arrLen[16];
+    i64 arrTg;
+    u32 narr;
 
     void plan(i64 lo, i64 hi)
         {
@@ -306,6 +316,11 @@ class ParLayout : Object
         per = (i64)1;
         bool hostFold = nred > (u32)0 && devred == (i64)0;
         i64 most = hostFold ? (i64)65536 : (i64)1 << (i64)22;
+        // A threadgroup copy of an array is filled and folded once per
+        // threadgroup: fewer threads, each taking a run of items, keep that
+        // cost down.
+        if (arrTg != (i64)0 && most > (i64)1 << (i64)18)
+            most = (i64)1 << (i64)18;
         // A block whose items loop inside (an escape loop: items of very
         // different cost) runs one item a thread up to what the device allows
         // in one launch (a Vulkan dispatch: 65535 workgroups of the kernel's
@@ -2997,6 +3012,21 @@ class ParDevice
                     l.redStride[k] = num(src, &at);
                     }
                 l.nred = k + (u32)1;
+                continue;
+                }
+            // arr=<off>:<bytes>:<tg>: an array reduction's array.
+            if (src[at] == (u8)' ' && src[at + (u32)1] == (u8)'a' && src[at + (u32)2] == (u8)'r' && src[at + (u32)3] == (u8)'r'
+                && src[at + (u32)4] == (u8)'=' && l.narr < (u32)16)
+                {
+                at = at + (u32)5;
+                u32 k = l.narr;
+                l.arrOff[k] = num(src, &at);
+                at = at + (u32)1;
+                l.arrLen[k] = num(src, &at);
+                at = at + (u32)1;
+                if (num(src, &at) != (i64)0)
+                    l.arrTg = (i64)1;
+                l.narr = k + (u32)1;
                 continue;
                 }
             // ops=<n>: the per-item compute-op count (cost model).
