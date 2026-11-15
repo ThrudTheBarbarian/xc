@@ -271,6 +271,34 @@ class ElfSymDef
         {
         return _symdefs;
         }
+    // Each undefined symbol the map names takes the name it maps to, so the
+    // object's references to it bind to that instead (ld's --wrap, without
+    // the __real_ side): a C program's own malloc calls reach the heap's
+    // _xc_malloc (CAlloc.xc). Definitions keep their names.
+    void redirectUndefined(Map* to)
+        {
+        for (u32 i = (u32)0; i < _symdefs.count(); i = i + (u32)1)
+            {
+            ElfSymDef* s = (ElfSymDef*)_symdefs.get(i);
+            if (s.where() != (u32)0 || s.name() == (String*)0)
+                continue;
+            String* n = (String*)to.get((Hashable*)s.name());
+            if (n != (String*)0)
+                s.set(n, s.ext(), s.weak(), s.where(), s.off());
+            }
+        }
+    // Whether the object defines (globally) any name the map has.
+    bool definesAnyOf(Map* names)
+        {
+        for (u32 i = (u32)0; i < _symdefs.count(); i = i + (u32)1)
+            {
+            ElfSymDef* s = (ElfSymDef*)_symdefs.get(i);
+            if (s.where() != (u32)0 && s.ext() && s.name() != (String*)0
+                && names.get((Hashable*)s.name()) != (Object*)0)
+                return true;
+            }
+        return false;
+        }
     Array* relocs(void)
         {
         return _relocs;

@@ -26,6 +26,7 @@ class MachOLink
 
     SectionBytes* _objModInit; // the objects' constructor lists, one after another
     Array* _objModInitFix; // Arm64Fixup@ against _objModInit
+    Map* _redirect;    // undefined name -> name, for the forced objects (setRedirect)
 
     void init(void)
         {
@@ -37,6 +38,15 @@ class MachOLink
         _fdes = new Array();
         _objModInit = new SectionBytes();
         _objModInitFix = new Array();
+        _redirect = (Map*)0;
+        }
+
+    // The objects given as files (not archive members) bind their undefined
+    // references to these names instead: a C program's own allocator calls
+    // (CAlloc.xc). 0 leaves every object as it is.
+    void setRedirect(Map* to)
+        {
+        _redirect = to;
         }
 
     SectionBytes* objModInit(void)
@@ -215,6 +225,8 @@ class MachOLink
                 _rc = (u32)1;
                 return;
                 }
+            if (_redirect != (Map*)0)
+                o.redirectUndefined(_redirect);
             forced.set((Hashable*)Number.withU32(allObjs.count()), (Object*)Number.withU32((u32)1));
             allObjs.add((Object*)o);
             }

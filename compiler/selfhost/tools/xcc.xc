@@ -95,6 +95,8 @@ bool gCSplitPair;
 bool gHalfXcArgs;       // the C path: xcc's half has a par block (--xc-* options, #148)
 // -c of a C file: cSplitLink makes one relocatable object, not a program.
 bool gCSplitRelocatable;
+// The macOS object link's redirections for those objects (linkObjectsArm64).
+Map* gMachORedirect;
 // A language whose row names a linker (C++: clang++): the program is one
 // assembly unit, as --no-self-host's, linked by it with clang's object.
 String* gLangLinker;
@@ -3059,6 +3061,8 @@ void linkX86_64Glibc(DriverOptions* d, String* prog)
         }
     }
     X86Link* ln = new X86Link();
+    // A C or C++ program: its large malloc blocks are the runtime's (#235).
+    if (!shared && cAllocFor(d, false)) ln.setCAlloc(cAllocRedirects(false), cAllocExports());
     Data* img = (Data*)0;
     if (shared) {
         Array* iface = new Array();
@@ -4329,6 +4333,7 @@ Array* mergeLinkObjects(DriverOptions* d, SectionBytes* mtext, SectionBytes* mda
     Array* mObjc = new Array();
     if (objs.count() > (u32)0 || ars.count() > (u32)0) {
         MachOLink* ml = new MachOLink();
+        if (gMachORedirect != (Map*)0) ml.setRedirect(gMachORedirect);
         ml.merge(objs, ars, mtext, mdata, msyms, mdataSyms, mfix, mObjc);
         if (ml.rc() != (u32)0) {
             Stdio.printf("xcc: error: arm64 link: %s\n", ml.why() == 0 ? "?" : ml.why().cString());
@@ -4687,6 +4692,8 @@ void linkObjectsArm64(DriverOptions* d)
     // Objects that took libRuntime: the library carries the runtime.
     if (gObjRuntimeLib == (String*)0) combined.append(rt);
     if (isIos(d)) { combined.appendByte((u8)'\n'); combined.append(iosRuntimeSource(d)); }   // stage 4 shim
+    // A C or C++ program: its large malloc blocks are the runtime's (#235).
+    gMachORedirect = !isIos(d) && cAllocFor(d, true) ? cAllocRedirects(true) : (Map*)0;
     Arm64Asm* as = new Arm64Asm();
     as.assemble(Arm64Asm.machoDialectFromElf(combined));
     Array* bssCommons = as.takeCommons(); // bug 642: __bss, not __data
@@ -4941,6 +4948,98 @@ String* iosRuntimeSource(DriverOptions* d)
     return t;
 }
 
+// The allocator names CAlloc.xc takes over in a C or C++ program's own
+// objects (operator new and delete among them), each mapped to its entry
+// point there (ELF spelling, or Mach-O's leading underscore). Libraries keep
+// their references. macOS has no memalign. Its
+// free() and realloc() find the heap's zone without being renamed; the
+// program's are renamed so that an owned block skips the zone search and its
+// realloc(NULL, n) of a large n is the heap's block.
+Map* cAllocRedirects(bool macho)
+{
+    Map* m = new Map();
+    String* list = String.withCString(macho ? "malloc calloc realloc reallocarray aligned_alloc posix_memalign free"
+                                            : "malloc calloc realloc reallocarray aligned_alloc posix_memalign memalign free");
+    // C++'s operator new and delete: plain and array, sized, nothrow.
+    list.appendCString(" _Znwm _Znam _ZnwmRKSt9nothrow_t _ZnamRKSt9nothrow_t _ZdlPv _ZdaPv _ZdlPvm _ZdaPvm");
+    Array* names = list.splitOnByte((u8)' ');
+    for (u32 i = (u32)0; i < names.count(); i = i + (u32)1) {
+        String* n = (String*)names.get(i);
+        String* from = String.withCString(macho ? "_" : "");
+        from.append(n);
+        String* to = String.withCString(macho ? "__xc_" : "_xc_");
+        to.append(n.hasPrefix(String.withCString("_")) ? n.substringFromByte((u32)1) : n);
+        m.set((Hashable*)from, (Object*)to);
+    }
+    return m;
+}
+
+// What a Linux C program's executable exports for its libraries, each the
+// name of the CAlloc.xc function it is: every library's free, realloc and
+// malloc_usable_size reach the heap.
+Map* cAllocExports(void)
+{
+    Map* m = new Map();
+    m.set((Hashable*)String.withCString("free"), (Object*)String.withCString("_xc_lib_free"));
+    m.set((Hashable*)String.withCString("realloc"), (Object*)String.withCString("_xc_lib_realloc"));
+    m.set((Hashable*)String.withCString("malloc_usable_size"), (Object*)String.withCString("_xc_lib_usable_size"));
+    return m;
+}
+
+// Whether an object of the link carries the heap (CAlloc.xc's _xc_malloc).
+bool objectsCarryHeap(DriverOptions* d)
+{
+    Map* heap = new Map();
+    String* hn = String.withCString("_xc_malloc");
+    heap.set((Hashable*)hn, (Object*)hn);
+    for (u32 i = (u32)0; i < d.objectInputs().count(); i = i + (u32)1) {
+        String* op = (String*)d.objectInputs().get(i);
+        if (!op.hasSuffix(String.withCString(".o"))) continue;
+        Data* od = Files.readData(op);
+        if (od == (Data*)0) continue;
+        ElfObject* o = ElfObject.parse(od);
+        if (o.ok() && o.definesAnyOf(heap)) return true;
+    }
+    return false;
+}
+
+// Whether this link turns on the heap of a C program's large blocks: an
+// object carries it (CAlloc.xc, in a C or C++ object's xcc half) and no
+// object defines an allocator of its own (a program that brings its own
+// malloc keeps it, with every block unknown to par, as before).
+bool cAllocFor(DriverOptions* d, bool macho)
+{
+    Map* names = cAllocRedirects(macho);
+    String* us = String.withCString(macho ? "_malloc_usable_size" : "malloc_usable_size");
+    names.set((Hashable*)us, (Object*)us);
+    Map* heap = new Map();
+    String* hn = String.withCString(macho ? "__xc_malloc" : "_xc_malloc");
+    heap.set((Hashable*)hn, (Object*)hn);
+    bool carried = false;
+    Array* paths = new Array();
+    paths.addAll(d.objectInputs());
+    Array* li = d.linkInputs();
+    for (u32 i = (u32)0; li != (Array*)0 && i < li.count(); i = i + (u32)1) paths.add(li.get(i));
+    for (u32 i = (u32)0; i < paths.count(); i = i + (u32)1) {
+        String* op = (String*)paths.get(i);
+        if (!op.hasSuffix(String.withCString(".o"))) continue;
+        if (macho) {
+            MachOObject* o = MachOObject.atPath(op);
+            if (o == (MachOObject*)0) continue;
+            if (o.definesAny(names)) return false;
+            if (o.definesAny(heap)) carried = true;
+        } else {
+            Data* od = Files.readData(op);
+            if (od == (Data*)0) continue;
+            ElfObject* o = ElfObject.parse(od);
+            if (!o.ok()) continue;
+            if (o.definesAnyOf(names)) return false;
+            if (o.definesAnyOf(heap)) carried = true;
+        }
+    }
+    return carried;
+}
+
 // Objects as inputs, dispatched per target. What is not ported is REFUSED
 // naming the gap, never linked as something else.
 // A C program (the C path): xcc's object, just written, and clang's for the
@@ -5098,6 +5197,12 @@ void linkObjects(DriverOptions* d)
     if ((d.targetRow() != (TargetRow*)0 && d.targetRow().exeFormat().hasPrefix(String.withCString("elf")))
         || d.arch().equals(String.withCString("win64")))
         askers = addObjectDepLibs(d);
+    // A C or C++ object that asks for no library is one too when it carries
+    // the heap of the program's large blocks (CAlloc.xc, compiled for the
+    // glibc link).
+    if (!askers && d.targetRow() != (TargetRow*)0 && d.targetRow().exeFormat().hasPrefix(String.withCString("elf"))
+        && isX86_64(d) && objectsCarryHeap(d))
+        askers = true;
     // win64: a C++ program's objects keep clang's SEH tables (.pdata/.xdata),
     // as the one-step C path does.
     if (askers && d.arch().equals(String.withCString("win64")))
@@ -5478,6 +5583,11 @@ void main(void)
         // program's one definition of it then.
         Languages.setWholeProgram(!gCSplitRelocatable && !d.keepAsm() && !d.compileOnly());
         cPathSetElf(crow != (TargetRow*)0 && crow.exeFormat().hasPrefix(String.withCString("elf")));
+        // xcc's half carries the heap of the program's large blocks
+        // (CAlloc.xc, #235) where the link can turn it on: macOS, and x86-64
+        // linked against glibc.
+        cPathSetHeap((d.arch().equals(String.withCString("arm64")) && !isIos(d) && !cElfArm64)
+                     || (isX86_64(d) && d.caps().dynamic()));
         // -Wpar-auto: the outliner says what it lifted from this file, and why not.
         optSetWarnParAuto(!d.fe().warningSuppressed(String.withCString("par-auto")));
         // C and C++: unwind tables for xcc's functions, so a C++ exception

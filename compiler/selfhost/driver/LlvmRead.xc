@@ -1301,6 +1301,19 @@ class LlvmReader
                 fs.setAttr(String.withCString("exported"), true);
             _m.addSym(fs);
             }
+        // Defined here under a name the xc runtime declares too (a program's
+        // own malloc or free): a root as well, since the runtime and clang's
+        // code call it by that name. Inlined into its callers and then
+        // removed, it left those calls to the C library's.
+        else if (_split && !decl)
+            {
+            for (u32 i = (u32)0; i < _m.syms().count(); i = i + (u32)1)
+                {
+                IRSymbol* es = (IRSymbol*)_m.syms().get(i);
+                if (es.name().equals(sym))
+                    es.setAttr(String.withCString("exported"), true);
+                }
+            }
         }
 
     // ── a function ───────────────────────────────────────────────────────

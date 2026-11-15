@@ -1,12 +1,12 @@
 #!/bin/bash
 # crangeguard.sh — C loops whose arrays the call site checks by range (#219).
 # A lifted loop that writes out[i] and reads a[j] for j < i (a triangular
-# nest) needs an overlap check. It was a heap-block test, Par.spanOf, which
-# knows no glibc malloc block, so on Linux such a loop always ran serially.
-# Now the outliner bounds j (an inner loop's counter up to i) and compares the
-# byte ranges at the call site, and the run trusts that check. Apart arrays
-# run as a block and give the serial answer. An `out` that lies inside `a`
-# still runs serially, with the same answer.
+# nest) needs an overlap check. The outliner bounds j (an inner loop's
+# counter up to i) and compares the byte ranges at the call site; the run's
+# own check sizes the arrays with Par.spanOf, which knows a C program's
+# malloc blocks of 64 KB and more (the runtime allocates them, #235). Apart
+# arrays run as a block and give the serial answer. An `out` that lies inside
+# `a` runs serially, with the same answer.
 #
 #   bash tests/par/crangeguard.sh
 set -u
@@ -19,7 +19,7 @@ for shape in apart inside; do
 cat > "$W/$shape.c" <<C
 #include <stdio.h>
 #include <stdlib.h>
-#define N 6000
+#define N 20000
 int main(void)
 {
     float* a = malloc(2 * N * sizeof(float));
@@ -42,12 +42,7 @@ want=$("$W/$shape.ser")
 XC_PAR=cpu XC_PAR_REPORT=1 "$W/$shape" > "$W/$shape.rep" 2>&1
 got=$(grep -v '^par: ' "$W/$shape.rep" | tail -1)
 if [ "$got" != "$want" ]; then echo "  FAIL: $shape: $got, serially $want"; fail=1; continue; fi
-# Linux: the call site's range check passes the apart arrays, but the run's
-# own overlap check still sizes them with Par.spanOf, which knows no glibc
-# malloc block, so they run serially there for now (#235). macOS sizes them.
-if [ $shape = apart ] && [ "$(uname -s)" = Linux ]; then
-    echo "  ok: apart arrays give the serial answer ($got; serial on Linux until #235)"
-elif [ $shape = apart ]; then
+if [ $shape = apart ]; then
     grep -q "$shape.c:9: .* items on the CPU" "$W/$shape.rep" && echo "  ok: apart arrays run as a block ($got)" \
         || { echo "  FAIL: apart arrays did not run as a block"; sed 's/^/    /' "$W/$shape.rep"; fail=1; }
 else

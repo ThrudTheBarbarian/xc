@@ -48,10 +48,6 @@ i32 gParActive;
 // The bytes from p to the end of the page-aligned heap block it points into,
 // or -1 outside every such block (the runtime's registry, rt.c).
 i64 _xtc_simd_span(pointer p);
-#if OS_macos
-// libSystem: the usable size of a malloc block from its start, else 0.
-u64 malloc_size(pointer p);
-#endif
 // An array reduction's private copies (ParFnChunk.arrNew, arrMerge).
 pointer malloc(u64 n);
 void free(pointer p);
@@ -520,14 +516,6 @@ class ParFnChunkBase : ParFnChunk
 
 class Par
     {
-    // The byte length a block's generated gpuLength() reports for a captured
-    // pointer to numbers: the bytes from p to the end of the page-aligned
-    // heap block it points into (a `simd:` array, or any numeric array of
-    // 64 KB and more, which the runtime aligns unasked), or -1 when p is in
-    // no such block — a pointer into a small array, a stack array, a global —
-    // and the block runs on the CPU as before. On a target without the
-    // aligned allocator a `simd:` pointer is trusted to be its block's start
-    // and sized from the header, as it was; elem is the element's size.
     // Bring an array a GPU run kept on the device back to the host now
     // (XC_PAR_RESIDENT=1, #15): any host access does so by itself, but a
     // system call or a C library given the array (write(), memcpy inside
@@ -541,25 +529,23 @@ class Par
 #endif
         }
 
+    // The byte length a block's generated gpuLength() reports for a captured
+    // pointer to numbers: the bytes from p to the end of the page-aligned
+    // heap block it points into (a `simd:` array, any numeric array of 64 KB
+    // and more, which the runtime aligns unasked, or a C program's malloc
+    // block of 64 KB and more, CAlloc.xc), or -1 when p is in no such
+    // block — a pointer into a small array, a stack array, a global, memory a
+    // library allocated — and the block runs on the CPU as before. On a
+    // target without the aligned allocator a `simd:` pointer is trusted to be
+    // its block's start and sized from the header, as it was; elem is the
+    // element's size.
     static i64 spanOf(pointer p, i64 elem, bool simdType)
         {
         if (p == (pointer)0)
             return (i64)0 - (i64)1;
 #if ARCH_arm64 || ARCH_x86_64 || OS_windows
         parGlobals();
-        i64 span = _xtc_simd_span(p);
-#if OS_macos
-        // A block the system's malloc made (a C++ program's operator new,
-        // linked by clang++): its size from its start, 0 for any other
-        // pointer, which stays unknown.
-        if (span < (i64)0)
-            {
-            u64 sz = malloc_size(p);
-            if (sz > (u64)0)
-                span = (i64)sz;
-            }
-#endif
-        return span;
+        return _xtc_simd_span(p);
 #else
 #if ARCH_6502
         // No GPU, and no element count in a primitive array's header.

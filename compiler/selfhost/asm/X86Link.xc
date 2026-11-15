@@ -33,6 +33,8 @@ class X86Link
     Map* _soDefs;   // symbol -> SONAME, from the .so inputs
     Array* _xtNeeds; // the runtime hand-offs (`__xt_…`) the .so inputs import
     bool _glibcShared; // a glibc LIBRARY: its __xt_ imports come from the program
+    Map* _redirect;    // undefined name -> name, for the object files (setCAlloc)
+    Map* _cExports;    // exported name -> the defined name it is (setCAlloc)
 
     void init(void)
         {
@@ -43,6 +45,19 @@ class X86Link
         _soDefs = new Map();
         _xtNeeds = (Array*)0;
         _glibcShared = false;
+        _redirect = (Map*)0;
+        _cExports = (Map*)0;
+        }
+
+    // A C or C++ program's heap (CAlloc.xc, in its objects): the object
+    // files' undefined references named in `to` bind to the names it maps
+    // them to, and the executable also exports each name of `exports` as the
+    // function it maps to (glibc's free, realloc and malloc_usable_size as
+    // the heap's), so its libraries' calls reach them.
+    void setCAlloc(Map* to, Map* exports)
+        {
+        _redirect = to;
+        _cExports = exports;
         }
     bool failed(void)
         {
@@ -275,6 +290,8 @@ class X86Link
                     fail(op.appending(String.withCString(" is not a readable x86-64 object")));
                     return (Data*)0;
                     }
+                if (_redirect != (Map*)0)
+                    oo.redirectUndefined(_redirect);
                 ElfMerge.merge(im, oo, op, k);
                 if (im.failed())
                     {
@@ -294,6 +311,22 @@ class X86Link
                 }
             if (!applyStaticTls(im))
                 return (Data*)0;
+            // The heap's exports (setCAlloc): each a second name for its
+            // function, in the dynamic symbol table.
+            if (_cExports != (Map*)0)
+                {
+                Array* ks = _cExports.allKeys();
+                Elf64.sortStrings(ks);
+                for (u32 k = (u32)0; k < ks.count(); k = k + (u32)1)
+                    {
+                    String* as = (String*)ks.get(k);
+                    Object* at = im.syms().get(_cExports.get((Hashable*)as));
+                    if (at == (Object*)0)
+                        continue;
+                    im.syms().set((Hashable*)as, at);
+                    pub.add((Object*)as);
+                    }
+                }
             // The init/fini array bounds and the weak-undef zeroes, exactly as
             // the static path synthesises them: musl's start/exit code walks
             // those arrays, and a dynamic image needs them just as much.

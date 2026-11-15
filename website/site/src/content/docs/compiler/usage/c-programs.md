@@ -72,6 +72,27 @@ xcc: C path: left to clang: @log_line
 xcc: C path:   because of a parameter of a type not read (in log_line: ...)
 ```
 
+## Heap arrays
+
+A loop over two pointers runs as a block only when the runtime can tell the
+arrays apart. On x86-64 Linux (glibc, the default dynamic link) and on macOS,
+the program's own `malloc`, `calloc`, `realloc`, `aligned_alloc` and
+`posix_memalign` calls of 64 KB and more get a block from `xcc`'s runtime, which
+records where it starts and how long it is. Smaller requests go to the C
+library, and a block of the C library's stays one when `realloc` grows it. A
+loop runs as a block when its arrays are such blocks, each passed from its
+start; a pointer into the middle of a block, a smaller block, or memory a
+library allocated is unknown, and the loop runs serially, with the same answer.
+
+The blocks work with every C library: a library may realloc or free one, and the
+program may free memory a library allocated. On Linux the executable exports
+`free`, `realloc` and `malloc_usable_size` for this; on macOS the blocks come
+from a malloc zone of their own, so `malloc_size` answers for them. A program
+that defines its own `malloc` keeps it. C++ `new` and `new[]` work the same way:
+the program's `operator new` and `operator delete` calls are the runtime's for
+64 KB and more (the aligned forms stay the C++ library's). A `-static` Linux
+program and the other targets use the C library for every block.
+
 ## Options
 
 `-I <dir>`, `-D<name>[=<value>]` and `-std=<standard>` (such as `-std=c99`,

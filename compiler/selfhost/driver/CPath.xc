@@ -104,6 +104,10 @@ String* cPathStd(void) { return gCPathStd; }
 // (row field frames) gets it registered at start-up.
 bool gCPathElf;
 void cPathSetElf(bool b) { gCPathElf = b; }
+// The program's large malloc blocks are the runtime's (#235): xcc's half
+// carries CAlloc.xc, which the link turns on (x86-64 glibc, macOS).
+bool gCPathHeap;
+void cPathSetHeap(bool b) { gCPathHeap = b; }
 // The source's row of the language table (Language.xc): the command that
 // writes its LLVM IR, and which functions xcc takes. 0: C's.
 LanguageRow* gCPathLang;
@@ -542,7 +546,10 @@ class CPath
             {
             String* stub = String.withString(scratch);
             stub.appendCString(".xc");
-            if (!Files.writeText(stub, String.withCString("#import \"Par.xc\"\n")))
+            String* stubText = String.withCString("#import \"Par.xc\"\n");
+            if (gCPathHeap)
+                stubText.appendCString("#import \"CAlloc.xc\"\n");
+            if (!Files.writeText(stub, stubText))
                 {
                 Stdio.error(String.withFormat("xcc: error: cannot write '%s'\n", stub.cString()));
                 return (IRModule*)0;
