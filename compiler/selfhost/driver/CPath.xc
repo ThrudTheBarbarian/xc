@@ -573,6 +573,9 @@ class CPath
                     IRDbg.setPath(IRDbg.canonicalPath(input), k);
                     break;
                     }
+            // What the stub brought, for the optimiser to remove when no
+            // loop is lifted (Opt.dropBase).
+            base.markBase();
             m = r.readInto(readText, base);
             }
         else

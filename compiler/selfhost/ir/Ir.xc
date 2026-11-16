@@ -2149,6 +2149,39 @@ class IRValue
             return (IRSymbol*)0;
         return (IRSymbol*)_symByName.get((Hashable*)name);
         }
+    // An OPT pass that removes symbols (Opt.dropBase) sets the list again,
+    // and the index by name with it.
+    void setSyms(Array* ss)
+        {
+        _syms = new Array();
+        _symByName = (Map*)0;
+        for (u32 i = (u32)0; i < ss.count(); i = i + (u32)1)
+            addSym((IRSymbol*)ss.get(i));
+        }
+    // The names of the functions, symbols and load-time initialisers the
+    // module held before a C file's IR was read into it (CPath: the par
+    // runtime's stub module), or 0: with no block lifted, Opt.dropBase
+    // removes those the program does not reach (#278).
+    Map* _baseNames;
+    void markBase(void)
+        {
+        _baseNames = new Map();
+        for (u32 i = (u32)0; i < _funcs.count(); i = i + (u32)1)
+            _baseNames.set((Hashable*)((IRFunc*)_funcs.get(i)).name(), (Object*)Number.with((u32)1));
+        for (u32 i = (u32)0; i < _syms.count(); i = i + (u32)1)
+            if (((IRSymbol*)_syms.get(i)).name() != (String*)0)
+                _baseNames.set((Hashable*)((IRSymbol*)_syms.get(i)).name(), (Object*)Number.with((u32)1));
+        for (u32 i = (u32)0; i < _modinits.count(); i = i + (u32)1)
+            _baseNames.set((Hashable*)_modinits.get(i), (Object*)Number.with((u32)1));
+        }
+    Map* baseNames(void)
+        {
+        return _baseNames;
+        }
+    void setBaseNames(Map* b)
+        {
+        _baseNames = b;
+        }
     void addFunc(IRFunc* f)
         {
         _funcs.add((Object*)f);

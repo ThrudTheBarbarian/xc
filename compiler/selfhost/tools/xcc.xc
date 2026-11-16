@@ -5656,6 +5656,13 @@ void main(void)
         // A whole program (not -c, not -S): xcc may take an ODR copy, the
         // program's one definition of it then.
         Languages.setWholeProgram(!gCSplitRelocatable && !d.keepAsm() && !d.compileOnly());
+        // …and with no loop lifted, the par runtime the C path lowered goes
+        // (#278): the program keeps libc's allocator and none of the runtime.
+        optSetDropBase(!gCSplitRelocatable && !d.keepAsm() && !d.compileOnly());
+        // The class-name root stays for an object or archive the command line
+        // joins (bug 605), not for the language's own libraries (libc++'s
+        // archive), which addLanguageLibs adds below.
+        optSetDropBaseClassRoot(linkJoinsObjects(d));
         cPathSetElf(crow != (TargetRow*)0 && crow.exeFormat().hasPrefix(String.withCString("elf")));
         // xcc's half carries the heap of the program's large blocks
         // (CAlloc.xc, #235) where the link can turn it on: macOS, and x86-64
@@ -5812,6 +5819,8 @@ void main(void)
                      irrt.why() == 0 ? "?" : irrt.why().cString());
         Process.exit((i32)3); return;
     }
+    // What a C file's stub module brought (CPath) is not in the text.
+    parsed.setBaseNames(mod.baseNames());
     mod = parsed;
     // Stashed for `-c`, which keeps the module's IR beside the object so a
     // later link can re-run the inliner across module boundaries — the thing

@@ -78,6 +78,17 @@ void optSetOutline(bool b) { gOptOutline = b; }
 void optSetOutlineFloatSum(bool b) { gOptOutlineFloatSum = b; }
 void optSetPromoteScalars(bool b) { gOptPromoteScalars = b; }
 void optSetParKernelHook(ParKernelHook* h) { gParKernelHook = h; }
+// A whole program (not -c, not -S): when the outliner lifts no loop, the
+// stub module's runtime is removed (Opt.dropBase, #278). An object keeps it,
+// for another object of the program may need the runtime or its heap.
+bool gOptDropBase;
+void optSetDropBase(bool b) { gOptDropBase = b; }
+bool optDropBase(void) { return gOptDropBase; }
+// …keeping the class-name root (_xtc_class_new), for an object the command
+// line joins to the program.
+bool gOptDropBaseClassRoot;
+void optSetDropBaseClassRoot(bool b) { gOptDropBaseClassRoot = b; }
+bool optDropBaseClassRoot(void) { return gOptDropBaseClassRoot; }
 
 // A sentinel count from lrcCountLiveOut: a value OTHER than the accumulator
 // escapes the outer loop, so the collapse is unsafe. Distinct from 0, which
