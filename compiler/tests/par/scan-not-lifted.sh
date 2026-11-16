@@ -1,9 +1,9 @@
 #!/bin/bash
 # scan-not-lifted.sh — a running value read inside a loop is no reduction: a
 # prefix sum (`s += a[i]; b[i] = s`), over global arrays and over malloc'd
-# ones, is not made a par block (the outliner says so), and gives clang's
-# output on the CPU, the GPU and auto. 1.0 lifted it and every chunk started
-# its sum from zero. Skipped without clang. Self-hosted compiler only.
+# ones, is never an ordinary par block: the outliner refuses it or makes it a
+# scan block (#272), and it gives clang's output on the CPU, the GPU and
+# auto. 1.0 lifted it as a block and every chunk started its sum from zero. Skipped without clang. Self-hosted compiler only.
 #
 #   bash tests/par/scan-not-lifted.sh
 set -u
@@ -56,8 +56,9 @@ for p in g h; do
     want=$("$W/$p.ref")
     XC_PAR_OUTLINE_TRACE=1 "$XC" -q -O3 -H . -o "$W/$p" "$W/$p.c" > "$W/$p.b" 2>&1 \
         || { echo "FAIL scan-not-lifted: $p.c does not build"; head -3 "$W/$p.b"; fail=1; continue; }
-    grep -q 'not a block: an accumulator read in the loop' "$W/$p.b" \
-        || { echo "FAIL scan-not-lifted: $p.c's prefix sum was not refused:"; grep '^outline' "$W/$p.b" | head -4; fail=1; }
+    # Never an ordinary block: refused, or a scan block (two passes, #272).
+    grep -q 'not a block: an accumulator read in the loop' "$W/$p.b" || grep -q 'scan:.*outlined, a block' "$W/$p.b" \
+        || { echo "FAIL scan-not-lifted: $p.c's prefix sum was neither refused nor a scan block:"; grep '^outline' "$W/$p.b" | head -4; fail=1; }
     for m in cpu gpu auto; do
         mkdir -p "$W/s.$p.$m"
         got=$(XC_PAR=$m XCC_SETTINGS_DIR="$W/s.$p.$m" "$W/$p")
