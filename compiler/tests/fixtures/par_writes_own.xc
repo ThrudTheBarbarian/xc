@@ -3,7 +3,7 @@
 // its space is made there (gpuWritesAllOwn, as gpuWritesAll for a global).
 // `whole` overwrites ys; `half` writes only the first half of zs, whose
 // second half must keep its 5s; `reads` reads acc as it writes it. The
-// runtime reports one array written whole.
+// runtime reports ys written whole, and zs's half (its device buffer).
 
 #import "Stdio.xc"
 #import "Par.xc"

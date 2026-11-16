@@ -8,7 +8,9 @@
 # allocates it without the copy, Metal makes an empty buffer, Vulkan skips
 # the copy into its mapping. tests/fixtures/par_writes_own.xc: one block
 # overwrites ys (reported), one writes half of zs (whose other half must
-# survive), one reads acc as it writes it. The CUDA run of that block, on an
+# survive), one reads acc as it writes it (never reported). zs's device
+# buffer ends where the block's writes end (#325), so that half is written
+# whole too and may be reported. The CUDA run of that block, on an
 # RTX 5080: 7.2 -> 3.6 ms; Vulkan 10.4 -> 9.5.
 # Here: the CPU answer, on a Mac the Metal one with its report, and one
 # through a worker daemon on this machine; on the Windows host
@@ -29,9 +31,14 @@ got=$(XC_PAR=cpu "$W/p" 2>/dev/null)
 check() {   # $1: label, $2: the run's output
     local out="$2"
     echo "$out" | grep -q 'items on the GPU' || { echo "writes-own: no $1 GPU, skipped"; return; }
-    [ "$(echo "$out" | grep -c 'written whole on the device, not sent')" = 1 ] \
-        || { echo "FAIL writes-own: $1 reports $(echo "$out" | grep -c 'written whole') arrays written whole, want 1"; fail=1; }
-    echo "$out" | grep -q '16777216 bytes written whole' || { echo "FAIL writes-own: $1 did not take ys whole"; fail=1; }
+    # ys (16 MB) once, zs's written half (8 MB) at most, and never acc
+    # (16 MB, read as it is written).
+    [ "$(echo "$out" | grep -c '16777216 bytes written whole on the device, not sent')" = 1 ] \
+        || { echo "FAIL writes-own: $1 reports $(echo "$out" | grep -c '16777216 bytes written whole') 16 MB arrays written whole, want 1 (ys)"; fail=1; }
+    [ "$(echo "$out" | grep -c '8388608 bytes written whole on the device, not sent')" -le 1 ] \
+        || { echo "FAIL writes-own: $1 reports zs's half written whole more than once"; fail=1; }
+    [ "$(echo "$out" | grep 'written whole on the device, not sent' | grep -v -e '16777216 bytes' -e '8388608 bytes' | wc -l | tr -d ' ')" = 0 ] \
+        || { echo "FAIL writes-own: $1 reports another array written whole"; fail=1; }
     [ "$(echo "$out" | grep -E '^[0-9]' | tail -1)" = "$WANT" ] \
         || { echo "FAIL writes-own: $1 gives '$(echo "$out" | grep -E '^[0-9]' | tail -1)'"; fail=1; }
 }
