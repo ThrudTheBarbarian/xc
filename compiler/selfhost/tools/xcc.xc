@@ -5970,6 +5970,11 @@ void emitModule(DriverOptions* d, IRModule* mod)
         return;
     }
     if (d.compileOnly()) {
+        // A C/C++ file's xcc half that links libRuntime reads the guard
+        // through the GOT, as on the ELF rows: the image does not define it,
+        // and an @PAGE reference to an import is not patched.
+        if (gCSplitOut != (String*)0 && d.fe().runtimeLibFile() != (String*)0 && !isIos(d))
+            prog = guardThroughGot(prog);
         String* one = new String();
         one.append(classAllocStubs(prog));
         one.appendByte((u8)'\n');
