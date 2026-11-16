@@ -89,7 +89,9 @@ class Parser
     Map*    _blkBases;      // mangled -> Map{"ret": spelling, "params": Array<Node nkParam>}
     Map*    _blkImplBase;   // impl name -> base name
     Map*    _blkFnRet;      // function name -> return spelling
-    Set*    _blkIvarNames;  // current class's ivars (capture-error message)
+    Map*    _blkClassIvars; // class -> Set of its own ivar names (capture error)
+    Map*    _blkClassParent; // class -> parent class
+    String* _blkCurClass;   // the class being parsed, or 0
     u32     _blkCounter;
     String* _lastBlkName;
     // The `#package` in force, for bodyless declarations. 0 = default.
@@ -121,7 +123,9 @@ class Parser
         _blkBases   = new Map();
         _blkImplBase = new Map();
         _blkFnRet   = new Map();
-        _blkIvarNames = new Set();
+        _blkClassIvars = new Map();
+        _blkClassParent = new Map();
+        _blkCurClass = (String*)0;
         _blkCounter = (u32)0;
         _lastBlkName = (String*)0;
         _currentPackage = (String*)0;
@@ -197,6 +201,33 @@ class Parser
             if (o != 0) { if (outDepth != (u32*)0) *outDepth = i; return (Map*)o; }
         }
         return (Map*)0;
+    }
+
+    // The ivar names a block in the class being parsed cannot capture: that
+    // class's own and its parents' (as far as this parse has seen them). A
+    // class's names stay with the class, so a global or a local in code
+    // outside it (`u32 key[n];` in main, after a library class with a `key`
+    // ivar) is captured like any other name. As the reference.
+    void blkAddIvar(String* name)
+    {
+        if (_blkCurClass == (String*)0) return;
+        Set* own = (Set*)_blkClassIvars.get((Hashable*)_blkCurClass);
+        if (own == (Set*)0) {
+            own = new Set();
+            _blkClassIvars.set((Hashable*)String.withString(_blkCurClass), (Object*)own);
+        }
+        own.add((Hashable*)String.withString(name));
+    }
+
+    bool blkIsIvar(String* name)
+    {
+        String* cls = _blkCurClass;
+        for (u32 hop = (u32)0; cls != (String*)0 && hop < (u32)64; hop = hop + (u32)1) {
+            Set* own = (Set*)_blkClassIvars.get((Hashable*)cls);
+            if (own != (Set*)0 && own.contains((Hashable*)name)) return true;
+            cls = (String*)_blkClassParent.get((Hashable*)cls);
+        }
+        return false;
     }
 
     // In a par body, `self.f` (not a call) where `f` resolves to this class's
@@ -275,7 +306,7 @@ class Parser
             if (!seen) outer.add((Object*)String.withString(name));
         }
         if (info == 0) {
-            if (Parser._same(name, "self") || _blkIvarNames.contains((Hashable*)name)) {
+            if (Parser._same(name, "self") || blkIsIvar(name)) {
                 _error(String.withFormat("a block cannot capture '%s' (v1 captures locals and parameters only) — copy it into a local first, e.g. `auto me = self;` outside the block", name.cString()));
             }
             return;
@@ -1877,6 +1908,12 @@ class Parser
         }
         n.setOp(parent);
         n.setExtra(protos);
+        // The class's ivars are its own: a block in it cannot capture them
+        // (nor its parents'), and code outside it captures those names.
+        String* savedCls = _blkCurClass;
+        _blkCurClass = nameTok == 0 ? (String*)0 : nameTok.value();
+        if (_blkCurClass != (String*)0 && !Parser._same(parent, "-"))
+            _blkClassParent.set((Hashable*)String.withString(_blkCurClass), (Object*)String.withString(parent));
 
         // Ivars are printed before methods, matching the original's ordering,
         // so they are collected separately and appended in that order.
@@ -1901,6 +1938,7 @@ class Parser
             blkPopScope();                           // task #26
             closeBlock();
         }
+        _blkCurClass = savedCls;
         match((u16)tokSemicolon);
 
         for (u32 i = (u32)0; i < ivars.count(); i = i + (u32)1)
@@ -2225,7 +2263,7 @@ class Parser
             Object* bi = ((Map*)_blkScopes.get(_blkScopes.count() - (u32)1)).get((Hashable*)name);
             if (bi != 0) ((Map*)bi).set((Hashable*)String.withCString("ivar"), (Object*)Number.with((u32)1));
         }
-        _blkIvarNames.add((Hashable*)String.withString(name));
+        blkAddIvar(name);
         if (match((u16)tokAssign)) v.add(parseExpression());
         while (match((u16)tokComma)) {
             Token* more = expect((u16)tokIdentifier);
@@ -2241,7 +2279,7 @@ class Parser
                 Object* bi = ((Map*)_blkScopes.get(_blkScopes.count() - (u32)1)).get((Hashable*)more.value());
                 if (bi != 0) ((Map*)bi).set((Hashable*)String.withCString("ivar"), (Object*)Number.with((u32)1));
             }
-            _blkIvarNames.add((Hashable*)String.withString(more.value()));
+            blkAddIvar(more.value());
             if (match((u16)tokAssign)) extra.add(parseExpression());
             _pendingMembers.add((Object*)extra);
         }
@@ -2929,6 +2967,7 @@ class Parser
         // 25). As the reference.
         u32 plainEnd = _pos;
         u32 errMark = _errors.count();
+        u32 warnMark = _warnings.count();
         bool fatalMark = _fatal;
         _pos = forPos;
         Token* forTok = cur();
@@ -2966,7 +3005,7 @@ class Parser
         blkPopScope();
         _blkFrames.removeAt(_blkFrames.count() - (u32)1);
         if (loop == (Node*)0 || _errors.count() > errMark) {
-            parAutoTakeBack(errMark, fatalMark, plainEnd);
+            parAutoRefused(errMark, warnMark, fatalMark, plainEnd, forTok);
             _parTok = savedParTok;
             return plain;
         }
@@ -3006,7 +3045,7 @@ class Parser
         _mkAt = savedMkAt;
         _parTok = savedParTok;
         if (out == (Node*)0 || _errors.count() > errMark) {
-            parAutoTakeBack(errMark, fatalMark, plainEnd);
+            parAutoRefused(errMark, warnMark, fatalMark, plainEnd, forTok);
             return plain;
         }
         return out;
@@ -3060,6 +3099,28 @@ class Parser
             _errors.removeAt(_errors.count() - (u32)1);
         _fatal = fatalMark;
         _pos = plainEnd;
+    }
+
+    // As parAutoTakeBack, for the block form of a loop under --par-style=auto:
+    // its warnings go too, and -Wpar-auto says why the loop stays a loop, with
+    // the first error the block form reported. As the reference.
+    void parAutoRefused(u32 errMark, u32 warnMark, bool fatalMark, u32 plainEnd, Token* forTok)
+    {
+        String* why = (String*)0;
+        if (_errors.count() > errMark) {
+            String* e = (String*)_errors.get(errMark);
+            u32 at = e.byteIndexOf(String.withCString("error: "));
+            if (at != String.notFound())
+                why = e.substringFromByte(at + (u32)7);
+        }
+        while (_warnings.count() > warnMark)
+            _warnings.removeAt(_warnings.count() - (u32)1);
+        parAutoTakeBack(errMark, fatalMark, plainEnd);
+        if (why != (String*)0) {
+            String* w = String.withCString("this loop runs serially, not as a 'par' block (--par-style): its block form is refused: ");
+            w.append(why);
+            warnAt(String.withCString("par-auto"), w, forTok);
+        }
     }
 
     u16 parTokType(u32 i)
@@ -4831,7 +4892,7 @@ class Parser
     Node* parSameNameCall(String* g)
     {
         Node* c = mkNamed((u16)nkCall, String.withCString("parSameName"));
-        c.add(parIdent(String.withCString("name")));
+        c.add(parIdent(String.withCString("__par_name")));
         c.add(mkNamed((u16)nkStr, String.withString(g)));
         c.setNum((i64)2);
         return c;
@@ -5116,6 +5177,21 @@ class Parser
                 return (Node*)0;
             }
         }
+        // A global the body names is reached by that name from the block's
+        // run(), where the block's range fields lo and hi, and its __par_
+        // names, are found first. As the reference.
+        Array* outerG = (Array*)frame.get((Hashable*)String.withCString("outer"));
+        if (outerG != (Array*)0 && _parTopVars != (Map*)0)
+            for (u32 i = (u32)0; i < outerG.count(); i = i + (u32)1) {
+                String* gn = (String*)outerG.get(i);
+                if (_parTopVars.get((Hashable*)gn) == (Object*)0 || redTypes.get((Hashable*)gn) != 0) continue;
+                bool own = gn.hasPrefix(String.withCString("__par_"));
+                if (own || Parser._same(gn, "lo") || Parser._same(gn, "hi")) {
+                    _errorAt(String.withFormat("a '%s' block cannot capture '%s': the name is one of the block's own (%s). Rename the variable",
+                                               label.cString(), gn.cString(), own ? "names beginning __par_" : "lo, hi, for a global"), parKeywordNode());
+                    return (Node*)0;
+                }
+            }
         // :constant(a, b): each name a captured array, or pointer to numbers,
         // the body only reads. As the reference.
         Array* constants = (Array*)frame.get((Hashable*)String.withCString("constant"));
@@ -5288,7 +5364,7 @@ class Parser
         {
             Node* m = mkNamed((u16)nkMethodDecl, String.withCString("gpuLength"));
             m.setOp(String.withCString("i64"));
-            Node* p = mkNamed((u16)nkParam, String.withCString("k"));
+            Node* p = mkNamed((u16)nkParam, String.withCString("__par_k"));
             p.setOp(String.withCString("i32"));
             m.add(p);
             Node* b = mk((u16)nkBlock);
@@ -5341,7 +5417,7 @@ class Parser
                 } else
                     continue;
                 Node* n = mk((u16)nkIf);
-                n.add(parBin("==", parIdent(String.withCString("k")),
+                n.add(parBin("==", parIdent(String.withCString("__par_k")),
                              parCast(String.withCString("i32"), parInt((i64)i))));
                 Node* then = mk((u16)nkBlock);
                 Node* ret = mk((u16)nkReturn);
@@ -5368,7 +5444,7 @@ class Parser
                     || !Parser.parReadsOnly(frame, cn))
                     continue;
                 Node* n = mk((u16)nkIf);
-                n.add(parBin("==", parIdent(String.withCString("k")),
+                n.add(parBin("==", parIdent(String.withCString("__par_k")),
                              parCast(String.withCString("i32"), parInt((i64)i))));
                 Node* then = mk((u16)nkBlock);
                 Node* ret = mk((u16)nkReturn);
@@ -5388,7 +5464,7 @@ class Parser
                 bro.add(rf);
                 Node* mr = mkNamed((u16)nkMethodDecl, String.withCString("gpuReadsOnly"));
                 mr.setOp(String.withCString("bool"));
-                Node* pr = mkNamed((u16)nkParam, String.withCString("k"));
+                Node* pr = mkNamed((u16)nkParam, String.withCString("__par_k"));
                 pr.setOp(String.withCString("i32"));
                 mr.add(pr);
                 mr.add(bro);
@@ -5429,7 +5505,7 @@ class Parser
                 if (!wall)
                     continue;
                 Node* n = mk((u16)nkIf);
-                n.add(parBin("==", parIdent(String.withCString("k")),
+                n.add(parBin("==", parIdent(String.withCString("__par_k")),
                              parCast(String.withCString("i32"), parInt((i64)i))));
                 Node* then = mk((u16)nkBlock);
                 Node* ret = mk((u16)nkReturn);
@@ -5449,7 +5525,7 @@ class Parser
                 bwo.add(rf);
                 Node* mw = mkNamed((u16)nkMethodDecl, String.withCString("gpuWritesAllOwn"));
                 mw.setOp(String.withCString("bool"));
-                Node* pw = mkNamed((u16)nkParam, String.withCString("k"));
+                Node* pw = mkNamed((u16)nkParam, String.withCString("__par_k"));
                 pw.setOp(String.withCString("i32"));
                 mw.add(pw);
                 mw.add(bwo);
@@ -5477,13 +5553,13 @@ class Parser
                 }
             Node* ma = mkNamed((u16)nkMethodDecl, String.withCString("gpuGlobal"));
             ma.setOp(String.withCString("pointer"));
-            Node* pa = mkNamed((u16)nkParam, String.withCString("name"));
+            Node* pa = mkNamed((u16)nkParam, String.withCString("__par_name"));
             pa.setOp(String.withCString("u8*"));
             ma.add(pa);
             Node* ba = mk((u16)nkBlock);
             Node* mb = mkNamed((u16)nkMethodDecl, String.withCString("gpuGlobalBytes"));
             mb.setOp(String.withCString("i64"));
-            Node* pb = mkNamed((u16)nkParam, String.withCString("name"));
+            Node* pb = mkNamed((u16)nkParam, String.withCString("__par_name"));
             pb.setOp(String.withCString("u8*"));
             mb.add(pb);
             Node* bb = mk((u16)nkBlock);
@@ -5605,7 +5681,7 @@ class Parser
                 brg.add(noneR);
                 Node* mg = mkNamed((u16)nkMethodDecl, String.withCString("gpuReadsOnlyGlobal"));
                 mg.setOp(String.withCString("bool"));
-                Node* pg = mkNamed((u16)nkParam, String.withCString("name"));
+                Node* pg = mkNamed((u16)nkParam, String.withCString("__par_name"));
                 pg.setOp(String.withCString("u8*"));
                 mg.add(pg);
                 mg.add(brg);
@@ -5619,7 +5695,7 @@ class Parser
                 bw.add(noneW);
                 Node* mw = mkNamed((u16)nkMethodDecl, String.withCString("gpuWritesAll"));
                 mw.setOp(String.withCString("bool"));
-                Node* pw = mkNamed((u16)nkParam, String.withCString("name"));
+                Node* pw = mkNamed((u16)nkParam, String.withCString("__par_name"));
                 pw.setOp(String.withCString("u8*"));
                 mw.add(pw);
                 mw.add(bw);
@@ -5757,16 +5833,16 @@ class Parser
         {
             Node* m = mkNamed((u16)nkMethodDecl, String.withCString("merge"));
             m.setOp(String.withCString("void"));
-            Node* p = mkNamed((u16)nkParam, String.withCString("other"));
+            Node* p = mkNamed((u16)nkParam, String.withCString("__par_other"));
             p.setOp(String.withCString("ParChunk*"));
             m.add(p);
             Node* b = mk((u16)nkBlock);
             // The downcast only when there is something to fold: an unused
             // `o` reads as a never-used local to the analyser (-Wanalyze).
             if (reds.count() > (u32)0) {
-                Node* o = mkNamed((u16)nkVariableDecl, String.withCString("o"));
+                Node* o = mkNamed((u16)nkVariableDecl, String.withCString("__par_o"));
                 o.setOp(implPtr);
-                o.add(parCast(implPtr, parIdent(String.withCString("other"))));
+                o.add(parCast(implPtr, parIdent(String.withCString("__par_other"))));
                 b.add(o);
             }
             for (u32 i = (u32)0; i < reds.count(); i = i + (u32)1) {
@@ -5778,14 +5854,14 @@ class Parser
                     Node* call = mkNamed((u16)nkMethodCall, String.withCString("arrMerge"));
                     call.add(parIdent(String.withCString("ParFnChunk")));
                     call.add(parCast(u8p, parMember(String.withCString("self"), Parser.parFieldOf(r.name()))));
-                    call.add(parCast(u8p, parMember(String.withCString("o"), Parser.parFieldOf(r.name()))));
+                    call.add(parCast(u8p, parMember(String.withCString("__par_o"), Parser.parFieldOf(r.name()))));
                     call.add(parCast(String.withCString("i64"), parInt(Parser.parArrCode((String*)redTypes.get((Hashable*)r.name()), r.op()))));
                     call.setNum((i64)3);
                     b.add(parStmt(call));
                     continue;
                 }
                 b.add(parFold(r.op(), parFieldRef(r.name()), parFieldRef(r.name()),
-                              parMember(String.withCString("o"), Parser.parFieldOf(r.name()))));
+                              parMember(String.withCString("__par_o"), Parser.parFieldOf(r.name()))));
             }
             m.add(b);
             cls.add(m);

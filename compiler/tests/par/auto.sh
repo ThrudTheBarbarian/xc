@@ -278,5 +278,27 @@ XC_PAR_REPORT=1 "$W/hist1" > "$W/rep5" 2>&1
 for k in 11 13; do grep -q "hist\.xc:$k:" "$W/rep5" || { echo "FAIL auto: the array reduction at line $k did not run as a block"; cat "$W/rep5"; fail=1; }; done
 for k in 17 21; do grep -q "hist\.xc:$k:" "$W/rep5" && { echo "FAIL auto: the loop at line $k ran as a block"; fail=1; }; done
 [ "$("$W/hist0")" = "$(grep -v '^par: ' "$W/rep5" | tail -1)" ] || { echo "FAIL auto: hist.xc's output differs under --par-style=auto"; fail=1; }
+# A loop over a global or a local that shares its name with an ivar of a class
+# the program imports (key, value, next, ... in the par runtime's classes), or
+# with a parameter or local of the block's own methods (k, o, other), is a
+# block like any other (#261). A subclass's loop over an inherited ivar is
+# not, nor is a loop over a global named lo or hi (the block's range fields),
+# and -Wpar-auto names the capture the block form refused.
+LN=tests/fixtures/par_auto_library_names.xc
+"$XC" -q -H . -O2 -Wpar-auto "$LN" -o "$W/names" >"$W/b11" 2>&1 || { echo "FAIL auto: $LN does not build"; head -3 "$W/b11"; fail=1; }
+grep -q "par_auto_library_names.xc:44:.*runs serially, not as a 'par' block (--par-style): its block form is refused: a block cannot capture 'k'" "$W/b11" \
+    || { echo "FAIL auto: no reason for the inherited-ivar loop at line 44"; cat "$W/b11"; fail=1; }
+for k in 104:hi 106:lo 109:lo; do
+    grep -q "par_auto_library_names.xc:${k%%:*}:.*runs serially, not as a 'par' block (--par-style): its block form is refused: .* cannot capture '${k##*:}': the name is one of the block's own (lo, hi, for a global)" "$W/b11" \
+        || { echo "FAIL auto: no reason for the loop over the global ${k##*:} at line ${k%%:*}"; cat "$W/b11"; fail=1; }
+done
+XC_PAR_REPORT=1 "$W/names" > "$W/rep6" 2>&1
+for k in 54 56 71 74 77 92 94 96 98 100 102; do
+    grep -q "par_auto_library_names\.xc:$k:" "$W/rep6" || { echo "FAIL auto: the loop at line $k of $LN did not run as a block"; fail=1; }
+done
+for k in 44 104 106 109; do
+    grep -q "par_auto_library_names\.xc:$k:" "$W/rep6" && { echo "FAIL auto: the loop at line $k of $LN ran as a block"; fail=1; }
+done
+[ "$(grep -v '^par: ' "$W/rep6")" = "$(cat tests/fixtures/par_auto_library_names.expected.out)" ] || { echo "FAIL auto: $LN's output"; grep -v '^par: ' "$W/rep6"; fail=1; }
 [ $fail = 0 ] && echo "--- auto: pass ---"
 exit $fail
