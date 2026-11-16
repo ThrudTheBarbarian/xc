@@ -43,7 +43,10 @@ LIBS="tests/arm64/emit-lib/TheLib.xc tests/arm64/emit-lib-overload/OvLib.xc
       tests/selfhost-iface/mod-shape.xc tests/fixtures/class_final.xc
       tests/fixtures/foundation_comparable.xc
       tests/fixtures/overload_virtual_dispatch.xc
-      tests/fixtures/block_calls_use.xc tests/fixtures/class_calls_use.xc"
+      tests/fixtures/block_calls_use.xc tests/fixtures/class_calls_use.xc
+      tests/fixtures/matmul_exact_x86.xc"
+# matmul_exact_x86 is xtc-na on arm64, so only this harness builds it there:
+# the serial matrix nest beside the kernel call must fuse on both sides (#351).
 # Every 16th fixture by default, which keeps a local run short. LIB_DIFF_ALL=1
 # takes them all: the sample moves whenever a fixture is added, and two real
 # divergences (590, 591) stayed hidden until it happened to land on them.

@@ -216,11 +216,13 @@ BOOL XTIROpcodeIsTerminator(XTIROpcode op);
 BOOL XTIROpcodeTouchesMemory(XTIROpcode op);
 
 /// Opcodes whose instruction carries a predicate a copy must keep: the
-/// compares' operator, and FpToSI / FpToUI's XTIRConvUnchecked (C's casts).
+/// compares' operator, FpToSI / FpToUI's XTIRConvUnchecked (C's casts), and
+/// FAdd / FSub's XTIRFpContract (a copy of a fused add fuses too, as in the
+/// port: the unrolled copies of a matrix nest's accumulator, #351).
 static inline BOOL XTIROpCarriesPredicate(XTIROpcode op)
     {
     return op == XTIROpICmp || op == XTIROpFCmp || op == XTIROpVICmp || op == XTIROpVFCmp
-        || op == XTIROpFpToSI || op == XTIROpFpToUI;
+        || op == XTIROpFpToSI || op == XTIROpFpToUI || op == XTIROpFAdd || op == XTIROpFSub;
     }
 
 NS_ASSUME_NONNULL_END
