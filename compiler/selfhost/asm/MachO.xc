@@ -1556,7 +1556,7 @@ class MachOSha256
             Arm64Fixup* f = (Arm64Fixup*)fixups.get(i);
             if (f.kind() != (u32)FIXUP_PAGE21 && f.kind() != (u32)FIXUP_PAGEOFF12)
                 continue;
-            if (symbols.get((Hashable*)f.symbol()) != (Object*)0)
+            if (symbols.get((Hashable*)f.symbol()) != (Object*)0 || isDsoHandle(f.symbol()))
                 continue;
             if (f.kind() == (u32)FIXUP_PAGEOFF12 && !isAddImm64(rdw(text, f.offset())))
                 {
@@ -1604,6 +1604,21 @@ class MachOSha256
                 }
             }
         return best;
+        }
+
+    // `___dso_handle`: ld64 defines it in every image as the image's own
+    // Mach-O header, and a C++ global constructor passes its address to
+    // __cxa_atexit. It is never an import (libSystem has none to give); a
+    // reference to it is the header, offset 0 of the image.
+    static bool isDsoHandle(String* name)
+        {
+        return name != (String*)0 && name.equals(String.withCString("___dso_handle"));
+        }
+
+    // A fixup to ___dso_handle that this image does not define itself.
+    static bool dsoFixup(Arm64Fixup* f, Map* symbols)
+        {
+        return isDsoHandle(f.symbol()) && symbols.get((Hashable*)f.symbol()) == (Object*)0;
         }
 
     bool pageImport(Arm64Fixup* f)
@@ -1712,7 +1727,7 @@ class MachOSha256
             // used to link as null with no diagnostic).
             bool wants = f.kind() == (u32)FIXUP_BRANCH26 || f.kind() == (u32)FIXUP_GOTPAGE21 || f.kind() == (u32)FIXUP_GOTPAGEOFF12 || f.kind() == (u32)FIXUP_POINTER64
                       || pageImport(f);
-            if (!wants)
+            if (!wants || dsoFixup(f, symbols))
                 continue;
             if (symbols.get((Hashable*)f.symbol()) != (Object*)0)
                 continue;
@@ -1829,6 +1844,20 @@ class MachOSha256
             Arm64Fixup* f = (Arm64Fixup*)fixups.get(i);
             bool defined = symbols.get((Hashable*)f.symbol()) != (Object*)0;
             u32 site = textOffset + f.offset();
+            if (dsoFixup(f, symbols))
+                {
+                // The image's own header, at offset 0 (see isDsoHandle). A GOT
+                // pair is relaxed to the address, as for any symbol the image
+                // defines.
+                u32 s = (u32)f.addend();
+                if (f.kind() == (u32)FIXUP_PAGE21 || f.kind() == (u32)FIXUP_GOTPAGE21)
+                    patchAdrp(txt, f.offset(), s, site);
+                else if (f.kind() == (u32)FIXUP_PAGEOFF12)
+                    wrw(txt, f.offset(), (rdw(txt, f.offset()) & ~((u32)$FFF << (u32)10)) | (((s & (u32)$FFF) >> f.scale()) << (u32)10));
+                else if (f.kind() == (u32)FIXUP_GOTPAGEOFF12)
+                    wrw(txt, f.offset(), (u32)$91000000 | ((s & (u32)$FFF) << (u32)10) | (rdw(txt, f.offset()) & (u32)$3FF));
+                continue;
+                }
             if (f.kind() == (u32)FIXUP_BRANCH26 && !defined)
                 {
                 u32 idx = ((Number*)_importIndex.get((Hashable*)f.symbol())).asU32();
@@ -1917,13 +1946,15 @@ class MachOSha256
                 }
             if (f.kind() != (u32)FIXUP_POINTER64)
                 continue;
-            if (symbols.get((Hashable*)f.symbol()) == (Object*)0)
+            bool dso = dsoFixup(f, symbols);
+            if (symbols.get((Hashable*)f.symbol()) == (Object*)0 && !dso)
                 {
                 if (_importIndex.get((Hashable*)f.symbol()) != (Object*)0)
                     _dataBinds.add((Object*)f);
                 continue;
                 }
-            u32 s = symOffset(symbols, dataSyms, f.symbol(), textOffset, dataProgOffset) + (u32)f.addend();
+            // ___dso_handle: the image's header, offset 0 (isDsoHandle).
+            u32 s = dso ? (u32)f.addend() : symOffset(symbols, dataSyms, f.symbol(), textOffset, dataProgOffset) + (u32)f.addend();
             for (u32 b = (u32)0; b < (u32)4; b = b + (u32)1)
                 dat.setByteAt(f.offset() + b, (u8)((s >> ((u32)8 * b)) & (u32)$FF));
             dat.setByteAt(f.offset() + (u32)4, (u8)((u32)1)); // VMBASE high half
@@ -2040,7 +2071,7 @@ class MachOSha256
             Arm64Fixup* f = (Arm64Fixup*)fixups.get(i);
             bool wants = f.kind() == (u32)FIXUP_BRANCH26 || f.kind() == (u32)FIXUP_GOTPAGE21 || f.kind() == (u32)FIXUP_GOTPAGEOFF12 || f.kind() == (u32)FIXUP_POINTER64
                       || pageImport(f);
-            if (!wants)
+            if (!wants || dsoFixup(f, symbols))
                 continue;
             if (symbols.get((Hashable*)f.symbol()) != (Object*)0)
                 continue;
@@ -2088,6 +2119,20 @@ class MachOSha256
             Arm64Fixup* f = (Arm64Fixup*)fixups.get(i);
             bool defined = symbols.get((Hashable*)f.symbol()) != (Object*)0;
             u32 site = textOffset + f.offset();
+            if (dsoFixup(f, symbols))
+                {
+                // The image's own header, at offset 0 (see isDsoHandle). A GOT
+                // pair is relaxed to the address, as for any symbol the image
+                // defines.
+                u32 s = (u32)f.addend();
+                if (f.kind() == (u32)FIXUP_PAGE21 || f.kind() == (u32)FIXUP_GOTPAGE21)
+                    patchAdrp(txt, f.offset(), s, site);
+                else if (f.kind() == (u32)FIXUP_PAGEOFF12)
+                    wrw(txt, f.offset(), (rdw(txt, f.offset()) & ~((u32)$FFF << (u32)10)) | (((s & (u32)$FFF) >> f.scale()) << (u32)10));
+                else if (f.kind() == (u32)FIXUP_GOTPAGEOFF12)
+                    wrw(txt, f.offset(), (u32)$91000000 | ((s & (u32)$FFF) << (u32)10) | (rdw(txt, f.offset()) & (u32)$3FF));
+                continue;
+                }
             if (f.kind() == (u32)FIXUP_BRANCH26 && !defined)
                 {
                 u32 idx = ((Number*)_importIndex.get((Hashable*)f.symbol())).asU32();
@@ -2164,13 +2209,15 @@ class MachOSha256
             Arm64Fixup* f = (Arm64Fixup*)fixups.get(i);
             if (f.kind() != (u32)FIXUP_POINTER64)
                 continue;
-            if (symbols.get((Hashable*)f.symbol()) == (Object*)0)
+            bool dso = dsoFixup(f, symbols);
+            if (symbols.get((Hashable*)f.symbol()) == (Object*)0 && !dso)
                 {
                 if (_importIndex.get((Hashable*)f.symbol()) != (Object*)0)
                     _dataBinds.add((Object*)f);
                 continue;
                 }
-            u32 s = symOffset(symbols, dataSyms, f.symbol(), textOffset, dataProgOffset) + (u32)f.addend();
+            // ___dso_handle: the image's header, offset 0 (isDsoHandle).
+            u32 s = dso ? (u32)f.addend() : symOffset(symbols, dataSyms, f.symbol(), textOffset, dataProgOffset) + (u32)f.addend();
             for (u32 b = (u32)0; b < (u32)8; b = b + (u32)1)
                 dat.setByteAt(f.offset() + b, (u8)(b < (u32)4
                                                                     ? ((s >> ((u32)8 * b)) & (u32)$FF)
