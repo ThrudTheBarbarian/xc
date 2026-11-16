@@ -559,6 +559,20 @@ class CPath
             Directory._unlink(stub);
             if (base == (IRModule*)0)
                 return (IRModule*)0;
+            // The stub's place in the debug file table names the C source
+            // (#349): it was the scratch path, which carries this process's
+            // id, so the same .c gave different assembly every run and -g
+            // named a file deleted once the compile ends. The stub holds only
+            // imports; the reader then finds the source's path already in the
+            // table and its lines share the entry.
+            String* stubPath = IRDbg.canonicalPath(stub);
+            Array* dbgFiles = IRDbg.files();
+            for (u32 k = (u32)0; k < dbgFiles.count(); k = k + (u32)1)
+                if (((String*)dbgFiles.get(k)).equals(stubPath))
+                    {
+                    IRDbg.setPath(IRDbg.canonicalPath(input), k);
+                    break;
+                    }
             m = r.readInto(readText, base);
             }
         else
