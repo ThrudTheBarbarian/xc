@@ -20,6 +20,6 @@ for g in "" -g; do
     cmp -s "$W/1.s" "$W/2.s" || { echo "FAIL c-file-names: two $g -S runs of one .c differ"; fail=1; }
     grep -q 'xcc-c-' "$W/1.s" && { echo "FAIL c-file-names: the scratch file is named in the $g assembly"; fail=1; }
 done
-grep -q '\.file .*"[^"]*/a\.c"' "$W/1.s" || { echo "FAIL c-file-names: the line table does not name a.c"; fail=1; }
+grep -qE '\.file[[:space:]].*"[^"]*/a\.c"' "$W/1.s" || { echo "FAIL c-file-names: the line table does not name a.c"; fail=1; }
 [ $fail = 0 ] && echo "c-file-names: ok"
 exit $fail
