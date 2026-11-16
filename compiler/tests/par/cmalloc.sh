@@ -10,7 +10,8 @@
 # c-malloc/stress.c: threads allocating, growing and freeing blocks large and
 # small while the main thread's lifted gather runs as a block over two large
 # ones; clang's answer with XC_PAR_THREADS of 1 and 16. A program with its own
-# allocator keeps it; a program of two C files runs its loop as a block.
+# allocator keeps it; a program of two C files runs its loop as a block; a
+# C++ program's new[] arrays are the heap's too.
 # Skipped where there is no clang. Self-hosted compiler only.
 #
 #   bash tests/par/cmalloc.sh
@@ -105,5 +106,25 @@ for link in $links; do
         echo "  FAIL: twoloop.c twoalloc.c ($link) do not build"; head -5 "$W/two.b"; fail=1
     fi
 done
+# C++: operator new and delete go through the heap too. The program's first
+# allocation is an operator new, and its loop over new[] arrays runs as a block.
+if clang++ --version > /dev/null 2>&1; then
+    clang++ -O2 -w -o "$W/cxx.ref" $D/cxxnew.cpp || { echo "FAIL cmalloc: clang++ does not build cxxnew.cpp"; exit 1; }
+    wantcxx=$("$W/cxx.ref")
+    for link in $links; do
+        opt=""
+        [ "$link" = libRuntime ] || opt=$link
+        if "$XC" -q -O3 -H . $opt -o "$W/cxx" $D/cxxnew.cpp > "$W/cxx.b" 2>&1; then
+            XC_PAR=cpu XC_PAR_REPORT=1 "$W/cxx" > "$W/cxx.r" 2>&1
+            got=$(grep -v '^par: ' "$W/cxx.r" | tail -1)
+            runs=$(grep -c 'cxxnew.cpp:9: [0-9]* items on' "$W/cxx.r")
+            if [ "$got" != "$wantcxx" ]; then echo "  FAIL: C++ ($link) gives '$got', clang++'s '$wantcxx'"; fail=1
+            elif [ "$runs" != 1 ]; then echo "  FAIL: C++ ($link): the loop ran as a block $runs times (want 1)"; grep cxxnew "$W/cxx.r" | head -3; fail=1
+            else echo "  ok: C++ ($link) gives clang++'s answer ($got), the loop over new[] arrays as a block"; fi
+        else
+            echo "  FAIL: cxxnew.cpp ($link) does not build"; head -5 "$W/cxx.b"; fail=1
+        fi
+    done
+fi
 [ $fail = 0 ] && echo "--- cmalloc: pass ---" || echo "--- cmalloc: FAIL ---"
 exit $fail

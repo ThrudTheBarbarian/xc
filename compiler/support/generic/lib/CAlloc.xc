@@ -704,7 +704,8 @@ extern i32 _xc_posix_memalign(pointer* out, u64 a, u64 n)
 // failure (which throws, or is 0 for nothrow), is the C++ library's own
 // operator. A delete of an owned block releases it here; of any other, it
 // goes to the C++ library's. Called only by a program that links one, after
-// the start, so a call that finds the lookup running waits for it.
+// the start, so a call that finds the lookup running waits for it; each entry
+// point waits before it reads the library's operator.
 void _xcWaitAll(void)
 {
     while (!_xcReady())
@@ -771,41 +772,49 @@ void _xcDeleteSizedWith(pointer real, pointer plain, pointer p, u64 n)
 
 extern pointer _xc_Znwm(u64 n)
 {
+    _xcWaitAll();
     return _xcNewWith(_xc_fnew, n);
 }
 
 extern pointer _xc_Znam(u64 n)
 {
+    _xcWaitAll();
     return _xcNewWith(_xc_fnewa, n);
 }
 
 extern pointer _xc_ZnwmRKSt9nothrow_t(u64 n, pointer tag)
 {
+    _xcWaitAll();
     return _xcNewNothrowWith(_xc_fnewnt, n, tag);
 }
 
 extern pointer _xc_ZnamRKSt9nothrow_t(u64 n, pointer tag)
 {
+    _xcWaitAll();
     return _xcNewNothrowWith(_xc_fnewant, n, tag);
 }
 
 extern void _xc_ZdlPv(pointer p)
 {
+    _xcWaitAll();
     _xcDeleteWith(_xc_fdel, p);
 }
 
 extern void _xc_ZdaPv(pointer p)
 {
+    _xcWaitAll();
     _xcDeleteWith(_xc_fdela, p);
 }
 
 extern void _xc_ZdlPvm(pointer p, u64 n)
 {
+    _xcWaitAll();
     _xcDeleteSizedWith(_xc_fdels, _xc_fdel, p, n);
 }
 
 extern void _xc_ZdaPvm(pointer p, u64 n)
 {
+    _xcWaitAll();
     _xcDeleteSizedWith(_xc_fdelas, _xc_fdela, p, n);
 }
 
