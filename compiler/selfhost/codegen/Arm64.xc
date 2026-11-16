@@ -331,9 +331,14 @@ class Arm64
             _out = new String();
             emitFunction((IRFunc*)m.funcs().get(f));
             _out.appendCString("\n");   // the blank line before the next function
-            module.append(tbzInRange(elideLeafFrame(expandStagedSlots(
-                peepholeFallthrough(peepholeUsra(peepholeRedundantCmp(peepholeAndsFold(peepholeCopyProp(
-                    peepholeRedundantReloads(peepholeSpills(_out)))))))))));
+            // An inline-asm body is the user's: out of the peepholes' sight (#306).
+            Array* asmBodies = new Array();
+            String* emitted = _out;
+            bool hasAsm = emitted.contains(String.withCString("    // inline asm\n"));
+            String* pp = peepholeFallthrough(peepholeUsra(peepholeRedundantCmp(peepholeAndsFold(peepholeCopyProp(
+                    peepholeRedundantReloads(peepholeSpills(hasAsm ? hideAsm(emitted, asmBodies) : emitted)))))));
+            if (hasAsm) pp = restoreAsm(pp, asmBodies, emitted);
+            module.append(tbzInRange(elideLeafFrame(expandStagedSlots(pp))));
             _out = module;
         }
         // The SME matrix kernels the module calls (idiom-matmul), and the state
@@ -2790,6 +2795,7 @@ class Arm64
             if (l.byteLength() == (u32)0) continue;
             _out.appendFormat("    %s\n", l.cString());
         }
+        _out.appendCString("    // end inline asm\n");
     }
 
     // `{{XTLOCAL:<vid>}}` becomes the local's sp-relative slot WITHOUT enclosing
@@ -6290,6 +6296,73 @@ class Arm64
         return o;
     }
 
+    // ── Inline asm is the user's ─────────────────────────────────────────
+    //
+    // emitAsm brackets an asm body with `// inline asm` and `// end inline
+    // asm`. The rewriting peepholes never see the body (#306): hideAsm takes
+    // each body out into `bodies`, leaving the two markers side by side, and
+    // restoreAsm puts them back. Every peephole treats a comment line as a
+    // barrier, so the pair drops what each knows about registers, slots and
+    // flags; peepholeSpills keeps every store in a function with a body
+    // (#305). The slot passes after the chain (expandStagedSlots,
+    // elideLeafFrame, tbzInRange) see the restored text.
+    static String* hideAsm(String* text, Array* bodies)
+    {
+        Array* lines = linesOf(text);
+        Array* out = new Array();
+        Array* body = (Array*)0;
+        for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1) {
+            String* ln = (String*)lines.get(i);
+            String* t = ln.trimmed();
+            if (body != (Array*)0) {
+                if (!t.equals(String.withCString("// end inline asm"))) { body.add((Object*)ln); continue; }
+                bodies.add((Object*)body);
+                body = (Array*)0;
+            } else if (t.equals(String.withCString("// inline asm")))
+                body = new Array();
+            out.add((Object*)ln);
+        }
+        if (body != (Array*)0) bodies.add((Object*)body);    // unterminated: to the end
+        return joinLines(out);
+    }
+
+    // The peepholed text with each body back after its opening marker; the
+    // text as emitted (`orig`) when a marker went missing on the way.
+    static String* restoreAsm(String* text, Array* bodies, String* orig)
+    {
+        Array* lines = linesOf(text);
+        Array* out = new Array();
+        u32 k = (u32)0;
+        for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1) {
+            String* ln = (String*)lines.get(i);
+            out.add((Object*)ln);
+            if (ln.trimmed().equals(String.withCString("// inline asm"))) {
+                if (k >= bodies.count()) return orig;
+                out.addAll((Array*)bodies.get(k));
+                k = k + (u32)1;
+            }
+        }
+        if (k != bodies.count()) return orig;
+        return joinLines(out);
+    }
+
+    // The base register a writeback address writes: `[xN, #i]!` (pre-index)
+    // and `[xN], #i` / `[xN], xM` (post-index). 0 for any other line.
+    static String* writebackBase(String* line)
+    {
+        String* t = line.trimmed();
+        u32 lb = t.indexOfByte((u8)'[');
+        if (lb == (u32)$FFFF_FFFF) return (String*)0;
+        u32 rb = t.indexOfByte((u8)']');
+        if (rb == (u32)$FFFF_FFFF || rb < lb) return (String*)0;
+        String* after = t.substringFromByte(rb + (u32)1).trimmed();
+        if (!after.hasPrefix(String.withCString("!")) && !after.hasPrefix(String.withCString(",")))
+            return (String*)0;
+        String* inner = t.substringBytes(lb + (u32)1, rb - lb - (u32)1);
+        u32 c = inner.indexOfByte((u8)',');
+        return (c == (u32)$FFFF_FFFF ? inner : inner.substringBytes((u32)0, c)).trimmed();
+    }
+
     // Parse `<mnem> <reg>, [sp, #<off>]` (or a bare `[sp]`). The offset comes
     // back as its TEXT, which is all the comparisons need. Returns false when
     // the line is not a frame access.
@@ -6532,6 +6605,10 @@ class Arm64
                     if (sameArm64Reg(w, ra) || sameArm64Reg(w, rb))
                         last = (String*)0;
                 }
+                // A writeback address writes its base too (#306).
+                String* wb = writebackBase(ln);
+                if (last != (String*)0 && wb != (String*)0 && (sameArm64Reg(wb, ra) || sameArm64Reg(wb, rb)))
+                    last = (String*)0;
             }
             out.add((Object*)ln);
         }
@@ -6902,6 +6979,15 @@ class Arm64
                     else k = k + (u32)1;
                 }
             }
+            // A writeback address writes its base too (#306).
+            String* wb = writebackBase(ln);
+            if (wb != (String*)0) {
+                u32 k = (u32)0;
+                while (k < hReg.count()) {
+                    if (sameArm64Reg((String*)hReg.get(k), wb)) { hOff.removeAt(k); hReg.removeAt(k); }
+                    else k = k + (u32)1;
+                }
+            }
             out.add((Object*)ln);
         }
         return joinLines(out);
@@ -6925,6 +7011,11 @@ class Arm64
                 spAddrTaken = true;      // only the aliasable RANGE is at risk
             if ((t.hasPrefix(String.withCString("stp ")) || t.hasPrefix(String.withCString("ldp ")))
              && t.byteIndexOf(String.withCString("x29, x30")) == (u32)$FFFF_FFFF)
+                clean = false;
+            // An inline-asm body may read any slot in its own spelling
+            // (`ldr x9,[ sp, #16 ]`), which the load count does not see: a
+            // store it reads was deleted as never loaded (#305).
+            if (t.equals(String.withCString("// inline asm")))
                 clean = false;
             String* m = (String*)0; String* r = (String*)0; String* o = (String*)0;
             Array* spa = parseSp((String*)lines.get(i));

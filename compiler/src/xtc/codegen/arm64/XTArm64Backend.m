@@ -7557,6 +7557,7 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
                 if (line.length == 0) continue;
                 [ctx.out appendFormat:@"    %@\n", line];
             }
+            [ctx.out appendString:@"    // end inline asm\n"];
             break;
         }
 
@@ -8488,6 +8489,12 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
             && [t rangeOfString:@"x29, x30"].location == NSNotFound) {
             clean = NO;
         }
+        // An inline-asm body may read any slot in its own spelling
+        // (`ldr x9,[ sp, #16 ]`), which the load count does not see: a store
+        // it reads was deleted as never loaded (#305). Mirrored in the port.
+        if ([t isEqualToString:@"// inline asm"]) {
+            clean = NO;
+        }
         if ([self parseSpLine:ln mnem:&m reg:&r off:&o]
             && ([m hasPrefix:@"ldr"])) {
             [loads addObject:o];
@@ -8854,6 +8861,69 @@ static NSUInteger simdUse(NSArray *ops, NSString *m, NSInteger r) {
 // A compare the flags already hold: `cmp w2, #0` again, after only
 // instructions that leave the flags and both its registers alone (the fcsels
 // of one condition, each re-testing it: #22, perlin's grad).
+// ── Inline asm is the user's ──────────────────────────────────────────
+//
+// emitInsn brackets an asm body with `// inline asm` and `// end inline asm`.
+// The rewriting peepholes never see the body (#306): XTArm64HideAsm takes each
+// body out into `bodies`, leaving the two markers side by side, and
+// XTArm64RestoreAsm puts them back. Every peephole treats a comment line as a
+// barrier, so the pair drops what each knows about registers, slots and flags;
+// peepholeSpills keeps every store in a function with a body (#305). The slot
+// passes after the chain (expandStagedSlots, elideLeafFrame, tbzInRange) see
+// the restored text. Mirrored in the port (hideAsm/restoreAsm).
+static NSString *XTArm64HideAsm(NSString *text, NSMutableArray<NSArray<NSString *> *> *bodies) {
+    NSMutableArray<NSString *> *out = [NSMutableArray array];
+    NSMutableArray<NSString *> *body = nil;
+    NSCharacterSet *ws = [NSCharacterSet whitespaceCharacterSet];
+    for (NSString *ln in [text componentsSeparatedByString:@"\n"]) {
+        NSString *t = [ln stringByTrimmingCharactersInSet:ws];
+        if (body) {
+            if (![t isEqualToString:@"// end inline asm"]) { [body addObject:ln]; continue; }
+            [bodies addObject:body];
+            body = nil;
+        } else if ([t isEqualToString:@"// inline asm"]) {
+            body = [NSMutableArray array];
+        }
+        [out addObject:ln];
+    }
+    if (body) [bodies addObject:body];      // unterminated: to the end
+    return [out componentsJoinedByString:@"\n"];
+}
+
+// The peepholed text with each body back after its opening marker; the text
+// as emitted (`orig`) when a marker went missing on the way.
+static NSString *XTArm64RestoreAsm(NSString *text, NSArray<NSArray<NSString *> *> *bodies, NSString *orig) {
+    NSMutableArray<NSString *> *out = [NSMutableArray array];
+    NSUInteger k = 0;
+    NSCharacterSet *ws = [NSCharacterSet whitespaceCharacterSet];
+    for (NSString *ln in [text componentsSeparatedByString:@"\n"]) {
+        [out addObject:ln];
+        if ([[ln stringByTrimmingCharactersInSet:ws] isEqualToString:@"// inline asm"]) {
+            if (k >= bodies.count) return orig;
+            [out addObjectsFromArray:bodies[k]];
+            k++;
+        }
+    }
+    if (k != bodies.count) return orig;
+    return [out componentsJoinedByString:@"\n"];
+}
+
+// The base register a writeback address writes: `[xN, #i]!` (pre-index) and
+// `[xN], #i` / `[xN], xM` (post-index). nil for any other line.
+static NSString *XTArm64WritebackBase(NSString *line) {
+    NSCharacterSet *ws = [NSCharacterSet whitespaceCharacterSet];
+    NSString *t = [line stringByTrimmingCharactersInSet:ws];
+    NSRange lb = [t rangeOfString:@"["];
+    if (lb.location == NSNotFound) return nil;
+    NSRange rb = [t rangeOfString:@"]"];
+    if (rb.location == NSNotFound || rb.location < lb.location) return nil;
+    NSString *after = [[t substringFromIndex:rb.location + 1] stringByTrimmingCharactersInSet:ws];
+    if (![after hasPrefix:@"!"] && ![after hasPrefix:@","]) return nil;
+    NSString *inner = [t substringWithRange:NSMakeRange(lb.location + 1, rb.location - lb.location - 1)];
+    NSRange c = [inner rangeOfString:@","];
+    return [(c.location == NSNotFound ? inner : [inner substringToIndex:c.location]) stringByTrimmingCharactersInSet:ws];
+}
+
 + (NSString *)peepholeRedundantCmp:(NSString *)text {
     static NSSet<NSString *> *neutral = nil;
     if (!neutral)
@@ -8892,6 +8962,10 @@ static NSUInteger simdUse(NSArray *ops, NSString *m, NSInteger r) {
                 if (sameArm64Reg(w, ra) || sameArm64Reg(w, rb))
                     last = nil;
             }
+            // A writeback address writes its base too (#306).
+            NSString *wb = XTArm64WritebackBase(ln);
+            if (last && wb && (sameArm64Reg(wb, ra) || sameArm64Reg(wb, rb)))
+                last = nil;
         }
         [out addObject:ln];
     }
@@ -8965,6 +9039,11 @@ static NSUInteger simdUse(NSArray *ops, NSString *m, NSInteger r) {
             for (NSString *k in held.allKeys)
                 if (sameArm64Reg(held[k], w)) [held removeObjectForKey:k];
         }
+        // A writeback address writes its base too (#306).
+        NSString *wb = XTArm64WritebackBase(ln);
+        if (wb)
+            for (NSString *k in held.allKeys)
+                if (sameArm64Reg(held[k], wb)) [held removeObjectForKey:k];
         [out addObject:ln];
     }
     return [out componentsJoinedByString:@"\n"];
@@ -10001,13 +10080,19 @@ static BOOL vecPhiInLive(XTIRFunction* fn, XTIRInsn* p, NSUInteger h, XTIRValueI
     [out appendString:@"\n"];
     NSUInteger aliasLo = 0, aliasHi = NSUIntegerMax;
     [self aliasableRangeForCtx:ctx lo:&aliasLo hi:&aliasHi];
-    [moduleOut appendString:[self tbzInRange:
-        [self elideLeafFrame:[self expandStagedSlots:
+    // An inline-asm body is the user's: out of the peepholes' sight (#306),
+    // canonicaliseStagedSlots among them, as the port (which has no such pass).
+    NSMutableArray<NSArray<NSString *> *> *asmBodies = [NSMutableArray array];
+    BOOL hasAsm = [body rangeOfString:@"    // inline asm\n"].location != NSNotFound;
+    NSString *pp =
             [self peepholeFallthrough:[self peepholeUsra:[self peepholeRedundantCmp:[self peepholeAndsFold:[self peepholeCopyProp:
              [self peepholeRedundantReloads:
-              [self peepholeSpills:[self canonicaliseStagedSlots:body]
+              [self peepholeSpills:[self canonicaliseStagedSlots:hasAsm ? XTArm64HideAsm(body, asmBodies) : body]
                                   aliasLo:aliasLo aliasHi:aliasHi
-                                  argArea:ctx.maxOutStack]]]]]]]
+                                  argArea:ctx.maxOutStack]]]]]]];
+    if (hasAsm) pp = XTArm64RestoreAsm(pp, asmBodies, body);
+    [moduleOut appendString:[self tbzInRange:
+        [self elideLeafFrame:[self expandStagedSlots:pp
                        frameBase:ctx.frameBase
                     saveAreaFrom:ctx.saveAreaOffset
                               to:ctx.saveAreaOffset + 8 * ctx.savedRegs.count]] ctx:ctx]];
