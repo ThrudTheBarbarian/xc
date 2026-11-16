@@ -2739,6 +2739,16 @@ class Arm64Asm
     {
         _memImm = (i32)0; _memMode = (u32)0;
         String* m = opAt(ops, memIdx);
+        // `] !` is `]!` (#359): inline asm reaches here re-spaced token by
+        // token, so a pre-index operand written `[x1, #8]!` arrives as
+        // `[ x1,#8 ] !`.
+        if (m.hasSuffix(String.withCString("!"))) {
+            String* core = m.substringBytes((u32)0, m.byteLength() - (u32)1).trimmed();
+            if (core.hasSuffix(String.withCString("]"))) {
+                m = String.withString(core);
+                m.appendCString("!");
+            }
+        }
         if (!m.hasPrefix(String.withCString("["))) { fail(String.withCString("expected [ in memory operand")); return false; }
         if (m.hasSuffix(String.withCString("]")) && memIdx + (u32)1 < ops.count()) {
             String* inner = m.substringBytes((u32)1, m.byteLength() - (u32)2);

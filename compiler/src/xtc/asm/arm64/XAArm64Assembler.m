@@ -264,6 +264,13 @@ static BOOL parseMem(NSArray<NSString *> *ops, NSUInteger memIdx,
                      int *rn, int64_t *imm, int *mode, NSError **err) {
     *imm = 0; *mode = 0;
     NSString *m = ops[memIdx];
+    // `] !` is `]!` (#359): inline asm arrives re-spaced token by token, so a
+    // pre-index operand written `[x1, #8]!` is `[ x1,#8 ] !`. As the port's.
+    if ([m hasSuffix:@"!"]) {
+        NSString *core = [[m substringToIndex:m.length - 1]
+            stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+        if ([core hasSuffix:@"]"]) m = [core stringByAppendingString:@"!"];
+    }
     BOOL is64, isSP;
     // post-index: "[Xn]" is one operand, "#imm" the next
     if (![m hasPrefix:@"["]) { if (err) *err = asmErr(@"expected [ in %@", m); return NO; }
