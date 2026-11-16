@@ -1,4 +1,4 @@
-//xtc-flags: target=arm64
+//xtc-na: arm9,m68k,xt6502,x86_64,win64 — uses inline arm64 assembly
 // asm_writeback_cmp.xc — inline asm whose second compare reads a base a
 // writeback load moved. The redundant-compare peephole took `ldr` as leaving
 // both compare registers alone and dropped the second `cmp x1, x4`, so the

@@ -1,4 +1,4 @@
-//xtc-flags: target=arm64
+//xtc-na: arm9,m68k,xt6502,x86_64,win64 — uses inline arm64 assembly
 // asm_reads_self.xc — inline asm that reads `__self` and a local. Nothing
 // else in the method reads self, so at -O2 its parameter store was the only
 // write to that slot, and the spill peephole deleted it as never loaded: the
