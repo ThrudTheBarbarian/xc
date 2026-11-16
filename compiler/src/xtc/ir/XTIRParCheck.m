@@ -37,6 +37,22 @@
 // What a kernel may call outside the program: the static-init once (the host
 // has run it before any block starts), the bounds checks of a -fbounds-check
 // build, block copies, and the maths every GPU has natively.
+// A Trunc to 32 bits or more: the loop variable's own width. A cut to 8 or
+// 16 bits wraps inside the range ((u8)i repeats every 256 items), so the
+// index is not affine in i (#280). Mirrored in the port.
+static BOOL parTruncWide(XTIRInsn* d)
+    {
+    XTIRType* t = d.result.type;
+    return t.kind == XTIRTypeKindI32 || t.kind == XTIRTypeKindU32 || t.kind == XTIRTypeKindI64 || t.kind == XTIRTypeKindU64;
+    }
+
+// a * b fits comfortably in an int64: both under 2^31 in magnitude (#280).
+static BOOL parMulOk(long long a, long long b)
+    {
+    long long lim = 2147483647LL;
+    return a == 0 || b == 0 || (a <= lim && a >= -lim && b <= lim && b >= -lim);
+    }
+
 static NSSet<NSString*>* allowedExternals(void)
     {
     static NSSet<NSString*>* s;
@@ -1921,9 +1937,12 @@ static BOOL parIntKind(XTIRType* t)
             return d.operands.count && d.operands[0].kind == XTIROperandKindImmI
                        ? (XTParIndex){ YES, 0, d.operands[0].intValue }
                        : no;
+        case XTIROpTrunc:
+            if (!parTruncWide(d))
+                return no;
+            return d.operands.count ? [self indexOf:d.operands[0] iv:iv defs:def depth:depth + 1] : no;
         case XTIROpZExt:
         case XTIROpSExt:
-        case XTIROpTrunc:
         case XTIROpCopy:
             return d.operands.count ? [self indexOf:d.operands[0] iv:iv defs:def depth:depth + 1] : no;
         case XTIROpAdd:
@@ -1940,9 +1959,9 @@ static BOOL parIntKind(XTIRType* t)
                 return (XTParIndex){ YES, a.k + b.k, a.c + b.c };
             if (d.opcode == XTIROpSub)
                 return (XTParIndex){ YES, a.k - b.k, a.c - b.c };
-            if (a.k == 0)
+            if (a.k == 0 && parMulOk(a.c, b.k) && parMulOk(a.c, b.c))
                 return (XTParIndex){ YES, a.c * b.k, a.c * b.c };
-            if (b.k == 0)
+            if (b.k == 0 && parMulOk(b.c, a.k) && parMulOk(b.c, a.c))
                 return (XTParIndex){ YES, b.c * a.k, b.c * a.c };
             return no;
             }
@@ -1970,9 +1989,12 @@ static BOOL parIntKind(XTIRType* t)
         {
         case XTIROpConst:
             return d.operands[0].kind == XTIROperandKindImmI ? (XTParSym){ YES, 0, d.operands[0].intValue, -1, 0 } : no;
+        case XTIROpTrunc:
+            if (!parTruncWide(d))
+                return no;
+            return [self symIndexOf:d.operands[0] iv:iv self:selfId defs:def depth:depth + 1];
         case XTIROpZExt:
         case XTIROpSExt:
-        case XTIROpTrunc:
         case XTIROpCopy:
             return [self symIndexOf:d.operands[0] iv:iv self:selfId defs:def depth:depth + 1];
         case XTIROpLoad:
@@ -2007,6 +2029,8 @@ static BOOL parIntKind(XTIRType* t)
                     return no;
                 XTParSym s = aConst ? b : a;
                 int64_t f = aConst ? a.c : b.c;
+                if (!parMulOk(s.k, f) || !parMulOk(s.c, f) || !parMulOk(s.m, f) || !parMulOk(s.m2, f))
+                    return no;
                 r = (XTParSym){ YES, s.k * f, s.c * f, s.slot, s.m * f, s.slot2, s.m2 * f };
                 }
             else
@@ -2101,9 +2125,12 @@ static BOOL parIntKind(XTIRType* t)
         {
         case XTIROpConst:
             return d.operands[0].kind == XTIROperandKindImmI ? [@{@"" : @(d.operands[0].intValue)} mutableCopy] : nil;
+        case XTIROpTrunc:
+            if (!parTruncWide(d))
+                return nil;
+            return sub(0);
         case XTIROpZExt:
         case XTIROpSExt:
-        case XTIROpTrunc:
         case XTIROpCopy:
             return sub(0);
         case XTIROpLoad:
@@ -2172,6 +2199,8 @@ static BOOL parIntKind(XTIRType* t)
                         if (mb.length)
                             [atoms addObjectsFromArray:[mb componentsSeparatedByString:@"."]];
                         NSString* m = [[atoms sortedArrayUsingSelector:@selector(compare:)] componentsJoinedByString:@"."];
+                        if (!parMulOk([a[ma] longLongValue], [b[mb] longLongValue]))
+                            return nil;
                         r[m] = @([r[m] longLongValue] + [a[ma] longLongValue] * [b[mb] longLongValue]);
                         }
                 }

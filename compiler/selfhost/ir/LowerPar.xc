@@ -379,10 +379,14 @@
     // of the object is name k-1: field 0 is the object header.
     final Array* parIvarNames(String* cls)
         {
+        // The whole ancestry, however deep (a cap of 16 named the wrong ivar
+        // in a deeper hierarchy, #281); a class seen twice ends the walk.
         Array* chain = new Array();
+        Set* seen = new Set();
         Node* d = (Node*)_classDecls.get((Hashable*)cls);
-        for (u32 depth = (u32)0; d != (Node*)0 && depth < (u32)16; depth = depth + (u32)1)
+        while (d != (Node*)0 && !seen.contains((Hashable*)d.name()))
             {
+            seen.add((Hashable*)d.name());
             chain.insert((u32)0, (Object*)d);
             String* pn = d.op();
             if (pn == (String*)0 || pn.byteLength() == (u32)0 || pn.equals(d.name()))
@@ -425,6 +429,11 @@
                 return ParIdx.of(true, (i64)0, o0.imm());
             return ParIdx.of(false, (i64)0, (i64)0);
             }
+        // A cut to 8 or 16 bits wraps inside the range ((u8)i repeats every
+        // 256 items), so the index is not affine in i; a cut to 32 bits is
+        // the loop variable's own width (#280).
+        if (o.equals(String.withCString("Trunc")) && !Lower.parTruncWide(d))
+            return ParIdx.of(false, (i64)0, (i64)0);
         if (o.equals(String.withCString("ZExt")) || o.equals(String.withCString("SExt")) || o.equals(String.withCString("Trunc")) || o.equals(String.withCString("Copy")))
             return parIndex(o0, iv, def, depth + (u32)1);
         bool isAdd = o.equals(String.withCString("Add"));
@@ -442,11 +451,28 @@
             return ParIdx.of(true, ak + bk, ac + bc);
         if (isSub)
             return ParIdx.of(true, ak - bk, ac - bc);
-        if (ak == (i64)0)
+        // The products must not overflow (#280).
+        if (ak == (i64)0 && Lower.parMulOk(ac, bk) && Lower.parMulOk(ac, bc))
             return ParIdx.of(true, ac * bk, ac * bc);
-        if (bk == (i64)0)
+        if (bk == (i64)0 && Lower.parMulOk(bc, ak) && Lower.parMulOk(bc, ac))
             return ParIdx.of(true, bc * ak, bc * ac);
         return ParIdx.of(false, (i64)0, (i64)0);
+        }
+
+    // A Trunc to 32 bits or more (#280).
+    static bool parTruncWide(IRInsn* d)
+        {
+        if (d.res() == (IRValue*)0 || d.res().ty() == (String*)0)
+            return false;
+        String* t = d.res().ty();
+        return t.equals(String.withCString("I32")) || t.equals(String.withCString("U32"))
+            || t.equals(String.withCString("I64")) || t.equals(String.withCString("U64"));
+        }
+    // a * b fits comfortably in an i64: both under 2^31 in magnitude.
+    static bool parMulOk(i64 a, i64 b)
+        {
+        i64 lim = (i64)2147483647;
+        return a == (i64)0 || b == (i64)0 || (a <= lim && a >= (i64)0 - lim && b <= lim && b >= (i64)0 - lim);
         }
 
     // An index with one symbolic term besides i: k*i + c + m*v, where v is a
@@ -469,6 +495,8 @@
         IROperand* o0 = (IROperand*)d.ops().get((u32)0);
         if (o.equals(String.withCString("Const")))
             return o0.kind() == (u8)OPK_IMMI ? ParIdx.of(true, (i64)0, o0.imm()) : no;
+        if (o.equals(String.withCString("Trunc")) && !Lower.parTruncWide(d))
+            return no;
         if (o.equals(String.withCString("ZExt")) || o.equals(String.withCString("SExt")) || o.equals(String.withCString("Trunc")) || o.equals(String.withCString("Copy")))
             return parSymIndex(o0, iv, selfVal, def, depth + (u32)1);
         if (o.equals(String.withCString("Load")))
@@ -503,6 +531,8 @@
                 return no;
             ParIdx* s = aConst ? b : a;
             i64 fct = aConst ? a.c : b.c;
+            if (!Lower.parMulOk(s.k, fct) || !Lower.parMulOk(s.c, fct) || !Lower.parMulOk(s.m, fct) || !Lower.parMulOk(s.m2, fct))
+                return no;
             ParIdx* r = ParIdx.sym(true, s.k * fct, s.c * fct, s.slot, s.m * fct);
             r.slot2 = s.slot2;
             r.m2 = s.m2 * fct;
@@ -822,6 +852,8 @@
         IROperand* o0 = (IROperand*)d.ops().get((u32)0);
         if (o.equals(String.withCString("Const")))
             return o0.kind() == (u8)OPK_IMMI ? parPoly1("", o0.imm()) : (Map*)0;
+        if (o.equals(String.withCString("Trunc")) && !Lower.parTruncWide(d))
+            return (Map*)0;
         if (o.equals(String.withCString("ZExt")) || o.equals(String.withCString("SExt")) || o.equals(String.withCString("Trunc")) || o.equals(String.withCString("Copy")))
             return parGridPoly(o0, iv, selfVal, ivars, def, depth + (u32)1);
         if (o.equals(String.withCString("Load")))
@@ -885,6 +917,8 @@
                     {
                     String* ma = (String*)ak.get(i);
                     String* mb = (String*)bk.get(j);
+                    if (!Lower.parMulOk(parCoef(a, ma), parCoef(b, mb)))
+                        return (Map*)0;
                     String* m = parMono(ma, mb);
                     r.set((Hashable*)m, (Object*)Number.with(parCoef(r, m) + parCoef(a, ma) * parCoef(b, mb)));
                     }
