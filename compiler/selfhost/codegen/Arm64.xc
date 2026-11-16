@@ -1400,7 +1400,7 @@ class Arm64
             Array* made = vecRematBefore(n);
             IRValue* sv = n.res() != (IRValue*)0 && inMap(_vSpill, n.res()) ? n.res() : (IRValue*)0;
             if (sv != (IRValue*)0) {
-                if (_vScratch < (u32)29) {
+                if (_vScratch < _vScratchLo) {
                     Stdio.printf("xcc-cg-arm64: error: vector register pressure "
                                  "exceeded the 14-register pool (v18-v31) in '%s'\n", fn.name().cString());
                     Process.exit((i32)1);
@@ -4190,6 +4190,8 @@ class Arm64
     Map* _vBackDef;
     Map* _vVecPhis;
     Map* _vBorrowed;
+    // The phi classes that lent their register to borrowers: never given up.
+    Map* _vLent;
 
     // emitAggCopy/aggChunk tail-rebase state (finding #13's family): the frame
     // base register, its bias, and the offset both pointers were rebased by.
@@ -4201,6 +4203,10 @@ class Arm64
     // again into a scratch register at each instruction that reads it.
     Map* _vRemat;       // value -> the constant operand its splat broadcasts
     u32 _vScratch;      // the next free scratch after vecRematBefore (31 down to 29)
+    // The lowest spill scratch register: v29 (v29-v31), or v27 once a phi
+    // class may be given up (#307): a phi member's multiply-add can read its
+    // slot, a splat and a constant and write its slot through a fourth.
+    u32 _vScratchLo;
     // The constant splats this instruction reads that have no register, made
     // into v31, v30, v29 for it (the fused multiply's operands included).
     Array* vecRematBefore(IRInsn* n)
@@ -4225,7 +4231,7 @@ class Arm64
             bool sp = !rm && _vSpill != (Map*)0 && inMap(_vSpill, o.val());
             if (!rm && !sp) continue;
             if (made.contains((Object*)o.val())) continue;
-            if (scratch < (u32)29) {
+            if (scratch < _vScratchLo) {
                 Stdio.printf("xcc-cg-arm64: error: vector register pressure "
                              "exceeded the 14-register pool (v18-v31) in '%s'\n", _fn.name().cString());
                 Process.exit((i32)1);
@@ -4813,7 +4819,11 @@ class Arm64
         _vRemat = new Map();
         _vSpill = new Map();
         _vSpillOrder = new Array();
+        _vSpillAlias = new Map();
         _vSpillOf = new Map();
+        _vPhiSpillOf = new Map();
+        _vScratchLo = (u32)29;
+        _vLent = new Map();
         _vecReg = new Map();
         _vecClass = new Map();
         Array* vecVals = new Array();
@@ -4873,6 +4883,7 @@ class Arm64
         _vVecPhis = new Map();
         _vBackDef = new Map();
         _vBorrowed = new Map();
+        _vLent = new Map();
         i32 vp = (i32)0;
         for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1) {
             IRBlock* bb = (IRBlock*)fn.blocks().get(b);
@@ -4945,12 +4956,32 @@ class Arm64
             // empty (made again at each read).
             _vecCalleeUsed = new Map();
             _vBorrowed = new Map();
+            _vLent = new Map();
             _vRemat = new Map();
             Map* rematOf = vecRematCandidates(fn, vecVals);
             _vRematOf = rematOf;
             _vSpill = new Map();
             _vSpillOrder = new Array();
+            _vSpillAlias = new Map();
             _vSpillOf = vecSpillCandidates(fn, vecVals, rematOf);
+            regOf = vecScan(fn, classes, lo, hi, true);
+        }
+        if (regOf == (Map*)0) {
+            // Still out: again with the phi classes that may live in a slot
+            // among the candidates (#307), so a function that fitted before
+            // is allocated as before. As the reference.
+            _vecCalleeUsed = new Map();
+            _vBorrowed = new Map();
+            _vLent = new Map();
+            _vRemat = new Map();
+            Map* rematOf2 = vecRematCandidates(fn, vecVals);
+            _vRematOf = rematOf2;
+            _vSpill = new Map();
+            _vSpillOrder = new Array();
+            _vSpillAlias = new Map();
+            _vSpillOf = vecSpillCandidates(fn, vecVals, rematOf2);
+            _vPhiSpillOf = vecPhiSpillCandidates(fn, vecVals);
+            _vScratchLo = (u32)27;
             regOf = vecScan(fn, classes, lo, hi, true);
         }
         if (regOf == (Map*)0) {
@@ -4978,6 +5009,11 @@ class Arm64
     Map* _vSpillOf;     // the classes that may be spilled (value -> value)
     Map* _vSpill;       // spilled value -> its frame offset (Number), set by buildSlots
     Array* _vSpillOrder; // the spilled values, in the order given up
+    // A spilled phi class's other members (the values coalesced onto the
+    // phi): member -> the phi, whose slot they share as they would share its
+    // register. buildSlots gives them its offset.
+    Map* _vSpillAlias;
+    Map* _vPhiSpillOf;  // the phi classes that may live in a slot (phi -> phi)
 
     // The classes that are one constant's splat and nothing else: no phi, no
     // lane group, no other member. Each maps to the constant operand.
@@ -5084,6 +5120,69 @@ class Arm64
         return r;
     }
 
+    // The phi classes that may live in a frame slot (#307): those whose edges
+    // move nothing between registers, so that with the whole class in one slot
+    // no edge needs a copy. The phi heads its own class, every value it takes
+    // is a member, every member is an instruction's result (not a phi, not in
+    // a lane group), and neither the phi nor a member is read by another phi
+    // or a terminator. As the reference.
+    Map* vecPhiSpillCandidates(IRFunc* fn, Array* vecVals)
+    {
+        Map* r = new Map();
+        Map* defined = new Map();
+        Map* termRead = new Map();
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1) {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1) {
+                IRInsn* n = (IRInsn*)bb.insns().get(i);
+                if (n.res() != (IRValue*)0) defined.set((Hashable*)n.res(), (Object*)n.res());
+            }
+            IRInsn* t = bb.term();
+            for (u32 k = (u32)0; t != (IRInsn*)0 && k < t.ops().count(); k = k + (u32)1) {
+                IROperand* o = (IROperand*)t.ops().get(k);
+                if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0) termRead.set((Hashable*)o.val(), (Object*)o.val());
+            }
+        }
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1) {
+            Array* ps = ((IRBlock*)fn.blocks().get(b)).phis();
+            for (u32 i = (u32)0; i < ps.count(); i = i + (u32)1) {
+                IRInsn* p = (IRInsn*)ps.get(i);
+                IRValue* c = p.res();
+                if (c == (IRValue*)0 || !isVecTy(c.ty())) continue;
+                if (_vecClass.get((Hashable*)c) != (Object*)0 || inMap(termRead, c)
+                    || _laneBase.get((Hashable*)c) != (Object*)0 || _laneLeader.get((Hashable*)c) != (Object*)0) continue;
+                bool ok = true;
+                for (u32 k = (u32)0; ok && k < p.ops().count(); k = k + (u32)1) {
+                    IROperand* o = (IROperand*)p.ops().get(k);
+                    if (o.kind() == (u8)OPK_BLOCK) continue;
+                    if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0
+                        || (IRValue*)_vecClass.get((Hashable*)o.val()) != c) ok = false;
+                }
+                Array* ck = _vecClass.allKeys();
+                for (u32 q = (u32)0; ok && q < ck.count(); q = q + (u32)1) {
+                    IRValue* m = (IRValue*)ck.get(q);
+                    if ((IRValue*)_vecClass.get((Hashable*)m) != c) continue;
+                    if (!inMap(defined, m) || inMap(_vVecPhis, m) || inMap(termRead, m)
+                        || _laneBase.get((Hashable*)m) != (Object*)0 || _laneLeader.get((Hashable*)m) != (Object*)0) ok = false;
+                }
+                for (u32 qb = (u32)0; ok && qb < fn.blocks().count(); qb = qb + (u32)1) {
+                    Array* qs = ((IRBlock*)fn.blocks().get(qb)).phis();
+                    for (u32 j = (u32)0; ok && j < qs.count(); j = j + (u32)1) {
+                        IRInsn* q = (IRInsn*)qs.get(j);
+                        if (q == p) continue;
+                        for (u32 k = (u32)0; ok && k < q.ops().count(); k = k + (u32)1) {
+                            IROperand* o = (IROperand*)q.ops().get(k);
+                            if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0
+                                && (o.val() == c || (IRValue*)_vecClass.get((Hashable*)o.val()) == c)) ok = false;
+                        }
+                    }
+                }
+                if (ok) r.set((Hashable*)c, (Object*)c);
+            }
+        }
+        return r;
+    }
+
     // The scan itself: class -> register, or 0 when the pool runs out. With
     // `remat`, v29-v31 stay out of the pool and a constant splat gives way.
     Map* vecScan(IRFunc* fn, Array* classes, Map* lo, Map* hi, bool remat)
@@ -5097,7 +5196,7 @@ class Arm64
         if (vecFpFree(fn))
             for (u32 r = (u32)8; r <= (u32)15; r = r + (u32)1)
                 freePool.add((Object*)Number.with((i32)r));
-        for (u32 r = (u32)18; r <= (remat ? (u32)28 : (u32)31); r = r + (u32)1)
+        for (u32 r = (u32)18; r <= (remat ? _vScratchLo - (u32)1 : (u32)31); r = r + (u32)1)
             freePool.add((Object*)Number.with((i32)r));
         Array* active = new Array();
         Map* regOf = new Map();
@@ -5124,26 +5223,39 @@ class Arm64
                 IRValue* victim = (IRValue*)0;
                 i32 far = (i32)0 - (i32)1;
                 i32 farLo = (i32)0 - (i32)1;
-                if (inMap(_vRematOf, cls) || inMap(_vSpillOf, cls)) {
+                if (inMap(_vRematOf, cls) || inMap(_vSpillOf, cls) || inMap(_vPhiSpillOf, cls)) {
                     victim = cls;
                     far = ((Number*)hi.get((Hashable*)cls)).asI32();
                     farLo = ((Number*)lo.get((Hashable*)cls)).asI32();
                 }
                 for (u32 a = (u32)0; a < active.count(); a = a + (u32)1) {
                     IRValue* av = (IRValue*)active.get(a);
-                    if ((!inMap(_vRematOf, av) && !inMap(_vSpillOf, av)) || inMap(_vBorrowed, av)) continue;
+                    if ((!inMap(_vRematOf, av) && !inMap(_vSpillOf, av) && !inMap(_vPhiSpillOf, av))
+                        || inMap(_vBorrowed, av) || inMap(_vLent, av)) continue;
                     i32 h = ((Number*)hi.get((Hashable*)av)).asI32();
                     i32 l = ((Number*)lo.get((Hashable*)av)).asI32();
                     if (h > far || (h == far && l > farLo)) { far = h; farLo = l; victim = av; }
                 }
                 if (victim == (IRValue*)0) return (Map*)0;
                 // A constant is made again where it is read; anything else
-                // lives in a frame slot of its own.
+                // lives in a frame slot of its own. A phi class's members
+                // share its slot: each is stored where it is defined, and the
+                // edges, which move nothing between members of one class, need
+                // no copy.
                 if (inMap(_vRematOf, victim))
                     _vRemat.set((Hashable*)victim, _vRematOf.get((Hashable*)victim));
                 else {
                     _vSpill.set((Hashable*)victim, (Object*)Number.withU32((u32)0));
                     _vSpillOrder.add((Object*)victim);
+                    if (inMap(_vPhiSpillOf, victim)) {
+                        Array* ck = _vecClass.allKeys();
+                        for (u32 q = (u32)0; q < ck.count(); q = q + (u32)1) {
+                            IRValue* m = (IRValue*)ck.get(q);
+                            if ((IRValue*)_vecClass.get((Hashable*)m) != victim) continue;
+                            _vSpill.set((Hashable*)m, (Object*)Number.withU32((u32)0));
+                            _vSpillAlias.set((Hashable*)m, (Object*)victim);
+                        }
+                    }
                 }
                 if (victim == cls) continue;
                 freePool.add(regOf.get((Hashable*)victim));
@@ -5206,6 +5318,10 @@ class Arm64
             bad.set((Hashable*)String.withCString("d29"), (Object*)String.withCString("d29"));
             bad.set((Hashable*)String.withCString("d30"), (Object*)String.withCString("d30"));
             bad.set((Hashable*)String.withCString("d31"), (Object*)String.withCString("d31"));
+            if (_vScratchLo < (u32)29) {
+                bad.set((Hashable*)String.withCString("d27"), (Object*)String.withCString("d27"));
+                bad.set((Hashable*)String.withCString("d28"), (Object*)String.withCString("d28"));
+            }
         }
         Array* sReg = new Array();
         Array* sLo = new Array();
@@ -5300,6 +5416,7 @@ class Arm64
                         ((Number*)lu).asI32() == start && bd != (Object*)0 &&
                         ((Number*)hi.get((Hashable*)cls)).asI32() <= ((Number*)bd).asI32()) {
                         _vBorrowed.set((Hashable*)cls, (Object*)cls);
+                        _vLent.set((Hashable*)ocls, (Object*)ocls);
                         return regOf.get((Hashable*)ocls);
                     }
                     continue;
@@ -11613,6 +11730,9 @@ class Arm64
                 _vSpill.set((Hashable*)_vSpillOrder.get(i), (Object*)Number.withU32(cur));
                 cur = cur + (u32)16;
             }
+            Array* ak = _vSpillAlias == (Map*)0 ? new Array() : _vSpillAlias.allKeys();
+            for (u32 i = (u32)0; i < ak.count(); i = i + (u32)1)
+                _vSpill.set((Hashable*)ak.get(i), _vSpill.get((Hashable*)_vSpillAlias.get((Hashable*)ak.get(i))));
         }
         // The aggregates last (#35), just under the canary: a write that runs
         // off the end of a local array meets the guard before it meets another

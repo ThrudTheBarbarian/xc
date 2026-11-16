@@ -1748,6 +1748,17 @@ class X86_64
         }
 
     // A float Const whose bits are +0.0 (all zero).
+    // An immediate float whose bits are all zero (+0.0).
+    static bool isZeroFpHex(IROperand* k)
+        {
+        if (k.fpHex() == (String*)0 || k.fpHex().byteLength() != (u32)16)
+            return false;
+        for (u32 i = (u32)0; i < (u32)16; i = i + (u32)1)
+            if (k.fpHex().byteAt(i) != (u8)48)
+                return false;
+        return true;
+        }
+
     static bool isPosZeroConst(IRInsn* n)
         {
         if (!n.op().equals(String.withCString("Const")) || n.res() == (IRValue*)0 || n.ops().count() < (u32)1)
@@ -3259,6 +3270,8 @@ class X86_64
         _vec = new Map();
         _vRemat = new Map();
         _vSpill = new Map();
+        _vSpillAlias = new Map();
+        _vPhiSpillable = new Map();
         _vecClass = new Map();
         if (_hasAsm)
             return;
@@ -3410,8 +3423,22 @@ class X86_64
             // to its frame slot (no phi class: its edges copy registers).
             _vRemat = new Map();
             _vSpill = new Map();
+            _vSpillAlias = new Map();
             _vSpillable = new Map();
             _vRematOf = vecRematCandidates(fn, vecVals, phiCls);
+            regOf = vecScanX(fn, classes, lo, hi, defOfCls, phiCls, true);
+            }
+        if (regOf == (Map*)0)
+            {
+            // Still out: again with the phi classes whose edges copy nothing
+            // among the candidates (#307), so a function that fitted before is
+            // allocated as before. As the reference.
+            _vRemat = new Map();
+            _vSpill = new Map();
+            _vSpillAlias = new Map();
+            _vSpillable = new Map();
+            _vRematOf = vecRematCandidates(fn, vecVals, phiCls);
+            _vPhiSpillable = vecPhiSpillCandidates(fn);
             regOf = vecScanX(fn, classes, lo, hi, defOfCls, phiCls, true);
             }
         if (regOf == (Map*)0)
@@ -3440,6 +3467,11 @@ class X86_64
     Map* _vRematOf;     // the classes that are a constant's splat
     Map* _vSpill;       // values that live in their frame slot, no register
     Map* _vSpillable;   // the classes that may be given up: one member, no phi
+    Map* _vPhiSpillable; // the phi classes that may live in a slot (phi -> phi)
+    // A spilled phi class's other members (the values coalesced onto the
+    // phi): member -> the phi, whose slot they share as they would share its
+    // register.
+    Map* _vSpillAlias;
     Map* _vZmmOnly;     // the classes that may take zmm16-31 (every value 64 bytes)
 
     // The scan: class -> register, or 0 when the pool runs out. With `remat`,
@@ -3488,7 +3520,7 @@ class X86_64
                 IRValue* victim = (IRValue*)0;
                 i32 far = (i32)0 - (i32)1;
                 i32 farLo = (i32)0 - (i32)1;
-                if (inMap(_vSpillable, cls))
+                if (inMap(_vSpillable, cls) || inMap(_vPhiSpillable, cls))
                     {
                     victim = cls;
                     far = ((Number*)hi.get((Hashable*)cls)).asI32();
@@ -3497,7 +3529,7 @@ class X86_64
                 for (u32 a = (u32)0; a < active.count(); a = a + (u32)1)
                     {
                     IRValue* av = (IRValue*)active.get(a);
-                    if (!inMap(_vSpillable, av))
+                    if (!inMap(_vSpillable, av) && !inMap(_vPhiSpillable, av))
                         continue;
                     i32 h = ((Number*)hi.get((Hashable*)av)).asI32();
                     i32 l = ((Number*)lo.get((Hashable*)av)).asI32();
@@ -3511,11 +3543,28 @@ class X86_64
                 if (victim == (IRValue*)0)
                     return (Map*)0;
                 // A constant is made again where it is read; anything else
-                // lives in its own frame slot, reloaded where it is read.
+                // lives in its own frame slot, reloaded where it is read. A phi
+                // class's members share its slot: each is stored where it is
+                // defined, and the edges, which move nothing between members
+                // of one class, need no copy.
                 if (inMap(_vRematOf, victim))
                     _vRemat.set((Hashable*)victim, _vRematOf.get((Hashable*)victim));
                 else
+                    {
                     _vSpill.set((Hashable*)victim, (Object*)victim);
+                    if (inMap(_vPhiSpillable, victim))
+                        {
+                        Array* ck = _vecClass.allKeys();
+                        for (u32 q = (u32)0; q < ck.count(); q = q + (u32)1)
+                            {
+                            IRValue* m = (IRValue*)ck.get(q);
+                            if ((IRValue*)_vecClass.get((Hashable*)m) != victim)
+                                continue;
+                            _vSpill.set((Hashable*)m, (Object*)m);
+                            _vSpillAlias.set((Hashable*)m, (Object*)victim);
+                            }
+                        }
+                    }
                 if (victim == cls)
                     continue;
                 vecRelease(regOf.get((Hashable*)victim), freePool, highPool);
@@ -3577,6 +3626,88 @@ class X86_64
             highPool.add(r);
         else
             freePool.add(r);
+        }
+
+    // The phi classes that may live in a frame slot (#307): those whose edges
+    // move nothing between registers, so that with the whole class in one slot
+    // no edge needs a copy. The phi heads its own class, every value it takes
+    // is a member, every member is an instruction's result (not a phi, not
+    // folded into its reader), and neither the phi nor a member is read by
+    // another phi or a terminator. As the reference.
+    Map* vecPhiSpillCandidates(IRFunc* fn)
+        {
+        Map* r = new Map();
+        Map* defined = new Map();
+        Map* termRead = new Map();
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)bb.insns().get(i);
+                if (n.res() != (IRValue*)0)
+                    defined.set((Hashable*)n.res(), (Object*)n.res());
+                }
+            IRInsn* t = bb.term();
+            for (u32 k = (u32)0; t != (IRInsn*)0 && k < t.ops().count(); k = k + (u32)1)
+                {
+                IROperand* o = (IROperand*)t.ops().get(k);
+                if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0)
+                    termRead.set((Hashable*)o.val(), (Object*)o.val());
+                }
+            }
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            Array* ps = ((IRBlock*)fn.blocks().get(b)).phis();
+            for (u32 i = (u32)0; i < ps.count(); i = i + (u32)1)
+                {
+                IRInsn* p = (IRInsn*)ps.get(i);
+                IRValue* c = p.res();
+                if (c == (IRValue*)0 || !isVecTy(c.ty()))
+                    continue;
+                if (_vecClass.get((Hashable*)c) != (Object*)0 || inMap(termRead, c) || isFolded(c))
+                    continue;
+                bool ok = true;
+                for (u32 k = (u32)0; ok && k < p.ops().count(); k = k + (u32)1)
+                    {
+                    IROperand* o = (IROperand*)p.ops().get(k);
+                    if (o.kind() == (u8)OPK_BLOCK)
+                        continue;
+                    if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0
+                        || (IRValue*)_vecClass.get((Hashable*)o.val()) != c)
+                        ok = false;
+                    }
+                Array* ck = _vecClass.allKeys();
+                for (u32 q = (u32)0; ok && q < ck.count(); q = q + (u32)1)
+                    {
+                    IRValue* m = (IRValue*)ck.get(q);
+                    if ((IRValue*)_vecClass.get((Hashable*)m) != c)
+                        continue;
+                    if (!inMap(defined, m) || inMap(termRead, m) || isFolded(m))
+                        ok = false;
+                    }
+                for (u32 qb = (u32)0; ok && qb < fn.blocks().count(); qb = qb + (u32)1)
+                    {
+                    Array* qs = ((IRBlock*)fn.blocks().get(qb)).phis();
+                    for (u32 j = (u32)0; ok && j < qs.count(); j = j + (u32)1)
+                        {
+                        IRInsn* q = (IRInsn*)qs.get(j);
+                        if (q == p)
+                            continue;
+                        for (u32 k = (u32)0; ok && k < q.ops().count(); k = k + (u32)1)
+                            {
+                            IROperand* o = (IROperand*)q.ops().get(k);
+                            if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0
+                                && (o.val() == c || (IRValue*)_vecClass.get((Hashable*)o.val()) == c))
+                                ok = false;
+                            }
+                        }
+                    }
+                if (ok)
+                    r.set((Hashable*)c, (Object*)c);
+                }
+            }
+        return r;
         }
 
     // The classes that are one constant's splat and nothing else (no phi, no
@@ -3655,6 +3786,12 @@ class X86_64
                     if (d != (IRInsn*)0)
                         k = (IROperand*)d.ops().get((u32)0);
                     }
+                // A float constant other than +0.0 is not made again: the
+                // splat reads a float through loadF, which has only a value's
+                // slot or home to read, and made every such constant 0.0
+                // (#307). Such a splat is spilled instead. As the reference.
+                if (k != (IROperand*)0 && k.kind() == (u8)OPK_IMMF && !isZeroFpHex(k))
+                    k = (IROperand*)0;
                 if (k != (IROperand*)0)
                     r.set((Hashable*)v, (Object*)k);
                 }
@@ -8417,6 +8554,16 @@ class X86_64
             bool re = inMap(_vRemat, o.val());
             if (!re && !(inMap(_vSpill, o.val()) && !isFolded(o.val())))
                 continue;
+            // Three operands at most, in xmm15-xmm13: below that the scratch
+            // would meet the spilled result's xmm12 and then the allocator's
+            // own pool. No vector instruction reads more than three vectors.
+            if (scratch < (u32)13)
+                {
+                Stdio.printf("xcc-cg-x86_64: error: vector register pressure "
+                             "exceeded the 14-register SSE pool in '%s'\n",
+                             fn.name().cString());
+                Process.exit((i32)1);
+                }
             String* name = vecScratchName(o.val(), scratch);
             scratch = scratch - (u32)1;
             _vec.set((Hashable*)o.val(), (Object*)name);
@@ -8459,7 +8606,8 @@ class X86_64
     // A spilled vector between its frame slot and the register `reg`.
     void vecSlotMove(IRValue* v, String* reg, bool load)
         {
-        u32 off = slotOf(v);
+        Object* home = _vSpillAlias == (Map*)0 ? (Object*)0 : _vSpillAlias.get((Hashable*)v);
+        u32 off = slotOf(home == (Object*)0 ? v : (IRValue*)home);
         if (isWide512VecTy(v.ty()))
             {
             if (load)

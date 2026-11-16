@@ -148,7 +148,14 @@ static NSUInteger sArm64LoopAlign = 0;
 @property (nonatomic) NSSet<NSNumber *> *vSpillOf;
 @property (nonatomic) NSMutableDictionary<NSNumber *, NSNumber *> *vSpill;   // value -> frame offset
 @property (nonatomic) NSMutableArray<NSNumber *> *vSpillOrder;
+// A spilled phi class's other members (the values coalesced onto the phi):
+// member -> the phi, whose slot they share as they would share its register.
+@property (nonatomic) NSMutableDictionary<NSNumber *, NSNumber *> *vSpillAlias;
 @property (nonatomic) NSUInteger vScratch;
+// The lowest spill scratch register: v29 (v29-v31), or v27 once a phi class
+// may be given up (#307): a phi member's multiply-add can read its slot, a
+// splat and a constant and write its slot through a fourth.
+@property (nonatomic) NSUInteger vScratchLo;
 // Lane groups: four broadcasts of adjacent 32-bit loads (a[k..k+3]) become one
 // `ldr q` and by-lane multiplies. Each member broadcast → its lane and its
 // group's leader (the first in the block); each leader → @[base operand,
@@ -1121,6 +1128,8 @@ static unsigned xtArm64GlobalP2Align(uint32_t size) {
             ctx.vSpill[v] = @(cur);
             cur += 16;
         }
+        for (NSNumber *m in ctx.vSpillAlias)
+            ctx.vSpill[m] = ctx.vSpill[ctx.vSpillAlias[m]];
     }
     // The aggregates last (#35), just under the canary: a write that runs off
     // the end of a local array meets the guard before it meets another value, a
@@ -2484,6 +2493,8 @@ static BOOL a64InsnReads(XTIRInsn *n, XTIRValueId x) {
             }
         NSMutableSet<NSString *> *bad = [NSMutableSet set];
         if (ctx.vRemat.count > 0 || ctx.vSpill.count > 0) [bad addObjectsFromArray:@[@"d29", @"d30", @"d31"]];
+        if ((ctx.vRemat.count > 0 || ctx.vSpill.count > 0) && ctx.vScratchLo < 29)
+            [bad addObjectsFromArray:@[@"d27", @"d28"]];
         for (NSNumber *v in ctx.vecReg) {
             NSString *g = ctx.vecReg[v];
             if (g.length < 2) continue;
@@ -5413,7 +5424,9 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
         inBlock:(XTIRBlock *)block
             ctx:(XTArm64FnCtx *)ctx
 {
-    if (ctx.vRemat.count == 0 && ctx.vSpill.count == 0) {
+    // A phi moves nothing here: its edges do (and a spilled phi class's edges
+    // move nothing at all, its members sharing one slot).
+    if ((ctx.vRemat.count == 0 && ctx.vSpill.count == 0) || insn.opcode == XTIROpPhi) {
         [self emitInsn1:insn inBlock:block ctx:ctx];
         return;
     }
@@ -5438,7 +5451,7 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
         BOOL rm = ctx.vRemat[@(o.valueId)] != nil;
         BOOL sp = !rm && ctx.vSpill[@(o.valueId)] != nil;
         if (!rm && !sp) continue;
-        if (scratch < 29) {
+        if (scratch < ctx.vScratchLo) {
             fprintf(stderr, "xcc-cg-arm64: error: vector register pressure exceeded "
                             "the 14-register pool (v18-v31) in '%s'\n", ctx.fn.name.UTF8String);
             exit(1);
@@ -5472,7 +5485,7 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
     // A spilled result: written in the next scratch, then stored to its slot.
     NSNumber *sv = insn.result && ctx.vSpill[@(insn.result.valueId)] ? @(insn.result.valueId) : nil;
     if (sv) {
-        if (scratch < 29) {
+        if (scratch < ctx.vScratchLo) {
             fprintf(stderr, "xcc-cg-arm64: error: vector register pressure exceeded "
                             "the 14-register pool (v18-v31) in '%s'\n", ctx.fn.name.UTF8String);
             exit(1);
@@ -9593,25 +9606,36 @@ static BOOL vecPhiInLive(XTIRFunction* fn, XTIRInsn* p, NSUInteger h, XTIRValueI
     }
     // Out of registers: again with v29-v31 held back as scratch, and the
     // constant splat that ends last given up whenever the pool is empty (made
-    // again at each read; the port's vecScan).
+    // again at each read; the port's vecScan). Still out: a third time with
+    // the phi classes that may live in a slot among the candidates (#307), so
+    // a function that fitted before is allocated as before.
     ctx.vRemat = [NSMutableDictionary dictionary];
     ctx.vSpill = [NSMutableDictionary dictionary];
     ctx.vSpillOrder = [NSMutableArray array];
+    ctx.vSpillAlias = [NSMutableDictionary dictionary];
     ctx.vSpillOf = [NSSet set];
     NSMutableDictionary<NSNumber *, XTIROperand *> *rematOf = [NSMutableDictionary dictionary];
+    NSSet<NSNumber *> *phiSpillOf = [NSSet set];
     NSMutableDictionary<NSNumber *, NSNumber *> *regOfClass = nil;
-    for (int attempt = 0; attempt < 2 && !regOfClass; attempt++) {
-        BOOL remat = attempt == 1;
+    ctx.vScratchLo = 29;
+    for (int attempt = 0; attempt < 3 && !regOfClass; attempt++) {
+        BOOL remat = attempt >= 1;
         if (remat) {
             rematOf = [self vecRematCandidates:fn vecVals:vecVals canon:canon vecPhis:vecPhis ctx:ctx];
+            ctx.vRemat = [NSMutableDictionary dictionary];
             ctx.vSpill = [NSMutableDictionary dictionary];
             ctx.vSpillOrder = [NSMutableArray array];
+            ctx.vSpillAlias = [NSMutableDictionary dictionary];
             ctx.vSpillOf = [self vecSpillCandidates:fn canon:canon vecPhis:vecPhis rematOf:rematOf ctx:ctx];
+        }
+        if (attempt == 2) {
+            phiSpillOf = [self vecPhiSpillCandidates:fn canon:canon vecPhis:vecPhis ctx:ctx];
+            ctx.vScratchLo = 27;
         }
         NSMutableArray<NSNumber *> *freePool = [NSMutableArray array];
         if (fpFree)
             for (int r = 8; r <= 15; r++) [freePool addObject:@(r)];
-        for (int r = 18; r <= (remat ? 28 : 31); r++) [freePool addObject:@(r)];
+        for (int r = 18; r <= (remat ? (int)ctx.vScratchLo - 1 : 31); r++) [freePool addObject:@(r)];
         ctx.vecCalleeUsed = [NSMutableSet set];
         NSMutableArray<NSNumber *> *active = [NSMutableArray array];   // class ids, by ascending end
         NSMutableDictionary<NSNumber *, NSNumber *> *roc = [NSMutableDictionary dictionary];
@@ -9621,6 +9645,9 @@ static BOOL vecPhiInLive(XTIRFunction* fn, XTIRInsn* p, NSUInteger h, XTIRValueI
         // reduction): the register is the phi class's, so their expiry does not
         // free it.
         NSMutableSet<NSNumber *> *borrowed = [NSMutableSet set];
+        // The phi classes that lent their register so: never given up, since
+        // the borrowers keep running in it.
+        NSMutableSet<NSNumber *> *lent = [NSMutableSet set];
         BOOL failed = NO;
         for (NSNumber *cls in classes) {
             NSInteger start = lo[cls].integerValue;
@@ -9642,20 +9669,30 @@ static BOOL vecPhiInLive(XTIRFunction* fn, XTIRInsn* p, NSUInteger h, XTIRValueI
                 // and this one; the port's vecScan.
                 NSNumber *victim = nil;
                 NSInteger far = -1, farLo = -1;
-                if (rematOf[cls] || [ctx.vSpillOf containsObject:cls]) { victim = cls; far = hi[cls].integerValue; farLo = lo[cls].integerValue; }
+                if (rematOf[cls] || [ctx.vSpillOf containsObject:cls] || [phiSpillOf containsObject:cls]) { victim = cls; far = hi[cls].integerValue; farLo = lo[cls].integerValue; }
                 for (NSNumber *av in active) {
-                    if ((!rematOf[av] && ![ctx.vSpillOf containsObject:av]) || [borrowed containsObject:av]) continue;
+                    if ((!rematOf[av] && ![ctx.vSpillOf containsObject:av] && ![phiSpillOf containsObject:av])
+                        || [borrowed containsObject:av] || [lent containsObject:av]) continue;
                     NSInteger h = hi[av].integerValue, l = lo[av].integerValue;
                     if (h > far || (h == far && l > farLo)) { far = h; farLo = l; victim = av; }
                 }
                 if (!victim) { failed = YES; break; }
                 // A constant is made again where it is read; anything else lives
                 // in a frame slot of its own (the port's vecScan).
+                // A phi class's members share its slot: each is stored where it
+                // is defined, and the edges, which move nothing between members
+                // of one class, need no copy.
                 if (rematOf[victim])
                     ctx.vRemat[victim] = rematOf[victim];
                 else {
                     ctx.vSpill[victim] = @0;
                     [ctx.vSpillOrder addObject:victim];
+                    if ([phiSpillOf containsObject:victim])
+                        for (NSNumber *m in canon)
+                            if ([canon[m] isEqual:victim]) {
+                                ctx.vSpill[m] = @0;
+                                ctx.vSpillAlias[m] = victim;
+                            }
                 }
                 if ([victim isEqual:cls]) continue;
                 [freePool addObject:roc[victim]];
@@ -9688,6 +9725,7 @@ static BOOL vecPhiInLive(XTIRFunction* fn, XTIRInsn* p, NSUInteger h, XTIRValueI
                                 hi[cls].integerValue <= backDef[ocls].integerValue) {
                                 reg = roc[ocls];
                                 [borrowed addObject:cls];
+                                [lent addObject:ocls];
                                 break;
                             }
                             continue;
@@ -9754,6 +9792,55 @@ static BOOL vecPhiInLive(XTIRFunction* fn, XTIRInsn* p, NSUInteger h, XTIRValueI
             if (canon[v] || [members containsObject:v] || [vecPhis containsObject:v] || rematOf[v]
                 || [barred containsObject:v] || ctx.laneAddr[v] || ctx.laneLeader[v]) continue;
             [r addObject:v];
+        }
+    return r;
+}
+
+// The phi classes that may live in a frame slot (#307): those whose edges move
+// nothing between registers, so that with the whole class in one slot no edge
+// needs a copy. The phi heads its own class, every value it takes is a member,
+// every member is an instruction's result (not a phi, not in a lane group),
+// and neither the phi nor a member is read by another phi or a terminator. As
+// the port's vecPhiSpillCandidates.
++ (NSSet<NSNumber *> *)vecPhiSpillCandidates:(XTIRFunction *)fn
+                                       canon:(NSDictionary<NSNumber *, NSNumber *> *)canon
+                                     vecPhis:(NSSet<NSNumber *> *)vecPhis
+                                         ctx:(XTArm64FnCtx *)ctx {
+    NSMutableSet<NSNumber *> *r = [NSMutableSet set];
+    NSMutableSet<NSNumber *> *defined = [NSMutableSet set];
+    NSMutableSet<NSNumber *> *termRead = [NSMutableSet set];
+    for (XTIRBlock *bb in fn.blocks) {
+        for (XTIRInsn *n in bb.instructions)
+            if (n.result) [defined addObject:@(n.result.valueId)];
+        for (XTIROperand *o in bb.terminator.operands)
+            if (o.kind == XTIROperandKindUse) [termRead addObject:@(o.valueId)];
+    }
+    for (XTIRBlock *pb in fn.blocks)
+        for (XTIRInsn *p in pb.phiNodes) {
+            if (!p.result || p.result.type.kind != XTIRTypeKindVec) continue;
+            NSNumber *c = @(p.result.valueId);
+            if (canon[c] || [termRead containsObject:c] || ctx.laneAddr[c] || ctx.laneLeader[c]) continue;
+            BOOL ok = YES;
+            for (XTIROperand *o in p.operands) {
+                if (o.kind == XTIROperandKindBlock) continue;
+                if (o.kind != XTIROperandKindUse || ![canon[@(o.valueId)] isEqual:c]) { ok = NO; break; }
+            }
+            for (NSNumber *m in canon) {
+                if (!ok) break;
+                if (![canon[m] isEqual:c]) continue;
+                if (![defined containsObject:m] || [vecPhis containsObject:m] || [termRead containsObject:m]
+                    || ctx.laneAddr[m] || ctx.laneLeader[m]) ok = NO;
+            }
+            for (XTIRBlock *qb in fn.blocks) {
+                if (!ok) break;
+                for (XTIRInsn *q in qb.phiNodes) {
+                    if (q == p) continue;
+                    for (XTIROperand *o in q.operands)
+                        if (o.kind == XTIROperandKindUse
+                            && (o.valueId == p.result.valueId || [canon[@(o.valueId)] isEqual:c])) ok = NO;
+                }
+            }
+            if (ok) [r addObject:c];
         }
     return r;
 }
