@@ -66,36 +66,44 @@ done
 # renamed, and (Linux) the executable exports nothing. On the CPU: the pool is
 # a global of 64 KB and more, which the runtime knows as one block, and its
 # arrays are pointers into it.
+# Each with the target's libRuntime, when one is built, and without it.
+RL=$( [ "$PLAT" = osx ] && echo support/runtime-lib/arm64-macos/libRuntime.dylib || echo support/runtime-lib/x86_64-linux/libRuntime.so )
+links="--no-runtime-lib"
+[ -f "$RL" ] && links="libRuntime --no-runtime-lib"
 clang -O2 -w -DOWN_HEAP_HERE -o "$W/own.ref" $D/ownmain.c || { echo "FAIL cmalloc: clang does not build ownmain.c"; exit 1; }
-want=$("$W/own.ref")
-for shape in one two; do
-    if [ $shape = one ]; then
-        "$XC" -q -O2 -H . -DOWN_HEAP_HERE -o "$W/own.$shape" $D/ownmain.c > "$W/own.b" 2>&1
+wantown=$("$W/own.ref")
+clang -O2 -w -o "$W/two.ref" $D/twoloop.c $D/twoalloc.c || { echo "FAIL cmalloc: clang does not build twoloop.c"; exit 1; }
+wanttwo=$("$W/two.ref")
+for link in $links; do
+    opt=""
+    [ "$link" = libRuntime ] || opt=$link
+    for shape in one two; do
+        if [ $shape = one ]; then
+            "$XC" -q -O2 -H . $opt -DOWN_HEAP_HERE -o "$W/own.$shape" $D/ownmain.c > "$W/own.b" 2>&1
+        else
+            "$XC" -q -O2 -H . $opt -o "$W/own.$shape" $D/ownmain.c $D/ownheap.c > "$W/own.b" 2>&1
+        fi
+        [ $? = 0 ] || { echo "  FAIL: own allocator ($shape, $link) does not build"; head -5 "$W/own.b"; fail=1; continue; }
+        got=$(XC_PAR=cpu "$W/own.$shape" 2>&1)
+        [ "$got" = "$wantown" ] && echo "  ok: own allocator ($shape object(s), $link) gives clang's answer ($got)" \
+            || { echo "  FAIL: own allocator ($shape, $link) gives '$got', clang's '$wantown'"; fail=1; }
+        if [ "$PLAT" = linux ] && command -v nm > /dev/null; then
+            defs=$(nm -D --defined-only "$W/own.$shape" | awk 'NF == 3 { print $3 }' | tr '\n' ' ')
+            [ -z "$defs" ] || { echo "  FAIL: own allocator ($shape, $link): the executable exports '$defs'"; fail=1; }
+        fi
+    done
+    # A program of two C files: one allocates the arrays, the other's lifted
+    # loop runs over them as a block.
+    if "$XC" -q -O3 -H . $opt -o "$W/two" $D/twoloop.c $D/twoalloc.c > "$W/two.b" 2>&1; then
+        XC_PAR=cpu XC_PAR_REPORT=1 "$W/two" > "$W/two.r" 2>&1
+        got=$(grep -v '^par: ' "$W/two.r" | tail -1)
+        runs=$(grep -c 'twoloop.c:9: [0-9]* items on' "$W/two.r")
+        if [ "$got" != "$wanttwo" ]; then echo "  FAIL: two files ($link) give $got, clang's $wanttwo"; fail=1
+        elif [ "$runs" != 1 ]; then echo "  FAIL: two files ($link): the loop ran as a block $runs times (want 1)"; grep twoloop "$W/two.r" | head -3; fail=1
+        else echo "  ok: two files ($link) give clang's answer ($got), the loop as a block"; fi
     else
-        "$XC" -q -O2 -H . -o "$W/own.$shape" $D/ownmain.c $D/ownheap.c > "$W/own.b" 2>&1
-    fi
-    [ $? = 0 ] || { echo "  FAIL: own allocator ($shape) does not build"; head -5 "$W/own.b"; fail=1; continue; }
-    got=$(XC_PAR=cpu "$W/own.$shape" 2>&1)
-    [ "$got" = "$want" ] && echo "  ok: own allocator ($shape object(s)) gives clang's answer ($got)" \
-        || { echo "  FAIL: own allocator ($shape) gives '$got', clang's '$want'"; fail=1; }
-    if [ "$PLAT" = linux ] && command -v nm > /dev/null; then
-        defs=$(nm -D --defined-only "$W/own.$shape" | awk 'NF == 3 { print $3 }' | tr '\n' ' ')
-        [ -z "$defs" ] || { echo "  FAIL: own allocator ($shape): the executable exports '$defs'"; fail=1; }
+        echo "  FAIL: twoloop.c twoalloc.c ($link) do not build"; head -5 "$W/two.b"; fail=1
     fi
 done
-# A program of two C files: one allocates the arrays, the other's lifted loop
-# runs over them as a block.
-clang -O2 -w -o "$W/two.ref" $D/twoloop.c $D/twoalloc.c || { echo "FAIL cmalloc: clang does not build twoloop.c"; exit 1; }
-want=$("$W/two.ref")
-if "$XC" -q -O3 -H . -o "$W/two" $D/twoloop.c $D/twoalloc.c > "$W/two.b" 2>&1; then
-    XC_PAR=cpu XC_PAR_REPORT=1 "$W/two" > "$W/two.r" 2>&1
-    got=$(grep -v '^par: ' "$W/two.r" | tail -1)
-    runs=$(grep -c 'twoloop.c:9: [0-9]* items on' "$W/two.r")
-    if [ "$got" != "$want" ]; then echo "  FAIL: two files give $got, clang's $want"; fail=1
-    elif [ "$runs" != 1 ]; then echo "  FAIL: two files: the loop ran as a block $runs times (want 1)"; grep twoloop "$W/two.r" | head -3; fail=1
-    else echo "  ok: two files give clang's answer ($got), the loop as a block"; fi
-else
-    echo "  FAIL: twoloop.c twoalloc.c do not build"; head -5 "$W/two.b"; fail=1
-fi
 [ $fail = 0 ] && echo "--- cmalloc: pass ---" || echo "--- cmalloc: FAIL ---"
 exit $fail
