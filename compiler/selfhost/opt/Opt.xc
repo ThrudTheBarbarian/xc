@@ -978,6 +978,9 @@
             self.seed(m, reachable, work, String.withCString("ParFnChunk$ctx"));
             self.seed(m, reachable, work, String.withCString("Par$run"));
             self.seed(m, reachable, work, String.withCString("ParFnChunk$runOn"));
+            // A running total's two passes (#272, #353).
+            self.seed(m, reachable, work, String.withCString("ParFnChunk$runScanOn"));
+            self.seed(m, reachable, work, String.withCString("ParFnChunk$fixRange"));
             self.seed(m, reachable, work, String.withCString("ParFnChunk$arrNew"));
             self.seed(m, reachable, work, String.withCString("ParFnChunk$arrMerge"));
             self.seed(m, reachable, work, String.withCString("parSameName"));

@@ -57,6 +57,8 @@ C
 
 run_case add_incl  long          3000017 "acc += x[i]; out[i] = acc;"
 run_case add_excl  long          3000017 "out[i] = acc; acc += x[i];"
+# The par runtime compiled into the program instead of libRuntime (#353).
+run_case add_src   long          3000017 "acc += x[i]; out[i] = acc;" --no-runtime-lib
 run_case add_int   int           1000003 "acc += x[i]; out[i] = acc;"
 run_case add_uns   unsigned      1000003 "acc += x[i]; out[i] = acc;"
 run_case or_incl   unsigned      1000003 "acc |= (unsigned)x[i] << (i % 20); out[i] = acc;"
