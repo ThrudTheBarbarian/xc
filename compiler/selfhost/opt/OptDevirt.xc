@@ -56,6 +56,8 @@
             u32 guard = (u32)0;
             while (guard < (u32)64 && dvOne(m, fn))
                 guard = guard + (u32)1;
+            if (guard == (u32)64)
+                optRoundCap("devirtualisation", (u32)64, fn);
             }
         }
 

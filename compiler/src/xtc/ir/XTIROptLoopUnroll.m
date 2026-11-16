@@ -508,7 +508,8 @@ static BOOL bodyHasCall(XTIRBlock* B)
     // the IR, so a fresh scan avoids stale captured operands). Each unroll
     // removes a loop, so the candidate set shrinks — the guard caps any
     // pathological case. A loop that would bust the budget is left alone.
-    for (NSUInteger iter = 0; iter < 4096; iter++)
+    NSUInteger iter = 0;
+    for (; iter < 4096; iter++)
         {
         NSArray<XTUnrollCand*>* cands = [self candidatesIn:fn profile:prof];
         if (cands.count == 0)
@@ -561,6 +562,8 @@ static BOOL bodyHasCall(XTIRBlock* B)
             }
         [self unroll:chosen inFunction:fn];
         }
+    if (iter == 4096)
+        XTIROptRoundCap("loop unrolling", 4096, fn.name);
     }
 
 + (NSArray<XTIRInsn*>*)allInsns:(XTIRBlock*)b

@@ -37,6 +37,8 @@
             u32 iter = (u32)0;
             while (iter < (u32)512 && rotOne(fn))
                 iter = iter + (u32)1;
+            if (iter == (u32)512)
+                optRoundCap("loop rotation", (u32)512, fn);
             }
         }
 

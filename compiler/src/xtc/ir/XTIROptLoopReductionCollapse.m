@@ -146,9 +146,14 @@ static NSUInteger computeTrip(int64_t init, int64_t step, int64_t bound,
     // the next round. Each transform invalidates the CFG/def analysis, so we
     // rebuild it each round. Capped as a backstop.
     for (XTIRFunction* fn in mod.functions)
-        for (int round = 0; round < 16 && [self analyzeFunction:fn]; round++)
+        {
+        int round = 0;
+        for (; round < 16 && [self analyzeFunction:fn]; round++)
             {
             }
+        if (round == 16)
+            XTIROptRoundCap("loop reduction collapse", 16, fn.name);
+        }
     return YES;
     }
 

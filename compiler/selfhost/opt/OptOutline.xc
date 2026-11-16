@@ -102,6 +102,8 @@
                     }
                     }
                 }
+            if (again && guard == (u32)64)
+                optRoundCap("the par outliner", (u32)64, fn);
             }
         }
 

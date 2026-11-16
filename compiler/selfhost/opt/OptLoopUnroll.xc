@@ -86,6 +86,9 @@
                 return;
             unrollApply(fn, chosen);
             }
+        // Reached only when the cap ended the loop: every way out of a
+        // converged round returns.
+        optRoundCap("loop unrolling", (u32)4096, fn);
         }
 
     final bool unrollBodyHasCall(IRBlock* B)

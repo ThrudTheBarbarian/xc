@@ -30,6 +30,8 @@
             u32 guard = (u32)0;
             while (guard < (u32)256 && nivOne(fn))
                 guard = guard + (u32)1;
+            if (guard == (u32)256)
+                optRoundCap("IV narrowing", (u32)256, fn);
             }
         }
 

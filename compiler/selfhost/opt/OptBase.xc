@@ -74,6 +74,16 @@ bool optOutlineFloatSum(void) { return gOptOutlineFloatSum; }
 bool optPromoteScalars(void) { return gOptPromoteScalars; }
 ParKernelHook* optParKernelHook(void) { return gParKernelHook; }
 u8* optGetenv(u8* name) { return _xt_getenv(name); }
+// A run-until-nothing-changes loop that stopped at its round cap rather than
+// converging (#334): the two look the same from outside, so XC_OPT_CAPS=1
+// says which pass, in which function. Output is unchanged either way.
+void optRoundCap(u8* pass, u32 cap, IRFunc* fn)
+{
+    if (_xt_getenv("XC_OPT_CAPS") == (u8*)0)
+        return;
+    Stdio.error(String.withFormat("xcc: note: %s stopped at its round cap (%u) in '%s'\n", pass, cap,
+                                  fn != (IRFunc*)0 && fn.name() != (String*)0 ? fn.name().cString() : "?"));
+}
 void optSetOutline(bool b) { gOptOutline = b; }
 void optSetOutlineFloatSum(bool b) { gOptOutlineFloatSum = b; }
 void optSetPromoteScalars(bool b) { gOptPromoteScalars = b; }

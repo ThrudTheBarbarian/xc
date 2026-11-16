@@ -27,3 +27,15 @@ NS_ASSUME_NONNULL_BEGIN
 @end
 
 NS_ASSUME_NONNULL_END
+
+// A run-until-nothing-changes loop that stopped at its round cap rather than
+// converging (#334): the two look the same from outside, so XC_OPT_CAPS=1 says
+// which pass, in which function. Output is unchanged. As the port's
+// optRoundCap.
+static inline void XTIROptRoundCap(const char* pass, unsigned cap, NSString* fn)
+    {
+    if (!getenv("XC_OPT_CAPS"))
+        return;
+    fprintf(stderr, "xcc: note: %s stopped at its round cap (%u) in '%s'\n", pass, cap,
+            fn.length ? fn.UTF8String : "?");
+    }

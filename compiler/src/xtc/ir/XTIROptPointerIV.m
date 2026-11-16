@@ -33,9 +33,12 @@
         {
         // One loop per function-scan pass; repeat until no more rewrites (a
         // function may hold several independent loops).
-        for (int iter = 0; iter < 64; iter++)
+        int iter = 0;
+        for (; iter < 64; iter++)
             if (![self runOnceForFunction:fn])
                 break;
+        if (iter == 64)
+            XTIROptRoundCap("pointer IVs", 64, fn.name);
         }
     return YES;
     }

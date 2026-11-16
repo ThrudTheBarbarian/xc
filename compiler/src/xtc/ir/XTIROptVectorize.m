@@ -925,7 +925,8 @@ static XTIRSymbolId xtvIotaSymbol(XTIRType* laneType, NSUInteger vecBytes, XTIRF
     BOOL reduxOff = getenv("XTVEC_REDUX_OFF") != NULL;
     sVecRemainders = [NSMutableSet set];
     sEscDone = [NSMutableSet set];
-    for (NSUInteger iter = 0; iter < 256; iter++)
+    NSUInteger iter = 0;
+    for (; iter < 256; iter++)
         {
         // A loop around an escape-time or counted inner loop, across its items
         // (mandelbrot, nbody), FIRST: taking the inner loop first (an ordered
@@ -980,6 +981,8 @@ static XTIRSymbolId xtvIotaSymbol(XTIRType* laneType, NSUInteger vecBytes, XTIRF
             continue;
         break;
         }
+    if (iter == 256)
+        XTIROptRoundCap("the vectoriser", 256, fn.name);
     // Break the serial accumulator dependency: unroll vectorised reduction loops
     // with several independent accumulators (clang-style), so the OoO core
     // overlaps the add/max chains. Profile-gated; XTVEC_NOUNROLL disables.
