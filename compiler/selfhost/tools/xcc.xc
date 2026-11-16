@@ -8516,6 +8516,8 @@ void finishDriverArgs(DriverOptions* d)
             }
         }
         LayoutMap* m = LayoutMap.read(lp);
+        for (u32 i = (u32)0; i < m.warnings().count(); i = i + (u32)1)
+            Stdio.error(String.withFormat("xcc: warning: %s\n", ((String*)m.warnings().get(i)).cString()));
         if (m.failed()) {
             Stdio.printf("xcc: error: %s\n", m.why().cString());
             Process.exit((i32)1);

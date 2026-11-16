@@ -49,6 +49,7 @@ class LayoutMap
 
     bool _hasShadow;
     Array* _chain;         // the files including this one (#298)
+    Array* _warnings;      // String@, "file:line: ..." (#298)
     u32 _shadowRegAddr;    u32 _shadowRegMask;
     u32 _trampolineStart;  u32 _trampolineEnd;
 
@@ -73,9 +74,103 @@ class LayoutMap
         _hasShadow = false;
         _hasEntry = false;
         _chain = (Array*)0;
+        _warnings = new Array();
     }
 
     bool failed(void) { return _failed; }
+    // What the reader passed over: an unknown section or key, or a value
+    // not of its key's form (#298). They used to be dropped without a word.
+    Array* warnings(void) { return _warnings; }
+
+    void warn(String* path, u32 line, String* what)
+    {
+        String* w = String.withString(path);
+        w.appendFormat(":%u: ", line);
+        w.append(what);
+        _warnings.add((Object*)w);
+    }
+
+    // Every section any layout reader acts on.
+    static bool knownSection(String* s)
+    {
+        return oneOf(s, "zp memory banking shadow cloaked weak stack heap entry startup buffers output symbols library");
+    }
+
+    static bool oneOf(String* word, string list)
+    {
+        Array* ws = String.withCString(list).splitOnByte((u8)' ');
+        for (u32 i = (u32)0; i < ws.count(); i = i + (u32)1)
+            if (word.equals((String*)ws.get(i)))
+                return true;
+        return false;
+    }
+
+    // The keys a section takes, in any reader: 0 for a section whose keys
+    // are names of the layout's own (weak, buffers).
+    static string keysOf(String* s)
+    {
+        if (s.equals(String.withCString("zp"))) return "sp tmp hp arc-scratch arcscratch vars runtime bankreg";
+        if (s.equals(String.withCString("memory"))) return "main system screen";
+        if (s.equals(String.withCString("banking")))
+            return "window pagesize registers codewindow datawindow datapagesize codereg datareg coderegion "
+                   "coderegionspan dataregion dataregionspan regcwindow regcpagesize regcreg regcregion regcregionspan";
+        if (s.equals(String.withCString("shadow"))) return "register trampoline nmientry irqentry ranges stage";
+        if (s.equals(String.withCString("cloaked"))) return "range bank id";
+        if (s.equals(String.withCString("stack"))) return "base grows bank range";
+        if (s.equals(String.withCString("heap"))) return "top low range bank grows pointer-width regcbank";
+        if (s.equals(String.withCString("entry"))) return "address";
+        if (s.equals(String.withCString("startup"))) return "file";
+        if (s.equals(String.withCString("output"))) return "format";
+        if (s.equals(String.withCString("symbols"))) return "file";
+        if (s.equals(String.withCString("library"))) return "path";
+        return (string)0;
+    }
+
+    static bool knownKey(String* section, String* key)
+    {
+        if (section.equals(String.withCString("banking"))
+            && (key.hasSuffix(String.withCString("-window")) || key.hasSuffix(String.withCString("-reg"))))
+            return true;
+        string ks = keysOf(section);
+        if (ks == (string)0)
+            return true;
+        return oneOf(key, ks);
+    }
+
+    // Whether `val` has the form its key reads: a range, a range list, a
+    // number, a register spec or list. Keys of no fixed form pass.
+    static bool wellFormed(String* section, String* key, String* val)
+    {
+        u32 lo = (u32)0; u32 hi = (u32)0; u32 v = (u32)0;
+        if (section.equals(String.withCString("zp")) || section.equals(String.withCString("memory"))) {
+            if (key.equals(String.withCString("vars")) || key.equals(String.withCString("main")))
+                return rangeList(val).count() > (u32)0;
+            return range(val, &lo, &hi);
+        }
+        if (section.equals(String.withCString("banking"))) {
+            if (key.hasSuffix(String.withCString("-window")) || key.hasSuffix(String.withCString("window")))
+                return range(val, &lo, &hi);
+            if (key.equals(String.withCString("registers")))
+                return registerList(val).count() > (u32)0;
+            if (key.equals(String.withCString("regcreg")))
+                return range(val, &lo, &hi) || number32(val, &v);
+            return number32(val, &v);
+        }
+        if (section.equals(String.withCString("shadow"))) {
+            if (key.equals(String.withCString("register"))) return registerSpec(val, &lo, &hi);
+            if (key.equals(String.withCString("trampoline"))) return range(val, &lo, &hi);
+            return true;
+        }
+        if (section.equals(String.withCString("stack")) || section.equals(String.withCString("heap"))
+            || section.equals(String.withCString("cloaked"))) {
+            if (key.equals(String.withCString("range"))) return range(val, &lo, &hi);
+            if (key.equals(String.withCString("top"))) return number32(val, &v);
+            return true;
+        }
+        if (section.equals(String.withCString("entry")))
+            return number32(val, &v);
+        return true;
+    }
     String* why(void) { return _why; }
 
     static LayoutMap* read(String* path)
@@ -144,6 +239,8 @@ class LayoutMap
             }
             LayoutMap* base = LayoutMap.readIncluded(incPath, _chain != (Array*)0 ? _chain : new Array());
             if (base.failed()) { fail(base.why()); return; }
+            for (u32 k = (u32)0; k < base.warnings().count(); k = k + (u32)1)
+                _warnings.add(base.warnings().get(k));
             mergeDefaults(base);
         }
         String* section = (String*)0;
@@ -157,6 +254,8 @@ class LayoutMap
             if (line.byteLength() == (u32)0) continue;
             if (line.byteAt((u32)0) == (u8)'[' && line.byteAt(line.byteLength() - (u32)1) == (u8)']') {
                 section = line.substringBytes((u32)1, line.byteLength() - (u32)2).lowercased();
+                if (!knownSection(section))
+                    warn(path, i + (u32)1, String.withFormat("unknown section [%s], ignored", section.cString()));
                 if (section.equals(String.withCString("stack")) && !stackReset) {
                     _stackBase = (String*)0;
                     stackReset = true;
@@ -174,6 +273,13 @@ class LayoutMap
                 fail(String.withFormat("%s:%u: key '%s' outside any section",
                                        path.cString(), i + (u32)1, key.cString()));
                 return;
+            }
+            if (knownSection(section)) {
+                if (!knownKey(section, key))
+                    warn(path, i + (u32)1, String.withFormat("unknown key '%s' in [%s], ignored", key.cString(), section.cString()));
+                else if (!wellFormed(section, key, val))
+                    warn(path, i + (u32)1, String.withFormat("'%s = %s' in [%s]: not a value of that key's form, ignored",
+                                                             key.cString(), val.cString(), section.cString()));
             }
             apply(section, key, val);
         }
