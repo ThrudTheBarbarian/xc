@@ -440,10 +440,7 @@ class Xt6502
                 connectDef(interf, n.memRes(), live);
                 if (n.res() != (IRValue*)0) removeVal(live, n.res());
                 if (n.memRes() != (IRValue*)0) removeVal(live, n.memRes());
-                for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1) {
-                    IROperand* o = (IROperand*)n.ops().get(k);
-                    if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0) addVal(live, o.val());
-                }
+                addUses(live, n);
                 interfereAll(interf, live);
             }
         }
@@ -635,11 +632,14 @@ class Xt6502
             Array* seq = allInsns(bb);
             for (u32 i = (u32)0; i < seq.count(); i = i + (u32)1) {
                 IRInsn* n = (IRInsn*)seq.get(i);
-                for (u32 q = (u32)0; q < n.ops().count(); q = q + (u32)1) {
-                    IROperand* o = (IROperand*)n.ops().get(q);
-                    if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0) continue;
-                    if (!hasVal(k, o.val())) addVal(g, o.val());
-                }
+                // A phi's operands are read by the edge copies at the END of
+                // each predecessor, so they are uses there (below), not here.
+                if (!isPhi(n))
+                    for (u32 q = (u32)0; q < n.ops().count(); q = q + (u32)1) {
+                        IROperand* o = (IROperand*)n.ops().get(q);
+                        if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0) continue;
+                        if (!hasVal(k, o.val())) addVal(g, o.val());
+                    }
                 if (n.res() != (IRValue*)0) addVal(k, n.res());
                 if (n.memRes() != (IRValue*)0) addVal(k, n.memRes());
             }
@@ -662,6 +662,7 @@ class Xt6502
                         i32 si = blockIndexOf(fn, o.blk());
                         if (si < (i32)0) continue;
                         unionVals(out, (Array*)liveIn.get((u32)si));
+                        addPhiUsesFrom(out, bb, o.blk());
                     }
                 Array* inn = copyVals((Array*)gen.get(b));
                 Array* outMinusKill = minusVals(out, (Array*)kill.get(b));
@@ -673,6 +674,39 @@ class Xt6502
                     changed = true;
                 }
             }
+        }
+    }
+
+    static bool isPhi(IRInsn* n)
+    { return n.op().equals(String.withCString("Phi")); }
+
+    // The values succ's phis take on the edge from pred: live at the end of
+    // pred, where the edge copies read them. Counting them as uses inside the
+    // phi's own block instead let a phi that feeds a sibling phi (a rotation:
+    // d takes a's old value) die at the top of the loop, and the loop body
+    // reused its slot before the back edge copied it.
+    static void addPhiUsesFrom(Array* live, IRBlock* pred, IRBlock* succ)
+    {
+        for (u32 i = (u32)0; i < succ.phis().count(); i = i + (u32)1) {
+            IRInsn* phi = (IRInsn*)succ.phis().get(i);
+            for (u32 k = (u32)0; k + (u32)1 < phi.ops().count(); k = k + (u32)2) {
+                IROperand* b = (IROperand*)phi.ops().get(k);
+                IROperand* v = (IROperand*)phi.ops().get(k + (u32)1);
+                if (b.kind() == (u8)OPK_BLOCK && b.blk() == pred
+                 && v.kind() == (u8)OPK_USE && v.val() != (IRValue*)0)
+                    addVal(live, v.val());
+            }
+        }
+    }
+
+    // A backward walk's step over n's operands: a phi's are edge uses (see
+    // addPhiUsesFrom), already in the predecessor's live-out.
+    static void addUses(Array* live, IRInsn* n)
+    {
+        if (isPhi(n)) return;
+        for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1) {
+            IROperand* o = (IROperand*)n.ops().get(k);
+            if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0) addVal(live, o.val());
         }
     }
 
@@ -3005,10 +3039,7 @@ class Xt6502
                 }
                 if (n.res() != (IRValue*)0) removeVal(live, n.res());
                 if (n.memRes() != (IRValue*)0) removeVal(live, n.memRes());
-                for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1) {
-                    IROperand* o = (IROperand*)n.ops().get(k);
-                    if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0) addVal(live, o.val());
-                }
+                addUses(live, n);
             }
         }
     }

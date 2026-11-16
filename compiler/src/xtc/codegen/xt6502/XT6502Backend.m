@@ -620,6 +620,22 @@ typedef NS_ENUM(uint8_t, XT6502KnownAddrKind) {
     return kept;
 }
 
+// The values succ's phis take on the edge from pred: live at the end of pred,
+// where the edge copies read them. Counting them as uses inside the phi's own
+// block instead let a phi that feeds a sibling phi (a rotation: d takes a's
+// old value) die at the top of the loop, and the loop body reused its slot
+// before the back edge copied it.
++ (void)addPhiUsesFrom:(XTIRBlock *)pred to:(XTIRBlock *)succ into:(NSMutableSet<NSNumber *> *)live {
+    for (XTIRInsn *phi in succ.phiNodes) {
+        for (NSUInteger i = 0; i + 1 < phi.operands.count; i += 2) {
+            XTIROperand *b = phi.operands[i];
+            XTIROperand *v = phi.operands[i + 1];
+            if (b.kind == XTIROperandKindBlock && b.blockRef == pred && v.kind == XTIROperandKindUse)
+                [live addObject:@(v.valueId)];
+        }
+    }
+}
+
 // Compute, per call instruction, the ZP bytes that must be preserved
 // across it = the values LIVE immediately after the call (defined
 // before, used after), intersected with the ZP allocation, minus the
@@ -662,7 +678,10 @@ typedef NS_ENUM(uint8_t, XT6502KnownAddrKind) {
             NSMutableSet<NSNumber *> *u = [NSMutableSet set];
             NSMutableSet<NSNumber *> *d = [NSMutableSet set];
             [self collectInsn:insn uses:u defs:d];
-            for (NSNumber *v in u) if (![kill containsObject:v]) [gen addObject:v];
+            // A phi's operands are read by the edge copies at the END of each
+            // predecessor, so they are uses there (addPhiUsesFrom:), not here.
+            if (insn.opcode != XTIROpPhi)
+                for (NSNumber *v in u) if (![kill containsObject:v]) [gen addObject:v];
             [kill unionSet:d];
         }
         [genMap setObject:gen forKey:b];
@@ -689,6 +708,7 @@ typedef NS_ENUM(uint8_t, XT6502KnownAddrKind) {
                     if (op.kind == XTIROperandKindBlock && op.blockRef) {
                         NSSet<NSNumber *> *si = [liveIn objectForKey:op.blockRef];
                         if (si) [out unionSet:si];
+                        [self addPhiUsesFrom:b to:op.blockRef into:out];
                     }
                 }
             }
@@ -839,7 +859,10 @@ typedef NS_ENUM(uint8_t, XT6502KnownAddrKind) {
             NSMutableSet<NSNumber *> *u = [NSMutableSet set];
             NSMutableSet<NSNumber *> *d = [NSMutableSet set];
             [self collectInsn:insn uses:u defs:d];
-            for (NSNumber *v in u) if (![kill containsObject:v]) [gen addObject:v];
+            // A phi's operands are read by the edge copies at the END of each
+            // predecessor, so they are uses there (addPhiUsesFrom:), not here.
+            if (insn.opcode != XTIROpPhi)
+                for (NSNumber *v in u) if (![kill containsObject:v]) [gen addObject:v];
             [kill unionSet:d];
         }
         [genMap setObject:gen forKey:b];
@@ -862,6 +885,7 @@ typedef NS_ENUM(uint8_t, XT6502KnownAddrKind) {
                     if (op.kind == XTIROperandKindBlock && op.blockRef) {
                         NSSet<NSNumber *> *si = [liveIn objectForKey:op.blockRef];
                         if (si) [out unionSet:si];
+                        [self addPhiUsesFrom:b to:op.blockRef into:out];
                     }
                 }
             }
@@ -928,8 +952,11 @@ typedef NS_ENUM(uint8_t, XT6502KnownAddrKind) {
             connectDef(insn.memoryResult);
             if (insn.result) [live removeObject:@(insn.result.valueId)];
             if (insn.memoryResult) [live removeObject:@(insn.memoryResult.valueId)];
-            for (XTIROperand *op in insn.operands)
-                if (op.kind == XTIROperandKindUse) [live addObject:@(op.valueId)];
+            // A phi's operands are edge uses, already in the predecessor's
+            // live-out.
+            if (insn.opcode != XTIROpPhi)
+                for (XTIROperand *op in insn.operands)
+                    if (op.kind == XTIROperandKindUse) [live addObject:@(op.valueId)];
             interfereAll(live);
         }
     }
