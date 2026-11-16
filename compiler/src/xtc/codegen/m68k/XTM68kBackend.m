@@ -2272,9 +2272,7 @@ static NSString* m68kSym(NSString* name)
     // lc4's slot first then reading it for v0 hands v0 the post-increment value
     // (a lost copy). Both live in slots, not registers, so a register-only check
     // missed it. The common loop case (independent accumulator/IV updates) stays
-    // safe; a true cycle (e.g. a swap) still needs the stack parallel-copy
-    // fallback. Aggregates are excluded — they take the safe-path byte copy and
-    // never share the scalar stack shuffle.
+    // safe; a true cycle (e.g. a swap) needs the stack parallel copy below.
     NSString* (^locOf)(XTIRValueId) = ^NSString*(XTIRValueId vid) {
       NSString* h = gHome[@(vid)];
       if (h)
@@ -2282,11 +2280,11 @@ static NSString* m68kSym(NSString* name)
       NSNumber* off = slots[@(vid)];
       return off ? [NSString stringWithFormat:@"%d(a6)", off.intValue] : nil;
     };
+    // Aggregates and eight-byte scalars count too: they live in slots, and a
+    // swap of two of them is as much a cycle as a swap of two longs.
     BOOL safe = YES;
     for (NSUInteger i = 0; i < dests.count && safe; i++)
         {
-        if (dests[i].type.kind == XTIRTypeKindAgg)
-            continue;
         NSString* rd = locOf(dests[i].valueId);
         if (!rd)
             continue;
@@ -2363,63 +2361,125 @@ static NSString* m68kSym(NSString* name)
             }
         return;
         }
-    // Cycle: read EVERY source (push) before writing ANY dest (pop reverse).
-    // Pointer-IV walking pointers (address-register homes) are handled directly
-    // and excluded from the stack shuffle (they can't be in a d-register cycle).
-    NSMutableArray<XTIRValue*>* cd = [NSMutableArray array];
-    NSMutableArray<XTIROperand*>* cs = [NSMutableArray array];
+    // Not safe: read EVERY source (push) before writing ANY dest (pop in
+    // reverse). Slots are a6-relative, so moving sp leaves them addressable. An
+    // eight-byte scalar is pushed as its two longs and an aggregate as a block of
+    // its size rounded up to a long, so a cycle of either is handled like a cycle
+    // of longs. A walking pointer whose source is its own address register is
+    // already in place.
+    NSMutableIndexSet* skip = [NSMutableIndexSet indexSet];
     for (NSUInteger i = 0; i < dests.count; i++)
         {
         NSString* destAReg = gPtrAReg[@(dests[i].valueId)];
+        NSString* srcAReg = srcs[i].kind == XTIROperandKindUse ? gPtrAReg[@(srcs[i].valueId)] : nil;
         XTIRType* dt = dests[i].type;
-        if (destAReg)
+        BOOL agg = dt && dt.kind == XTIRTypeKindAgg && dt.layout && srcs[i].kind == XTIROperandKindUse;
+        // (An aggregate with no slot of its own has nowhere to go.)
+        if ((destAReg && srcAReg && [destAReg isEqualToString:srcAReg])
+            || (agg && !slots[@(dests[i].valueId)]))
             {
-            NSString* srcAReg = srcs[i].kind == XTIROperandKindUse
-                                    ? gPtrAReg[@(srcs[i].valueId)]
-                                    : nil;
-            if (![destAReg isEqualToString:srcAReg])
-                [self loadOperand:srcs[i] intoReg:destAReg slots:slots into:out];
-            }
-        else if ([self emitWidePhiCopyTo:dests[i] from:srcs[i] slots:slots into:out])
-            {
-            // Eight-byte scalar: copied in place, exactly as an aggregate is
-            // below. Both step outside the read-all-then-write-all discipline,
-            // so a cycle whose members are 64-bit would still be wrong — no
-            // such cycle exists today, and it would need a wide shuffle.
+            [skip addIndex:i];
             continue;
             }
-        else if (dt && dt.kind == XTIRTypeKindAgg && dt.layout && srcs[i].kind == XTIROperandKindUse)
+        if (agg)
             {
-            // An aggregate is a slot-to-slot byte copy — a 4-byte push/pop would
-            // truncate it. Copy the full width in place (aggregates have their own
-            // slot and can't participate in the scalar d-register shuffle below).
             NSUInteger width = [self m68kAggSize:dt.layout];
-            NSNumber* ds = slots[@(dests[i].valueId)];
-            if (!ds)
-                continue;
-            [out appendFormat:@"\tlea\t%d(a6),a0\n", ds.intValue];
+            [out appendFormat:@"\tsub.l\t#%lu,sp\n", (unsigned long)((width + 3) & ~(NSUInteger)3)];
+            [out appendString:@"\tmove.l\tsp,a0\n"];
             [out appendFormat:@"\tlea\t%d(a6),a1\n", [self slotOff:srcs[i] slots:slots]];
-            int n = gLabelSeq++;
-            [out appendFormat:@"\tmove.l\t#%lu,d0\n.Lphicpy%d:\n\tmove.b\t(a1)+,(a0)+\n"
-                              @"\tsubq.l\t#1,d0\n\tbne.s\t.Lphicpy%d\n",
-                              (unsigned long)width, n, n];
+            [self emitPhiByteLoop:width into:out];
             }
-        else
+        else if (![self pushWidePhiSource:srcs[i] dest:dests[i] slots:slots into:out])
             {
-            [cd addObject:dests[i]];
-            [cs addObject:srcs[i]];
+            [self loadOperand:srcs[i] intoReg:@"d0" slots:slots into:out];
+            [out appendString:@"\tmove.l\td0,-(sp)\n"];
             }
         }
-    for (XTIROperand* s in cs)
+    for (NSInteger i = (NSInteger)dests.count - 1; i >= 0; i--)
         {
-        [self loadOperand:s intoReg:@"d0" slots:slots into:out];
-        [out appendString:@"\tmove.l\td0,-(sp)\n"];
-        }
-    for (NSInteger i = (NSInteger)cd.count - 1; i >= 0; i--)
-        {
+        NSUInteger u = (NSUInteger)i;
+        if ([skip containsIndex:u])
+            continue;
+        XTIRType* dt = dests[u].type;
+        int ds = [(NSNumber *)slots[@(dests[u].valueId)] intValue];
+        if (dt && dt.kind == XTIRTypeKindAgg && dt.layout && srcs[u].kind == XTIROperandKindUse)
+            {
+            NSUInteger width = [self m68kAggSize:dt.layout];
+            [out appendFormat:@"\tlea\t%d(a6),a0\n", ds];
+            [out appendString:@"\tmove.l\tsp,a1\n"];
+            [self emitPhiByteLoop:width into:out];
+            [out appendFormat:@"\tadd.l\t#%lu,sp\n", (unsigned long)((width + 3) & ~(NSUInteger)3)];
+            continue;
+            }
+        if ([self isWidePhiSource:srcs[u] dest:dests[u] slots:slots])
+            {
+            [out appendFormat:@"\tmove.l\t(sp)+,%d(a6)\n", ds];
+            [out appendFormat:@"\tmove.l\t(sp)+,%d(a6)\n", ds + 4];
+            continue;
+            }
+        NSString* destAReg = gPtrAReg[@(dests[u].valueId)];
+        if (destAReg)
+            {
+            [out appendFormat:@"\tmove.l\t(sp)+,%@\n", destAReg];
+            continue;
+            }
         [out appendString:@"\tmove.l\t(sp)+,d0\n"];
-        [self storeReg:@"d0" toResult:cd[i] slots:slots into:out];
+        [self storeReg:@"d0" toResult:dests[u] slots:slots into:out];
         }
+    }
+
+// True when emitWidePhiCopyTo would take this copy: an i64 or double from an
+// immediate or a slot.
++ (BOOL)isWidePhiSource:(XTIROperand*)src dest:(XTIRValue*)dest slots:(NSDictionary*)slots
+    {
+    XTIRType* dt = dest.type;
+    if (!dt || !(dt.kind == XTIRTypeKindI64 || dt.kind == XTIRTypeKindU64 || dt.kind == XTIRTypeKindF64))
+        return NO;
+    if (!slots[@(dest.valueId)])
+        return NO;
+    if (src.kind == XTIROperandKindImmI || src.kind == XTIROperandKindImmF)
+        return YES;
+    return src.kind == XTIROperandKindUse && slots[@(src.valueId)] != nil;
+    }
+
+// Push an eight-byte source low long first, so the high long is on top and
+// pops first into the slot base (big-endian: high at slot, low at slot+4).
++ (BOOL)pushWidePhiSource:(XTIROperand*)src dest:(XTIRValue*)dest
+                    slots:(NSDictionary*)slots
+                     into:(NSMutableString*)out
+    {
+    if (![self isWidePhiSource:src dest:dest slots:slots])
+        return NO;
+    if (src.kind == XTIROperandKindImmI)
+        {
+        uint64_t v = (uint64_t)src.intValue;
+        [out appendFormat:@"\tmove.l\t#%u,-(sp)\n", (unsigned)(v & 0xFFFFFFFFu)];
+        [out appendFormat:@"\tmove.l\t#%u,-(sp)\n", (unsigned)(v >> 32)];
+        return YES;
+        }
+    if (src.kind == XTIROperandKindImmF)
+        {
+        uint64_t bits = src.floatRawBytes;
+        [out appendFormat:@"\tmove.l\t#$%08X,-(sp)\n", (uint32_t)(bits & 0xFFFFFFFF)];
+        [out appendFormat:@"\tmove.l\t#$%08X,-(sp)\n", (uint32_t)(bits >> 32)];
+        return YES;
+        }
+    int ss = [(NSNumber *)slots[@(src.valueId)] intValue];
+    [out appendFormat:@"\tmove.l\t%d(a6),-(sp)\n", ss + 4];
+    [out appendFormat:@"\tmove.l\t%d(a6),-(sp)\n", ss];
+    return YES;
+    }
+
+// Copy `width` bytes from (a1) to (a0). The loop runs at least once, so an
+// empty aggregate copies nothing rather than 2^32 bytes.
++ (void)emitPhiByteLoop:(NSUInteger)width into:(NSMutableString*)out
+    {
+    if (width == 0)
+        return;
+    int n = gLabelSeq++;
+    [out appendFormat:@"\tmove.l\t#%lu,d0\n.Lphicpy%d:\n\tmove.b\t(a1)+,(a0)+\n"
+                      @"\tsubq.l\t#1,d0\n\tbne.s\t.Lphicpy%d\n",
+                      (unsigned long)width, n, n];
     }
 
 // Memory operand for a folded ElementAddr/FieldAddr. Emits the needed loads

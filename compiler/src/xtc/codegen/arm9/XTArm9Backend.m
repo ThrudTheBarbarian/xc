@@ -2671,13 +2671,175 @@ static const NSUInteger kArm9VaForwardWords = 16;
         }
     }
 
+// How one phi copy moves: one word through r0, the two words of an
+// i64/double slot, or a block copy between aggregate slots.
+typedef NS_ENUM(NSUInteger, XTArm9PhiKind) {
+    XTArm9PhiWord = 0,
+    XTArm9PhiWide = 1,
+    XTArm9PhiAgg = 2,
+};
+
++ (XTArm9PhiKind)phiCopyKind:(XTIRValue*)dst src:(XTIROperand*)vop
+                        slot:(NSDictionary<NSNumber*, NSNumber*>*)slot
+    {
+    XTIRType* pty = dst.type;
+    if (!pty)
+        return XTArm9PhiWord;
+    if (pty.kind == XTIRTypeKindI64 || pty.kind == XTIRTypeKindU64 || pty.kind == XTIRTypeKindF64)
+        {
+        if (!slot[@(dst.valueId)])
+            return XTArm9PhiWord;
+        if (vop.kind == XTIROperandKindImmI || vop.kind == XTIROperandKindImmF)
+            return XTArm9PhiWide;
+        if (vop.kind == XTIROperandKindUse && slot[@(vop.valueId)])
+            return XTArm9PhiWide;
+        return XTArm9PhiWord;
+        }
+    if (pty.kind == XTIRTypeKindAgg && vop.kind == XTIROperandKindUse && slot[@(dst.valueId)])
+        return XTArm9PhiAgg;
+    return XTArm9PhiWord;
+    }
+
+// One phi copy, moved the way its kind says.
+//
+// An AGGREGATE phi is a slot-to-slot BLOCK COPY, not a one-word move. A struct
+// value always lives in a frame slot, so routing it through r0 copied only its
+// first FOUR BYTES and left the rest as whatever the frame held — on arm9 that
+// is the 0xa5a5 stack poison, so an 8-byte Rect through a ternary came back with
+// garbage w/h. The SAME argument holds for an i64 — and for a DOUBLE, which is
+// the same eight bytes in the same kind of slot: a `u64` loop variable kept
+// 0xa5a5a5a5 in its high word, so `v > 0` was permanently true.
++ (void)emitOnePhiCopy:(XTIRValue*)dst src:(XTIROperand*)vop kind:(XTArm9PhiKind)kind
+                    fn:(XTIRFunction*)fn
+                  slot:(NSDictionary<NSNumber*, NSNumber*>*)slot
+                   out:(NSMutableString*)out
+    {
+    NSUInteger dd = slot[@(dst.valueId)].unsignedIntegerValue;
+    if (kind == XTArm9PhiWide && vop.kind == XTIROperandKindUse)
+        {
+        NSUInteger so = slot[@(vop.valueId)].unsignedIntegerValue;
+        [self emitSpAccess:@"ldr" reg:@"r0" off:so out:out];
+        [self emitSpAccess:@"str" reg:@"r0" off:dd out:out];
+        [self emitSpAccess:@"ldr" reg:@"r0" off:so + 4 out:out];
+        [self emitSpAccess:@"str" reg:@"r0" off:dd + 4 out:out];
+        return;
+        }
+    if (kind == XTArm9PhiWide)
+        {
+        // An immediate source, integer or float: the bits are laid down
+        // directly. arm9 is LITTLE-endian, so the low word is at the lower
+        // address.
+        uint64_t iv = (vop.kind == XTIROperandKindImmF)
+                          ? vop.floatRawBytes
+                          : (uint64_t)vop.intValue;
+        [self emitMovImm:(int64_t)(uint32_t)(iv & 0xFFFFFFFFu) reg:@"r0" into:out];
+        [self emitSpAccess:@"str" reg:@"r0" off:dd out:out];
+        [self emitMovImm:(int64_t)(uint32_t)(iv >> 32) reg:@"r0" into:out];
+        [self emitSpAccess:@"str" reg:@"r0" off:dd + 4 out:out];
+        return;
+        }
+    if (kind == XTArm9PhiAgg)
+        {
+        // r1 = sp + dstSlot. (movw/movt then add, so a big frame offset does
+        // not overflow the add's 8-bit rotated immediate.)
+        [out appendFormat:@"\tmovw\tr1, #%lu\n", (unsigned long)(dd & 0xFFFF)];
+        [out appendFormat:@"\tmovt\tr1, #%lu\n", (unsigned long)((dd >> 16) & 0xFFFF)];
+        [out appendString:@"\tadd\tr1, r1, sp\n"];
+        [self emitBlockCopyFromSlot:fn.values[@(vop.valueId)]
+                                 to:@"r1"
+                               size:[self aggSize:dst.type.layout]
+                               slot:slot
+                                out:out];
+        return;
+        }
+    [self loadOperand:vop into:@"r0" slot:slot out:out];
+    [self storeResult:dst from:@"r0" slot:slot out:out];
+    }
+
+// One phi-copy cycle, c0 <- c1 <- ... <- ck-1 <- c0 (copy c(i) reads the
+// destination of c(i+1)). The first destination is saved in r3, the chain runs,
+// and the saved value goes into the last destination. r3 is never a home (homes
+// are r4-r11), and loadOperand, storeResult and emitSpAccess touch only the
+// register they are given and r12, so any length and width works with the one
+// scratch. Every member has the same type. A one-word cycle moves values (a
+// member may be homed in a register); a wide or aggregate one lives in slots
+// and goes word by word, then byte by byte for an aggregate's tail.
++ (void)emitPhiCycle:(NSArray<NSNumber*>*)cyc dests:(NSArray<XTIRValue*>*)dests
+                srcs:(NSArray<XTIROperand*>*)srcs kind:(XTArm9PhiKind)kind
+                slot:(NSDictionary<NSNumber*, NSNumber*>*)slot
+                 out:(NSMutableString*)out
+    {
+    NSUInteger k = cyc.count;
+    NSUInteger last = cyc[k - 1].unsignedIntegerValue;
+    if (kind == XTArm9PhiWord)
+        {
+        [self loadOperand:srcs[last] into:@"r3" slot:slot out:out];
+        for (NSUInteger i = 0; i + 1 < k; i++)
+            {
+            NSUInteger c = cyc[i].unsignedIntegerValue;
+            [self loadOperand:srcs[c] into:@"r0" slot:slot out:out];
+            [self storeResult:dests[c] from:@"r0" slot:slot out:out];
+            }
+        [self storeResult:dests[last] from:@"r3" slot:slot out:out];
+        return;
+        }
+    XTIRValue* d0 = dests[cyc[0].unsignedIntegerValue];
+    NSUInteger size = kind == XTArm9PhiWide ? 8 : [self aggSize:d0.type.layout];
+    NSUInteger off = 0;
+    while (off < size)
+        {
+        BOOL whole = off + 4 <= size;
+        NSString* ld = whole ? @"ldr" : @"ldrb";
+        NSString* st = whole ? @"str" : @"strb";
+        [self emitSpAccess:ld reg:@"r3"
+                       off:slot[@(srcs[last].valueId)].unsignedIntegerValue + off out:out];
+        for (NSUInteger i = 0; i + 1 < k; i++)
+            {
+            NSUInteger c = cyc[i].unsignedIntegerValue;
+            [self emitSpAccess:ld reg:@"r0"
+                           off:slot[@(srcs[c].valueId)].unsignedIntegerValue + off out:out];
+            [self emitSpAccess:st reg:@"r0"
+                           off:slot[@(dests[c].valueId)].unsignedIntegerValue + off out:out];
+            }
+        [self emitSpAccess:st reg:@"r3"
+                       off:slot[@(dests[last].valueId)].unsignedIntegerValue + off out:out];
+        off += whole ? 4 : 1;
+        }
+    }
+
+// True when a pending copy other than idx reads copy idx's destination.
++ (BOOL)phiCopyBlocked:(NSUInteger)idx dests:(NSArray<XTIRValue*>*)dests
+                  srcs:(NSArray<XTIROperand*>*)srcs pending:(NSIndexSet*)pending
+    {
+    XTIRValueId did = dests[idx].valueId;
+    for (NSUInteger o = pending.firstIndex; o != NSNotFound; o = [pending indexGreaterThanIndex:o])
+        {
+        if (o == idx)
+            continue;
+        if (srcs[o].kind == XTIROperandKindUse && srcs[o].valueId == did)
+            return YES;
+        }
+    return NO;
+    }
+
 // Emit the parallel phi-copies for the edge `from` → `to`.
+//
+// Phi copies are a PARALLEL assignment. A naive in-order emission is wrong
+// when one copy's SOURCE is a SIBLING copy's DEST — after an inner loop
+// unrolls, `v0 <- lc4` runs next to `lc4 <- lc4+1`, and copying lc4 first
+// hands v0 the post-increment value. So a copy goes when no pending copy still
+// reads its destination; wide and aggregate copies are taken before one-word
+// ones. When every pending copy is blocked, what is left is one or more
+// disjoint cycles (each destination is read by exactly one pending copy), and
+// one is broken through r3 (emitPhiCycle). A stack shuffle is unusable here:
+// arm9 slots are sp-relative, so a push would shift every [sp,#off].
 + (void)emitPhiEdgeFrom:(XTIRBlock*)from to:(XTIRBlock*)to fn:(XTIRFunction*)fn
                    slot:(NSDictionary<NSNumber*, NSNumber*>*)slot
                     out:(NSMutableString*)out
     {
     NSMutableArray<XTIRValue*>* dests = [NSMutableArray array];
     NSMutableArray<XTIROperand*>* srcs = [NSMutableArray array];
+    NSMutableArray<NSNumber*>* kinds = [NSMutableArray array];
     for (XTIRInsn* phi in to.phiNodes)
         {
         if (phi.opcode != XTIROpPhi || !phi.result)
@@ -2687,12 +2849,6 @@ static const NSUInteger kArm9VaForwardWords = 16;
             XTIROperand* bop = phi.operands[i];
             if (bop.kind == XTIROperandKindBlock && bop.blockRef == from)
                 {
-                // An AGGREGATE phi is a slot-to-slot BLOCK COPY, not a one-word move.
-                // A struct value always lives in a frame slot, so routing it through r0
-                // copied only its first FOUR BYTES and left the rest as whatever the
-                // frame held — on arm9 that is the 0xa5a5 stack poison, so an 8-byte
-                // Rect through a ternary came back with garbage w/h. (arm64 and m68k had
-                // the same bug; they just happened to read zeros.)
                 XTIROperand* vop = phi.operands[i + 1];
                 XTIRType* pty = phi.result.type;
                 // A VECTOR phi lives in a q-register, not a slot — never route
@@ -2709,57 +2865,9 @@ static const NSUInteger kArm9VaForwardWords = 16;
                         [out appendFormat:@"\tvorr\tq%@, q%@, q%@\n", dq, sq, sq];
                     break;
                     }
-                NSNumber* dstSlot = slot[@(phi.result.valueId)];
-                // The SAME argument for an i64 — and for a DOUBLE, which is the
-                // same eight bytes in the same kind of slot. The one-word path
-                // below left the other half holding whatever the frame did: a
-                // `u64` loop variable kept 0xa5a5a5a5 up there, so `v > 0` was
-                // permanently true and String.withU64 spun forever, and a
-                // double through a ternary lost its value outright.
-                if (pty && (pty.kind == XTIRTypeKindI64 || pty.kind == XTIRTypeKindU64 || pty.kind == XTIRTypeKindF64) && dstSlot)
-                    {
-                    if (vop.kind == XTIROperandKindUse && slot[@(vop.valueId)])
-                        {
-                        NSUInteger so = slot[@(vop.valueId)].unsignedIntegerValue;
-                        NSUInteger dd = dstSlot.unsignedIntegerValue;
-                        [self emitSpAccess:@"ldr" reg:@"r0" off:so out:out];
-                        [self emitSpAccess:@"str" reg:@"r0" off:dd out:out];
-                        [self emitSpAccess:@"ldr" reg:@"r0" off:so + 4 out:out];
-                        [self emitSpAccess:@"str" reg:@"r0" off:dd + 4 out:out];
-                        break;
-                        }
-                    // An immediate source, integer or float: the bits are laid
-                    // down directly. arm9 is LITTLE-endian, so the low word is
-                    // at the lower address.
-                    if (vop.kind == XTIROperandKindImmI || vop.kind == XTIROperandKindImmF)
-                        {
-                        uint64_t iv = (vop.kind == XTIROperandKindImmF)
-                                          ? vop.floatRawBytes
-                                          : (uint64_t)vop.intValue;
-                        NSUInteger dd = dstSlot.unsignedIntegerValue;
-                        [self emitMovImm:(int64_t)(uint32_t)(iv & 0xFFFFFFFFu) reg:@"r0" into:out];
-                        [self emitSpAccess:@"str" reg:@"r0" off:dd out:out];
-                        [self emitMovImm:(int64_t)(uint32_t)(iv >> 32) reg:@"r0" into:out];
-                        [self emitSpAccess:@"str" reg:@"r0" off:dd + 4 out:out];
-                        break;
-                        }
-                    }
-                if (pty && pty.kind == XTIRTypeKindAgg && vop.kind == XTIROperandKindUse && dstSlot)
-                    {
-                    // r1 = sp + dstSlot. (movw/movt then add, so a big frame offset
-                    // does not overflow the add's 8-bit rotated immediate.)
-                    [out appendFormat:@"\tmovw\tr1, #%lu\n", (unsigned long)(dstSlot.unsignedIntegerValue & 0xFFFF)];
-                    [out appendFormat:@"\tmovt\tr1, #%lu\n", (unsigned long)((dstSlot.unsignedIntegerValue >> 16) & 0xFFFF)];
-                    [out appendString:@"\tadd\tr1, r1, sp\n"];
-                    [self emitBlockCopyFromSlot:fn.values[@(vop.valueId)]
-                                             to:@"r1"
-                                           size:[self aggSize:pty.layout]
-                                           slot:slot
-                                            out:out];
-                    break;
-                    }
                 [dests addObject:phi.result];
                 [srcs addObject:vop];
+                [kinds addObject:@([self phiCopyKind:phi.result src:vop slot:slot])];
                 break;
                 }
             }
@@ -2767,78 +2875,50 @@ static const NSUInteger kArm9VaForwardWords = 16;
     NSUInteger n = dests.count;
     if (n == 0)
         return;
-    // Phi copies are a PARALLEL assignment. A naive in-order emission is wrong
-    // when one copy's SOURCE is a SIBLING copy's DEST — after an inner loop
-    // unrolls, `v0 <- lc4` runs next to `lc4 <- lc4+1`, and copying lc4 first
-    // hands v0 the post-increment value (a lost copy → nested counter one too
-    // high). Emit in dependency order: a copy whose dest is not read by any
-    // pending copy goes first. (A stack shuffle is unusable here — arm9 slots are
-    // sp-relative, so a push would shift every [sp,#off] mid-sequence; arm64 and
-    // xt6502 use this same value-ordering.) A residual true cycle (a swap) is
-    // rare; break it by picking the first pending copy (matches arm64).
     NSMutableIndexSet* pending = [NSMutableIndexSet indexSetWithIndexesInRange:NSMakeRange(0, n)];
     while (pending.count)
         {
         NSInteger pick = -1;
-        for (NSUInteger idx = pending.firstIndex; idx != NSNotFound;
-             idx = [pending indexGreaterThanIndex:idx])
-            {
-            XTIRValueId did = dests[idx].valueId;
-            BOOL blocked = NO;
-            for (NSUInteger o = pending.firstIndex; o != NSNotFound;
-                 o = [pending indexGreaterThanIndex:o])
+        for (NSUInteger pass = 0; pass < 2 && pick < 0; pass++)
+            for (NSUInteger idx = pending.firstIndex; idx != NSNotFound && pick < 0;
+                 idx = [pending indexGreaterThanIndex:idx])
                 {
-                if (o == idx)
+                BOOL word = kinds[idx].unsignedIntegerValue == XTArm9PhiWord;
+                if (word != (pass == 1))
                     continue;
-                if (srcs[o].kind == XTIROperandKindUse && srcs[o].valueId == did)
-                    {
-                    blocked = YES;
-                    break;
-                    }
+                if (![self phiCopyBlocked:idx dests:dests srcs:srcs pending:pending])
+                    pick = (NSInteger)idx;
                 }
-            if (!blocked)
-                {
-                pick = (NSInteger)idx;
-                break;
-                }
-            }
         if (pick >= 0)
             {
-            [self loadOperand:srcs[(NSUInteger)pick] into:@"r0" slot:slot out:out];
-            [self storeResult:dests[(NSUInteger)pick] from:@"r0" slot:slot out:out];
-            [pending removeIndex:(NSUInteger)pick];
-            continue;
-            }
-        // Residual cycle: every pending copy's DEST is another copy's SOURCE, so
-        // no single-step order is safe — a swap `%a<-%b, %b<-%a` copied in place
-        // loses one value (bug 199: loop-swapped class-pointer locals came back
-        // unchanged). arm9 slots are sp-relative so a stack shuffle would shift
-        // every [sp,#off]; instead read EVERY source into its own scratch
-        // register (r0/r2/r3 — never home registers, homes are r4-r11), then
-        // write every dest. Only 32-bit scalars reach here (i64/double/agg phis
-        // are copied inline above), so one GP register per member suffices. A
-        // cycle wider than the 3-register pool falls back to the in-place single
-        // step, no worse than pre-fix.
-        NSArray<NSString*>* pool = @[ @"r0", @"r2", @"r3" ];
-        if (pending.count > pool.count)
-            {
-            NSUInteger fb = pending.firstIndex;
-            [self loadOperand:srcs[fb] into:@"r0" slot:slot out:out];
-            [self storeResult:dests[fb] from:@"r0" slot:slot out:out];
-            [pending removeIndex:fb];
+            NSUInteger p = (NSUInteger)pick;
+            [self emitOnePhiCopy:dests[p] src:srcs[p]
+                            kind:(XTArm9PhiKind)kinds[p].unsignedIntegerValue
+                              fn:fn slot:slot out:out];
+            [pending removeIndex:p];
             continue;
             }
         NSMutableArray<NSNumber*>* cyc = [NSMutableArray array];
-        for (NSUInteger idx = pending.firstIndex; idx != NSNotFound;
-             idx = [pending indexGreaterThanIndex:idx])
-            [cyc addObject:@(idx)];
-        for (NSUInteger k = 0; k < cyc.count; k++)
-            [self loadOperand:srcs[cyc[k].unsignedIntegerValue] into:pool[k] slot:slot out:out];
-        for (NSUInteger k = 0; k < cyc.count; k++)
+        NSUInteger first = pending.firstIndex;
+        NSUInteger cur = first;
+        while (YES)
             {
-            [self storeResult:dests[cyc[k].unsignedIntegerValue] from:pool[k] slot:slot out:out];
-            [pending removeIndex:cyc[k].unsignedIntegerValue];
+            [cyc addObject:@(cur)];
+            XTIRValueId want = srcs[cur].valueId;
+            NSUInteger next = NSNotFound;
+            for (NSUInteger j = pending.firstIndex; j != NSNotFound && next == NSNotFound;
+                 j = [pending indexGreaterThanIndex:j])
+                if (dests[j].valueId == want)
+                    next = j;
+            if (next == NSNotFound || next == first)
+                break;
+            cur = next;
             }
+        [self emitPhiCycle:cyc dests:dests srcs:srcs
+                      kind:(XTArm9PhiKind)kinds[first].unsignedIntegerValue
+                      slot:slot out:out];
+        for (NSNumber* c in cyc)
+            [pending removeIndex:c.unsignedIntegerValue];
         }
     }
 

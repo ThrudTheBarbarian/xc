@@ -3660,9 +3660,24 @@ class Xt6502
         IROperand* cond = (IROperand*)n.ops().get((u32)0);
         IROperand* t = (IROperand*)n.ops().get((u32)1);
         IROperand* f = (IROperand*)n.ops().get((u32)2);
+        // Each edge's phi copies run on that edge only, after the test. Run
+        // before the branch, one edge's copies could overwrite a value the
+        // other edge's copies still read (a loop's exit taking a variable the
+        // back edge had just rotated).
+        if (hasPhiCopies(bb, t.blk()) || hasPhiCopies(bb, f.blk())) {
+            loadCondTest(cond);
+            u32 el = _labelCounter; _labelCounter = _labelCounter + (u32)1;
+            _out.appendFormat("    BNE .Lcbt_%lu\n", el);
+            _out.appendFormat("    JMP .Lcbsk_%lu\n", el);
+            _out.appendFormat(".Lcbt_%lu:\n", el);
+            emitPhiCopies(bb, t.blk());
+            _out.appendFormat("    JMP %s\n", blockLabel(_fn, t.blk()).cString());
+            _out.appendFormat(".Lcbsk_%lu:\n", el);
+            emitPhiCopies(bb, f.blk());
+            _out.appendFormat("    JMP %s\n", blockLabel(_fn, f.blk()).cString());
+            return;
+        }
         loadOperandByte(cond, (u32)0);
-        emitPhiCopies(bb, t.blk());
-        emitPhiCopies(bb, f.blk());
         loadCondTest(cond);
         // BEQ has the same ±127 reach as BRA, but here it spans only the
         // 3-byte JMP-true, which is always in range; the JMPs carry the
@@ -3674,12 +3689,29 @@ class Xt6502
         _out.appendFormat("    JMP %s\n", blockLabel(_fn, f.blk()).cString());
     }
 
+    // True when the edge pred -> succ carries a phi copy.
+    static bool hasPhiCopies(IRBlock* pred, IRBlock* succ)
+    {
+        for (u32 i = (u32)0; i < succ.phis().count(); i = i + (u32)1) {
+            IRInsn* phi = (IRInsn*)succ.phis().get(i);
+            if (phi.res() == (IRValue*)0) continue;
+            for (u32 k = (u32)0; k + (u32)1 < phi.ops().count(); k = k + (u32)2) {
+                IROperand* bop = (IROperand*)phi.ops().get(k);
+                if (bop.kind() == (u8)OPK_BLOCK && bop.blk() == pred) return true;
+            }
+        }
+        return false;
+    }
+
     // Phi copies are a PARALLEL assignment: a loop's `v <- c` and `c <- c+1`
     // must both read the OLD c, so a naive in-order copy is off by one. Emit in
     // dependency order — a copy whose destination nothing pending still reads
-    // is safe now — and break a residual cycle by stashing one destination in
-    // the $B0.. scratch (free at a branch) and redirecting reads to it. The
-    // hardware stack is not an option: SP-relative slots would shift under it.
+    // is safe now. When only cycles are left (each destination read by exactly
+    // one pending copy), break one byte by byte: save the first destination's
+    // byte in $B0 (free at a branch), run the chain, and store the saved byte
+    // into the last destination. One scratch byte serves any cycle length and
+    // width. The hardware stack is not an option: SP-relative slots would
+    // shift under it.
     void emitPhiCopies(IRBlock* pred, IRBlock* succ)
     {
         Array* dests = new Array();
@@ -3699,8 +3731,6 @@ class Xt6502
         if (n == (u32)0) return;
         Array* pending = new Array();
         for (u32 i = (u32)0; i < n; i = i + (u32)1) pending.add((Object*)Number.withU32(i));
-        Map* redir = new Map();
-        u32 scratch = (u32)$B0;
         while (pending.count() > (u32)0) {
             i32 pick = (i32)-1;
             for (u32 pi = (u32)0; pi < pending.count(); pi = pi + (u32)1) {
@@ -3715,34 +3745,53 @@ class Xt6502
                 }
                 if (!blocked) { pick = (i32)pi; break; }
             }
-            if (pick < (i32)0) {                     // cycle: stash one, redirect
-                pick = (i32)0;
-                u32 idx = ((Number*)pending.get((u32)0)).asU32();
+            if (pick >= (i32)0) {
+                u32 idx = ((Number*)pending.get((u32)pick)).asU32();
                 IRValue* d = (IRValue*)dests.get(idx);
+                IROperand* sv = (IROperand*)srcs.get(idx);
                 u32 w = byteWidth(d.ty());
                 for (u32 b = (u32)0; b < w; b = b + (u32)1) {
-                    String* o = operandFor(d, b);
-                    if (o == (String*)0) continue;
-                    _out.appendFormat("    LDA %s\n    STA $%s\n",
-                                      o.cString(), hex2(scratch + b).cString());
-                }
-                redir.set((Hashable*)d, (Object*)Number.withU32(scratch));
-                scratch = scratch + w;
-            }
-            u32 idx = ((Number*)pending.get((u32)pick)).asU32();
-            IRValue* d = (IRValue*)dests.get(idx);
-            IROperand* sv = (IROperand*)srcs.get(idx);
-            u32 w = byteWidth(d.ty());
-            for (u32 b = (u32)0; b < w; b = b + (u32)1) {
-                Object* rs = sv.kind() == (u8)OPK_USE ? redir.get((Hashable*)sv.val()) : (Object*)0;
-                if (rs != (Object*)0)
-                    _out.appendFormat("    LDA $%s\n",
-                                      hex2(((Number*)rs).asU32() + b).cString());
-                else
                     loadOperandByte(sv, b);
-                storeAToValue(d, b);
+                    storeAToValue(d, b);
+                }
+                pending.removeAt((u32)pick);
+                continue;
             }
-            pending.removeAt((u32)pick);
+            // A cycle c0 <- c1 <- ... <- ck-1 <- c0: copy c(i) reads the
+            // destination of c(i+1).
+            Array* cyc = new Array();
+            u32 first = ((Number*)pending.get((u32)0)).asU32();
+            u32 cur = first;
+            while (true) {
+                cyc.add((Object*)Number.withU32(cur));
+                IRValue* want = ((IROperand*)srcs.get(cur)).val();
+                u32 next = n;
+                for (u32 pi = (u32)0; pi < pending.count() && next == n; pi = pi + (u32)1) {
+                    u32 j = ((Number*)pending.get(pi)).asU32();
+                    if ((IRValue*)dests.get(j) == want) next = j;
+                }
+                if (next == n || next == first) break;
+                cur = next;
+            }
+            u32 k = cyc.count();
+            u32 last = ((Number*)cyc.get(k - (u32)1)).asU32();
+            u32 w = byteWidth(((IRValue*)dests.get(first)).ty());
+            for (u32 b = (u32)0; b < w; b = b + (u32)1) {
+                loadOperandByte((IROperand*)srcs.get(last), b);
+                _out.appendCString("    STA $B0\n");
+                for (u32 i = (u32)0; i + (u32)1 < k; i = i + (u32)1) {
+                    u32 c = ((Number*)cyc.get(i)).asU32();
+                    loadOperandByte((IROperand*)srcs.get(c), b);
+                    storeAToValue((IRValue*)dests.get(c), b);
+                }
+                _out.appendCString("    LDA $B0\n");
+                storeAToValue((IRValue*)dests.get(last), b);
+            }
+            for (u32 i = (u32)0; i < k; i = i + (u32)1) {
+                u32 c = ((Number*)cyc.get(i)).asU32();
+                for (u32 pi = (u32)0; pi < pending.count(); pi = pi + (u32)1)
+                    if (((Number*)pending.get(pi)).asU32() == c) { pending.removeAt(pi); pi = pending.count(); }
+            }
         }
     }
 

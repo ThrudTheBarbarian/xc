@@ -2478,12 +2478,12 @@ class M68k
         // dest (`v0 <- lc4` beside `lc4 <- lc4+1` after the inner loop unrolls),
         // writing lc4's slot first hands v0 the post-increment value. Both live
         // in slots, so a register-only check misses it.
+        // Aggregates and eight-byte scalars count too: they live in slots, and
+        // a swap of two of them is as much a cycle as a swap of two longs.
         bool safe = true;
         for (u32 i = (u32)0; i < dests.count() && safe; i = i + (u32)1)
             {
             IRValue* d = (IRValue*)dests.get(i);
-            if (isAggTy(d.ty()))
-                continue; // aggregates take the byte-copy path
             String* rd = locOf(d);
             if (rd == (String*)0)
                 continue;
@@ -2505,46 +2505,138 @@ class M68k
                 emitOnePhiCopy((IRValue*)dests.get(i), (IROperand*)srcs.get(i));
             return;
             }
-        // A cycle: read EVERY source (push) before writing ANY dest (pop in
-        // reverse). Aggregates are excluded — they have their own slot and
-        // cannot ride the 4-byte scalar shuffle.
-        Array* cd = new Array();
-        Array* cs = new Array();
+        // Not safe: read EVERY source (push) before writing ANY dest (pop in
+        // reverse). Slots are a6-relative, so moving sp leaves them
+        // addressable. An eight-byte scalar is pushed as its two longs and an
+        // aggregate as a block of its size rounded up to a long, so a cycle
+        // of either is handled like a cycle of longs. A walking pointer whose
+        // source is its own address register is already in place.
+        Array* skip = new Array();
         for (u32 i = (u32)0; i < dests.count(); i = i + (u32)1)
             {
             IRValue* d = (IRValue*)dests.get(i);
             IROperand* sv = (IROperand*)srcs.get(i);
-            // Address-register and aggregate destinations are handled directly:
-            // neither can ride the 4-byte scalar stack shuffle.
-            if (ptrRegOf(d) != (String*)0)
+            String* dA = ptrRegOf(d);
+            String* sA = sv.kind() == (u8)OPK_USE ? ptrRegOf(sv.val()) : (String*)0;
+            // (An aggregate with no slot of its own has nowhere to go.)
+            bool inPlace = (dA != (String*)0 && sA != (String*)0 && dA.equals(sA))
+                           || (isAggTy(d.ty()) && sv.kind() == (u8)OPK_USE && !hasSlot(d));
+            skip.add((Object*)Number.with(inPlace ? (u32)1 : (u32)0));
+            if (inPlace)
+                continue;
+            if (isAggPhiCopy(d, sv))
+                pushAggPhiSource(d, sv);
+            else if (!pushWidePhiSource(d, sv))
                 {
-                emitOnePhiCopy(d, sv);
+                loadOperand(sv, String.withCString("d0"));
+                _out.appendCString("\tmove.l\td0,-(sp)\n");
+                }
+            }
+        for (u32 i = dests.count(); i > (u32)0; i = i - (u32)1)
+            {
+            if (((Number*)skip.get(i - (u32)1)).asU32() != (u32)0)
+                continue;
+            IRValue* d = (IRValue*)dests.get(i - (u32)1);
+            IROperand* sv = (IROperand*)srcs.get(i - (u32)1);
+            if (isAggPhiCopy(d, sv))
+                {
+                popAggPhiDest(d);
                 continue;
                 }
-            if (isAggTy(d.ty()) && sv.kind() == (u8)OPK_USE)
+            if (isWidePhiSource(d, sv))
                 {
-                emitAggPhiCopy(d, sv);
+                _out.appendFormat("\tmove.l\t(sp)+,%ld(a6)\n", slotOf(d));
+                _out.appendFormat("\tmove.l\t(sp)+,%ld(a6)\n", slotOf(d) + (i32)4);
                 continue;
                 }
-            // Eight-byte scalar: copied in place, exactly as an aggregate is.
-            // Both step outside the read-all-then-write-all discipline, so a
-            // cycle whose members are 64-bit would still be wrong — no such
-            // cycle exists today, and it would need a wide shuffle.
-            if (emitWidePhiCopy(d, sv))
+            String* dA = ptrRegOf(d);
+            if (dA != (String*)0)
+                {
+                _out.appendFormat("\tmove.l\t(sp)+,%s\n", dA.cString());
                 continue;
-            cd.add((Object*)d);
-            cs.add((Object*)sv);
-            }
-        for (u32 i = (u32)0; i < cs.count(); i = i + (u32)1)
-            {
-            loadOperand((IROperand*)cs.get(i), String.withCString("d0"));
-            _out.appendCString("\tmove.l\td0,-(sp)\n");
-            }
-        for (u32 i = cd.count(); i > (u32)0; i = i - (u32)1)
-            {
+                }
             _out.appendCString("\tmove.l\t(sp)+,d0\n");
-            storeReg(String.withCString("d0"), (IRValue*)cd.get(i - (u32)1));
+            storeReg(String.withCString("d0"), d);
             }
+        }
+
+    // True when emitWidePhiCopy would take this copy: an i64 or double from
+    // an immediate or a slot.
+    bool isWidePhiSource(IRValue* d, IROperand* src)
+        {
+        if ((!isI64(d.ty()) && !isF64(d.ty())) || !hasSlot(d))
+            return false;
+        if (src.kind() == (u8)OPK_IMMI || src.kind() == (u8)OPK_IMMF)
+            return true;
+        return src.kind() == (u8)OPK_USE && src.val() != (IRValue*)0 && hasSlot(src.val());
+        }
+
+    // True when an aggregate copy goes slot to slot.
+    bool isAggPhiCopy(IRValue* d, IROperand* src)
+        {
+        return isAggTy(d.ty()) && src.kind() == (u8)OPK_USE && hasSlot(d);
+        }
+
+    // Push an eight-byte source low long first, so the high long is on top
+    // and pops first into the slot base (big-endian: high at slot, low at
+    // slot+4).
+    bool pushWidePhiSource(IRValue* d, IROperand* src)
+        {
+        if (!isWidePhiSource(d, src))
+            return false;
+        if (src.kind() == (u8)OPK_IMMI)
+            {
+            i64 v = src.imm();
+            _out.appendFormat("\tmove.l\t#%lu,-(sp)\n", (u32)v);
+            _out.appendFormat("\tmove.l\t#%lu,-(sp)\n", (u32)(v >> (i64)32));
+            return true;
+            }
+        if (src.kind() == (u8)OPK_IMMF)
+            {
+            String* hx = src.fpHex();
+            _out.appendFormat("\tmove.l\t#$%s,-(sp)\n",
+                              upperHex(hx.substringBytes((u32)8, (u32)8)).cString());
+            _out.appendFormat("\tmove.l\t#$%s,-(sp)\n",
+                              upperHex(hx.substringBytes((u32)0, (u32)8)).cString());
+            return true;
+            }
+        i32 ss = slotOf(src.val());
+        _out.appendFormat("\tmove.l\t%ld(a6),-(sp)\n", ss + (i32)4);
+        _out.appendFormat("\tmove.l\t%ld(a6),-(sp)\n", ss);
+        return true;
+        }
+
+    // An aggregate source goes onto the stack as a block of its size rounded
+    // up to a long, byte by byte as emitAggPhiCopy copies; popAggPhiDest
+    // copies it back out and releases it.
+    void pushAggPhiSource(IRValue* d, IROperand* src)
+        {
+        u32 wide = aggSize(layoutOf(d.ty()));
+        _out.appendFormat("\tsub.l\t#%lu,sp\n", (wide + (u32)3) & ~(u32)3);
+        _out.appendCString("\tmove.l\tsp,a0\n");
+        _out.appendFormat("\tlea\t%ld(a6),a1\n", slotOf(src.val()));
+        emitPhiByteLoop(wide);
+        }
+
+    void popAggPhiDest(IRValue* d)
+        {
+        u32 wide = aggSize(layoutOf(d.ty()));
+        _out.appendFormat("\tlea\t%ld(a6),a0\n", slotOf(d));
+        _out.appendCString("\tmove.l\tsp,a1\n");
+        emitPhiByteLoop(wide);
+        _out.appendFormat("\tadd.l\t#%lu,sp\n", (wide + (u32)3) & ~(u32)3);
+        }
+
+    // Copy `wide` bytes from (a1) to (a0). The loop runs at least once, so
+    // an empty aggregate copies nothing rather than 2^32 bytes.
+    void emitPhiByteLoop(u32 wide)
+        {
+        if (wide == (u32)0)
+            return;
+        u32 nlbl = _labelSeq;
+        _labelSeq = _labelSeq + (u32)1;
+        _out.appendFormat("\tmove.l\t#%lu,d0\n.Lphicpy%lu:\n\tmove.b\t(a1)+,(a0)+\n", wide, nlbl);
+        _out.appendFormat("\tsubq.l\t#1,d0\n\tbne.s\t.Lphicpy%lu\n", nlbl);
         }
 
     void emitOnePhiCopy(IRValue* d, IROperand* src)
@@ -2636,10 +2728,7 @@ class M68k
         u32 wide = aggSize(layoutOf(d.ty()));
         _out.appendFormat("\tlea\t%ld(a6),a0\n", slotOf(d));
         _out.appendFormat("\tlea\t%ld(a6),a1\n", slotOf(src.val()));
-        u32 nlbl = _labelSeq;
-        _labelSeq = _labelSeq + (u32)1;
-        _out.appendFormat("\tmove.l\t#%lu,d0\n.Lphicpy%lu:\n\tmove.b\t(a1)+,(a0)+\n", wide, nlbl);
-        _out.appendFormat("\tsubq.l\t#1,d0\n\tbne.s\t.Lphicpy%lu\n", nlbl);
+        emitPhiByteLoop(wide);
         }
 
     // Where a value lives — its home register, or its frame slot.

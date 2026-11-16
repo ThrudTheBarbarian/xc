@@ -1652,12 +1652,14 @@ static NSString *padLeft(NSString *s, NSUInteger width) {
     // Phi copies are a PARALLEL (simultaneous) assignment: a loop's `v <- c`
     // and `c <- c+1` must both read the OLD c. A naive in-order sequential copy
     // clobbers it (off-by-one). Emit in dependency order — a copy whose dest is
-    // not read by any pending copy is safe to do now; a residual cycle is broken
-    // by stashing one dest into ZP scratch ($B0+, free at a branch) and reading
-    // it there. (No hardware stack: SP-relative slots would shift under it.)
+    // not read by any pending copy is safe to do now. When only cycles are left
+    // (each dest read by exactly one pending copy), break one byte by byte: save
+    // the first dest's byte in $B0 (free at a branch), run the chain, and store
+    // the saved byte into the last dest. One scratch byte serves any cycle
+    // length and width; the old stash grew from $B0 with no limit and ran into
+    // the zero-page variables at $C0. (No hardware stack: SP-relative slots
+    // would shift under it.)
     NSMutableIndexSet *pending = [NSMutableIndexSet indexSetWithIndexesInRange:NSMakeRange(0, n)];
-    NSMutableDictionary<NSNumber *, NSNumber *> *redir = [NSMutableDictionary dictionary];
-    int scratch = 0xB0;
     while (pending.count) {
         NSInteger pick = -1;
         for (NSUInteger idx = pending.firstIndex; idx != NSNotFound; idx = [pending indexGreaterThanIndex:idx]) {
@@ -1668,26 +1670,60 @@ static NSString *padLeft(NSString *s, NSUInteger width) {
             }
             if (!blocked) { pick = (NSInteger)idx; break; }
         }
-        if (pick < 0) {                            // cycle: stash one dest, redirect reads
-            NSUInteger idx = pending.firstIndex; XTIRValue *d = dests[idx];
+        if (pick >= 0) {
+            NSUInteger idx = (NSUInteger)pick;
+            XTIRValue *d = dests[idx]; XTIROperand *s = srcs[idx];
             NSUInteger w = [self byteWidthForType:d.type];
             for (NSUInteger b = 0; b < w; b++) {
-                NSString *op = [self operandForValueId:d.valueId byteIndex:b ctx:ctx];
-                if (op) [ctx.out appendFormat:@"    LDA %@\n    STA $%02X\n", op, scratch + (int)b];
+                [self loadOperandByte:s byteIndex:b ctx:ctx];
+                [self storeAToValueId:d.valueId byteIndex:b ctx:ctx];
             }
-            redir[@(d.valueId)] = @(scratch); scratch += (int)w; pick = (NSInteger)idx;
+            [pending removeIndex:idx];
+            continue;
         }
-        NSUInteger idx = (NSUInteger)pick;
-        XTIRValue *d = dests[idx]; XTIROperand *s = srcs[idx];
-        NSUInteger w = [self byteWidthForType:d.type];
+        // A cycle c0 <- c1 <- ... <- ck-1 <- c0: copy c(i) reads the
+        // destination of c(i+1).
+        NSMutableArray<NSNumber *> *cyc = [NSMutableArray array];
+        NSUInteger first = pending.firstIndex, cur = first;
+        while (YES) {
+            [cyc addObject:@(cur)];
+            XTIRValueId want = srcs[cur].valueId;
+            NSUInteger next = NSNotFound;
+            for (NSUInteger j = pending.firstIndex; j != NSNotFound && next == NSNotFound;
+                 j = [pending indexGreaterThanIndex:j])
+                if (dests[j].valueId == want) next = j;
+            if (next == NSNotFound || next == first) break;
+            cur = next;
+        }
+        NSUInteger k = cyc.count;
+        NSUInteger last = cyc[k - 1].unsignedIntegerValue;
+        NSUInteger w = [self byteWidthForType:dests[first].type];
         for (NSUInteger b = 0; b < w; b++) {
-            NSNumber *rs = (s.kind == XTIROperandKindUse) ? redir[@(s.valueId)] : nil;
-            if (rs) [ctx.out appendFormat:@"    LDA $%02X\n", rs.intValue + (int)b];
-            else    [self loadOperandByte:s byteIndex:b ctx:ctx];
-            [self storeAToValueId:d.valueId byteIndex:b ctx:ctx];
+            [self loadOperandByte:srcs[last] byteIndex:b ctx:ctx];
+            [ctx.out appendString:@"    STA $B0\n"];
+            for (NSUInteger i = 0; i + 1 < k; i++) {
+                NSUInteger c = cyc[i].unsignedIntegerValue;
+                [self loadOperandByte:srcs[c] byteIndex:b ctx:ctx];
+                [self storeAToValueId:dests[c].valueId byteIndex:b ctx:ctx];
+            }
+            [ctx.out appendString:@"    LDA $B0\n"];
+            [self storeAToValueId:dests[last].valueId byteIndex:b ctx:ctx];
         }
-        [pending removeIndex:idx];
+        for (NSNumber *c in cyc) [pending removeIndex:c.unsignedIntegerValue];
     }
+}
+
+// YES when the edge pred -> succ carries a phi copy.
++ (BOOL)edgeHasPhiCopies:(XTIRBlock *)pred to:(XTIRBlock *)succ
+{
+    for (XTIRInsn *phi in succ.phiNodes) {
+        if (phi.opcode != XTIROpPhi || !phi.result) continue;
+        for (NSUInteger i = 0; i + 1 < phi.operands.count; i += 2) {
+            XTIROperand *bop = phi.operands[i];
+            if (bop.kind == XTIROperandKindBlock && bop.blockRef == pred) return YES;
+        }
+    }
+    return NO;
 }
 
 #pragma mark - Per-opcode emission
@@ -2421,18 +2457,28 @@ static NSString *padLeft(NSString *s, NSUInteger width) {
             XTIROperand *cond = insn.operands[0];
             XTIROperand *t = insn.operands[1];
             XTIROperand *f = insn.operands[2];
-            // Load cond byte.
+            // Each edge's phi copies run on that edge only, after the
+            // test. Run before the branch, one edge's copies could
+            // overwrite a value the other edge's copies still read (a
+            // loop's exit taking a variable the back edge had just
+            // rotated).
+            if ([self edgeHasPhiCopies:block to:t.blockRef]
+                || [self edgeHasPhiCopies:block to:f.blockRef]) {
+                [self loadCondTest:cond ctx:ctx];
+                NSUInteger el = ctx.labelCounter++;
+                [ctx.out appendFormat:@"    BNE .Lcbt_%lu\n", (unsigned long)el];
+                [ctx.out appendFormat:@"    JMP .Lcbsk_%lu\n", (unsigned long)el];
+                [ctx.out appendFormat:@".Lcbt_%lu:\n", (unsigned long)el];
+                [self emitPhiCopiesFrom:block to:t.blockRef ctx:ctx];
+                [ctx.out appendFormat:@"    JMP %@\n",
+                 [self blockLabelForFn:ctx.fn block:t.blockRef]];
+                [ctx.out appendFormat:@".Lcbsk_%lu:\n", (unsigned long)el];
+                [self emitPhiCopiesFrom:block to:f.blockRef ctx:ctx];
+                [ctx.out appendFormat:@"    JMP %@\n",
+                 [self blockLabelForFn:ctx.fn block:f.blockRef]];
+                break;
+            }
             [self loadOperandByte:cond byteIndex:0 ctx:ctx];
-            // Phi copies for both successors run *before* the
-            // physical branch. (Since both successors are reachable,
-            // we have to do the copies before we know which way the
-            // jump goes — and our simple regalloc never aliases a
-            // phi-source slot with a phi-result slot, so the copies
-            // don't conflict.)
-            [self emitPhiCopiesFrom:block to:t.blockRef ctx:ctx];
-            [self emitPhiCopiesFrom:block to:f.blockRef ctx:ctx];
-            // Re-load cond after the copies (might have been
-            // clobbered by intermediate LDA/STA).
             [self loadCondTest:cond ctx:ctx];
             // BEQ <skip-true> ; JMP <true> ; skip-true: ; JMP <false>
             // The BEQ has the same ±127 range limit as BRA, but
