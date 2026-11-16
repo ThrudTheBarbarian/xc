@@ -4026,12 +4026,23 @@ static void vecSlotMove(XTIRFunction* fn, XTIRValueId vid, NSString* reg, BOOL l
                         }
                     }
                 }
-            else if ([self isFloatVal:pv])
+            else if ([self isFloatVal:pv] && freg < 8)
                 {
-                if (s && freg < 8)
+                if (s)
                     [out appendFormat:@"\tmov%@\t[rbp-%@], xmm%lu\n",
                                       pv.type.kind == XTIRTypeKindF64 ? @"sd" : @"ss", s, (unsigned long)freg];
                 freg++;
+                }
+            else if ([self isFloatVal:pv])
+                {
+                // Past xmm7 the caller passed it on the stack, in the next slot
+                // in parameter order, as an integer past r9 (#313).
+                if (s)
+                    {
+                    [out appendFormat:@"\tmov\trax, [rbp+%lu]\n", (unsigned long)(16 + 8 * sidx)];
+                    [out appendFormat:@"\tmov\t[rbp-%@], rax\n", s];
+                    }
+                sidx++;
                 }
             else
                 {
@@ -5181,8 +5192,8 @@ static BOOL xtConstThrough(XTIRValueId v, XTIRInsn* (^defOf)(XTIRValueId), int d
             {
             // Pre-pass: System V passes integer/pointer args past r9 on the stack.
             // Size that outgoing area so a single `sub rsp` reserves it (kept
-            // 16-aligned). Struct/float overflow past their register files is
-            // unsupported (rare), so only integer stack args are counted.
+            // 16-aligned): integers past r9, floats past xmm7 and structs past
+            // the registers.
             // A >16-byte aggregate RESULT is MEMORY class: rdi carries a hidden
             // pointer to the result slot, shifting the GP args right by one.
             BOOL memRet = (res && [self isSysVMemRet:res.type]);
@@ -5199,9 +5210,14 @@ static BOOL xtConstThrough(XTIRValueId v, XTIRInsn* (^defOf)(XTIRValueId), int d
                     else
                         nstack += nr; // whole, on the stack (#301)
                     }
-                else if (v && [self isFloatVal:v] && cFreg < 8)
+                else if (v && [self isFloatVal:v])
                     {
-                    cFreg++;
+                    // A float past xmm7 takes the next stack slot, as an integer
+                    // past r9 does (#313).
+                    if (cFreg < 8)
+                        cFreg++;
+                    else
+                        nstack++;
                     }
                 else if (cIreg < 6)
                     {
@@ -5259,14 +5275,25 @@ static BOOL xtConstThrough(XTIRValueId v, XTIRInsn* (^defOf)(XTIRValueId), int d
                         }
                     }
                 // float arg → xmm
-                else if (v && [self isFloatVal:v] && freg < 8)
+                else if (v && [self isFloatVal:v])
                     {
-                    [self loadF:a
-                           into:[NSString stringWithFormat:@"xmm%lu", (unsigned long)freg]
-                             fn:fn
-                           slot:slot
-                            out:out];
-                    freg++;
+                    if (freg < 8)
+                        {
+                        [self loadF:a
+                               into:[NSString stringWithFormat:@"xmm%lu", (unsigned long)freg]
+                                 fn:fn
+                               slot:slot
+                                out:out];
+                        freg++;
+                        }
+                    else
+                        {
+                        // Past xmm7 its bits go through rax, which is not an argument
+                        // register, to the next outgoing stack slot in source order (#313).
+                        [self loadZX:a into:'a' fn:fn slot:slot out:out];
+                        [out appendFormat:@"\tmov\t[rsp+%lu], rax\n", (unsigned long)(8 * sidx)];
+                        sidx++;
+                        }
                     }
                 // int/pointer arg
                 else if (ireg < 6)
@@ -5382,9 +5409,14 @@ static BOOL xtConstThrough(XTIRValueId v, XTIRInsn* (^defOf)(XTIRValueId), int d
                     else
                         nstack += nr; // whole, on the stack (#301)
                     }
-                else if (v && [self isFloatVal:v] && cFreg < 8)
+                else if (v && [self isFloatVal:v])
                     {
-                    cFreg++;
+                    // A float past xmm7 takes the next stack slot, as an integer
+                    // past r9 does (#313).
+                    if (cFreg < 8)
+                        cFreg++;
+                    else
+                        nstack++;
                     }
                 else if (cIreg < 6)
                     {
@@ -5443,14 +5475,25 @@ static BOOL xtConstThrough(XTIRValueId v, XTIRInsn* (^defOf)(XTIRValueId), int d
                             }
                         }
                     }
-                else if (v && [self isFloatVal:v] && freg < 8)
+                else if (v && [self isFloatVal:v])
                     {
-                    [self loadF:a
-                           into:[NSString stringWithFormat:@"xmm%lu", (unsigned long)freg]
-                             fn:fn
-                           slot:slot
-                            out:out];
-                    freg++;
+                    if (freg < 8)
+                        {
+                        [self loadF:a
+                               into:[NSString stringWithFormat:@"xmm%lu", (unsigned long)freg]
+                                 fn:fn
+                               slot:slot
+                                out:out];
+                        freg++;
+                        }
+                    else
+                        {
+                        // Past xmm7 its bits go through rax, which is not an argument
+                        // register, to the next outgoing stack slot in source order (#313).
+                        [self loadZX:a into:'a' fn:fn slot:slot out:out];
+                        [out appendFormat:@"\tmov\t[rsp+%lu], rax\n", (unsigned long)(8 * sidx)];
+                        sidx++;
+                        }
                     }
                 else if (ireg < 6)
                     {
@@ -5592,9 +5635,14 @@ static BOOL xtConstThrough(XTIRValueId v, XTIRInsn* (^defOf)(XTIRValueId), int d
                 else
                     nstack += nr; // whole, on the stack (#301)
                 }
-            else if (v && [self isFloatVal:v] && cFreg < 8)
+            else if (v && [self isFloatVal:v])
                 {
-                cFreg++;
+                // A float past xmm7 takes the next stack slot, as an integer
+                // past r9 does (#313).
+                if (cFreg < 8)
+                    cFreg++;
+                else
+                    nstack++;
                 }
             else if (cIreg < 6)
                 {
@@ -5642,14 +5690,25 @@ static BOOL xtConstThrough(XTIRValueId v, XTIRInsn* (^defOf)(XTIRValueId), int d
                         }
                     }
                 }
-            else if (v && [self isFloatVal:v] && freg < 8)
+            else if (v && [self isFloatVal:v])
                 {
-                [self loadF:a
-                       into:[NSString stringWithFormat:@"xmm%lu", (unsigned long)freg]
-                         fn:fn
-                       slot:slot
-                        out:out];
-                freg++;
+                if (freg < 8)
+                    {
+                    [self loadF:a
+                           into:[NSString stringWithFormat:@"xmm%lu", (unsigned long)freg]
+                             fn:fn
+                           slot:slot
+                            out:out];
+                    freg++;
+                    }
+                else
+                    {
+                    // Past xmm7 its bits go through rax, which is not an argument
+                    // register, to the next outgoing stack slot in source order (#313).
+                    [self loadZX:a into:'a' fn:fn slot:slot out:out];
+                    [out appendFormat:@"\tmov\t[rsp+%lu], rax\n", (unsigned long)(8 * sidx)];
+                    sidx++;
+                    }
                 }
             else if (ireg < 6)
                 {

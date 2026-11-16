@@ -1065,12 +1065,23 @@ class X86_64
                         }
                     }
                 }
-            else if (isFloatTy(t))
+            else if (isFloatTy(t) && freg < (u32)8)
                 {
-                if (hasSlot(pv) && freg < (u32)8)
+                if (hasSlot(pv))
                     _out.appendFormat("\tmov%s\t[rbp-%lu], xmm%lu\n",
                                       t.equals(String.withCString("F64")) ? "sd" : "ss", s, freg);
                 freg = freg + (u32)1;
+                }
+            else if (isFloatTy(t))
+                {
+                // Past xmm7 the caller passed it on the stack, in the next
+                // slot in parameter order, as an integer past r9 (#313).
+                if (hasSlot(pv))
+                    {
+                    _out.appendFormat("\tmov\trax, [rbp+%lu]\n", (u32)16 + (u32)8 * sidx);
+                    _out.appendFormat("\tmov\t[rbp-%lu], rax\n", s);
+                    }
+                sidx = sidx + (u32)1;
                 }
             else if (ireg < iregs.count())
                 {
@@ -4257,9 +4268,14 @@ class X86_64
                 else
                     nstack = nstack + nr; // whole, on the stack (#301)
                 }
-            else if (isFloatTy(t) && cFreg < (u32)8)
+            else if (isFloatTy(t))
                 {
-                cFreg = cFreg + (u32)1;
+                // A float past xmm7 takes the next stack slot, as an integer
+                // past r9 does (#313).
+                if (cFreg < (u32)8)
+                    cFreg = cFreg + (u32)1;
+                else
+                    nstack = nstack + (u32)1;
                 }
             else if (cIreg < (u32)6)
                 {
@@ -4319,12 +4335,24 @@ class X86_64
                         }
                     }
                 }
-            else if (isFloatTy(t) && freg < (u32)8)
+            else if (isFloatTy(t))
                 {
-                String* x = String.withCString("xmm");
-                x.appendFormat("%lu", freg);
-                loadF(a, x);
-                freg = freg + (u32)1;
+                if (freg < (u32)8)
+                    {
+                    String* x = String.withCString("xmm");
+                    x.appendFormat("%lu", freg);
+                    loadF(a, x);
+                    freg = freg + (u32)1;
+                    }
+                else
+                    {
+                    // Past xmm7 its bits go through rax, which is not an
+                    // argument register, to the next outgoing stack slot in
+                    // source order (#313).
+                    loadZX(a, (u8)'a');
+                    _out.appendFormat("\tmov\t[rsp+%lu], rax\n", (u32)8 * sidx);
+                    sidx = sidx + (u32)1;
+                    }
                 }
             else if (ireg < (u32)6)
                 {
@@ -4409,9 +4437,14 @@ class X86_64
                 else
                     nstack = nstack + nr; // whole, on the stack (#301)
                 }
-            else if (isFloatTy(t) && cFreg < (u32)8)
+            else if (isFloatTy(t))
                 {
-                cFreg = cFreg + (u32)1;
+                // A float past xmm7 takes the next stack slot, as an integer
+                // past r9 does (#313).
+                if (cFreg < (u32)8)
+                    cFreg = cFreg + (u32)1;
+                else
+                    nstack = nstack + (u32)1;
                 }
             else if (cIreg < (u32)6)
                 {
@@ -4463,12 +4496,24 @@ class X86_64
                         }
                     }
                 }
-            else if (isFloatTy(t) && freg < (u32)8)
+            else if (isFloatTy(t))
                 {
-                String* x = String.withCString("xmm");
-                x.appendFormat("%lu", freg);
-                loadF(a, x);
-                freg = freg + (u32)1;
+                if (freg < (u32)8)
+                    {
+                    String* x = String.withCString("xmm");
+                    x.appendFormat("%lu", freg);
+                    loadF(a, x);
+                    freg = freg + (u32)1;
+                    }
+                else
+                    {
+                    // Past xmm7 its bits go through rax, which is not an
+                    // argument register, to the next outgoing stack slot in
+                    // source order (#313).
+                    loadZX(a, (u8)'a');
+                    _out.appendFormat("\tmov\t[rsp+%lu], rax\n", (u32)8 * sidx);
+                    sidx = sidx + (u32)1;
+                    }
                 }
             else if (ireg < (u32)6)
                 {
@@ -6692,9 +6737,14 @@ class X86_64
                 else
                     nstack = nstack + nr; // whole, on the stack (#301)
                 }
-            else if (isFloatTy(t) && cFreg < (u32)8)
+            else if (isFloatTy(t))
                 {
-                cFreg = cFreg + (u32)1;
+                // A float past xmm7 takes the next stack slot, as an integer
+                // past r9 does (#313).
+                if (cFreg < (u32)8)
+                    cFreg = cFreg + (u32)1;
+                else
+                    nstack = nstack + (u32)1;
                 }
             else if (cIreg < (u32)6)
                 {
@@ -6754,12 +6804,24 @@ class X86_64
                         }
                     }
                 }
-            else if (isFloatTy(t) && freg < (u32)8)
+            else if (isFloatTy(t))
                 {
-                String* x = String.withCString("xmm");
-                x.appendFormat("%lu", freg);
-                loadF(a, x);
-                freg = freg + (u32)1;
+                if (freg < (u32)8)
+                    {
+                    String* x = String.withCString("xmm");
+                    x.appendFormat("%lu", freg);
+                    loadF(a, x);
+                    freg = freg + (u32)1;
+                    }
+                else
+                    {
+                    // Past xmm7 its bits go through rax, which is not an
+                    // argument register, to the next outgoing stack slot in
+                    // source order (#313).
+                    loadZX(a, (u8)'a');
+                    _out.appendFormat("\tmov\t[rsp+%lu], rax\n", (u32)8 * sidx);
+                    sidx = sidx + (u32)1;
+                    }
                 }
             else if (ireg < (u32)6)
                 {
