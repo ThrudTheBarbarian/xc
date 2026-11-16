@@ -18,6 +18,7 @@
 // overflow.
 
 #import "Foundation.xc"
+#import <GasString>
 
 #import "M68kAsmDefs.xc"
 
@@ -1538,44 +1539,13 @@ class MOp
             }
         if (dir.equals(String.withCString(".ascii")) || dir.equals(String.withCString(".asciz")))
             {
-            u32 q1 = args.byteIndexOf(String.withCString("\""));
-            u32 q2 = lastQuote(args);
-            if (q1 != (u32)$FFFF_FFFF && q2 > q1)
+            Data* bytes = GasString.decode(args, dir.equals(String.withCString(".asciz")));
+            if (bytes == (Data*)0)
                 {
-                String* str = args.substringBytes(q1 + (u32)1, q2 - q1 - (u32)1);
-                u32 i = (u32)0;
-                while (i < str.byteLength())
-                    {
-                    u8 c = str.byteAt(i);
-                    if (c == (u8)'\\' && i + (u32)1 < str.byteLength())
-                        {
-                        u8 n = str.byteAt(i + (u32)1);
-                        if (n == (u8)'n')
-                            {
-                            d.appendByte((u8)10);
-                            i = i + (u32)2;
-                            continue;
-                            }
-                        if (n == (u8)'r')
-                            {
-                            d.appendByte((u8)13);
-                            i = i + (u32)2;
-                            continue;
-                            }
-                        if (n == (u8)'0')
-                            {
-                            d.appendByte((u8)0);
-                            i = i + (u32)2;
-                            continue;
-                            }
-                        }
-                    d.appendByte((u8)((u32)c));
-                    i = i + (u32)1;
-                    }
+                fail(String.withCString("bad string directive"));
+                return d;
                 }
-            if (dir.equals(String.withCString(".asciz")))
-                d.appendByte((u8)0);
-            return d;
+            return bytes;
             }
         if (dir.equals(String.withCString(".space")) || dir.equals(String.withCString(".ds.b")))
             {
@@ -1597,15 +1567,6 @@ class MOp
             return d;
             }
         return d;
-        }
-
-    static u32 lastQuote(String* s)
-        {
-        u32 f = (u32)$FFFF_FFFF;
-        for (u32 i = (u32)0; i < s.byteLength(); i = i + (u32)1)
-            if (s.byteAt(i) == (u8)'"')
-                f = i;
-        return f;
         }
 
     // ── The two passes, and the $601A image ──────────────────────────────

@@ -2,6 +2,7 @@
 |* XAM68kAssembler.m — see header. Minimal two-pass 68k assembler → $601A.
 \****************************************************************************/
 #import "XAM68kAssembler.h"
+#import "XAGasString.h"
 
 // ── Operand model ───────────────────────────────────────────────────────
 typedef enum
@@ -1223,6 +1224,9 @@ static NSArray<NSString*>* splitOperands(NSString* s)
         }
 
     // ── data-directive bytes (for both passes) ──────────────────────────
+    // A malformed string directive is recorded here and reported after the
+    // directive (the block itself has no error path).
+    __block NSString* dirError = nil;
     NSData* (^dataForDir)(NSString*, NSString*, uint32_t) =
         ^NSData*(NSString* dir, NSString* args, uint32_t curOff) {
           NSMutableData* d = [NSMutableData data];
@@ -1236,22 +1240,14 @@ static NSArray<NSString*>* splitOperands(NSString* s)
               }
           else if ([dir isEqualToString:@".ascii"] || [dir isEqualToString:@".asciz"])
               {
-              NSRange q1 = [args rangeOfString:@"\""];
-              NSRange q2 = [args rangeOfString:@"\"" options:NSBackwardsSearch];
-              if (q1.location != NSNotFound && q2.location > q1.location)
+              NSData* sd = XAGasStringDecode(args, [dir isEqualToString:@".asciz"]);
+              if (!sd)
                   {
-                  NSString* str = [args substringWithRange:
-                                            NSMakeRange(q1.location + 1, q2.location - q1.location - 1)];
-                  str = [str stringByReplacingOccurrencesOfString:@"\\n" withString:@"\n"];
-                  str = [str stringByReplacingOccurrencesOfString:@"\\r" withString:@"\r"];
-                  str = [str stringByReplacingOccurrencesOfString:@"\\0" withString:@"\0"];
-                  [d appendData:[str dataUsingEncoding:NSISOLatin1StringEncoding]];
+                  if (!dirError)
+                      dirError = @"bad string directive";
                   }
-              if ([dir isEqualToString:@".asciz"])
-                  {
-                  uint8_t z = 0;
-                  [d appendBytes:&z length:1];
-                  }
+              else
+                  [d appendData:sd];
               }
           else if ([dir isEqualToString:@".space"] || [dir isEqualToString:@".ds.b"])
               {
@@ -1320,6 +1316,11 @@ static NSArray<NSString*>* splitOperands(NSString* s)
             if ([dir isEqualToString:@".text"] || [dir isEqualToString:@".globl"])
                 continue;
             off += dataForDir(dir, it[@"args"], off).length;
+            if (dirError)
+                {
+                *error = dirError;
+                return nil;
+                }
             continue;
             }
         NSString* e = nil;

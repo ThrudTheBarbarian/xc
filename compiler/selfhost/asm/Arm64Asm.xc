@@ -22,6 +22,7 @@
 #import <U64>
 #import <DwarfWriter>
 #import <SectionBytes>
+#import <GasString>
 
 #import "Arm64AsmDefs.xc"
 
@@ -583,6 +584,7 @@ class Arm64Asm
         bool inStr = false;
         for (u32 i = (u32)0; i < l.byteLength(); i = i + (u32)1) {
             u8 c = l.byteAt(i);
+            if (inStr && c == (u8)'\\') { i = i + (u32)1; continue; }   // \" stays inside
             if (c == (u8)'"') { inStr = !inStr; continue; }
             if (inStr) continue;
             if (c == (u8)';') return l.substringBytes((u32)0, i);
@@ -3178,26 +3180,9 @@ class Arm64Asm
             width = (u32)8;
         else if (mn.equals(String.withCString(".ascii")) || mn.equals(String.withCString(".asciz"))
               || mn.equals(String.withCString(".string"))) {
-            u32 q1 = rest.byteIndexOf(String.withCString("\""));
-            u32 q2 = lastIndexOfQuote(rest);
-            if (q1 == (u32)$FFFF_FFFF || q2 <= q1) { fail(String.withCString("bad string directive")); return true; }
-            String* str = rest.substringBytes(q1 + (u32)1, q2 - q1 - (u32)1);
-            u32 i = (u32)0;
-            while (i < str.byteLength()) {
-                u8 c = str.byteAt(i);
-                if (c == (u8)'\\' && i + (u32)1 < str.byteLength()) {
-                    i = i + (u32)1;
-                    u8 n = str.byteAt(i);
-                    if (n == (u8)'n') c = (u8)10;
-                    else if (n == (u8)'t') c = (u8)9;
-                    else if (n == (u8)'r') c = (u8)13;
-                    else if (n == (u8)'0') c = (u8)0;
-                    else c = n;
-                }
-                into.appendByte(c);
-                i = i + (u32)1;
-            }
-            if (!mn.equals(String.withCString(".ascii"))) into.appendByte((u8)0);
+            Data* bytes = GasString.decode(rest, !mn.equals(String.withCString(".ascii")));
+            if (bytes == (Data*)0) { fail(String.withCString("bad string directive")); return true; }
+            into.appendData(bytes);
             _wasDirective = true;
             return true;
         }
@@ -3225,14 +3210,6 @@ class Arm64Asm
         }
         _wasDirective = true;
         return true;
-    }
-
-    static u32 lastIndexOfQuote(String* s)
-    {
-        u32 found = (u32)$FFFF_FFFF;
-        for (u32 i = (u32)0; i < s.byteLength(); i = i + (u32)1)
-            if (s.byteAt(i) == (u8)'"') found = i;
-        return found;
     }
 
     // `.quad <symbol>` — a symbol-valued pointer (a vtable slot, say), which

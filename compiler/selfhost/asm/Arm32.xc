@@ -26,6 +26,7 @@
 //   push/pop          cond 100 P U S W L Rn register_list
 
 #import "Foundation.xc"
+#import <GasString>
 
 // One entry in the object's symbol table.
 class AsmSymbol
@@ -865,9 +866,34 @@ class AsmSymbol
             emitWord(rest);
             return;
             }
-        if (d.equals(String.withCString(".p2align")))
+        // Strings. These used to fall through to the no-payload case below,
+        // so the runtime's messages were missing from every arm9 binary.
+        if (d.equals(String.withCString(".ascii")) || d.equals(String.withCString(".asciz"))
+            || d.equals(String.withCString(".string")))
+            {
+            Data* bytes = GasString.decode(rest, !d.equals(String.withCString(".ascii")));
+            if (bytes == (Data*)0)
+                {
+                giveUp(String.withCString("bad string directive"));
+                return;
+                }
+            for (u32 i = (u32)0; i < bytes.length(); i = i + (u32)1)
+                putByte((u32)bytes.byteAt(i));
+            return;
+            }
+        // `.align N` is a power of two on ARM, as `.p2align` is. It used to
+        // fall through to the no-payload case below, which went unnoticed
+        // while the runtime's data section was empty (its strings were
+        // dropped too); with them present, every word after a string was
+        // misaligned and the first exclusive load faulted.
+        if (d.equals(String.withCString(".p2align")) || d.equals(String.withCString(".align")))
             {
             align(rest);
+            return;
+            }
+        if (d.equals(String.withCString(".balign")))
+            {
+            alignBytes(Arm32.decimalValue(rest));
             return;
             }
         if (d.equals(String.withCString(".set")) || d.equals(String.withCString(".equ")))
@@ -1014,6 +1040,11 @@ class AsmSymbol
         for (u32 i = (u32)0; i < l.byteLength(); i = i + (u32)1)
             {
             u8 c = l.byteAt(i);
+            if (inStr && c == (u8)'\\')
+                {
+                i = i + (u32)1; // \" stays inside the string
+                continue;
+                }
             if (c == (u8)'"')
                 {
                 inStr = !inStr;
@@ -1073,8 +1104,15 @@ class AsmSymbol
 
     void align(String* rest)
         {
-        u32 p = Arm32.decimalValue(rest);
-        u32 mask = ((u32)1 << p) - (u32)1;
+        alignBytes((u32)1 << Arm32.decimalValue(rest));
+        }
+
+    // Pad the current section to a multiple of `n` bytes (a power of two).
+    void alignBytes(u32 n)
+        {
+        if (n == (u32)0)
+            return;
+        u32 mask = n - (u32)1;
         while ((cursor() & mask) != (u32)0)
             putByte((u32)0);
         }

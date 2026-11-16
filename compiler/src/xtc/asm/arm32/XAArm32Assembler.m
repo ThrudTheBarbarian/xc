@@ -1,4 +1,5 @@
 #import "XAArm32Assembler.h"
+#import "XAGasString.h"
 
 @implementation XAArm32Symbol
 @end
@@ -350,6 +351,11 @@ static NSString* stripComment(NSString* l)
     for (NSUInteger i = 0; i < l.length; i++)
         {
         unichar c = [l characterAtIndex:i];
+        if (inStr && c == '\\')
+            {
+            i++; // \" stays inside the string
+            continue;
+            }
         if (c == '"')
             {
             inStr = !inStr;
@@ -881,9 +887,34 @@ static NSString* labelOn(NSString* line)
         [self emitWord:rest];
         return;
         }
-    if ([d isEqualToString:@".p2align"])
+    // Strings. These used to fall through to the no-payload case below, so
+    // the runtime's messages were missing from every arm9 binary.
+    if ([d isEqualToString:@".ascii"] || [d isEqualToString:@".asciz"] || [d isEqualToString:@".string"])
+        {
+        NSData* sd = XAGasStringDecode(rest, ![d isEqualToString:@".ascii"]);
+        if (!sd)
+            {
+            [self giveUp:@"bad string directive"];
+            return;
+            }
+        const uint8_t* sb = (const uint8_t*)sd.bytes;
+        for (NSUInteger k = 0; k < sd.length; k++)
+            [self putByte:sb[k]];
+        return;
+        }
+    // `.align N` is a power of two on ARM, as `.p2align` is. It used to fall
+    // through to the no-payload case below, which went unnoticed while the
+    // runtime's data section was empty (its strings were dropped too); with
+    // them present, every word after a string was misaligned and the first
+    // exclusive load faulted.
+    if ([d isEqualToString:@".p2align"] || [d isEqualToString:@".align"])
         {
         [self align:rest];
+        return;
+        }
+    if ([d isEqualToString:@".balign"])
+        {
+        [self alignBytes:decimalValue(rest)];
         return;
         }
     if ([d isEqualToString:@".set"] || [d isEqualToString:@".equ"])
@@ -1035,8 +1066,15 @@ static NSString* labelOn(NSString* line)
 
 - (void)align:(NSString*)rest
     {
-    uint32_t p = decimalValue(rest);
-    uint32_t mask = (1u << p) - 1u;
+    [self alignBytes:1u << decimalValue(rest)];
+    }
+
+// Pad the current section to a multiple of `n` bytes (a power of two).
+- (void)alignBytes:(uint32_t)n
+    {
+    if (n == 0)
+        return;
+    uint32_t mask = n - 1u;
     while (([self cursor] & mask) != 0)
         [self putByte:0];
     }

@@ -20,6 +20,7 @@
 \****************************************************************************/
 
 #import <Foundation/Foundation.h>
+#import "XAGasString.h"
 #import "XAArm64Assembler.h"
 
 static const struct
@@ -259,6 +260,27 @@ static const struct
         {"\tbl\t_bar", "\tbl\t_bar"},
     };
 
+// GAS string operands (XAGasString.h, shared by every assembler here and
+// matched by the self-hosted GasString.xc). The expected bytes are clang's
+// for the same directives. NULL `hex` means the operand must be refused.
+static const struct
+    {
+    const char* rest;
+    BOOL zero;
+    const char* hex;
+    } kGasStrings[] = {
+        {"\"dash \\342\\200\\224 end\"", YES, "6461736820e2809420656e6400"},
+        {"\"a\\012b\\x41\\x4a\\tq\\\\\\\"z\", \"two\", \"\\0\\7\\177\"", NO,
+         "610a62414a09715c227a74776f00077f"},
+        {"\"say \\\"hi\\\" // not a comment\"", YES,
+         "7361792022686922202f2f206e6f74206120636f6d6d656e7400"},
+        {"\"caf\xc3\xa9\"", YES, "636166c3a900"},
+        {"\"\\b\\f\\r\\q\"", NO, "080c0d71"},
+        {"\"unterminated", NO, NULL},
+        {"\"a\" junk", NO, NULL},
+        {"", NO, NULL},
+    };
+
 int runArm64AssemblerTests(void);
 int runArm64AssemblerTests(void)
     {
@@ -315,6 +337,30 @@ int runArm64AssemblerTests(void)
             fprintf(stderr, "  PASS: dialect %-34s -> %s\n",
                     kDialect[i].elf, got.UTF8String);
             }
+        }
+
+    NSUInteger gn = sizeof(kGasStrings) / sizeof(kGasStrings[0]);
+    for (NSUInteger i = 0; i < gn; i++)
+        {
+        NSData* d = XAGasStringDecode(@(kGasStrings[i].rest), kGasStrings[i].zero);
+        NSMutableString* got = nil;
+        if (d)
+            {
+            got = [NSMutableString string];
+            const uint8_t* b = (const uint8_t*)d.bytes;
+            for (NSUInteger k = 0; k < d.length; k++)
+                [got appendFormat:@"%02x", b[k]];
+            }
+        const char* want = kGasStrings[i].hex;
+        BOOL ok = want ? (got && [got isEqualToString:@(want)]) : (got == nil);
+        if (!ok)
+            {
+            fprintf(stderr, "  FAIL: gas string %s got %s want %s\n", kGasStrings[i].rest,
+                    got ? got.UTF8String : "(refused)", want ? want : "(refused)");
+            failures++;
+            }
+        else
+            fprintf(stderr, "  PASS: gas string %s\n", kGasStrings[i].rest);
         }
     return failures;
     }

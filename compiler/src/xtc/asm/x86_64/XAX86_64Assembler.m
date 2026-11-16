@@ -1,4 +1,5 @@
 #import "XAX86_64Assembler.h"
+#import "XAGasString.h"
 #import "XTDwarfWriter.h"
 #include <stdlib.h>
 #include <errno.h>
@@ -1679,6 +1680,7 @@ static NSString *stripAsmComment(NSString *l) {
     BOOL inq = NO;
     for (NSUInteger i = 0; i < l.length; i++) {
         unichar c = [l characterAtIndex:i];
+        if (inq && c == '\\') { i++; continue; }   // \" stays inside the string
         if (c == '"') { inq = !inq; continue; }
         if (inq) continue;
         if (c == '#') return [l substringToIndex:i];
@@ -1896,17 +1898,10 @@ static BOOL isPlainIntLiteral(NSString *s) {
             else if ([d isEqualToString:@".quad"] || [d isEqualToString:@".8byte"]) width = 8;
             else if ([d isEqualToString:@".ascii"] || [d isEqualToString:@".asciz"] ||
                      [d isEqualToString:@".string"]) {
-                NSRange q1 = [rest rangeOfString:@"\""], q2 = [rest rangeOfString:@"\"" options:NSBackwardsSearch];
-                if (q1.location == NSNotFound || q2.location <= q1.location) {
-                    if (error) *error = xerr(@"bad string in '%@'", l); return nil; }
-                NSString *s = [rest substringWithRange:NSMakeRange(q1.location+1, q2.location-q1.location-1)];
-                for (NSUInteger i = 0; i < s.length; i++) {
-                    unichar c = [s characterAtIndex:i];
-                    if (c == '\\' && i+1 < s.length) { unichar n = [s characterAtIndex:++i];
-                        c = n=='n'?'\n': n=='t'?'\t': n=='r'?'\r': n=='0'?0: n; }
-                    emit8(sec, (uint8_t)c);
-                }
-                if (![d isEqualToString:@".ascii"]) emit8(sec, 0);
+                NSData *sd = XAGasStringDecode(rest, ![d isEqualToString:@".ascii"]);
+                if (!sd) { if (error) *error = xerr(@"bad string in '%@'", l); return nil; }
+                const uint8_t *sb = (const uint8_t *)sd.bytes;
+                for (NSUInteger i = 0; i < sd.length; i++) emit8(sec, sb[i]);
                 continue;
             }
             if (!width) continue;                       // unknown directive: no bytes

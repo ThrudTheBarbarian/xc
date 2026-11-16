@@ -1,4 +1,5 @@
 #import "XAArm64Assembler.h"
+#import "XAGasString.h"
 #import "XTRegexCompat.h"
 #import "XTDwarfWriter.h"
 #include <stdlib.h>
@@ -132,6 +133,7 @@ static NSString *stripComment(NSString *l) {
     BOOL inStr = NO;
     for (NSUInteger i=0;i<l.length;i++) {
         unichar c=[l characterAtIndex:i];
+        if (inStr && c=='\\') { i++; continue; }   // \" stays inside the string
         if (c=='"') inStr=!inStr;
         else if (!inStr) {
             if (c==';') return [l substringToIndex:i];
@@ -1869,17 +1871,9 @@ static BOOL emitDataDirective(NSString *l, NSMutableData *out, NSError **err) {
     else if ([mn isEqualToString:@".quad"]||[mn isEqualToString:@".8byte"]
              ||[mn isEqualToString:@".xword"]) width=8;   // .xword: the ELF spelling
     else if ([mn isEqualToString:@".ascii"]||[mn isEqualToString:@".asciz"]||[mn isEqualToString:@".string"]) {
-        NSRange q1=[rest rangeOfString:@"\""], q2=[rest rangeOfString:@"\"" options:NSBackwardsSearch];
-        if (q1.location==NSNotFound||q2.location<=q1.location) { if(err)*err=asmErr(@"bad string %@",l); return NO; }
-        NSString *s=[rest substringWithRange:NSMakeRange(q1.location+1, q2.location-q1.location-1)];
-        // minimal C escapes
-        NSMutableData *sd=[NSMutableData data];
-        for (NSUInteger i=0;i<s.length;i++){ unichar c=[s characterAtIndex:i];
-            if (c=='\\' && i+1<s.length){ unichar n=[s characterAtIndex:++i];
-                c = n=='n'?'\n': n=='t'?'\t': n=='r'?'\r': n=='0'?0: n=='\\'?'\\': n=='"'?'"': n; }
-            uint8_t b=(uint8_t)c; [sd appendBytes:&b length:1]; }
+        NSData *sd=XAGasStringDecode(rest, ![mn isEqualToString:@".ascii"]);
+        if (!sd) { if(err)*err=asmErr(@"bad string %@",l); return NO; }
         [out appendData:sd];
-        if (![mn isEqualToString:@".ascii"]) { uint8_t z=0; [out appendBytes:&z length:1]; }
         return YES;
     }
     else if ([mn isEqualToString:@".space"]||[mn isEqualToString:@".zero"]) {

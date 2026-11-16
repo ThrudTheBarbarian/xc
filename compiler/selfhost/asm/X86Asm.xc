@@ -20,6 +20,7 @@
 #import "Foundation.xc"
 #import <DwarfWriter>
 #import <SectionBytes>
+#import <GasString>
 
 #import "X86AsmDefs.xc"
 // The four below are never produced by THIS assembler. They exist because the
@@ -3304,6 +3305,11 @@ class X86Fixup
         for (u32 i = (u32)0; i < l.byteLength(); i = i + (u32)1)
             {
             u8 c = l.byteAt(i);
+            if (inq && c == (u8)'\\')
+                {
+                i = i + (u32)1; // \" stays inside the string
+                continue;
+                }
             if (c == (u8)'"')
                 {
                 inq = !inq;
@@ -3742,38 +3748,13 @@ class X86Fixup
             }
         if (d.equals(String.withCString(".ascii")) || d.equals(String.withCString(".asciz")) || d.equals(String.withCString(".string")))
             {
-            u32 q1 = rest.byteIndexOf(String.withCString("\""));
-            u32 q2 = lastQuote(rest);
-            if (q1 == (u32)$FFFF_FFFF || q2 <= q1)
+            Data* bytes = GasString.decode(rest, !d.equals(String.withCString(".ascii")));
+            if (bytes == (Data*)0)
                 {
                 failWith(String.withCString("bad string in"), l);
                 return section;
                 }
-            String* str = rest.substringBytes(q1 + (u32)1, q2 - q1 - (u32)1);
-            u32 i = (u32)0;
-            while (i < str.byteLength())
-                {
-                u8 c = str.byteAt(i);
-                if (c == (u8)'\\' && i + (u32)1 < str.byteLength())
-                    {
-                    i = i + (u32)1;
-                    u8 n = str.byteAt(i);
-                    if (n == (u8)'n')
-                        c = (u8)10;
-                    else if (n == (u8)'t')
-                        c = (u8)9;
-                    else if (n == (u8)'r')
-                        c = (u8)13;
-                    else if (n == (u8)'0')
-                        c = (u8)0;
-                    else
-                        c = n;
-                    }
-                sec.appendByte(c);
-                i = i + (u32)1;
-                }
-            if (!d.equals(String.withCString(".ascii")))
-                sec.appendByte((u8)0);
+            sec.appendData(bytes);
             return section;
             }
         u32 width = dataWidth(d);
@@ -3868,15 +3849,6 @@ class X86Fixup
                 return false;
             }
         return true;
-        }
-
-    static u32 lastQuote(String* s)
-        {
-        u32 f = (u32)$FFFF_FFFF;
-        for (u32 i = (u32)0; i < s.byteLength(); i = i + (u32)1)
-            if (s.byteAt(i) == (u8)'"')
-                f = i;
-        return f;
         }
 
     // A call or jcc to a label in this same text needs no relocation, so it is
