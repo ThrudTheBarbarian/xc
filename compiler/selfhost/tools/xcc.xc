@@ -2905,9 +2905,25 @@ String* standardPath(String* p)
 }
 
 // The names a module's assembly declares `.globl`, sorted: a library's own API.
+// Appends each name of `from` that `into` does not hold yet, in order (#335):
+// the lists ran to thousands of names and were searched once per name.
+void addMissing(Array* into, Array* from)
+{
+    Map* seen = new Map();
+    for (u32 i = (u32)0; i < into.count(); i = i + (u32)1)
+        seen.set((Hashable*)into.get(i), into.get(i));
+    for (u32 i = (u32)0; i < from.count(); i = i + (u32)1) {
+        Object* n = from.get(i);
+        if (seen.get((Hashable*)n) != (Object*)0) continue;
+        seen.set((Hashable*)n, n);
+        into.add(n);
+    }
+}
+
 Array* globlNames(String* prog)
 {
     Array* out = new Array();
+    Map* seen = new Map();
     Array* lines = prog.splitOnByte((u8)'\n');
     for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1) {
         String* l = (String*)lines.get(i);
@@ -2921,7 +2937,7 @@ Array* globlNames(String* prog)
         u32 e = k;
         while (e < l.byteLength() && l.byteAt(e) != (u8)' ' && l.byteAt(e) != (u8)'\t' && l.byteAt(e) != (u8)'\r') e = e + (u32)1;
         String* n = l.substringBytes(k, e - k);
-        if (!Elf64.hasName(out, n)) out.add((Object*)n);
+        if (seen.get((Hashable*)n) == (Object*)0) { seen.set((Hashable*)n, (Object*)n); out.add((Object*)n); }
     }
     Elf64.sortStrings(out);
     return out;
@@ -2971,8 +2987,7 @@ void linkX86_64Glibc(DriverOptions* d, String* prog)
         if (d.emitRuntime() && !rn.hasPrefix(String.withCString("crt-")) && !rn.hasPrefix(String.withCString("libinit-"))) {
             t = runtimeForLibRuntime(t);
             Array* g = globlNames(t);
-            for (u32 j = (u32)0; j < g.count(); j = j + (u32)1)
-                if (!Elf64.hasName(rtExports, (String*)g.get(j))) rtExports.add(g.get(j));
+            addMissing(rtExports, g);
         }
         srcs.add((Object*)t);
     }
@@ -3105,8 +3120,7 @@ void linkX86_64Glibc(DriverOptions* d, String* prog)
             for (u32 i = (u32)0; i < ij.byteLength(); i = i + (u32)1)
                 iface.add((Object*)Number.withU32((u32)ij.byteAt(i)));
         Array* exports = globlNames(prog);
-        for (u32 j = (u32)0; j < rtExports.count(); j = j + (u32)1)
-            if (!Elf64.hasName(exports, (String*)rtExports.get(j))) exports.add(rtExports.get(j));
+        addMissing(exports, rtExports);
         Elf64.sortStrings(exports);
         img = ln.linkGlibcShared(srcs, objs, ars, sos, mapText, baseNameOf(d.fe().output()),
                                  exports, String.withCString("$ORIGIN"), iface);
@@ -6325,8 +6339,7 @@ void emitModule(DriverOptions* d, IRModule* mod)
             if (d.emitRuntime()) {
                 // The runtime is ELF-flavoured already: its names as they are.
                 Array* rx = globlNames(rt, as.symbols());
-                for (u32 i = (u32)0; i < rx.count(); i = i + (u32)1)
-                    if (!Elf64.hasName(exports, (String*)rx.get(i))) exports.add(rx.get(i));
+                addMissing(exports, rx);
                 Elf64.sortStrings(exports);
             }
             // The interface rides in a `.xtc.iface` section, as on the other
@@ -6414,8 +6427,7 @@ void emitModule(DriverOptions* d, IRModule* mod)
             // …and libRuntime the runtime's as well: it is the one copy.
             if (d.emitRuntime()) {
                 Array* rx = globlNames(rt, as.symbols());
-                for (u32 i = (u32)0; i < rx.count(); i = i + (u32)1)
-                    if (!Elf64.hasName(exports, (String*)rx.get(i))) exports.add(rx.get(i));
+                addMissing(exports, rx);
                 Elf64.sortStrings(exports);
             }
             Array* iface = new Array();

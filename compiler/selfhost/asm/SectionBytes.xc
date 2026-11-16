@@ -250,3 +250,29 @@ class NameSet
         return true;
         }
     }
+
+// A list's names by first position (#335): the image writers asked "where is
+// this name in that list" with a scan per fixup. Built once the list is
+// final; at() gives $FFFF_FFFF for a name not in it, as the scan did.
+class NameIndex
+    {
+    Map* _m;
+    void init(void)
+        {
+        _m = new Map();
+        }
+    static NameIndex* of(Array* names)
+        {
+        NameIndex* x = new NameIndex();
+        if (names != (Array*)0)
+            for (u32 i = (u32)0; i < names.count(); i = i + (u32)1)
+                if (x._m.get((Hashable*)names.get(i)) == (Object*)0)
+                    x._m.set((Hashable*)names.get(i), (Object*)Number.withU32(i));
+        return x;
+        }
+    u32 at(String* name)
+        {
+        Object* o = name == (String*)0 ? (Object*)0 : _m.get((Hashable*)name);
+        return o == (Object*)0 ? (u32)$FFFF_FFFF : ((Number*)o).asU32();
+        }
+    }

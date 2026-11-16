@@ -858,6 +858,9 @@ class ElfArm64
         for (u32 i = (u32)0; i < wordCand.count(); i = i + (u32)1)
             if (!importSet.has((String*)wordCand.get(i)))
                 wordImports.add(wordCand.get(i));
+        // Positions by name, for the fixups below (#335).
+        NameIndex* importsAt = NameIndex.of(imports);
+        NameIndex* wordImportsAt = NameIndex.of(wordImports);
         // An executable's imports, checked against what its libraries define:
         // a symbol none of them has is an error here rather than at load.
         if (isExec && _known != (Map*)0)
@@ -1006,9 +1009,9 @@ class ElfArm64
             if (off != (Object*)0)
                 target = (dataSet.has(f.symbol()) ? dataAddr : textAddr) + ((Number*)off).asU32();
             else if (isGot)
-                target = gotOff + indexIn(imports, f.symbol()) * (u32)8;
+                target = gotOff + importsAt.at(f.symbol()) * (u32)8;
             else
-                target = thunkAddr + indexIn(imports, f.symbol()) * (u32)ATHUNK_SZ;
+                target = thunkAddr + importsAt.at(f.symbol()) * (u32)ATHUNK_SZ;
             target = target + (u32)f.addend();
 
             if (f.kind() == (u32)FIXUP_POINTER64)
@@ -1208,10 +1211,10 @@ class ElfArm64
             Object* off = symbols.get((Hashable*)f.symbol());
             if (off == (Object*)0)
                 {
-                u32 wi = indexIn(imports, f.symbol());
+                u32 wi = importsAt.at(f.symbol());
                 u32 symIdx = wi < imports.count()
                                  ? (u32)1 + exports.count() + wi
-                                 : (u32)1 + exports.count() + imports.count() + indexIn(wordImports, f.symbol());
+                                 : (u32)1 + exports.count() + imports.count() + wordImportsAt.at(f.symbol());
                 p64(dataAddr + f.offset());
                 p32((u32)257); // R_AARCH64_ABS64
                 p32(symIdx);   // r_info: type | sym<<32

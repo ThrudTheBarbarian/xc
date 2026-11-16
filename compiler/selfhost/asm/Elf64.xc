@@ -829,6 +829,11 @@ class ElfSharedInfo
                 }
             }
         u32 ngot = imports.count() + absGot.count() + localGot.count();
+        // Positions by name, for the fixups below (#335).
+        NameIndex* importsAt = NameIndex.of(imports);
+        NameIndex* absGotAt = NameIndex.of(absGot);
+        NameIndex* localGotAt = NameIndex.of(localGot);
+        NameIndex* wordImportsAt = NameIndex.of(wordImports);
 
         u32 thunkOff = text.length(); // thunks are appended to .text
         u32 nsym = (u32)1 + exports.count() + imports.count() + wordImports.count();
@@ -944,11 +949,11 @@ class ElfSharedInfo
                              ? ((Number*)off).asU32()
                              : (Elf64.inSet(dataSet, f.symbol()) ? dataAddr : textAddr) + ((Number*)off).asU32();
             else if (isGot)
-                target = gotOff + Elf64.indexIn(imports, f.symbol()) * (u32)8;
+                target = gotOff + importsAt.at(f.symbol()) * (u32)8;
             else if (f.kind() == (u32)X86FIX_ABS64)
                 target = (u32)0; // an import: the loader writes S + A
             else
-                target = thunkAddr + Elf64.indexIn(imports, f.symbol()) * (u32)THUNK_SZ;
+                target = thunkAddr + importsAt.at(f.symbol()) * (u32)THUNK_SZ;
 
             if (f.kind() == (u32)X86FIX_ABS64)
                 {
@@ -987,11 +992,11 @@ class ElfSharedInfo
             bool isAbsSym = off != (Object*)0 && absSyms != (Array*)0 && Elf64.inSet(absSet, f.symbol());
             if (isGot && isAbsSym)
                 {
-                target = gotOff + (imports.count() + Elf64.indexIn(absGot, f.symbol())) * (u32)8;
+                target = gotOff + (imports.count() + absGotAt.at(f.symbol())) * (u32)8;
                 }
             else if (Elf64.needsLocalGotSlot(f, symbols, absSet, text))
                 {
-                target = gotOff + (imports.count() + absGot.count() + Elf64.indexIn(localGot, f.symbol())) * (u32)8;
+                target = gotOff + (imports.count() + absGot.count() + localGotAt.at(f.symbol())) * (u32)8;
                 }
             else if (f.kind() == (u32)X86FIX_GOTLOAD && off != (Object*)0)
                 {
@@ -1134,10 +1139,10 @@ class ElfSharedInfo
             X86Fixup* f = (X86Fixup*)absFixups.get(i);
             if (symbols.get((Hashable*)f.symbol()) == (Object*)0)
                 {
-                u32 wi = Elf64.indexIn(imports, f.symbol());
+                u32 wi = importsAt.at(f.symbol());
                 u32 symIdx = wi < imports.count()
                                  ? (u32)1 + exports.count() + wi
-                                 : (u32)1 + exports.count() + imports.count() + Elf64.indexIn(wordImports, f.symbol());
+                                 : (u32)1 + exports.count() + imports.count() + wordImportsAt.at(f.symbol());
                 p64(dataAddr + f.offset());
                 p32((u32)R_X86_64_64);
                 p32(symIdx);
@@ -1429,14 +1434,6 @@ class ElfSharedInfo
         _out.setByteAt(at + (u32)1, (u8)((v >> (u32)8) & (u32)$FF));
         }
 
-    static u32 indexIn(Array* a, String* nm)
-        {
-        for (u32 i = (u32)0; i < a.count(); i = i + (u32)1)
-            if (((String*)a.get(i)).equals(nm))
-                return i;
-        return (u32)$FFFF_FFFF;
-        }
-
     // The SysV ELF hash DT_HASH requires — unchanged since 1995 and specified
     // byte for byte in the gABI, so it is written out rather than looked up.
     static u32 elfHash(String* name)
@@ -1554,22 +1551,27 @@ class ElfSharedInfo
         Array* defData = new Array();
         Array* names = symbols.allKeys();
         Elf64.sortStrings(names);
+        // The name lists as sets (#335): each was scanned once per symbol.
+        // Built here, after the exception tables above have added theirs.
+        NameSet* globalSet = NameSet.of(globalSyms);
+        NameSet* dataSet = NameSet.of(dataSyms);
         for (u32 i = (u32)0; i < names.count(); i = i + (u32)1)
             {
             String* n = (String*)names.get(i);
             if (n.hasPrefix(String.withCString(".L")))
                 continue; // already resolved
-            if (!Elf64.hasName(globalSyms, n))
+            if (!globalSet.has(n))
                 {
                 locals.add((Object*)n);
                 continue;
                 }
-            if (Elf64.hasName(dataSyms, n))
+            if (dataSet.has(n))
                 defData.add((Object*)n);
             else
                 defText.add((Object*)n);
             }
         Array* undef = new Array();
+        NameSet* undefSet = new NameSet();
         for (u32 i = (u32)0; i < fixups.count(); i = i + (u32)1)
             {
             X86Fixup* f = (X86Fixup*)fixups.get(i);
@@ -1577,7 +1579,7 @@ class ElfSharedInfo
                 continue;
             if (symbols.get((Hashable*)f.symbol()) != (Object*)0)
                 continue;
-            if (!Elf64.hasName(undef, f.symbol()))
+            if (undefSet.add(f.symbol()))
                 undef.add((Object*)f.symbol());
             }
         Elf64.sortStrings(undef);
@@ -1618,7 +1620,7 @@ class ElfSharedInfo
         for (u32 i = (u32)0; i < locals.count(); i = i + (u32)1)
             {
             String* n = (String*)locals.get(i);
-            if (Elf64.hasName(dataSyms, n))
+            if (dataSet.has(n))
                 continue;
             Object* o = symbols.get((Hashable*)n);
             if (o == (Object*)0)
@@ -1662,7 +1664,7 @@ class ElfSharedInfo
         for (u32 i = (u32)0; i < names.count(); i = i + (u32)1)
             {
             String* n = (String*)names.get(i);
-            if (n.hasPrefix(String.withCString(".L")) || !Elf64.hasName(dataSyms, n))
+            if (n.hasPrefix(String.withCString(".L")) || !dataSet.has(n))
                 continue;
             Object* o = symbols.get((Hashable*)n);
             if (o == (Object*)0)
@@ -1721,8 +1723,8 @@ class ElfSharedInfo
                 }
             Object* defAt = symbols.get((Hashable*)n);
             bool isUndef = defAt == (Object*)0;
-            bool inData = Elf64.hasName(dataSyms, n);
-            u32 bind = (isUndef || Elf64.hasName(globalSyms, n)) ? (u32)1 : (u32)0;
+            bool inData = dataSet.has(n);
+            u32 bind = (isUndef || globalSet.has(n)) ? (u32)1 : (u32)0;
             u32 kind = isUndef ? (u32)0 : (inData ? (u32)1 : (u32)2); // NOTYPE/OBJECT/FUNC
             symtab.appendByte((u8)((bind << (u32)4) | kind));
             symtab.appendByte((u8)0); // st_other

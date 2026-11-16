@@ -879,6 +879,9 @@ class MachOSha256
     Data* objectFromText(SectionBytes* text, SectionBytes* data, Map* symbols, Array* dataSyms,
                          Array* fixups, Array* exports, Map* commons)
         {
+        // The name lists as sets (#335): each was scanned once per symbol.
+        NameSet* exportSet = exports != (Array*)0 ? NameSet.of(exports) : (NameSet*)0;
+        NameSet* dataSet = NameSet.of(dataSyms);
         if (data == (SectionBytes*)0)
             data = new SectionBytes();
         SectionBytes* mi = _objModInit != (SectionBytes*)0 ? _objModInit : new SectionBytes();
@@ -903,8 +906,8 @@ class MachOSha256
             String* n = (String*)names.get(i);
             if (n.hasPrefix(String.withCString("L")))
                 continue; // assembler-local
-            bool ext = exports == (Array*)0 || MachO.hasName(exports, n);
-            if (MachO.hasName(dataSyms, n))
+            bool ext = exports == (Array*)0 || exportSet.has(n);
+            if (dataSet.has(n))
                 {
                 if (ext)
                     defData.add((Object*)n);
@@ -981,6 +984,7 @@ class MachOSha256
             }
         u32 nLocals = locText.count() + locData.count();
         Array* undef = new Array();
+        NameSet* undefSet = new NameSet();
         for (u32 i = (u32)0; i < fixups.count(); i = i + (u32)1)
             {
             Arm64Fixup* f = (Arm64Fixup*)fixups.get(i);
@@ -988,7 +992,7 @@ class MachOSha256
                 continue;
             if (symbols.get((Hashable*)f.symbol()) != (Object*)0)
                 continue;
-            if (!MachO.hasName(undef, f.symbol()))
+            if (undefSet.add(f.symbol()))
                 undef.add((Object*)f.symbol());
             }
         // COMMON (`.comm`) symbols are external undefined-with-size — they sit
@@ -996,16 +1000,16 @@ class MachOSha256
         // them, so the linker sees the size and gives one shared slot (bug 169).
         Array* cks = commons.allKeys();
         for (u32 i = (u32)0; i < cks.count(); i = i + (u32)1)
-            if (!MachO.hasName(undef, (String*)cks.get(i)))
+            if (undefSet.add((String*)cks.get(i)))
                 undef.add(cks.get(i));
         if (hasGcc)
             {
-            if (!MachO.hasName(undef, persSym) && symbols.get((Hashable*)persSym) == (Object*)0)
+            if (!undefSet.has(persSym) && symbols.get((Hashable*)persSym) == (Object*)0 && undefSet.add(persSym))
                 undef.add((Object*)persSym);
             for (u32 i = (u32)1; i < typeRefs.count(); i = i + (u32)2)
                 {
                 String* ts = (String*)typeRefs.get(i);
-                if (!MachO.hasName(undef, ts) && symbols.get((Hashable*)ts) == (Object*)0)
+                if (!undefSet.has(ts) && symbols.get((Hashable*)ts) == (Object*)0 && undefSet.add(ts))
                     undef.add((Object*)ts);
                 }
             }
@@ -1431,8 +1435,8 @@ class MachOSha256
                 }
             Object* at = symbols.get((Hashable*)n);
             bool isUndef = at == (Object*)0;
-            bool inData = MachO.hasName(dataSyms, n);
-            bool isExt = exports == (Array*)0 || MachO.hasName(exports, n);
+            bool inData = dataSet.has(n);
+            bool isExt = exports == (Array*)0 || exportSet.has(n);
             Array* common = (Array*)commons.get((Hashable*)n); // [size, log2align] or 0
             put32(((Number*)strx.get(i)).asU32());
             put8(isUndef ? (u32)$01 : (isExt ? (u32)$0F : (u32)$0E)); // N_UNDF|N_EXT : N_SECT[|N_EXT]
