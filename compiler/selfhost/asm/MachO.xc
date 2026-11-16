@@ -1527,6 +1527,90 @@ class MachOSha256
     // __got slot, bound at load by the LC_DYLD_INFO bind stream.
     Array* _imports;   // String@
     Map* _importIndex; // name -> index
+    // A direct @PAGE/@PAGEOFF pair naming a symbol a library defines (#350).
+    // Where every PAGEOFF use is an `add` (the address is taken), the pair
+    // goes through the import's GOT slot: the adrp names the slot's page and
+    // the add becomes a load of the slot. A load or store straight from the
+    // symbol has no room for that extra load, so it is refused, named.
+    Map* _pageGot;      // symbol -> symbol, the pairs rewritten through the GOT
+    Array* _badPage;    // [symbol, function]@ for the refused ones
+
+    Array* unreachableImports(void)
+        {
+        return _badPage == (Array*)0 ? new Array() : _badPage;
+        }
+
+    // `add Xd, Xn, #imm` (64-bit, unshifted): the address form of PAGEOFF.
+    static bool isAddImm64(u32 w)
+        {
+        return (w & (u32)$FFC00000) == (u32)$91000000;
+        }
+
+    void classifyPageImports(Array* fixups, Map* symbols, Array* dataSyms, SectionBytes* text)
+        {
+        _pageGot = new Map();
+        _badPage = new Array();
+        Map* bad = new Map();
+        for (u32 i = (u32)0; i < fixups.count(); i = i + (u32)1)
+            {
+            Arm64Fixup* f = (Arm64Fixup*)fixups.get(i);
+            if (f.kind() != (u32)FIXUP_PAGE21 && f.kind() != (u32)FIXUP_PAGEOFF12)
+                continue;
+            if (symbols.get((Hashable*)f.symbol()) != (Object*)0)
+                continue;
+            if (f.kind() == (u32)FIXUP_PAGEOFF12 && !isAddImm64(rdw(text, f.offset())))
+                {
+                if (bad.get((Hashable*)f.symbol()) == (Object*)0)
+                    {
+                    bad.set((Hashable*)f.symbol(), (Object*)f.symbol());
+                    // The symbol, then the function the reference is in.
+                    Array* pair = new Array();
+                    pair.add((Object*)f.symbol());
+                    String* fn = MachO.functionAt(symbols, dataSyms, f.offset());
+                    pair.add((Object*)(fn != (String*)0 ? fn : String.withCString("")));
+                    _badPage.add((Object*)pair);
+                    }
+                continue;
+                }
+            _pageGot.set((Hashable*)f.symbol(), (Object*)f.symbol());
+            }
+        // A symbol with any refused use is not rewritten at all.
+        Array* names = bad.allKeys();
+        for (u32 i = (u32)0; i < names.count(); i = i + (u32)1)
+            _pageGot.remove((Hashable*)names.get(i));
+        }
+
+    // The text symbol whose code holds `off`: the one at the greatest
+    // offset not past it.
+    static String* functionAt(Map* symbols, Array* dataSyms, u32 off)
+        {
+        Map* data = new Map();
+        for (u32 i = (u32)0; i < dataSyms.count(); i = i + (u32)1)
+            data.set((Hashable*)dataSyms.get(i), dataSyms.get(i));
+        Array* names = symbols.allKeys();
+        String* best = (String*)0;
+        u32 at = (u32)0;
+        for (u32 i = (u32)0; i < names.count(); i = i + (u32)1)
+            {
+            String* n = (String*)names.get(i);
+            // A data symbol, or an assembler-local label (`L…`), is not a function.
+            if (data.get((Hashable*)n) != (Object*)0 || n.hasPrefix(String.withCString("L")))
+                continue;
+            u32 o = ((Number*)symbols.get((Hashable*)n)).asU32();
+            if (o <= off && (best == (String*)0 || o > at || (o == at && n.compare(best) < (i32)0)))
+                {
+                best = n;
+                at = o;
+                }
+            }
+        return best;
+        }
+
+    bool pageImport(Arm64Fixup* f)
+        {
+        return (f.kind() == (u32)FIXUP_PAGE21 || f.kind() == (u32)FIXUP_PAGEOFF12)
+            && _pageGot != (Map*)0 && _pageGot.get((Hashable*)f.symbol()) != (Object*)0;
+        }
     Array* _dataBinds; // Arm64Fixup@ — undefined-symbol __data slots (finding #7)
     // Bug 069 / 138: the ObjC metadata sections carved out of the data blob
     // by the linker's repartition (MachOObjcRange@, FINAL blob coordinates).
@@ -1617,6 +1701,7 @@ class MachOSha256
         bool hasDataSect = dOnly > (u32)0;
 
         // 1. Imports — the calls this image cannot resolve itself.
+        classifyPageImports(fixups, symbols, dataSyms, text);
         _imports = new Array();
         _importIndex = new Map();
         for (u32 i = (u32)0; i < fixups.count(); i = i + (u32)1)
@@ -1625,7 +1710,8 @@ class MachOSha256
             // A pointer slot in __data holding an UNDEFINED symbol's address
             // needs an import too — it binds in place (finding #7; the slot
             // used to link as null with no diagnostic).
-            bool wants = f.kind() == (u32)FIXUP_BRANCH26 || f.kind() == (u32)FIXUP_GOTPAGE21 || f.kind() == (u32)FIXUP_GOTPAGEOFF12 || f.kind() == (u32)FIXUP_POINTER64;
+            bool wants = f.kind() == (u32)FIXUP_BRANCH26 || f.kind() == (u32)FIXUP_GOTPAGE21 || f.kind() == (u32)FIXUP_GOTPAGEOFF12 || f.kind() == (u32)FIXUP_POINTER64
+                      || pageImport(f);
             if (!wants)
                 continue;
             if (symbols.get((Hashable*)f.symbol()) != (Object*)0)
@@ -1766,6 +1852,37 @@ class MachOSha256
                 u32 s = symOffset(symbols, dataSyms, f.symbol(), textOffset, dataProgOffset) + (u32)f.addend();
                 u32 imm12 = (s & (u32)$FFF) >> f.scale();
                 wrw(txt, f.offset(), (rdw(txt, f.offset()) & ~((u32)$FFF << (u32)10)) | (imm12 << (u32)10));
+                }
+            else if (f.kind() == (u32)FIXUP_PAGE21 && pageImport(f))
+                {
+                // Through the GOT (#350): the slot's page.
+                u32 slot = gotOffset + ((Number*)_importIndex.get((Hashable*)f.symbol())).asU32() * (u32)GOT_SZ;
+                patchAdrp(txt, f.offset(), slot, site);
+                }
+            else if (f.kind() == (u32)FIXUP_PAGEOFF12 && pageImport(f))
+                {
+                // `add Xd, Xn, #off` becomes `ldr Xd, [Xn, #slot]`: the
+                // address the add would have formed, read from the slot.
+                u32 slot = gotOffset + ((Number*)_importIndex.get((Hashable*)f.symbol())).asU32() * (u32)GOT_SZ;
+                u32 w = rdw(txt, f.offset());
+                u32 ld = (u32)$F9400000 | (((slot & (u32)$FFF) >> (u32)3) << (u32)10) | (w & (u32)$3FF);
+                wrw(txt, f.offset(), ld);
+                }
+            else if (f.kind() == (u32)FIXUP_GOTPAGE21 && defined)
+                {
+                // A GOT pair naming a symbol this image defines is relaxed to
+                // the symbol itself, as ld64 does: the adrp takes its page and
+                // the load (below) becomes an add. It used to be left zero,
+                // reading the start of the code page (#350).
+                u32 s = symOffset(symbols, dataSyms, f.symbol(), textOffset, dataProgOffset) + (u32)f.addend();
+                patchAdrp(txt, f.offset(), s, site);
+                }
+            else if (f.kind() == (u32)FIXUP_GOTPAGEOFF12 && defined)
+                {
+                // `ldr Xt, [Xn, #off]` becomes `add Xt, Xn, #pageoff(sym)`.
+                u32 s = symOffset(symbols, dataSyms, f.symbol(), textOffset, dataProgOffset) + (u32)f.addend();
+                u32 w = rdw(txt, f.offset());
+                wrw(txt, f.offset(), (u32)$91000000 | ((s & (u32)$FFF) << (u32)10) | (w & (u32)$3FF));
                 }
             else if (f.kind() == (u32)FIXUP_GOTPAGE21 && !defined)
                 {
@@ -1915,12 +2032,14 @@ class MachOSha256
         bool hasIface = iface != (Array*)0 && iface.count() > (u32)0;
 
         // 1. Imports — identical rule to the executable's.
+        classifyPageImports(fixups, symbols, dataSyms, text);
         _imports = new Array();
         _importIndex = new Map();
         for (u32 i = (u32)0; i < fixups.count(); i = i + (u32)1)
             {
             Arm64Fixup* f = (Arm64Fixup*)fixups.get(i);
-            bool wants = f.kind() == (u32)FIXUP_BRANCH26 || f.kind() == (u32)FIXUP_GOTPAGE21 || f.kind() == (u32)FIXUP_GOTPAGEOFF12 || f.kind() == (u32)FIXUP_POINTER64;
+            bool wants = f.kind() == (u32)FIXUP_BRANCH26 || f.kind() == (u32)FIXUP_GOTPAGE21 || f.kind() == (u32)FIXUP_GOTPAGEOFF12 || f.kind() == (u32)FIXUP_POINTER64
+                      || pageImport(f);
             if (!wants)
                 continue;
             if (symbols.get((Hashable*)f.symbol()) != (Object*)0)
@@ -1992,6 +2111,37 @@ class MachOSha256
                 u32 s = symOffset(symbols, dataSyms, f.symbol(), textOffset, dataProgOffset) + (u32)f.addend();
                 u32 imm12 = (s & (u32)$FFF) >> f.scale();
                 wrw(txt, f.offset(), (rdw(txt, f.offset()) & ~((u32)$FFF << (u32)10)) | (imm12 << (u32)10));
+                }
+            else if (f.kind() == (u32)FIXUP_PAGE21 && pageImport(f))
+                {
+                // Through the GOT (#350): the slot's page.
+                u32 slot = gotOffset + ((Number*)_importIndex.get((Hashable*)f.symbol())).asU32() * (u32)GOT_SZ;
+                patchAdrp(txt, f.offset(), slot, site);
+                }
+            else if (f.kind() == (u32)FIXUP_PAGEOFF12 && pageImport(f))
+                {
+                // `add Xd, Xn, #off` becomes `ldr Xd, [Xn, #slot]`: the
+                // address the add would have formed, read from the slot.
+                u32 slot = gotOffset + ((Number*)_importIndex.get((Hashable*)f.symbol())).asU32() * (u32)GOT_SZ;
+                u32 w = rdw(txt, f.offset());
+                u32 ld = (u32)$F9400000 | (((slot & (u32)$FFF) >> (u32)3) << (u32)10) | (w & (u32)$3FF);
+                wrw(txt, f.offset(), ld);
+                }
+            else if (f.kind() == (u32)FIXUP_GOTPAGE21 && defined)
+                {
+                // A GOT pair naming a symbol this image defines is relaxed to
+                // the symbol itself, as ld64 does: the adrp takes its page and
+                // the load (below) becomes an add. It used to be left zero,
+                // reading the start of the code page (#350).
+                u32 s = symOffset(symbols, dataSyms, f.symbol(), textOffset, dataProgOffset) + (u32)f.addend();
+                patchAdrp(txt, f.offset(), s, site);
+                }
+            else if (f.kind() == (u32)FIXUP_GOTPAGEOFF12 && defined)
+                {
+                // `ldr Xt, [Xn, #off]` becomes `add Xt, Xn, #pageoff(sym)`.
+                u32 s = symOffset(symbols, dataSyms, f.symbol(), textOffset, dataProgOffset) + (u32)f.addend();
+                u32 w = rdw(txt, f.offset());
+                wrw(txt, f.offset(), (u32)$91000000 | ((s & (u32)$FFF) << (u32)10) | (w & (u32)$3FF));
                 }
             else if (f.kind() == (u32)FIXUP_GOTPAGE21 && !defined)
                 {

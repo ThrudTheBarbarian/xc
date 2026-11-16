@@ -1134,8 +1134,33 @@ String* appleSdkRoot(DriverOptions* d)
 // With an SDK at hand, libSystem's own export list says which imports it
 // really has; any other unclaimed import is a link error naming it. Without
 // an SDK nothing is known, and the old behaviour stands.
+// A direct @PAGE/@PAGEOFF load or store of a symbol a library defines
+// (#350): the writer refuses it rather than leave the address zero.
+void checkPageImports(MachO* m)
+{
+    Array* bad = m.unreachableImports();
+    if (bad.count() == (u32)0) return;
+    for (u32 i = (u32)0; i < bad.count(); i = i + (u32)1) {
+        Array* pair = (Array*)bad.get(i);
+        String* s = (String*)pair.get((u32)0);
+        String* fn = (String*)pair.get((u32)1);
+        String* shown = s.hasPrefix(String.withCString("_")) ? s.substringFromByte((u32)1) : s;
+        String* where = String.withCString("");
+        if (fn.byteLength() > (u32)0) {
+            where.appendCString(" in '");
+            where.append(fn.hasPrefix(String.withCString("_")) ? fn.substringFromByte((u32)1) : fn);
+            where.appendCString("'");
+        }
+        Stdio.printf("xcc: error: '%s' is loaded or stored directly%s (an @PAGE/@PAGEOFF pair), but a "
+                     "library defines it, and such a reference cannot reach another image: it has to "
+                     "go through the GOT\n", shown.cString(), where.cString());
+    }
+    Process.exit((i32)1);
+}
+
 void checkSystemImports(DriverOptions* d, MachO* m)
 {
+    checkPageImports(m);
     // macOS only for now: the iOS SDKs inline libSystem's sub-libraries as
     // further documents in the same .tbd, which the reader does not merge yet,
     // so `write` and the pthread calls would look missing (580 follow-up).
@@ -6414,6 +6439,7 @@ void emitModule(DriverOptions* d, IRModule* mod)
             m.setDeps(arm64LinkDeps(d, d.fe().neededLibs(), new Array()));
             m.dylib(as.textBytes(), instName, exports, iface,
                     as.symbols(), dataBytes, as.dataSyms(), fixups, miLen, objcSects, bssLen);
+            checkPageImports(m);
         } else {
             // The dylibs this program `#import <X>`ed. Each becomes an
             // LC_LOAD_DYLIB and claims the imports it exports, so dyld looks
