@@ -730,12 +730,12 @@ class Wasm32
         // x86-64, a wasm library (no main) needs none, as threads do not
         // combine with wasm libraries (refused below), so no threaded host
         // can share its objects (#303).
-        bool safeArc = _arcOverride >= (i32)0 ? _arcOverride != (i32)0 : spawnsThreads(mod);
+        bool safeArc = _arcOverride >= (i32)0 ? _arcOverride != (i32)0 : CgCommon.spawnsThreads(mod);
         _threaded = safeArc && !_emitLib && !_linkLibs;
         // A module that starts threads and is, or links, a library would
         // spawn into nothing (each thread is an instance of one module); as
         // the reference, refused.
-        if ((_emitLib || _linkLibs) && spawnsThreads(mod)) {
+        if ((_emitLib || _linkLibs) && CgCommon.spawnsThreads(mod)) {
             Stdio.printf("xcc-cg-wasm32: error: this module starts threads and %s; on wasm32 threads do not "
                          "combine with wasm libraries yet (each thread is an instance of one module on shared memory, "
                          "and a library is a module of its own). Build it as one program.\n",
@@ -3275,29 +3275,6 @@ class Wasm32
         String* s = String.withCString("");
         if (_linkLibs) s.appendFormat(" (export \"%s\")", n.cString());
         return s;
-    }
-
-    // Whether the module spawns a thread (calls _xt_thread_create), as the
-    // reference's referencesSymbolNamed.
-    bool spawnsThreads(IRModule* m)
-    {
-        String* want = String.withCString("_xt_thread_create");
-        for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1) {
-            IRFunc* fn = (IRFunc*)m.funcs().get(f);
-            for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1) {
-                IRBlock* bb = (IRBlock*)fn.blocks().get(b);
-                if (listNames(bb.phis(), want) || listNames(bb.insns(), want)) return true;
-                if (bb.term() != (IRInsn*)0 && CgCommon.insnNames(bb.term(), want)) return true;
-            }
-        }
-        return false;
-    }
-
-    bool listNames(Array* list, String* want)
-    {
-        for (u32 i = (u32)0; i < list.count(); i = i + (u32)1)
-            if (CgCommon.insnNames((IRInsn*)list.get(i), want)) return true;
-        return false;
     }
 
     // `  (data (i32.const A) "…") ;; c` as a passive segment, its address and

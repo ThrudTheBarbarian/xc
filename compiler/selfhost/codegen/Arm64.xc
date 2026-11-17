@@ -308,7 +308,7 @@ class Arm64
     String* assembly(IRModule* m)
     {
         _m = m;
-        _atomicArc = _arcOverride >= (i32)0 ? _arcOverride != (i32)0 : arcAtomic(m);
+        _atomicArc = _arcOverride >= (i32)0 ? _arcOverride != (i32)0 : CgCommon.arcAtomic(m, _lseAtomics);
         // The parameter map (and every frame kept) is for the backtracing
         // reporter of -fbounds-check, which is linked separately; a module
         // that brings its own checker (Checked.xc, -fbounds-check=light) needs neither.
@@ -2146,39 +2146,6 @@ class Arm64
             _out.appendFormat("    .quad %ld\n", (i32)e.saveBase());
             _out.appendFormat("    .quad ___xt_ms_s_%ld\n", (i32)i);
         }
-    }
-
-    // Atomic reference counts (the security review, 2026-10-21): an object
-    // two threads retain and release with plain loads and stores can be freed
-    // twice. Always on with the LSE atomics, where they cost nothing measurable
-    // (the ARC benchmarks within 1%). Elsewhere on when the module spawns a
-    // thread, as before; when it has no main (a library or a plugin, whose
-    // caller may have threads of its own); and when it loads a plugin (whose
-    // threads may share its objects).
-    bool arcAtomic(IRModule* m)
-    {
-        if (_lseAtomics) return true;
-        if (spawnsThreads(m)) return true;
-        bool hasMain = false;
-        for (u32 f = (u32)0; f < m.funcs().count() && !hasMain; f = f + (u32)1)
-            hasMain = ((IRFunc*)m.funcs().get(f)).name().equals(String.withCString("main"));
-        if (!hasMain) return true;
-        return CgCommon.referencesSymbol(m, String.withCString("Plugin$load"));
-    }
-
-    bool spawnsThreads(IRModule* m)
-    {
-        String* want = String.withCString("_xt_thread_create");
-        for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1) {
-            IRFunc* fn = (IRFunc*)m.funcs().get(f);
-            for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1) {
-                IRBlock* bb = (IRBlock*)fn.blocks().get(b);
-                if (CgCommon.insnsName(bb.phis(), want)) return true;
-                if (CgCommon.insnsName(bb.insns(), want)) return true;
-                if (bb.term() != (IRInsn*)0 && CgCommon.insnNames(bb.term(), want)) return true;
-            }
-        }
-        return false;
     }
 
     void emitRetain(IRInsn* n)
