@@ -7945,13 +7945,24 @@ void checkCapabilities(DriverOptions* d)
 //   PrefixLonger  the argument starts with the name and is longer than minLen
 //   Custom        driverOptionCustom decides (spellings with different rules)
 // The first name is the one messages use. applyOption does what each row's
-// option means and returns how many arguments it took (#337).
+// option means and returns how many arguments it took (#337). A row marked
+// inert does nothing (its value is still checked): once applyOption has
+// accepted it, inertFlag says it will be removed, naming it as the mark says.
 enum DriverOptionKind = {
     doptkExact = 1,
     doptkExactValue,
     doptkPrefix,
     doptkPrefixLonger,
     doptkCustom
+};
+
+// How an inert row's warning names it: not inert; the argument as given; the
+// row's first name; the argument up to its `=`.
+enum DriverOptionInert = {
+    doptiNone = 0,
+    doptiArgument,
+    doptiName,
+    doptiBeforeEq
 };
 
 enum DriverOptionId = {
@@ -8039,6 +8050,7 @@ class DriverOption
     u32    _kind;
     Array* _names;   // String*: the spellings; the first is the name messages use
     u32    _minLen;  // PrefixLonger: the argument must be longer than this
+    u32    _inert;   // DriverOptionInert: a flag that does nothing, and how it is named
 
     void init(void)
     {
@@ -8046,6 +8058,7 @@ class DriverOption
         _kind = (u32)0;
         _names = (Array*)0;
         _minLen = (u32)0;
+        _inert = (u32)doptiNone;
     }
 
     u32 id(void)         { return _id; }
@@ -8053,6 +8066,7 @@ class DriverOption
     Array* names(void)   { return _names; }
     String* name(void)   { return (String*)_names.get((u32)0); }
     u32 minLen(void)     { return _minLen; }
+    u32 inert(void)      { return _inert; }
 }
 
 Array* gDriverOptions;
@@ -8065,6 +8079,13 @@ void driverOption(u32 id, u32 kind, string names, u32 minLen)
     r._names = String.withCString(names).splitOnByte((u8)' ');
     r._minLen = minLen;
     gDriverOptions.add((Object*)r);
+}
+
+// The row just added does nothing; its warning names it as `how` says.
+void inertOption(u32 how)
+{
+    DriverOption* r = (DriverOption*)gDriverOptions.get(gDriverOptions.count() - (u32)1);
+    r._inert = how;
 }
 
 // The rows, in the order they are tested.
@@ -8138,11 +8159,16 @@ Array* driverOptions(void)
     driverOption((u32)doptArchOptions, (u32)doptkPrefix, "-x-", (u32)0);
     driverOption((u32)doptLinkLibs, (u32)doptkExact, "--link-libs", (u32)0);
     driverOption((u32)doptArc, (u32)doptkCustom, "-farc -farc=", (u32)0);
+    inertOption((u32)doptiArgument);    // ARC is always on
     driverOption((u32)doptAutoCloak, (u32)doptkPrefix, "-fauto-cloak=", (u32)0);
+    inertOption((u32)doptiName);
     driverOption((u32)doptStackSize, (u32)doptkCustom, "-ss --stack-size -ss= --stack-size=", (u32)0);
+    inertOption((u32)doptiBeforeEq);
     driverOption((u32)doptSelfHost, (u32)doptkExact, "--self-host", (u32)0);
     driverOption((u32)doptNewIr, (u32)doptkExact, "-fnew-ir --with-ir", (u32)0);
+    inertOption((u32)doptiArgument);
     driverOption((u32)doptWarnAll, (u32)doptkExact, "-W", (u32)0);
+    inertOption((u32)doptiArgument);
     driverOption((u32)doptQuitStyle, (u32)doptkExactValue, "-Q --quit-style", (u32)0);
     driverOption((u32)doptXtcStack, (u32)doptkExact, "--xtc-stack", (u32)0);
     driverOption((u32)doptMinBanked, (u32)doptkExactValue, "-Fmb --fn-min-banked", (u32)0);
@@ -8652,7 +8678,6 @@ u32 applyOption(DriverOptions* d, u32 id, String* a, u32 i, u32 argc)
     // command lines build, and said out loud, because a silently ignored
     // flag is what made "verified with ARC off" mean nothing.
     if (id == (u32)doptArc) {
-        inertFlag(a);   // ARC is always on
         return (u32)1;
     }
     // -fauto-cloak=never|auto|always: the value is checked, and the flag is
@@ -8666,7 +8691,6 @@ u32 applyOption(DriverOptions* d, u32 id, String* a, u32 i, u32 argc)
             driverExit((i32)1);
             return (u32)0;
         }
-        inertFlag(String.withCString("-fauto-cloak="));
         return (u32)1;
     }
     // -ss / --stack-size <n>, also joined with `=`: checked, and without
@@ -8693,7 +8717,6 @@ u32 applyOption(DriverOptions* d, u32 id, String* a, u32 i, u32 argc)
             driverExit((i32)1);
             return (u32)0;
         }
-        inertFlag(eq != String.notFound() ? a.substringBytes((u32)0, eq) : a);
         return i - i0;
     }
     // Accepted, and already what happens: every build links in-house, and
@@ -8702,12 +8725,11 @@ u32 applyOption(DriverOptions* d, u32 id, String* a, u32 i, u32 argc)
         return (u32)1;
     }
     if (id == (u32)doptNewIr) {
-        inertFlag(a);
         return (u32)1;
     }
     // A bare -W: every warning category is on unless -Wno- turns it off,
     // so there is nothing more to enable.
-    if (id == (u32)doptWarnAll) { inertFlag(a); return (u32)1; }
+    if (id == (u32)doptWarnAll) { return (u32)1; }
     // The xt6502 options. Each is the 6502 back end's or its startup's
     // business; on another target they change nothing.
     if (id == (u32)doptQuitStyle) {
@@ -8750,19 +8772,22 @@ u32 applyOption(DriverOptions* d, u32 id, String* a, u32 i, u32 argc)
     return (u32)0;
 }
 
-// The flags that take their value as the next argument (the ones the
-// parse loop below reads with `i + 1 < argc`), each with the name its
-// message gives it: the first spelling in its test, as the reference driver
-// names `--output` as -o. 0 for a flag that takes none.
+// The flags that take their value as the next argument (the table's
+// ExactValue rows), each with the name its message gives it: the row's first
+// spelling, as the reference driver names `--output` as -o. 0 for a flag
+// that takes none.
 String* valueFlagName(String* a)
 {
-    Array* ws = String.withCString("--arch=-A --bundle=--bundle --bundle-key=--bundle-key --bundle-lib=--bundle-lib --bundle-name=--bundle-name --bundle-version=--bundle-version --fn-leaf-inline=-Fli --fn-loop-unroll=-Flu --fn-min-banked=-Fmb --include=-I --library-path=-L --memory-model=-m --output=-o --preprocessed=-E --property=--property --publisher=--publisher --publisher-domain=--publisher-domain --quit-style=-Q --resources=--resources --rotate-from=--rotate-from --setting=--property --sign=--sign --sign-bundle=--sign-bundle --sign-entitlements=--sign-entitlements --sign-key=--sign-key --trust=--trust --xcc-home=-H --xtc-home=-H -A=-A -D=-D -E=-E -Fli=-Fli -Flu=-Flu -Fmb=-Fmb -H=-H -I=-I -L=-L -Q=-Q -Xlinker=-Xlinker -framework=-Xlinker -m=-m -o=-o").splitOnByte((u8)' ');
-    for (u32 k = (u32)0; k < ws.count(); k = k + (u32)1)
+    Array* rows = driverOptions();
+    for (u32 k = (u32)0; k < rows.count(); k = k + (u32)1)
         {
-        String* w = (String*)ws.get(k);
-        u32 eq = w.indexOfByte((u8)'=');
-        if (a.equals(w.substringBytes((u32)0, eq)))
-            return w.substringFromByte(eq + (u32)1);
+        DriverOption* r = (DriverOption*)rows.get(k);
+        if (r.kind() != (u32)doptkExactValue)
+            continue;
+        Array* ns = r.names();
+        for (u32 j = (u32)0; j < ns.count(); j = j + (u32)1)
+            if (a.equals((String*)ns.get(j)))
+                return r.name();
         }
     return (String*)0;
 }
@@ -8773,6 +8798,18 @@ String* valueFlagName(String* a)
 void inertFlag(String* a)
 {
     Stdio.error(String.withFormat("xcc: warning: %s has no effect and will be removed\n", a.cString()));
+}
+
+// How an inert row's warning names argument `a` (DriverOptionInert).
+String* inertSpelling(DriverOption* r, String* a)
+{
+    if (r.inert() == (u32)doptiName)
+        return r.name();
+    if (r.inert() == (u32)doptiBeforeEq) {
+        u32 eq = a.indexOfByte((u8)'=');
+        return eq != String.notFound() ? a.substringBytes((u32)0, eq) : a;
+    }
+    return a;
 }
 
 DriverOptions* parseDriverArgs(void)
@@ -8795,6 +8832,8 @@ DriverOptions* parseDriverArgs(void)
         DriverOption* hit = driverOptionFor(a, i, argc);
         if (hit != (DriverOption*)0) {
             i = i + applyOption(d, hit.id(), a, i, argc);
+            if (hit.inert() != (u32)doptiNone)
+                inertFlag(inertSpelling(hit, a));
             continue;
         }
         // An unrecognised flag is an ERROR, not something to skip. A driver that
