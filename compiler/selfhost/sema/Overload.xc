@@ -39,24 +39,38 @@ class Overload
     // inherited ones included. A class argument satisfies a protocol
     // parameter, which is how `render(Drawable@)` takes a Sprite.
     static Map* _conforms;
+    // className -> the set of its protocols (#335): conformsTo split the list
+    // on every query, and overload ranking asks once per candidate per
+    // argument. Built once, when the hierarchy is set.
+    static Map* _conformSets;
     static void setHierarchy(Map* parents, Map* conforms)
         {
         _parents = parents;
         _conforms = conforms;
+        _conformSets = new Map();
+        if (conforms == 0)
+            return;
+        Array* keys = conforms.allKeys();
+        for (u32 k = (u32)0; k < keys.count(); k = k + (u32)1)
+            {
+            String* list = (String*)conforms.get((Hashable*)keys.get(k));
+            Map* set = new Map();
+            Array* names = list.splitOnByte((u8)',');
+            for (u32 i = (u32)0; i < names.count(); i = i + (u32)1)
+                {
+                String* n = ((String*)names.get(i)).trimmed();
+                set.set((Hashable*)n, (Object*)n);
+                }
+            _conformSets.set((Hashable*)keys.get(k), (Object*)set);
+            }
         }
 
     static bool conformsTo(String* cls, String* proto)
         {
-        if (_conforms == 0 || cls == 0 || proto == 0)
+        if (_conformSets == 0 || cls == 0 || proto == 0)
             return false;
-        String* list = (String*)_conforms.get((Hashable*)cls);
-        if (list == 0)
-            return false;
-        Array* names = list.splitOnByte((u8)',');
-        for (u32 i = (u32)0; i < names.count(); i = i + (u32)1)
-            if (((String*)names.get(i)).trimmed().equals(proto))
-                return true;
-        return false;
+        Map* set = (Map*)_conformSets.get((Hashable*)cls);
+        return set != 0 && set.get((Hashable*)proto) != 0;
         }
 
     // Does cls, or a class it descends from, DECLARE conformance to proto?
