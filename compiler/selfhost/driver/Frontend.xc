@@ -1889,7 +1889,7 @@ void injectClassNames(Node* program, FeOptions* o, Array* tokens, Array* ifaces,
                 {
                 u32 k = (u32)0;
                 Node* c = (Node*)byName.get((Hashable*)names.get(i));
-                while (c != (Node*)0 && !c.name().equals(String.withCString("Object")) && k < (u32)64)
+                while (c != (Node*)0 && !c.name().equals(String.withCString("Object")) && k <= byName.count())
                     {
                     k = k + (u32)1;
                     String* pn = c.op();

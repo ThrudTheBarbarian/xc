@@ -415,7 +415,9 @@ class Vtable
                 // one slot, not two.
                 Node* a = parentRespectingCycles(classes, cls);
                 u32 guard = (u32)0;
-                while (a != 0 && guard < (u32)64)
+                // parentRespectingCycles severs a loop, so the class count
+                // bounds the chain (#334; it was a cap of 64).
+                while (a != 0 && guard <= classes.count())
                     {
                     Node* match = Vtable.matching(a, child);
                     if (match != 0)
@@ -469,7 +471,7 @@ class Vtable
             bool ovr = false;
             Node* a = p;
             u32 g = (u32)0;
-            while (a != 0 && g < (u32)64)
+            while (a != 0 && g <= classes.count())
                 {
                 if (Vtable.matching(a, m) != 0)
                     {
