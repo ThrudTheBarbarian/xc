@@ -222,7 +222,7 @@
                     // every iteration (dominates the latch): one under an `if`
                     // may be the guard's whole point (`if (p != null) s +=
                     // p.x`), and hoisted it loads through null. As the reference.
-                    if (n.op().equals(String.withCString("Load")) && !self.hasBlock((Array*)dom.get((Hashable*)latch), bb))
+                    if (n.op().equals(String.withCString("Load")) && !dom.dominates(bb, latch))
                         continue;
                     if (keepSplats && n.op().equals(String.withCString("VSplat")))
                         continue;
