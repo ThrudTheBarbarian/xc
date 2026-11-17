@@ -595,6 +595,43 @@ static NSArray<NSString*>* sTbdTargets = nil;
 
 static NSArray<NSString*>* sLastUnexportedSystemImports = nil;
 
+// Fixups that do not fit the instruction they patch (#285): a branch out of
+// range or unaligned, a page offset not aligned to the access. They were
+// written masked; the link driver now refuses the link with these. As the
+// port's MachO.linkErrors.
+static NSMutableArray<NSString*>* sLastLinkErrors = nil;
++ (NSArray<NSString*>*)lastLinkErrors
+    {
+    return sLastLinkErrors ?: @[];
+    }
+static NSString* xtmShown(NSString* sym)
+    {
+    return [sym hasPrefix:@"_"] ? [sym substringFromIndex:1] : (sym ?: @"");
+    }
+static BOOL xtmBranchFits(int64_t delta, NSString* sym)
+    {
+    if (delta & 3)
+        {
+        [sLastLinkErrors addObject:[NSString stringWithFormat:@"unaligned branch to '%@'", xtmShown(sym)]];
+        return NO;
+        }
+    int64_t imm = delta >> 2;
+    if (imm < -33554432 || imm >= 33554432)
+        {
+        [sLastLinkErrors addObject:[NSString stringWithFormat:@"branch out of the +-128 MB range to '%@'", xtmShown(sym)]];
+        return NO;
+        }
+    return YES;
+    }
+static BOOL xtmLo12Aligned(uint64_t target, uint32_t scale, NSString* sym)
+    {
+    if (scale == 0 || ((target & 0xFFF) & ((1u << scale) - 1)) == 0)
+        return YES;
+    [sLastLinkErrors addObject:[NSString stringWithFormat:@"a %u-byte load or store through @PAGEOFF is not aligned to '%@'",
+                                                          1u << scale, xtmShown(sym)]];
+    return NO;
+    }
+
 + (NSArray<NSString*>*)lastUnexportedSystemImports
     {
     return sLastUnexportedSystemImports ?: @[];
@@ -1642,6 +1679,7 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
                  objcSections:(NSArray<NSDictionary*>*)objcSections
                     bssLength:(NSUInteger)bssLength
     {
+    sLastLinkErrors = [NSMutableArray array];
     if (!dylibs)
         dylibs = @[];
     if (!objcSections)
@@ -1813,13 +1851,15 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
             NSUInteger idx = importIndex[f.symbol].unsignedIntegerValue;
             uint64_t stubAddr = stubsAddr + idx * STUB_SZ;
             int32_t rel = (int32_t)(((int64_t)stubAddr - (int64_t)(textAddr + f.offset)) >> 2);
-            wrw(f.offset, (rdw(f.offset) & 0xFC000000u) | ((uint32_t)rel & 0x03FFFFFFu));
+            if (xtmBranchFits((int64_t)stubAddr - (int64_t)(textAddr + f.offset), f.symbol))
+                wrw(f.offset, (rdw(f.offset) & 0xFC000000u) | ((uint32_t)rel & 0x03FFFFFFu));
             }
         // call -> local (static-linked)
         else if (f.kind == XAArm64FixupBranch26 && symbols[f.symbol])
             {
             int32_t rel = (int32_t)(((int64_t)symAddr(f.symbol) + f.addend - (int64_t)(textAddr + f.offset)) >> 2);
-            wrw(f.offset, (rdw(f.offset) & 0xFC000000u) | ((uint32_t)rel & 0x03FFFFFFu));
+            if (xtmBranchFits((int64_t)symAddr(f.symbol) + f.addend - (int64_t)(textAddr + f.offset), f.symbol))
+                wrw(f.offset, (rdw(f.offset) & 0xFC000000u) | ((uint32_t)rel & 0x03FFFFFFu));
             }
         // adrp <sym>@PAGE
         else if (f.kind == XAArm64FixupPage21 && symbols[f.symbol])
@@ -1834,7 +1874,8 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
         else if (f.kind == XAArm64FixupPageOff12 && symbols[f.symbol])
             {
             uint32_t imm12 = (uint32_t)(((symAddr(f.symbol) + (uint64_t)f.addend) & 0xFFF) >> f.scale);
-            wrw(f.offset, (rdw(f.offset) & ~(0xFFFu << 10)) | (imm12 << 10));
+            if (xtmLo12Aligned(symAddr(f.symbol) + (uint64_t)f.addend, (uint32_t)f.scale, f.symbol))
+                wrw(f.offset, (rdw(f.offset) & ~(0xFFFu << 10)) | (imm12 << 10));
             }
         // adrp <sym>@GOTPAGE
         else if (f.kind == XAArm64FixupGotPage21 && !symbols[f.symbol])
@@ -2461,6 +2502,7 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
                   dylibs:(NSArray<NSDictionary*>*)dylibs
                bssLength:(NSUInteger)bssLength
     {
+    sLastLinkErrors = [NSMutableArray array];
     if (!objcSections)
         objcSections = @[];
     if (!dylibs)
@@ -2600,7 +2642,8 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
             NSUInteger idx = importIndex[f.symbol].unsignedIntegerValue;
             uint64_t stubAddr = stubsAddr + idx * STUB_SZ;
             int32_t rel = (int32_t)(((int64_t)stubAddr - (int64_t)(textAddr + f.offset)) >> 2);
-            wrw(f.offset, (rdw(f.offset) & 0xFC000000u) | ((uint32_t)rel & 0x03FFFFFFu));
+            if (xtmBranchFits((int64_t)stubAddr - (int64_t)(textAddr + f.offset), f.symbol))
+                wrw(f.offset, (rdw(f.offset) & 0xFC000000u) | ((uint32_t)rel & 0x03FFFFFFu));
             }
         else if (f.kind == XAArm64FixupBranch26 && symbols[f.symbol])
             {
@@ -2613,7 +2656,8 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
             // a branch to itself. The library loaded, exported the right symbols,
             // and hung the moment the call was made.
             int32_t rel = (int32_t)(((int64_t)symAddr(f.symbol) + f.addend - (int64_t)(textAddr + f.offset)) >> 2);
-            wrw(f.offset, (rdw(f.offset) & 0xFC000000u) | ((uint32_t)rel & 0x03FFFFFFu));
+            if (xtmBranchFits((int64_t)symAddr(f.symbol) + f.addend - (int64_t)(textAddr + f.offset), f.symbol))
+                wrw(f.offset, (rdw(f.offset) & 0xFC000000u) | ((uint32_t)rel & 0x03FFFFFFu));
             }
         else if (f.kind == XAArm64FixupPage21 && symbols[f.symbol])
             {
@@ -2629,7 +2673,8 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
         else if (f.kind == XAArm64FixupPageOff12 && symbols[f.symbol])
             {
             uint32_t imm12 = (uint32_t)(((symAddr(f.symbol) + (uint64_t)f.addend) & 0xFFF) >> f.scale);
-            wrw(f.offset, (rdw(f.offset) & ~(0xFFFu << 10)) | (imm12 << 10));
+            if (xtmLo12Aligned(symAddr(f.symbol) + (uint64_t)f.addend, (uint32_t)f.scale, f.symbol))
+                wrw(f.offset, (rdw(f.offset) & ~(0xFFFu << 10)) | (imm12 << 10));
             }
         // adrp <sym>@GOTPAGE
         else if (f.kind == XAArm64FixupGotPage21 && !symbols[f.symbol])
