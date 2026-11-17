@@ -7931,6 +7931,825 @@ void checkCapabilities(DriverOptions* d)
     }
 }
 
+// ── the option table ──────────────────────────────────────────────────────
+//
+// The options parseDriverArgs reads after parseCapabilityFlag, one row each,
+// in the order they are tested: the first row that matches an argument takes
+// it, so where two rows can match (-O and -O<n>, -ll and -l<name>, -D and
+// -D<name>, -L and -L<dir>), the earlier row wins. A row's kind says how its
+// names match:
+//   Exact         the argument is one of the names
+//   ExactValue    the argument is one of the names and a value follows it;
+//                 with no value the row does not match and later rows are tried
+//   Prefix        the argument starts with the name
+//   PrefixLonger  the argument starts with the name and is longer than minLen
+//   Custom        driverOptionCustom decides (spellings with different rules)
+// The first name is the one messages use. applyOption does what each row's
+// option means and returns how many arguments it took (#337).
+enum DriverOptionKind = {
+    doptkExact = 1,
+    doptkExactValue,
+    doptkPrefix,
+    doptkPrefixLonger,
+    doptkCustom
+};
+
+enum DriverOptionId = {
+    doptOutput = 1,
+    doptArch,
+    doptHome,
+    doptInclude,
+    doptDefine,
+    doptDefineJoined,
+    doptXlinker,
+    doptListLayouts,
+    doptLib,
+    doptWl,
+    doptLibPath,
+    doptLibPathJoined,
+    doptKeepAsm,
+    doptEmitApk,
+    doptSignKey,
+    doptBoundsCheck,
+    doptBoundsCheckLight,
+    doptStd,
+    doptFpContract,
+    doptNoBoundsCheck,
+    doptMigrate,
+    doptQuiet,
+    doptLoopUnroll,
+    doptHelp,
+    doptPrintTarget,
+    doptPrint3pDir,
+    doptVersion,
+    doptMemoryModel,
+    doptVerbose,
+    doptOptBare,
+    doptOptLevel,
+    doptAnalyze,
+    doptWarnOff,
+    doptBundle,
+    doptProperty,
+    doptBundleName,
+    doptBundleVersion,
+    doptResources,
+    doptTrust,
+    doptNoSign,
+    doptSignBundle,
+    doptBundleLib,
+    doptRotateFrom,
+    doptBundleKey,
+    doptPublisher,
+    doptPublisherDomain,
+    doptEmitRuntime,
+    doptNoRuntimeLib,
+    doptNoXcArgs,
+    doptEmitLib,
+    doptLto,
+    doptSign,
+    doptSignEntitlements,
+    doptCompileOnly,
+    doptEmitIface,
+    doptPreprocessed,
+    doptEmitIR,
+    doptEmitIROpt,
+    doptAssembleOnly,
+    doptDumpLayout,
+    doptDceTrace,
+    doptLeafInline,
+    doptArchOptions,
+    doptLinkLibs,
+    doptArc,
+    doptAutoCloak,
+    doptStackSize,
+    doptSelfHost,
+    doptNewIr,
+    doptWarnAll,
+    doptQuitStyle,
+    doptXtcStack,
+    doptMinBanked,
+    doptDumpPlacement,
+    doptDumpUsage,
+    doptCPair
+};
+
+class DriverOption
+{
+    u32    _id;
+    u32    _kind;
+    Array* _names;   // String*: the spellings; the first is the name messages use
+    u32    _minLen;  // PrefixLonger: the argument must be longer than this
+
+    void init(void)
+    {
+        _id = (u32)0;
+        _kind = (u32)0;
+        _names = (Array*)0;
+        _minLen = (u32)0;
+    }
+
+    u32 id(void)         { return _id; }
+    u32 kind(void)       { return _kind; }
+    Array* names(void)   { return _names; }
+    String* name(void)   { return (String*)_names.get((u32)0); }
+    u32 minLen(void)     { return _minLen; }
+}
+
+Array* gDriverOptions;
+
+void driverOption(u32 id, u32 kind, string names, u32 minLen)
+{
+    DriverOption* r = new DriverOption();
+    r._id = id;
+    r._kind = kind;
+    r._names = String.withCString(names).splitOnByte((u8)' ');
+    r._minLen = minLen;
+    gDriverOptions.add((Object*)r);
+}
+
+// The rows, in the order they are tested.
+Array* driverOptions(void)
+{
+    if (gDriverOptions != (Array*)0)
+        return gDriverOptions;
+    gDriverOptions = new Array();
+    driverOption((u32)doptOutput, (u32)doptkExactValue, "-o --output", (u32)0);
+    driverOption((u32)doptArch, (u32)doptkExactValue, "-A --arch", (u32)0);
+    driverOption((u32)doptHome, (u32)doptkExactValue, "-H --xcc-home --xtc-home", (u32)0);
+    driverOption((u32)doptInclude, (u32)doptkExactValue, "-I --include", (u32)0);
+    driverOption((u32)doptDefine, (u32)doptkExactValue, "-D", (u32)0);
+    driverOption((u32)doptDefineJoined, (u32)doptkPrefixLonger, "-D", (u32)2);
+    driverOption((u32)doptXlinker, (u32)doptkExactValue, "-Xlinker -framework", (u32)0);
+    driverOption((u32)doptListLayouts, (u32)doptkExact, "-ll --list-layouts", (u32)0);
+    driverOption((u32)doptLib, (u32)doptkPrefixLonger, "-l", (u32)2);
+    driverOption((u32)doptWl, (u32)doptkPrefix, "-Wl,", (u32)0);
+    driverOption((u32)doptLibPath, (u32)doptkExactValue, "-L --library-path", (u32)0);
+    driverOption((u32)doptLibPathJoined, (u32)doptkPrefixLonger, "-L", (u32)2);
+    driverOption((u32)doptKeepAsm, (u32)doptkExact, "-S", (u32)0);
+    driverOption((u32)doptEmitApk, (u32)doptkExact, "--emit-apk", (u32)0);
+    driverOption((u32)doptSignKey, (u32)doptkExactValue, "--sign-key", (u32)0);
+    driverOption((u32)doptBoundsCheck, (u32)doptkExact, "-fbounds-check", (u32)0);
+    driverOption((u32)doptBoundsCheckLight, (u32)doptkExact, "-fbounds-check=light", (u32)0);
+    driverOption((u32)doptStd, (u32)doptkPrefixLonger, "-std=", (u32)5);
+    driverOption((u32)doptFpContract, (u32)doptkPrefix, "-ffp-contract=", (u32)0);
+    driverOption((u32)doptNoBoundsCheck, (u32)doptkExact, "-fno-bounds-check", (u32)0);
+    driverOption((u32)doptMigrate, (u32)doptkPrefix, "--migrate=", (u32)0);
+    driverOption((u32)doptQuiet, (u32)doptkExact, "-q --quiet", (u32)0);
+    driverOption((u32)doptLoopUnroll, (u32)doptkExactValue, "-Flu --fn-loop-unroll", (u32)0);
+    driverOption((u32)doptHelp, (u32)doptkExact, "-h --help", (u32)0);
+    driverOption((u32)doptPrintTarget, (u32)doptkExact, "--print-target", (u32)0);
+    driverOption((u32)doptPrint3pDir, (u32)doptkExact, "--print-3p-dir", (u32)0);
+    driverOption((u32)doptVersion, (u32)doptkExact, "-v --version", (u32)0);
+    driverOption((u32)doptMemoryModel, (u32)doptkExactValue, "-m --memory-model", (u32)0);
+    driverOption((u32)doptVerbose, (u32)doptkExact, "-V --verbose", (u32)0);
+    driverOption((u32)doptOptBare, (u32)doptkExact, "-O", (u32)0);
+    driverOption((u32)doptOptLevel, (u32)doptkPrefix, "-O", (u32)0);
+    driverOption((u32)doptAnalyze, (u32)doptkExact, "-Wanalyze", (u32)0);
+    driverOption((u32)doptWarnOff, (u32)doptkPrefix, "-Wno-", (u32)0);
+    driverOption((u32)doptBundle, (u32)doptkExactValue, "--bundle", (u32)0);
+    driverOption((u32)doptProperty, (u32)doptkExactValue, "--property --setting", (u32)0);
+    driverOption((u32)doptBundleName, (u32)doptkExactValue, "--bundle-name", (u32)0);
+    driverOption((u32)doptBundleVersion, (u32)doptkExactValue, "--bundle-version", (u32)0);
+    driverOption((u32)doptResources, (u32)doptkExactValue, "--resources", (u32)0);
+    driverOption((u32)doptTrust, (u32)doptkExactValue, "--trust", (u32)0);
+    driverOption((u32)doptNoSign, (u32)doptkExact, "--no-sign", (u32)0);
+    driverOption((u32)doptSignBundle, (u32)doptkExactValue, "--sign-bundle", (u32)0);
+    driverOption((u32)doptBundleLib, (u32)doptkExactValue, "--bundle-lib", (u32)0);
+    driverOption((u32)doptRotateFrom, (u32)doptkExactValue, "--rotate-from", (u32)0);
+    driverOption((u32)doptBundleKey, (u32)doptkExactValue, "--bundle-key", (u32)0);
+    driverOption((u32)doptPublisher, (u32)doptkExactValue, "--publisher", (u32)0);
+    driverOption((u32)doptPublisherDomain, (u32)doptkExactValue, "--publisher-domain", (u32)0);
+    driverOption((u32)doptEmitRuntime, (u32)doptkExact, "--emit-runtime", (u32)0);
+    driverOption((u32)doptNoRuntimeLib, (u32)doptkExact, "--no-runtime-lib", (u32)0);
+    driverOption((u32)doptNoXcArgs, (u32)doptkExact, "-fno-xc-args", (u32)0);
+    driverOption((u32)doptEmitLib, (u32)doptkExact, "--emit-lib", (u32)0);
+    driverOption((u32)doptLto, (u32)doptkExact, "-flto", (u32)0);
+    driverOption((u32)doptSign, (u32)doptkExactValue, "--sign", (u32)0);
+    driverOption((u32)doptSignEntitlements, (u32)doptkExactValue, "--sign-entitlements", (u32)0);
+    driverOption((u32)doptCompileOnly, (u32)doptkExact, "-c", (u32)0);
+    driverOption((u32)doptEmitIface, (u32)doptkExact, "--emit-iface", (u32)0);
+    driverOption((u32)doptPreprocessed, (u32)doptkExactValue, "-E --preprocessed", (u32)0);
+    driverOption((u32)doptEmitIR, (u32)doptkExact, "--emit-ir", (u32)0);
+    driverOption((u32)doptEmitIROpt, (u32)doptkExact, "--emit-ir-opt", (u32)0);
+    driverOption((u32)doptAssembleOnly, (u32)doptkExact, "-a --assemble-only --emit-asm-from-ir", (u32)0);
+    driverOption((u32)doptDumpLayout, (u32)doptkExact, "-dl --dump-layout", (u32)0);
+    driverOption((u32)doptDceTrace, (u32)doptkExact, "-fdce-trace", (u32)0);
+    driverOption((u32)doptLeafInline, (u32)doptkExactValue, "-Fli --fn-leaf-inline", (u32)0);
+    driverOption((u32)doptArchOptions, (u32)doptkPrefix, "-x-", (u32)0);
+    driverOption((u32)doptLinkLibs, (u32)doptkExact, "--link-libs", (u32)0);
+    driverOption((u32)doptArc, (u32)doptkCustom, "-farc -farc=", (u32)0);
+    driverOption((u32)doptAutoCloak, (u32)doptkPrefix, "-fauto-cloak=", (u32)0);
+    driverOption((u32)doptStackSize, (u32)doptkCustom, "-ss --stack-size -ss= --stack-size=", (u32)0);
+    driverOption((u32)doptSelfHost, (u32)doptkExact, "--self-host", (u32)0);
+    driverOption((u32)doptNewIr, (u32)doptkExact, "-fnew-ir --with-ir", (u32)0);
+    driverOption((u32)doptWarnAll, (u32)doptkExact, "-W", (u32)0);
+    driverOption((u32)doptQuitStyle, (u32)doptkExactValue, "-Q --quit-style", (u32)0);
+    driverOption((u32)doptXtcStack, (u32)doptkExact, "--xtc-stack", (u32)0);
+    driverOption((u32)doptMinBanked, (u32)doptkExactValue, "-Fmb --fn-min-banked", (u32)0);
+    driverOption((u32)doptDumpPlacement, (u32)doptkExact, "-dp --dump-placement", (u32)0);
+    driverOption((u32)doptDumpUsage, (u32)doptkExact, "-du --dump-usage", (u32)0);
+    driverOption((u32)doptCPair, (u32)doptkExact, "--c-pair", (u32)0);
+    return gDriverOptions;
+}
+
+// The Custom rows' tests, as the branches they replace wrote them.
+bool driverOptionCustom(u32 id, String* a)
+{
+    if (id == (u32)doptArc)
+        return a.equals(String.withCString("-farc")) || a.hasPrefix(String.withCString("-farc="));
+    if (id == (u32)doptStackSize)
+        return a.equals(String.withCString("-ss")) || a.equals(String.withCString("--stack-size"))
+               || a.hasPrefix(String.withCString("-ss=")) || a.hasPrefix(String.withCString("--stack-size="));
+    return false;
+}
+
+bool driverOptionMatches(DriverOption* r, String* a, u32 i, u32 argc)
+{
+    u32 kind = r.kind();
+    if (kind == (u32)doptkCustom)
+        return driverOptionCustom(r.id(), a);
+    Array* ns = r.names();
+    for (u32 k = (u32)0; k < ns.count(); k = k + (u32)1) {
+        String* n = (String*)ns.get(k);
+        if (kind == (u32)doptkExact && a.equals(n))
+            return true;
+        if (kind == (u32)doptkExactValue && a.equals(n) && i + (u32)1 < argc)
+            return true;
+        if (kind == (u32)doptkPrefix && a.hasPrefix(n))
+            return true;
+        if (kind == (u32)doptkPrefixLonger && a.hasPrefix(n) && a.byteLength() > r.minLen())
+            return true;
+    }
+    return false;
+}
+
+// The first row that takes argument i, or 0.
+DriverOption* driverOptionFor(String* a, u32 i, u32 argc)
+{
+    Array* rows = driverOptions();
+    for (u32 k = (u32)0; k < rows.count(); k = k + (u32)1) {
+        DriverOption* r = (DriverOption*)rows.get(k);
+        if (driverOptionMatches(r, a, i, argc))
+            return r;
+    }
+    return (DriverOption*)0;
+}
+
+// What row `id` means, for argument i (`a`). Returns how many arguments it
+// took: 1, or 2 with the value that followed. A row that fails exits.
+u32 applyOption(DriverOptions* d, u32 id, String* a, u32 i, u32 argc)
+{
+    FeOptions* o = d.fe();
+    if (id == (u32)doptOutput) {
+        String* out = Process.argument(i + (u32)1);
+        o.setOutput(out);
+        // The output EXTENSION decides the format, as it does in the
+        // reference: `-o x.s` means ASSEMBLY, and stops before the link.
+        // Without this the driver linked an executable and CALLED it x.s,
+        // so anything asking this compiler for assembly — a build system,
+        // a differential, the staged self-build — silently got a Mach-O
+        // with an .s on the end.
+        if (out.hasSuffix(String.withCString(".s"))
+            || out.hasSuffix(String.withCString(".asm")))
+            d.setKeepAsm(true);
+        return (u32)2;
+    }
+    if (id == (u32)doptArch) {
+        // -A names a row of the target table; the driver still tests the
+        // row's legacy arch string. A token no row has is kept as typed
+        // and refused later, with the list of targets.
+        String* tok = Process.argument(i + (u32)1);
+        TargetRow* row = Targets.find(tok);
+        d.setTargetRow(row);
+        d.setArch(row != (TargetRow*)0 ? row.legacy() : tok);
+        if (row != (TargetRow*)0 && row.cpuVariant() != (u32)0)
+            d.caps().setM68kCpu(row.cpuVariant());
+        // The musl row is -A x86_64 -static. Kept apart from -static and
+        // merged after parsing, so a later -A replaces it: it used to
+        // stick, and `-A x86_64-linux-musl -A arm64` was refused for a
+        // -static nobody wrote.
+        d.caps().setRowStatic(row != (TargetRow*)0 && row.name().equals(String.withCString("x86_64-linux-musl")));
+        d.setSawArch(true);
+        return (u32)2;
+    }
+    // `--xcc-home` is the documented long form; `--xtc-home` is the older
+    // spelling. The value is cleaned as $XCC_HOME is — a Windows shell
+    // keeps the quotes in `-H "C:\path with spaces"`.
+    if (id == (u32)doptHome) {
+        o.setHome(sanitiseEnvPath(Process.argument(i + (u32)1))); return (u32)2;
+    }
+    if (id == (u32)doptInclude) {
+        o.incs().add((Object*)Process.argument(i + (u32)1)); return (u32)2;
+    }
+    if (id == (u32)doptDefine) {
+        o.defs().add((Object*)Process.argument(i + (u32)1)); return (u32)2;
+    }
+    // `-DNAME` / `-DNAME=VALUE`, joined, as cc takes it.
+    if (id == (u32)doptDefineJoined) {
+        o.defs().add((Object*)a.substringFromByte((u32)2)); return (u32)1;
+    }
+    // ── linker passthrough ───────────────────────────────────────
+    //
+    // This driver LINKS IN-HOUSE, so there is no clang to forward these to
+    // — they are honoured rather than passed on. `-Xlinker <lib.dylib>` is
+    // how every UXKit driver gate names its platform shim, and rejecting
+    // the flag made six back ends unbuildable (uxkit bug 034-E).
+    if (id == (u32)doptXlinker) {
+        bool isFw = a.equals(String.withCString("-framework"));
+        String* v = Process.argument(i + (u32)1);
+        if (isFw) d.frameworks().add((Object*)v);
+        else      d.addLinkToken(v);
+        return (u32)2;
+    }
+    // `-ll` lists the layouts. It has to be tested before `-l<name>`, which
+    // would otherwise read it as a library called `l`.
+    if (id == (u32)doptListLayouts) {
+        d.setListLayouts(true); return (u32)1;
+    }
+    if (id == (u32)doptLib) {
+        d.linkInputs().add((Object*)a);              // resolved on the -L path
+        return (u32)1;
+    }
+    if (id == (u32)doptWl) {
+        // `-Wl,a,b,c` is `-Xlinker a -Xlinker b -Xlinker c`. A FILE the
+        // linker takes — an object, an archive, a dylib or a stub — is a
+        // link input (bug 139: the harness names its objects this way, as
+        // clang users do); `-rpath <dir>` is honoured on a Mach-O link; any
+        // other flag is named at link time and skipped (addLinkToken).
+        Array* toks = a.substringFromByte((u32)4).splitOnByte((u8)',');
+        for (u32 k = (u32)0; k < toks.count(); k = k + (u32)1)
+            d.addLinkToken((String*)toks.get(k));
+        return (u32)1;
+    }
+    if (id == (u32)doptLibPath) {
+        o.libs().add((Object*)Process.argument(i + (u32)1)); return (u32)2;
+    }
+    // `-L<dir>`, joined.
+    if (id == (u32)doptLibPathJoined) {
+        o.libs().add((Object*)a.substringFromByte((u32)2)); return (u32)1;
+    }
+    if (id == (u32)doptKeepAsm) { d.setKeepAsm(true); return (u32)1; }
+    if (id == (u32)doptEmitApk) { d.setEmitApk(true); return (u32)1; }
+    if (id == (u32)doptSignKey) {
+        d.setSignKey(Process.argument(i + (u32)1)); return (u32)2;
+    }
+    // `--migrate=<base>:<to>` — compile as if the library were still
+    // <base>: a member marked since("V") with V newer than <base> vanishes
+    // from lookup, so a call whose MEANING changed between the two fails
+    // loudly instead of quietly resolving to the new one. Joined, like -O.
+    // -fbounds-check: a checked build. NATIVE ONLY, and a hard error
+    // elsewhere rather than a flag that quietly does nothing — the checked
+    // runtime is arm64 assembly and only the arm64 back end emits the
+    // parameter map it walks.
+    if (id == (u32)doptBoundsCheck) {
+        o.setBoundsCheck(true); o.setBoundsReport(true); return (u32)1;
+    }
+    // -fbounds-check=light: the checks without the debug build's frames
+    // and backtrace — a failure names the site and the bounds and stops.
+    if (id == (u32)doptBoundsCheckLight) {
+        o.setBoundsCheck(true); o.setBoundsReport(false); return (u32)1;
+    }
+    // -std=<standard>: for a C or C++ file, handed to clang (whose own
+    // default is otherwise used; Apple's clang++ defaults to C++14).
+    if (id == (u32)doptStd) {
+        String* v = a.substringFromByte((u32)5);
+        for (u32 k = 0; k < v.byteLength(); k = k + 1) {
+            u8 c = v.byteAt(k);
+            if (!((c >= (u8)'a' && c <= (u8)'z') || (c >= (u8)'0' && c <= (u8)'9') || c == (u8)'+' || c == (u8)':')) {
+                Stdio.printf("xcc: error: -std= takes a language standard such as c11 or c++17\n");
+                driverExit((i32)1);
+            }
+        }
+        cPathSetStd(v); return (u32)1;
+    }
+    // -ffp-contract=fast|on|off: for a C file, handed to clang. `on` (clang's
+    // default) fuses within an expression, `fast` across statements too,
+    // `off` not at all; -fgoal=accuracy means off (owner, 2026-11-09).
+    if (id == (u32)doptFpContract) {
+        String* v = a.substringFromByte((u32)14);
+        if (!v.equals(String.withCString("fast")) && !v.equals(String.withCString("on")) && !v.equals(String.withCString("off"))) {
+            Stdio.printf("xcc: error: -ffp-contract= takes fast, on or off\n");
+            driverExit((i32)1);
+        }
+        cPathSetFpContract(v); return (u32)1;
+    }
+    // -fno-bounds-check: no checks, the default (benchmarks say it anyway).
+    if (id == (u32)doptNoBoundsCheck) {
+        o.setBoundsCheck(false); o.setBoundsReport(false); return (u32)1;
+    }
+    if (id == (u32)doptMigrate) {
+        o.setMigrate(a.substringFromByte((u32)10));
+        return (u32)1;
+    }
+    // `-q` — suppress the informational lines. A build system wants the
+    // errors and nothing else.
+    if (id == (u32)doptQuiet) {
+        d.setQuiet(true); return (u32)1;
+    }
+    // `-Flu <n>` — auto-unroll counted loops with trip count <= n. The
+    // per-target default stands unless this says otherwise.
+    if (id == (u32)doptLoopUnroll) {
+        i32 lu = parseCount(Process.argument(i + (u32)1));
+        if (lu < (i32)0) {
+            // Not a number. Refused rather than quietly left at the
+            // target's default: this driver's whole argument policy is
+            // that an option it cannot honour is an error, and `-Flu wat`
+            // silently compiling something other than what was asked for
+            // is the failure that policy exists to prevent.
+            Stdio.printf("xcc: error: -Flu takes a decimal trip count, got '%s'\n",
+                         Process.argument(i + (u32)1).cString());
+            driverExit((i32)1);
+            return (u32)0;
+        }
+        d.setUnroll(lu);
+        return (u32)2;
+    }
+    if (id == (u32)doptHelp) {
+        usage();
+        driverExit((i32)0);
+        return (u32)0;
+    }
+    if (id == (u32)doptPrintTarget) {
+        d.setPrintTarget(true);
+        return (u32)1;
+    }
+    if (id == (u32)doptPrint3pDir) {
+        d.setPrint3pDir(true);
+        return (u32)1;
+    }
+    if (id == (u32)doptVersion) {
+        // XCC_VERSION comes from the Makefile, which reads the VERSION
+        // file — the same source the Objective-C driver uses. It was a
+        // literal "0.6" here, which is one fact in two places: bumping
+        // VERSION moved the bootstrap compiler to 0.61 and left the
+        // compiler that actually SHIPS reporting 0.6.
+#ifndef XCC_VERSION
+#define XCC_VERSION "unversioned"
+#endif
+        Stdio.printf("xcc %s (xc, self-hosted)\n", XCC_VERSION);
+        driverExit((i32)0);
+        return (u32)0;
+    }
+    // `-m <layout>` picks a memory layout, and with it the 6502 target. A
+    // handful of names are PLATFORMS with no layout and select their
+    // target instead. Anything else is a `.lnk` — a file path, a path
+    // without its `.lnk`, `<platform>/<layout>`, or a bare layout name
+    // searched for under every platform — and is resolved after the parse,
+    // when -H and the environment have both been seen.
+    if (id == (u32)doptMemoryModel) {
+        String* layout = Process.argument(i + (u32)1);
+        String* plat = platformLayoutArch(layout);
+        if (plat != (String*)0) {
+            // `atarist` is the m68k PLATFORM, so it leaves an m68k CPU
+            // already chosen by -A alone.
+            if (!plat.equals(String.withCString("m68k")) || !isM68k(d)) d.setArch(plat);
+            d.setLayoutSpec((String*)0);
+        } else {
+            d.setArch(String.withCString("xt6502"));
+            d.setLayoutSpec(layout);
+        }
+        return (u32)2;
+    }
+    if (id == (u32)doptVerbose) {
+        o.setVerbose(true); return (u32)1;
+    }
+    // `-O3`, joined — NOT `-O 3`. Both spellings used to be accepted in the
+    // sense that the second was SILENTLY IGNORED: `-O 0` left the driver at
+    // its -O3 default and compiled the wrong thing without a word, which is
+    // exactly the failure this compiler refuses everywhere else.
+    // A bare `-O` is `-O1`, as cc reads it.
+    if (id == (u32)doptOptBare) { d.setOpt((u32)1); return (u32)1; }
+    // -O0 to -O3 and nothing else: -Os, -Oz, -Og and -O9 are errors, not
+    // levels computed from whatever byte follows the O.
+    if (id == (u32)doptOptLevel) {
+        if (a.byteLength() == (u32)3 && a.byteAt((u32)2) >= (u8)'0' && a.byteAt((u32)2) <= (u8)'3') {
+            d.setOpt((u32)(a.byteAt((u32)2) - (u8)'0')); return (u32)1;
+        }
+        Stdio.error(String.withFormat("xcc: error: unsupported optimisation level '%s' (use -O0, -O1, -O2 or -O3)\n", a.cString()));
+        driverExit((i32)1);
+        return (u32)0;
+    }
+    // -Wanalyze: the static analyser. Off by default — an unknown
+    // false-positive rate must not destabilise the corpus.
+    if (id == (u32)doptAnalyze) {
+        o.setAnalyze(true); return (u32)1;
+    }
+    // -Wno-<category>. The port rejected every one of these as an
+    // unrecognised OPTION, so `xcc -Wno-comment` failed the build outright
+    // while the reference suppressed and carried on — a user following the
+    // documented advice got a hard error from the shipped compiler. An
+    // unknown category is a warning, not an error: mistyping a suppression
+    // must not stop a compile, and the known names are listed, as the
+    // reference does.
+    if (id == (u32)doptWarnOff) {
+        String* cat = a.substringBytes((u32)5, a.byteLength() - (u32)5);
+        if (!isWarningCategory(cat)) {
+            Stdio.printf("xcc: warning: unknown warning category '%s' — known: %s\n",
+                         cat.cString(), warningCategoryNames().cString());
+        } else {
+            o.suppressWarning(cat);
+        }
+        return (u32)1;
+    }
+    // --bundle <dir> and its companions: a library, laid out and signed.
+    if (id == (u32)doptBundle) {
+        d._bundleDir = Process.argument(i + (u32)1);
+        d.setEmitLib(true);
+        o.setEmitIface(true);
+        o.setLibraryBuild(true);
+        return (u32)2;
+    }
+    // --property k=v / --setting k=v: the bundle's developer properties.
+    if (id == (u32)doptProperty) {
+        String* kv = Process.argument(i + (u32)1);
+        u32 eq = kv.indexOfByte((u8)'=');
+        if (eq == String.notFound() || eq == (u32)0) {
+            Stdio.printf("xcc: error: %s wants key=value, not '%s'\n", a.cString(), kv.cString());
+            driverExit((i32)1);
+        }
+        bool ro = a.equals(String.withCString("--property"));
+        if (ro && d._bundleReadonly == (Map*)0) d._bundleReadonly = new Map();
+        if (!ro && d._bundleWriteable == (Map*)0) d._bundleWriteable = new Map();
+        (ro ? d._bundleReadonly : d._bundleWriteable).set((Hashable*)kv.substringBytes((u32)0, eq),
+                                                           (Object*)kv.substringFromByte(eq + (u32)1));
+        return (u32)2;
+    }
+    if (id == (u32)doptBundleName) {
+        d._bundleName = Process.argument(i + (u32)1); return (u32)2;
+    }
+    if (id == (u32)doptBundleVersion) {
+        d._bundleVersion = Process.argument(i + (u32)1); return (u32)2;
+    }
+    if (id == (u32)doptResources) {
+        d._bundleResources = Process.argument(i + (u32)1); return (u32)2;
+    }
+    // --trust <key.pub>: a curated program, which loads plugins only from
+    // the publishers it names (bundles-and-plugins.md §2a); repeatable.
+    if (id == (u32)doptTrust) {
+        String* f = Process.argument(i + (u32)1);
+        String* t = Files.readText(f);
+        if (t != (String*)0)
+            while (t.byteLength() > (u32)0 && (t.byteAt(t.byteLength() - (u32)1) == (u8)10
+                                               || t.byteAt(t.byteLength() - (u32)1) == (u8)13
+                                               || t.byteAt(t.byteLength() - (u32)1) == (u8)' '))
+                t = t.substringBytes((u32)0, t.byteLength() - (u32)1);
+        Data* pk = t == (String*)0 ? (Data*)0 : BundleSign._unhex(t, (u32)32);
+        if (pk == (Data*)0) {
+            Stdio.printf("xcc: error: --trust %s: not a publisher's public key (64 hex digits, as xcc --bundle writes beside its key)\n",
+                         f.cString());
+            driverExit((i32)1);
+        }
+        if (d._trusted == (String*)0) d._trusted = new String();
+        else d._trusted.appendByte((u8)' ');
+        d._trusted.append(Sha256.hex(pk.bytes(), (u32)32));
+        return (u32)2;
+    }
+    if (id == (u32)doptNoSign) {
+        d._noSign = true; return (u32)1;
+    }
+    if (id == (u32)doptSignBundle) {
+        d._signBundle = Process.argument(i + (u32)1); return (u32)2;
+    }
+    if (id == (u32)doptBundleLib) {
+        if (d._bundleLibs == (Array*)0) d._bundleLibs = new Array();
+        d._bundleLibs.add((Object*)Process.argument(i + (u32)1));
+        return (u32)2;
+    }
+    if (id == (u32)doptRotateFrom) {
+        d._rotateFrom = Process.argument(i + (u32)1); return (u32)2;
+    }
+    if (id == (u32)doptBundleKey) {
+        d._bundleKey = Process.argument(i + (u32)1); return (u32)2;
+    }
+    if (id == (u32)doptPublisher) {
+        d._publisher = Process.argument(i + (u32)1); return (u32)2;
+    }
+    if (id == (u32)doptPublisherDomain) {
+        d._publisherDomain = Process.argument(i + (u32)1); return (u32)2;
+    }
+    // --emit-runtime: libRuntime (owner, 2026-11-03), a library build of
+    // the runtime's files, which then export their classes; the input is
+    // the runtime's root file (Par.xc).
+    if (id == (u32)doptEmitRuntime) {
+        d._emitRuntime = true;
+        d.setEmitLib(true);
+        o.setEmitIface(true);
+        o.setLibraryBuild(true);
+        o.setEmitLib(true);
+        return (u32)1;
+    }
+    if (id == (u32)doptNoRuntimeLib) {
+        d._noRuntimeLib = true; return (u32)1;
+    }
+    if (id == (u32)doptNoXcArgs) {
+        d._noXcArgs = true; return (u32)1;
+    }
+    if (id == (u32)doptEmitLib) {
+        d.setEmitLib(true);
+        o.setEmitIface(true);        // the library carries its own interface
+        o.setLibraryBuild(true);     // …and numbers every method a slot
+        o.setEmitLib(true);          // …and exports its standard-library state
+        return (u32)1;
+    }
+    // --emit-iface: the interface IS the output. The caller is asking what
+    // this source DECLARES, not asking for code — an editor, or the writer
+    // differential — so the front end runs and nothing after it does.
+    // -c: separate compilation. The object carries the MODULE and nothing
+    // else — its own code plus its per-class allocators, deliberately NOT
+    // the crt or the runtime, which belong to the final link and would
+    // collide the moment two objects met.
+    if (id == (u32)doptLto) { d.setLto(true); return (u32)1; }
+    if (id == (u32)doptSign) {
+        d.setSignIdentity(Process.argument(i + (u32)1)); return (u32)2;
+    }
+    if (id == (u32)doptSignEntitlements) {
+        d.setSignEntitlements(Process.argument(i + (u32)1)); return (u32)2;
+    }
+    if (id == (u32)doptCompileOnly) {
+        d.setCompileOnly(true);
+        o.setCompileOnly(true);   // …so `main`, if any, is the class-name root
+        o.setEmitIface(true);     // the interface is a build artifact of -c
+        // An object is part of a library too: the overrides may live in a
+        // module that is not being compiled, so every instance method
+        // earns a slot. The numbering an object publishes has to be the
+        // one the final link will use.
+        o.setLibraryBuild(true);
+        return (u32)1;
+    }
+    if (id == (u32)doptEmitIface) {
+        d.setEmitIfaceOnly(true);
+        o.setEmitIface(true);
+        return (u32)1;
+    }
+    // ── output modes and diagnostics ─────────────────────────────
+    //
+    // -E <path>: the preprocessed source, written as the compile goes on.
+    if (id == (u32)doptPreprocessed) {
+        o.setPreprocessedPath(Process.argument(i + (u32)1)); return (u32)2;
+    }
+    // The IR after lowering / after the optimiser, to stderr. Diagnostics:
+    // the output file is the same with or without them.
+    if (id == (u32)doptEmitIR) { d.setEmitIR(true); return (u32)1; }
+    if (id == (u32)doptEmitIROpt) { d.setEmitIROpt(true); return (u32)1; }
+    // -a: stop after the back end and write the assembly, which is what
+    // -S means here. --emit-asm-from-ir is the old name for the same thing,
+    // from when the IR pipeline ran beside another code generator.
+    if (id == (u32)doptAssembleOnly) {
+        if (a.equals(String.withCString("--emit-asm-from-ir")))
+            Stdio.error(String.withCString("xcc: warning: --emit-asm-from-ir will be removed; it is -S\n"));
+        d.setKeepAsm(true); return (u32)1;
+    }
+    if (id == (u32)doptDumpLayout) {
+        d.setDumpLayout(true); return (u32)1;
+    }
+    // -fdce-trace: name each function dead-function elimination removes.
+    if (id == (u32)doptDceTrace) { d.setDceTrace(true); return (u32)1; }
+    // -Fli <n>: the largest callee, in IR instructions, the inliner splices.
+    if (id == (u32)doptLeafInline) {
+        i32 li = parseCount(Process.argument(i + (u32)1));
+        if (li < (i32)0) {
+            Stdio.printf("xcc: error: -Fli takes a decimal instruction count, got '%s'\n",
+                         Process.argument(i + (u32)1).cString());
+            driverExit((i32)1);
+            return (u32)0;
+        }
+        d.setInlineMax(li);
+        return (u32)2;
+    }
+    // -x-<arch>,<option>[,<option>…]: options that exist for one target
+    // only. An arch with none, or an option the arch does not have, is an
+    // error — a typo must not build without the feature it asked for.
+    if (id == (u32)doptArchOptions) {
+        Array* parts = a.substringFromByte((u32)3).splitOnByte((u8)',');
+        String* xarch = parts.count() > (u32)0 ? (String*)parts.get((u32)0) : String.withCString("");
+        if (parts.count() < (u32)2 || xarch.byteLength() == (u32)0) {
+            Stdio.printf("xcc: error: '%s' — expected -x-<arch>,<option>[,<option>...]\n", a.cString());
+            driverExit((i32)1);
+            return (u32)0;
+        }
+        if (!xarch.equals(String.withCString("wasm32"))) {
+            Stdio.printf("xcc: error: no target-specific options exist for arch '%s'\n", xarch.cString());
+            driverExit((i32)1);
+            return (u32)0;
+        }
+        for (u32 k = (u32)1; k < parts.count(); k = k + (u32)1) {
+            String* xo = (String*)parts.get(k);
+            if (!xo.equals(String.withCString("return-call"))) {
+                Stdio.printf("xcc: error: unknown wasm32 option '%s' — known: return-call\n", xo.cString());
+                driverExit((i32)1);
+                return (u32)0;
+            }
+            d.setTailCalls(true);
+        }
+        return (u32)1;
+    }
+    // --link-libs: build a wasm32 APP in the mode that links .wasm
+    // libraries — it owns memory and the table and exports what each
+    // library's loader wiring needs. The driver chooses it by itself when
+    // the program imports a .wasm library; this asks for it outright.
+    if (id == (u32)doptLinkLibs) { d.setLinkLibs(true); return (u32)1; }
+    // `-farc` retired (bug 026): ARC is always on. Still accepted so old
+    // command lines build, and said out loud, because a silently ignored
+    // flag is what made "verified with ARC off" mean nothing.
+    if (id == (u32)doptArc) {
+        inertFlag(a);   // ARC is always on
+        return (u32)1;
+    }
+    // -fauto-cloak=never|auto|always: the value is checked, and the flag is
+    // inert — it placed code in the cloaked region of the retired Atari
+    // xl/xe layouts, and no live layout has one.
+    if (id == (u32)doptAutoCloak) {
+        String* v = a.substringFromByte((u32)13).lowercased();
+        if (!v.equals(String.withCString("never")) && !v.equals(String.withCString("auto"))
+            && !v.equals(String.withCString("always"))) {
+            Stdio.printf("xcc: -fauto-cloak= expects 'never|auto|always', got '%s'\n", v.cString());
+            driverExit((i32)1);
+            return (u32)0;
+        }
+        inertFlag(String.withCString("-fauto-cloak="));
+        return (u32)1;
+    }
+    // -ss / --stack-size <n>, also joined with `=`: checked, and without
+    // effect on every current layout (none has a flat xtc stack to cap).
+    if (id == (u32)doptStackSize) {
+        u32 i0 = i;
+        String* v = (String*)0;
+        u32 eq = a.indexOfByte((u8)'=');
+        if (eq != String.notFound()) {
+            v = a.substringFromByte(eq + (u32)1);
+            i = i + (u32)1;
+        } else if (i + (u32)1 < argc) {
+            v = Process.argument(i + (u32)1);
+            i = i + (u32)2;
+        } else {
+            Stdio.printf("xcc: error: %s requires an argument\n", a.cString());
+            driverExit((i32)1);
+            return (u32)0;
+        }
+        i32 n = parseStackSize(v);
+        if (n <= (i32)0 || n > (i32)65535) {
+            Stdio.printf("xcc: --stack-size expects a positive integer up to 65535, got '%s'\n",
+                         v.cString());
+            driverExit((i32)1);
+            return (u32)0;
+        }
+        inertFlag(eq != String.notFound() ? a.substringBytes((u32)0, eq) : a);
+        return i - i0;
+    }
+    // Accepted, and already what happens: every build links in-house, and
+    // the IR pipeline is the only code generator.
+    if (id == (u32)doptSelfHost) {
+        return (u32)1;
+    }
+    if (id == (u32)doptNewIr) {
+        inertFlag(a);
+        return (u32)1;
+    }
+    // A bare -W: every warning category is on unless -Wno- turns it off,
+    // so there is nothing more to enable.
+    if (id == (u32)doptWarnAll) { inertFlag(a); return (u32)1; }
+    // The xt6502 options. Each is the 6502 back end's or its startup's
+    // business; on another target they change nothing.
+    if (id == (u32)doptQuitStyle) {
+        String* v = Process.argument(i + (u32)1).lowercased();
+        if (!v.equals(String.withCString("rts")) && !v.equals(String.withCString("loop"))) {
+            Stdio.printf("xcc: -Q expects 'rts' or 'loop', got '%s'\n", v.cString());
+            driverExit((i32)1);
+            return (u32)0;
+        }
+        d.setQuitLoop(v.equals(String.withCString("loop")));
+        return (u32)2;
+    }
+    if (id == (u32)doptXtcStack) {
+        d.setXtcStack(true);
+        return (u32)1;
+    }
+    if (id == (u32)doptMinBanked) {
+        i32 mb = parseCount(Process.argument(i + (u32)1));
+        if (mb < (i32)0 || mb > (i32)65535) {
+            Stdio.printf("xcc: error: -Fmb takes a decimal instruction count, got '%s'\n",
+                         Process.argument(i + (u32)1).cString());
+            driverExit((i32)1);
+            return (u32)0;
+        }
+        d.setFnMinBanked((u32)mb);
+        return (u32)2;
+    }
+    if (id == (u32)doptDumpPlacement) {
+        d.setDumpPlacement(true);
+        return (u32)1;
+    }
+    if (id == (u32)doptDumpUsage) {
+        d.setDumpUsage(true);
+        return (u32)1;
+    }
+    if (id == (u32)doptCPair) {
+        gCSplitPair = true;
+        return (u32)1;
+    }
+    return (u32)0;
+}
+
 // The flags that take their value as the next argument (the ones the
 // parse loop below reads with `i + 1 < argc`), each with the name its
 // message gives it: the first spelling in its test, as the reference driver
@@ -7971,573 +8790,12 @@ DriverOptions* parseDriverArgs(void)
     while (i < argc) {
         if (parseCapabilityFlag(d, &i, argc)) continue;
         String* a = Process.argument(i);
-        if ((a.equals(String.withCString("-o")) || a.equals(String.withCString("--output")))
-            && i + (u32)1 < argc) {
-            String* out = Process.argument(i + (u32)1);
-            o.setOutput(out);
-            // The output EXTENSION decides the format, as it does in the
-            // reference: `-o x.s` means ASSEMBLY, and stops before the link.
-            // Without this the driver linked an executable and CALLED it x.s,
-            // so anything asking this compiler for assembly — a build system,
-            // a differential, the staged self-build — silently got a Mach-O
-            // with an .s on the end.
-            if (out.hasSuffix(String.withCString(".s"))
-                || out.hasSuffix(String.withCString(".asm")))
-                d.setKeepAsm(true);
-            i = i + (u32)2; continue;
-        }
-        if ((a.equals(String.withCString("-A")) || a.equals(String.withCString("--arch")))
-            && i + (u32)1 < argc) {
-            // -A names a row of the target table; the driver still tests the
-            // row's legacy arch string. A token no row has is kept as typed
-            // and refused later, with the list of targets.
-            String* tok = Process.argument(i + (u32)1);
-            TargetRow* row = Targets.find(tok);
-            d.setTargetRow(row);
-            d.setArch(row != (TargetRow*)0 ? row.legacy() : tok);
-            if (row != (TargetRow*)0 && row.cpuVariant() != (u32)0)
-                d.caps().setM68kCpu(row.cpuVariant());
-            // The musl row is -A x86_64 -static. Kept apart from -static and
-            // merged after parsing, so a later -A replaces it: it used to
-            // stick, and `-A x86_64-linux-musl -A arm64` was refused for a
-            // -static nobody wrote.
-            d.caps().setRowStatic(row != (TargetRow*)0 && row.name().equals(String.withCString("x86_64-linux-musl")));
-            d.setSawArch(true);
-            i = i + (u32)2; continue;
-        }
-        // `--xcc-home` is the documented long form; `--xtc-home` is the older
-        // spelling. The value is cleaned as $XCC_HOME is — a Windows shell
-        // keeps the quotes in `-H "C:\path with spaces"`.
-        if ((a.equals(String.withCString("-H")) || a.equals(String.withCString("--xcc-home"))
-             || a.equals(String.withCString("--xtc-home"))) && i + (u32)1 < argc) {
-            o.setHome(sanitiseEnvPath(Process.argument(i + (u32)1))); i = i + (u32)2; continue;
-        }
-        if ((a.equals(String.withCString("-I")) || a.equals(String.withCString("--include")))
-            && i + (u32)1 < argc) {
-            o.incs().add((Object*)Process.argument(i + (u32)1)); i = i + (u32)2; continue;
-        }
-        if (a.equals(String.withCString("-D")) && i + (u32)1 < argc) {
-            o.defs().add((Object*)Process.argument(i + (u32)1)); i = i + (u32)2; continue;
-        }
-        // `-DNAME` / `-DNAME=VALUE`, joined, as cc takes it.
-        if (a.hasPrefix(String.withCString("-D")) && a.byteLength() > (u32)2) {
-            o.defs().add((Object*)a.substringFromByte((u32)2)); i = i + (u32)1; continue;
-        }
-        // ── linker passthrough ───────────────────────────────────────
-        //
-        // This driver LINKS IN-HOUSE, so there is no clang to forward these to
-        // — they are honoured rather than passed on. `-Xlinker <lib.dylib>` is
-        // how every UXKit driver gate names its platform shim, and rejecting
-        // the flag made six back ends unbuildable (uxkit bug 034-E).
-        if ((a.equals(String.withCString("-Xlinker"))
-          || a.equals(String.withCString("-framework"))) && i + (u32)1 < argc) {
-            bool isFw = a.equals(String.withCString("-framework"));
-            String* v = Process.argument(i + (u32)1);
-            if (isFw) d.frameworks().add((Object*)v);
-            else      d.addLinkToken(v);
-            i = i + (u32)2;
+        // The option table, top to bottom: the first row that matches takes
+        // the argument, and its value when it has one (#337).
+        DriverOption* hit = driverOptionFor(a, i, argc);
+        if (hit != (DriverOption*)0) {
+            i = i + applyOption(d, hit.id(), a, i, argc);
             continue;
-        }
-        // `-ll` lists the layouts. It has to be tested before `-l<name>`, which
-        // would otherwise read it as a library called `l`.
-        if (a.equals(String.withCString("-ll")) || a.equals(String.withCString("--list-layouts"))) {
-            d.setListLayouts(true); i = i + (u32)1; continue;
-        }
-        if (a.hasPrefix(String.withCString("-l")) && a.byteLength() > (u32)2) {
-            d.linkInputs().add((Object*)a);              // resolved on the -L path
-            i = i + (u32)1;
-            continue;
-        }
-        if (a.hasPrefix(String.withCString("-Wl,"))) {
-            // `-Wl,a,b,c` is `-Xlinker a -Xlinker b -Xlinker c`. A FILE the
-            // linker takes — an object, an archive, a dylib or a stub — is a
-            // link input (bug 139: the harness names its objects this way, as
-            // clang users do); `-rpath <dir>` is honoured on a Mach-O link; any
-            // other flag is named at link time and skipped (addLinkToken).
-            Array* toks = a.substringFromByte((u32)4).splitOnByte((u8)',');
-            for (u32 k = (u32)0; k < toks.count(); k = k + (u32)1)
-                d.addLinkToken((String*)toks.get(k));
-            i = i + (u32)1;
-            continue;
-        }
-        if ((a.equals(String.withCString("-L")) || a.equals(String.withCString("--library-path")))
-            && i + (u32)1 < argc) {
-            o.libs().add((Object*)Process.argument(i + (u32)1)); i = i + (u32)2; continue;
-        }
-        // `-L<dir>`, joined.
-        if (a.hasPrefix(String.withCString("-L")) && a.byteLength() > (u32)2) {
-            o.libs().add((Object*)a.substringFromByte((u32)2)); i = i + (u32)1; continue;
-        }
-        if (a.equals(String.withCString("-S"))) { d.setKeepAsm(true); i = i + (u32)1; continue; }
-        if (a.equals(String.withCString("--emit-apk"))) { d.setEmitApk(true); i = i + (u32)1; continue; }
-        if (a.equals(String.withCString("--sign-key")) && i + (u32)1 < argc) {
-            d.setSignKey(Process.argument(i + (u32)1)); i = i + (u32)2; continue;
-        }
-        // `--migrate=<base>:<to>` — compile as if the library were still
-        // <base>: a member marked since("V") with V newer than <base> vanishes
-        // from lookup, so a call whose MEANING changed between the two fails
-        // loudly instead of quietly resolving to the new one. Joined, like -O.
-        // -fbounds-check: a checked build. NATIVE ONLY, and a hard error
-        // elsewhere rather than a flag that quietly does nothing — the checked
-        // runtime is arm64 assembly and only the arm64 back end emits the
-        // parameter map it walks.
-        if (a.equals(String.withCString("-fbounds-check"))) {
-            o.setBoundsCheck(true); o.setBoundsReport(true); i = i + (u32)1; continue;
-        }
-        // -fbounds-check=light: the checks without the debug build's frames
-        // and backtrace — a failure names the site and the bounds and stops.
-        if (a.equals(String.withCString("-fbounds-check=light"))) {
-            o.setBoundsCheck(true); o.setBoundsReport(false); i = i + (u32)1; continue;
-        }
-        // -std=<standard>: for a C or C++ file, handed to clang (whose own
-        // default is otherwise used; Apple's clang++ defaults to C++14).
-        if (a.hasPrefix(String.withCString("-std=")) && a.byteLength() > (u32)5) {
-            String* v = a.substringFromByte((u32)5);
-            for (u32 k = 0; k < v.byteLength(); k = k + 1) {
-                u8 c = v.byteAt(k);
-                if (!((c >= (u8)'a' && c <= (u8)'z') || (c >= (u8)'0' && c <= (u8)'9') || c == (u8)'+' || c == (u8)':')) {
-                    Stdio.printf("xcc: error: -std= takes a language standard such as c11 or c++17\n");
-                    driverExit((i32)1);
-                }
-            }
-            cPathSetStd(v); i = i + (u32)1; continue;
-        }
-        // -ffp-contract=fast|on|off: for a C file, handed to clang. `on` (clang's
-        // default) fuses within an expression, `fast` across statements too,
-        // `off` not at all; -fgoal=accuracy means off (owner, 2026-11-09).
-        if (a.hasPrefix(String.withCString("-ffp-contract="))) {
-            String* v = a.substringFromByte((u32)14);
-            if (!v.equals(String.withCString("fast")) && !v.equals(String.withCString("on")) && !v.equals(String.withCString("off"))) {
-                Stdio.printf("xcc: error: -ffp-contract= takes fast, on or off\n");
-                driverExit((i32)1);
-            }
-            cPathSetFpContract(v); i = i + (u32)1; continue;
-        }
-        // -fno-bounds-check: no checks, the default (benchmarks say it anyway).
-        if (a.equals(String.withCString("-fno-bounds-check"))) {
-            o.setBoundsCheck(false); o.setBoundsReport(false); i = i + (u32)1; continue;
-        }
-        if (a.hasPrefix(String.withCString("--migrate="))) {
-            o.setMigrate(a.substringFromByte((u32)10));
-            i = i + (u32)1; continue;
-        }
-        // `-q` — suppress the informational lines. A build system wants the
-        // errors and nothing else.
-        if (a.equals(String.withCString("-q")) || a.equals(String.withCString("--quiet"))) {
-            d.setQuiet(true); i = i + (u32)1; continue;
-        }
-        // `-Flu <n>` — auto-unroll counted loops with trip count <= n. The
-        // per-target default stands unless this says otherwise.
-        if ((a.equals(String.withCString("-Flu"))
-             || a.equals(String.withCString("--fn-loop-unroll")))
-            && i + (u32)1 < argc) {
-            i32 lu = parseCount(Process.argument(i + (u32)1));
-            if (lu < (i32)0) {
-                // Not a number. Refused rather than quietly left at the
-                // target's default: this driver's whole argument policy is
-                // that an option it cannot honour is an error, and `-Flu wat`
-                // silently compiling something other than what was asked for
-                // is the failure that policy exists to prevent.
-                Stdio.printf("xcc: error: -Flu takes a decimal trip count, got '%s'\n",
-                             Process.argument(i + (u32)1).cString());
-                driverExit((i32)1);
-                return (DriverOptions*)0;
-            }
-            d.setUnroll(lu);
-            i = i + (u32)2; continue;
-        }
-        if (a.equals(String.withCString("-h")) || a.equals(String.withCString("--help"))) {
-            usage();
-            driverExit((i32)0);
-            return (DriverOptions*)0;
-        }
-        if (a.equals(String.withCString("--print-target"))) {
-            d.setPrintTarget(true);
-            i = i + (u32)1; continue;
-        }
-        if (a.equals(String.withCString("--print-3p-dir"))) {
-            d.setPrint3pDir(true);
-            i = i + (u32)1; continue;
-        }
-        if (a.equals(String.withCString("-v")) || a.equals(String.withCString("--version"))) {
-            // XCC_VERSION comes from the Makefile, which reads the VERSION
-            // file — the same source the Objective-C driver uses. It was a
-            // literal "0.6" here, which is one fact in two places: bumping
-            // VERSION moved the bootstrap compiler to 0.61 and left the
-            // compiler that actually SHIPS reporting 0.6.
-#ifndef XCC_VERSION
-#define XCC_VERSION "unversioned"
-#endif
-            Stdio.printf("xcc %s (xc, self-hosted)\n", XCC_VERSION);
-            driverExit((i32)0);
-            return (DriverOptions*)0;
-        }
-        // `-m <layout>` picks a memory layout, and with it the 6502 target. A
-        // handful of names are PLATFORMS with no layout and select their
-        // target instead. Anything else is a `.lnk` — a file path, a path
-        // without its `.lnk`, `<platform>/<layout>`, or a bare layout name
-        // searched for under every platform — and is resolved after the parse,
-        // when -H and the environment have both been seen.
-        if ((a.equals(String.withCString("-m")) || a.equals(String.withCString("--memory-model")))
-            && i + (u32)1 < argc) {
-            String* layout = Process.argument(i + (u32)1);
-            String* plat = platformLayoutArch(layout);
-            if (plat != (String*)0) {
-                // `atarist` is the m68k PLATFORM, so it leaves an m68k CPU
-                // already chosen by -A alone.
-                if (!plat.equals(String.withCString("m68k")) || !isM68k(d)) d.setArch(plat);
-                d.setLayoutSpec((String*)0);
-            } else {
-                d.setArch(String.withCString("xt6502"));
-                d.setLayoutSpec(layout);
-            }
-            i = i + (u32)2; continue;
-        }
-        if (a.equals(String.withCString("-V")) || a.equals(String.withCString("--verbose"))) {
-            o.setVerbose(true); i = i + (u32)1; continue;
-        }
-        // `-O3`, joined — NOT `-O 3`. Both spellings used to be accepted in the
-        // sense that the second was SILENTLY IGNORED: `-O 0` left the driver at
-        // its -O3 default and compiled the wrong thing without a word, which is
-        // exactly the failure this compiler refuses everywhere else.
-        // A bare `-O` is `-O1`, as cc reads it.
-        if (a.equals(String.withCString("-O"))) { d.setOpt((u32)1); i = i + (u32)1; continue; }
-        // -O0 to -O3 and nothing else: -Os, -Oz, -Og and -O9 are errors, not
-        // levels computed from whatever byte follows the O.
-        if (a.hasPrefix(String.withCString("-O"))) {
-            if (a.byteLength() == (u32)3 && a.byteAt((u32)2) >= (u8)'0' && a.byteAt((u32)2) <= (u8)'3') {
-                d.setOpt((u32)(a.byteAt((u32)2) - (u8)'0')); i = i + (u32)1; continue;
-            }
-            Stdio.error(String.withFormat("xcc: error: unsupported optimisation level '%s' (use -O0, -O1, -O2 or -O3)\n", a.cString()));
-            driverExit((i32)1);
-            return (DriverOptions*)0;
-        }
-        // -Wanalyze: the static analyser. Off by default — an unknown
-        // false-positive rate must not destabilise the corpus.
-        if (a.equals(String.withCString("-Wanalyze"))) {
-            o.setAnalyze(true); i = i + (u32)1; continue;
-        }
-        // -Wno-<category>. The port rejected every one of these as an
-        // unrecognised OPTION, so `xcc -Wno-comment` failed the build outright
-        // while the reference suppressed and carried on — a user following the
-        // documented advice got a hard error from the shipped compiler. An
-        // unknown category is a warning, not an error: mistyping a suppression
-        // must not stop a compile, and the known names are listed, as the
-        // reference does.
-        if (a.hasPrefix(String.withCString("-Wno-"))) {
-            String* cat = a.substringBytes((u32)5, a.byteLength() - (u32)5);
-            if (!isWarningCategory(cat)) {
-                Stdio.printf("xcc: warning: unknown warning category '%s' — known: %s\n",
-                             cat.cString(), warningCategoryNames().cString());
-            } else {
-                o.suppressWarning(cat);
-            }
-            i = i + (u32)1; continue;
-        }
-        // --bundle <dir> and its companions: a library, laid out and signed.
-        if (a.equals(String.withCString("--bundle")) && i + (u32)1 < argc) {
-            d._bundleDir = Process.argument(i + (u32)1);
-            d.setEmitLib(true);
-            o.setEmitIface(true);
-            o.setLibraryBuild(true);
-            i = i + (u32)2; continue;
-        }
-        // --property k=v / --setting k=v: the bundle's developer properties.
-        if ((a.equals(String.withCString("--property")) || a.equals(String.withCString("--setting"))) && i + (u32)1 < argc) {
-            String* kv = Process.argument(i + (u32)1);
-            u32 eq = kv.indexOfByte((u8)'=');
-            if (eq == String.notFound() || eq == (u32)0) {
-                Stdio.printf("xcc: error: %s wants key=value, not '%s'\n", a.cString(), kv.cString());
-                driverExit((i32)1);
-            }
-            bool ro = a.equals(String.withCString("--property"));
-            if (ro && d._bundleReadonly == (Map*)0) d._bundleReadonly = new Map();
-            if (!ro && d._bundleWriteable == (Map*)0) d._bundleWriteable = new Map();
-            (ro ? d._bundleReadonly : d._bundleWriteable).set((Hashable*)kv.substringBytes((u32)0, eq),
-                                                               (Object*)kv.substringFromByte(eq + (u32)1));
-            i = i + (u32)2; continue;
-        }
-        if (a.equals(String.withCString("--bundle-name")) && i + (u32)1 < argc) {
-            d._bundleName = Process.argument(i + (u32)1); i = i + (u32)2; continue;
-        }
-        if (a.equals(String.withCString("--bundle-version")) && i + (u32)1 < argc) {
-            d._bundleVersion = Process.argument(i + (u32)1); i = i + (u32)2; continue;
-        }
-        if (a.equals(String.withCString("--resources")) && i + (u32)1 < argc) {
-            d._bundleResources = Process.argument(i + (u32)1); i = i + (u32)2; continue;
-        }
-        // --trust <key.pub>: a curated program, which loads plugins only from
-        // the publishers it names (bundles-and-plugins.md §2a); repeatable.
-        if (a.equals(String.withCString("--trust")) && i + (u32)1 < argc) {
-            String* f = Process.argument(i + (u32)1);
-            String* t = Files.readText(f);
-            if (t != (String*)0)
-                while (t.byteLength() > (u32)0 && (t.byteAt(t.byteLength() - (u32)1) == (u8)10
-                                                   || t.byteAt(t.byteLength() - (u32)1) == (u8)13
-                                                   || t.byteAt(t.byteLength() - (u32)1) == (u8)' '))
-                    t = t.substringBytes((u32)0, t.byteLength() - (u32)1);
-            Data* pk = t == (String*)0 ? (Data*)0 : BundleSign._unhex(t, (u32)32);
-            if (pk == (Data*)0) {
-                Stdio.printf("xcc: error: --trust %s: not a publisher's public key (64 hex digits, as xcc --bundle writes beside its key)\n",
-                             f.cString());
-                driverExit((i32)1);
-            }
-            if (d._trusted == (String*)0) d._trusted = new String();
-            else d._trusted.appendByte((u8)' ');
-            d._trusted.append(Sha256.hex(pk.bytes(), (u32)32));
-            i = i + (u32)2; continue;
-        }
-        if (a.equals(String.withCString("--no-sign"))) {
-            d._noSign = true; i = i + (u32)1; continue;
-        }
-        if (a.equals(String.withCString("--sign-bundle")) && i + (u32)1 < argc) {
-            d._signBundle = Process.argument(i + (u32)1); i = i + (u32)2; continue;
-        }
-        if (a.equals(String.withCString("--bundle-lib")) && i + (u32)1 < argc) {
-            if (d._bundleLibs == (Array*)0) d._bundleLibs = new Array();
-            d._bundleLibs.add((Object*)Process.argument(i + (u32)1));
-            i = i + (u32)2; continue;
-        }
-        if (a.equals(String.withCString("--rotate-from")) && i + (u32)1 < argc) {
-            d._rotateFrom = Process.argument(i + (u32)1); i = i + (u32)2; continue;
-        }
-        if (a.equals(String.withCString("--bundle-key")) && i + (u32)1 < argc) {
-            d._bundleKey = Process.argument(i + (u32)1); i = i + (u32)2; continue;
-        }
-        if (a.equals(String.withCString("--publisher")) && i + (u32)1 < argc) {
-            d._publisher = Process.argument(i + (u32)1); i = i + (u32)2; continue;
-        }
-        if (a.equals(String.withCString("--publisher-domain")) && i + (u32)1 < argc) {
-            d._publisherDomain = Process.argument(i + (u32)1); i = i + (u32)2; continue;
-        }
-        // --emit-runtime: libRuntime (owner, 2026-11-03), a library build of
-        // the runtime's files, which then export their classes; the input is
-        // the runtime's root file (Par.xc).
-        if (a.equals(String.withCString("--emit-runtime"))) {
-            d._emitRuntime = true;
-            d.setEmitLib(true);
-            o.setEmitIface(true);
-            o.setLibraryBuild(true);
-            o.setEmitLib(true);
-            i = i + (u32)1;
-            continue;
-        }
-        if (a.equals(String.withCString("--no-runtime-lib"))) {
-            d._noRuntimeLib = true; i = i + (u32)1; continue;
-        }
-        if (a.equals(String.withCString("-fno-xc-args"))) {
-            d._noXcArgs = true; i = i + (u32)1; continue;
-        }
-        if (a.equals(String.withCString("--emit-lib"))) {
-            d.setEmitLib(true);
-            o.setEmitIface(true);        // the library carries its own interface
-            o.setLibraryBuild(true);     // …and numbers every method a slot
-            o.setEmitLib(true);          // …and exports its standard-library state
-            i = i + (u32)1;
-            continue;
-        }
-        // --emit-iface: the interface IS the output. The caller is asking what
-        // this source DECLARES, not asking for code — an editor, or the writer
-        // differential — so the front end runs and nothing after it does.
-        // -c: separate compilation. The object carries the MODULE and nothing
-        // else — its own code plus its per-class allocators, deliberately NOT
-        // the crt or the runtime, which belong to the final link and would
-        // collide the moment two objects met.
-        if (a.equals(String.withCString("-flto"))) { d.setLto(true); i = i + (u32)1; continue; }
-        if (a.equals(String.withCString("--sign")) && i + (u32)1 < argc) {
-            d.setSignIdentity(Process.argument(i + (u32)1)); i = i + (u32)2; continue;
-        }
-        if (a.equals(String.withCString("--sign-entitlements")) && i + (u32)1 < argc) {
-            d.setSignEntitlements(Process.argument(i + (u32)1)); i = i + (u32)2; continue;
-        }
-        if (a.equals(String.withCString("-c"))) {
-            d.setCompileOnly(true);
-            o.setCompileOnly(true);   // …so `main`, if any, is the class-name root
-            o.setEmitIface(true);     // the interface is a build artifact of -c
-            // An object is part of a library too: the overrides may live in a
-            // module that is not being compiled, so every instance method
-            // earns a slot. The numbering an object publishes has to be the
-            // one the final link will use.
-            o.setLibraryBuild(true);
-            i = i + (u32)1;
-            continue;
-        }
-        if (a.equals(String.withCString("--emit-iface"))) {
-            d.setEmitIfaceOnly(true);
-            o.setEmitIface(true);
-            i = i + (u32)1;
-            continue;
-        }
-        // ── output modes and diagnostics ─────────────────────────────
-        //
-        // -E <path>: the preprocessed source, written as the compile goes on.
-        if ((a.equals(String.withCString("-E")) || a.equals(String.withCString("--preprocessed")))
-            && i + (u32)1 < argc) {
-            o.setPreprocessedPath(Process.argument(i + (u32)1)); i = i + (u32)2; continue;
-        }
-        // The IR after lowering / after the optimiser, to stderr. Diagnostics:
-        // the output file is the same with or without them.
-        if (a.equals(String.withCString("--emit-ir"))) { d.setEmitIR(true); i = i + (u32)1; continue; }
-        if (a.equals(String.withCString("--emit-ir-opt"))) { d.setEmitIROpt(true); i = i + (u32)1; continue; }
-        // -a: stop after the back end and write the assembly, which is what
-        // -S means here. --emit-asm-from-ir is the old name for the same thing,
-        // from when the IR pipeline ran beside another code generator.
-        if (a.equals(String.withCString("-a")) || a.equals(String.withCString("--assemble-only"))
-            || a.equals(String.withCString("--emit-asm-from-ir"))) {
-            if (a.equals(String.withCString("--emit-asm-from-ir")))
-                Stdio.error(String.withCString("xcc: warning: --emit-asm-from-ir will be removed; it is -S\n"));
-            d.setKeepAsm(true); i = i + (u32)1; continue;
-        }
-        if (a.equals(String.withCString("-dl")) || a.equals(String.withCString("--dump-layout"))) {
-            d.setDumpLayout(true); i = i + (u32)1; continue;
-        }
-        // -fdce-trace: name each function dead-function elimination removes.
-        if (a.equals(String.withCString("-fdce-trace"))) { d.setDceTrace(true); i = i + (u32)1; continue; }
-        // -Fli <n>: the largest callee, in IR instructions, the inliner splices.
-        if ((a.equals(String.withCString("-Fli")) || a.equals(String.withCString("--fn-leaf-inline")))
-            && i + (u32)1 < argc) {
-            i32 li = parseCount(Process.argument(i + (u32)1));
-            if (li < (i32)0) {
-                Stdio.printf("xcc: error: -Fli takes a decimal instruction count, got '%s'\n",
-                             Process.argument(i + (u32)1).cString());
-                driverExit((i32)1);
-                return (DriverOptions*)0;
-            }
-            d.setInlineMax(li);
-            i = i + (u32)2; continue;
-        }
-        // -x-<arch>,<option>[,<option>…]: options that exist for one target
-        // only. An arch with none, or an option the arch does not have, is an
-        // error — a typo must not build without the feature it asked for.
-        if (a.hasPrefix(String.withCString("-x-"))) {
-            Array* parts = a.substringFromByte((u32)3).splitOnByte((u8)',');
-            String* xarch = parts.count() > (u32)0 ? (String*)parts.get((u32)0) : String.withCString("");
-            if (parts.count() < (u32)2 || xarch.byteLength() == (u32)0) {
-                Stdio.printf("xcc: error: '%s' — expected -x-<arch>,<option>[,<option>...]\n", a.cString());
-                driverExit((i32)1);
-                return (DriverOptions*)0;
-            }
-            if (!xarch.equals(String.withCString("wasm32"))) {
-                Stdio.printf("xcc: error: no target-specific options exist for arch '%s'\n", xarch.cString());
-                driverExit((i32)1);
-                return (DriverOptions*)0;
-            }
-            for (u32 k = (u32)1; k < parts.count(); k = k + (u32)1) {
-                String* xo = (String*)parts.get(k);
-                if (!xo.equals(String.withCString("return-call"))) {
-                    Stdio.printf("xcc: error: unknown wasm32 option '%s' — known: return-call\n", xo.cString());
-                    driverExit((i32)1);
-                    return (DriverOptions*)0;
-                }
-                d.setTailCalls(true);
-            }
-            i = i + (u32)1; continue;
-        }
-        // --link-libs: build a wasm32 APP in the mode that links .wasm
-        // libraries — it owns memory and the table and exports what each
-        // library's loader wiring needs. The driver chooses it by itself when
-        // the program imports a .wasm library; this asks for it outright.
-        if (a.equals(String.withCString("--link-libs"))) { d.setLinkLibs(true); i = i + (u32)1; continue; }
-        // `-farc` retired (bug 026): ARC is always on. Still accepted so old
-        // command lines build, and said out loud, because a silently ignored
-        // flag is what made "verified with ARC off" mean nothing.
-        if (a.equals(String.withCString("-farc")) || a.hasPrefix(String.withCString("-farc="))) {
-            inertFlag(a);   // ARC is always on
-            i = i + (u32)1; continue;
-        }
-        // -fauto-cloak=never|auto|always: the value is checked, and the flag is
-        // inert — it placed code in the cloaked region of the retired Atari
-        // xl/xe layouts, and no live layout has one.
-        if (a.hasPrefix(String.withCString("-fauto-cloak="))) {
-            String* v = a.substringFromByte((u32)13).lowercased();
-            if (!v.equals(String.withCString("never")) && !v.equals(String.withCString("auto"))
-                && !v.equals(String.withCString("always"))) {
-                Stdio.printf("xcc: -fauto-cloak= expects 'never|auto|always', got '%s'\n", v.cString());
-                driverExit((i32)1);
-                return (DriverOptions*)0;
-            }
-            inertFlag(String.withCString("-fauto-cloak="));
-            i = i + (u32)1; continue;
-        }
-        // -ss / --stack-size <n>, also joined with `=`: checked, and without
-        // effect on every current layout (none has a flat xtc stack to cap).
-        if (a.equals(String.withCString("-ss")) || a.equals(String.withCString("--stack-size"))
-            || a.hasPrefix(String.withCString("-ss=")) || a.hasPrefix(String.withCString("--stack-size="))) {
-            String* v = (String*)0;
-            u32 eq = a.indexOfByte((u8)'=');
-            if (eq != String.notFound()) {
-                v = a.substringFromByte(eq + (u32)1);
-                i = i + (u32)1;
-            } else if (i + (u32)1 < argc) {
-                v = Process.argument(i + (u32)1);
-                i = i + (u32)2;
-            } else {
-                Stdio.printf("xcc: error: %s requires an argument\n", a.cString());
-                driverExit((i32)1);
-                return (DriverOptions*)0;
-            }
-            i32 n = parseStackSize(v);
-            if (n <= (i32)0 || n > (i32)65535) {
-                Stdio.printf("xcc: --stack-size expects a positive integer up to 65535, got '%s'\n",
-                             v.cString());
-                driverExit((i32)1);
-                return (DriverOptions*)0;
-            }
-            inertFlag(eq != String.notFound() ? a.substringBytes((u32)0, eq) : a);
-            continue;
-        }
-        // Accepted, and already what happens: every build links in-house, and
-        // the IR pipeline is the only code generator.
-        if (a.equals(String.withCString("--self-host"))) {
-            i = i + (u32)1; continue;
-        }
-        if (a.equals(String.withCString("-fnew-ir")) || a.equals(String.withCString("--with-ir"))) {
-            inertFlag(a);
-            i = i + (u32)1; continue;
-        }
-        // A bare -W: every warning category is on unless -Wno- turns it off,
-        // so there is nothing more to enable.
-        if (a.equals(String.withCString("-W"))) { inertFlag(a); i = i + (u32)1; continue; }
-        // The xt6502 options. Each is the 6502 back end's or its startup's
-        // business; on another target they change nothing.
-        if ((a.equals(String.withCString("-Q")) || a.equals(String.withCString("--quit-style")))
-            && i + (u32)1 < argc) {
-            String* v = Process.argument(i + (u32)1).lowercased();
-            if (!v.equals(String.withCString("rts")) && !v.equals(String.withCString("loop"))) {
-                Stdio.printf("xcc: -Q expects 'rts' or 'loop', got '%s'\n", v.cString());
-                driverExit((i32)1);
-                return (DriverOptions*)0;
-            }
-            d.setQuitLoop(v.equals(String.withCString("loop")));
-            i = i + (u32)2; continue;
-        }
-        if (a.equals(String.withCString("--xtc-stack"))) {
-            d.setXtcStack(true);
-            i = i + (u32)1; continue;
-        }
-        if ((a.equals(String.withCString("-Fmb")) || a.equals(String.withCString("--fn-min-banked")))
-            && i + (u32)1 < argc) {
-            i32 mb = parseCount(Process.argument(i + (u32)1));
-            if (mb < (i32)0 || mb > (i32)65535) {
-                Stdio.printf("xcc: error: -Fmb takes a decimal instruction count, got '%s'\n",
-                             Process.argument(i + (u32)1).cString());
-                driverExit((i32)1);
-                return (DriverOptions*)0;
-            }
-            d.setFnMinBanked((u32)mb);
-            i = i + (u32)2; continue;
-        }
-        if (a.equals(String.withCString("-dp")) || a.equals(String.withCString("--dump-placement"))) {
-            d.setDumpPlacement(true);
-            i = i + (u32)1; continue;
-        }
-        if (a.equals(String.withCString("-du")) || a.equals(String.withCString("--dump-usage"))) {
-            d.setDumpUsage(true);
-            i = i + (u32)1; continue;
-        }
-        if (a.equals(String.withCString("--c-pair"))) {
-            gCSplitPair = true;
-            i = i + (u32)1; continue;
         }
         // An unrecognised flag is an ERROR, not something to skip. A driver that
         // quietly drops an option it does not know builds something other than
