@@ -7192,7 +7192,11 @@ static BOOL xtConstThrough(XTIRValueId v, XTIRInsn* (^defOf)(XTIRValueId), int d
             swap = YES;
             break;
         default:
-            return;
+            // No vcmpps predicate is wired for it (ONE needs an ordered test as
+            // well). It emitted nothing, leaving the mask unwritten.
+            fprintf(stderr, "xcc-cg-x86_64: error: unsupported: VFCmp predicate %d\n",
+                    (int)in.predicate);
+            exit(1);
             }
         NSString *lhs = swap ? b : a, *rhs = swap ? a : b;
         if ([d hasPrefix:@"zmm"])
@@ -7496,6 +7500,15 @@ static BOOL xtConstThrough(XTIRValueId v, XTIRInsn* (^defOf)(XTIRValueId), int d
                 {
                 XTIRValueId vid = (XTIRValueId)[[text substringWithRange:[m rangeAtIndex:1]] integerValue];
                 NSNumber* s = slot[@(vid)];
+                // A bare `rbp` would put the user's asm on the saved frame
+                // pointer. Only pinned locals and __self make markers, so this
+                // guards against a compiler bug.
+                if (!s)
+                    {
+                    fprintf(stderr, "xcc-cg-x86_64: error: unsupported: inline asm local with "
+                                    "no slot in '%s'\n", fn.name.UTF8String);
+                    exit(1);
+                    }
                 [resolved replaceCharactersInRange:m.range
                                         withString:s ? [NSString stringWithFormat:@"rbp-%ld",
                                                                                   (long)s.integerValue]

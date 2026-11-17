@@ -281,9 +281,9 @@ typedef NS_ENUM(uint8_t, XT6502KnownAddrKind) {
             ctx.nextZp = ranges[ctx.zpRangeIndex][0].unsignedIntegerValue;
         }
     }
-    // Overflowed every range. Diagnose elsewhere (the §6.1 budget
-    // check upstream catches realistic cases); here just return the
-    // (clamped) slot without assigning so emission can proceed.
+    // Overflowed every range. The §6.1 budget check upstream catches the
+    // realistic cases; here the flag is raised and emission proceeds, and
+    // the function's emission reports it once, at the end.
     ctx.zpOverflow = YES;
     return ctx.nextZp;
 }
@@ -4134,10 +4134,10 @@ static NSString *padLeft(NSString *s, NSUInteger width) {
         [spillDecls addObject:@[label, @(width)]];
     }
 
-    // (A param / SSA temp that overflows the ZP pool — ctx.zpOverflow —
-    // is left as the pre-#56 silent fallback: register pressure for
-    // per-invocation temporaries beyond the pool is a separate later
-    // task, out of scope for the pinned-local spill landing here.)
+    // (A param / SSA temp that overflows the ZP pool raises ctx.zpOverflow,
+    // which is reported as an error once the function is emitted: register
+    // pressure for per-invocation temporaries beyond the pool has no spill
+    // yet.)
 
     // STACK-ABI §6.1 budget check: N (SP-frame locals, 0 today) + K
     // (param bytes) ≤ 119. Pinned-local size is NOT part of N — those
@@ -4309,6 +4309,16 @@ static NSString *padLeft(NSString *s, NSUInteger width) {
                 @"the +127 a d,SP operand reaches; automatic frame splitting is a future task "
                 @"(STACK-ABI §7)",
                 fn.name, (long)ctx.maxSpOffset] at:synthLoc()];
+        }
+        return NO;
+    }
+    // allocateSlotsForValue ran past the last zero-page range and handed out
+    // addresses beyond it, over whatever lives there.
+    if (ctx.zpOverflow) {
+        if (diag) {
+            [diag emitError:[NSString stringWithFormat:
+                @"xt6502: function '%@' needs more zero-page bytes than the layout's "
+                @"variable ranges hold", fn.name] at:synthLoc()];
         }
         return NO;
     }

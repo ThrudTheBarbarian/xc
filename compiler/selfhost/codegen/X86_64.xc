@@ -2923,7 +2923,14 @@ class X86_64
             swap = true;
             }
         else
+            {
+            // No vcmpps predicate is wired for it (ONE needs an ordered test
+            // as well). It emitted nothing, leaving the mask unwritten.
+            String* what = String.withCString("VFCmp predicate ");
+            what.append(p);
+            unsupported(what);
             return;
+            }
         String* lhs = swap ? b : a;
         String* rhs = swap ? a : b;
         if (isZmm(d))
@@ -4916,7 +4923,13 @@ class X86_64
             if (v != (IRValue*)0 && hasSlot(v))
                 out.appendFormat("rbp-%lu", slotOf(v));
             else
+                {
+                // A bare `rbp` would put the user's asm on the saved frame
+                // pointer. Only pinned locals and __self make markers, so this
+                // guards against a compiler bug.
+                unsupported(String.withCString("inline asm local with no slot"));
                 out.appendCString("rbp");
+                }
             i = j;
             }
         return out;

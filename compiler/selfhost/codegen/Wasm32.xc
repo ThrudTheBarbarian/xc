@@ -1236,7 +1236,14 @@ class Wasm32
                                     _fixupAddrs.add((Object*)Number.with(vbase + k * (u32)4));
                                     _fixupNames.add((Object*)e);
                                 }
-                            } else w = (u32)0;        // unresolved: TODO note only
+                            } else {
+                                // A word that names neither a function nor
+                                // data would be a null method slot: refused.
+                                Stdio.printf("xcc-cg-wasm32: error: vtable entry '%s' resolves to neither function nor data\n",
+                                             e.cString());
+                                _fatalImport = true;
+                                w = (u32)0;
+                            }
                         }
                     }
                 }
@@ -2065,7 +2072,7 @@ class Wasm32
             String* pred = insn.pred() == 0 ? String.withCString("EQ") : insn.pred();
             pushOperand((IROperand*)ops.get((u32)0), out);
             pushOperand((IROperand*)ops.get((u32)1), out);
-            out.appendFormat("    %s.%s\n", shape.cString(), Wasm32.icmpMn(pred).cString());
+            out.appendFormat("    %s.%s\n", shape.cString(), cmpMn(Wasm32.icmpMn(pred), pred).cString());
             setResult(res, false, out);
             return true;
         }
@@ -2144,6 +2151,17 @@ class Wasm32
         if (p.equals(String.withCString("UGT"))) return String.withCString("gt_u");
         if (p.equals(String.withCString("ULE"))) return String.withCString("le_u");
         if (p.equals(String.withCString("UGE"))) return String.withCString("ge_u");
+        return (String*)0;
+    }
+
+    // A predicate with no wasm mnemonic (LLVM's unordered and ordered/
+    // unordered tests, say) is refused rather than compared as `eq`.
+    String* cmpMn(String* mn, String* pred)
+    {
+        if (mn != (String*)0) return mn;
+        Stdio.printf("xcc-cg-wasm32: error: compare predicate %s has no wasm lowering\n",
+                     pred == (String*)0 ? "(none)" : pred.cString());
+        _fatalImport = true;
         return String.withCString("eq");
     }
 
@@ -2161,7 +2179,7 @@ class Wasm32
         if (p.equals(String.withCString("OGT"))) return String.withCString("gt");
         if (p.equals(String.withCString("OLE"))) return String.withCString("le");
         if (p.equals(String.withCString("OGE"))) return String.withCString("ge");
-        return String.withCString("eq");
+        return (String*)0;
     }
 
     bool emitCore(IRInsn* insn, String* op, String* out)
@@ -2325,7 +2343,7 @@ class Wasm32
             if (unsignedPred && narrowSigned) out.append(mask);
             pushOperand((IROperand*)ops.get((u32)1), out);
             if (unsignedPred && narrowSigned) out.append(mask);
-            out.appendFormat("    %s.%s\n", p.cString(), Wasm32.icmpMn(pred).cString());
+            out.appendFormat("    %s.%s\n", p.cString(), cmpMn(Wasm32.icmpMn(pred), pred).cString());
             setResult(res, false, out);
             return true;
         }
@@ -2337,7 +2355,7 @@ class Wasm32
             pushOperand((IROperand*)ops.get((u32)1), out);
             out.appendFormat("    %s.%s\n",
                              (at != 0 && at.equals(String.withCString("F32"))) ? "f32" : "f64",
-                             Wasm32.fcmpMn(pred).cString());
+                             cmpMn(Wasm32.fcmpMn(pred), pred).cString());
             setResult(res, false, out);
             return true;
         }

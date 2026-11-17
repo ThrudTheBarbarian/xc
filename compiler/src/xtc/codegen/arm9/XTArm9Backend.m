@@ -65,6 +65,14 @@ static NSUInteger sOutArgBytes = 0;
 // `add` is skipped (its result id lands in sNoEmit).
 static NSDictionary<NSNumber*, XTIRInsn*>* sPostIncEA = nil;
 
+// A shape this back end does not emit. Loud and named, as the vector-pool
+// exhaustion is: a placeholder in its place would assemble, run and be wrong.
+static void arm9Refuse(NSString* what)
+    {
+    fprintf(stderr, "xcc-cg-arm9: error: unsupported: %s\n", what.UTF8String);
+    exit(1);
+    }
+
 @implementation XTArm9Backend
 
 + (void)setPIC:(BOOL)pic
@@ -391,6 +399,7 @@ static BOOL arm9EncodableImm(uint32_t v)
     else
         {
         [out appendFormat:@"\tmov\t%@, #0\t\t@ TODO operand kind %d\n", reg, (int)op.kind];
+        arm9Refuse(@"operand kind");
         }
     }
 
@@ -718,6 +727,7 @@ static BOOL arm9EncodableImm(uint32_t v)
     else
         {
         [out appendFormat:@"\t@ TODO vfpLoad operand kind %d\n", (int)op.kind];
+        arm9Refuse(@"float operand kind");
         }
     }
 
@@ -1611,6 +1621,8 @@ static const NSUInteger kArm9VaForwardWords = 16;
         if (res && ops.count >= 2)
             {
             NSString* cc = [self condForICmp:in.predicate];
+            if (!cc)
+                arm9Refuse([NSString stringWithFormat:@"predicate %d", (int)in.predicate]);
             // A 64-bit compare is not one `cmp`: the single-word path below
             // reads the LOW word of each operand and ignores the rest, so
             // `7 == 0` came out true.
@@ -1812,6 +1824,8 @@ static const NSUInteger kArm9VaForwardWords = 16;
         [self vfpLoad:rb operand:ops[1] slot:slot out:out];
         [out appendFormat:@"\tvcmp.%@\t%@, %@\n\tvmrs\tAPSR_nzcv, fpscr\n", d ? @"f64" : @"f32", ra, rb];
         NSString* cc = [self condForFCmp:in.predicate];
+        if (!cc)
+            arm9Refuse([NSString stringWithFormat:@"predicate %d", (int)in.predicate]);
         [out appendString:@"\tmov\tr0, #0\n"];
         if (cc)
             [out appendFormat:@"\tmov%@\tr0, #1\n", cc];
@@ -1955,6 +1969,8 @@ static const NSUInteger kArm9VaForwardWords = 16;
         else
             {
             [out appendFormat:@"\tbl\t%@\n", callee ?: @"0 @ TODO unknown callee"];
+            if (!callee)
+                arm9Refuse(@"call with no callee");
             }
         if (!sret)
             [self storeCallResult:res slot:slot out:out];
@@ -2202,6 +2218,7 @@ static const NSUInteger kArm9VaForwardWords = 16;
         else
             {
             [out appendFormat:@"\tmov\tr0, #0\t\t@ TODO AddrOf operand kind %d\n", (int)ops[0].kind];
+            arm9Refuse(@"AddrOf operand kind");
             }
         [self storeResult:res from:@"r0" slot:slot out:out];
         return;
@@ -2642,6 +2659,11 @@ static const NSUInteger kArm9VaForwardWords = 16;
                 {
                 XTIRValueId vid = (XTIRValueId)[[text substringWithRange:[m rangeAtIndex:1]] integerValue];
                 NSNumber* s = slot[@(vid)];
+                // A local with no slot would come out as `sp, #0`, under the
+                // user's asm. Only pinned locals and __self make markers, so
+                // this guards against a compiler bug.
+                if (!s)
+                    arm9Refuse(@"inline asm local with no slot");
                 [resolved replaceCharactersInRange:m.range
                                         withString:[NSString stringWithFormat:@"sp, #%ld",
                                                                               (long)(s ? s.integerValue : 0)]];
@@ -2662,10 +2684,7 @@ static const NSUInteger kArm9VaForwardWords = 16;
     default:
         if (res && ![self isMemValue:res])
             {
-            [out appendFormat:@"\tmov\tr0, #0\t\t@ TODO opcode %d\n", (int)op];
-            [self storeResult:res from:@"r0" slot:slot out:out];
-            fprintf(stderr, "xcc-cg-arm9: note: unhandled opcode %d in '%s' (placeholder emitted)\n",
-                    (int)op, fn.name.UTF8String);
+            arm9Refuse([NSString stringWithFormat:@"opcode %d in '%@'", (int)op, fn.name]);
             }
         return;
         }
@@ -3054,6 +3073,7 @@ typedef NS_ENUM(NSUInteger, XTArm9PhiKind) {
         }
     default:
         [out appendFormat:@"\t@ TODO terminator %d\n", (int)t.opcode];
+        arm9Refuse([NSString stringWithFormat:@"terminator %d", (int)t.opcode]);
         [self emitFrameReturnNativeVa:nativeVa frame:frame out:out];
         return;
         }

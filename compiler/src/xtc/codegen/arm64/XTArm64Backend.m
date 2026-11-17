@@ -7545,6 +7545,16 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
                 for (NSTextCheckingResult *m in [ms reverseObjectEnumerator]) {
                     XTIRValueId vid = (XTIRValueId)[[text substringWithRange:[m rangeAtIndex:1]] integerValue];
                     NSUInteger off = [self slotOffsetForValue:vid ctx:ctx];
+                    // A marker naming no value, or one with no slot (offset 0
+                    // is never a local's), would come out as `sp, #0`: the
+                    // saved frame pointer and link register, under the user's
+                    // asm. Only pinned locals and __self make markers, so this
+                    // guards against a compiler bug.
+                    if (!ctx.fn.values[@(vid)] || off == 0) {
+                        fprintf(stderr, "xcc-cg-arm64: error: unsupported: inline asm local "
+                                        "with no slot in '%s'\n", ctx.fn.name.UTF8String);
+                        exit(1);
+                    }
                     NSString *repl = [NSString stringWithFormat:@"sp, #%lu",
                                        (unsigned long)off];
                     [resolved replaceCharactersInRange:m.range withString:repl];

@@ -520,6 +520,7 @@ class M68k
     void emitFunction(IRFunc* fn)
         {
         _fn = fn;
+        u32 fnStart = _out.byteLength();
         assignSlots(fn);
         computeFusedCmps(fn); // all three feed the allocator's exclusion set
         computeFolds(fn);
@@ -569,6 +570,30 @@ class M68k
         seedHomedParams(fn);
         for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
             emitBlock(fn, (IRBlock*)fn.blocks().get(b));
+        // A value with no frame slot comes out as offset 0, and nothing a
+        // function addresses lives at 0..7(a6): that is the saved frame pointer
+        // and the return address (locals are below a6, parameters from 8(a6)).
+        if (M68k.addressesFrameLink(_out, fnStart))
+            unsupported(String.withCString("slot:missing"));
+        }
+
+    // True when the text from `from` on has an operand 0(a6)..7(a6).
+    static bool addressesFrameLink(String* text, u32 from)
+        {
+        u32 n = text.byteLength();
+        for (u32 i = from + (u32)1; i + (u32)4 <= n; i = i + (u32)1)
+            {
+            u8 c = text.byteAt(i);
+            if (c < (u8)'0' || c > (u8)'7')
+                continue;
+            if (text.byteAt(i + (u32)1) != (u8)'(' || text.byteAt(i + (u32)2) != (u8)'a'
+                || text.byteAt(i + (u32)3) != (u8)'6')
+                continue;
+            u8 p = text.byteAt(i - (u32)1);
+            if (p != (u8)'-' && (p < (u8)'0' || p > (u8)'9'))
+                return true;
+            }
+        return false;
         }
 
     void seedHomedParams(IRFunc* fn)
@@ -2141,7 +2166,7 @@ class M68k
             String* sf = String.withCString(dbl ? "d" : "s");
             _out.appendFormat("\tfmove.%s\t%ld(a6),fp0\n", sf.cString(), o0);
             _out.appendFormat("\tfcmp.%s\t%ld(a6),fp0\n", sf.cString(), o1);
-            _out.appendFormat("\t%s\td2\n\tand.l\t#1,d2\n", fpuCond(n.pred()).cString());
+            _out.appendFormat("\t%s\td2\n\tand.l\t#1,d2\n", m68kCond(fpuCond(n.pred()), n.pred(), "fseq").cString());
             }
         else
             {
@@ -2168,9 +2193,22 @@ class M68k
                 _out.appendFormat("\tmove.l\t%ld(a6),d0\n\tmove.l\t%ld(a6),d1\n\tjsr\t__cmpsf2\n", o0, o1);
                 }
             _out.appendFormat("\tmoveq\t#0,d2\n\ttst.l\td0\n\ts%s\td2\n\tand.l\t#1,d2\n",
-                              softFCond(n.pred()).cString());
+                              m68kCond(softFCond(n.pred()), n.pred(), "eq").cString());
             }
         storeReg(String.withCString("d2"), n.res());
+        }
+
+    // A predicate a condition table does not know (LLVM's unordered tests,
+    // say) is refused rather than tested as `eq`. `dflt` keeps the emitted
+    // text well formed up to the refusal.
+    String* m68kCond(String* cc, String* pred, u8* dflt)
+        {
+        if (cc != (String*)0)
+            return cc;
+        String* what = String.withCString("predicate ");
+        what.append(pred == (String*)0 ? String.withCString("(none)") : pred);
+        unsupported(what);
+        return String.withCString(dflt);
         }
 
     // The predicate order is the IR's own: OEQ, ONE, OLT, OGT, OLE, OGE.
@@ -2190,7 +2228,7 @@ class M68k
             return String.withCString("fsle");
         if (p.equals(String.withCString("OGE")))
             return String.withCString("fsge");
-        return String.withCString("fseq");
+        return (String*)0;
         }
 
     static String* softFCond(String* p)
@@ -2209,7 +2247,7 @@ class M68k
             return String.withCString("le");
         if (p.equals(String.withCString("OGE")))
             return String.withCString("le"); // operands swapped
-        return String.withCString("eq");
+        return (String*)0;
         }
 
     // ── Compare-and-branch fusion ────────────────────────────────────────
@@ -2375,7 +2413,7 @@ class M68k
             _out.appendFormat("\tjsr\t%s\n\tlea\t16(sp),sp\n",
                               sgn ? "__cmpdi2" : "__ucmpdi2");
             _out.appendCString("\tmoveq\t#0,d2\n\ttst.l\td0\n");
-            _out.appendFormat("\ts%s\td2\n", condForSignOf(n.pred()).cString());
+            _out.appendFormat("\ts%s\td2\n", m68kCond(condForSignOf(n.pred()), n.pred(), "eq").cString());
             _out.appendCString("\tand.l\t#1,d2\n");
             storeReg(String.withCString("d2"), n.res());
             return;
@@ -2396,7 +2434,7 @@ class M68k
             }
         _out.appendCString("\tmoveq\t#0,d2\n"); // pre-clear; cmp sets the flags below
         _out.appendFormat("\tcmp.%s\td1,d0\n", sz.cString());
-        _out.appendFormat("\ts%s\td2\n", condFor(n.pred()).cString());
+        _out.appendFormat("\ts%s\td2\n", m68kCond(condFor(n.pred()), n.pred(), "eq").cString());
         _out.appendCString("\tand.l\t#1,d2\n");
         storeReg(String.withCString("d2"), n.res());
         }
@@ -2438,7 +2476,7 @@ class M68k
             {
             // The ICmp already emitted its `cmp` and the flags are still set:
             // branch to the FALSE edge on the negated predicate.
-            _out.appendFormat("\tb%s\t.Lcbf%lu\n", condForNegated(fcmp.pred()).cString(), lbl);
+            _out.appendFormat("\tb%s\t.Lcbf%lu\n", m68kCond(condForNegated(fcmp.pred()), fcmp.pred(), "ne").cString(), lbl);
             }
         else
             {
@@ -3684,7 +3722,7 @@ class M68k
             return String.withCString("ls");
         if (p.equals(String.withCString("UGE")))
             return String.withCString("cc");
-        return String.withCString("eq");
+        return (String*)0;
         }
 
     // The predicate applied to a -1/0/1 helper RESULT, which is always tested
@@ -3693,6 +3731,8 @@ class M68k
     static String* condForSignOf(String* p)
         {
         if (p == (String*)0)
+            return String.withCString("eq");
+        if (p.equals(String.withCString("EQ")))
             return String.withCString("eq");
         if (p.equals(String.withCString("NE")))
             return String.withCString("ne");
@@ -3704,7 +3744,7 @@ class M68k
             return String.withCString("le");
         if (p.equals(String.withCString("SGE")) || p.equals(String.withCString("UGE")))
             return String.withCString("ge");
-        return String.withCString("eq");
+        return (String*)0;
         }
 
     static String* condForNegated(String* p)
@@ -3731,7 +3771,7 @@ class M68k
             return String.withCString("hi");
         if (p.equals(String.withCString("UGE")))
             return String.withCString("cs");
-        return String.withCString("ne");
+        return (String*)0;
         }
 
     // The addressing a phi-edge copy reads its source through: an immediate,

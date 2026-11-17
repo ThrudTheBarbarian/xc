@@ -1500,6 +1500,7 @@ class Arm9
             }
         _out.appendFormat("\tmov\t%s, #0\t\t@ TODO operand kind %ld\n",
                           reg.cString(), (i32)op.kind());
+        giveUp(String.withCString("operand kind"));
         }
 
     // A homed value stays live in its register AND is written to its slot: a
@@ -2205,6 +2206,8 @@ class Arm9
             {
             _out.appendFormat("\tbl\t%s\n",
                               callee == 0 ? "0 @ TODO unknown callee" : callee.cString());
+            if (callee == 0)
+                giveUp(String.withCString("call with no callee"));
             }
         if (!sret)
             storeCallResult(res);
@@ -2432,6 +2435,7 @@ class Arm9
             return true;
             }
         _out.appendFormat("\t@ TODO vfpLoad operand kind %ld\n", (i32)op.kind());
+        giveUp(String.withCString("float operand kind"));
         }
 
     void vfpStore(String* reg, IRValue* v)
@@ -2520,6 +2524,8 @@ class Arm9
         _out.appendFormat("\tvcmp.%s\t%s, %s\n\tvmrs\tAPSR_nzcv, fpscr\n",
                           d ? "f64" : "f32", ra.cString(), rb.cString());
         String* cc = Arm9.condForFCmp(insn.pred());
+        if (cc == 0)
+            giveUp(predicateName(insn.pred()));
         _out.appendCString("\tmov\tr0, #0\n");
         if (cc != 0)
             _out.appendFormat("\tmov%s\tr0, #1\n", cc.cString());
@@ -2791,6 +2797,11 @@ class Arm9
                 while (j < text.byteLength() && text.byteAt(j) == (u8)'}')
                     j = j + (u32)1;
                 Object* so = _slot.get((Hashable*)Number.with(vid));
+                // A local with no slot would come out as `sp, #0`, under the
+                // user's asm. Only pinned locals and __self make markers, so
+                // this guards against a compiler bug.
+                if (so == 0)
+                    giveUp(String.withCString("inline asm local with no slot"));
                 out.appendFormat("sp, #%ld", (i32)(so == 0 ? (u32)0 : ((Number*)so).asU32()));
                 i = j;
                 continue;
@@ -3044,6 +3055,8 @@ class Arm9
         if (res == 0 || ops.count() < (u32)2)
             return;
         String* cc = Arm9.condForICmp(insn.pred());
+        if (cc == 0)
+            giveUp(predicateName(insn.pred()));
         // A 64-bit compare is not one `cmp`: the single-word path below reads
         // the LOW word of each operand and ignores the rest, so `7 == 0` came
         // out true. Done inline rather than through libgcc's __cmpdi2 — that
@@ -3250,6 +3263,7 @@ class Arm9
             {
             _out.appendFormat("\tmov\tr0, #0\t\t@ TODO AddrOf operand kind %ld\n",
                               (i32)o.kind());
+            giveUp(String.withCString("AddrOf operand kind"));
             }
         storeResult(res, String.withCString("r0"));
         }
@@ -3525,10 +3539,11 @@ class Arm9
             _out.appendCString("\tudf\t#0\n");
             return;
             }
-        // Anything else gets the original's placeholder, verbatim — including
-        // its opcode NUMBER, which is the one place this port has to know the
-        // enum rather than the spelling.
+        // Anything else is refused. The placeholder text stays, with the
+        // original's opcode NUMBER, so the output matches the reference's up to
+        // the refusal.
         _out.appendFormat("\t@ TODO terminator %ld\n", (i32)Arm9.opcodeNumber(op));
+        giveUp(op);
         emitFrameReturn();
         }
 
@@ -4687,6 +4702,15 @@ class Arm9
             if ((IRInsn*)blk.insns().get(i) == n)
                 return true;
         return false;
+        }
+
+    // A compare predicate with no ARM condition (LLVM's unordered tests, say)
+    // made the result a constant false; it is refused instead.
+    static String* predicateName(String* p)
+        {
+        String* w = String.withCString("predicate ");
+        w.append(p == (String*)0 ? String.withCString("(none)") : p);
+        return w;
         }
 
     // A shape this slice does not emit yet. Loud, and named — a backend that

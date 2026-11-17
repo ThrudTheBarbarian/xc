@@ -1607,6 +1607,7 @@ static NSString* m68kSym(NSString* name)
                            fn.name, frameSize];
         }
 
+    NSUInteger fnStart = out.length;
     [out appendFormat:@"\t.globl\t%@\n%@:\n", m68kSym(fn.name), m68kSym(fn.name)];
     [out appendFormat:@"\tlink\ta6,#-%d\n", frameSize];
     for (NSString* r in gHomeSaves) // persist clobbered callee-saved homes
@@ -1661,6 +1662,16 @@ static NSString* m68kSym(NSString* name)
             }
         if (bb.terminator)
             [self emitInsn:bb.terminator fn:fn block:bb mod:mod slots:slots cpu:cpu into:out];
+        }
+    // A value with no frame slot comes out as offset 0, and nothing a function
+    // addresses lives at 0..7(a6): that is the saved frame pointer and the
+    // return address (locals are below a6, parameters from 8(a6)).
+    if (m68kAddressesFrameLink(out, fnStart))
+        {
+        [NSException raise:@"XTSlotMissing"
+                    format:@"function '%@' addresses 0..7(a6), the saved frame pointer or "
+                           @"return address, for a value with no frame slot",
+                           fn.name];
         }
     }
 
@@ -2116,6 +2127,35 @@ static NSString* m68kSym(NSString* name)
 
 // Bcc mnemonic for the NEGATED ICmp predicate (branch-to-false when the
 // condition is false, so a fused CondBranch can skip the boolean).
+// True when the text from `from` on has an operand 0(a6)..7(a6).
+static BOOL m68kAddressesFrameLink(NSString* text, NSUInteger from)
+    {
+    NSUInteger n = text.length;
+    for (NSUInteger i = from + 1; i + 4 <= n; i++)
+        {
+        unichar c = [text characterAtIndex:i];
+        if (c < '0' || c > '7')
+            continue;
+        if ([text characterAtIndex:i + 1] != '(' || [text characterAtIndex:i + 2] != 'a'
+            || [text characterAtIndex:i + 3] != '6')
+            continue;
+        unichar p = [text characterAtIndex:i - 1];
+        if (p != '-' && (p < '0' || p > '9'))
+            return YES;
+        }
+    return NO;
+    }
+
+// A predicate a condition table does not know (LLVM's unordered tests, say) is
+// refused rather than tested as `eq`. `dflt` is returned only so the call reads
+// naturally; the exception ends the compile.
+static NSString* m68kRefusePredicate(int p, NSString* dflt)
+    {
+    [NSException raise:@"XTUnsupportedPredicate"
+                format:@"compare predicate %d has no m68k condition", p];
+    return dflt;
+    }
+
 + (NSString*)condForNegatedPredicate:(uint8_t)p
     {
     switch (p)
@@ -2141,7 +2181,7 @@ static NSString* m68kSym(NSString* name)
     case XTIRICmpUGE:
         return @"cs";
     default:
-        return @"ne";
+        return m68kRefusePredicate(p, @"ne");
         }
     }
 
@@ -2171,7 +2211,7 @@ static NSString* m68kSym(NSString* name)
     case XTIRICmpUGE:
         return @"cc";
     default:
-        return @"eq";
+        return m68kRefusePredicate(p, @"eq");
         }
     }
 
@@ -3152,7 +3192,8 @@ static NSString* m68kSym(NSString* name)
             {
             NSString* s = dbl ? @"d" : @"s";
             NSArray* fcc = @[ @"fseq", @"fsne", @"fslt", @"fsgt", @"fsle", @"fsge" ];
-            NSString* cc = insn.predicate < fcc.count ? fcc[insn.predicate] : @"fseq";
+            NSString* cc = insn.predicate < fcc.count ? fcc[insn.predicate]
+                                                      : m68kRefusePredicate(insn.predicate, @"fseq");
             [out appendFormat:@"\tfmove.%@\t%d(a6),fp0\n\tfcmp.%@\t%d(a6),fp0\n", s, o0, s, o1];
             [out appendFormat:@"\t%@\td2\n\tand.l\t#1,d2\n", cc];
             }
@@ -3180,7 +3221,8 @@ static NSString* m68kSym(NSString* name)
                 }
             // d0 <=> 0; set d2 = (d0 <pred> 0)
             NSArray* icc = @[ @"eq", @"ne", @"lt", @"lt", @"le", @"le" ];
-            NSString* cc = insn.predicate < icc.count ? icc[insn.predicate] : @"eq";
+            NSString* cc = insn.predicate < icc.count ? icc[insn.predicate]
+                                                      : m68kRefusePredicate(insn.predicate, @"eq");
             [out appendFormat:@"\tmoveq\t#0,d2\n\ttst.l\td0\n\ts%@\td2\n\tand.l\t#1,d2\n", cc];
             }
         [self storeReg:@"d2" toResult:insn.result slots:slots into:out];
@@ -3233,8 +3275,11 @@ static NSString* m68kSym(NSString* name)
                 case XTIRICmpUGE:
                     cc = @"ge";
                     break;
+                case XTIRICmpEQ:
+                    break;
                 default:
-                    break; // EQ
+                    cc = m68kRefusePredicate(insn.predicate, @"eq");
+                    break;
                     }
                 [out appendFormat:@"\tmoveq\t#0,d2\n\ttst.l\td0\n\ts%@\td2\n"
                                   @"\tand.l\t#1,d2\n",

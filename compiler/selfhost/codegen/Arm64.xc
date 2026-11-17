@@ -2842,6 +2842,12 @@ class Arm64
             }
             if (j + (u32)1 < text.byteLength() && text.byteAt(j) == (u8)'}') j = j + (u32)2;
             IRValue* v = _fn.valueWithId(vid);
+            // A marker naming no value, or one with no slot (offset 0 is never a
+            // local's), would come out as `sp, #0`: the saved frame pointer and
+            // link register, under the user's asm. Only pinned locals and __self make markers, so this
+            // guards against a compiler bug.
+            if (v == (IRValue*)0 || slotOf(v) == (u32)0)
+                unsupported(String.withCString("inline asm local with no slot"));
             out.appendFormat("sp, #%lu", v == (IRValue*)0 ? (u32)0 : slotOf(v));
             i = j;
         }

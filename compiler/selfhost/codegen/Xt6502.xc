@@ -207,8 +207,8 @@ class Xt6502
                 _nextZp = ((LayoutRange*)_zpRanges.get(_zpRangeIndex)).lo();
         }
         // Every range is full. The budget check upstream catches the realistic
-        // cases; here the flag is raised and emission continues so the failure
-        // is reported once, in one place, rather than as garbage assembly.
+        // cases; here the flag is raised and emission continues, and
+        // emitFunction reports it once, at the end.
         _zpOverflow = true;
         return _nextZp;
     }
@@ -1463,6 +1463,12 @@ class Xt6502
         // assembler; it is the budget's refusal instead.
         if (_maxSpOffset > (i32)127) {
             unsupported(String.withCString("frame:budget"));
+            return;
+        }
+        // allocateSlots ran past the last zero-page range and handed out
+        // addresses beyond it, over whatever lives there.
+        if (_zpOverflow) {
+            unsupported(String.withCString("zeropage:full"));
             return;
         }
         _out.appendCString("\n");
