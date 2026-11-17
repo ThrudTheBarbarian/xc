@@ -6913,14 +6913,13 @@ static BOOL escLane32(XTIRType* t)
     return fa.operands[1].intValue == field;
     }
 
-// The item loop of a par body (ParImpl$<n>$run, from the block's lo to its
+// The item loop of a par kernel (the block's run, from the block's lo to its
 // hi): its work items are independent by the language (par.md, "Independent
 // work items": none may read what another writes), so its arrays need not be
 // proved distinct.
 - (BOOL)parItemLoop
     {
-    NSString* nm = _fn.name;
-    if (![nm hasPrefix:@"ParImpl$"] || ![nm hasSuffix:@"$run"] || _boundConst)
+    if (_fn.parKernel == XTIRParKernelNone || _boundConst)
         return NO;
     return [self isParField:escFrom(_ivPhi, _PH) field:1] && [self isParField:_boundOp field:2];
     }

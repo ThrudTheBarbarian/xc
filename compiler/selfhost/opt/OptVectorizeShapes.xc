@@ -14,14 +14,13 @@
     class Opt (VectorizeShapes)
     {
 
-    // The item loop of a par body (ParImpl$<n>$run, from the block's lo to its
+    // The item loop of a par kernel (the block's run, from the block's lo to its
     // hi): its work items are independent by the language (par.md,
     // "Independent work items": none may read what another writes), so its
     // arrays need not be proved distinct. As the reference (parItemLoop).
     final bool escParItemLoop(void)
         {
-        String* nm = _esFn.name();
-        if (!nm.hasPrefix(String.withCString("ParImpl$")) || !nm.hasSuffix(String.withCString("$run")) || _esBoundConst)
+        if (_esFn.parKernel() == (u8)PARK_NONE || _esBoundConst)
             return false;
         return self.escIsParField(escFrom(_esIvPhi, _esPH), (i64)1) && self.escIsParField(_esBoundOp, (i64)2);
         }

@@ -5223,6 +5223,8 @@ class Parser
         if (_parTok != (Token*)0)
             cls.setPos(_parTok.fileId(), _parTok.line(), _parTok.col());
         cls.setOp(String.withCString("ParChunk"));
+        // The block's class: its run is the kernel (lowering marks it).
+        cls.addFlag((u32)NF_PARBLOCK);
         for (u32 i = (u32)0; i < caps.count(); i = i + (u32)1) {
             String* cn = (String*)caps.get(i);
             String* t = String.withString((String*)frameTypes.get((Hashable*)cn));

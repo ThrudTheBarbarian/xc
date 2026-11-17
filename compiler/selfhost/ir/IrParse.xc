@@ -749,6 +749,7 @@ class IrParser
         frameLine();
         unrollLine();
         speedLine();
+        parLine();
         collectDefs(_li, end);
         while (!_failed && _li < end)
             blockOrInsn();
@@ -844,6 +845,24 @@ class IrParser
                 break;
             }
         expectChar((u8)']');
+        nextLine();
+        }
+
+    // `par: kernel` / `par: outlined` — a par block's kernel, read back so the
+    // kernel passes in xcc-cg-<arch> and the kernel module's copy know it.
+    void parLine(void)
+        {
+        u32 save = _ci;
+        if (!expectWord("par"))
+            {
+            _ci = save;
+            return;
+            }
+        expectChar((u8)':');
+        if (expectWord("kernel"))
+            _fn.setParKernel((u8)PARK_BLOCK);
+        else if (expectWord("outlined"))
+            _fn.setParKernel((u8)PARK_OUTLINED);
         nextLine();
         }
 

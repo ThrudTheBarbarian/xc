@@ -570,6 +570,12 @@ typedef NS_ENUM(NSInteger, XTPlacement) {
 \****************************************************************************/
 @property(nonatomic, nullable, weak) XTClassDeclNode* parentClass;
 /****************************************************************************\
+|* The class the parser made of a par block: its run is the block's kernel
+|* (the lowering marks the IR function). Set where the class is made, so a
+|* class of the program's own called ParImpl is never taken for one.
+\****************************************************************************/
+@property(nonatomic) BOOL isParBlock;
+/****************************************************************************\
 |* Set by sema when it observes at least one `new ClassName(…)` site.
 |* On banked-heap targets the codegen uses this to auto-place methods
 |* with no explicit :main / :banked annotation in main RAM, so (self),Y

@@ -776,6 +776,11 @@ static NSString* dbgSuffix(XTIRInsn* insn)
         [out appendFormat:@"    speed: [%@]\n",
                           [names componentsJoinedByString:@", "]];
         }
+    // `par: kernel` / `par: outlined`, after `speed:`, only on a kernel.
+    if (fn.parKernel == XTIRParKernelBlock)
+        [out appendString:@"    par: kernel\n"];
+    else if (fn.parKernel == XTIRParKernelOutlined)
+        [out appendString:@"    par: outlined\n"];
 
     // Blocks.
     for (XTIRBlock* block in fn.blocks)

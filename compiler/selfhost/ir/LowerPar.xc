@@ -50,7 +50,7 @@
         for (u32 i = (u32)0; i < _m.funcs().count(); i = i + (u32)1)
             {
             IRFunc* f = (IRFunc*)_m.funcs().get(i);
-            if (!f.name().hasPrefix(String.withCString("ParImpl$")) || !f.name().hasSuffix(String.withCString("$run")))
+            if (f.parKernel() != (u8)PARK_BLOCK)
                 continue;
             String* cls = f.name().substringBytes((u32)0, f.name().byteLength() - (u32)4);
             // An auto block (--par-style=auto made it from a plain loop) the check
@@ -1290,7 +1290,7 @@
         // so the program itself touches all of it. The reference has no
         // outliner.
         Map* every = (Map*)0;
-        if (iv != (IRValue*)0 && f.name().hasPrefix(String.withCString("ParImpl$o")))
+        if (iv != (IRValue*)0 && f.parKernel() == (u8)PARK_OUTLINED)
             {
             IRBlock* hb = (IRBlock*)phiBlk.get((Hashable*)String.withU32(iv.seq()));
             if (hb != (IRBlock*)0)
@@ -2071,7 +2071,7 @@
         for (u32 i = (u32)0; i < _m.funcs().count() && !any; i = i + (u32)1)
             {
             IRFunc* f = (IRFunc*)_m.funcs().get(i);
-            if (f.name().hasPrefix(String.withCString("ParImpl$")) && f.name().hasSuffix(String.withCString("$run")))
+            if (f.parKernel() != (u8)PARK_NONE)
                 any = true;
             }
         if (!any) return (IRModule*)0;
@@ -2089,7 +2089,7 @@
         for (u32 i = (u32)0; i < copy.funcs().count(); i = i + (u32)1)
             {
             IRFunc* f = (IRFunc*)copy.funcs().get(i);
-            if (f.name().hasPrefix(String.withCString("ParImpl$")) && f.name().hasSuffix(String.withCString("$run")))
+            if (f.parKernel() != (u8)PARK_NONE)
                 {
                 work.add((Object*)f);
                 seen.set((Hashable*)f.name(), (Object*)f.name());
@@ -2222,7 +2222,7 @@
         for (u32 i = (u32)0; i < _m.funcs().count(); i = i + (u32)1)
             {
             IRFunc* f = (IRFunc*)_m.funcs().get(i);
-            if (!f.name().hasPrefix(String.withCString("ParImpl$")) || !f.name().hasSuffix(String.withCString("$run")))
+            if (f.parKernel() != (u8)PARK_BLOCK)
                 continue;
             // Its arrays of structs as arrays of words, in the copies the
             // kernels are printed from (parWordStructs).
