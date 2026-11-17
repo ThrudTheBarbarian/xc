@@ -67,7 +67,9 @@ class IfaceWrite
         Node* a = c;
         Node* am = m;
         u32 guard = (u32)0;
-        while (a != (Node*)0 && guard < (u32)64) {
+        // An ancestor chain is no longer than the program's declarations
+        // (#334; it was a cap of 64).
+        while (a != (Node*)0 && guard <= program.kidCount()) {
             Object* s = vt.slotForLabel(Vtable.label(a.name(), am));
             if (s != (Object*)0) best = s;
             Node* p = IfaceWrite.classNamed(program, Vtable.parentName(a));
@@ -114,7 +116,7 @@ class IfaceWrite
         if (vt == (Vtable*)0 || m.name() == (String*)0) return (Object*)0;
         Object* best = (Object*)0;
         u32 guard = (u32)0;
-        for (Node* a = c; a != (Node*)0 && guard < (u32)64; guard = guard + (u32)1) {
+        for (Node* a = c; a != (Node*)0 && guard <= program.kidCount(); guard = guard + (u32)1) {
             String* protos = a.extra();
             if (protos != (String*)0) {
                 Array* list = protos.splitOnByte((u8)',');

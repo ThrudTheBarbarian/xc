@@ -64,7 +64,7 @@ class Overload
         {
         String* c = cls;
         u32 guard = (u32)0;
-        while (c != 0 && guard < (u32)64)
+        while (c != 0 && (_parents == 0 || guard <= _parents.count()))
             {
             if (conformsTo(c, proto))
                 return true;
@@ -82,7 +82,7 @@ class Overload
             return false;
         String* c = sub;
         u32 guard = (u32)0;
-        while (c != 0 && guard < (u32)64)
+        while (c != 0 && (_parents == 0 || guard <= _parents.count()))
             {
             if (c.equals(sup))
                 return true;
