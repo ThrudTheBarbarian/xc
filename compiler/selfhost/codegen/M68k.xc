@@ -27,6 +27,7 @@
 #import "Foundation.xc"
 #import "Stdio.xc"
 #import <Ir>
+#import <CgCommon>
 #import "IrDefs.xc"
 #import <Homing>
 
@@ -113,11 +114,6 @@ class M68k
     static bool isVecTy(String* t)
         {
         return t != (String*)0 && t.hasPrefix(String.withCString("Vec("));
-        }
-
-    static bool isFloatTy(String* t)
-        {
-        return t != (String*)0 && (t.equals(String.withCString("F32")) || t.equals(String.withCString("F64")));
         }
 
     static bool isIntegerTy(String* t)

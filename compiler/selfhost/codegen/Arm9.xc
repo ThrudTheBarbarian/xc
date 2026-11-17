@@ -18,6 +18,7 @@
 
 #import "Foundation.xc"
 #import <Ir>
+#import <CgCommon>
 #import "IrDefs.xc"
 #import <Homing>
 #import "Process.xc"
@@ -3321,7 +3322,7 @@ class Arm9
     // The instruction stream is the question, not the symbol table.
     bool spawnsThreads(IRModule* m)
         {
-        return referencesSymbol(m, String.withCString("_xt_thread_create"));
+        return CgCommon.referencesSymbol(m, String.withCString("_xt_thread_create"));
         }
 
     // Atomic reference counts, as x86-64's arcAtomic (the security review,
@@ -3336,47 +3337,7 @@ class Arm9
             hasMain = ((IRFunc*)m.funcs().get(f)).name().equals(String.withCString("main"));
         if (!hasMain)
             return true;
-        return referencesSymbol(m, String.withCString("Plugin$load"));
-        }
-
-    bool referencesSymbol(IRModule* m, String* want)
-        {
-        for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
-            {
-            IRFunc* fn = (IRFunc*)m.funcs().get(f);
-            for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
-                {
-                IRBlock* bb = (IRBlock*)fn.blocks().get(b);
-                if (insnsName(bb.phis(), want))
-                    return true;
-                if (insnsName(bb.insns(), want))
-                    return true;
-                if (bb.term() != (IRInsn*)0 && insnNames(bb.term(), want))
-                    return true;
-                }
-            }
-        return false;
-        }
-
-    bool insnsName(Array* list, String* want)
-        {
-        for (u32 i = (u32)0; i < list.count(); i = i + (u32)1)
-            if (insnNames((IRInsn*)list.get(i), want))
-                return true;
-        return false;
-        }
-
-    bool insnNames(IRInsn* n, String* want)
-        {
-        for (u32 i = (u32)0; i < n.ops().count(); i = i + (u32)1)
-            {
-            IROperand* o = (IROperand*)n.ops().get(i);
-            if (o.kind() != (u8)OPK_SYM)
-                continue;
-            if (o.name() != (String*)0 && o.name().equals(want))
-                return true;
-            }
-        return false;
+        return CgCommon.referencesSymbol(m, String.withCString("Plugin$load"));
         }
 
     void emitRetain(Array* ops)

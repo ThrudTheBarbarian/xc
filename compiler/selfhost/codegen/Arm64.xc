@@ -30,6 +30,7 @@
 #import "Process.xc"
 #import <Ir>
 #import "IrDefs.xc"
+#import <CgCommon>
 #import <Homing>
 
 // C and C++ input (the driver sets it): each function's callee saves go out
@@ -273,12 +274,6 @@ class Arm64
     static bool isVecTy(String* t)
     { return t != (String*)0 && t.hasPrefix(String.withCString("Vec(")); }
 
-    static bool isFloatTy(String* t)
-    {
-        return t != (String*)0 && (t.equals(String.withCString("F32"))
-                                || t.equals(String.withCString("F64")));
-    }
-
     // The width a scalar leaf occupies. Pointers are 8 on this target — the
     // half of the type-width invariant the BACK END owns.
     static u32 width(String* t)
@@ -317,7 +312,7 @@ class Arm64
         // The parameter map (and every frame kept) is for the backtracing
         // reporter of -fbounds-check, which is linked separately; a module
         // that brings its own checker (Checked.xc, -fbounds-check=light) needs neither.
-        _msFns = referencesSymbol(m, String.withCString("_xt_check_bounds"))
+        _msFns = CgCommon.referencesSymbol(m, String.withCString("_xt_check_bounds"))
                  && !definesFunction(m, String.withCString("_xt_check_bounds"))
                ? new Array() : (Array*)0;
         _out = new String();
@@ -344,22 +339,22 @@ class Arm64
         // The SME matrix kernels the module calls (idiom-matmul), and the state
         // byte and sysctl name they share. Module-private labels: each object
         // that calls a kernel carries its own copy.
-        bool smeF32 = referencesSymbol(m, String.withCString("__xt_sme_gemm_f32"));
-        bool smeF64 = referencesSymbol(m, String.withCString("__xt_sme_gemm_f64"));
-        bool smeF32f = referencesSymbol(m, String.withCString("__xt_sme_gemm_f32_fast"));
-        bool smeF64f = referencesSymbol(m, String.withCString("__xt_sme_gemm_f64_fast"));
+        bool smeF32 = CgCommon.referencesSymbol(m, String.withCString("__xt_sme_gemm_f32"));
+        bool smeF64 = CgCommon.referencesSymbol(m, String.withCString("__xt_sme_gemm_f64"));
+        bool smeF32f = CgCommon.referencesSymbol(m, String.withCString("__xt_sme_gemm_f32_fast"));
+        bool smeF64f = CgCommon.referencesSymbol(m, String.withCString("__xt_sme_gemm_f64_fast"));
         if (smeF32) _out.append(smeGemmKernel(false, true));
         if (smeF64) _out.append(smeGemmKernel(true, true));
         if (smeF32f) _out.append(smeGemmKernel(false, false));
         if (smeF64f) _out.append(smeGemmKernel(true, false));
         // The integer kernels probe SME2 as well, for their 16-bit form.
-        bool smeU32 = referencesSymbol(m, String.withCString("__xt_sme_gemm_u32"));
-        bool smeI32 = referencesSymbol(m, String.withCString("__xt_sme_gemm_i32"));
+        bool smeU32 = CgCommon.referencesSymbol(m, String.withCString("__xt_sme_gemm_u32"));
+        bool smeI32 = CgCommon.referencesSymbol(m, String.withCString("__xt_sme_gemm_i32"));
         if (smeU32) _out.append(smeGemmIntKernel(false));
         if (smeI32) _out.append(smeGemmIntKernel(true));
         // The 64-bit ones probe FEAT_SME_I16I64.
-        bool smeU64 = referencesSymbol(m, String.withCString("__xt_sme_gemm_u64"));
-        bool smeI64 = referencesSymbol(m, String.withCString("__xt_sme_gemm_i64"));
+        bool smeU64 = CgCommon.referencesSymbol(m, String.withCString("__xt_sme_gemm_u64"));
+        bool smeI64 = CgCommon.referencesSymbol(m, String.withCString("__xt_sme_gemm_i64"));
         if (smeU64) _out.append(smeGemmI64Kernel(false));
         if (smeI64) _out.append(smeGemmI64Kernel(true));
         if (smeF32 || smeF64 || smeF32f || smeF64f || smeU32 || smeI32 || smeU64 || smeI64) {
@@ -1265,7 +1260,7 @@ class Arm64
             IRValue* p = (IRValue*)fn.params().get(i);
             String* t = p.ty();
             i32 so = ((Number*)offs.get(i)).asI32();
-            if (isFloatTy(t)) {
+            if (CgCommon.isFloatTy(t)) {
                 if (so >= (i32)0) {
                     String* sc = fregName((u32)16, t);
                     _out.appendFormat("    ldr %s, %s\n", sc.cString(),
@@ -1739,7 +1734,7 @@ class Arm64
         u32 M = (u32)0;
         u32 addIndicator = (u32)0;
         u32 sh = (u32)0;
-        magicU(d, W, &M, &addIndicator, &sh);
+        CgCommon.magicU(d, W, &M, &addIndicator, &sh);
         bool isDiv = n.op().equals(String.withCString("UDiv"));
         String* x = operandReg((IROperand*)n.ops().get((u32)0), String.withCString("w16"));
         String* dst = resultReg(n.res(), String.withCString("w16"));
@@ -1770,7 +1765,7 @@ class Arm64
     {
         i32 M = (i32)0;
         u32 sh = (u32)0;
-        magicS(d, &M, &sh);
+        CgCommon.magicS(d, &M, &sh);
         bool isDiv = n.op().equals(String.withCString("SDiv"));
         String* x = operandReg((IROperand*)n.ops().get((u32)0), String.withCString("w16"));
         String* dst = resultReg(n.res(), String.withCString("w16"));
@@ -1791,159 +1786,6 @@ class Arm64
         }
         canonicaliseUnlessProven(dst, n.res());
         storeReg(dst, n.res());
-    }
-
-    // The unsigned magic number, add-indicator and shift for `d` at width W.
-    //
-    // The reference works in 2W-bit arithmetic; there is no 64-bit integer
-    // here, so the two places it would be needed are handled directly. 2^W mod
-    // d becomes ((2^W - 1) mod d + 1) mod d, and q1's doubling is tracked with
-    // an overflow flag: the loop's only use of q1 is `q1 < delta` with
-    // delta < 2^W, so a q1 that has overflowed is unconditionally not less and
-    // the loop simply ends. q2 is meant to wrap — the result is masked to W
-    // bits — so its natural u32 wraparound at W = 32 is exactly right.
-    static void magicU(u32 d, u32 W, u32* Mout, u32* aout, u32* sout)
-    {
-        u32 twoWm1 = (u32)1 << (W - (u32)1);
-        u32 maxu = W == (u32)32 ? (u32)$FFFF_FFFF : (((u32)1 << W) - (u32)1);
-        u32 a = (u32)0;
-        u32 p = W - (u32)1;
-        u32 nc = maxu - ((maxu % d) + (u32)1) % d;
-        u32 q1 = twoWm1 / nc;
-        u32 r1 = twoWm1 - q1 * nc;
-        bool q1over = false;
-        u32 q2 = (twoWm1 - (u32)1) / d;
-        u32 r2 = (twoWm1 - (u32)1) - q2 * d;
-        u32 delta = (u32)0;
-        bool again = true;
-        while (again) {
-            p = p + (u32)1;
-            if (q1 >= twoWm1) q1over = true;
-            if (r1 >= nc - r1) { q1 = q1 + q1 + (u32)1; r1 = r1 - (nc - r1); }
-            else               { q1 = q1 + q1;          r1 = r1 + r1; }
-            if (r2 + (u32)1 >= d - r2) {
-                if (q2 >= twoWm1 - (u32)1) a = (u32)1;
-                q2 = q2 + q2 + (u32)1;
-                r2 = r2 - (d - r2 - (u32)1);
-            } else {
-                if (q2 >= twoWm1) a = (u32)1;
-                q2 = q2 + q2;
-                r2 = r2 + r2 + (u32)1;
-            }
-            delta = d - (u32)1 - r2;
-            again = p < (u32)2 * W && !q1over && (q1 < delta || (q1 == delta && r1 == (u32)0));
-        }
-        *Mout = (q2 + (u32)1) & maxu;
-        *aout = a;
-        *sout = p - W;
-    }
-
-    // The signed magic number and shift, at W = 32 — the only width the signed
-    // path takes. Same overflow treatment for q1 as the unsigned case.
-    static void magicS(i32 dIn, i32* Mout, u32* sout)
-    {
-        u32 twoWm1 = (u32)$8000_0000;
-        u32 ad = (u32)(dIn < (i32)0 ? -dIn : dIn);
-        u32 t = twoWm1 + (((u32)dIn >> (u32)31) & (u32)1);
-        u32 anc = t - (u32)1 - t % ad;
-        u32 p = (u32)31;
-        u32 q1 = twoWm1 / anc;
-        u32 r1 = twoWm1 - q1 * anc;
-        bool q1over = false;
-        u32 q2 = twoWm1 / ad;
-        u32 r2 = twoWm1 - q2 * ad;
-        u32 delta = (u32)0;
-        bool again = true;
-        while (again) {
-            p = p + (u32)1;
-            if (q1 >= twoWm1) q1over = true;
-            q1 = q1 + q1; r1 = r1 + r1;
-            if (r1 >= anc) { q1 = q1 + (u32)1; r1 = r1 - anc; }
-            q2 = q2 + q2; r2 = r2 + r2;
-            if (r2 >= ad) { q2 = q2 + (u32)1; r2 = r2 - ad; }
-            delta = ad - r2;
-            again = !q1over && (q1 < delta || (q1 == delta && r1 == (u32)0));
-        }
-        // The mask is the full u32 at this width, so the value is already the
-        // sign-extended magic; negate it for a negative divisor.
-        i32 M = (i32)(q2 + (u32)1);
-        if (dIn < (i32)0) M = -M;
-        *Mout = M;
-        *sout = p - (u32)32;
-    }
-
-    // The unsigned magic number, add-indicator and shift for `d` at W = 64
-    // (#309; Hacker's Delight 10-10). The reference works in 128-bit
-    // arithmetic; here the two places that need it are handled as magicU
-    // does at W = 32: 2^64 mod d is ((2^64 - 1) mod d + 1) mod d, and q1's
-    // doubling carries an overflow flag (an overflowed q1 is never less than
-    // delta, so the loop ends). q2 is meant to wrap.
-    static void magicU64(u64 d, u64* Mout, u32* aout, u32* sout)
-    {
-        u64 twoWm1 = (u64)$8000_0000_0000_0000;
-        u64 maxu = (u64)$FFFF_FFFF_FFFF_FFFF;
-        u32 a = (u32)0;
-        u32 p = (u32)63;
-        u64 nc = maxu - ((maxu % d) + (u64)1) % d;
-        u64 q1 = twoWm1 / nc;
-        u64 r1 = twoWm1 - q1 * nc;
-        bool q1over = false;
-        u64 q2 = (twoWm1 - (u64)1) / d;
-        u64 r2 = (twoWm1 - (u64)1) - q2 * d;
-        u64 delta = (u64)0;
-        bool again = true;
-        while (again) {
-            p = p + (u32)1;
-            if (q1 >= twoWm1) q1over = true;
-            if (r1 >= nc - r1) { q1 = q1 + q1 + (u64)1; r1 = r1 - (nc - r1); }
-            else { q1 = q1 + q1; r1 = r1 + r1; }
-            if (r2 + (u64)1 >= d - r2) {
-                if (q2 >= twoWm1 - (u64)1) a = (u32)1;
-                q2 = q2 + q2 + (u64)1;
-                r2 = r2 - (d - r2 - (u64)1);
-            } else {
-                if (q2 >= twoWm1) a = (u32)1;
-                q2 = q2 + q2;
-                r2 = r2 + r2 + (u64)1;
-            }
-            delta = d - (u64)1 - r2;
-            again = p < (u32)128 && !q1over && (q1 < delta || (q1 == delta && r1 == (u64)0));
-        }
-        *Mout = q2 + (u64)1;
-        *aout = a;
-        *sout = p - (u32)64;
-    }
-
-    // The signed magic number and shift for `dIn` at W = 64 (#309; Hacker's
-    // Delight 10-1), |dIn| >= 2 and not a power of two.
-    static void magicS64(i64 dIn, i64* Mout, u32* sout)
-    {
-        u64 twoWm1 = (u64)$8000_0000_0000_0000;
-        u64 ad = dIn < (i64)0 ? (u64)0 - (u64)dIn : (u64)dIn;
-        u64 t = twoWm1 + (dIn < (i64)0 ? (u64)1 : (u64)0);
-        u64 anc = t - (u64)1 - t % ad;
-        u32 p = (u32)63;
-        u64 q1 = twoWm1 / anc;
-        u64 r1 = twoWm1 - q1 * anc;
-        bool q1over = false;
-        u64 q2 = twoWm1 / ad;
-        u64 r2 = twoWm1 - q2 * ad;
-        u64 delta = (u64)0;
-        bool again = true;
-        while (again) {
-            p = p + (u32)1;
-            if (q1 >= twoWm1) q1over = true;
-            q1 = q1 + q1; r1 = r1 + r1;
-            if (r1 >= anc) { q1 = q1 + (u64)1; r1 = r1 - anc; }
-            q2 = q2 + q2; r2 = r2 + r2;
-            if (r2 >= ad) { q2 = q2 + (u64)1; r2 = r2 - ad; }
-            delta = ad - r2;
-            again = !q1over && (q1 < delta || (q1 == delta && r1 == (u64)0));
-        }
-        i64 M = (i64)(q2 + (u64)1);
-        if (dIn < (i64)0) M = (i64)0 - M;
-        *Mout = M;
-        *sout = p - (u32)64;
     }
 
     // rem = a - (a / b) * b. Register 15 is the quotient scratch — never a
@@ -1998,7 +1840,7 @@ class Arm64
         u64 M = (u64)0;
         u32 addIndicator = (u32)0;
         u32 sh = (u32)0;
-        magicU64(d, &M, &addIndicator, &sh);
+        CgCommon.magicU64(d, &M, &addIndicator, &sh);
         bool isDiv = n.op().equals(String.withCString("UDiv"));
         String* x = operandReg((IROperand*)n.ops().get((u32)0), String.withCString("x16"));
         String* dst = resultReg(n.res(), String.withCString("x16"));
@@ -2025,7 +1867,7 @@ class Arm64
     {
         i64 M = (i64)0;
         u32 sh = (u32)0;
-        magicS64(d, &M, &sh);
+        CgCommon.magicS64(d, &M, &sh);
         bool isDiv = n.op().equals(String.withCString("SDiv"));
         String* x = operandReg((IROperand*)n.ops().get((u32)0), String.withCString("x16"));
         String* dst = resultReg(n.res(), String.withCString("x16"));
@@ -2056,7 +1898,7 @@ class Arm64
         String* rt = d.res().ty();
         if (d.op().equals(String.withCString("Const"))) {
             if (a0.kind() != (u8)OPK_IMMI) return false;
-            *out = fitConst((i64)a0.imm(), rt, constSigned(rt));
+            *out = CgCommon.fitConst((i64)a0.imm(), rt, CgCommon.constSigned(rt));
             return true;
         }
         bool sx = d.op().equals(String.withCString("SExt"));
@@ -2066,29 +1908,9 @@ class Arm64
         if (!constThrough(a0.val(), &s, depth + (u32)1)) return false;
         // An extension reads its source at the source's width: sign bits for
         // SExt, zero bits for ZExt, whatever the source's own signedness.
-        if (sx || zx) s = fitConst(s, a0.val().ty(), sx);
-        *out = fitConst(s, rt, constSigned(rt));
+        if (sx || zx) s = CgCommon.fitConst(s, a0.val().ty(), sx);
+        *out = CgCommon.fitConst(s, rt, CgCommon.constSigned(rt));
         return true;
-    }
-
-    static bool constSigned(String* t)
-    {
-        return t != (String*)0 && t.hasPrefix(String.withCString("I"));
-    }
-
-    // `v` as a value of type `t`'s width: its low bits, sign- or zero-extended.
-    static i64 fitConst(i64 v, String* t, bool sgn)
-    {
-        u32 b = (u32)8;
-        if (t != (String*)0) {
-            if (t.equals(String.withCString("I8")) || t.equals(String.withCString("U8")) || t.equals(String.withCString("Bool"))) b = (u32)1;
-            else if (t.equals(String.withCString("I16")) || t.equals(String.withCString("U16"))) b = (u32)2;
-            else if (t.equals(String.withCString("I32")) || t.equals(String.withCString("U32"))) b = (u32)4;
-        }
-        if (b == (u32)8) return v;
-        u32 sh = (u32)64 - b * (u32)8;
-        if (sgn) return (v << sh) >> sh;
-        return (i64)(((u64)v << sh) >> sh);
     }
 
     void emitUnary(IRInsn* n, String* mnem)
@@ -2120,7 +1942,7 @@ class Arm64
         if (n.res() == (IRValue*)0) return;
         if (n.ops().count() < (u32)1) { unsupported(n.op()); return; }
         String* ty = n.res().ty();
-        if (isFloatTy(ty) || isAggTy(ty) || isVecTy(ty)) { unsupported(n.op()); return; }
+        if (CgCommon.isFloatTy(ty) || isAggTy(ty) || isVecTy(ty)) { unsupported(n.op()); return; }
         // …and the same for an i64/u64 result. Scratching a 64-bit widening
         // through `w16` emitted `mov w16, w<src>`, which neither sign-extends
         // nor carries a high half — so the value was SPILLED as four bytes and
@@ -2159,7 +1981,7 @@ class Arm64
         String* dStore = d;
         bool zx = (ext == (String*)0) && wide && !ptr
                && !n.op().equals(String.withCString("SExt"))
-               && st != (String*)0 && width(st) <= (u32)4 && !isFloatTy(st);
+               && st != (String*)0 && width(st) <= (u32)4 && !CgCommon.isFloatTy(st);
         if (zx) {
             if (d.hasPrefix(String.withCString("x"))) d = wForm(d);
             if (src.hasPrefix(String.withCString("x"))) src = wForm(src);
@@ -2229,28 +2051,6 @@ class Arm64
         return o;
     }
 
-    // Does anything in this module call the runtime's thread-create primitive?
-    // The INSTRUCTION stream is the question, not the symbol table: a symbol
-    // survives dead-function elimination whether or not anything still names
-    // it, and a program that imports a threading library it never spawns from
-    // should keep the cheaper refcount.
-    // Does the module call `name` anywhere? Same walk spawnsThreads does, and
-    // for the same reason: a per-module fact the back end must decide for
-    // itself rather than be told.
-    bool referencesSymbol(IRModule* m, String* want)
-    {
-        for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1) {
-            IRFunc* fn = (IRFunc*)m.funcs().get(f);
-            for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1) {
-                IRBlock* bb = (IRBlock*)fn.blocks().get(b);
-                if (insnsName(bb.phis(), want)) return true;
-                if (insnsName(bb.insns(), want)) return true;
-                if (bb.term() != (IRInsn*)0 && insnNames(bb.term(), want)) return true;
-            }
-        }
-        return false;
-    }
-
     // Whether m defines a function named `want` (with a body).
     bool definesFunction(IRModule* m, String* want)
     {
@@ -2284,7 +2084,7 @@ class Arm64
             Object* h = _home.get((Hashable*)p);
             u32 kind = (u32)1;                       // 1 int, 2 ptr, 3 float
             if (isPtrTy(t))          kind = (u32)2;
-            else if (isFloatTy(t))   kind = (u32)3;
+            else if (CgCommon.isFloatTy(t))   kind = (u32)3;
             u32 width = fieldWidth(t);
             i64 off = (i64)-1;                       // -1 = "in a register"
             i64 reg = (i64)-1;
@@ -2363,7 +2163,7 @@ class Arm64
         for (u32 f = (u32)0; f < m.funcs().count() && !hasMain; f = f + (u32)1)
             hasMain = ((IRFunc*)m.funcs().get(f)).name().equals(String.withCString("main"));
         if (!hasMain) return true;
-        return referencesSymbol(m, String.withCString("Plugin$load"));
+        return CgCommon.referencesSymbol(m, String.withCString("Plugin$load"));
     }
 
     bool spawnsThreads(IRModule* m)
@@ -2373,27 +2173,10 @@ class Arm64
             IRFunc* fn = (IRFunc*)m.funcs().get(f);
             for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1) {
                 IRBlock* bb = (IRBlock*)fn.blocks().get(b);
-                if (insnsName(bb.phis(), want)) return true;
-                if (insnsName(bb.insns(), want)) return true;
-                if (bb.term() != (IRInsn*)0 && insnNames(bb.term(), want)) return true;
+                if (CgCommon.insnsName(bb.phis(), want)) return true;
+                if (CgCommon.insnsName(bb.insns(), want)) return true;
+                if (bb.term() != (IRInsn*)0 && CgCommon.insnNames(bb.term(), want)) return true;
             }
-        }
-        return false;
-    }
-
-    bool insnsName(Array* list, String* want)
-    {
-        for (u32 i = (u32)0; i < list.count(); i = i + (u32)1)
-            if (insnNames((IRInsn*)list.get(i), want)) return true;
-        return false;
-    }
-
-    bool insnNames(IRInsn* n, String* want)
-    {
-        for (u32 i = (u32)0; i < n.ops().count(); i = i + (u32)1) {
-            IROperand* o = (IROperand*)n.ops().get(i);
-            if (o.kind() != (u8)OPK_SYM) continue;
-            if (o.name() != (String*)0 && o.name().equals(want)) return true;
         }
         return false;
     }
@@ -2680,7 +2463,7 @@ class Arm64
                 continue;
             }
             i32 so = ((Number*)offs.get(i)).asI32();
-            if (isFloatTy(aty)) {
+            if (CgCommon.isFloatTy(aty)) {
                 if (so < (i32)0) { loadValue(a.val(), fregName(fp, aty)); fp = fp + (u32)1; }
                 else {
                     String* sc = fregName((u32)16, aty);
@@ -2736,7 +2519,7 @@ class Arm64
         if (n.res() == (IRValue*)0) return;
         String* rt = n.res().ty();
         if (isAggTy(rt)) { captureAggResult(n, sret); return; }
-        if (isFloatTy(rt)) { storeReg(fregName((u32)0, rt), n.res()); return; }
+        if (CgCommon.isFloatTy(rt)) { storeReg(fregName((u32)0, rt), n.res()); return; }
         String* d = String.withCString(needsXReg(rt) ? "x0" : "w0");
         if (!needsXReg(rt)) canonicalise(d, rt);
         storeReg(d, n.res());
@@ -2789,39 +2572,13 @@ class Arm64
         String* text = resolveAsmLocals(bytesToString((Array*)_m.consts().get(cid)));
         _out.appendCString("    // inline asm\n");
         // A `;` ends a statement (asmStatements); the rest of its line is a comment.
-        Array* lines = asmStatements(text);
+        Array* lines = CgCommon.asmStatements(text);
         for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1) {
             String* l = (String*)lines.get(i);
             if (l.byteLength() == (u32)0) continue;
             _out.appendFormat("    %s\n", l.cString());
         }
         _out.appendCString("    // end inline asm\n");
-    }
-
-    // `{{XTLOCAL:<vid>}}` becomes the local's sp-relative slot WITHOUT enclosing
-    // brackets, so the user's `str w0, [result]` reads `str w0, [sp, #N]` —
-    // the natural memory-operand syntax on this target.
-    // An asm block's lines, each cut at a `;` outside a string literal: a `;`
-    // ends the statement, as on the 6502, and the rest of the line is a
-    // comment (bindAsmNames leaves it unbound). A line with no `;` stays as
-    // it is.
-    static Array* asmStatements(String* text)
-    {
-        Array* out = new Array();
-        Array* lines = text.splitOnByte((u8)'\n');
-        for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1) {
-            String* l = (String*)lines.get(i);
-            if (l.byteIndexOf(String.withCString(";")) == (u32)$FFFF_FFFF) { out.add((Object*)l); continue; }
-            bool quoted = false;
-            u32 k = (u32)0;
-            while (k < l.byteLength() && (quoted || l.byteAt(k) != (u8)';')) {
-                if (l.byteAt(k) == (u8)'"') quoted = !quoted;
-                k = k + (u32)1;
-            }
-            String* part = l.substringBytes((u32)0, k).trimmed();
-            if (part.byteLength() > (u32)0) out.add((Object*)part);
-        }
-        return out;
     }
 
     String* resolveAsmLocals(String* text)
@@ -3132,7 +2889,7 @@ class Arm64
                     continue;
                 String* lane = laneOf(n.res().ty());
                 if (lane == (String*)0) continue;
-                bool flt = isFloatTy(lane);
+                bool flt = CgCommon.isFloatTy(lane);
                 if (isSub && !flt) continue;
                 // Float lanes fuse only where the add is marked `contract`.
                 if (flt && (n.pred() == (String*)0 || !n.pred().equals(String.withCString("contract")))) continue;
@@ -3979,7 +3736,7 @@ class Arm64
                 initHeader();
                 if (isAggTy(sym.globalTy()))
                     bytes = relayAggInit(bytes, layoutOf(sym.globalTy()));
-                else if (isFloatTy(sym.globalTy()) && bytes.count() != size)
+                else if (CgCommon.isFloatTy(sym.globalTy()) && bytes.count() != size)
                     bytes = relayFloatInit(bytes, sym.globalTy());
                 // Natural alignment, capped at 8 (uxkit/029) — see the
                 // reference's xtArm64GlobalP2Align for why size decides it.
@@ -4376,7 +4133,7 @@ class Arm64
         // A FLOAT scalar has no `dup <Vd>.<T>, <Sn>` form — the DUP element
         // encoding takes a VECTOR element source: `dup vN.4s, vM.s[0]`.
         String* lane = laneOf(n.res().ty());
-        if (isFloatTy(lane) && (sc.hasPrefix(String.withCString("s")) || sc.hasPrefix(String.withCString("d"))))
+        if (CgCommon.isFloatTy(lane) && (sc.hasPrefix(String.withCString("s")) || sc.hasPrefix(String.withCString("d"))))
             {
             String* vn = String.withCString("v");
             vn.append(sc.substringFromByte((u32)1));
@@ -4398,7 +4155,7 @@ class Arm64
         bool bitwise = op.equals(String.withCString("VAnd")) || op.equals(String.withCString("VOr"))
                     || op.equals(String.withCString("VXor"));
         String* lane = laneOf(n.res().ty());
-        bool flt = isFloatTy(lane);
+        bool flt = CgCommon.isFloatTy(lane);
         // A bitwise op is lane-agnostic, so it always spells .16b.
         String* arr = bitwise ? String.withCString("16b") : neonArr(lane);
         String* mnem;
@@ -4439,7 +4196,7 @@ class Arm64
         IROperand* o0 = (IROperand*)n.ops().get((u32)0);
         if (o0.kind() != (u8)OPK_USE) { unsupported(n.op()); return; }
         String* lane = laneOf(n.res().ty());
-        if (!isFloatTy(lane)) { unsupported(n.op()); return; }
+        if (!CgCommon.isFloatTy(lane)) { unsupported(n.op()); return; }
         _out.appendFormat("    fsqrt v%lu.%s, v%lu.%s\n",
                           vecIndex(n.res()), neonArr(lane).cString(),
                           vecIndex(o0.val()), neonArr(lane).cString());
@@ -4724,7 +4481,7 @@ class Arm64
         // adds those — the p-ARING (l0+l1)+(l2+l3), which the x86-64 back end
         // mirrors so both round identically. The result lands in the low
         // s-element of the home, which is an FP register, so no fmov is needed.
-        if (isFloatTy(n.res().ty()))
+        if (CgCommon.isFloatTy(n.res().ty()))
             {
             u32 v = vecIndex(o0.val());
             String* d = resultReg(n.res(), fregName((u32)0, n.res().ty()));
@@ -5241,10 +4998,10 @@ class Arm64
                 Array* list = part == (u32)0 ? bb.phis() : bb.insns();
                 for (u32 i = (u32)0; i < list.count(); i = i + (u32)1) {
                     IRInsn* n = (IRInsn*)list.get(i);
-                    if (n.res() != (IRValue*)0 && isFloatTy(n.res().ty())) return false;
+                    if (n.res() != (IRValue*)0 && CgCommon.isFloatTy(n.res().ty())) return false;
                     for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1) {
                         IROperand* o = (IROperand*)n.ops().get(k);
-                        if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0 && isFloatTy(o.val().ty())) return false;
+                        if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0 && CgCommon.isFloatTy(o.val().ty())) return false;
                     }
                 }
             }
@@ -5808,7 +5565,7 @@ class Arm64
                 nleaf = aggHFA(layoutOf(ft), &inner);
                 if (nleaf == (u32)0) return (u32)0;      // a nested non-HFA
                 leaf = String.withCString(inner ? "F64" : "F32");
-            } else if (isFloatTy(ft)) {
+            } else if (CgCommon.isFloatTy(ft)) {
                 leaf = ft;
                 nleaf = (u32)1;
             } else {
@@ -6214,7 +5971,7 @@ class Arm64
                 stk = stk + asz;
                 continue;
             }
-            if (isFloatTy(t)) {
+            if (CgCommon.isFloatTy(t)) {
                 if (fp < (u32)8) { fp = fp + (u32)1; offs.add((Object*)Number.with(-1)); continue; }
                 u32 sz = t.equals(String.withCString("F64")) ? (u32)8 : (u32)4;
                 if (_aapcs64Abi) sz = (u32)8;
@@ -7749,7 +7506,7 @@ class Arm64
         String* mnem = String.withCString("ldr");
         String* dest = String.withCString("w17");
         u32 w = width(pte);
-        if (isFloatTy(pte)) {
+        if (CgCommon.isFloatTy(pte)) {
             // An FP load needs an FP scratch. Falling through to w17/x17 put
             // the value in a GP register, and the only way back out is through
             // the frame — `ldr w17,[p]; str w17,[slot]; ldr s0,[slot]` where
@@ -7827,7 +7584,7 @@ class Arm64
         if (d == (Object*)0) return false;
         IRInsn* n = (IRInsn*)d;
         if (!n.op().equals(String.withCString("Const")) || n.res() == (IRValue*)0) return false;
-        if (isFloatTy(n.res().ty())) return false;
+        if (CgCommon.isFloatTy(n.res().ty())) return false;
         if (n.ops().count() < (u32)1) return false;
         IROperand* a0 = (IROperand*)n.ops().get((u32)0);
         return a0.kind() == (u8)OPK_IMMI && a0.imm() == (i32)0;
@@ -8371,7 +8128,7 @@ class Arm64
         // these, so ANY float code with a conditional reaches here: this single
         // refusal was 71 of the 74 failures in the first corpus sweep run
         // through the xc compiler.
-        if (isFloatTy(ty)) {
+        if (CgCommon.isFloatTy(ty)) {
             bool dbl = ty.equals(String.withCString("F64"));
             // d16/d17 ONLY. d15 was the second operand's scratch here, and
             // d15 is in the FP HOME pool (d8-d15) — so an F64 Select quietly
@@ -9047,7 +8804,7 @@ class Arm64
             return;
         }
         String* save;
-        if (isFloatTy(pty))
+        if (CgCommon.isFloatTy(pty))
             save = String.withCString(pty.equals(String.withCString("F64")) ? "d17" : "s17");
         else
             save = String.withCString(needsXReg(pty) ? "x15" : "w15");
@@ -9129,7 +8886,7 @@ class Arm64
             emitAggCopy(aggSize(layoutOf(pty)), slotOf(phi.res()), true);
             return;
         }
-        bool fp = isFloatTy(pty);
+        bool fp = CgCommon.isFloatTy(pty);
         Object* h = _home.get((Hashable*)phi.res());
         if (h != (Object*)0 && vop.kind() == (u8)OPK_USE) {
             // Homed result and an SSA use: materialise straight into the home.
@@ -9189,7 +8946,7 @@ class Arm64
             Object* d = _defOf.get((Hashable*)o.val());
             if (d == (Object*)0) return (i32)-1;
             IRInsn* n = (IRInsn*)d;
-            if (!n.op().equals(String.withCString("Const")) || n.res() == (IRValue*)0 || isFloatTy(n.res().ty())
+            if (!n.op().equals(String.withCString("Const")) || n.res() == (IRValue*)0 || CgCommon.isFloatTy(n.res().ty())
              || n.ops().count() < (u32)1) return (i32)-1;
             IROperand* a0 = (IROperand*)n.ops().get((u32)0);
             if (a0.kind() != (u8)OPK_IMMI) return (i32)-1;
@@ -9245,7 +9002,7 @@ class Arm64
         if (val == (IROperand*)0) return (IROperand*)0;
         // cbz/cbnz are GP-register only. An ICmp never has float operands, but
         // guard anyway.
-        if (isFloatTy(opType(val))) return (IROperand*)0;
+        if (CgCommon.isFloatTy(opType(val))) return (IROperand*)0;
         return val;
     }
 
@@ -9348,7 +9105,7 @@ class Arm64
         if (rematConst(n.res(), &ignored)) return;
         IROperand* k = (IROperand*)n.ops().get((u32)0);
         String* ty = n.res().ty();
-        if (isFloatTy(ty)) {
+        if (CgCommon.isFloatTy(ty)) {
             // The immediate carries the abstract value as raw IEEE-754 double
             // bits, and this target is natively IEEE, so the pattern goes
             // straight to the slot. An F32 is the double narrowed first.
@@ -9483,7 +9240,7 @@ class Arm64
                 ? v.val().ty() : (String*)0;
             if (isAggTy(ty)) {
                 returnAggregate(v.val(), ty);
-            } else if (isFloatTy(ty)) {
+            } else if (CgCommon.isFloatTy(ty)) {
                 loadValue(v.val(), fregName((u32)0, ty));
             } else {
                 materialise(v, String.withCString(needsXReg(ty) ? "x0" : "w0"));
@@ -10751,7 +10508,7 @@ class Arm64
             IRValue* v = q == (u32)0 ? u : w;
             String* vt = v.ty();
             if (vt == (String*)0 || isMemTy(vt) || isAggTy(vt) || isVecTy(vt)) return false;
-            if (isFPReg(R) != isFloatTy(vt)) return false;
+            if (isFPReg(R) != CgCommon.isFloatTy(vt)) return false;
             if (inMap(_phiOf, v) || hasVal(_addrTaken, v) || !hasIvl(v)) return false;
             if (hasVal(_crossCall, v) && !(hasStr(gpCallee, R) || hasStr(fpCallee, R))) return false;
         }
@@ -10969,7 +10726,7 @@ class Arm64
                     String* vt = vIn.ty();
                     if (vt == (String*)0) continue;
                     if (isMemTy(vt) || isAggTy(vt) || vt.equals(String.withCString("Void"))) continue;
-                    if (isFPReg(R) != isFloatTy(vt)) continue;
+                    if (isFPReg(R) != CgCommon.isFloatTy(vt)) continue;
                     Object* db = defBlk.get((Hashable*)vIn);
                     if (db == (Object*)0) continue;
                     i32 dbi = ((Number*)db).asI32();
@@ -11052,7 +10809,7 @@ class Arm64
             if (isMemTy(t) || isAggTy(t) || isVecTy(t)
                 || t.equals(String.withCString("Void"))) continue;
             if (useCount(v) == (u32)0) continue;
-            if (isFloatTy(t)) {
+            if (CgCommon.isFloatTy(t)) {
                 if (hotDepthOf(v) > (u32)0) fp.add((Object*)v);
             } else {
                 gp.add((Object*)v);
@@ -11104,7 +10861,7 @@ class Arm64
 
     static bool gpScalarTy(String* t)
     {
-        return t != (String*)0 && !(isAggTy(t) || isVecTy(t) || isMemTy(t) || isFloatTy(t)
+        return t != (String*)0 && !(isAggTy(t) || isVecTy(t) || isMemTy(t) || CgCommon.isFloatTy(t)
                                     || t.equals(String.withCString("Void")));
     }
 
@@ -11135,7 +10892,7 @@ class Arm64
             bool allGP = nUser <= (u32)8;
             for (u32 p = (u32)0; p < nUser && allGP; p = p + (u32)1) {
                 String* pt = ((IRValue*)fn.params().get(p)).ty();
-                if (pt == (String*)0 || isAggTy(pt) || isVecTy(pt) || isMemTy(pt) || isFloatTy(pt)
+                if (pt == (String*)0 || isAggTy(pt) || isVecTy(pt) || isMemTy(pt) || CgCommon.isFloatTy(pt)
                     || pt.equals(String.withCString("Void")))
                     allGP = false;
             }
@@ -11782,7 +11539,7 @@ class Arm64
                 if (kk >= (i32)0 && k < (i32)0) { k = kk; x = (IROperand*)an.ops().get((u32)1 - q); }
             }
             if (k < (i32)0 || (u32)k >= w || x == (IROperand*)0 || x.kind() != (u8)OPK_USE || x.val() == (IRValue*)0) continue;
-            if (isFloatTy(opType(x))) continue;
+            if (CgCommon.isFloatTy(opType(x))) continue;
             _bitTests.set((Hashable*)bc.val(), (Object*)an);
             _btAnds.set((Hashable*)an.res(), (Object*)an);
         }
