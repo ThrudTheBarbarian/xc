@@ -7138,13 +7138,68 @@ void usage(void)
     Stdio.printf("    parent  >  the current directory  >  ~/xcc  >  ~/xtc  >  /opt/xcc/<version>\n");
     Stdio.printf("    >  /opt/xcc  >  /usr/local/xcc  >  /usr/local/xtc  >  /opt/xtc\n");
     Stdio.printf("\n");
-    Stdio.printf("Environment:\n");
-    Stdio.printf("  XCC_HOME                   A support root, ahead of the built-in search\n");
-    Stdio.printf("  XTC_HOME                   The older spelling of XCC_HOME\n");
-    Stdio.printf("  XTC_LDFLAGS                More linker arguments, read as if each were\n");
-    Stdio.printf("                             given with -Xlinker after the command line's own\n");
-    Stdio.printf("\n");
+    envUsage();
     Stdio.printf("An unrecognised option is an error, never ignored.\n");
+}
+
+// Every environment variable the compiler reads, in one place (#337): the
+// settings first, then the switches for diagnosing the compiler itself.
+// tests/driver/env-registry.sh checks that each variable the sources read is
+// listed here.
+void envUsage(void)
+{
+    Array* settings = new Array();
+    settings.add((Object*)String.withCString("XCC_HOME|A support root, ahead of the built-in search"));
+    settings.add((Object*)String.withCString("XTC_HOME|The older spelling of XCC_HOME"));
+    settings.add((Object*)String.withCString("XCC_3P|A third-party library root, ahead of /opt/xcc/3p"));
+    settings.add((Object*)String.withCString("XTC_LDFLAGS|More linker arguments, as if each were given with -Xlinker"));
+    settings.add((Object*)String.withCString("SDKROOT|The Apple SDK whose frameworks' exports a link checks"));
+    settings.add((Object*)String.withCString("XTC_MUSL_ROOT|The musl pool a static x86-64 Linux link takes libc from"));
+    settings.add((Object*)String.withCString("XTC_WIN64_TOOLCHAIN|The mingw root win64 -l archives come from"));
+    settings.add((Object*)String.withCString("XCC_DEBUG_DIR|Roots for separate debug files (colon-separated; /usr/lib/debug)"));
+    settings.add((Object*)String.withCString("XCC_NO_RUNTIME_LIB|=1: as --no-runtime-lib"));
+    settings.add((Object*)String.withCString("XC_PAR_REMOTE|A remote GPU worker: programs carry every GPU kernel form"));
+    settings.add((Object*)String.withCString("XC_LANGUAGES|A language table file, replacing the built-in rows"));
+    settings.add((Object*)String.withCString("XCC_SIGN_PASSPHRASE|The passphrase of the --sign key"));
+    settings.add((Object*)String.withCString("XCC_SIGN_CA_FILE|The CA bundle --sign's HTTPS requests trust"));
+    settings.add((Object*)String.withCString("TMPDIR|Where each run's private scratch directory is made"));
+    Array* diag = new Array();
+    diag.add((Object*)String.withCString("XC_C_KEEP|=<prefix>: keep a C build's IR and objects as <prefix>.*"));
+    diag.add((Object*)String.withCString("XC_C_TRACE|Name the C functions left to clang, and why"));
+    diag.add((Object*)String.withCString("XC_C_LL|=<file>: read this file as clang's IR"));
+    diag.add((Object*)String.withCString("XC_C_HANDLERS|=1: read C++ exception handlers on any target"));
+    diag.add((Object*)String.withCString("XC_C_CABI|Give every C function read the C calling convention"));
+    diag.add((Object*)String.withCString("XC_PAR_PROPOSE|=report|outline: report or outline the loops par would take"));
+    diag.add((Object*)String.withCString("XC_PAR_OUTLINE_TRACE|Why a block has no GPU form (=ir: the outliner's functions)"));
+    diag.add((Object*)String.withCString("XC_PAR_OUTLINE_DUMP|=<path>: the module after outlining"));
+    diag.add((Object*)String.withCString("XTIR_OPT_STOP_AFTER|=<pass>: stop the optimiser after that pass"));
+    diag.add((Object*)String.withCString("XC_OPT_CAPS|Say when a capped run-until-settled loop stopped at its cap"));
+    diag.add((Object*)String.withCString("XTIC_OFF|No if-conversion after bounds checks are removed"));
+    diag.add((Object*)String.withCString("XTGPU_ESC_TRIPS|=<n>: the escape-loop GPU variant's trip count"));
+    diag.add((Object*)String.withCString("XCC_GC_STATS|Print what the ELF link's section GC kept"));
+    diag.add((Object*)String.withCString("XCC_SIGN_HTTPS_CONNECT|=<host:port>: where --sign's HTTPS requests connect"));
+    Stdio.printf("Environment:\n");
+    envRows(settings);
+    Stdio.printf("\nDiagnostics (for working on the compiler):\n");
+    envRows(diag);
+    Stdio.printf("\n");
+}
+
+void envRows(Array* rows)
+{
+    for (u32 i = (u32)0; i < rows.count(); i = i + (u32)1)
+        {
+        String* r = (String*)rows.get(i);
+        u32 bar = r.indexOfByte((u8)'|');
+        String* name = r.substringBytes((u32)0, bar);
+        String* line = String.withCString("  ");
+        line.append(name);
+        while (line.byteLength() < (u32)29)
+            line.appendByte((u8)' ');
+        line.appendByte((u8)' ');
+        line.append(r.substringFromByte(bar + (u32)1));
+        Stdio.printf("%s\n", line.cString());
+        }
 }
 
 // The -Wno- categories, one indented line each.
