@@ -1082,6 +1082,9 @@
             bool st = ln.hasPrefix(String.withCString("\tst.local."));
             if (!ld && !st) { i = i + (u32)1; continue; }
             u32 sp = ln.indexOfByte((u8)' ');
+            // No space after the type: not a form this pass knows, so leave
+            // the kernel as it is (#333; the length went negative).
+            if (sp == String.notFound() || sp < (u32)10) return text;
             String* t = ln.substringBytes((u32)10, sp - (u32)10);
             u32 lb = ln.indexOfByte((u8)'[');
             u32 rb = ln.indexOfByte((u8)']');
