@@ -381,6 +381,9 @@ static long symVal(NSDictionary* syms, const Op* o)
 // Append the extension words for one EA operand; record a relocation
 // (relative byte offset within `d`) for abs.l SINGLE-symbol references (a
 // symbol DIFFERENCE is a constant and needs no relocation).
+// An extension word that does not fit (#289), found in pass 2 (when
+// `relRelocs` is non-nil); the pass-2 loop reports it. As the port's fail().
+static NSString* sExtErr = nil;
 static void appendExt(NSMutableData* d, const Op* o, int size,
                       NSDictionary* syms, NSMutableArray* relRelocs)
     {
@@ -388,6 +391,10 @@ static void appendExt(NSMutableData* d, const Op* o, int size,
         {
     case OP_INDDISP:
     case OP_PCDISP:
+        // A d16 past -32768..32767 was masked, so a field 40000 bytes in was
+        // stored 25 KB below the object (#289); it is refused.
+        if (relRelocs && !sExtErr && (o->value < -32768 || o->value > 32767))
+            sExtErr = [NSString stringWithFormat:@"displacement %ld does not fit 16 bits", (long)o->value];
         app16(d, (uint16_t)(o->value & 0xFFFF));
         break;
     // brief extension word (disp8 = 0)
@@ -410,7 +417,13 @@ static void appendExt(NSMutableData* d, const Op* o, int size,
             app32(d, (uint32_t)symVal(syms, o));
             }
         else
-            app16(d, (uint16_t)(symVal(syms, o) & 0xFFFF));
+            {
+            // A word immediate, signed or unsigned (#289).
+            long iv = symVal(syms, o);
+            if (relRelocs && !sExtErr && (iv < -32768 || iv > 65535))
+                sExtErr = [NSString stringWithFormat:@"immediate %ld does not fit 16 bits", iv];
+            app16(d, (uint16_t)(iv & 0xFFFF));
+            }
         break;
     default:
         break;
@@ -522,7 +535,14 @@ static int branchCC(NSString* m)
             {
             long target = symVal(syms, &o[0]);
             app16(d, 0xF280 | p.intValue);
-            app16(d, (uint16_t)((target - (long)(curOff + 2)) & 0xFFFF));
+            long fd = target - (long)(curOff + 2);
+            if (rr && (fd < -32768 || fd > 32767))
+                {
+                if (err)
+                    *err = [NSString stringWithFormat:@"%@: branch out of the 16-bit range", mnem];
+                return nil;
+                }
+            app16(d, (uint16_t)(fd & 0xFFFF));
             return d;
             }
         }
@@ -537,6 +557,12 @@ static int branchCC(NSString* m)
         long target = symVal(syms, &o[0]);
         long disp = target - (long)(curOff + 2); // always word form
         app16(d, 0x6000 | (cc << 8));
+        if (rr && (disp < -32768 || disp > 32767))
+            {
+            if (err)
+                *err = [NSString stringWithFormat:@"%@: branch out of the 16-bit range", mnem];
+            return nil;
+            }
         app16(d, (uint16_t)(disp & 0xFFFF));
         return d;
         }
@@ -1385,6 +1411,7 @@ static NSArray<NSString*>* splitOperands(NSString* s)
         NSString* e = nil;
         uint32_t base = (uint32_t)text.length;
         sMissingSym = nil;
+        sExtErr = nil;
         NSData* enc = [self encode:it[@"mnem"]
                               size:[it[@"size"] intValue]
                                ops:it[@"ops"]
@@ -1395,6 +1422,11 @@ static NSArray<NSString*>* splitOperands(NSString* s)
         if (!enc)
             {
             *error = e ?: @"encode error (pass2)";
+            return nil;
+            }
+        if (sExtErr)
+            {
+            *error = sExtErr;
             return nil;
             }
         if (sMissingSym)
