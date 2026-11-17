@@ -649,18 +649,22 @@ class JsonVal
         if (expLen == (u32)0 || expOff + expLen > d.length())
             return out;
         IfaceImport.walkTrie(d, expOff, expOff, expOff + expLen,
-                             String.withCString(""), out, (u32)0);
+                             String.withCString(""), out, Data.withLength(expLen));
         return out;
         }
 
-    // `depth` is a recursion guard, not a semantic limit: a malformed trie can
-    // point a child back at its parent, and a reader that loops forever on a
-    // bad input is worse than one that gives up on it.
+    // `seen` marks each node offset once visited (#334): a malformed trie can
+    // point a child back at an ancestor, and a reader that loops forever on a
+    // bad input is worse than one that gives up on it. It was a depth cap of
+    // 64, which also cut off a well-formed trie deeper than that: exports
+    // that share prefixes branch once per shared run, so a library of long,
+    // similar names went past it and lost the names below.
     static void walkTrie(Data* d, u32 base, u32 at, u32 end,
-                         String* prefix, Array* out, u32 depth)
+                         String* prefix, Array* out, Data* seen)
         {
-        if (depth > (u32)64 || at >= end)
+        if (at >= end || seen.byteAt(at - base) != (u8)0)
             return;
+        seen.setByteAt(at - base, (u8)1);
         u32 p = at;
         u32 termSize = (u32)0;
         u32 shift = (u32)0;
@@ -702,7 +706,7 @@ class JsonVal
                 if ((b & (u8)$80) == (u8)0)
                     break;
                 }
-            IfaceImport.walkTrie(d, base, base + kidOff, end, edge, out, depth + (u32)1);
+            IfaceImport.walkTrie(d, base, base + kidOff, end, edge, out, seen);
             }
         }
 
