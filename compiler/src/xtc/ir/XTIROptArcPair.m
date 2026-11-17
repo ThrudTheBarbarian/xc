@@ -1,4 +1,5 @@
 #import "XTIROptArcPair.h"
+#import "XTIRRuntimeRoles.h"
 #import "XTIRModule.h"
 #import "XTIRFunction.h"
 #import "XTIRBlock.h"
@@ -32,7 +33,7 @@ static BOOL apBlocks(XTIRModule* mod, XTIRInsn* n)
     // nothing the program reads; it may stop the program. A pair across one
     // goes as across a compare, which an inlined check is.
     if (n.opcode == XTIROpCall && n.operands.count > 0 && n.operands[0].kind == XTIROperandKindSym
-        && [[mod symbolForId:n.operands[0].symbolId].name hasPrefix:@"_xt_check_"])
+        && XTIRRuntimeIsRuntime([mod symbolForId:n.operands[0].symbolId].name))
         return NO;
     switch (n.opcode)
         {

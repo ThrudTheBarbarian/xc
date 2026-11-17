@@ -1,4 +1,5 @@
 #import "XTIROptTrapCut.h"
+#import "XTIRRuntimeRoles.h"
 #import "XTIROptBlockMerge.h"
 #import "XTIRModule.h"
 #import "XTIRFunction.h"
@@ -29,7 +30,7 @@ static BOOL isTrap(XTIRInsn* insn, XTIRModule* mod)
     if (c.kind != XTIROperandKindSym)
         return NO;
     NSString* nm = [mod symbolForId:c.symbolId].name;
-    return [nm isEqualToString:@"_xt_check_trap"] || [nm isEqualToString:@"_xt_check_cast_trap"];
+    return XTIRRuntimeStops(nm);
     }
 
 - (BOOL)runOnModule:(XTIRModule*)mod

@@ -1,4 +1,5 @@
 #import "XTIROptInline.h"
+#import "XTIRRuntimeRoles.h"
 #import "XTIROptTargetProfile.h"
 #import "XTIRModule.h"
 #import "XTIRFunction.h"
@@ -28,7 +29,7 @@ static BOOL checksOnlyCalls(XTIRModule* mod, XTIRFunction* fn)
                 if (n.operands.count == 0 || n.operands[0].kind != XTIROperandKindSym)
                     return NO;
                 XTIRSymbol* sym = [mod symbolForId:n.operands[0].symbolId];
-                if (!sym || ![sym.name hasPrefix:@"_xt_check"])
+                if (!sym || !XTIRRuntimeIsRuntime(sym.name))
                     return NO;
                 break;
                 }
@@ -262,7 +263,7 @@ static NSSet<NSValue*>* XTIRCyclicBlocks(XTIRFunction* fn)
     if (!callee || callee == caller)
         return nil; // unknown body / self
     // A subscript check inlines only after bounds-elide, and then nothing else.
-    BOOL isCheck = [sym.name hasPrefix:@"_xt_check_"] && ![sym.name hasSuffix:@"_trap"];
+    BOOL isCheck = XTIRRuntimeInlinesWithChecks(sym.name);
     if (isCheck != self.checksOnly)
         return nil;
     if (callee.blocks.count == 0)
@@ -292,8 +293,7 @@ static NSSet<NSValue*>* XTIRCyclicBlocks(XTIRFunction* fn)
             // check (Checked.xc) inlines as a compare with a cold trap.
             if (multi && bi.opcode == XTIROpCall && bi.operands.count >= 1 &&
                 bi.operands[0].kind == XTIROperandKindSym &&
-                [[mod symbolForId:bi.operands[0].symbolId].name hasPrefix:@"_xt_check_"] &&
-                [[mod symbolForId:bi.operands[0].symbolId].name hasSuffix:@"_trap"])
+                XTIRRuntimeIsTrap([mod symbolForId:bi.operands[0].symbolId].name))
                 continue;
             if (multi)
                 switch (bi.opcode)

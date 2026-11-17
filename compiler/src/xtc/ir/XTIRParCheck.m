@@ -1,4 +1,5 @@
 #import "XTIRParCheck.h"
+#import "XTIRRuntimeRoles.h"
 #import "XTIRType.h"
 #import "XTIRLayout.h"
 #import "XTIRModule.h"
@@ -2990,7 +2991,7 @@ static BOOL parIsComputeOp(XTIROpcode op)
                     // A subscript check is allowed by name: outside the program in
                     // a -fbounds-check build, Checked.xc's own body (which writes
                     // to stderr) under -fbounds-check=light.
-                    if ([name hasPrefix:@"_xt_check_"] && [allowedExternals() containsObject:name])
+                    if (XTIRRuntimeIsRuntime(name) && [allowedExternals() containsObject:name])
                         break;
                     XTIRFunction* callee = self.fnByName[name];
                     if (!callee)
