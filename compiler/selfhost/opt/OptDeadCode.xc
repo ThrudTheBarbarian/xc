@@ -281,15 +281,27 @@
         retainPairsIn(fn);
         deadStoresIn(fn);
         writeOnlyLocalsIn(fn);
+        // Each sweep reads the use counts as they stood when it began. They
+        // are built once and then kept: what a sweep removed leaves the
+        // counts before the next one (faDropUses), which is what rebuilding
+        // them gave.
+        bool began = _faFn == (IRFunc*)0;
+        if (began)
+            self.faBegin(fn, "deadCode");
         bool changed = true;
         while (changed)
             {
             changed = false;
-            Map* uses = self.useCounts(fn);
+            Map* uses = self.faUseCounts(fn);
+            _dcRemoved = new Array();
             for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
                 if (sweepBlock((IRBlock*)fn.blocks().get(b), uses))
                     changed = true;
+            self.faDropUses(fn, _dcRemoved);
+            _dcRemoved = (Array*)0;
             }
+        if (began)
+            self.faEnd();
         }
 
     final bool sweepBlock(IRBlock* bb, Map* uses)
@@ -301,6 +313,7 @@
             IRInsn* n = (IRInsn*)bb.insns().get(i);
             if (n.res() != 0 && isPureOp(n) && self.countOf(uses, n.res()) == (u32)0)
                 {
+                _dcRemoved.add((Object*)n);
                 changed = true;
                 continue;
                 }
@@ -317,6 +330,7 @@
             IRInsn* phi = (IRInsn*)bb.phis().get(i);
             if (phi.res() != 0 && phi.memRes() == 0 && self.countOf(uses, phi.res()) == (u32)0)
                 {
+                _dcRemoved.add((Object*)phi);
                 phiChanged = true;
                 continue;
                 }

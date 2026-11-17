@@ -752,6 +752,9 @@
             _vecFn = fn;
             _vecRemainders = new Map();
             _esDone = new Set();
+            // The recognisers share def, def-block and use maps from the
+            // analysis cache; every rewrite below drops them.
+            self.faBegin(fn, "vectorize");
             u32 iter = (u32)0;
             while (iter < (u32)256)
                 {
@@ -760,6 +763,7 @@
                 // first (an ordered float sum) would leave it serial.
                 if (vecEscape(fn))
                     {
+                    self.invalidateCfg(fn);
                     iter = iter + (u32)1;
                     continue;
                     }
@@ -767,6 +771,7 @@
                 if (c != (VecCand*)0)
                     {
                     vecApplyMap(fn, c);
+                    self.invalidateCfg(fn);
                     iter = iter + (u32)1;
                     continue;
                     }
@@ -774,6 +779,7 @@
                 if (r != (VecCand*)0)
                     {
                     vecApplyReduction(fn, r);
+                    self.invalidateCfg(fn);
                     iter = iter + (u32)1;
                     continue;
                     }
@@ -781,6 +787,7 @@
                 if (mm != (VecCand*)0)
                     {
                     self.vecApplyMaxMin(fn, mm);
+                    self.invalidateCfg(fn);
                     iter = iter + (u32)1;
                     continue;
                     }
@@ -788,6 +795,7 @@
                 if (cn != (VecCand*)0)
                     {
                     vecApplyCount(fn, cn);
+                    self.invalidateCfg(fn);
                     iter = iter + (u32)1;
                     continue;
                     }
@@ -795,6 +803,7 @@
                 if (ws != (VecCand*)0)
                     {
                     self.vecApplyWidening(fn, ws);
+                    self.invalidateCfg(fn);
                     iter = iter + (u32)1;
                     continue;
                     }
@@ -802,6 +811,7 @@
                 if (dp != (VecCand*)0)
                     {
                     self.vecApplyWidening(fn, dp);
+                    self.invalidateCfg(fn);
                     iter = iter + (u32)1;
                     continue;
                     }
@@ -809,6 +819,7 @@
                 // accumulator one Add deep; rotate it back out and try again.
                 if (vecReassociate(fn))
                     {
+                    self.invalidateCfg(fn);
                     iter = iter + (u32)1;
                     continue;
                     }
@@ -817,11 +828,13 @@
                 // recognise gives the recognisers above two loops they can.
                 if (vecDistribute(fn))
                     {
+                    self.invalidateCfg(fn);
                     iter = iter + (u32)1;
                     continue;
                     }
                 break;
                 }
+            self.faEnd();
             // …then break the serial accumulator dependency. The bit selects
             // and rotates first (where the back end has them), so the
             // interleave's register estimate sees the body the back end will.
@@ -1148,20 +1161,27 @@
 
     final VecCand* vecRecogniseMap(IRFunc* fn)
         {
-        Map* defOf = new Map();
-        Map* defBlk = new Map();
+        // The cached maps, plus any terminator's result (on a copy: the
+        // cached ones are shared).
+        Map* defOf = self.faDefMap(fn);
+        Map* defBlk = self.faResBlockMap(fn);
+        bool copied = false;
         for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
             {
             IRBlock* bb = (IRBlock*)fn.blocks().get(b);
-            self.vecNoteDefs(defOf, defBlk, bb.phis(), bb);
-            self.vecNoteDefs(defOf, defBlk, bb.insns(), bb);
             if (bb.term() != (IRInsn*)0 && bb.term().res() != (IRValue*)0)
                 {
+                if (!copied)
+                    {
+                    defOf = defOf.copy();
+                    defBlk = defBlk.copy();
+                    copied = true;
+                    }
                 defOf.set((Hashable*)bb.term().res(), (Object*)bb.term());
                 defBlk.set((Hashable*)bb.term().res(), (Object*)bb);
                 }
             }
-        Map* uses = self.useCounts(fn);
+        Map* uses = self.faUseCounts(fn);
 
         for (u32 hi = (u32)0; hi < fn.blocks().count(); hi = hi + (u32)1)
             {
@@ -1362,15 +1382,9 @@
     // map recogniser; the extra structure is the accumulator.
     final VecCand* vecRecogniseReduction(IRFunc* fn)
         {
-        Map* defOf = new Map();
-        Map* defBlk = new Map();
-        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
-            {
-            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
-            self.vecNoteDefs(defOf, defBlk, bb.phis(), bb);
-            self.vecNoteDefs(defOf, defBlk, bb.insns(), bb);
-            }
-        Map* uses = self.useCounts(fn);
+        Map* defOf = self.faDefMap(fn);
+        Map* defBlk = self.faResBlockMap(fn);
+        Map* uses = self.faUseCounts(fn);
         for (u32 hi = (u32)0; hi < fn.blocks().count(); hi = hi + (u32)1)
             {
             VecCand* c = vecReductionAt(fn, (IRBlock*)fn.blocks().get(hi),
@@ -2103,15 +2117,9 @@
     // wraparound sum exactly.
     final VecCand* vecRecogniseWideningSum(IRFunc* fn)
         {
-        Map* defOf = new Map();
-        Map* defBlk = new Map();
-        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
-            {
-            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
-            self.vecNoteDefs(defOf, defBlk, bb.phis(), bb);
-            self.vecNoteDefs(defOf, defBlk, bb.insns(), bb);
-            }
-        Map* uses = self.useCounts(fn);
+        Map* defOf = self.faDefMap(fn);
+        Map* defBlk = self.faResBlockMap(fn);
+        Map* uses = self.faUseCounts(fn);
         for (u32 hi = (u32)0; hi < fn.blocks().count(); hi = hi + (u32)1)
             {
             VecCand* c = self.vecWideningAt(fn, (IRBlock*)fn.blocks().get(hi),
@@ -2129,15 +2137,9 @@
     // VMul inserted in front.
     final VecCand* vecRecogniseDotProduct(IRFunc* fn)
         {
-        Map* defOf = new Map();
-        Map* defBlk = new Map();
-        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
-            {
-            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
-            self.vecNoteDefs(defOf, defBlk, bb.phis(), bb);
-            self.vecNoteDefs(defOf, defBlk, bb.insns(), bb);
-            }
-        Map* uses = self.useCounts(fn);
+        Map* defOf = self.faDefMap(fn);
+        Map* defBlk = self.faResBlockMap(fn);
+        Map* uses = self.faUseCounts(fn);
         for (u32 hi = (u32)0; hi < fn.blocks().count(); hi = hi + (u32)1)
             {
             VecCand* c = self.vecDotAt(fn, (IRBlock*)fn.blocks().get(hi), defOf, defBlk, uses);
@@ -2153,15 +2155,9 @@
     // max/min accumulate plus a horizontal reduce.
     final VecCand* vecRecogniseCount(IRFunc* fn)
         {
-        Map* defOf = new Map();
-        Map* defBlk = new Map();
-        Map* uses = self.useCounts(fn);
-        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
-            {
-            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
-            self.vecNoteDefs(defOf, defBlk, bb.phis(), bb);
-            self.vecNoteDefs(defOf, defBlk, bb.insns(), bb);
-            }
+        Map* defOf = self.faDefMap(fn);
+        Map* defBlk = self.faResBlockMap(fn);
+        Map* uses = self.faUseCounts(fn);
         for (u32 hi = (u32)0; hi < fn.blocks().count(); hi = hi + (u32)1)
             {
             VecCand* c = vecCountAt(fn, (IRBlock*)fn.blocks().get(hi), defOf, defBlk, uses);
@@ -2173,14 +2169,8 @@
 
     final VecCand* vecRecogniseMaxMin(IRFunc* fn)
         {
-        Map* defOf = new Map();
-        Map* defBlk = new Map();
-        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
-            {
-            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
-            self.vecNoteDefs(defOf, defBlk, bb.phis(), bb);
-            self.vecNoteDefs(defOf, defBlk, bb.insns(), bb);
-            }
+        Map* defOf = self.faDefMap(fn);
+        Map* defBlk = self.faResBlockMap(fn);
         for (u32 hi = (u32)0; hi < fn.blocks().count(); hi = hi + (u32)1)
             {
             VecCand* c = self.vecMaxMinAt(fn, (IRBlock*)fn.blocks().get(hi), defOf, defBlk);

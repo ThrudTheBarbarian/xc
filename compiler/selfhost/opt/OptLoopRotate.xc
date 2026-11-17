@@ -34,15 +34,19 @@
             // One loop at a time, re-recognised from the live CFG: a rotated
             // loop's back edge is conditional and no longer matches, so the
             // bound is only a backstop.
+            // The recognisers ask for predecessors from the analysis cache;
+            // each rotation changes the CFG and drops it (rotOne).
+            self.faBegin(fn, "loopRotate");
             u32 iter = (u32)0;
             while (iter < (u32)512 && rotOne(fn))
                 iter = iter + (u32)1;
+            self.faEnd();
             }
         }
 
     final bool rotInRegion(IRBlock* b)
         {
-        return _rotR != (Array*)0 && self.hasBlock(_rotR, b);
+        return _rotRSet != (Map*)0 && _rotRSet.get((Hashable*)b) != (Object*)0;
         }
 
     final bool rotOne(IRFunc* fn)
@@ -71,6 +75,7 @@
             if (!rotRecognise(fn, (IRBlock*)fn.blocks().get(b), defBlk))
                 continue;
             rotApply(fn);
+            self.invalidateCfg(fn);
             return true;
             }
         // Then a loop whose test is a short-circuit chain. Mirrors the original.
@@ -79,6 +84,7 @@
             if (!rcRecognise(fn, (IRBlock*)fn.blocks().get(b), defBlk))
                 continue;
             rcApply(fn);
+            self.invalidateCfg(fn);
             return true;
             }
         return false;
@@ -90,6 +96,7 @@
         _rotB = (IRBlock*)0;
         _rotL = (IRBlock*)0;
         _rotR = (Array*)0;
+        _rotRSet = (Map*)0;
         _rotE = (IRBlock*)0;
         _rotCond = (IRValue*)0;
         _rotEntryTrue = false;
@@ -136,6 +143,7 @@
         IRBlock* E = (IRBlock*)0;
         IRBlock* L = (IRBlock*)0;
         Array* R = (Array*)0;
+        Map* Rset = (Map*)0;
         for (u32 side = (u32)0; side < (u32)2 && B == (IRBlock*)0; side = side + (u32)1)
             {
             IRBlock* b = side == (u32)0 ? t0 : t1;
@@ -144,6 +152,8 @@
                 continue;
             Array* reg = new Array();
             reg.add((Object*)b);
+            Map* regSet = new Map();
+            regSet.set((Hashable*)b, (Object*)b);
             Array* work = new Array();
             work.add((Object*)b);
             bool okR = true;
@@ -177,25 +187,26 @@
                         okR = false; // a second exit
                         break;
                         }
-                    if (!self.hasBlock(reg, sb))
+                    if (regSet.get((Hashable*)sb) == (Object*)0)
                         {
                         reg.add((Object*)sb);
+                        regSet.set((Hashable*)sb, (Object*)sb);
                         work.add((Object*)sb);
                         }
                     }
                 }
-            if (!okR || latchBlk == (IRBlock*)0 || self.hasBlock(reg, e))
+            if (!okR || latchBlk == (IRBlock*)0 || regSet.get((Hashable*)e) != (Object*)0)
                 continue;
             // Nothing outside the region may enter it except H into B.
             bool closed = true;
             for (u32 r = (u32)0; r < reg.count() && closed; r = r + (u32)1)
                 {
                 IRBlock* x = (IRBlock*)reg.get(r);
-                Array* ps = self.predsOfBlock(fn, x);
+                Array* ps = self.faPreds(fn, x);
                 for (u32 q = (u32)0; q < ps.count(); q = q + (u32)1)
                     {
                     IRBlock* pb = (IRBlock*)ps.get(q);
-                    if (!self.hasBlock(reg, pb) && !(x == b && pb == H))
+                    if (regSet.get((Hashable*)pb) == (Object*)0 && !(x == b && pb == H))
                         closed = false;
                     }
                 }
@@ -220,20 +231,22 @@
             E = e;
             L = latchBlk;
             R = reg;
+            Rset = regSet;
             }
         if (B == (IRBlock*)0 || B == E || E == (IRBlock*)0)
             return false;
 
         // B's only predecessor is H, and H's are exactly the preheader and L.
-        if (predsOfBlock(fn, B).count() != (u32)1)
+        if (self.faPreds(fn, B).count() != (u32)1)
             return false;
-        Array* hp = self.predsOfBlock(fn, H);
+        Array* hp = self.faPreds(fn, H);
         if (hp.count() != (u32)2 || !self.hasBlock(hp, L))
             return false;
         // rotUsedOutsideLoop reads these two, so they are set before the
         // escape test below (they are cleared again on every bail).
         _rotH = H;
         _rotR = R;
+        _rotRSet = Rset;
 
         // Every header non-phi instruction is part of the guard: safe to
         // duplicate, referencing no B-defined value (the peeled copy must be
@@ -251,7 +264,7 @@
                 if (op.kind() != (u8)OPK_USE)
                     continue;
                 Object* db = defBlk.get((Hashable*)op.val());
-                if (db != (Object*)0 && self.hasBlock(R, (IRBlock*)db))
+                if (db != (Object*)0 && Rset.get((Hashable*)db) != (Object*)0)
                     return false;
                 }
             if (n.res() != (IRValue*)0 && rotUsedOutside(fn, n.res(), H, H))
@@ -306,7 +319,7 @@
             {
             if (E.phis().count() != (u32)0)
                 return false;
-            Array* ep = self.predsOfBlock(fn, E);
+            Array* ep = self.faPreds(fn, E);
             if (ep.count() != (u32)1 || (IRBlock*)ep.get((u32)0) != H)
                 return false;
             }
@@ -323,7 +336,7 @@
         if (condInsn != (IRInsn*)0 && condInsn.op().equals(String.withCString("ICmp")) &&
             condInsn.ops().count() == (u32)2 && E.phis().count() == (u32)0)
             {
-            Array* ep = self.predsOfBlock(fn, E);
+            Array* ep = self.faPreds(fn, E);
             Map* defs = new Map();
             for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
                 {
@@ -830,6 +843,7 @@
         _rotB = (IRBlock*)0;
         _rotL = (IRBlock*)0;
         _rotR = (Array*)0;
+        _rotRSet = (Map*)0;
         _rotE = (IRBlock*)0;
         if (H1.phis().count() == (u32)0 || !rcTest(H1))
             return false;
@@ -857,7 +871,7 @@
         IRBlock* x = rcNext(H1, E);
         while (chain.count() < (u32)4 && x != H1 && x != E && x.phis().count() == (u32)0 && rcTest(x) && rcTargets(x, E))
             {
-            Array* xp = self.predsOfBlock(fn, x);
+            Array* xp = self.faPreds(fn, x);
             if (xp.count() != (u32)1 || (IRBlock*)xp.get((u32)0) != (IRBlock*)chain.get(chain.count() - (u32)1))
                 break;
             chain.add((Object*)x);
@@ -866,11 +880,13 @@
         IRBlock* B = x;
         if (chain.count() < (u32)2 || B == H1 || B == E || B.phis().count() != (u32)0 || self.hasBlock(chain, B))
             return false;
-        if (predsOfBlock(fn, B).count() != (u32)1)
+        if (self.faPreds(fn, B).count() != (u32)1)
             return false;
         // The body region, as the one-block case finds it.
         Array* R = new Array();
         R.add((Object*)B);
+        Map* Rset = new Map();
+        Rset.set((Hashable*)B, (Object*)B);
         Array* work = new Array();
         work.add((Object*)B);
         IRBlock* L = (IRBlock*)0;
@@ -896,9 +912,10 @@
                     }
                 if (sb == E || self.hasBlock(chain, sb))
                     return false;
-                if (!self.hasBlock(R, sb))
+                if (Rset.get((Hashable*)sb) == (Object*)0)
                     {
                     R.add((Object*)sb);
+                    Rset.set((Hashable*)sb, (Object*)sb);
                     work.add((Object*)sb);
                     }
                 }
@@ -908,19 +925,19 @@
         for (u32 r = (u32)0; r < R.count(); r = r + (u32)1)
             {
             IRBlock* rb = (IRBlock*)R.get(r);
-            Array* rp = self.predsOfBlock(fn, rb);
+            Array* rp = self.faPreds(fn, rb);
             for (u32 q = (u32)0; q < rp.count(); q = q + (u32)1)
                 {
                 IRBlock* pb = (IRBlock*)rp.get(q);
-                if (!self.hasBlock(R, pb) && !(rb == B && pb == (IRBlock*)chain.get(chain.count() - (u32)1)))
+                if (Rset.get((Hashable*)pb) == (Object*)0 && !(rb == B && pb == (IRBlock*)chain.get(chain.count() - (u32)1)))
                     return false;
                 }
             }
-        Array* hp = self.predsOfBlock(fn, H1);
+        Array* hp = self.faPreds(fn, H1);
         if (hp.count() != (u32)2 || !self.hasBlock(hp, L))
             return false;
         // E is reached from the chain alone.
-        Array* ep = self.predsOfBlock(fn, E);
+        Array* ep = self.faPreds(fn, E);
         if (ep.count() != chain.count())
             return false;
         for (u32 q = (u32)0; q < ep.count(); q = q + (u32)1)
@@ -944,7 +961,7 @@
                     if (o.kind() != (u8)OPK_USE)
                         continue;
                     Object* db = defBlk.get((Hashable*)o.val());
-                    if (db != (Object*)0 && self.hasBlock(R, (IRBlock*)db))
+                    if (db != (Object*)0 && Rset.get((Hashable*)db) != (Object*)0)
                         return false;
                     }
                 if (n.res() != (IRValue*)0)
@@ -954,7 +971,7 @@
         for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
             {
             IRBlock* bb = (IRBlock*)fn.blocks().get(b);
-            if (hasBlock(chain, bb) || self.hasBlock(R, bb))
+            if (hasBlock(chain, bb) || Rset.get((Hashable*)bb) != (Object*)0)
                 continue;
             if (rcBlockUses(bb, chainVals))
                 return false;
@@ -964,6 +981,7 @@
         _rotB = B;
         _rotL = L;
         _rotR = R;
+        _rotRSet = Rset;
         _rotE = E;
         return true;
         }

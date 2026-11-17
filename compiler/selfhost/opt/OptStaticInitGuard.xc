@@ -451,6 +451,11 @@
     // and terminator move into A, and B's successors' phis now name A.
     final void coalesceStraightLine(IRFunc* fn)
         {
+        // Predecessors come from the analysis cache, rebuilt once per merge
+        // rather than once per candidate block.
+        bool began = _faFn == (IRFunc*)0;
+        if (began)
+            self.faBegin(fn, "staticInitGuard");
         bool changed = true;
         while (changed)
             {
@@ -474,13 +479,16 @@
                     continue;
                 if (B.phis().count() != (u32)0)
                     continue;
-                Array* bp = self.predsOfBlock(fn, B);
+                Array* bp = self.faPreds(fn, B);
                 if (bp.count() != (u32)1 || (IRBlock*)bp.get((u32)0) != A)
                     continue;
                 mergeBlocks(fn, A, B);
+                self.invalidateCfg(fn);
                 changed = true;
                 }
             }
+        if (began)
+            self.faEnd();
         }
 
     final void mergeBlocks(IRFunc* fn, IRBlock* A, IRBlock* B)
