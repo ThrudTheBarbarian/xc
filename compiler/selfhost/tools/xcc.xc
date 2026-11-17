@@ -7887,6 +7887,14 @@ String* valueFlagName(String* a)
     return (String*)0;
 }
 
+// Flags that do nothing now, still accepted so command lines keep building,
+// each with one warning that it will be removed (#337); they go in a later
+// release, once announced.
+void inertFlag(String* a)
+{
+    Stdio.error(String.withFormat("xcc: warning: %s has no effect and will be removed\n", a.cString()));
+}
+
 DriverOptions* parseDriverArgs(void)
 {
     DriverOptions* d = new DriverOptions();
@@ -8313,6 +8321,8 @@ DriverOptions* parseDriverArgs(void)
         // from when the IR pipeline ran beside another code generator.
         if (a.equals(String.withCString("-a")) || a.equals(String.withCString("--assemble-only"))
             || a.equals(String.withCString("--emit-asm-from-ir"))) {
+            if (a.equals(String.withCString("--emit-asm-from-ir")))
+                Stdio.error(String.withCString("xcc: warning: --emit-asm-from-ir will be removed; it is -S\n"));
             d.setKeepAsm(true); i = i + (u32)1; continue;
         }
         if (a.equals(String.withCString("-dl")) || a.equals(String.withCString("--dump-layout"))) {
@@ -8369,10 +8379,7 @@ DriverOptions* parseDriverArgs(void)
         // command lines build, and said out loud, because a silently ignored
         // flag is what made "verified with ARC off" mean nothing.
         if (a.equals(String.withCString("-farc")) || a.hasPrefix(String.withCString("-farc="))) {
-            Stdio.error(String.withFormat("xcc: warning: %s is retired and does nothing — ARC is always "
-                         "on. `delete` on a struct or primitive array is still allowed "
-                         "(ARC never managed those); on a class instance it is not.\n",
-                         a.cString()));
+            inertFlag(a);   // ARC is always on
             i = i + (u32)1; continue;
         }
         // -fauto-cloak=never|auto|always: the value is checked, and the flag is
@@ -8386,6 +8393,7 @@ DriverOptions* parseDriverArgs(void)
                 driverExit((i32)1);
                 return (DriverOptions*)0;
             }
+            inertFlag(String.withCString("-fauto-cloak="));
             i = i + (u32)1; continue;
         }
         // -ss / --stack-size <n>, also joined with `=`: checked, and without
@@ -8412,17 +8420,21 @@ DriverOptions* parseDriverArgs(void)
                 driverExit((i32)1);
                 return (DriverOptions*)0;
             }
+            inertFlag(eq != String.notFound() ? a.substringBytes((u32)0, eq) : a);
             continue;
         }
         // Accepted, and already what happens: every build links in-house, and
         // the IR pipeline is the only code generator.
-        if (a.equals(String.withCString("--self-host")) || a.equals(String.withCString("-fnew-ir"))
-            || a.equals(String.withCString("--with-ir"))) {
+        if (a.equals(String.withCString("--self-host"))) {
+            i = i + (u32)1; continue;
+        }
+        if (a.equals(String.withCString("-fnew-ir")) || a.equals(String.withCString("--with-ir"))) {
+            inertFlag(a);
             i = i + (u32)1; continue;
         }
         // A bare -W: every warning category is on unless -Wno- turns it off,
         // so there is nothing more to enable.
-        if (a.equals(String.withCString("-W"))) { i = i + (u32)1; continue; }
+        if (a.equals(String.withCString("-W"))) { inertFlag(a); i = i + (u32)1; continue; }
         // The xt6502 options. Each is the 6502 back end's or its startup's
         // business; on another target they change nothing.
         if ((a.equals(String.withCString("-Q")) || a.equals(String.withCString("--quit-style")))
