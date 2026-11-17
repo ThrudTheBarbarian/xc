@@ -65,8 +65,13 @@ static BOOL mayAlias(XTIRValueId sp, XTIRValueId lp,
     {
     (void)outErrors;
     for (XTIRFunction* fn in mod.functions)
-        for (int round = 0; round < 16 && [self runOnFunction:fn]; round++)
+        {
+        int round = 0;
+        for (; round < 16 && [self runOnFunction:fn]; round++)
             ;
+        if (round == 16)
+            XTIROptRoundCap("aggregate expansion", 16, fn.name);
+        }
     return YES;
     }
 

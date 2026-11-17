@@ -214,13 +214,16 @@ static XTIRInsn* buildLike(XTIRInsn* insn, XTIRValue* _Nullable result,
     // rewrites the CFG; a fresh scan avoids stale captured blocks). An unrolled
     // loop's body is no longer single-block, so it won't re-match — the bound is
     // just a runaway backstop.
-    for (NSUInteger iter = 0; iter < 256; iter++)
+    NSUInteger iter = 0;
+    for (; iter < 256; iter++)
         {
         XTVarTripCand* c = [self recognise:fn];
         if (!c)
             break;
         [self apply:c inFunction:fn];
         }
+    if (iter == 256)
+        XTIROptRoundCap("variable-trip unrolling", 256, fn.name);
     }
 
 - (nullable XTVarTripCand*)recognise:(XTIRFunction*)fn

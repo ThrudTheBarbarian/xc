@@ -89,11 +89,14 @@ static BOOL pureHoistable(XTIRInsn* insn)
 
 - (void)runOnFunction:(XTIRFunction*)fn
     {
-    for (NSUInteger pass = 0; pass < 32; pass++)
+    NSUInteger pass = 0;
+    for (; pass < 32; pass++)
         {
         if (![self hoistOnce:fn])
             break;
         }
+    if (pass == 32)
+        XTIROptRoundCap("LICM", 32, fn.name);
     }
 
 - (BOOL)hoistOnce:(XTIRFunction*)fn

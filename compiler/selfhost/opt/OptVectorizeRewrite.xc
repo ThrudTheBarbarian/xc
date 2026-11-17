@@ -822,6 +822,8 @@
                     }
                 break;
                 }
+            if (iter == (u32)256)
+                optRoundCap("the vectoriser", (u32)256, fn);
             // …then break the serial accumulator dependency. The bit selects
             // and rotates first (where the back end has them), so the
             // interleave's register estimate sees the body the back end will.

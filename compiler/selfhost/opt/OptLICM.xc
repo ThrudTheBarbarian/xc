@@ -36,6 +36,8 @@
             u32 pass = (u32)0;
             while (pass < (u32)32 && licmOnce(fn))
                 pass = pass + (u32)1;
+            if (pass == (u32)32)
+                optRoundCap("LICM", (u32)32, fn);
             }
         }
 

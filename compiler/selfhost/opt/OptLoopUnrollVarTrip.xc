@@ -46,6 +46,8 @@
                 vtApply(fn, c);
                 iter = iter + (u32)1;
                 }
+            if (iter == (u32)256)
+                optRoundCap("variable-trip unrolling", (u32)256, fn);
             }
         }
 

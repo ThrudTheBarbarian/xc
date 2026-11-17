@@ -180,7 +180,8 @@ static NSArray<XTIRBlock*>* predsOf(XTIRBlock* target, XTIRFunction* fn)
     // One loop at a time, re-recognising from the live CFG. A rotated loop's
     // back-edge is conditional (B→B via CondBranch), so it no longer matches the
     // top-tested pattern — the bound is just a backstop.
-    for (NSUInteger iter = 0; iter < 512; iter++)
+    NSUInteger iter = 0;
+    for (; iter < 512; iter++)
         {
         XTLoopRotCand* c = [self recognise:fn];
         if (c)
@@ -193,6 +194,8 @@ static NSArray<XTIRBlock*>* predsOf(XTIRBlock* target, XTIRFunction* fn)
             break;
         [self applyChain:cc inFunction:fn];
         }
+    if (iter == 512)
+        XTIROptRoundCap("loop rotation", 512, fn.name);
     }
 
 // Every instruction of every block, terminator included.
