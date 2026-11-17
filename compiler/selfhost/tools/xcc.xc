@@ -7870,6 +7870,23 @@ void checkCapabilities(DriverOptions* d)
     }
 }
 
+// The flags that take their value as the next argument (the ones the
+// parse loop below reads with `i + 1 < argc`), each with the name its
+// message gives it: the first spelling in its test, as the reference driver
+// names `--output` as -o. 0 for a flag that takes none.
+String* valueFlagName(String* a)
+{
+    Array* ws = String.withCString("--arch=-A --bundle=--bundle --bundle-key=--bundle-key --bundle-lib=--bundle-lib --bundle-name=--bundle-name --bundle-version=--bundle-version --fn-leaf-inline=-Fli --fn-loop-unroll=-Flu --fn-min-banked=-Fmb --include=-I --library-path=-L --memory-model=-m --output=-o --preprocessed=-E --property=--property --publisher=--publisher --publisher-domain=--publisher-domain --quit-style=-Q --resources=--resources --rotate-from=--rotate-from --setting=--property --sign=--sign --sign-bundle=--sign-bundle --sign-entitlements=--sign-entitlements --sign-key=--sign-key --trust=--trust --xcc-home=-H --xtc-home=-H -A=-A -D=-D -E=-E -Fli=-Fli -Flu=-Flu -Fmb=-Fmb -H=-H -I=-I -L=-L -Q=-Q -Xlinker=-Xlinker -framework=-Xlinker -m=-m -o=-o").splitOnByte((u8)' ');
+    for (u32 k = (u32)0; k < ws.count(); k = k + (u32)1)
+        {
+        String* w = (String*)ws.get(k);
+        u32 eq = w.indexOfByte((u8)'=');
+        if (a.equals(w.substringBytes((u32)0, eq)))
+            return w.substringFromByte(eq + (u32)1);
+        }
+    return (String*)0;
+}
+
 DriverOptions* parseDriverArgs(void)
 {
     DriverOptions* d = new DriverOptions();
@@ -8450,6 +8467,18 @@ DriverOptions* parseDriverArgs(void)
         // An unrecognised flag is an ERROR, not something to skip. A driver that
         // quietly drops an option it does not know builds something other than
         // what it was asked for and says it succeeded.
+        // A flag that takes a value, given none (it was the last argument):
+        // said as that, as the reference driver says it, not as unrecognised
+        // (#337).
+        if (i + (u32)1 >= argc && valueFlagName(a) != (String*)0) {
+            String* fl = valueFlagName(a);
+            if (fl.equals(String.withCString("-A")))
+                Stdio.printf("xcc: error: %s requires an argument (6502 | arm64 | arm9 | m68k | x86_64 | win64 | wasm32)\n", fl.cString());
+            else
+                Stdio.printf("xcc: error: %s requires an argument\n", fl.cString());
+            Process.exit((i32)1);
+            return (DriverOptions*)0;
+        }
         if (a.hasPrefix(String.withCString("-"))) {
             Stdio.printf("xcc: error: unrecognised option '%s'\n", a.cString());
             Stdio.printf("       (note: the optimisation level is joined — -O0, not -O 0)\n");
