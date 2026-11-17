@@ -226,6 +226,27 @@ class CgCommon
         return false;
     }
 
+    static bool spawnsThreads(IRModule* m)
+    {
+        return referencesSymbol(m, String.withCString("_xt_thread_create"));
+    }
+
+    // Whether ARC's count updates must be atomic (the security review of
+    // 2026-10-21, #303): when the module spawns a thread, has no main (a
+    // library or a plugin, whose caller may have threads of its own), or
+    // loads a plugin (whose threads may share its objects). forced is the
+    // target's own reason to say yes regardless (arm64 with LSE atomics).
+    static bool arcAtomic(IRModule* m, bool forced)
+    {
+        if (forced) return true;
+        if (spawnsThreads(m)) return true;
+        bool hasMain = false;
+        for (u32 f = (u32)0; f < m.funcs().count() && !hasMain; f = f + (u32)1)
+            hasMain = ((IRFunc*)m.funcs().get(f)).name().equals(String.withCString("main"));
+        if (!hasMain) return true;
+        return referencesSymbol(m, String.withCString("Plugin$load"));
+    }
+
     static bool isFloatTy(String* t)
     {
         return t != (String*)0 && (t.equals(String.withCString("F32"))
