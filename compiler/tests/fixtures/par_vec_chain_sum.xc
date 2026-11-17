@@ -1,3 +1,4 @@
+//xtc-na: xt6502 — no par runtime on this target (no ParDevice)
 // par_vec_chain_sum.xc — par bodies that are a serial chain per item and also
 // sum across items (#21): the escape vectoriser runs several vector chains
 // side by side (four on arm64, two on x86-64) for a counted inner loop, and

@@ -1,3 +1,4 @@
+//xtc-na: xt6502 — no par runtime on this target (no ParDevice)
 // A block may capture, or reduce into, a variable named as one of the block's
 // own members (lo, hi, run, merge, go, ...): each was refused ("the name is
 // one of the block's own"). The capture keeps its name in the body; its field

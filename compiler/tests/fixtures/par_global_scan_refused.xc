@@ -1,3 +1,4 @@
+//xtc-na: xt6502 — no par runtime on this target (no ParDevice)
 //xtc-flags: expect=sema-error
 // The independence rule covers global arrays too: g[i] reads the element the
 // previous item writes.

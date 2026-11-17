@@ -1,3 +1,4 @@
+//xtc-na: xt6502 — no par runtime on this target (no ParDevice)
 // par_gpu_wide.xc — 64-bit integers in a `par` block: a hash built from
 // multiplies, xors and shifts of u64 values, signed i64 comparisons and
 // arithmetic shifts, and a u64 reduction. WGSL has no 64-bit integers, so on

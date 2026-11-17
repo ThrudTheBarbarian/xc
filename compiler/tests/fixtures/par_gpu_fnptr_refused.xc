@@ -1,3 +1,4 @@
+//xtc-na: xt6502 — no par runtime on this target (no ParDevice)
 //xtc-flags: expect=sema-error
 // A `par` body may not call through a function pointer: a GPU kernel's calls
 // are all known when it is built.

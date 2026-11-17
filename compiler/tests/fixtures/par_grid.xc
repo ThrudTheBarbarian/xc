@@ -1,3 +1,4 @@
+//xtc-na: xt6502 — no par runtime on this target (no ParDevice)
 // par :grid(w, h[, d]): the work items are a grid's points, par.x/.y/.z the
 // point and par.width/.height/.depth the grid's size. The body is any code:
 // `return` ends a work item, a loop or switch of its own may `break`, and the

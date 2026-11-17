@@ -1,3 +1,4 @@
+//xtc-na: xt6502 — no par runtime on this target (no ParDevice)
 // A :grid block writing planes of a planar result at a captured offset
 // (`o[plane + par.y * par.width + par.x]`), and one reading plane 0 while it
 // writes plane 1, which the run-time check settles. Same answers as the loop

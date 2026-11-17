@@ -1,3 +1,4 @@
+//xtc-na: xt6502 — no par runtime on this target (no ParDevice)
 //xtc-flags: expect=sema-error
 // A `par` body may not assign a captured scalar: every work item has its own
 // copy, so the write would vanish. Make it a reduction or write to an array.

@@ -1,3 +1,4 @@
+//xtc-na: xt6502 — no par runtime on this target (no ParDevice)
 // par_pin_cpus.xc — after a par block has run on the CPU, each thread's
 // allowed CPUs (Linux: /proc/self/task/*/status), sorted, one line a thread:
 // pinned, every lane holds one CPU of the process's set and the calling

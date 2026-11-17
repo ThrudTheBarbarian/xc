@@ -1,3 +1,4 @@
+//xtc-na: xt6502 — no par runtime on this target (no ParDevice)
 // par_perlin.xc — benchmark/par/perlin.xc as it was with a hand-written `par`
 // block, kept for the tests that read that block's code (vex-scalar,
 // x86-peep); the benchmark itself is a plain loop now.

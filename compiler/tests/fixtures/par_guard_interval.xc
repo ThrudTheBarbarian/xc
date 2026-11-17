@@ -1,3 +1,4 @@
+//xtc-na: xt6502 — no par runtime on this target (no ParDevice)
 //xtc-flags: target=arm64
 // par_guard_interval.xc — the run-time checks par-check leaves where the
 // static test cannot decide: a read and a write with unequal strides and a

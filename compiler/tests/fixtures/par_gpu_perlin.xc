@@ -1,3 +1,4 @@
+//xtc-na: xt6502 — no par runtime on this target (no ParDevice)
 //xtc-flags: target=arm64
 // par_gpu_perlin.xc — Perlin noise (Ken Perlin's improved noise, 2D, four
 // octaves) for a 1024x1024 image in one `par` block: on the GPU with

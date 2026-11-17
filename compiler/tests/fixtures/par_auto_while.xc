@@ -1,3 +1,4 @@
+//xtc-na: xt6502 — no par runtime on this target (no ParDevice)
 //xtc-flags: target=arm64 --par-style=auto
 // par_auto_while.xc — --par-style=auto takes a counted while loop as the `for` it
 // amounts to: `while (v < B) { …; v++; }` with v written nowhere else. After

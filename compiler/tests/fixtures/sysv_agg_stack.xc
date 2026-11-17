@@ -1,3 +1,4 @@
+//xtc-na: xt6502 — the many-argument calls exceed the 6502 frame budget
 // sysv_agg_stack.xc — a struct argument past the integer argument registers
 // (#301). Under x86-64 SysV a struct that does not fit in the registers left
 // goes whole on the stack, and the registers left still take later integer

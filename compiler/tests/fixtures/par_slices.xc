@@ -1,3 +1,4 @@
+//xtc-na: xt6502 — no par runtime on this target (no ParDevice)
 // par_slices.xc — slices of one big array written by a par block, one slice at
 // a time through `stack + k*n`, then the whole array read by another block
 // (2026-10-26, reported by the Astronomancy stream). Under CUDA the whole
