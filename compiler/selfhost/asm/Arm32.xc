@@ -395,7 +395,17 @@ class AsmSymbol
             w = w | ((u32)1 << 22);
         if (load)
             w = w | ((u32)1 << 20);
+        rangeCheck(mag, (u32)4095, "load/store offset out of range (offset12 reaches +/-4095)");
         word(w | (rn << 16) | (rt << 12) | (mag & (u32)$FFF));
+        }
+
+    // A field the encoding cannot hold is refused rather than masked: a
+    // masked offset or displacement is a different, valid-looking address.
+    // Checked in pass 2 only, where labels and pools are final.
+    void rangeCheck(u32 mag, u32 limit, u8* what)
+        {
+        if (_pass == (u32)2 && mag > limit)
+            giveUp(String.withCString(what));
         }
 
     // The halfword and signed forms are a different encoding entirely: the
@@ -413,6 +423,7 @@ class AsmSymbol
             sh = sh | ((u32)1 << 6); // S bit
         if (signedOp && !halfword)
             sh = ((u32)1 << 6); // ldrsb: S set, H clear
+        rangeCheck(mag, (u32)255, "halfword load/store offset out of range (offset8 reaches +/-255)");
         word(w | (rn << 16) | (rt << 12) | (((mag >> 4) & (u32)$F) << 8) | (u32)$90 | sh | (mag & (u32)$F));
         }
 
@@ -433,6 +444,8 @@ class AsmSymbol
     void branch(i32 cond, bool link, i32 targetOffset, u32 at)
         {
         i32 delta = (targetOffset - (i32)at - (i32)8) >> 2;
+        if (delta < (i32)-8388608 || delta >= (i32)8388608)
+            rangeCheck((u32)1, (u32)0, "branch out of range (reaches +/-32MB)");
         u32 w = ((u32)cond << 28) | ((u32)5 << 25) | ((u32)delta & (u32)$FFFFFF);
         if (link)
             w = w | ((u32)1 << 24);
@@ -1152,6 +1165,7 @@ class AsmSymbol
                 {
                 // Patch the ldr's 12-bit offset: pool word minus (site + 8).
                 u32 disp = wordAt - (site + (u32)8);
+                rangeCheck(disp, (u32)4095, "literal pool out of reach (an ldr reaches 4 KB; add .ltorg)");
                 u32 idx = site;
                 u32 w = (u32)_bytes.byteAt(idx) | ((u32)_bytes.byteAt(idx + (u32)1) << 8) | ((u32)_bytes.byteAt(idx + (u32)2) << 16) | ((u32)_bytes.byteAt(idx + (u32)3) << 24);
                 w = (w & ~(u32)$FFF) | (disp & (u32)$FFF);
@@ -2025,6 +2039,7 @@ class AsmSymbol
                 w = w | ((u32)1 << (u32)22);
             if (load)
                 w = w | ((u32)1 << (u32)20);
+            rangeCheck(mag, (u32)4095, "load/store offset out of range (offset12 reaches +/-4095)");
             word(w | ((u32)rn << (u32)16) | ((u32)rt << (u32)12) | (mag & (u32)$FFF));
             return;
             }
@@ -2340,7 +2355,11 @@ class AsmSymbol
             off = (i32)Arm32.immediateValue(o);
             }
         u32 up = off >= (i32)0 ? (u32)1 : (u32)0;
-        u32 mag = (off >= (i32)0 ? (u32)off : (u32)(-off)) >> 2;
+        u32 bytes = off >= (i32)0 ? (u32)off : (u32)(-off);
+        if ((bytes & (u32)3) != (u32)0)
+            rangeCheck((u32)1, (u32)0, "vldr/vstr offset is not a multiple of 4");
+        rangeCheck(bytes >> 2, (u32)255, "vldr/vstr offset out of range (reaches +/-1020)");
+        u32 mag = bytes >> 2;
         u32 d = single ? ((u32)vd & (u32)1) : (((u32)vd >> 4) & (u32)1);
         u32 vdField = single ? ((u32)vd >> 1) : ((u32)vd & (u32)$F);
         u32 w = (u32)$E << 28 | ((u32)$D << 24) | (up << 23) | (d << 22) | ((load ? (u32)1 : (u32)0) << 20) | ((u32)rn << 16) | (vdField << 12) | ((single ? (u32)$A : (u32)$B) << 8) | (mag & (u32)$FF);

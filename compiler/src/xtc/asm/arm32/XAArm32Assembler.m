@@ -65,6 +65,15 @@
 // A mnemonic outside the subset. Recorded by name and only once, and the FIRST
 // one becomes the error — a file that uses three unknown forms should report
 // the one to implement, not a count.
+// A field the encoding cannot hold is refused rather than masked: a masked
+// offset or displacement is a different, valid-looking address. Checked in
+// pass 2 only, where labels and pools are final.
+- (void)rangeCheck:(uint32_t)mag limit:(uint32_t)limit what:(NSString*)what
+    {
+    if (_pass == 2 && mag > limit)
+        [self giveUp:what];
+    }
+
 - (void)giveUp:(NSString*)what
     {
     if (!_missing)
@@ -456,6 +465,7 @@ static NSString* stripComment(NSString* l)
         w |= (1u << 22);
     if (load)
         w |= (1u << 20);
+    [self rangeCheck:mag limit:4095 what:@"load/store offset out of range (offset12 reaches +/-4095)"];
     [self word:w | (rn << 16) | (rt << 12) | (mag & 0xFFFu)];
     }
 
@@ -476,6 +486,7 @@ static NSString* stripComment(NSString* l)
         sh |= (1u << 6); // S bit
     if (signedOp && !halfword)
         sh = (1u << 6); // ldrsb: S set, H clear
+    [self rangeCheck:mag limit:255 what:@"halfword load/store offset out of range (offset8 reaches +/-255)"];
     [self word:w | (rn << 16) | (rt << 12) | (((mag >> 4) & 0xFu) << 8) | 0x90u | sh | (mag & 0xFu)];
     }
 
@@ -496,6 +507,8 @@ static NSString* stripComment(NSString* l)
 - (void)branch:(int)cond link:(BOOL)link target:(int)targetOffset at:(uint32_t)at
     {
     int delta = (targetOffset - (int)at - 8) >> 2;
+    if (delta < -8388608 || delta >= 8388608)
+        [self rangeCheck:1 limit:0 what:@"branch out of range (reaches +/-32MB)"];
     uint32_t w = ((uint32_t)cond << 28) | (5u << 25) | ((uint32_t)delta & 0xFFFFFFu);
     if (link)
         w |= (1u << 24);
@@ -1117,6 +1130,7 @@ static NSString* labelOn(NSString* line)
             {
             // Patch the ldr's 12-bit offset: pool word minus (site + 8).
             uint32_t disp = wordAt - (site + 8);
+            [self rangeCheck:disp limit:4095 what:@"literal pool out of reach (an ldr reaches 4 KB; add .ltorg)"];
             uint8_t* p = (uint8_t*)_text.mutableBytes + site;
             uint32_t w = p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
             w = (w & ~0xFFFu) | (disp & 0xFFFu);
@@ -1821,6 +1835,7 @@ static uint32_t registerList(NSArray<NSString*>* ops)
             w |= (1u << 22);
         if (load)
             w |= (1u << 20);
+        [self rangeCheck:mag limit:4095 what:@"load/store offset out of range (offset12 reaches +/-4095)"];
         [self word:w | ((uint32_t)rn << 16) | ((uint32_t)rt << 12) | (mag & 0xFFFu)];
         return;
         }
@@ -2147,7 +2162,11 @@ static uint32_t vfpFields(int vd, int vm, int vn, BOOL dbl)
         off = (int)immediateValue(o);
         }
     uint32_t up = off >= 0 ? 1u : 0u;
-    uint32_t mag = (off >= 0 ? (uint32_t)off : (uint32_t)(-off)) >> 2;
+    uint32_t bytes = off >= 0 ? (uint32_t)off : (uint32_t)(-off);
+    if (bytes & 3u)
+        [self rangeCheck:1 limit:0 what:@"vldr/vstr offset is not a multiple of 4"];
+    [self rangeCheck:bytes >> 2 limit:255 what:@"vldr/vstr offset out of range (reaches +/-1020)"];
+    uint32_t mag = bytes >> 2;
     uint32_t d = single ? ((uint32_t)vd & 1u) : (((uint32_t)vd >> 4) & 1u);
     uint32_t vdField = single ? ((uint32_t)vd >> 1) : ((uint32_t)vd & 0xFu);
     [self word:(0xEu << 28) | (0xDu << 24) | (up << 23) | (d << 22) | ((load ? 1u : 0u) << 20) | ((uint32_t)rn << 16) | (vdField << 12) | ((single ? 0xAu : 0xBu) << 8) | (mag & 0xFFu)];
