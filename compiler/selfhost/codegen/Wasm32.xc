@@ -15,6 +15,7 @@
 
 #import "Foundation.xc"
 #import <Ir>
+#import <CgCommon>
 #import "IrDefs.xc"
 
 
@@ -3304,7 +3305,7 @@ class Wasm32
             for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1) {
                 IRBlock* bb = (IRBlock*)fn.blocks().get(b);
                 if (listNames(bb.phis(), want) || listNames(bb.insns(), want)) return true;
-                if (bb.term() != (IRInsn*)0 && insnNames(bb.term(), want)) return true;
+                if (bb.term() != (IRInsn*)0 && CgCommon.insnNames(bb.term(), want)) return true;
             }
         }
         return false;
@@ -3313,17 +3314,7 @@ class Wasm32
     bool listNames(Array* list, String* want)
     {
         for (u32 i = (u32)0; i < list.count(); i = i + (u32)1)
-            if (insnNames((IRInsn*)list.get(i), want)) return true;
-        return false;
-    }
-
-    bool insnNames(IRInsn* n, String* want)
-    {
-        for (u32 i = (u32)0; i < n.ops().count(); i = i + (u32)1) {
-            IROperand* o = (IROperand*)n.ops().get(i);
-            if (o.kind() != (u8)OPK_SYM) continue;
-            if (o.name() != (String*)0 && o.name().equals(want)) return true;
-        }
+            if (CgCommon.insnNames((IRInsn*)list.get(i), want)) return true;
         return false;
     }
 
