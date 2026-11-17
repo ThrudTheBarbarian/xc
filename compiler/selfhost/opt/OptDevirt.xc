@@ -508,7 +508,7 @@
     final bool dvVersion(IRFunc* fn, IRBlock* B, IRInsn* d, Array* cands)
         {
         IROperand* ro = (IROperand*)d.ops().get((u32)0);
-        Map* dom = self.dominators(fn);
+        DomTree* dom = self.domTree(fn);
         Map* preds = self.lrcPredMap(fn);
         Array* best = (Array*)0;
         IRBlock* bestH = (IRBlock*)0;
@@ -519,8 +519,7 @@
             for (u32 s = (u32)0; s < ss.count(); s = s + (u32)1)
                 {
                 IRBlock* H = (IRBlock*)ss.get(s);
-                Array* dl = (Array*)dom.get((Hashable*)latch);
-                if (dl == (Array*)0 || !self.hasBlock(dl, H))
+                if (!dom.dominates(H, latch))
                     continue;
                 Array* body = dvLoopBody(preds, H, latch);
                 if (!self.hasBlock(body, B))

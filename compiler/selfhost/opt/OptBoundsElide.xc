@@ -215,7 +215,7 @@
     // no loop does.
     final bool bhOnce(IRFunc* fn, Map* done, String* limName)
         {
-        Map* dom = self.dominators(fn);
+        DomTree* dom = self.domTree(fn);
         Map* preds = self.lrcPredMap(fn);
         Map* defBlk = new Map();
         Map* defOf = new Map();
@@ -251,8 +251,7 @@
             for (u32 s = (u32)0; s < ss.count(); s = s + (u32)1)
                 {
                 IRBlock* H = (IRBlock*)ss.get(s);
-                Array* dl = (Array*)dom.get((Hashable*)latch);
-                if (dl == (Array*)0 || !self.hasBlock(dl, H))
+                if (!dom.dominates(H, latch))
                     continue;
                 Array* body = (Array*)bodyOf.get((Hashable*)H);
                 Map* inBody = (Map*)inOf.get((Hashable*)H);
@@ -308,8 +307,7 @@
                 }
             if (outside != (u32)1)
                 continue;
-            Array* dh = (Array*)dom.get((Hashable*)H);
-            if (dh == (Array*)0 || !self.hasBlock(dh, pre) || !bhQuiet(body))
+            if (!dom.dominates(pre, H) || !bhQuiet(body))
                 continue;
             bestH = H;
             bestPre = pre;
@@ -352,18 +350,17 @@
     // the loop is entered X runs, and what X reads may be read before the loop
     // without reading anything the program would not: a loop that runs no
     // times reads nothing.
-    final bool bhSure(IRBlock* X, Array* exits, Map* dom)
+    final bool bhSure(IRBlock* X, Array* exits, DomTree* dom)
         {
         for (u32 k = (u32)0; k < exits.count(); k = k + (u32)1)
             {
-            Array* d = (Array*)dom.get((Hashable*)exits.get(k));
-            if (d == (Array*)0 || !self.hasBlock(d, X))
+            if (!dom.dominates(X, (IRBlock*)exits.get(k)))
                 return false;
             }
         return true;
         }
 
-    final bool bhHasWork(Array* body, Map* inBody, IRBlock* H, Array* exits, Map* dom, Map* defBlk, Map* defOf, Map* done, String* limName)
+    final bool bhHasWork(Array* body, Map* inBody, IRBlock* H, Array* exits, DomTree* dom, Map* defBlk, Map* defOf, Map* done, String* limName)
         {
         bool noStore = bhNoStore(body);
         for (u32 b = (u32)0; b < body.count(); b = b + (u32)1)
@@ -562,7 +559,7 @@
             }
         }
 
-    final void bhHoist(IRFunc* fn, Array* body, Map* inBody, IRBlock* H, IRBlock* pre, Array* exits, bool guarded, Map* dom,
+    final void bhHoist(IRFunc* fn, Array* body, Map* inBody, IRBlock* H, IRBlock* pre, Array* exits, bool guarded, DomTree* dom,
                        Map* defBlk, Map* defOf, Map* done, String* limName)
         {
         bool noStore = bhNoStore(body);
@@ -834,7 +831,7 @@
 
     final bool bvOnce(IRFunc* fn, Map* seen)
         {
-        Map* dom = self.dominators(fn);
+        DomTree* dom = self.domTree(fn);
         Map* preds = self.lrcPredMap(fn);
         Map* defBlk = new Map();
         Map* defOf = new Map();
@@ -873,8 +870,7 @@
             for (u32 s = (u32)0; s < ss.count(); s = s + (u32)1)
                 {
                 IRBlock* H = (IRBlock*)ss.get(s);
-                Array* dl = (Array*)dom.get((Hashable*)latch);
-                if (dl == (Array*)0 || !self.hasBlock(dl, H))
+                if (!dom.dominates(H, latch))
                     continue;
                 Array* body = (Array*)bodyOf.get((Hashable*)H);
                 Map* inBody = (Map*)inOf.get((Hashable*)H);
@@ -929,7 +925,7 @@
         return false;
         }
 
-    final bool bvTry(IRFunc* fn, IRBlock* H, IRBlock* L, Array* body, Map* inBody, Map* preds, Map* dom, Map* defBlk, Map* defOf)
+    final bool bvTry(IRFunc* fn, IRBlock* H, IRBlock* L, Array* body, Map* inBody, Map* preds, DomTree* dom, Map* defBlk, Map* defOf)
         {
         // The preheader: H's one predecessor outside, going to H alone.
         Array* hp = self.lrcPredsIn(preds, H);
@@ -1050,8 +1046,7 @@
             IRBlock* ob = (IRBlock*)fn.blocks().get(b);
             if (inBody.get((Hashable*)ob) != (Object*)0)
                 continue;
-            Array* d = (Array*)dom.get((Hashable*)ob);
-            bool underX = d != (Array*)0 && self.hasBlock(d, X);
+            bool underX = dom.dominates(X, ob);
             if (underX)
                 continue;
             if (bvUsesLoop(ob, inBody, defBlk))
