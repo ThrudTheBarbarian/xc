@@ -276,3 +276,72 @@ class NameIndex
         return o == (Object*)0 ? (u32)$FFFF_FFFF : ((Number*)o).asU32();
         }
     }
+
+// Assembly text as the linkers handle it.
+class AsmText
+    {
+    u8 _unused;
+    void init(void)
+        {
+        _unused = (u8)0;
+        }
+
+    // `.L<rest>` becomes `.L<index>Z<rest>`, so two separately compiled files
+    // cannot collide on `.L0`: a compiler restarts its numbering per file. Only
+    // a LABEL is renamed (#290): a `.L` inside a quoted string is left alone,
+    // and so is one that does not start a token, where the byte before it is
+    // part of a name or path (`dir.Logs/prog.xc` in a -g build's file name
+    // was rewritten to `dir.L2Zogs`).
+    static String* namespaceLocals(String* s, u32 idx)
+        {
+        String* out = new String();
+        u32 n = s.byteLength();
+        u32 i = (u32)0;
+        bool inStr = false;
+        while (i < n)
+            {
+            u8 c = s.byteAt(i);
+            if (inStr)
+                {
+                out.appendByte(c);
+                if (c == (u8)92 && i + (u32)1 < n)
+                    {
+                    out.appendByte(s.byteAt(i + (u32)1));
+                    i = i + (u32)2;
+                    continue;
+                    }
+                if (c == (u8)34 || c == (u8)10)
+                    inStr = false;
+                i = i + (u32)1;
+                continue;
+                }
+            if (c == (u8)34)
+                {
+                inStr = true;
+                out.appendByte(c);
+                i = i + (u32)1;
+                continue;
+                }
+            if (c == (u8)'.' && i + (u32)1 < n && s.byteAt(i + (u32)1) == (u8)'L'
+                && (i == (u32)0 || !AsmText.nameByte(s.byteAt(i - (u32)1))))
+                {
+                out.appendCString(".L");
+                out.appendFormat("%luZ", idx);
+                i = i + (u32)2;
+                continue;
+                }
+            out.appendByte(c);
+            i = i + (u32)1;
+            }
+        return out;
+        }
+
+    // A byte that continues a name or a path: what may not come before a
+    // label's `.L`. Not `-` or `+`: a label difference (`.L5-.L4`, in jump
+    // tables and debug info) names a label after each.
+    static bool nameByte(u8 c)
+        {
+        return (c >= (u8)'a' && c <= (u8)'z') || (c >= (u8)'A' && c <= (u8)'Z') || (c >= (u8)'0' && c <= (u8)'9')
+            || c == (u8)'_' || c == (u8)'$' || c == (u8)'.' || c == (u8)'/';
+        }
+    }

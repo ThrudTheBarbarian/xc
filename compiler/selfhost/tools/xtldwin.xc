@@ -22,6 +22,7 @@
 #import "X86AsmDefs.xc"
 #import <Pe>
 #import "PeDefs.xc"
+#import <SectionBytes>
 
 Array* gDlls; // String@
 Array* gSyms; // Array@ of String@, parallel to gDlls
@@ -48,26 +49,11 @@ bool alreadyListed(String* sym)
     return false;
     }
 
-// `.L<rest>` becomes `.L<index>Z<rest>` — clang restarts its `.LBB` numbering
-// per translation unit, so a plain concatenation of two generated files makes
-// the first one's branches land inside the second.
+// `.L<rest>` becomes `.L<index>Z<rest>`, labels only: the shared
+// implementation (#290), which leaves strings and paths alone.
 String* namespaceLocals(String* s, u32 idx)
     {
-    String* out = new String();
-    u32 i = (u32)0;
-    while (i < s.byteLength())
-        {
-        if (i + (u32)1 < s.byteLength() && s.byteAt(i) == (u8)'.' && s.byteAt(i + (u32)1) == (u8)'L')
-            {
-            out.appendCString(".L");
-            out.appendFormat("%luZ", idx);
-            i = i + (u32)2;
-            continue;
-            }
-        out.appendByte(s.byteAt(i));
-        i = i + (u32)1;
-        }
-    return out;
+    return AsmText.namespaceLocals(s, idx);
     }
 
 void main(void)
