@@ -172,6 +172,9 @@ static BOOL hasContractPair(XTIRFunction* fn)
             c.simdLaneBytes = [widths[k] unsignedIntValue];
             c.simdLevel = levels[k];
             c.simdBaseName = n;
+            // A clone is a variant of the kernel, not the kernel the runtime
+            // and the par passes know.
+            c.parKernel = XTIRParKernelNone;
             [mod addFunction:c];
             }
         }

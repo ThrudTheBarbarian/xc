@@ -816,6 +816,11 @@ class IRValue
     String* _simdLevel;
     String* _simdBaseName;
     bool _simdDispatch;
+    // A par block's kernel (PARK_BLOCK: the run of the class the parser made
+    // of a block; PARK_OUTLINED: the run the IR outliner made of a loop), set
+    // where it is made and printed as `par: kernel` / `par: outlined`. The
+    // passes that treat a kernel apart read this, not the function's name.
+    u8 _parKernel;
     // -g: where the function begins (its body's opening brace), the line its
     // prologue is attributed to.
     bool _dbg;
@@ -836,6 +841,7 @@ class IRValue
         _simdLevel = (String*)0;
         _simdBaseName = (String*)0;
         _simdDispatch = false;
+        _parKernel = (u8)PARK_NONE;
         _ret = String.withCString("Void");
         _pinnedSize = (u32)0;
         }
@@ -848,6 +854,8 @@ class IRValue
     void setSimdBaseName(String* n)    { _simdBaseName = n; }
     bool simdDispatch(void)            { return _simdDispatch; }
     void setSimdDispatch(bool d)       { _simdDispatch = d; }
+    u8 parKernel(void)                 { return _parKernel; }
+    void setParKernel(u8 k)            { _parKernel = k; }
     bool hasDbg(void)                  { return _dbg; }
     u32 dbgFile(void)                  { return _dbgFile; }
     u32 dbgLine(void)                  { return _dbgLine; }
@@ -1266,6 +1274,12 @@ class IRValue
                 }
             out.appendCString("]\n");
             }
+        // `par: kernel` / `par: outlined`, after `speed:`, only on a kernel. As
+        // the reference.
+        if (_parKernel == (u8)PARK_BLOCK)
+            out.appendCString("    par: kernel\n");
+        else if (_parKernel == (u8)PARK_OUTLINED)
+            out.appendCString("    par: outlined\n");
 
         Map* preds = predsAll();
         for (u32 b = (u32)0; b < _blocks.count(); b = b + (u32)1)

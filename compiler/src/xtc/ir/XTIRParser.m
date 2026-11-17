@@ -2159,6 +2159,21 @@ typedef NS_ENUM(NSUInteger, XTIRTokKind) {
                 }
             return YES;
             }
+        // par: kernel / par: outlined — a par block's kernel, read back so
+        // the kernel passes on the far side of the process boundary and the
+        // kernel module's copy know it.
+        if ([kw isEqualToString:@"par"])
+            {
+            NSUInteger pos = 1;
+            if ([self tok:tokens at:pos].kind == XTIRTokColon)
+                pos++;
+            NSString* what = [self tok:tokens at:pos].kind == XTIRTokWord ? [self tok:tokens at:pos].text : nil;
+            if ([what isEqualToString:@"kernel"])
+                state.currentFunction.parKernel = XTIRParKernelBlock;
+            else if ([what isEqualToString:@"outlined"])
+                state.currentFunction.parKernel = XTIRParKernelOutlined;
+            return YES;
+            }
         // frame: { pinned: [(%loc:T @off), ...], size: N }
         if ([kw isEqualToString:@"frame"])
             {

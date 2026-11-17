@@ -92,9 +92,9 @@ class Analyze
                         continue;
                     checkBody(m);
                     // A static method has no self, so it has no fields to hide.
-                    // A par block's class (ParImpl$<n>) is the compiler's: its
-                    // run copies each capture to a local named as the field.
-                    if (!m.hasFlag((u32)NF_STATIC) && !d.name().hasPrefix(String.withCString("ParImpl$")))
+                    // A par block's class is the compiler's: its run copies
+                    // each capture to a local named as the field.
+                    if (!m.hasFlag((u32)NF_STATIC) && !d.hasFlag((u32)NF_PARBLOCK))
                         for (u32 b = (u32)0; b < m.kidCount(); b = b + (u32)1)
                             if (m.kid(b).kind() == (u16)nkBlock)
                                 hiddenFields(m.kid(b), fields, d.name());

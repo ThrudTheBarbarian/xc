@@ -4,6 +4,12 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
+typedef NS_ENUM(uint8_t, XTIRParKernelKind) {
+    XTIRParKernelNone = 0,
+    XTIRParKernelBlock = 1,
+    XTIRParKernelOutlined = 2,
+};
+
 @class XTIRType;
 @class XTIRBlock;
 @class XTIRValue;
@@ -96,6 +102,12 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, copy, nullable) NSString* simdLevel;
 @property(nonatomic, copy, nullable) NSString* simdBaseName;
 @property(nonatomic) BOOL simdDispatch;
+/// A par block's kernel: XTIRParKernelBlock for the run of the class the
+/// parser made of a block (XTIRParKernelOutlined is the IR outliner's, which
+/// the port has). Set where the kernel is made, printed as `par: kernel` /
+/// `par: outlined`; the passes that treat a kernel apart read this, not the
+/// function's name.
+@property(nonatomic) uint8_t parKernel;
 // -g: where the function begins (its body's opening brace), the line its
 // prologue is attributed to.
 @property(nonatomic, strong, nullable) XTIRDbgLoc* dbgLoc;

@@ -623,7 +623,7 @@ class ClassInfo
 
     // ── functions and the module ─────────────────────────────────────────
     // ── the `par` subset (par-blocks.md §2) ─────────────────────────────────
-    // Every `par` block's kernel — `run` of the parser's `ParImpl$<n>` — and
+    // Every `par` block's kernel — `run` of the class the parser made of it — and
     // every function it calls, transitively, must be something a GPU can run.
     // The rule holds on every target, the CPU included. One error per block, at
     // the block, naming the construct.
@@ -15601,6 +15601,9 @@ class ClassInfo
             _fnRetParts = splitReturns(m.op());
             }
         _fnThrows = m.hasFlag((u32)NF_THROWS);
+        // The run of a par block's class is the block's kernel.
+        if (cls.hasFlag((u32)NF_PARBLOCK) && !m.hasFlag((u32)NF_STATIC) && m.name().equals(String.withCString("run")))
+            _fn.setParKernel((u8)PARK_BLOCK);
         _curClass = info;
         _curMethodName = m.name();
         _curMethodFile = m.file();
