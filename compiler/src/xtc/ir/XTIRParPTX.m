@@ -268,6 +268,9 @@ static NSString* ptxScalarReplace(NSString* text)
         if (!ld && !st)
             continue;
         NSRange sp = [ln rangeOfString:@" "];
+        // No space after the type: not a form this pass knows (#333).
+        if (sp.location == NSNotFound || sp.location < 10)
+            return text;
         NSString* t = [ln substringWithRange:NSMakeRange(10, sp.location - 10)];
         NSRange lb = [ln rangeOfString:@"["], rb = [ln rangeOfString:@"]"];
         if (lb.location == NSNotFound || rb.location == NSNotFound || !ptxFieldReg(t))
