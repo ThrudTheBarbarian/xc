@@ -1603,6 +1603,12 @@ class BeFact : Object
     bool _cseCrossBlock;
     bool _cseLate;
 
+    // ── inline ───────────────────────────────────────────────────────────
+    //
+    // The instructions of the caller being inlined into that use each value,
+    // so forwarding a spliced call's result does not scan the whole caller.
+    Map* _ilUses;
+
     // ── par-propose (report) ─────────────────────────────────────────────
     //
     // IR Propose, step 1 (cpp-front-end.md, c-and-cpp-one-path.md): find the
