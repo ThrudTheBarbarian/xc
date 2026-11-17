@@ -429,7 +429,7 @@ same "-fbounds-check=light" $A -fbounds-check=light -o @OUT@ ret.xc
 for v in never auto always bogus; do same "-fauto-cloak=$v" $A -fauto-cloak=$v -o @OUT@ ret.xc; done
 same "-farc"                $A -farc -o @OUT@ ret.xc
 same "-farc=off"            $A -farc=off -o @OUT@ ret.xc
-grep -q "retired" xcout.err.txt && ok "-farc warns that it is retired" || bad "-farc does not warn"
+grep -q "has no effect and will be removed" xcout.err.txt && ok "-farc warns that it goes" || bad "-farc does not warn"
 same "-Q rts"               -q -A 6502 -Q rts -o @OUT@.xex ret.xc
 same "-Q loop"              -q -A 6502 -Q loop -o @OUT@.xex ret.xc
 same "--quit-style loop"    -q -A 6502 --quit-style loop -o @OUT@.xex ret.xc
