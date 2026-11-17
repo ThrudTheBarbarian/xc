@@ -1637,6 +1637,17 @@ class X86Fixup
                     }
                 // r64 falls through to C7 /0 with a sign-extended imm32 — B8+rd
                 // under REX.W is `movabs` and would want eight immediate bytes.
+                // A memory destination has no movabs form at all, so a value
+                // that is not a sign-extended imm32 is refused: masked, it
+                // stored `mov qword ptr [rax], 0x100000000` as 0.
+                if (_osz == (u32)8 && !fitsImm32(b))
+                    {
+                    failWith(String.withCString(
+                                 "64-bit immediate does not fit an imm32 field — "
+                                 "load it into a register first"),
+                             mn);
+                    return;
+                    }
                 eRex(_w, (i32)0, a.index(), a.rmReg(), _force8);
                 e8(_osz == (u32)1 ? (u32)$C6 : (u32)$C7);
                 eModRM((u32)0, a);
@@ -1756,6 +1767,16 @@ class X86Fixup
             }
         if (mn.equals(String.withCString("test")) && a != (XOperand*)0 && b != (XOperand*)0 && b.kind() == (u32)OP_IMM && b.symbol() == (String*)0)
             {
+            // As for the ALU forms: the immediate is a sign-extended imm32,
+            // and `test rcx, 0x100000000` became `test rcx, 0`.
+            if (_osz == (u32)8 && !fitsImm32(b))
+                {
+                failWith(String.withCString(
+                             "64-bit immediate does not fit an imm32 field — "
+                             "load it into a register first"),
+                         mn);
+                return;
+                }
             if (a.kind() == (u32)OP_REG && a.reg() == (u32)0 && !_force8)
                 {
                 eRex(_w, (i32)0, (i32)0, (i32)0, false);

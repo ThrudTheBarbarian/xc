@@ -728,7 +728,15 @@ static BOOL namesHighZmm(NSString *s) {
                 emitImmOsz(out, osz, b->imm); CLEANUP(); return out;
             }
             // r64 falls through to C7 /0 with a sign-extended imm32 — B8+rd under
-            // REX.W is `movabs` and would demand eight immediate bytes.
+            // REX.W is `movabs` and would demand eight immediate bytes. A memory
+            // destination has no movabs form, so a value that is not a
+            // sign-extended imm32 is refused: masked, it stored
+            // `mov qword ptr [rax], 0x100000000` as 0.
+            if (osz == 8 && (b->imm > INT32_MAX || b->imm < INT32_MIN)) {
+                if (error) *error = xerr(@"64-bit immediate does not fit an imm32 "
+                                         @"field — load it into a register first ('%@')", mn);
+                CLEANUP(); return nil;
+            }
             emitRex(out, w, 0, a->index, a->kind==OpReg?a->reg:a->base, force8);
             emit8(out, osz==1 ? 0xC6 : 0xC7);
             emitModRM(out, 0, a);
@@ -800,6 +808,13 @@ static BOOL namesHighZmm(NSString *s) {
 
     // ── test r/m, imm  (A8/A9 for the accumulator, else F6/F7 /0) ──
     if ([mn isEqualToString:@"test"] && a && b && b->kind == OpImm && !b->symbol) {
+        // As for the ALU forms: the immediate is a sign-extended imm32, and
+        // `test rcx, 0x100000000` became `test rcx, 0`.
+        if (osz == 8 && (b->imm > INT32_MAX || b->imm < INT32_MIN)) {
+            if (error) *error = xerr(@"64-bit immediate does not fit an imm32 "
+                                     @"field — load it into a register first ('%@')", mn);
+            CLEANUP(); return nil;
+        }
         if (a->kind == OpReg && a->reg == 0 && !force8) {
             emitRex(out, w, 0, 0, 0, NO);
             emit8(out, osz==1 ? 0xA8 : 0xA9);
