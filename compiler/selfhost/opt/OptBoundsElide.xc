@@ -117,7 +117,7 @@
                 {
                 IRFunc* fn = (IRFunc*)m.funcs().get(f);
                 if (fn.blocks().count() == (u32)0 || fn.name() == (String*)0
-                    || fn.name().hasPrefix(String.withCString("_xt_check")) || !bhHasCheck(fn))
+                    || IRRuntime.isRuntime(fn.name()) || !bhHasCheck(fn))
                     continue;
                 Map* done = new Map();
                 for (u32 guard = (u32)0; guard < (u32)64; guard = guard + (u32)1)
@@ -190,7 +190,7 @@
                 if (oc == opCall && n.ops().count() > 0)
                     {
                     IROperand* c = (IROperand*)n.ops().get((u32)0);
-                    if (c.kind() == (u8)OPK_SYM && c.name() != (String*)0 && c.name().hasPrefix(String.withCString("_xt_check_")))
+                    if (c.kind() == (u8)OPK_SYM && IRRuntime.isRuntime(c.name()))
                         continue;
                     return false;
                     }
@@ -777,7 +777,7 @@
         for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
             {
             IRFunc* fn = (IRFunc*)m.funcs().get(f);
-            if (fn.blocks().count() == (u32)0 || fn.name() == (String*)0 || fn.name().hasPrefix(String.withCString("_xt_check"))
+            if (fn.blocks().count() == (u32)0 || fn.name() == (String*)0 || IRRuntime.isRuntime(fn.name())
                 || !bhHasCheck(fn))
                 continue;
             Map* seen = new Map();

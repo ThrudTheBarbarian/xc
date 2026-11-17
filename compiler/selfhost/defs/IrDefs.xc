@@ -28,3 +28,12 @@
 #define PARK_NONE $00
 #define PARK_BLOCK $01
 #define PARK_OUTLINED $02
+// IRRuntime.role(): what a runtime check symbol (Checked.xc, CheckedVtbl.xc)
+// is to the passes.
+#define RT_NONE $00
+#define RT_CHECK $01
+#define RT_LIMIT $02
+#define RT_TRAP $03
+#define RT_TRAP_RETURNS $04
+#define RT_HELPER $05
+#define RT_DATA $06

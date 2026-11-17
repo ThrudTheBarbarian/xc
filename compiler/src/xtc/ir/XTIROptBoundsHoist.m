@@ -3,6 +3,7 @@
 // Opt.boundsHoist (selfhost/opt/OptBoundsElide.xc) makes it, so the two
 // compilers write the same code.
 #import "XTIROptBoundsHoist.h"
+#import "XTIRRuntimeRoles.h"
 #import "XTIRModule.h"
 #import "XTIRFunction.h"
 #import "XTIRBlock.h"
@@ -72,7 +73,7 @@ static NSString* symName(XTIRModule* mod, XTIROperand* o)
         _lim = (XTIRSymbolId)[mod.symbols indexOfObjectIdenticalTo:ls];
         for (XTIRFunction* fn in [mod.functions copy])
             {
-            if (fn.blocks.count == 0 || !fn.name || [fn.name hasPrefix:@"_xt_check"] || ![self hasCheck:fn])
+            if (fn.blocks.count == 0 || !fn.name || XTIRRuntimeIsRuntime(fn.name) || ![self hasCheck:fn])
                 continue;
             _fn = fn;
             NSHashTable<XTIRInsn*>* done = [NSHashTable hashTableWithOptions:NSPointerFunctionsObjectPointerPersonality];
@@ -120,7 +121,7 @@ static NSString* symName(XTIRModule* mod, XTIROperand* o)
             case XTIROpCall:
                 {
                 NSString* nm = n.operands.count > 0 ? symName(_mod, n.operands[0]) : nil;
-                if (nm && [nm hasPrefix:@"_xt_check_"])
+                if (XTIRRuntimeIsRuntime(nm))
                     continue;
                 return NO;
                 }
@@ -890,7 +891,7 @@ static BOOL bvIsHeapCheck(XTIRModule* mod, XTIRInsn* n)
     _mod = mod;
     for (XTIRFunction* fn in [mod.functions copy])
         {
-        if (fn.blocks.count == 0 || !fn.name || [fn.name hasPrefix:@"_xt_check"])
+        if (fn.blocks.count == 0 || !fn.name || XTIRRuntimeIsRuntime(fn.name))
             continue;
         BOOL any = NO;
         for (XTIRBlock* bb in fn.blocks)

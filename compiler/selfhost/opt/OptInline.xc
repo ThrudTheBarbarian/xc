@@ -47,8 +47,7 @@
                 if (oc == opCall)
                     {
                     IROperand* o = n.ops().count() > (u32)0 ? (IROperand*)n.ops().get((u32)0) : (IROperand*)0;
-                    if (o == (IROperand*)0 || o.kind() != (u8)OPK_SYM || o.name() == (String*)0
-                        || !o.name().hasPrefix(String.withCString("_xt_check")))
+                    if (o == (IROperand*)0 || o.kind() != (u8)OPK_SYM || !IRRuntime.isRuntime(o.name()))
                         return false;
                     }
                 else if (IROp.has(oc, OPF_CALL) || oc == opVTblDispatch
@@ -429,7 +428,7 @@
         if (callee == 0 || callee == caller)
             return (IRFunc*)0;
         // A subscript check inlines only after bounds-elide, and then nothing else.
-        bool isCheck = c.name().hasPrefix(String.withCString("_xt_check_")) && !c.name().hasSuffix(String.withCString("_trap"));
+        bool isCheck = IRRuntime.inlinesWithChecks(c.name());
         if (isCheck != _inlineChecks)
             return (IRFunc*)0;
         if (callee.blocks().count() == (u32)0)

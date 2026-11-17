@@ -3433,7 +3433,7 @@
                     // A subscript check is allowed by name: outside the program
                     // in a -fbounds-check build, Checked.xc's own body (which
                     // writes to stderr) under -fbounds-check=light.
-                    if (name.hasPrefix(String.withCString("_xt_check_")) && parAllowedExternal(name))
+                    if (IRRuntime.isRuntime(name) && parAllowedExternal(name))
                         continue;
                     IRFunc* callee = (IRFunc*)_parFns.get((Hashable*)name);
                     if (callee == (IRFunc*)0)

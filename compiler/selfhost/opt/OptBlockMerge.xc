@@ -114,8 +114,7 @@
         IROperand* c = (IROperand*)n.ops().get((u32)0);
         if (c.kind() != (u8)OPK_SYM || c.name() == 0)
             return false;
-        return c.name().equals(String.withCString("_xt_check_trap"))
-            || c.name().equals(String.withCString("_xt_check_cast_trap"));
+        return IRRuntime.stops(c.name());
         }
 
     final void trapCut(IRModule* m)

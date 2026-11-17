@@ -1935,6 +1935,70 @@ class IRType
     }
 
 
+    // The runtime's check symbols (Checked.xc, CheckedVtbl.xc) and the role of
+    // each: one table, which every pass that treats them apart reads, so a new
+    // one is classified the same everywhere. As the reference
+    // (XTIRRuntimeRoles.h).
+    //
+    //   RT_CHECK         a check: compares, and calls a trap when it fails
+    //   RT_LIMIT         the bound a hoisted check compares against
+    //   RT_TRAP          reports a failed check and stops the program
+    //   RT_TRAP_RETURNS  a check's slow path: stops the program, or returns
+    //                    when a closer look finds the value good
+    //   RT_HELPER        the runtime's own output and lookup helpers
+    //   RT_DATA          the runtime's own data
+    //
+    // A name with the runtime's prefix that is not listed is a
+    // RT_TRAP_RETURNS when it ends `_trap`, else a RT_HELPER: never taken to
+    // stop the program, nor inlined with the checks.
+    class IRRuntime
+    {
+    u8 _unused;
+
+    static bool listed(String* n, string list)
+        {
+        String* key = String.withCString(" ");
+        key.append(n);
+        key.appendCString(" ");
+        return String.withCString(list).byteIndexOf(key) != String.notFound();
+        }
+
+    static u8 role(String* n)
+        {
+        if (n == (String*)0 || !n.hasPrefix(String.withCString("_xt_check_")))
+            return (u8)RT_NONE;
+        if (IRRuntime.listed(n, " _xt_check_bounds _xt_check_bounds_n _xt_check_interior _xt_check_object _xt_check_vtbl "))
+            return (u8)RT_CHECK;
+        if (IRRuntime.listed(n, " _xt_check_limit "))
+            return (u8)RT_LIMIT;
+        if (IRRuntime.listed(n, " _xt_check_trap _xt_check_cast_trap "))
+            return (u8)RT_TRAP;
+        if (IRRuntime.listed(n, " _xt_check_vtbl_trap "))
+            return (u8)RT_TRAP_RETURNS;
+        if (IRRuntime.listed(n, " _xt_check_put _xt_check_putNum _xt_check_vtbl_put _xt_check_vtbl_putHex _xt_check_vtbl_phdrs _xt_check_vtbl_image "))
+            return (u8)RT_HELPER;
+        if (IRRuntime.listed(n, " _xt_check_vtbl_lo _xt_check_vtbl_len _xt_check_vtbl_seen "))
+            return (u8)RT_DATA;
+        if (n.hasSuffix(String.withCString("_trap")))
+            return (u8)RT_TRAP_RETURNS;
+        return (u8)RT_HELPER;
+        }
+
+    // Part of the check runtime: not itself checked, and a call to it frees
+    // and writes nothing the program reads.
+    static bool isRuntime(String* n)        { return IRRuntime.role(n) != (u8)RT_NONE; }
+    // A failed check's report: the cold path of an inlined check.
+    static bool isTrap(String* n)
+        {
+        u8 r = IRRuntime.role(n);
+        return r == (u8)RT_TRAP || r == (u8)RT_TRAP_RETURNS;
+        }
+    // Never returns: the block can end at the call.
+    static bool stops(String* n)            { return IRRuntime.role(n) == (u8)RT_TRAP; }
+    // Inlined with the checks, after bounds-elide, and not before.
+    static bool inlinesWithChecks(String* n) { return IRRuntime.isRuntime(n) && !IRRuntime.isTrap(n); }
+    }
+
     class IRSymbol
     {
     String* _name;
