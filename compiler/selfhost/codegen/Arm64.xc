@@ -338,12 +338,12 @@ class Arm64
             // The text passes take and give lines: split once here, joined
             // once after (#333).
             Array* pl = linesOf(hasAsm ? hideAsm(emitted, asmBodies) : emitted);
-            Arm64._parseMemo = new Map();
-            if (Arm64._parseNone == (Array*)0)
-                Arm64._parseNone = new Array();
+            _parseMemo = new Map();
+            if (_parseNone == (Array*)0)
+                _parseNone = new Array();
             pl = peepholeFallthroughLines(peepholeUsraLines(peepholeRedundantCmpLines(peepholeAndsFoldLines(
                     peepholeCopyPropLines(peepholeRedundantReloadsLines(peepholeSpillsLines(pl)))))));
-            Arm64._parseMemo = (Map*)0;
+            _parseMemo = (Map*)0;
             String* pp = joinLines(pl);
             if (hasAsm) pp = restoreAsm(pp, asmBodies, emitted);
             module.append(tbzInRange(elideLeafFrame(expandStagedSlots(pp))));
