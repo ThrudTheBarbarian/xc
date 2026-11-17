@@ -1208,7 +1208,7 @@ static BOOL gEmitsWGSL = NO;
     // minutes and 23 GB in it for no kernel at all.
     BOOL any = NO;
     for (XTIRFunction* f in module.functions)
-        if ([f.name hasPrefix:@"ParImpl$"] && [f.name hasSuffix:@"$run"])
+        if (f.parKernel != XTIRParKernelNone)
             {
             any = YES;
             break;
@@ -1230,7 +1230,7 @@ static BOOL gEmitsWGSL = NO;
     NSMutableSet<NSString*>* seen = [NSMutableSet set];
     NSMutableArray<XTIRFunction*>* work = [NSMutableArray array];
     for (XTIRFunction* f in copy.functions)
-        if ([f.name hasPrefix:@"ParImpl$"] && [f.name hasSuffix:@"$run"])
+        if (f.parKernel != XTIRParKernelNone)
             {
             [work addObject:f];
             [seen addObject:f.name];
@@ -1356,7 +1356,7 @@ static BOOL gEmitsWGSL = NO;
             kvfns[g.name] = g;
     for (XTIRFunction* f in module.functions)
         {
-        if (![f.name hasPrefix:@"ParImpl$"] || ![f.name hasSuffix:@"$run"])
+        if (f.parKernel != XTIRParKernelBlock)
             continue;
         // Each printer tries the optimised kernel first and the plain one if
         // that declines, so the optimiser never costs a block its GPU path.
@@ -1670,7 +1670,7 @@ static BOOL gEmitsWGSL = NO;
     NSMutableSet<NSString*>* serial = [NSMutableSet set];
     for (XTIRFunction* f in module.functions)
         {
-        if (![f.name hasPrefix:@"ParImpl$"] || ![f.name hasSuffix:@"$run"])
+        if (f.parKernel != XTIRParKernelBlock)
             continue;
         NSString* cls = [f.name substringToIndex:f.name.length - 4];
         BOOL isAuto = [self isAutoBlock:module number:[cls substringFromIndex:8]];

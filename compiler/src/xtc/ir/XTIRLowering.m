@@ -20252,6 +20252,9 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
         XTIRFunction* fn = sym.function;
         if (!fn)
             continue;
+        // The run of a par block's class is the block's kernel.
+        if (cls.isParBlock && !m.isStatic && [m.methodName isEqualToString:@"run"])
+            fn.parKernel = XTIRParKernelBlock;
 
         NSMutableArray<NSString*>* paramNames = [NSMutableArray array];
         if (!m.isStatic)

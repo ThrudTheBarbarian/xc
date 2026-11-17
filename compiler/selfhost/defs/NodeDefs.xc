@@ -37,3 +37,6 @@
 #define NF_OUTLET $10000000
 #define NF_ACTION $20000000
 #define NF_EXPORTED $8000000
+// On a class declaration only: the class the parser made of a par block. Its
+// bit is NF_IRQ's and NF_GOAL_SPEED's, which are on functions and loops.
+#define NF_PARBLOCK $40000

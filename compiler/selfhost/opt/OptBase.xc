@@ -1604,7 +1604,7 @@ class OptProfile
     // subclass of it) and the optimiser calls it with them.
     class ParOutBlock
     {
-    String* _cls;       // ParImpl$o<n>: the name the printers know the block by
+    String* _cls;       // ParImpl$o<n>: the class name the printers give the block
     Array* _fieldTypes; // the record's types from field 3 on: the captures, then the accumulators
 
     static ParOutBlock* with(String* cls, Array* types)
@@ -2437,6 +2437,33 @@ class BeFact : Object
         {
         for (u32 i = (u32)0; i < names.count(); i = i + (u32)1)
             if (((String*)names.get(i)).equals(name))
+                return true;
+        return false;
+        }
+
+    // The name stems (`<class>$`) of the par kernels in m: a kernel is
+    // `<class>$run`, and every method of its class starts with the stem.
+    Array* parKernelStems(IRModule* m)
+        {
+        Array* stems = new Array();
+        for (u32 i = (u32)0; i < m.funcs().count(); i = i + (u32)1)
+            {
+            IRFunc* f = (IRFunc*)m.funcs().get(i);
+            if (f.parKernel() == (u8)PARK_NONE || f.name() == (String*)0 || f.name().byteLength() < (u32)3)
+                continue;
+            stems.add((Object*)f.name().substringBytes((u32)0, f.name().byteLength() - (u32)3));
+            }
+        return stems;
+        }
+
+    // Whether fn belongs to a par block: its kernel, or another method of the
+    // kernel's class (stems from parKernelStems).
+    bool parBlockFn(IRFunc* fn, Array* stems)
+        {
+        if (fn.parKernel() != (u8)PARK_NONE)
+            return true;
+        for (u32 i = (u32)0; i < stems.count(); i = i + (u32)1)
+            if (fn.name().hasPrefix((String*)stems.get(i)))
                 return true;
         return false;
         }

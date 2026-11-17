@@ -17,13 +17,14 @@
     final void parProposeReport(IRModule* m)
         {
         // Every program: --par-style=auto imports the runtime where a loop needs it.
+        Array* stems = self.parKernelStems(m);
         for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
             {
             IRFunc* fn = (IRFunc*)m.funcs().get(f);
             if (fn.blocks().count() == (u32)0)
                 continue;
-            // A written par block's body (ParImpl$<n>$…): already a block.
-            if (fn.name().hasPrefix(String.withCString("ParImpl$")))
+            // A written par block's functions: already a block.
+            if (self.parBlockFn(fn, stems))
                 continue;
             _ppModule = m;
             Array* loops = self.lrcLoops(fn);

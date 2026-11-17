@@ -2373,6 +2373,8 @@ static NSString* parRootName(XTASTNode* n)
                                                             ivars:ivars
                                                           methods:methods
                                                          location:loc];
+    // The block's class: its run is the kernel (the lowering marks it).
+    impl.isParBlock = YES;
     [[self blkClasses] addObject:impl];
 
     // ── the site ──

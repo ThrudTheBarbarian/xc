@@ -22,3 +22,9 @@
 #define OPF_DISPATCH $0040    // a method call through a table: VTblDispatch, ProtoDispatch
 #define OPF_CLOBBERS $0080    // may clobber the caller-saved registers: the back ends' homing list
 #define OPF_TERM $0100        // ends a block: the branches, Return, Unreachable, Invoke and Resume
+// IRFunc.parKernel(): what made the function a par block's kernel, printed as
+// the function's `par:` line. Set where the kernel is made, never read from
+// its name: a class of the program's own may be called ParImpl.
+#define PARK_NONE $00
+#define PARK_BLOCK $01
+#define PARK_OUTLINED $02

@@ -18,11 +18,13 @@
     final void parProposeOutline(IRModule* m)
         {
         // The functions made here are visited too (the count grows): a loop
-        // outlined serially is in one, and so are the loops inside it.
+        // outlined serially is in one, and so are the loops inside it. A par
+        // block's functions are left alone; a kernel made here is marked.
+        Array* stems = self.parKernelStems(m);
         for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
             {
             IRFunc* fn = (IRFunc*)m.funcs().get(f);
-            if (fn.blocks().count() == (u32)0 || fn.name().hasPrefix(String.withCString("ParImpl$")))
+            if (fn.blocks().count() == (u32)0 || self.parBlockFn(fn, stems))
                 continue;
             bool again = true;
             u32 guard = (u32)0;
@@ -2198,9 +2200,11 @@
 
         // ── run(rec): the loop over [rec.lo, rec.hi) ──
         IRFunc* B = new IRFunc();
-        // ParImpl$o<n>$run: the name the kernel printers find a block by.
+        // ParImpl$o<n>$run: the name the kernel printers find a block by, and
+        // the mark the kernel passes know it by.
         String* pcls = String.withFormat("ParImpl$o%u%s", _ppOutN, optModTag().cString());
         B.setName(String.withFormat("%s$run", pcls.cString()));
+        B.setParKernel((u8)PARK_OUTLINED);
         if (fn.hasDbg())
             B.setDbg(fn.dbgFile(), fn.dbgLine(), fn.dbgCol());
         IRValue* bRec = new IRValue(recT);

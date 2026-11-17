@@ -176,6 +176,9 @@
                 c.setSimdLaneBytes(bytes);
                 c.setSimdLevel(level);
                 c.setSimdBaseName(n);
+                // A clone is a variant of the kernel, not the kernel the
+                // runtime and the par passes know. As the reference.
+                c.setParKernel((u8)PARK_NONE);
                 m.addFunc(c);
                 break;
                 }
