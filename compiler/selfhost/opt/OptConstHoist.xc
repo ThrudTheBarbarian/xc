@@ -161,11 +161,9 @@
         IRBlock* entry = (IRBlock*)fn.blocks().get((u32)0);
         if (a == entry)
             return true;
-        // The blocks reached, as a set (#335): a scan of a growing list per
-        // edge made each query quadratic in the function's size.
-        Set* seen = new Set();
+        Array* seen = new Array();
         Array* work = new Array();
-        seen.add((Hashable*)entry);
+        seen.add((Object*)entry);
         work.add((Object*)entry);
         while (work.count() > (u32)0)
             {
@@ -180,13 +178,13 @@
                 IROperand* o = (IROperand*)n.term().ops().get(q);
                 if (o.kind() != (u8)OPK_BLOCK || o.blk() == (IRBlock*)0)
                     continue;
-                if (seen.contains((Hashable*)o.blk()))
+                if (hasBlock(seen, o.blk()))
                     continue;
-                seen.add((Hashable*)o.blk());
+                seen.add((Object*)o.blk());
                 work.add((Object*)o.blk());
                 }
             }
-        return !seen.contains((Hashable*)b);
+        return !self.hasBlock(seen, b);
         }
 
     final void chHoistMulImms(IRFunc* fn)
