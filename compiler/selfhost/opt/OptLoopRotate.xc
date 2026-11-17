@@ -109,7 +109,7 @@
                 hasVecPhi = true;
             }
         IRInsn* term = H.term();
-        if (term == (IRInsn*)0 || !term.op().equals(String.withCString("CondBranch")) || term.ops().count() < (u32)3)
+        if (term == (IRInsn*)0 || !term.isOp(opCondBranch) || term.ops().count() < 3)
             return false;
         IROperand* c0 = (IROperand*)term.ops().get((u32)0);
         if (c0.kind() != (u8)OPK_USE)
@@ -174,7 +174,7 @@
                     if (sb == H)
                         {
                         // The one way back, and an unconditional one.
-                        if (latchBlk != (IRBlock*)0 || !xt.op().equals(String.withCString("Branch")))
+                        if (latchBlk != (IRBlock*)0 || !xt.isOp(opBranch))
                             okR = false;
                         latchBlk = x;
                         continue;
@@ -219,7 +219,7 @@
                 {
                 bool branches = false;
                 for (u32 r = (u32)0; r < reg.count(); r = r + (u32)1)
-                    if (!((IRBlock*)reg.get(r)).term().op().equals(String.withCString("Branch")))
+                    if (!((IRBlock*)reg.get(r)).term().isOp(opBranch))
                         branches = true;
                 if (!branches)
                     continue;
@@ -251,7 +251,7 @@
         for (u32 i = (u32)0; i < H.insns().count(); i = i + (u32)1)
             {
             IRInsn* n = (IRInsn*)H.insns().get(i);
-            if (!rotDupSafe(n.op()))
+            if (!rotDupSafe(n.opc()))
                 return false;
             for (u32 o = (u32)0; o < n.ops().count(); o = o + (u32)1)
                 {
@@ -328,7 +328,7 @@
         for (u32 i = (u32)0; i < H.insns().count(); i = i + (u32)1)
             if (((IRInsn*)H.insns().get(i)).res() == c0.val())
                 condInsn = (IRInsn*)H.insns().get(i);
-        if (condInsn != (IRInsn*)0 && condInsn.op().equals(String.withCString("ICmp")) &&
+        if (condInsn != (IRInsn*)0 && condInsn.isOp(opICmp) &&
             condInsn.ops().count() == (u32)2 && E.phis().count() == (u32)0)
             {
             Array* ep = self.predsOfBlock(fn, E);
@@ -424,15 +424,15 @@
             IRInsn* d = (IRInsn*)dobj;
             if (d.ops().count() < (u32)1)
                 return false;
-            if (d.op().equals(String.withCString("Const")))
+            if (d.isOp(opConst))
                 {
                 IROperand* c = (IROperand*)d.ops().get((u32)0);
                 if (c.kind() != (u8)OPK_IMMI)
                     return false;
                 v = c.imm();
                 }
-            else if (d.op().equals(String.withCString("ZExt")) || d.op().equals(String.withCString("SExt")) ||
-                     d.op().equals(String.withCString("Trunc")))
+            else if (d.isOp(opZExt) || d.isOp(opSExt) ||
+                     d.isOp(opTrunc))
                 {
                 if (!rotConst((IROperand*)d.ops().get((u32)0), defs, depth + (u32)1))
                     return false;
@@ -485,9 +485,9 @@
     // speculatable load — the peeled copy reads exactly what the header read on
     // entry, so duplicating a load adds no new access. No store, call, or other
     // side effect.
-    final bool rotDupSafe(String* op)
+    final bool rotDupSafe(u16 oc)
         {
-        return op.equals(String.withCString("Const")) || op.equals(String.withCString("Copy")) || op.equals(String.withCString("Add")) || op.equals(String.withCString("Sub")) || op.equals(String.withCString("Mul")) || op.equals(String.withCString("Neg")) || op.equals(String.withCString("And")) || op.equals(String.withCString("Or")) || op.equals(String.withCString("Xor")) || op.equals(String.withCString("Not")) || op.equals(String.withCString("Shl")) || op.equals(String.withCString("LShr")) || op.equals(String.withCString("AShr")) || op.equals(String.withCString("Rol")) || op.equals(String.withCString("Ror")) || op.equals(String.withCString("FAdd")) || op.equals(String.withCString("FSub")) || op.equals(String.withCString("FMul")) || op.equals(String.withCString("FNeg")) || op.equals(String.withCString("FSqrt")) || op.equals(String.withCString("ICmp")) || op.equals(String.withCString("FCmp")) || op.equals(String.withCString("Select")) || op.equals(String.withCString("SExt")) || op.equals(String.withCString("ZExt")) || op.equals(String.withCString("Trunc")) || op.equals(String.withCString("Bitcast")) || op.equals(String.withCString("IntToPtr")) || op.equals(String.withCString("PtrToInt")) || op.equals(String.withCString("FpToSI")) || op.equals(String.withCString("FpToUI")) || op.equals(String.withCString("SIToFp")) || op.equals(String.withCString("UIToFp")) || op.equals(String.withCString("FpExt")) || op.equals(String.withCString("FpTrunc")) || op.equals(String.withCString("AddrOf")) || op.equals(String.withCString("FieldAddr")) || op.equals(String.withCString("ElementAddr")) || op.equals(String.withCString("Load"));
+        return IROp.has(oc, OPF_PURE) || oc == opLoad;
         }
 
     final void rotApply(IRFunc* fn)
@@ -757,7 +757,7 @@
     final bool rcTest(IRBlock* h)
         {
         IRInsn* t = h.term();
-        if (t == (IRInsn*)0 || !t.op().equals(String.withCString("CondBranch")) || t.ops().count() < (u32)3)
+        if (t == (IRInsn*)0 || !t.isOp(opCondBranch) || t.ops().count() < 3)
             return false;
         IROperand* c = (IROperand*)t.ops().get((u32)0);
         if (c.kind() != (u8)OPK_USE)
@@ -897,7 +897,7 @@
                 IRBlock* sb = o.blk();
                 if (sb == H1)
                     {
-                    if (L != (IRBlock*)0 || !wt.op().equals(String.withCString("Branch")))
+                    if (L != (IRBlock*)0 || !wt.isOp(opBranch))
                         return false;
                     L = w;
                     continue;
@@ -944,7 +944,7 @@
             for (u32 i = (u32)0; i < hb.insns().count(); i = i + (u32)1)
                 {
                 IRInsn* n = (IRInsn*)hb.insns().get(i);
-                if (!rotDupSafe(n.op()))
+                if (!rotDupSafe(n.opc()))
                     return false;
                 for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
                     {
@@ -1097,7 +1097,7 @@
                 {
                 q = q - (u32)1;
                 IRInsn* n = (IRInsn*)chainInsns.get(q);
-                if (n.res() == (IRValue*)0 || set.get((Hashable*)n.res()) == (Object*)0 || n.op().equals(String.withCString("Load")))
+                if (n.res() == (IRValue*)0 || set.get((Hashable*)n.res()) == (Object*)0 || n.isOp(opLoad))
                     continue;
                 rcMarkOps(n, chainVals, set);
                 }
@@ -1120,7 +1120,7 @@
             if (n.res() == (IRValue*)0 || need.get((Hashable*)n.res()) == (Object*)0)
                 continue;
             IRValue* v = new IRValue(n.res().ty());
-            if (n.op().equals(String.withCString("Load")))
+            if (n.isOp(opLoad))
                 {
                 IRInsn* p = IRInsn.with(String.withCString("Phi"));
                 p.copyDbg(n);

@@ -597,7 +597,7 @@
         for (u32 oi = (u32)0; oi < B.insns().count(); oi = oi + (u32)1)
             {
             IRInsn* outer = (IRInsn*)B.insns().get(oi);
-            if (!outer.op().equals(String.withCString("Add")) || outer.res() == (IRValue*)0
+            if (!outer.isOp(opAdd) || outer.res() == (IRValue*)0
                 || outer.ops().count() < (u32)2)
                 continue;
             // The accumulator must not already be a direct operand.
@@ -624,7 +624,7 @@
                 if (!found)
                     continue;
                 IRInsn* inner = (IRInsn*)B.insns().get(ii);
-                if (!inner.op().equals(String.withCString("Add")) || inner.ops().count() < (u32)2)
+                if (!inner.isOp(opAdd) || inner.ops().count() < 2)
                     continue;
                 u32 accSide = (u32)2;
                 for (u32 k = (u32)0; k < (u32)2; k = k + (u32)1)
@@ -760,7 +760,7 @@
                 return false;
 
         IRInsn* term = H.term();
-        if (term == (IRInsn*)0 || !term.op().equals(String.withCString("CondBranch")) || term.ops().count() < (u32)3)
+        if (term == (IRInsn*)0 || !term.isOp(opCondBranch) || term.ops().count() < 3)
             return false;
         IROperand* c0 = (IROperand*)term.ops().get((u32)0);
         if (c0.kind() != (u8)OPK_USE)
@@ -770,7 +770,7 @@
         if (go == (Object*)0 || gb == (Object*)0 || (IRBlock*)gb != H)
             return false;
         IRInsn* guard = (IRInsn*)go;
-        if (!guard.op().equals(String.withCString("ICmp")) || guard.ops().count() < (u32)2)
+        if (!guard.isOp(opICmp) || guard.ops().count() < 2)
             return false;
         IROperand* gl = (IROperand*)guard.ops().get((u32)0);
         if (gl.kind() != (u8)OPK_USE)
@@ -961,7 +961,7 @@
                     if (db != (Object*)0 && (IRBlock*)db == B)
                         {
                         Object* bd = defOf.get((Hashable*)base.val());
-                        if (bd == (Object*)0 || !((IRInsn*)bd).op().equals(String.withCString("AddrOf")))
+                        if (bd == (Object*)0 || !((IRInsn*)bd).isOp(opAddrOf))
                             return (String*)0;
                         }
                     }
@@ -1089,14 +1089,14 @@
             return false;
         String* s = a.val().ty();
         String* r = n.res().ty();
-        String* op = n.op();
-        if (op.equals(String.withCString("SIToFp")))
+        u16 oc = n.opc();
+        if (oc == opSIToFp)
             return s.equals(String.withCString("I32")) && r.equals(String.withCString("F32"));
-        if (op.equals(String.withCString("UIToFp")))
+        if (oc == opUIToFp)
             return s.equals(String.withCString("U32")) && r.equals(String.withCString("F32"));
-        if (op.equals(String.withCString("FpToSI")))
+        if (oc == opFpToSI)
             return s.equals(String.withCString("F32")) && r.equals(String.withCString("I32"));
-        if (op.equals(String.withCString("FpToUI")))
+        if (oc == opFpToUI)
             return s.equals(String.withCString("F32")) && r.equals(String.withCString("U32"));
         return false;
         }
@@ -1128,7 +1128,7 @@
         if (d == (IRInsn*)0 || d.ops().count() < (u32)1)
             return (Object*)0;
         IROperand* o = (IROperand*)d.ops().get((u32)0);
-        if (d.op().equals(String.withCString("AddrOf")))
+        if (d.isOp(opAddrOf))
             {
             if (o.kind() == (u8)OPK_SYM)
                 return (Object*)o.name();
@@ -1137,7 +1137,7 @@
                 return (Object*)o.val();
             return (Object*)0;
             }
-        if (d.op().equals(String.withCString("Call")) && o.kind() == (u8)OPK_SYM
+        if (d.isOp(opCall) && o.kind() == OPK_SYM
             && o.name().hasPrefix(String.withCString("_xtc_new_")))
             return (Object*)base.val();
         return (Object*)0;
@@ -1264,7 +1264,7 @@
         if (o.kind() == (u8)OPK_USE)
             {
             Object* cd = defOf.get((Hashable*)o.val());
-            if (cd != 0 && ((IRInsn*)cd).op().equals(String.withCString("Const")))
+            if (cd != 0 && ((IRInsn*)cd).isOp(opConst))
                 return true;
             if (cd == 0 && defBlk.get((Hashable*)o.val()) == 0)
                 return true;
@@ -1277,7 +1277,7 @@
         if (o.kind() == (u8)OPK_USE)
             {
             Object* cd = defOf.get((Hashable*)o.val());
-            if (cd != 0 && ((IRInsn*)cd).op().equals(String.withCString("Const")))
+            if (cd != 0 && ((IRInsn*)cd).isOp(opConst))
                 return true;
             }
         return vecOperandOK(o, elems, B, H, defOf, defBlk);
@@ -1311,8 +1311,8 @@
             IRInsn* nn = (IRInsn*)B.insns().get(i);
             if (nn == accNext || nn == ivNext || nn == zx || nn == load)
                 continue;
-            String* op = nn.op();
-            if (op.equals(String.withCString("AddrOf")) || op.equals(String.withCString("ElementAddr")) || op.equals(String.withCString("Const")) || op.equals(String.withCString("ZExt")) || op.equals(String.withCString("SExt")) || op.equals(String.withCString("Trunc")))
+            u16 oc = nn.opc();
+            if (oc == opAddrOf || oc == opElementAddr || oc == opConst || oc == opZExt || oc == opSExt || oc == opTrunc)
                 continue;
             return false;
             }
@@ -1359,7 +1359,7 @@
         if (ao == (Object*)0 || ab == (Object*)0 || (IRBlock*)ab != B)
             return (VecCand*)0;
         IRInsn* accNext = (IRInsn*)ao;
-        if (!accNext.op().equals(String.withCString("Add")) || self.countOf(uses, accBack.val()) != (u32)1 || accNext.ops().count() < (u32)2)
+        if (!accNext.isOp(opAdd) || self.countOf(uses, accBack.val()) != 1 || accNext.ops().count() < 2)
             return (VecCand*)0;
         IROperand* x0 = (IROperand*)accNext.ops().get((u32)0);
         IROperand* x1 = (IROperand*)accNext.ops().get((u32)1);
@@ -1378,7 +1378,7 @@
         if (zo == (Object*)0 || zb == (Object*)0 || (IRBlock*)zb != B)
             return (VecCand*)0;
         IRInsn* zx = (IRInsn*)zo;
-        if (!zx.op().equals(String.withCString("ZExt")) || zx.ops().count() < (u32)1)
+        if (!zx.isOp(opZExt) || zx.ops().count() < 1)
             return (VecCand*)0;
         IROperand* zs = (IROperand*)zx.ops().get((u32)0);
         if (zs.kind() != (u8)OPK_USE)
@@ -1388,7 +1388,7 @@
         if (lo == (Object*)0 || lb == (Object*)0 || (IRBlock*)lb != B)
             return (VecCand*)0;
         IRInsn* load = (IRInsn*)lo;
-        if (!load.op().equals(String.withCString("Load")) || load.res() == (IRValue*)0 || load.ops().count() < (u32)1)
+        if (!load.isOp(opLoad) || load.res() == (IRValue*)0 || load.ops().count() < 1)
             return (VecCand*)0;
         String* lt = load.res().ty();
         if (lt == (String*)0 || (!lt.equals(String.withCString("U8")) && !lt.equals(String.withCString("U16"))))
@@ -1479,7 +1479,7 @@
         if (ao == (Object*)0 || ab == (Object*)0 || (IRBlock*)ab != B)
             return (VecCand*)0;
         IRInsn* accNext = (IRInsn*)ao;
-        if (!accNext.op().equals(String.withCString("Add")) || self.countOf(uses, accBack.val()) != (u32)1 || accNext.ops().count() < (u32)2)
+        if (!accNext.isOp(opAdd) || self.countOf(uses, accBack.val()) != 1 || accNext.ops().count() < 2)
             return (VecCand*)0;
         IROperand* x0 = (IROperand*)accNext.ops().get((u32)0);
         IROperand* x1 = (IROperand*)accNext.ops().get((u32)1);
@@ -1497,7 +1497,7 @@
         if (zo == (Object*)0 || zb == (Object*)0 || (IRBlock*)zb != B)
             return (VecCand*)0;
         IRInsn* zx = (IRInsn*)zo;
-        if (!zx.op().equals(String.withCString("ZExt")) || zx.ops().count() < (u32)1)
+        if (!zx.isOp(opZExt) || zx.ops().count() < 1)
             return (VecCand*)0;
         if (countOf(uses, elemOp.val()) != (u32)1)
             return (VecCand*)0;
@@ -1509,7 +1509,7 @@
         if (mo == (Object*)0 || mb == (Object*)0 || (IRBlock*)mb != B)
             return (VecCand*)0;
         IRInsn* mul = (IRInsn*)mo;
-        if (!mul.op().equals(String.withCString("Mul")) || self.countOf(uses, zs.val()) != (u32)1 || mul.ops().count() < (u32)2)
+        if (!mul.isOp(opMul) || self.countOf(uses, zs.val()) != 1 || mul.ops().count() < 2)
             return (VecCand*)0;
         IROperand* m0 = (IROperand*)mul.ops().get((u32)0);
         IROperand* m1 = (IROperand*)mul.ops().get((u32)1);
@@ -1591,8 +1591,8 @@
             IRInsn* nn = (IRInsn*)B.insns().get(i);
             if (hasInsn(known, nn))
                 continue;
-            String* op = nn.op();
-            if (op.equals(String.withCString("AddrOf")) || op.equals(String.withCString("ElementAddr")) || op.equals(String.withCString("Const")) || op.equals(String.withCString("ZExt")) || op.equals(String.withCString("SExt")) || op.equals(String.withCString("Trunc")))
+            u16 oc = nn.opc();
+            if (oc == opAddrOf || oc == opElementAddr || oc == opConst || oc == opZExt || oc == opSExt || oc == opTrunc)
                 continue;
             return false;
             }
@@ -1620,7 +1620,7 @@
             IRInsn* n = (IRInsn*)B.insns().get(i);
             if (n == accNext)
                 continue;
-            if (!n.op().equals(String.withCString("Add")) || n.res() == (IRValue*)0)
+            if (!n.isOp(opAdd) || n.res() == (IRValue*)0)
                 continue;
             if (n.ops().count() < (u32)2)
                 continue;
@@ -1659,7 +1659,7 @@
                 return false;
 
         IRInsn* term = H.term();
-        if (term == (IRInsn*)0 || !term.op().equals(String.withCString("CondBranch")) || term.ops().count() < (u32)3)
+        if (term == (IRInsn*)0 || !term.isOp(opCondBranch) || term.ops().count() < 3)
             return false;
         IROperand* c0 = (IROperand*)term.ops().get((u32)0);
         if (c0.kind() != (u8)OPK_USE)
@@ -1669,7 +1669,7 @@
         if (go == (Object*)0 || gb == (Object*)0 || (IRBlock*)gb != H)
             return false;
         IRInsn* guard = (IRInsn*)go;
-        if (!guard.op().equals(String.withCString("ICmp")) || guard.ops().count() < (u32)2)
+        if (!guard.isOp(opICmp) || guard.ops().count() < 2)
             return false;
         IROperand* gl = (IROperand*)guard.ops().get((u32)0);
         if (gl.kind() != (u8)OPK_USE)
@@ -1704,7 +1704,7 @@
             return false;
         if (vecIncoming(fn, ivPhi, idxH, true) != L)
             return false;
-        if (L.term() == (IRInsn*)0 || !L.term().op().equals(String.withCString("Branch")) || L.term().ops().count() < (u32)1 || ((IROperand*)L.term().ops().get((u32)0)).blk() != H)
+        if (L.term() == (IRInsn*)0 || !L.term().isOp(opBranch) || L.term().ops().count() < 1 || ((IROperand*)L.term().ops().get(0)).blk() != H)
             return false;
 
         // The join holds the accumulator's merge phi, the iv step and the branch.
@@ -1770,7 +1770,7 @@
         if (an == (Object*)0 || ab == (Object*)0 || (IRBlock*)ab != B)
             return false;
         IRInsn* accNext = (IRInsn*)an;
-        if (!accNext.op().equals(String.withCString("Select")) || accNext.ops().count() < (u32)3)
+        if (!accNext.isOp(opSelect) || accNext.ops().count() < 3)
             return false;
         if (countOf(uses, accBack.val()) != (u32)1)
             return false;
@@ -1788,7 +1788,7 @@
         if (io == (Object*)0 || ib == (Object*)0 || (IRBlock*)ib != B)
             return false;
         IRInsn* incr = (IRInsn*)io;
-        if (!incr.op().equals(String.withCString("Add")) || incr.ops().count() < (u32)2)
+        if (!incr.isOp(opAdd) || incr.ops().count() < 2)
             return false;
         IROperand* x0 = (IROperand*)incr.ops().get((u32)0);
         IROperand* x1 = (IROperand*)incr.ops().get((u32)1);
@@ -1808,7 +1808,7 @@
         if (co == (Object*)0 || cb == (Object*)0 || (IRBlock*)cb != B)
             return false;
         IRInsn* cmp = (IRInsn*)co;
-        if (!cmp.op().equals(String.withCString("ICmp")) || cmp.ops().count() < (u32)2)
+        if (!cmp.isOp(opICmp) || cmp.ops().count() < 2)
             return false;
 
         _vcAccNext = accNext;
@@ -1940,7 +1940,7 @@
         for (u32 i = (u32)0; i < L.insns().count(); i = i + (u32)1)
             {
             IRInsn* n = (IRInsn*)L.insns().get(i);
-            if (!n.op().equals(String.withCString("Add")) || n.res() == (IRValue*)0)
+            if (!n.isOp(opAdd) || n.res() == (IRValue*)0)
                 continue;
             if (n.ops().count() < (u32)2)
                 continue;
@@ -2038,7 +2038,7 @@
 
         // The head: address, load, compare, conditional branch — nothing else.
         IRInsn* bterm = B.term();
-        if (bterm == (IRInsn*)0 || !bterm.op().equals(String.withCString("CondBranch")) || bterm.ops().count() < (u32)3)
+        if (bterm == (IRInsn*)0 || !bterm.isOp(opCondBranch) || bterm.ops().count() < 3)
             return (VecCand*)0;
         IROperand* bc = (IROperand*)bterm.ops().get((u32)0);
         if (bc.kind() != (u8)OPK_USE)
@@ -2048,7 +2048,7 @@
         if (co == (Object*)0 || cb == (Object*)0 || (IRBlock*)cb != B)
             return (VecCand*)0;
         IRInsn* cmp = (IRInsn*)co;
-        if (!cmp.op().equals(String.withCString("ICmp")))
+        if (!cmp.isOp(opICmp))
             return (VecCand*)0;
 
         IRValue* elem = self.vecMaxMinHead(B, iv, defOf);
@@ -2063,7 +2063,7 @@
         for (u32 i = (u32)0; i < L.insns().count(); i = i + (u32)1)
             {
             IRInsn* n = (IRInsn*)L.insns().get(i);
-            if (!n.op().equals(String.withCString("Add")) || n.res() == (IRValue*)0)
+            if (!n.isOp(opAdd) || n.res() == (IRValue*)0)
                 continue;
             if (n.ops().count() < (u32)2)
                 continue;
@@ -2234,7 +2234,7 @@
                 defIn.set((Hashable*)n.res(), (Object*)n);
             // Is this such a lane vector? VAdd of a single-use in-body VSplat
             // and an outside value, read only in B, more than once.
-            if (n.op().equals(String.withCString("VAdd")) && n.res() != (IRValue*)0 && n.ops().count() == (u32)2
+            if (n.isOp(opVAdd) && n.res() != (IRValue*)0 && n.ops().count() == 2
                 && ((IROperand*)n.ops().get((u32)0)).kind() == (u8)OPK_USE
                 && ((IROperand*)n.ops().get((u32)1)).kind() == (u8)OPK_USE
                 && self.countOf(usesIn, n.res()) > (u32)1 && self.countOf(usesIn, n.res()) == self.countOf(usesAll, n.res()))
@@ -2243,7 +2243,7 @@
                     {
                     IRInsn* sp = (IRInsn*)defIn.get((Hashable*)((IROperand*)n.ops().get(k)).val());
                     IROperand* t = (IROperand*)n.ops().get((u32)1 - k);
-                    if (sp != (IRInsn*)0 && sp.op().equals(String.withCString("VSplat"))
+                    if (sp != (IRInsn*)0 && sp.isOp(opVSplat)
                         && self.countOf(usesAll, sp.res()) == (u32)1
                         && defIn.get((Hashable*)t.val()) == (Object*)0
                         && (IRBlock*)defBlk.get((Hashable*)t.val()) != B)
@@ -2377,7 +2377,7 @@
             for (u32 i = (u32)0; i < B.insns().count(); i = i + (u32)1)
                 {
                 IRInsn* n = (IRInsn*)B.insns().get(i);
-                if (!n.op().equals(String.withCString("Mul")) || n.res() == (IRValue*)0 || n.ops().count() < (u32)2)
+                if (!n.isOp(opMul) || n.res() == (IRValue*)0 || n.ops().count() < 2)
                     continue;
                 IROperand* m0 = (IROperand*)n.ops().get((u32)0);
                 IROperand* m1 = (IROperand*)n.ops().get((u32)1);

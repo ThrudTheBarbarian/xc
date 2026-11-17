@@ -24,6 +24,8 @@
 
 #import "Foundation.xc"
 #import "Files.xc"
+#import "Process.xc"
+#import "Stdio.xc"
 
 // -g: source locations, the port of XTIRDbgLoc's class side. The location
 // lowering is AT is process state, as the original's is: an instruction made
@@ -456,9 +458,359 @@ class IRValue
         }
     }
 
+// Opcodes as numbers. An instruction keeps its mnemonic String, which is what
+// the printer and the back ends read, and carries this number as well, looked
+// up from the mnemonic when the instruction is made (IRInsn.with). The
+// optimiser tests the number and IROp's property table instead of comparing
+// strings, each comparison of which built and freed a String. The numbering is
+// private to the process and may be reordered freely; opCount stays last.
+enum IROpcode = {
+    opUnknown = 0,
+    // Constants and moves
+    opConst,
+    opCopy,
+    // Integer arithmetic
+    opAdd,
+    opSub,
+    opMul,
+    opSDiv,
+    opUDiv,
+    opSRem,
+    opURem,
+    opNeg,
+    // Floating point
+    opFAdd,
+    opFSub,
+    opFMul,
+    opFDiv,
+    opFNeg,
+    opFSqrt,
+    // Bitwise and shifts
+    opAnd,
+    opOr,
+    opXor,
+    opNot,
+    opShl,
+    opLShr,
+    opAShr,
+    opRol,
+    opRor,
+    // Conversions
+    opSExt,
+    opZExt,
+    opTrunc,
+    opBitcast,
+    opIntToPtr,
+    opPtrToInt,
+    opFpToSI,
+    opFpToUI,
+    opSIToFp,
+    opUIToFp,
+    opFpExt,
+    opFpTrunc,
+    opClassDowncast,
+    opClassDowncastFailable,
+    // Compares and selects
+    opICmp,
+    opFCmp,
+    opSelect,
+    // Memory
+    opLoad,
+    opStore,
+    opLoadVolatile,
+    opStoreVolatile,
+    opMemCopy,
+    opMemSet,
+    opAddrOf,
+    // Aggregates
+    opAggBuild,
+    opAggExtract,
+    opAggInsert,
+    opAggLoad,
+    opAggStore,
+    opFieldAddr,
+    opElementAddr,
+    // Control flow
+    opBranch,
+    opCondBranch,
+    opSwitch,
+    opReturn,
+    opIndirectBranch,
+    opUnreachable,
+    // Calls
+    opCall,
+    opCallIndirect,
+    opCallCloaked,
+    opCallBanked,
+    opCallBankedIndirect,
+    opVTblDispatch,
+    opProtoDispatch,
+    opProtoLoad,
+    opVTblLoad,
+    // Exceptions (C++)
+    opInvoke,
+    opLandingPad,
+    opResume,
+    opEhSelector,
+    opEhTypeId,
+    // Variadic access
+    opVaStart,
+    opVaArg,
+    // Phi
+    opPhi,
+    // ARC
+    opRetain,
+    opRelease,
+    opAutorelease,
+    opWeakRegister,
+    opWeakUnregister,
+    opWeakLoad,
+    // Banking
+    opBankSave,
+    opBankRestore,
+    opBankSelectFor,
+    // Inline assembly and debug
+    opAsm,
+    opDbgValue,
+    // SIMD
+    opVLoad,
+    opVStore,
+    opVSplat,
+    opVAdd,
+    opVSub,
+    opVMul,
+    opVDiv,
+    opVSqrt,
+    opVAnd,
+    opVOr,
+    opVXor,
+    opVMax,
+    opVMin,
+    opVICmp,
+    opVAddLP,
+    opVMulHi,
+    opVLShr,
+    opVShl,
+    opVNot,
+    opVExtract,
+    opVBsl,
+    opVRotl,
+    opVReduceAdd,
+    opVReduceMax,
+    opVReduceMin,
+    opVFCmp,
+    opVSIToFp,
+    opVFpToSI,
+    opCount
+};
+
+// The opcode property table: one row of OPF_* bits per opcode (IrDefs.xc says
+// what each bit means), and the mnemonic each number stands for. Built on
+// first use. The bits are filled from the predicates the optimiser had; where
+// those disagree, a caller combines bits with single opcodes so that it keeps
+// its own set.
+class IROp
+    {
+    static Map* _byName;   // mnemonic -> its number (Number@)
+    static Array* _names;  // number -> mnemonic (String@)
+    static Data* _store;   // the bits, a u32 per number
+    static u32* _flags;    // _store's bytes
+    u8 _unused;            // no instances: every entry point is static
+
+    static void def(u16 oc, string name, u32 flags)
+        {
+        String* s = String.withCString(name);
+        _byName.set((Hashable*)s, (Object*)Number.with(oc));
+        _names.set(oc, (Object*)s);
+        _flags[oc] = flags;
+        }
+
+    static void build(void)
+        {
+        u32 n = opCount;
+        _byName = new Map();
+        _names = new Array();
+        for (u32 i = 0; i < n; i = i + 1)
+            _names.add((Object*)0);
+        _store = Data.withLength(n * 4);
+        _flags = (u32*)_store.bytes();
+        IROp.def(opUnknown, "?", 0);
+        IROp.def(opConst, "Const", OPF_PURE);
+        IROp.def(opCopy, "Copy", OPF_PURE);
+        IROp.def(opAdd, "Add", OPF_PURE);
+        IROp.def(opSub, "Sub", OPF_PURE);
+        IROp.def(opMul, "Mul", OPF_PURE);
+        IROp.def(opSDiv, "SDiv", OPF_TRAPS);
+        IROp.def(opUDiv, "UDiv", OPF_TRAPS);
+        IROp.def(opSRem, "SRem", OPF_TRAPS);
+        IROp.def(opURem, "URem", OPF_TRAPS);
+        IROp.def(opNeg, "Neg", OPF_PURE);
+        IROp.def(opFAdd, "FAdd", OPF_PURE);
+        IROp.def(opFSub, "FSub", OPF_PURE);
+        IROp.def(opFMul, "FMul", OPF_PURE);
+        IROp.def(opFDiv, "FDiv", OPF_TRAPS);
+        IROp.def(opFNeg, "FNeg", OPF_PURE);
+        IROp.def(opFSqrt, "FSqrt", OPF_PURE);
+        IROp.def(opAnd, "And", OPF_PURE);
+        IROp.def(opOr, "Or", OPF_PURE);
+        IROp.def(opXor, "Xor", OPF_PURE);
+        IROp.def(opNot, "Not", OPF_PURE);
+        IROp.def(opShl, "Shl", OPF_PURE);
+        IROp.def(opLShr, "LShr", OPF_PURE);
+        IROp.def(opAShr, "AShr", OPF_PURE);
+        IROp.def(opRol, "Rol", OPF_PURE);
+        IROp.def(opRor, "Ror", OPF_PURE);
+        IROp.def(opSExt, "SExt", OPF_PURE);
+        IROp.def(opZExt, "ZExt", OPF_PURE);
+        IROp.def(opTrunc, "Trunc", OPF_PURE);
+        IROp.def(opBitcast, "Bitcast", OPF_PURE);
+        IROp.def(opIntToPtr, "IntToPtr", OPF_PURE);
+        IROp.def(opPtrToInt, "PtrToInt", OPF_PURE);
+        IROp.def(opFpToSI, "FpToSI", OPF_PURE);
+        IROp.def(opFpToUI, "FpToUI", OPF_PURE);
+        IROp.def(opSIToFp, "SIToFp", OPF_PURE);
+        IROp.def(opUIToFp, "UIToFp", OPF_PURE);
+        IROp.def(opFpExt, "FpExt", OPF_PURE);
+        IROp.def(opFpTrunc, "FpTrunc", OPF_PURE);
+        IROp.def(opClassDowncast, "ClassDowncast", 0);
+        IROp.def(opClassDowncastFailable, "ClassDowncastFailable", 0);
+        IROp.def(opICmp, "ICmp", OPF_PURE);
+        IROp.def(opFCmp, "FCmp", OPF_PURE);
+        IROp.def(opSelect, "Select", OPF_PURE);
+        IROp.def(opLoad, "Load", OPF_MEM);
+        IROp.def(opStore, "Store", OPF_MEM | OPF_WRITES);
+        IROp.def(opLoadVolatile, "LoadVolatile", OPF_MEM);
+        IROp.def(opStoreVolatile, "StoreVolatile", OPF_MEM | OPF_WRITES);
+        IROp.def(opMemCopy, "MemCopy", OPF_MEM | OPF_WRITES | OPF_CLOBBERS);
+        IROp.def(opMemSet, "MemSet", OPF_MEM | OPF_WRITES | OPF_CLOBBERS);
+        IROp.def(opAddrOf, "AddrOf", OPF_PURE);
+        IROp.def(opAggBuild, "AggBuild", 0);
+        IROp.def(opAggExtract, "AggExtract", 0);
+        IROp.def(opAggInsert, "AggInsert", 0);
+        IROp.def(opAggLoad, "AggLoad", OPF_MEM);
+        IROp.def(opAggStore, "AggStore", OPF_MEM);
+        IROp.def(opFieldAddr, "FieldAddr", OPF_PURE);
+        IROp.def(opElementAddr, "ElementAddr", OPF_PURE);
+        IROp.def(opBranch, "Branch", OPF_TERM);
+        IROp.def(opCondBranch, "CondBranch", OPF_TERM);
+        IROp.def(opSwitch, "Switch", OPF_TERM);
+        IROp.def(opReturn, "Return", OPF_TERM);
+        IROp.def(opIndirectBranch, "IndirectBranch", OPF_TERM);
+        IROp.def(opUnreachable, "Unreachable", OPF_TERM);
+        IROp.def(opCall, "Call", OPF_MEM | OPF_WRITES | OPF_CALL | OPF_CALL_DIRECT | OPF_CLOBBERS);
+        IROp.def(opCallIndirect, "CallIndirect", OPF_MEM | OPF_CALL | OPF_CLOBBERS);
+        IROp.def(opCallCloaked, "CallCloaked", OPF_MEM | OPF_WRITES | OPF_CALL | OPF_CALL_DIRECT | OPF_CLOBBERS);
+        IROp.def(opCallBanked, "CallBanked", OPF_MEM | OPF_WRITES | OPF_CALL | OPF_CALL_DIRECT | OPF_CLOBBERS);
+        IROp.def(opCallBankedIndirect, "CallBankedIndirect", OPF_MEM | OPF_CALL | OPF_CLOBBERS);
+        IROp.def(opVTblDispatch, "VTblDispatch", OPF_MEM | OPF_WRITES | OPF_DISPATCH | OPF_CLOBBERS);
+        IROp.def(opProtoDispatch, "ProtoDispatch", OPF_MEM | OPF_WRITES | OPF_DISPATCH | OPF_CLOBBERS);
+        IROp.def(opProtoLoad, "ProtoLoad", OPF_MEM);
+        IROp.def(opVTblLoad, "VTblLoad", OPF_MEM);
+        IROp.def(opInvoke, "Invoke", OPF_CLOBBERS | OPF_TERM);
+        IROp.def(opLandingPad, "LandingPad", 0);
+        IROp.def(opResume, "Resume", OPF_TERM);
+        IROp.def(opEhSelector, "EhSelector", 0);
+        IROp.def(opEhTypeId, "EhTypeId", 0);
+        IROp.def(opVaStart, "VaStart", 0);
+        IROp.def(opVaArg, "VaArg", 0);
+        IROp.def(opPhi, "Phi", 0);
+        IROp.def(opRetain, "Retain", OPF_MEM | OPF_WRITES);
+        IROp.def(opRelease, "Release", OPF_MEM | OPF_WRITES | OPF_CLOBBERS);
+        IROp.def(opAutorelease, "Autorelease", OPF_MEM | OPF_CLOBBERS);
+        IROp.def(opWeakRegister, "WeakRegister", OPF_MEM | OPF_WRITES | OPF_CLOBBERS);
+        IROp.def(opWeakUnregister, "WeakUnregister", OPF_MEM | OPF_WRITES | OPF_CLOBBERS);
+        IROp.def(opWeakLoad, "WeakLoad", OPF_MEM | OPF_CLOBBERS);
+        IROp.def(opBankSave, "BankSave", 0);
+        IROp.def(opBankRestore, "BankRestore", 0);
+        IROp.def(opBankSelectFor, "BankSelectFor", 0);
+        IROp.def(opAsm, "Asm", OPF_MEM | OPF_WRITES);
+        IROp.def(opDbgValue, "DbgValue", 0);
+        IROp.def(opVLoad, "VLoad", OPF_MEM);
+        IROp.def(opVStore, "VStore", OPF_MEM);
+        IROp.def(opVSplat, "VSplat", 0);
+        IROp.def(opVAdd, "VAdd", 0);
+        IROp.def(opVSub, "VSub", 0);
+        IROp.def(opVMul, "VMul", 0);
+        IROp.def(opVDiv, "VDiv", 0);
+        IROp.def(opVSqrt, "VSqrt", 0);
+        IROp.def(opVAnd, "VAnd", 0);
+        IROp.def(opVOr, "VOr", 0);
+        IROp.def(opVXor, "VXor", 0);
+        IROp.def(opVMax, "VMax", 0);
+        IROp.def(opVMin, "VMin", 0);
+        IROp.def(opVICmp, "VICmp", 0);
+        IROp.def(opVAddLP, "VAddLP", 0);
+        IROp.def(opVMulHi, "VMulHi", 0);
+        IROp.def(opVLShr, "VLShr", 0);
+        IROp.def(opVShl, "VShl", 0);
+        IROp.def(opVNot, "VNot", 0);
+        IROp.def(opVExtract, "VExtract", 0);
+        IROp.def(opVBsl, "VBsl", 0);
+        IROp.def(opVRotl, "VRotl", 0);
+        IROp.def(opVReduceAdd, "VReduceAdd", 0);
+        IROp.def(opVReduceMax, "VReduceMax", 0);
+        IROp.def(opVReduceMin, "VReduceMin", 0);
+        IROp.def(opVFCmp, "VFCmp", 0);
+        IROp.def(opVSIToFp, "VSIToFp", 0);
+        IROp.def(opVFpToSI, "VFpToSI", 0);
+        for (u32 i = 0; i < n; i = i + 1)
+            {
+            if (_names.get(i) == (Object*)0)
+                {
+                Stdio.error(String.withFormat("xcc: internal error: opcode %ld has no row in the opcode table\n", (i32)i));
+                Process.exit(2);
+                }
+            }
+        }
+
+    // The number of a mnemonic, or opUnknown for one that is not an opcode.
+    static u16 find(String* mnemonic)
+        {
+        if (_byName == (Map*)0)
+            IROp.build();
+        Number* oc = (Number*)_byName.get((Hashable*)mnemonic);
+        if (oc == (Number*)0)
+            return opUnknown;
+        return oc.asU16();
+        }
+
+    // The number of a mnemonic the compiler itself made. An unknown one is a
+    // compiler bug: stop rather than let every opcode test miss it.
+    static u16 of(String* mnemonic)
+        {
+        u16 oc = IROp.find(mnemonic);
+        if (oc == opUnknown)
+            {
+            Stdio.error(String.withFormat("xcc: internal error: '%s' is not an IR opcode\n", mnemonic.cString()));
+            Process.exit(2);
+            }
+        return oc;
+        }
+
+    static u32 flags(u16 oc)
+        {
+        if (_byName == (Map*)0)
+            IROp.build();
+        return _flags[oc];
+        }
+
+    static bool has(u16 oc, u32 bits)
+        {
+        return (IROp.flags(oc) & bits) != 0;
+        }
+
+    static String* name(u16 oc)
+        {
+        if (_byName == (Map*)0)
+            IROp.build();
+        return (String*)_names.get(oc);
+        }
+    }
+
     class IRInsn
     {
     String* _op; // the mnemonic, exactly as the printer spells it
+    u16 _opc;    // its number (IROpcode), what the opcode tests compare
     IRValue* _res;
     IRValue* _memRes;
     Array* _ops;
@@ -475,6 +827,7 @@ class IRValue
         {
         _ops = new Array();
         _op = String.withCString("?");
+        _opc = opUnknown;
         _dbg = false;
         }
 
@@ -482,6 +835,7 @@ class IRValue
         {
         IRInsn* i = new IRInsn();
         i._op = mnemonic;
+        i._opc = IROp.of(mnemonic);
         if (IRDbg.hasCurrent())
             i.setDbg(IRDbg.currentFile(), IRDbg.currentLine(), IRDbg.currentCol());
         return i;
@@ -526,6 +880,19 @@ class IRValue
     String* op(void)
         {
         return _op;
+        }
+    u16 opc(void)
+        {
+        return _opc;
+        }
+    bool isOp(u16 oc)
+        {
+        return _opc == oc;
+        }
+    // Has this opcode any of these OPF_* properties?
+    bool opHas(u32 bits)
+        {
+        return IROp.has(_opc, bits);
         }
     IRValue* res(void)
         {
@@ -572,12 +939,12 @@ class IRValue
     // landing pad): [callee, args..., mem, normal block, unwind block].
     bool isInvoke(void)
         {
-        return _op.equals(String.withCString("Invoke"));
+        return _opc == opInvoke;
         }
 
     bool isCall(void)
         {
-        return _op.equals(String.withCString("Call")) || _op.equals(String.withCString("CallCloaked")) || _op.equals(String.withCString("CallBanked")) || _op.equals(String.withCString("CallIndirect")) || _op.equals(String.withCString("CallBankedIndirect"));
+        return IROp.has(_opc, OPF_CALL);
         }
 
     String* text(void)
@@ -597,7 +964,7 @@ class IRValue
             }
         line.append(_op);
 
-        if (_op.equals(String.withCString("Phi")))
+        if (_opc == opPhi)
             {
             line.appendCString(" [");
             u32 pairs = (u32)0;

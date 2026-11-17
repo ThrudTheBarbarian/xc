@@ -173,7 +173,7 @@
         {
         IROperand* a0 = (IROperand*)mul.ops().get((u32)0);
         IROperand* a1 = (IROperand*)mul.ops().get((u32)1);
-        if (mul.op().equals(String.withCString("Shl")))
+        if (mul.isOp(opShl))
             {
             i64 n = (i64)0;
             IRInsn* tr = mmDefWith(a1, String.withCString("Trunc"), defOf);
@@ -206,7 +206,7 @@
     final bool mmBranchesTo(IRBlock* b, IRBlock* to)
         {
         IRInsn* t = b.term();
-        return t != 0 && t.op().equals(String.withCString("Branch")) && t.ops().count() == (u32)1
+        return t != 0 && t.isOp(opBranch) && t.ops().count() == 1
             && ((IROperand*)t.ops().get((u32)0)).blk() == to;
         }
 
@@ -217,10 +217,10 @@
             IRInsn* n = (IRInsn*)b.insns().get(i);
             if (n.memRes() != 0)
                 return false;
-            if (n.op().equals(String.withCString("Const")))
+            if (n.isOp(opConst))
                 continue;
             i64 v = (i64)0;
-            if (n.op().equals(String.withCString("ZExt")) && self.constValue(defOf, (IROperand*)n.ops().get((u32)0), &v))
+            if (n.isOp(opZExt) && self.constValue(defOf, (IROperand*)n.ops().get(0), &v))
                 continue;
             return false;
             }
@@ -243,16 +243,16 @@
             if (n.memRes() != 0 || n.res() == 0)
                 return false;
             i64 v = (i64)0;
-            bool k = n.op().equals(String.withCString("Const")) && n.ops().count() == (u32)1
+            bool k = n.isOp(opConst) && n.ops().count() == 1
                   && ((IROperand*)n.ops().get((u32)0)).kind() == (u8)OPK_IMMI;
-            if (!k && !(n.op().equals(String.withCString("ZExt")) && self.constValue(defOf, (IROperand*)n.ops().get((u32)0), &v)))
+            if (!k && !(n.isOp(opZExt) && self.constValue(defOf, (IROperand*)n.ops().get(0), &v)))
                 return false;
             }
         IRInsn* t = H.term();
-        if (!guard.op().equals(String.withCString("ICmp")) || guard.pred() == 0
+        if (!guard.isOp(opICmp) || guard.pred() == 0
             || !guard.pred().equals(String.withCString("ULT")) || guard.ops().count() != (u32)2 || guard.res() == 0)
             return false;
-        if (t == 0 || !t.op().equals(String.withCString("CondBranch")) || t.ops().count() != (u32)3
+        if (t == 0 || !t.isOp(opCondBranch) || t.ops().count() != 3
             || !mmIsUse((IROperand*)t.ops().get((u32)0), guard.res()))
             return false;
         IRInsn* iv = (IRInsn*)0;
@@ -353,7 +353,7 @@
                 if (mmBranchesTo(p, Hk) && p != Hk && mmSuccs(p).count() == (u32)1)
                     {
                     IRInsn* t = Hk.term();
-                    if (t != 0 && t.op().equals(String.withCString("CondBranch")) && t.ops().count() == (u32)3
+                    if (t != 0 && t.isOp(opCondBranch) && t.ops().count() == 3
                         && ((IROperand*)t.ops().get((u32)1)).blk() == p)
                         Bk = p;
                     }
@@ -391,7 +391,7 @@
                       : !mmPlusZero(mmIncoming(sPhi, Pk), defOf, fty))
                 continue;
             IRInsn* fadd = mmDefWith(mmIncoming(sPhi, Bk), String.withCString(isInt ? "Add" : "FAdd"), defOf);
-            _mxAcc = fadd != (IRInsn*)0 && fadd.op().equals(String.withCString("FAdd")) ? fadd : (IRInsn*)0;
+            _mxAcc = fadd != (IRInsn*)0 && fadd.isOp(opFAdd) ? fadd : (IRInsn*)0;
             // An unsigned sum of a mixed-signedness product is added in the
             // signed type: s' = Bitcast(Add(Bitcast(s), Mul)). As the reference.
             IRInsn* sumOut = (IRInsn*)0;
@@ -498,7 +498,7 @@
             for (u32 i = (u32)0; i < Ek.insns().count(); i = i + (u32)1)
                 {
                 IRInsn* n = (IRInsn*)Ek.insns().get(i);
-                if (!n.op().equals(String.withCString("Store")))
+                if (!n.isOp(opStore))
                     continue;
                 if (store != 0)
                     twoStores = true;

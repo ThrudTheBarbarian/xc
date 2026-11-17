@@ -94,7 +94,7 @@
     final bool unrollBodyHasCall(IRBlock* B)
         {
         for (u32 i = (u32)0; i < B.insns().count(); i = i + (u32)1)
-            if (unrollIsCall(((IRInsn*)B.insns().get(i)).op()))
+            if (unrollIsCall(((IRInsn*)B.insns().get(i)).opc()))
                 return true;
         return false;
         }
@@ -173,7 +173,7 @@
             return (LUCand*)0;
 
         IRInsn* term = H.term();
-        if (term == (IRInsn*)0 || !term.op().equals(String.withCString("CondBranch")) || term.ops().count() < (u32)3)
+        if (term == (IRInsn*)0 || !term.isOp(opCondBranch) || term.ops().count() < 3)
             return (LUCand*)0;
         IROperand* cond = (IROperand*)term.ops().get((u32)0);
         IROperand* o1 = (IROperand*)term.ops().get((u32)1);
@@ -233,14 +233,14 @@
         for (u32 i = (u32)0; i < H.insns().count(); i = i + (u32)1)
             {
             IRInsn* n = (IRInsn*)H.insns().get(i);
-            if (n.op().equals(String.withCString("ICmp")))
+            if (n.isOp(opICmp))
                 {
                 if (icmp != (IRInsn*)0)
                     return (IRInsn*)0;
                 icmp = n;
                 continue;
                 }
-            if (!n.op().equals(String.withCString("Const")) && !n.op().equals(String.withCString("ZExt")) && !n.op().equals(String.withCString("SExt")) && !n.op().equals(String.withCString("Trunc")))
+            if (!n.isOp(opConst) && !n.isOp(opZExt) && !n.isOp(opSExt) && !n.isOp(opTrunc))
                 return (IRInsn*)0;
             }
         if (icmp == (IRInsn*)0 || icmp.res() == (IRValue*)0)
@@ -300,9 +300,9 @@
         for (u32 i = (u32)0; i < B.insns().count(); i = i + (u32)1)
             {
             IRInsn* n = (IRInsn*)B.insns().get(i);
-            if (unrollIsCall(n.op()))
+            if (unrollIsCall(n.opc()))
                 hasCall = true;
-            if (unrollForbidden(n.op()))
+            if (unrollForbidden(n.opc()))
                 return false;
             }
         // A call body is fine — the apply threads its memory token through a
@@ -361,7 +361,7 @@
         if (ndo == (Object*)0)
             return false;
         IRInsn* nextDef = (IRInsn*)ndo;
-        if (!nextDef.op().equals(String.withCString("Add")) || nextDef.ops().count() < (u32)2)
+        if (!nextDef.isOp(opAdd) || nextDef.ops().count() < 2)
             return false;
         IROperand* na = (IROperand*)nextDef.ops().get((u32)0);
         IROperand* nb = (IROperand*)nextDef.ops().get((u32)1);
@@ -438,7 +438,7 @@
         {
         if (b == (IRBlock*)0 || b.term() == (IRInsn*)0)
             return false;
-        if (!b.term().op().equals(String.withCString("Branch")))
+        if (!b.term().isOp(opBranch))
             return false;
         Array* ss = unrollSuccs(b);
         return ss.count() == (u32)1 && (IRBlock*)ss.get((u32)0) == H;
@@ -479,9 +479,10 @@
         return out;
         }
 
-    final bool unrollIsCall(String* op)
+    // CallIndirect but not CallBankedIndirect.
+    final bool unrollIsCall(u16 oc)
         {
-        return self.isCallOp(op) || op.equals(String.withCString("CallIndirect")) || op.equals(String.withCString("VTblDispatch")) || op.equals(String.withCString("ProtoDispatch"));
+        return IROp.has(oc, OPF_CALL_DIRECT | OPF_DISPATCH) || oc == opCallIndirect;
         }
 
     // A body op that makes unrolling unsafe. Plain scalar Load/Store are always
@@ -490,13 +491,13 @@
     // exactly the trip executions. Everything else that touches memory stays
     // forbidden: replicating a Retain/Release is unsound, and replicating a
     // MemCopy or an Asm is pointless.
-    final bool unrollForbidden(String* op)
+    final bool unrollForbidden(u16 oc)
         {
-        if (op.equals(String.withCString("Load")) || op.equals(String.withCString("Store")))
+        if (oc == opLoad || oc == opStore)
             return false;
-        if (unrollIsCall(op))
+        if (unrollIsCall(oc))
             return !_profile.unrollCallsInBody();
-        return self.touchesMemory(op);
+        return self.touchesMemory(oc);
         }
 
     // Split a 2-incoming header phi into (preheader, init, next) given the body
@@ -552,7 +553,7 @@
             if (o == (Object*)0)
                 return false;
             IRInsn* def = (IRInsn*)o;
-            if (def.op().equals(String.withCString("Const")))
+            if (def.isOp(opConst))
                 {
                 if (def.ops().count() < (u32)1)
                     return false;
@@ -562,7 +563,7 @@
                 out[0] = k.imm();
                 return true;
                 }
-            if (!def.op().equals(String.withCString("ZExt")) && !def.op().equals(String.withCString("SExt")) && !def.op().equals(String.withCString("Trunc")))
+            if (!def.isOp(opZExt) && !def.isOp(opSExt) && !def.isOp(opTrunc))
                 return false;
             if (def.ops().count() < (u32)1)
                 return false;
@@ -723,7 +724,7 @@
         {
         bool hasCall = false;
         for (u32 i = (u32)0; i < B.insns().count(); i = i + (u32)1)
-            if (unrollIsCall(((IRInsn*)B.insns().get(i)).op()))
+            if (unrollIsCall(((IRInsn*)B.insns().get(i)).opc()))
                 {
                 hasCall = true;
                 break;

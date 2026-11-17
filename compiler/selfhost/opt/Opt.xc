@@ -236,17 +236,17 @@
         {
         if (i.memRes() != (IRValue*)0)
             return false;
-        String* o = i.op();
-        return o.equals(String.withCString("Const")) || o.equals(String.withCString("Copy")) || o.equals(String.withCString("Add"))
-            || o.equals(String.withCString("Sub")) || o.equals(String.withCString("Mul")) || o.equals(String.withCString("Neg"))
-            || o.equals(String.withCString("And")) || o.equals(String.withCString("Or")) || o.equals(String.withCString("Xor"))
-            || o.equals(String.withCString("Not")) || o.equals(String.withCString("Shl")) || o.equals(String.withCString("LShr"))
-            || o.equals(String.withCString("AShr")) || o.equals(String.withCString("FAdd")) || o.equals(String.withCString("FSub"))
-            || o.equals(String.withCString("FMul")) || o.equals(String.withCString("FNeg")) || o.equals(String.withCString("ICmp"))
-            || o.equals(String.withCString("FCmp")) || o.equals(String.withCString("Select")) || o.equals(String.withCString("SExt"))
-            || o.equals(String.withCString("ZExt")) || o.equals(String.withCString("Trunc")) || o.equals(String.withCString("Bitcast"))
-            || o.equals(String.withCString("FpToSI")) || o.equals(String.withCString("FpToUI")) || o.equals(String.withCString("SIToFp"))
-            || o.equals(String.withCString("UIToFp")) || o.equals(String.withCString("FpExt")) || o.equals(String.withCString("FpTrunc"));
+        u16 o = i.opc();
+        return o == opConst || o == opCopy || o == opAdd
+            || o == opSub || o == opMul || o == opNeg
+            || o == opAnd || o == opOr || o == opXor
+            || o == opNot || o == opShl || o == opLShr
+            || o == opAShr || o == opFAdd || o == opFSub
+            || o == opFMul || o == opFNeg || o == opICmp
+            || o == opFCmp || o == opSelect || o == opSExt
+            || o == opZExt || o == opTrunc || o == opBitcast
+            || o == opFpToSI || o == opFpToUI || o == opSIToFp
+            || o == opUIToFp || o == opFpExt || o == opFpTrunc;
         }
 
     static IROperand* escTripsMap(IROperand* o, Map* m)
@@ -294,7 +294,7 @@
                 {
                 IRBlock* H = (IRBlock*)fn.blocks().get(hi);
                 IRInsn* t = H.term();
-                if (H.phis().count() == (u32)0 || t == (IRInsn*)0 || !t.op().equals(String.withCString("CondBranch"))
+                if (H.phis().count() == 0 || t == (IRInsn*)0 || !t.isOp(opCondBranch)
                     || t.ops().count() < (u32)3)
                     continue;
                 IRBlock* B = (IRBlock*)0;
@@ -302,7 +302,7 @@
                     {
                     IRBlock* c = ((IROperand*)t.ops().get(k)).blk();
                     if (c != (IRBlock*)0 && c != H && c.phis().count() == (u32)0 && c.term() != (IRInsn*)0
-                        && c.term().op().equals(String.withCString("Branch")) && c.term().ops().count() >= (u32)1
+                        && c.term().isOp(opBranch) && c.term().ops().count() >= 1
                         && ((IROperand*)c.term().ops().get((u32)0)).blk() == H)
                         B = c;
                     }
@@ -459,10 +459,10 @@
         for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
             {
             IRBlock* blk = (IRBlock*)fn.blocks().get(b);
-            if (blk.term() != (IRInsn*)0 && (blk.term().isInvoke() || blk.term().op().equals(String.withCString("Resume"))))
+            if (blk.term() != (IRInsn*)0 && (blk.term().isInvoke() || blk.term().isOp(opResume)))
                 return true;
             for (u32 k = (u32)0; k < blk.insns().count(); k = k + (u32)1)
-                if (((IRInsn*)blk.insns().get(k)).op().equals(String.withCString("LandingPad")))
+                if (((IRInsn*)blk.insns().get(k)).isOp(opLandingPad))
                     return true;
             }
         return false;

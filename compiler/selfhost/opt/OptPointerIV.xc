@@ -92,7 +92,7 @@
         for (u32 i = (u32)0; i < B.insns().count(); i = i + (u32)1)
             {
             IRInsn* n = (IRInsn*)B.insns().get(i);
-            if (!n.op().equals(String.withCString("ElementAddr")) || n.res() == (IRValue*)0 || n.ops().count() < (u32)2)
+            if (!n.isOp(opElementAddr) || n.res() == (IRValue*)0 || n.ops().count() < 2)
                 continue;
             IROperand* baseOp = (IROperand*)n.ops().get((u32)0);
             IROperand* idxOp = (IROperand*)n.ops().get((u32)1);
@@ -216,7 +216,7 @@
         if (dd == (Object*)0)
             return false;
         IRInsn* d = (IRInsn*)dd;
-        if (d.op().equals(String.withCString("ZExt")) && d.ops().count() >= (u32)1
+        if (d.isOp(opZExt) && d.ops().count() >= 1
             && ((IROperand*)d.ops().get((u32)0)).kind() == (u8)OPK_USE)
             {
             Object* d2 = defOf.get((Hashable*)((IROperand*)d.ops().get((u32)0)).val());
@@ -224,7 +224,7 @@
                 return false;
             d = (IRInsn*)d2;
             }
-        if (!d.op().equals(String.withCString("Const")) || d.ops().count() < (u32)1)
+        if (!d.isOp(opConst) || d.ops().count() < 1)
             return false;
         IROperand* k = (IROperand*)d.ops().get((u32)0);
         if (k.kind() != (u8)OPK_IMMI || k.imm() < (i32)0)
@@ -273,7 +273,7 @@
             return false;
         i64 a[5];
         i64 b[5];
-        if (d.op().equals(String.withCString("Add")))
+        if (d.isOp(opAdd))
             {
             if (!pivAffIdx((IROperand*)d.ops().get((u32)0), iv, defOf, defBlk, H, B, a, depth + (u32)1))
                 return false;
@@ -290,14 +290,14 @@
             }
         i64 k = (i64)0;
         IROperand* x = (IROperand*)0;
-        if (d.op().equals(String.withCString("Mul")))
+        if (d.isOp(opMul))
             {
             if (pivConstZ(defOf, (IROperand*)d.ops().get((u32)1), &k))
                 x = (IROperand*)d.ops().get((u32)0);
             else if (pivConstZ(defOf, (IROperand*)d.ops().get((u32)0), &k))
                 x = (IROperand*)d.ops().get((u32)1);
             }
-        else if (d.op().equals(String.withCString("Shl")) && pivConstZ(defOf, (IROperand*)d.ops().get((u32)1), &k)
+        else if (d.isOp(opShl) && pivConstZ(defOf, (IROperand*)d.ops().get(1), &k)
                  && k >= (i64)0 && k < (i64)31)
             {
             k = (i64)1 << k;
@@ -328,7 +328,7 @@
         if (H.phis().count() == (u32)0)
             return false;
         IRInsn* term = H.term();
-        if (term == (IRInsn*)0 || !term.op().equals(String.withCString("CondBranch")) || term.ops().count() < (u32)3)
+        if (term == (IRInsn*)0 || !term.isOp(opCondBranch) || term.ops().count() < 3)
             return false;
         IROperand* c0 = (IROperand*)term.ops().get((u32)0);
         if (c0.kind() != (u8)OPK_USE)
@@ -337,7 +337,7 @@
         if (go == (Object*)0)
             return false;
         IRInsn* guard = (IRInsn*)go;
-        if (!guard.op().equals(String.withCString("ICmp")) || guard.ops().count() < (u32)2)
+        if (!guard.isOp(opICmp) || guard.ops().count() < 2)
             return false;
         IROperand* gl = (IROperand*)guard.ops().get((u32)0);
         if (gl.kind() != (u8)OPK_USE)
@@ -378,7 +378,7 @@
         if (no == (Object*)0)
             return false;
         IRInsn* ivNext = (IRInsn*)no;
-        if (!ivNext.op().equals(String.withCString("Add")))
+        if (!ivNext.isOp(opAdd))
             return false;
         Object* nb = defBlk.get((Hashable*)ivBack.val());
         if (nb == (Object*)0 || (IRBlock*)nb != B)
@@ -410,7 +410,7 @@
         {
         if (b == (IRBlock*)0 || b == H || b.term() == (IRInsn*)0)
             return false;
-        if (!b.term().op().equals(String.withCString("Branch")))
+        if (!b.term().isOp(opBranch))
             return false;
         if (b.term().ops().count() < (u32)1)
             return false;
@@ -430,7 +430,7 @@
             return true; // a parameter
         if (bBlk != (Object*)0 && (IRBlock*)bBlk != H && (IRBlock*)bBlk != B)
             return true;
-        return bdef != (Object*)0 && ((IRInsn*)bdef).op().equals(String.withCString("AddrOf"));
+        return bdef != (Object*)0 && ((IRInsn*)bdef).isOp(opAddrOf);
         }
 
     // Resolve a value to the induction variable plus a constant element offset:
@@ -449,7 +449,7 @@
         if (o == (Object*)0)
             return false;
         IRInsn* d = (IRInsn*)o;
-        if (!d.op().equals(String.withCString("Add")) || d.ops().count() < (u32)2)
+        if (!d.isOp(opAdd) || d.ops().count() < 2)
             return false;
         IROperand* a = (IROperand*)d.ops().get((u32)0);
         IROperand* b = (IROperand*)d.ops().get((u32)1);
@@ -482,7 +482,7 @@
         if (d == (Object*)0)
             return false;
         IRInsn* cd = (IRInsn*)d;
-        if (!cd.op().equals(String.withCString("Const")) || cd.ops().count() < (u32)1)
+        if (!cd.isOp(opConst) || cd.ops().count() < 1)
             return false;
         IROperand* k = (IROperand*)cd.ops().get((u32)0);
         if (k.kind() != (u8)OPK_IMMI)
@@ -607,7 +607,7 @@
             // constant address, so it moves to the preheader — otherwise the
             // pointer phi's preheader incoming would not dominate the loop.
             Object* bo = defOf.get((Hashable*)base);
-            if (bo != (Object*)0 && ((IRInsn*)bo).op().equals(String.withCString("AddrOf")))
+            if (bo != (Object*)0 && ((IRInsn*)bo).isOp(opAddrOf))
                 {
                 IRInsn* bdef = (IRInsn*)bo;
                 bool moved = self.removeInsn(H, bdef);

@@ -60,7 +60,7 @@
                 return false;
 
         IRInsn* term = H.term();
-        if (term == 0 || !term.op().equals(String.withCString("CondBranch")))
+        if (term == 0 || !term.isOp(opCondBranch))
             return false;
         if (term.ops().count() < (u32)3)
             return false;
@@ -71,7 +71,7 @@
         if (gd == 0)
             return false;
         IRInsn* guard = (IRInsn*)gd;
-        if (!guard.op().equals(String.withCString("ICmp")))
+        if (!guard.isOp(opICmp))
             return false;
         if (defBlk.get((Hashable*)c0.val()) != (Object*)H)
             return false;
@@ -130,7 +130,7 @@
         {
         if (b == 0 || b == H || b.term() == 0)
             return false;
-        if (!b.term().op().equals(String.withCString("Branch")))
+        if (!b.term().isOp(opBranch))
             return false;
         if (b.term().ops().count() < (u32)1)
             return false;
@@ -206,7 +206,7 @@
         if (nd == 0)
             return false;
         IRInsn* ivNext = (IRInsn*)nd;
-        if (!ivNext.op().equals(String.withCString("Add")))
+        if (!ivNext.isOp(opAdd))
             return false;
         if (defBlk.get((Hashable*)nextOp.val()) != (Object*)_msB)
             return false;
@@ -235,7 +235,7 @@
         if (ed == 0)
             return false;
         IRInsn* ea = (IRInsn*)ed;
-        if (!ea.op().equals(String.withCString("ElementAddr")))
+        if (!ea.isOp(opElementAddr))
             return false;
         if (ea.ops().count() < (u32)2)
             return false;
@@ -253,7 +253,7 @@
         // clone, or a value defined outside the loop.
         Object* bd = defOf.get((Hashable*)ba.val());
         Object* bb = defBlk.get((Hashable*)ba.val());
-        bool clonable = bd != 0 && ((IRInsn*)bd).op().equals(String.withCString("AddrOf")) && bb == (Object*)_msB;
+        bool clonable = bd != 0 && ((IRInsn*)bd).isOp(opAddrOf) && bb == (Object*)_msB;
         bool invariant = bd == 0 || (bb != (Object*)_msH && bb != (Object*)_msB);
         if (!clonable && !invariant)
             return false;
@@ -288,15 +288,15 @@
         for (u32 i = (u32)0; i < B.insns().count(); i = i + (u32)1)
             {
             IRInsn* n = (IRInsn*)B.insns().get(i);
-            String* op = n.op();
-            if (op.equals(String.withCString("Store")))
+            u16 oc = n.opc();
+            if (oc == opStore)
                 {
                 if (store != 0)
                     return (IRInsn*)0;
                 store = n;
                 continue;
                 }
-            if (op.equals(String.withCString("StoreVolatile")) || op.equals(String.withCString("Load")) || op.equals(String.withCString("LoadVolatile")) || op.equals(String.withCString("MemCopy")) || op.equals(String.withCString("MemSet")) || self.isCallOp(op))
+            if (oc == opStoreVolatile || oc == opLoad || oc == opLoadVolatile || oc == opMemCopy || oc == opMemSet || self.isCallOp(oc))
                 return (IRInsn*)0;
             }
         return store;

@@ -44,9 +44,9 @@
             for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
                 {
                 IRInsn* n = (IRInsn*)bb.insns().get(i);
-                if (n.op().equals(String.withCString("VaStart")))
+                if (n.isOp(opVaStart))
                     expandVaStart(n, out, remap);
-                else if (n.op().equals(String.withCString("VaArg")))
+                else if (n.isOp(opVaArg))
                     expandVaArg(m, n, out, remap, buf);
                 else
                     out.add((Object*)n);
@@ -63,8 +63,8 @@
             IRBlock* bb = (IRBlock*)fn.blocks().get(b);
             for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
                 {
-                String* op = ((IRInsn*)bb.insns().get(i)).op();
-                if (op.equals(String.withCString("VaStart")) || op.equals(String.withCString("VaArg")))
+                u16 oc = ((IRInsn*)bb.insns().get(i)).opc();
+                if (oc == opVaStart || oc == opVaArg)
                     return true;
                 }
             }

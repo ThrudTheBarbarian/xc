@@ -251,11 +251,11 @@
                         for (u32 k = (u32)0; k < ks.count(); k = k + (u32)1)
                             {
                             CSEKey* key = (CSEKey*)ks.get(k);
-                            String* kop = key.insn().op();
-                            if (kop.equals(String.withCString("AddrOf"))
-                                || kop.equals(String.withCString("ElementAddr"))
-                                || kop.equals(String.withCString("FieldAddr"))
-                                || (_cseLate && !kop.equals(String.withCString("Const"))))
+                            u16 kop = key.insn().opc();
+                            if (kop == opAddrOf
+                                || kop == opElementAddr
+                                || kop == opFieldAddr
+                                || (_cseLate && kop != opConst))
                                 availPure.set((Hashable*)key, op.get((Hashable*)key));
                             }
                         }
@@ -394,9 +394,9 @@
         for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
             {
             IRInsn* n = (IRInsn*)bb.insns().get(i);
-            if (keepSplats && n.op().equals(String.withCString("VSplat")))
+            if (keepSplats && n.isOp(opVSplat))
                 continue;
-            if (n.res() != 0 && n.memRes() == 0 && isCSEable(n.op()))
+            if (n.res() != 0 && n.memRes() == 0 && isCSEable(n.opc()))
                 {
                 CSEKey* key = pureKey(n, replace);
                 Object* have = availPure.get((Hashable*)key);
@@ -411,7 +411,7 @@
                     }
                 continue;
                 }
-            if (n.op().equals(String.withCString("Load")) && n.res() != 0 && n.ops().count() >= (u32)1 && ((IROperand*)n.ops().get((u32)0)).kind() == (u8)OPK_USE)
+            if (n.isOp(opLoad) && n.res() != 0 && n.ops().count() >= 1 && ((IROperand*)n.ops().get(0)).kind() == OPK_USE)
                 {
                 if (reuseLoad(n, replace, loaded, dead))
                     continue;
@@ -424,7 +424,7 @@
             //
             // VOLATILE stores are excluded: the whole point of one is that the
             // memory, not the value, is the observable thing.
-            if (n.op().equals(String.withCString("Store")) && n.ops().count() >= (u32)2
+            if (n.isOp(opStore) && n.ops().count() >= 2
                 && ((IROperand*)n.ops().get((u32)0)).kind() == (u8)OPK_USE)
                 {
                 IRValue* sp = resolveReplace(replace, ((IROperand*)n.ops().get((u32)0)).val());
@@ -444,7 +444,7 @@
                 }
             // Anything that may write memory, and the bank-state ops that
             // repoint pointers, invalidate what this block has loaded.
-            if (touchesMemory(n.op()) || isBankStateOp(n.op()))
+            if (touchesMemory(n.opc()) || isBankStateOp(n.opc()))
                 loaded.removeAll(); // in place: the CALLER publishes this map
             }
         }
@@ -467,8 +467,8 @@
             return true;
         IRInsn* sd = (IRInsn*)so;
         IRInsn* ld = (IRInsn*)lo;
-        if (!sd.op().equals(String.withCString("FieldAddr"))
-            || !ld.op().equals(String.withCString("FieldAddr")))
+        if (!sd.isOp(opFieldAddr)
+            || !ld.isOp(opFieldAddr))
             return true;
         if (sd.ops().count() < (u32)2 || ld.ops().count() < (u32)2)
             return true;
@@ -585,27 +585,18 @@
     // Pure, deterministic and memory-free: safe to value-number. Div and Rem
     // are here — computing one twice with the same operands gives the same
     // answer, and the first one has already trapped if it was going to.
-    final bool isCSEable(String* op)
+    final bool isCSEable(u16 oc)
         {
-        if (op.equals(String.withCString("UDiv")) || op.equals(String.withCString("SDiv")) || op.equals(String.withCString("URem")) || op.equals(String.withCString("SRem")) || op.equals(String.withCString("FDiv")) || op.equals(String.withCString("AggExtract")))
-            return true;
-        return speculatable0(op);
+        return IROp.has(oc, OPF_PURE | OPF_TRAPS) || oc == opAggExtract;
         }
 
-    // The `speculatable` list, keyed on the opcode alone.
-    final bool speculatable0(String* op)
+    final bool touchesMemory(u16 oc)
         {
-        IRInsn* probe = IRInsn.with(op);
-        return self.speculatable(probe);
+        return IROp.has(oc, OPF_MEM);
         }
 
-    final bool touchesMemory(String* op)
+    final bool isBankStateOp(u16 oc)
         {
-        return op.equals(String.withCString("Load")) || op.equals(String.withCString("Store")) || op.equals(String.withCString("LoadVolatile")) || op.equals(String.withCString("StoreVolatile")) || op.equals(String.withCString("MemCopy")) || op.equals(String.withCString("MemSet")) || op.equals(String.withCString("AggLoad")) || op.equals(String.withCString("AggStore")) || self.isCallOp(op) || op.equals(String.withCString("CallIndirect")) || op.equals(String.withCString("CallBankedIndirect")) || op.equals(String.withCString("VTblDispatch")) || op.equals(String.withCString("ProtoDispatch")) || op.equals(String.withCString("VTblLoad")) || op.equals(String.withCString("ProtoLoad")) || op.equals(String.withCString("Retain")) || op.equals(String.withCString("Release")) || op.equals(String.withCString("Autorelease")) || op.equals(String.withCString("WeakRegister")) || op.equals(String.withCString("WeakUnregister")) || op.equals(String.withCString("WeakLoad")) || op.equals(String.withCString("Asm")) || op.equals(String.withCString("VLoad")) || op.equals(String.withCString("VStore"));
-        }
-
-    final bool isBankStateOp(String* op)
-        {
-        return op.equals(String.withCString("BankSave")) || op.equals(String.withCString("BankRestore")) || op.equals(String.withCString("BankSelectFor"));
+        return oc == opBankSave || oc == opBankRestore || oc == opBankSelectFor;
         }
     }

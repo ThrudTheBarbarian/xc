@@ -85,7 +85,7 @@
     // The wide arithmetic this Trunc consumes, when there is one to narrow.
     final IRInsn* truncSource(IRInsn* tr, Map* defOf)
         {
-        if (!tr.op().equals(String.withCString("Trunc")))
+        if (!tr.isOp(opTrunc))
             return (IRInsn*)0;
         if (tr.res() == 0 || tr.ops().count() < (u32)1)
             return (IRInsn*)0;
@@ -125,7 +125,7 @@
             if (d != 0)
                 {
                 IRInsn* od = (IRInsn*)d;
-                if ((od.op().equals(String.withCString("ZExt")) || od.op().equals(String.withCString("SExt"))) && od.ops().count() >= (u32)1)
+                if ((od.isOp(opZExt) || od.isOp(opSExt)) && od.ops().count() >= 1)
                     {
                     IROperand* inner = (IROperand*)od.ops().get((u32)0);
                     if (inner.kind() == (u8)OPK_USE && inner.val() != 0 && self.irWidth(inner.val().ty()) == w)

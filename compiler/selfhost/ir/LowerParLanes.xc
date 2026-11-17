@@ -67,14 +67,14 @@
         {
         IRInsn* d = mslDefVal(v);
         if (d == (IRInsn*)0) return (i64)-1;
-        if (d.op().equals(String.withCString("Trunc")))
+        if (d.isOp(opTrunc))
             {
             IROperand* o = (IROperand*)d.ops().get((u32)0);
             if (o.kind() != (u8)OPK_USE) return (i64)-1;
             d = mslDefVal(o.val());
             if (d == (IRInsn*)0) return (i64)-1;
             }
-        if (!d.op().equals(String.withCString("Load"))) return (i64)-1;
+        if (!d.isOp(opLoad)) return -1;
         IROperand* p = (IROperand*)d.ops().get((u32)0);
         if (p.kind() != (u8)OPK_USE) return (i64)-1;
         return self.mslSelfField(mslDefVal(p.val()));
@@ -143,7 +143,7 @@
             {
             IRBlock* bb = (IRBlock*)f.blocks().get(bi);
             IRInsn* t = bb.term();
-            if (t == (IRInsn*)0 || !t.op().equals(String.withCString("CondBranch")) || t.ops().count() < (u32)3) continue;
+            if (t == (IRInsn*)0 || !t.isOp(opCondBranch) || t.ops().count() < 3) continue;
             if (((IROperand*)t.ops().get((u32)1)).blk() == bb || ((IROperand*)t.ops().get((u32)2)).blk() == bb)
                 { body = bb; break; }
             }
@@ -153,14 +153,14 @@
         IROperand* condOp = (IROperand*)term.ops().get((u32)0);
         if (condOp.kind() != (u8)OPK_USE) return false;
         IRInsn* cmp = mslDefVal(condOp.val());
-        if (cmp == (IRInsn*)0 || !cmp.op().equals(String.withCString("ICmp")) || !cmp.pred().equals(String.withCString("ULT"))) return false;
+        if (cmp == (IRInsn*)0 || !cmp.isOp(opICmp) || !cmp.pred().equals(String.withCString("ULT"))) return false;
         IROperand* icA = (IROperand*)cmp.ops().get((u32)0);
         IROperand* icB = (IROperand*)cmp.ops().get((u32)1);
         if (icA.kind() != (u8)OPK_USE || icB.kind() != (u8)OPK_USE) return false;
         IRValue* indNext = icA.val();
         IRValue* bound = icB.val();
         IRInsn* incr = mslDefVal(indNext);
-        if (incr == (IRInsn*)0 || !incr.op().equals(String.withCString("Add"))) return false;
+        if (incr == (IRInsn*)0 || !incr.isOp(opAdd)) return false;
         IROperand* a0 = (IROperand*)incr.ops().get((u32)0);
         IROperand* a1 = (IROperand*)incr.ops().get((u32)1);
         IRValue* indPhiVal = (IRValue*)0;

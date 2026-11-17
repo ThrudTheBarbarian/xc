@@ -72,7 +72,7 @@
             {
             IRBlock* bb = (IRBlock*)fn.blocks().get(b);
             IRInsn* t = bb.term();
-            if (t == (IRInsn*)0 || !t.op().equals(String.withCString("CondBranch")) || t.ops().count() != (u32)3)
+            if (t == (IRInsn*)0 || !t.isOp(opCondBranch) || t.ops().count() != 3)
                 continue;
             IROperand* c = (IROperand*)t.ops().get((u32)0);
             i64 k = (i64)-1;
@@ -83,7 +83,7 @@
                 if (defOf == (Map*)0)
                     defOf = self.defMapAll(fn);
                 IRInsn* d = (IRInsn*)defOf.get((Hashable*)c.val());
-                if (d != (IRInsn*)0 && d.op().equals(String.withCString("Const")) && d.ops().count() == (u32)1
+                if (d != (IRInsn*)0 && d.isOp(opConst) && d.ops().count() == 1
                     && ((IROperand*)d.ops().get((u32)0)).kind() == (u8)OPK_IMMI)
                     k = ((IROperand*)d.ops().get((u32)0)).imm();
                 }
@@ -109,7 +109,7 @@
     // path that does not trap.
     final bool trapCutIsTrap(IRInsn* n)
         {
-        if (!n.op().equals(String.withCString("Call")) || n.ops().count() < (u32)1)
+        if (!n.isOp(opCall) || n.ops().count() < 1)
             return false;
         IROperand* c = (IROperand*)n.ops().get((u32)0);
         if (c.kind() != (u8)OPK_SYM || c.name() == 0)
@@ -144,7 +144,7 @@
                         continue;
                     // Already cut: nothing after the trap, and Unreachable.
                     if (i + (u32)1 == bb.insns().count() && bb.term() != (IRInsn*)0
-                        && bb.term().op().equals(String.withCString("Unreachable")))
+                        && bb.term().isOp(opUnreachable))
                         break;
                     if (n.memRes() != (IRValue*)0)
                         rename.set((Hashable*)n.memRes(), (Object*)memIn);
@@ -495,7 +495,7 @@
             {
             IRBlock* A = (IRBlock*)fn.blocks().get(a);
             IRInsn* term = A.term();
-            if (term == (IRInsn*)0 || !term.op().equals(String.withCString("Branch")) || term.ops().count() != (u32)1)
+            if (term == (IRInsn*)0 || !term.isOp(opBranch) || term.ops().count() != 1)
                 continue;
             IRBlock* B = ((IROperand*)term.ops().get((u32)0)).blk();
             if (B == (IRBlock*)0 || B == A || B == entry || bmRefs(refs, B) != (u32)1)

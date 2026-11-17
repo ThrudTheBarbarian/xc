@@ -73,7 +73,7 @@
         if (entry.insns().count() == (u32)0)
             return (Array*)0;
         IRInsn* first = (IRInsn*)entry.insns().get((u32)0);
-        if (!first.op().equals(String.withCString("Retain")))
+        if (!first.isOp(opRetain))
             return (Array*)0;
         if (first.ops().count() < (u32)1)
             return (Array*)0;
@@ -100,9 +100,9 @@
                 IROperand* o = (IROperand*)n.ops().get((u32)0);
                 if (o.kind() != (u8)OPK_USE || o.val() != recv)
                     continue;
-                if (n.op().equals(String.withCString("Retain")))
+                if (n.isOp(opRetain))
                     retains = retains + (u32)1;
-                if (n.op().equals(String.withCString("Release")))
+                if (n.isOp(opRelease))
                     bracket.add((Object*)n);
                 }
             }
@@ -126,10 +126,10 @@
                 IRInsn* n = (IRInsn*)bb.insns().get(i);
                 if (bracket != 0 && self.hasInsn(bracket, n))
                     continue;
-                String* op = n.op();
-                if (op.equals(String.withCString("Release")) || op.equals(String.withCString("VTblDispatch")) || op.equals(String.withCString("ProtoDispatch")))
+                u16 oc = n.opc();
+                if (oc == opRelease || oc == opVTblDispatch || oc == opProtoDispatch)
                     return false;
-                if (!self.isCallOp(op))
+                if (!self.isCallOp(oc))
                     continue;
                 if (n.ops().count() < (u32)1)
                     return false;
@@ -146,7 +146,7 @@
 
     final bool callsTrap(IRInsn* n)
         {
-        if (!n.op().equals(String.withCString("Call")) || n.ops().count() < (u32)1)
+        if (!n.isOp(opCall) || n.ops().count() < 1)
             return false;
         IROperand* c = (IROperand*)n.ops().get((u32)0);
         return c.kind() == (u8)OPK_SYM && c.name() != 0 && c.name().hasPrefix(String.withCString("_xt_check_"))
@@ -295,7 +295,7 @@
                     {
                     IRInsn* r = (IRInsn*)bb.insns().get(i);
                     IROperand* xo = r.ops().count() >= (u32)2 ? (IROperand*)r.ops().get((u32)0) : (IROperand*)0;
-                    if (!r.op().equals(String.withCString("Retain")) || xo == (IROperand*)0
+                    if (!r.isOp(opRetain) || xo == (IROperand*)0
                         || xo.kind() != (u8)OPK_USE || xo.val() == (IRValue*)0 || r.memRes() == (IRValue*)0)
                         {
                         i = i + (u32)1;
@@ -365,19 +365,19 @@
     // Does an instruction stop the pair: may it free, write or change a count?
     final bool apBlocks(IRInsn* n)
         {
-        String* op = n.op();
-        if (op.equals(String.withCString("Retain")))
+        u16 oc = n.opc();
+        if (oc == opRetain)
             return false;    // another count going up frees nothing
         // A subscript check frees nothing (the reference explains).
-        if (op.equals(String.withCString("Call")) && n.ops().count() > (u32)0)
+        if (oc == opCall && n.ops().count() > 0)
             {
             IROperand* c = (IROperand*)n.ops().get((u32)0);
             if (c.kind() == (u8)OPK_SYM && c.name() != (String*)0 && c.name().hasPrefix(String.withCString("_xt_check_")))
                 return false;
             }
         // Every call, an indirect one too (lrcWritesMemory leaves those out).
-        return self.lrcWritesMemory(op) || op.hasPrefix(String.withCString("Call"))
-            || op.equals(String.withCString("LoadVolatile")) || op.equals(String.withCString("Return"));
+        return self.lrcWritesMemory(oc) || IROp.has(oc, OPF_CALL)
+            || oc == opLoadVolatile || oc == opReturn;
         }
 
     // Is v the retained value x, through casts?
@@ -388,7 +388,7 @@
             if (v == x)
                 return true;
             IRInsn* d = (IRInsn*)defs.get((Hashable*)v);
-            if (d == (IRInsn*)0 || !d.op().equals(String.withCString("Bitcast")) || d.ops().count() < (u32)1)
+            if (d == (IRInsn*)0 || !d.isOp(opBitcast) || d.ops().count() < 1)
                 return false;
             IROperand* o = (IROperand*)d.ops().get((u32)0);
             if (o.kind() != (u8)OPK_USE)
@@ -402,7 +402,7 @@
     final bool apIsNull(IRValue* v, Map* defs)
         {
         IRInsn* d = (IRInsn*)defs.get((Hashable*)v);
-        if (d == (IRInsn*)0 || !d.op().equals(String.withCString("IntToPtr")) || d.ops().count() < (u32)1)
+        if (d == (IRInsn*)0 || !d.isOp(opIntToPtr) || d.ops().count() < 1)
             return false;
         IROperand* o = (IROperand*)d.ops().get((u32)0);
         if (o.kind() == (u8)OPK_IMMI)
@@ -410,7 +410,7 @@
         if (o.kind() != (u8)OPK_USE)
             return false;
         IRInsn* c = (IRInsn*)defs.get((Hashable*)o.val());
-        return c != (IRInsn*)0 && c.op().equals(String.withCString("Const")) && c.ops().count() == (u32)1
+        return c != (IRInsn*)0 && c.isOp(opConst) && c.ops().count() == 1
             && ((IROperand*)c.ops().get((u32)0)).kind() == (u8)OPK_IMMI && ((IROperand*)c.ops().get((u32)0)).imm() == (i64)0;
         }
 
@@ -419,7 +419,7 @@
     final bool apNullEdge(IRBlock* p, IRBlock* s, IRValue* x, Map* defs)
         {
         IRInsn* t = p.term();
-        if (t == (IRInsn*)0 || !t.op().equals(String.withCString("CondBranch")) || t.ops().count() < (u32)3)
+        if (t == (IRInsn*)0 || !t.isOp(opCondBranch) || t.ops().count() < 3)
             return false;
         if (((IROperand*)t.ops().get((u32)1)).blk() != s || ((IROperand*)t.ops().get((u32)2)).blk() == s)
             return false;
@@ -427,7 +427,7 @@
         if (c.kind() != (u8)OPK_USE)
             return false;
         IRInsn* cmp = (IRInsn*)defs.get((Hashable*)c.val());
-        if (cmp == (IRInsn*)0 || !cmp.op().equals(String.withCString("ICmp")) || cmp.pred() == (String*)0
+        if (cmp == (IRInsn*)0 || !cmp.isOp(opICmp) || cmp.pred() == (String*)0
             || !cmp.pred().equals(String.withCString("EQ")) || cmp.ops().count() < (u32)2)
             return false;
         IROperand* a = (IROperand*)cmp.ops().get((u32)0);
@@ -444,7 +444,7 @@
         if (apSameObject((IRFunc*)0, v, x, defs))
             return true;
         IRInsn* d = (IRInsn*)defs.get((Hashable*)v);
-        if (d == (IRInsn*)0 || !d.op().equals(String.withCString("Phi")))
+        if (d == (IRInsn*)0 || !d.isOp(opPhi))
             return false;
         IRBlock* s = (IRBlock*)phiBlock.get((Hashable*)v);
         for (u32 k = (u32)0; k + (u32)1 < d.ops().count(); k = k + (u32)2)
@@ -485,7 +485,7 @@
             for (u32 i = start; i < q.insns().count(); i = i + (u32)1)
                 {
                 IRInsn* n = (IRInsn*)q.insns().get(i);
-                if (n.op().equals(String.withCString("Release")) && n.ops().count() >= (u32)2
+                if (n.isOp(opRelease) && n.ops().count() >= 2
                     && ((IROperand*)n.ops().get((u32)0)).kind() == (u8)OPK_USE
                     && apNames(((IROperand*)n.ops().get((u32)0)).val(), x, defs, phiBlock))
                     {
@@ -504,9 +504,9 @@
             IRInsn* t = q.term();
             if (t == (IRInsn*)0)
                 return (IRInsn*)0;
-            if (t.op().equals(String.withCString("Unreachable")))
+            if (t.isOp(opUnreachable))
                 continue;
-            if (!t.op().equals(String.withCString("Branch")) && !t.op().equals(String.withCString("CondBranch")))
+            if (!t.isOp(opBranch) && !t.isOp(opCondBranch))
                 return (IRInsn*)0;         // a Return, or anything else, before the release
             for (u32 k = (u32)0; k < t.ops().count(); k = k + (u32)1)
                 {

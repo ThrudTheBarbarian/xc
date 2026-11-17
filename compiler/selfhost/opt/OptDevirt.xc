@@ -211,9 +211,9 @@
             return false;
         for (u32 i = (u32)0; i < b.insns().count(); i = i + (u32)1)
             {
-            String* op = ((IRInsn*)b.insns().get(i)).op();
-            if (op.equals(String.withCString("Call")) || op.equals(String.withCString("VTblDispatch"))
-                || op.equals(String.withCString("ProtoDispatch")) || op.equals(String.withCString("CallIndirect")))
+            u16 oc = ((IRInsn*)b.insns().get(i)).opc();
+            if (oc == opCall || oc == opVTblDispatch
+                || oc == opProtoDispatch || oc == opCallIndirect)
                 return false;
             }
         return true;
@@ -250,7 +250,7 @@
             for (u32 i = (u32)0; i < B.insns().count(); i = i + (u32)1)
                 {
                 IRInsn* d = (IRInsn*)B.insns().get(i);
-                if (!d.op().equals(String.withCString("VTblDispatch")) || d.ops().count() < (u32)3)
+                if (!d.isOp(opVTblDispatch) || d.ops().count() < 3)
                     continue;
                 if (_dvDone != (Array*)0 && _dvDone.contains((Object*)d))
                     continue;
@@ -300,7 +300,7 @@
             IRInsn* n = (IRInsn*)b.insns().get(i);
             if (n.memRes() == (IRValue*)0 || n.memRes() != mo.val())
                 continue;
-            if (!n.op().equals(String.withCString("Call")) || n.ops().count() < (u32)3)
+            if (!n.isOp(opCall) || n.ops().count() < 3)
                 return (IRInsn*)0;
             IROperand* c0 = (IROperand*)n.ops().get((u32)0);
             IROperand* c1 = (IROperand*)n.ops().get((u32)1);
@@ -552,7 +552,7 @@
                 return false;
             P = q;
             }
-        if (P == (IRBlock*)0 || P.term() == (IRInsn*)0 || !P.term().op().equals(String.withCString("Branch")))
+        if (P == (IRBlock*)0 || P.term() == (IRInsn*)0 || !P.term().isOp(opBranch))
             return false;
         // One exit block, reached from the loop only.
         IRBlock* X = (IRBlock*)0;
@@ -868,7 +868,7 @@
                 // in this copy, so the call is direct. A dispatch on anything
                 // else is done with here: versioned again, each copy would
                 // copy the loop again (BinaryHeap$_siftDown: 448 copies).
-                if (n.op().equals(String.withCString("VTblDispatch")) && n.ops().count() >= (u32)2)
+                if (n.isOp(opVTblDispatch) && n.ops().count() >= 2)
                     {
                     IROperand* r0 = (IROperand*)n.ops().get((u32)0);
                     IROperand* s0 = (IROperand*)n.ops().get((u32)1);
@@ -902,7 +902,7 @@
             for (u32 i = (u32)0; i < ob.insns().count(); i = i + (u32)1)
                 {
                 IRInsn* n = (IRInsn*)ob.insns().get(i);
-                if (!n.op().equals(String.withCString("VTblDispatch")) || n.ops().count() < (u32)3)
+                if (!n.isOp(opVTblDispatch) || n.ops().count() < 3)
                     continue;
                 IROperand* r0 = (IROperand*)n.ops().get((u32)0);
                 IROperand* s0 = (IROperand*)n.ops().get((u32)1);

@@ -114,7 +114,7 @@
         {
         if (_mHelper)
             return (i64)-1;
-        if (d == (IRInsn*)0 || !d.op().equals(String.withCString("FieldAddr")) || d.ops().count() < (u32)2) return (i64)-1;
+        if (d == (IRInsn*)0 || !d.isOp(opFieldAddr) || d.ops().count() < 2) return -1;
         IROperand* b = (IROperand*)d.ops().get((u32)0);
         IROperand* k = (IROperand*)d.ops().get((u32)1);
         if (b.kind() != (u8)OPK_USE || b.val() == (IRValue*)0 || _mDef.get((Hashable*)mslKey(b.val())) != (Object*)0 || k.kind() != (u8)OPK_IMMI)
@@ -379,7 +379,7 @@
             return true;
         IRInsn* a = mslDefOf(p);
         IRInsn* b = mslDefOf(q);
-        if (a == (IRInsn*)0 || b == (IRInsn*)0 || !a.op().equals(String.withCString("ElementAddr")) || !b.op().equals(String.withCString("ElementAddr"))
+        if (a == (IRInsn*)0 || b == (IRInsn*)0 || !a.isOp(opElementAddr) || !b.isOp(opElementAddr)
             || a.ops().count() < (u32)2 || b.ops().count() < (u32)2)
             return false;
         IROperand* a0 = (IROperand*)a.ops().get((u32)0);
@@ -414,7 +414,7 @@
         for (u32 side = (u32)0; side < (u32)2; side = side + (u32)1)
             {
             IRInsn* ld = mslDefOf((IROperand*)b.ops().get(side));
-            if (ld == (IRInsn*)0 || !ld.op().equals(String.withCString("Load")) || ld.ops().count() < (u32)1 || ld.res() == (IRValue*)0)
+            if (ld == (IRInsn*)0 || !ld.isOp(opLoad) || ld.ops().count() < 1 || ld.res() == (IRValue*)0)
                 continue;
             if (!mslArrSame((IROperand*)ld.ops().get((u32)0), a))
                 continue;
@@ -443,11 +443,11 @@
             for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
                 {
                 IRInsn* ip = (IRInsn*)bb.insns().get(i);
-                if (ip.op().equals(String.withCString("DbgValue")))
+                if (ip.isOp(opDbgValue))
                     continue;
                 for (u32 q = (u32)0; q < ip.ops().count(); q = q + (u32)1)
                     mslArrCount((IROperand*)ip.ops().get(q));
-                if (ip.op().equals(String.withCString("ElementAddr")) && ip.res() != (IRValue*)0 && ip.ops().count() > (u32)0)
+                if (ip.isOp(opElementAddr) && ip.res() != (IRValue*)0 && ip.ops().count() > 0)
                     {
                     IROperand* o = (IROperand*)ip.ops().get((u32)0);
                     if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0 && _mArrOf.get((Hashable*)mslKey(o.val())) != (Object*)0)
@@ -521,7 +521,7 @@
             for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
                 {
                 IRInsn* ip = (IRInsn*)bb.insns().get(i);
-                if (!ip.op().equals(String.withCString("Load")) || ip.res() == (IRValue*)0 || ip.ops().count() < (u32)1)
+                if (!ip.isOp(opLoad) || ip.res() == (IRValue*)0 || ip.ops().count() < 1)
                     continue;
                 IROperand* o = (IROperand*)ip.ops().get((u32)0);
                 if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0 && _mArrEl.get((Hashable*)mslKey(o.val())) != (Object*)0
@@ -558,16 +558,16 @@
             {
             IRInsn* t = ((IRBlock*)f.blocks().get(u)).term();
             if (t == (IRInsn*)0) return false;
-            String* op = t.op();
+            u16 oc = t.opc();
             Array* ss = new Array();
-            if (op.equals(String.withCString("Branch")))
+            if (oc == opBranch)
                 ss.add((Object*)Number.with(sIndexOf(((IROperand*)t.ops().get((u32)0)).blk())));
-            else if (op.equals(String.withCString("CondBranch")))
+            else if (oc == opCondBranch)
                 {
                 ss.add((Object*)Number.with(sIndexOf(((IROperand*)t.ops().get((u32)1)).blk())));
                 ss.add((Object*)Number.with(sIndexOf(((IROperand*)t.ops().get((u32)2)).blk())));
                 }
-            else if (!op.equals(String.withCString("Return")))
+            else if (oc != opReturn)
                 return false;
             _sSucc.add((Object*)ss);
             }
@@ -818,7 +818,7 @@
     // The reason an instruction could not be printed.
     final String* parWhyFor(IRInsn* ip, bool ptx)
         {
-        if (ip.op().equals(String.withCString("Call")) && ip.ops().count() > (u32)0 && ((IROperand*)ip.ops().get((u32)0)).kind() == (u8)OPK_SYM)
+        if (ip.isOp(opCall) && ip.ops().count() > 0 && ((IROperand*)ip.ops().get(0)).kind() == OPK_SYM)
             {
             String* callee = ((IROperand*)ip.ops().get((u32)0)).name();
             String* m = self.ptxMathName(callee);

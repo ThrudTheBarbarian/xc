@@ -170,7 +170,7 @@
             {
             IRBlock* bb = (IRBlock*)body.get(i);
             for (u32 k = (u32)0; k < bb.insns().count(); k = k + (u32)1)
-                if (licmWritesMemory(((IRInsn*)bb.insns().get(k)).op()))
+                if (licmWritesMemory(((IRInsn*)bb.insns().get(k)).opc()))
                     {
                     hasMemWrite = true;
                     break;
@@ -188,7 +188,7 @@
             {
             IRBlock* bb = (IRBlock*)body.get(i);
             for (u32 k = (u32)0; k < bb.insns().count(); k = k + (u32)1)
-                if (licmIsCall(((IRInsn*)bb.insns().get(k)).op()))
+                if (licmIsCall(((IRInsn*)bb.insns().get(k)).opc()))
                     {
                     hasCall = true;
                     break;
@@ -222,9 +222,9 @@
                     // every iteration (dominates the latch): one under an `if`
                     // may be the guard's whole point (`if (p != null) s +=
                     // p.x`), and hoisted it loads through null. As the reference.
-                    if (n.op().equals(String.withCString("Load")) && !dom.dominates(bb, latch))
+                    if (n.isOp(opLoad) && !dom.dominates(bb, latch))
                         continue;
-                    if (keepSplats && n.op().equals(String.withCString("VSplat")))
+                    if (keepSplats && n.isOp(opVSplat))
                         continue;
                     if (hasCall && n.res() != (IRValue*)0 && n.res().ty() != (String*)0
                         && n.res().ty().hasPrefix(String.withCString("Vec(")))
@@ -289,7 +289,7 @@
         if (n.res() != (IRValue*)0 && n.res().ty() != (String*)0 && n.res().ty().hasPrefix(String.withCString("Vec("))
             && _licmVecPhiIns != (Array*)0 && Opt.bmHas2(_licmVecPhiIns, n.res()))
             return false;
-        if (n.op().equals(String.withCString("Load")))
+        if (n.isOp(opLoad))
             {
             if (hasMemWrite || n.ops().count() < (u32)1)
                 return false;
@@ -304,8 +304,8 @@
             // reads px[i] with i the OUTER loop's iv; that load is invariant
             // here and was never hoisted, which kept a non-iv load in the body
             // and stopped the reduction recogniser vectorising it.
-            String* pdo = ((IRInsn*)pd).op();
-            return pdo.equals(String.withCString("FieldAddr")) || pdo.equals(String.withCString("ElementAddr"));
+            u16 pdo = ((IRInsn*)pd).opc();
+            return pdo == opFieldAddr || pdo == opElementAddr;
             }
         return licmPure(n);
         }
@@ -317,26 +317,26 @@
         {
         if (n.memRes() != (IRValue*)0)
             return false;
-        String* op = n.op();
-        if (op.equals(String.withCString("Const")) || op.equals(String.withCString("Phi")) || op.equals(String.withCString("SDiv")) || op.equals(String.withCString("UDiv")) || op.equals(String.withCString("SRem")) || op.equals(String.withCString("URem")))
+        u16 oc = n.opc();
+        if (oc == opConst || oc == opPhi || oc == opSDiv || oc == opUDiv || oc == opSRem || oc == opURem)
             return false;
-        return !licmIsTerminator(op);
+        return !licmIsTerminator(oc);
         }
 
-    final bool licmIsTerminator(String* op)
+    // Not Invoke or Resume.
+    final bool licmIsTerminator(u16 oc)
         {
-        return op.equals(String.withCString("Branch")) || op.equals(String.withCString("CondBranch")) || op.equals(String.withCString("Switch")) || op.equals(String.withCString("Return")) || op.equals(String.withCString("IndirectBranch")) || op.equals(String.withCString("Unreachable"));
+        return IROp.has(oc, OPF_TERM) && oc != opInvoke && oc != opResume;
         }
 
-    final bool licmIsCall(String* op)
+    // Not the indirect calls.
+    final bool licmIsCall(u16 oc)
         {
-        return op.equals(String.withCString("Call")) || op.equals(String.withCString("CallBanked"))
-            || op.equals(String.withCString("CallCloaked")) || op.equals(String.withCString("VTblDispatch"))
-            || op.equals(String.withCString("ProtoDispatch"));
+        return IROp.has(oc, OPF_CALL_DIRECT | OPF_DISPATCH);
         }
 
-    final bool licmWritesMemory(String* op)
+    final bool licmWritesMemory(u16 oc)
         {
-        return self.lrcWritesMemory(op) || op.equals(String.withCString("LoadVolatile"));
+        return self.lrcWritesMemory(oc) || oc == opLoadVolatile;
         }
     }

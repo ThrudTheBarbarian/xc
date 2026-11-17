@@ -224,7 +224,7 @@
             if (st.byteLength() > (u32)0) { out.append(ind); out.append(st); out.appendCString("\n"); }
             }
         IRInsn* t = b.term();
-        if (t.op().equals(String.withCString("Return")))
+        if (t.isOp(opReturn))
             {
             if (_mHelper)
                 {
@@ -246,7 +246,7 @@
             out.append(ind); out.appendCString("break;\n");
             return true;
             }
-        if (t.op().equals(String.withCString("Branch")))
+        if (t.isOp(opBranch))
             return sJump(x, self.sIndexOf(((IROperand*)t.ops().get((u32)0)).blk()), h, e, f, ind, out);
         // CondBranch: if/else that rejoin at x's immediate post-dominator.
         u32 n = _sFn.blocks().count();
@@ -292,30 +292,30 @@
         String* b = mslExpr((IROperand*)ip.ops().get((u32)1), t);
         if (a == (String*)0 || b == (String*)0) return (String*)0;
         String* n = self.mslScalar(t);
-        String* op = ip.op();
+        u16 oc = ip.opc();
         String* sym = (String*)0;
         String* ca = (String*)0;   // the cast both operands take, if any
         bool castLeftOnly = false;
-        if (op.equals(String.withCString("Add")) || op.equals(String.withCString("FAdd"))) sym = String.withCString(" + ");
-        else if (op.equals(String.withCString("Sub")) || op.equals(String.withCString("FSub"))) sym = String.withCString(" - ");
-        else if (op.equals(String.withCString("Mul")) || op.equals(String.withCString("FMul"))) sym = String.withCString(" * ");
-        else if (op.equals(String.withCString("FDiv"))) sym = String.withCString(" / ");
-        else if (op.equals(String.withCString("UDiv"))) { sym = String.withCString(" / "); ca = mslUnsigned(t); }
-        else if (op.equals(String.withCString("URem"))) { sym = String.withCString(" % "); ca = mslUnsigned(t); }
-        else if (op.equals(String.withCString("SDiv"))) { sym = String.withCString(" / "); ca = mslSigned(t); }
-        else if (op.equals(String.withCString("SRem"))) { sym = String.withCString(" % "); ca = mslSigned(t); }
-        else if (op.equals(String.withCString("And"))) sym = String.withCString(" & ");
-        else if (op.equals(String.withCString("Or"))) sym = String.withCString(" | ");
-        else if (op.equals(String.withCString("Xor"))) sym = String.withCString(" ^ ");
-        else if (op.equals(String.withCString("Shl"))) sym = String.withCString(" << ");
-        else if (op.equals(String.withCString("LShr"))) { sym = String.withCString(" >> "); ca = mslUnsigned(t); castLeftOnly = true; }
-        else if (op.equals(String.withCString("AShr"))) { sym = String.withCString(" >> "); ca = mslSigned(t); castLeftOnly = true; }
+        if (oc == opAdd || oc == opFAdd) sym = String.withCString(" + ");
+        else if (oc == opSub || oc == opFSub) sym = String.withCString(" - ");
+        else if (oc == opMul || oc == opFMul) sym = String.withCString(" * ");
+        else if (oc == opFDiv) sym = String.withCString(" / ");
+        else if (oc == opUDiv) { sym = String.withCString(" / "); ca = mslUnsigned(t); }
+        else if (oc == opURem) { sym = String.withCString(" % "); ca = mslUnsigned(t); }
+        else if (oc == opSDiv) { sym = String.withCString(" / "); ca = mslSigned(t); }
+        else if (oc == opSRem) { sym = String.withCString(" % "); ca = mslSigned(t); }
+        else if (oc == opAnd) sym = String.withCString(" & ");
+        else if (oc == opOr) sym = String.withCString(" | ");
+        else if (oc == opXor) sym = String.withCString(" ^ ");
+        else if (oc == opShl) sym = String.withCString(" << ");
+        else if (oc == opLShr) { sym = String.withCString(" >> "); ca = mslUnsigned(t); castLeftOnly = true; }
+        else if (oc == opAShr) { sym = String.withCString(" >> "); ca = mslSigned(t); castLeftOnly = true; }
         if (sym == (String*)0) return (String*)0;
         // Signed overflow is undefined in MSL (as in C++): a signed + - * <<
         // is done in the unsigned type, which wraps, and converted back.
-        if (ca == (String*)0 && mslSignedInt(t) && (op.equals(String.withCString("Add")) || op.equals(String.withCString("Sub"))
-                || op.equals(String.withCString("Mul")) || op.equals(String.withCString("Shl"))))
-            { ca = mslUnsigned(t); castLeftOnly = op.equals(String.withCString("Shl")); }
+        if (ca == (String*)0 && mslSignedInt(t) && (oc == opAdd || oc == opSub
+                || oc == opMul || oc == opShl))
+            { ca = mslUnsigned(t); castLeftOnly = oc == opShl; }
         String* s = String.withString(n);
         s.appendCString("(");
         if (ca != (String*)0) { s.append(ca); s.appendCString("("); s.append(a); s.appendCString(")"); }
@@ -338,7 +338,7 @@
         String* p = ip.pred();
         String* sym = (String*)0;
         String* cast = (String*)0;
-        if (ip.op().equals(String.withCString("FCmp")))
+        if (ip.isOp(opFCmp))
             {
             if (p.equals(String.withCString("OEQ"))) sym = String.withCString(" == ");
             else if (p.equals(String.withCString("ONE"))) sym = String.withCString(" != ");
@@ -445,7 +445,7 @@
         }
     final String* mslStatement(IRInsn* ip)
         {
-        String* op = ip.op();
+        u16 oc = ip.opc();
         IRValue* r = ip.res();
         String* rt = r != (IRValue*)0 ? r.ty() : (String*)0;
         IROperand* o0 = ip.ops().count() > (u32)0 ? (IROperand*)ip.ops().get((u32)0) : (IROperand*)0;
@@ -455,14 +455,14 @@
             {
             if (r != (IRValue*)0 && _mArrSkip.get((Hashable*)self.mslKey(r)) != (Object*)0)
                 return String.withCString("");
-            if (op.equals(String.withCString("Store")) && self.mslArrMatch(ip))
+            if (oc == opStore && self.mslArrMatch(ip))
                 return mslArrStore(ip);
             }
-        if (op.equals(String.withCString("Const")))
+        if (oc == opConst)
             return mslAssign(r, mslExpr(o0, rt));
-        if (op.equals(String.withCString("Add")) || op.equals(String.withCString("Sub")) || op.equals(String.withCString("Mul")) || op.equals(String.withCString("UDiv")) || op.equals(String.withCString("SDiv")) || op.equals(String.withCString("URem")) || op.equals(String.withCString("SRem")) || op.equals(String.withCString("And")) || op.equals(String.withCString("Or")) || op.equals(String.withCString("Xor")) || op.equals(String.withCString("Shl")) || op.equals(String.withCString("LShr")) || op.equals(String.withCString("AShr")) || op.equals(String.withCString("FAdd")) || op.equals(String.withCString("FSub")) || op.equals(String.withCString("FMul")) || op.equals(String.withCString("FDiv")))
+        if (oc == opAdd || oc == opSub || oc == opMul || oc == opUDiv || oc == opSDiv || oc == opURem || oc == opSRem || oc == opAnd || oc == opOr || oc == opXor || oc == opShl || oc == opLShr || oc == opAShr || oc == opFAdd || oc == opFSub || oc == opFMul || oc == opFDiv)
             return mslAssign(r, mslBinary(ip));
-        if (op.equals(String.withCString("Not")))
+        if (oc == opNot)
             {
             String* a = mslExpr(o0, rt);
             if (a == (String*)0) return (String*)0;
@@ -470,7 +470,7 @@
             String* e = String.withString(self.mslScalar(rt)); e.appendCString("(~"); e.append(a); e.appendCString(")");
             return mslAssign(r, e);
             }
-        if (op.equals(String.withCString("Neg")) || op.equals(String.withCString("FNeg")))
+        if (oc == opNeg || oc == opFNeg)
             {
             String* a = mslExpr(o0, rt);
             if (a == (String*)0) return (String*)0;
@@ -480,27 +480,27 @@
             e.appendCString(")");
             return mslAssign(r, e);
             }
-        if (op.equals(String.withCString("FSqrt")))
+        if (oc == opFSqrt)
             {
             String* a = mslExpr(o0, rt);
             if (a == (String*)0) return (String*)0;
             String* e = String.withCString(_mFast ? "fast::sqrt(" : "precise::sqrt("); e.append(a); e.appendCString(")");
             return mslAssign(r, e);
             }
-        if (op.equals(String.withCString("ICmp")) || op.equals(String.withCString("FCmp")))
+        if (oc == opICmp || oc == opFCmp)
             return mslAssign(r, mslCompare(ip));
-        if (op.equals(String.withCString("ZExt")) || op.equals(String.withCString("SExt")) || op.equals(String.withCString("Trunc")) || op.equals(String.withCString("SIToFp")) || op.equals(String.withCString("UIToFp")) || op.equals(String.withCString("FpToSI")) || op.equals(String.withCString("FpToUI")) || op.equals(String.withCString("Copy")))
+        if (oc == opZExt || oc == opSExt || oc == opTrunc || oc == opSIToFp || oc == opUIToFp || oc == opFpToSI || oc == opFpToUI || oc == opCopy)
             {
             String* st = self.mslTypeOf(o0) != (String*)0 ? self.mslTypeOf(o0) : rt;
             String* a = mslExpr(o0, st);
             if (a == (String*)0 || self.mslScalar(rt) == (String*)0) return (String*)0;
             // Widen through the source's own signedness, as the CPU does.
-            if (op.equals(String.withCString("ZExt"))) { String* w = String.withString(mslUnsigned(st)); w.appendCString("("); w.append(a); w.appendCString(")"); a = w; }
-            else if (op.equals(String.withCString("SExt"))) { String* w = String.withString(mslSigned(st)); w.appendCString("("); w.append(a); w.appendCString(")"); a = w; }
+            if (oc == opZExt) { String* w = String.withString(mslUnsigned(st)); w.appendCString("("); w.append(a); w.appendCString(")"); a = w; }
+            else if (oc == opSExt) { String* w = String.withString(mslSigned(st)); w.appendCString("("); w.append(a); w.appendCString(")"); a = w; }
             String* e = String.withString(self.mslScalar(rt)); e.appendCString("("); e.append(a); e.appendCString(")");
             return mslAssign(r, e);
             }
-        if (op.equals(String.withCString("Select")))
+        if (oc == opSelect)
             {
             String* c = mslExpr(o0, (String*)0);
             String* a = mslExpr((IROperand*)ip.ops().get((u32)1), rt);
@@ -509,7 +509,7 @@
             String* e = String.withString(c); e.appendCString(" ? "); e.append(a); e.appendCString(" : "); e.append(b);
             return mslAssign(r, e);
             }
-        if (op.equals(String.withCString("FieldAddr")))
+        if (oc == opFieldAddr)
             {
             i64 k = self.mslSelfField(ip);
             // The slot of a captured array: only ever loaded, and that load is
@@ -533,20 +533,20 @@
             e.appendCString(" uchar*)"); e.append(self.mslName(o0.val())); e.appendCString(" + "); e.append(String.withU32(l.offsetAt((u32)fo.imm()))); e.appendCString(")");
             return mslAssign(r, e);
             }
-        if (op.equals(String.withCString("ElementAddr")))
+        if (oc == opElementAddr)
             {
             String* idx = mslExpr((IROperand*)ip.ops().get((u32)1), (String*)0);
             if (idx == (String*)0) return (String*)0;
             return mslAssign(r, mslCat3(mslName(o0.val()), " + ", idx));
             }
-        if (op.equals(String.withCString("Bitcast")))
+        if (oc == opBitcast)
             {
             String* pt = self.mslIsPtr(rt) ? mslPtrType(rt, (String*)_mSpace.get((Hashable*)self.mslKey(r))) : self.mslScalar(rt);
             if (pt == (String*)0) return (String*)0;
             String* e = String.withCString("as_type<"); e.append(pt); e.appendCString(">("); e.append(mslExpr(o0, (String*)0)); e.appendCString(")");
             return mslAssign(r, e);
             }
-        if (op.equals(String.withCString("Load")))
+        if (oc == opLoad)
             {
             String* buf = (String*)_mBufOf.get((Hashable*)self.mslKey(r));
             if (buf != (String*)0) return mslAssign(r, mslCat3(String.withCString("buf_"), "", buf));
@@ -556,7 +556,7 @@
             if (parSinitFlag(o0)) return mslAssign(r, mslCat3(mslScalar(rt), "", String.withCString("(2)")));
             return mslAssign(r, mslCat3(String.withCString("*"), "", self.mslName(o0.val())));
             }
-        if (op.equals(String.withCString("Store")))
+        if (oc == opStore)
             {
             if (o0.kind() != (u8)OPK_USE) return (String*)0;
             String* v = mslExpr((IROperand*)ip.ops().get((u32)1), self.mslPointee(mslTypeOf(o0)));
@@ -564,7 +564,7 @@
             String* s = String.withCString("*"); s.append(self.mslName(o0.val())); s.appendCString(" = "); s.append(v); s.appendCString(";");
             return s;
             }
-        if (op.equals(String.withCString("Call")))
+        if (oc == opCall)
             {
             String* callee = o0.name();
             // The static-init machinery: the host has run it.
@@ -614,7 +614,7 @@
             if (isVoid) { e.appendCString(";"); return e; }
             return mslAssign(r, e);
             }
-        if (op.equals(String.withCString("AddrOf")))
+        if (oc == opAddrOf)
             {
             if (_mSinit.get((Hashable*)self.mslKey(r)) != (Object*)0) return String.withCString("");
             String* lk = (String*)_mLocalOf.get((Hashable*)self.mslKey(r));
@@ -627,7 +627,7 @@
                 if (((String*)_mGlobals.get(q)).equals(g)) gi = q;
             return mslAssign(r, mslCat3(String.withCString("glob_"), "", String.withU32(gi)));
             }
-        if (op.equals(String.withCString("DbgValue")))
+        if (oc == opDbgValue)
             return String.withCString("");
         return (String*)0;
         }
@@ -692,9 +692,9 @@
                 }
             IRInsn* t = bb.term();
             if (t == (IRInsn*)0) return false;
-            if (t.op().equals(String.withCString("Branch")))
+            if (t.isOp(opBranch))
                 body.append(mslEdge(bb, ((IROperand*)t.ops().get((u32)0)).blk(), "            "));
-            else if (t.op().equals(String.withCString("CondBranch")))
+            else if (t.isOp(opCondBranch))
                 {
                 String* c = mslExpr((IROperand*)t.ops().get((u32)0), (String*)0);
                 if (c == (String*)0) return false;
@@ -703,7 +703,7 @@
                 body.appendCString("            }\n");
                 body.append(mslEdge(bb, ((IROperand*)t.ops().get((u32)2)).blk(), "            "));
                 }
-            else if (t.op().equals(String.withCString("Return")))
+            else if (t.isOp(opReturn))
                 {
                 // A helper returns its value; the kernel just stops.
                 IROperand* rv = t.ops().count() > (u32)0 ? (IROperand*)t.ops().get((u32)0) : (IROperand*)0;

@@ -205,16 +205,16 @@
 
     final bool escLaneable(IRInsn* n)
         {
-        String* op = n.op();
+        u16 oc = n.opc();
         // A constant of any width: one is only read through a splat (a lane
         // operation on a narrow one would itself be narrow, and refused).
-        if (op.equals(String.withCString("Const")))
+        if (oc == opConst)
             return n.res() != (IRValue*)0;
         if (escIsConstExt(n))
             return true;
-        if (op.equals(String.withCString("ElementAddr")))
+        if (oc == opElementAddr)
             return self.escAddrOK(n);
-        if (op.equals(String.withCString("Load")))
+        if (oc == opLoad)
             return self.escLoadOK(n);
         if (n.res() == (IRValue*)0)
             return false;
@@ -223,42 +223,42 @@
         if (!Opt.escLane32(t) && !isBool)
             return false;
         u32 nops = n.ops().count();
-        if (op.equals(String.withCString("Add")) || op.equals(String.withCString("Sub")) || op.equals(String.withCString("Mul"))
-            || op.equals(String.withCString("FAdd")) || op.equals(String.withCString("FSub")) || op.equals(String.withCString("FMul"))
-            || op.equals(String.withCString("FDiv")))
+        if (oc == opAdd || oc == opSub || oc == opMul
+            || oc == opFAdd || oc == opFSub || oc == opFMul
+            || oc == opFDiv)
             return !isBool && nops == (u32)2 && self.escOperandOK((IROperand*)n.ops().get((u32)0), false)
                 && self.escOperandOK((IROperand*)n.ops().get((u32)1), false);
-        if (op.equals(String.withCString("And")) || op.equals(String.withCString("Or")) || op.equals(String.withCString("Xor")))
+        if (oc == opAnd || oc == opOr || oc == opXor)
             return nops == (u32)2 && !t.equals(String.withCString("F32"))
                 && self.escOperandOK((IROperand*)n.ops().get((u32)0), isBool)
                 && self.escOperandOK((IROperand*)n.ops().get((u32)1), isBool)
                 && (!isBool || (((IROperand*)n.ops().get((u32)0)).kind() == (u8)OPK_USE
                                 && ((IROperand*)n.ops().get((u32)1)).kind() == (u8)OPK_USE));
-        if (op.equals(String.withCString("Not")))
+        if (oc == opNot)
             return isBool && nops == (u32)1 && self.escOperandOK((IROperand*)n.ops().get((u32)0), true)
                 && ((IROperand*)n.ops().get((u32)0)).kind() == (u8)OPK_USE;
-        if (op.equals(String.withCString("FSqrt")))
+        if (oc == opFSqrt)
             return t.equals(String.withCString("F32")) && nops == (u32)1 && self.escOperandOK((IROperand*)n.ops().get((u32)0), false);
-        if (op.equals(String.withCString("Shl")) || op.equals(String.withCString("LShr")))
+        if (oc == opShl || oc == opLShr)
             {
             i64 k = nops == (u32)2 ? self.escConstOf((IROperand*)n.ops().get((u32)1)) : (i64)0 - (i64)1;
             return !isBool && !t.equals(String.withCString("F32")) && k >= (i64)0 && k < (i64)32
                 && self.escOperandOK((IROperand*)n.ops().get((u32)0), false);
             }
-        if (op.equals(String.withCString("URem")) || op.equals(String.withCString("UDiv")))
+        if (oc == opURem || oc == opUDiv)
             return !isBool && !t.equals(String.withCString("F32")) && nops == (u32)2
                 && Opt.escLog2(escConstOf((IROperand*)n.ops().get((u32)1))) >= (i64)0
                 && self.escOperandOK((IROperand*)n.ops().get((u32)0), false);
-        if (op.equals(String.withCString("SIToFp")) || op.equals(String.withCString("UIToFp")))
+        if (oc == opSIToFp || oc == opUIToFp)
             {
             if (nops != (u32)1 || !t.equals(String.withCString("F32")))
                 return false;
             IROperand* a = (IROperand*)n.ops().get((u32)0);
             if (!self.escOperandOK(a, false) || a.kind() != (u8)OPK_USE || a.val().ty().equals(String.withCString("F32")))
                 return false;
-            return op.equals(String.withCString("SIToFp")) || self.escSmallUnsigned(a);
+            return oc == opSIToFp || self.escSmallUnsigned(a);
             }
-        if (op.equals(String.withCString("ICmp")) || op.equals(String.withCString("FCmp")))
+        if (oc == opICmp || oc == opFCmp)
             {
             if (!isBool || nops != (u32)2 || n.pred() == (String*)0)
                 return false;
@@ -268,9 +268,9 @@
                 return false;
             if (a.kind() != (u8)OPK_USE && b.kind() != (u8)OPK_USE)
                 return false;
-            return op.equals(String.withCString("ICmp")) || Opt.escFloatPred(n.pred());
+            return oc == opICmp || Opt.escFloatPred(n.pred());
             }
-        if (op.equals(String.withCString("Select")))
+        if (oc == opSelect)
             {
             if (isBool || nops != (u32)3)
                 return false;
@@ -297,11 +297,11 @@
 
     final void escLane(Array* into, IRInsn* n)
         {
-        String* op = n.op();
-        if (op.equals(String.withCString("Const")) || _esSkip.contains((Hashable*)n.res()) || self.escIsConstExt(n)
-            || op.equals(String.withCString("ElementAddr")))
+        u16 oc = n.opc();
+        if (oc == opConst || _esSkip.contains((Hashable*)n.res()) || self.escIsConstExt(n)
+            || oc == opElementAddr)
             return;     // an address is made by the load that reads it
-        if (op.equals(String.withCString("Load")))
+        if (oc == opLoad)
             {
             self.escLaneLoad(into, n);
             return;
@@ -309,13 +309,13 @@
         String* vty = self.escVecTy(n.res().ty());
         IRValue* r = (IRValue*)0;
         IROperand* a = (IROperand*)n.ops().get((u32)0);
-        if (op.equals(String.withCString("Not")))
+        if (oc == opNot)
             r = self.escPut(into, "VNot", vty, escV(a, n.res().ty()), (IROperand*)0);
-        else if (op.equals(String.withCString("FSqrt")))
+        else if (oc == opFSqrt)
             r = self.escPut(into, "VSqrt", vty, escV(a, n.res().ty()), (IROperand*)0);
-        else if (op.equals(String.withCString("SIToFp")) || op.equals(String.withCString("UIToFp")))
+        else if (oc == opSIToFp || oc == opUIToFp)
             r = self.escPut(into, "VSIToFp", vty, escV(a, a.val().ty()), (IROperand*)0);
-        else if (op.equals(String.withCString("Select")))
+        else if (oc == opSelect)
             {
             IRValue* m = (IRValue*)_esMap.get((Hashable*)a.val());
             IRValue* x = escV((IROperand*)n.ops().get((u32)1), n.res().ty()).val();
@@ -339,43 +339,43 @@
 
     final IRValue* escLane2(Array* into, IRInsn* n, String* vty)
         {
-        String* op = n.op();
+        u16 oc = n.opc();
         IROperand* a = (IROperand*)n.ops().get((u32)0);
         IROperand* b = (IROperand*)n.ops().get((u32)1);
         String* ta = Opt.escOpTy(n, (u32)0);
         String* tb = Opt.escOpTy(n, (u32)1);
-        if (op.equals(String.withCString("Shl")) || op.equals(String.withCString("LShr")))
-            return self.escPut(into, op.equals(String.withCString("Shl")) ? "VShl" : "VLShr", vty, escV(a, ta),
+        if (oc == opShl || oc == opLShr)
+            return self.escPut(into, oc == opShl ? "VShl" : "VLShr", vty, escV(a, ta),
                           IROperand.immI(self.escConstOf(b), n.res().ty()));
-        if (op.equals(String.withCString("UDiv")))
+        if (oc == opUDiv)
             return self.escPut(into, "VLShr", vty, escV(a, ta), IROperand.immI(Opt.escLog2(escConstOf(b)), n.res().ty()));
-        if (op.equals(String.withCString("URem")))
+        if (oc == opURem)
             return self.escPut(into, "VAnd", vty, escV(a, ta),
                           IROperand.useVal(self.escSplatOf(IROperand.immI(self.escConstOf(b) - (i64)1, n.res().ty()), n.res().ty())));
-        if (op.equals(String.withCString("ICmp")) || op.equals(String.withCString("FCmp")))
+        if (oc == opICmp || oc == opFCmp)
             {
-            IRValue* r = self.escPut(into, op.equals(String.withCString("ICmp")) ? "VICmp" : "VFCmp", vty, escV(a, ta), escV(b, tb));
+            IRValue* r = self.escPut(into, oc == opICmp ? "VICmp" : "VFCmp", vty, escV(a, ta), escV(b, tb));
             ((IRInsn*)into.get(into.count() - (u32)1)).setPred(n.pred());
             return r;
             }
         // 2.0 * v is v + v, exactly, and needs no splat of 2.0.
-        if (op.equals(String.withCString("FMul")) && (self.escIsTwo(a) || self.escIsTwo(b)))
+        if (oc == opFMul && (self.escIsTwo(a) || self.escIsTwo(b)))
             {
             IROperand* v = escV(escIsTwo(a) ? b : a, n.res().ty());
             return self.escPutC(into, "VAdd", vty, v, v);
             }
         string vop = "VAdd";
-        if (op.equals(String.withCString("Sub")) || op.equals(String.withCString("FSub")))
+        if (oc == opSub || oc == opFSub)
             vop = "VSub";
-        else if (op.equals(String.withCString("Mul")) || op.equals(String.withCString("FMul")))
+        else if (oc == opMul || oc == opFMul)
             vop = "VMul";
-        else if (op.equals(String.withCString("FDiv")))
+        else if (oc == opFDiv)
             vop = "VDiv";
-        else if (op.equals(String.withCString("And")))
+        else if (oc == opAnd)
             vop = "VAnd";
-        else if (op.equals(String.withCString("Or")))
+        else if (oc == opOr)
             vop = "VOr";
-        else if (op.equals(String.withCString("Xor")))
+        else if (oc == opXor)
             vop = "VXor";
         return self.escPutC(into, vop, vty, escV(a, ta), escV(b, tb));
         }
@@ -874,7 +874,7 @@
                 IRBlock* B = (IRBlock*)fn.blocks().get(bi);
                 if (B == H)
                     continue;
-                if (B.term() == (IRInsn*)0 || !B.term().op().equals(String.withCString("Branch"))
+                if (B.term() == (IRInsn*)0 || !B.term().isOp(opBranch)
                     || B.term().ops().count() < (u32)1
                     || ((IROperand*)B.term().ops().get((u32)0)).blk() != H)
                     continue;
@@ -913,7 +913,7 @@
         if (H.phis().count() < (u32)3)
             return false;
         IRInsn* term = H.term();
-        if (term == (IRInsn*)0 || !term.op().equals(String.withCString("CondBranch")) || term.ops().count() < (u32)3)
+        if (term == (IRInsn*)0 || !term.isOp(opCondBranch) || term.ops().count() < 3)
             return false;
         IROperand* co = (IROperand*)term.ops().get((u32)0);
         if (co.kind() != (u8)OPK_USE)
@@ -925,7 +925,7 @@
             if (n.res() == co.val())
                 guard = n;
             }
-        if (guard == (IRInsn*)0 || !guard.op().equals(String.withCString("ICmp")) || guard.ops().count() < (u32)2)
+        if (guard == (IRInsn*)0 || !guard.isOp(opICmp) || guard.ops().count() < 2)
             return false;
         IROperand* g0 = (IROperand*)guard.ops().get((u32)0);
         if (g0.kind() != (u8)OPK_USE)
@@ -951,7 +951,7 @@
             return false;
         if (B.phis().count() != (u32)0 || E.phis().count() != (u32)0)
             return false;
-        if (B.term() == (IRInsn*)0 || !B.term().op().equals(String.withCString("Branch"))
+        if (B.term() == (IRInsn*)0 || !B.term().isOp(opBranch)
             || B.term().ops().count() < (u32)1 || ((IROperand*)B.term().ops().get((u32)0)).blk() != H)
             return false;
         if (!self.vecDistributePure(B))
@@ -1192,7 +1192,7 @@
                 return (VecCand*)0;
 
         IRInsn* term = H.term();
-        if (term == (IRInsn*)0 || !term.op().equals(String.withCString("CondBranch")) || term.ops().count() < (u32)3)
+        if (term == (IRInsn*)0 || !term.isOp(opCondBranch) || term.ops().count() < 3)
             return (VecCand*)0;
         IROperand* c0 = (IROperand*)term.ops().get((u32)0);
         if (c0.kind() != (u8)OPK_USE)
@@ -1202,7 +1202,7 @@
         if (go == (Object*)0 || gb == (Object*)0 || (IRBlock*)gb != H)
             return (VecCand*)0;
         IRInsn* guard = (IRInsn*)go;
-        if (!guard.op().equals(String.withCString("ICmp")) || guard.ops().count() < (u32)2)
+        if (!guard.isOp(opICmp) || guard.ops().count() < 2)
             return (VecCand*)0;
         // The guard compares the iv against a positive constant trip count.
         IROperand* gl = (IROperand*)guard.ops().get((u32)0);
@@ -1247,7 +1247,7 @@
         if (no == (Object*)0 || nb == (Object*)0 || (IRBlock*)nb != B)
             return (VecCand*)0;
         IRInsn* ivNext = (IRInsn*)no;
-        if (!ivNext.op().equals(String.withCString("Add")))
+        if (!ivNext.isOp(opAdd))
             return (VecCand*)0;
         if (countOf(uses, nextOp.val()) != (u32)1)
             return (VecCand*)0;
@@ -1416,7 +1416,7 @@
         if (no == (Object*)0 || nb == (Object*)0 || (IRBlock*)nb != B)
             return (VecCand*)0;
         IRInsn* ivNext = (IRInsn*)no;
-        if (!ivNext.op().equals(String.withCString("Add")))
+        if (!ivNext.isOp(opAdd))
             return (VecCand*)0;
         if (countOf(uses, nextOp.val()) != (u32)1)
             return (VecCand*)0;
@@ -1442,8 +1442,8 @@
         if (ao == (Object*)0 || ab == (Object*)0 || (IRBlock*)ab != B)
             return (VecCand*)0;
         IRInsn* accNext = (IRInsn*)ao;
-        if (!(accNext.op().equals(String.withCString("Add"))
-              || ((floatRedux || orderedRedux) && accNext.op().equals(String.withCString("FAdd")))))
+        if (!(accNext.isOp(opAdd)
+              || ((floatRedux || orderedRedux) && accNext.isOp(opFAdd))))
             return (VecCand*)0;
         if (countOf(uses, accNextOp.val()) != (u32)1)
             return (VecCand*)0;
@@ -1621,7 +1621,7 @@
                     if (db != (Object*)0 && (IRBlock*)db == B)
                         {
                         Object* bd = defOf.get((Hashable*)base.val());
-                        if (bd == (Object*)0 || !((IRInsn*)bd).op().equals(String.withCString("AddrOf")))
+                        if (bd == (Object*)0 || !((IRInsn*)bd).isOp(opAddrOf))
                             return (String*)0;
                         }
                     }
@@ -2039,7 +2039,7 @@
     // An unchecked conversion (C's casts) leaves the range test out.
     final void vecApplyConv(IRInsn* n, VecCand* c, IRBlock* entry)
         {
-        String* op = n.op();
+        u16 oc = n.opc();
         IRValue* a = (IRValue*)_vecMap.get((Hashable*)((IROperand*)n.ops().get((u32)0)).val());
         String* rl = n.res().ty();
         String* sl = ((IROperand*)n.ops().get((u32)0)).val().ty();
@@ -2047,9 +2047,9 @@
         String* sty = self.vecTyOf(sl, c.vecBytes());
         bool unchecked = n.pred() != (String*)0 && n.pred().equals(String.withCString("unchecked"));
         IRValue* r = (IRValue*)0;
-        if (op.equals(String.withCString("SIToFp")))
+        if (oc == opSIToFp)
             r = self.vecPut1("VSIToFp", rty, IROperand.useVal(a), (IROperand*)0, n);
-        else if (op.equals(String.withCString("UIToFp")))
+        else if (oc == opUIToFp)
             {
             IRValue* hi = self.vecPut1("VLShr", sty, IROperand.useVal(a), IROperand.immI((i64)16, sl), n);
             IROperand* m16 = self.vecConstSplat(entry, sl, IROperand.immI((i64)65535, sl), c);
@@ -2060,7 +2060,7 @@
             IRValue* sh = self.vecPut1("VMul", rty, IROperand.useVal(fh), k16, n);
             r = self.vecPut1("VAdd", rty, IROperand.useVal(sh), IROperand.useVal(fl), n);
             }
-        else if (op.equals(String.withCString("FpToSI")))
+        else if (oc == opFpToSI)
             {
             r = self.vecPut1("VFpToSI", rty, IROperand.useVal(a), (IROperand*)0, n);
             if (!unchecked)
@@ -2203,7 +2203,7 @@
                 return (VecCand*)0;
 
         IRInsn* term = H.term();
-        if (term == (IRInsn*)0 || !term.op().equals(String.withCString("CondBranch")) || term.ops().count() < (u32)3)
+        if (term == (IRInsn*)0 || !term.isOp(opCondBranch) || term.ops().count() < 3)
             return (VecCand*)0;
         IROperand* cnd = (IROperand*)term.ops().get((u32)0);
         if (cnd.kind() != (u8)OPK_USE)
@@ -2213,7 +2213,7 @@
         if (go == (Object*)0 || gb == (Object*)0 || (IRBlock*)gb != H)
             return (VecCand*)0;
         IRInsn* guard = (IRInsn*)go;
-        if (!guard.op().equals(String.withCString("ICmp")) || guard.ops().count() < (u32)2)
+        if (!guard.isOp(opICmp) || guard.ops().count() < 2)
             return (VecCand*)0;
         IROperand* gl = (IROperand*)guard.ops().get((u32)0);
         if (gl.kind() != (u8)OPK_USE)
@@ -2245,7 +2245,7 @@
             return (VecCand*)0;
         if (vecCountEdge(fn, ivPhi, H, true) != L)
             return (VecCand*)0;
-        if (L.term() == (IRInsn*)0 || !L.term().op().equals(String.withCString("Branch")) || L.term().ops().count() < (u32)1)
+        if (L.term() == (IRInsn*)0 || !L.term().isOp(opBranch) || L.term().ops().count() < 1)
             return (VecCand*)0;
         if (((IROperand*)L.term().ops().get((u32)0)).blk() != H)
             return (VecCand*)0;
@@ -2367,7 +2367,7 @@
             IRInsn* n = (IRInsn*)B.insns().get(i);
             if (n == c.cmpInsn())
                 continue;
-            if (n.op().equals(String.withCString("Select")))
+            if (n.isOp(opSelect))
                 continue;
             if (n == c.ivNext())
                 {
@@ -2375,7 +2375,7 @@
                 continue;
                 }
             // the scalar increment feeds only the Select, so it goes too
-            if (n.res() != (IRValue*)0 && n.op().equals(String.withCString("Add")) && n.ops().count() >= (u32)2)
+            if (n.res() != (IRValue*)0 && n.isOp(opAdd) && n.ops().count() >= 2)
                 {
                 IROperand* a0 = (IROperand*)n.ops().get((u32)0);
                 IROperand* a1 = (IROperand*)n.ops().get((u32)1);
@@ -2384,7 +2384,7 @@
                 if (a1.kind() == (u8)OPK_USE && a1.val() == c.acc())
                     continue;
                 }
-            if (n.op().equals(String.withCString("Load")) && n.res() != (IRValue*)0)
+            if (n.isOp(opLoad) && n.res() != (IRValue*)0)
                 {
                 IRValue* vr = new IRValue(vecTy);
                 IRInsn* vl = IRInsn.with(String.withCString("VLoad"));
@@ -2580,7 +2580,7 @@
             {
             IRBlock* H = (IRBlock*)blocks.get(hb);
             IRInsn* term = H.term();
-            if (term == (IRInsn*)0 || !term.op().equals(String.withCString("CondBranch")) || term.ops().count() < (u32)3)
+            if (term == (IRInsn*)0 || !term.isOp(opCondBranch) || term.ops().count() < 3)
                 continue;
             IRBlock* B = (IRBlock*)0;
             for (u32 k = (u32)1; k < (u32)3 && B == (IRBlock*)0; k = k + (u32)1)
@@ -2589,7 +2589,7 @@
                 if (c == (IRBlock*)0 || c == H || c.term() == (IRInsn*)0)
                     continue;
                 IRInsn* ct = c.term();
-                if (ct.op().equals(String.withCString("Branch")) && ct.ops().count() >= (u32)1
+                if (ct.isOp(opBranch) && ct.ops().count() >= 1
                     && ((IROperand*)ct.ops().get((u32)0)).blk() == H)
                     B = c;
                 }
@@ -2621,7 +2621,7 @@
                 if (nxo == (Object*)0 || (IRBlock*)defBlk.get((Hashable*)nextOp.val()) != B)
                     continue;
                 IRInsn* nx = (IRInsn*)nxo;
-                if (!nx.op().equals(String.withCString("Add")) || nx.ops().count() != (u32)2)
+                if (!nx.isOp(opAdd) || nx.ops().count() != 2)
                     continue;
                 IROperand* n0 = (IROperand*)nx.ops().get((u32)0);
                 IROperand* n1 = (IROperand*)nx.ops().get((u32)1);
@@ -2639,7 +2639,7 @@
                 for (u32 si = (u32)0; si < body.count(); si = si + (u32)1)
                     {
                     IRInsn* sp = (IRInsn*)body.get(si);
-                    if (!sp.op().equals(String.withCString("VSplat")) || sp.res() == (IRValue*)0 || sp.ops().count() < (u32)1)
+                    if (!sp.isOp(opVSplat) || sp.res() == (IRValue*)0 || sp.ops().count() < 1)
                         continue;
                     IROperand* s0op = (IROperand*)sp.ops().get((u32)0);
                     if (s0op.kind() != (u8)OPK_USE || s0op.val() != ivPhi.res())
@@ -2667,9 +2667,9 @@
                             }
                         if (nextL == (IRInsn*)0 || nextL.res() == (IRValue*)0 || nextL.ops().count() != (u32)2)
                             break;
-                        bool isAdd = nextL.op().equals(String.withCString("VAdd"));
-                        bool isSub = nextL.op().equals(String.withCString("VSub"));
-                        bool isMul = nextL.op().equals(String.withCString("VMul"));
+                        bool isAdd = nextL.isOp(opVAdd);
+                        bool isSub = nextL.isOp(opVSub);
+                        bool isMul = nextL.isOp(opVMul);
                         if (!isAdd && !isSub && !isMul)
                             break;
                         IROperand* a0 = (IROperand*)nextL.ops().get((u32)0);
@@ -2688,7 +2688,7 @@
                             if (mdo == (Object*)0)
                                 break;
                             IRInsn* md = (IRInsn*)mdo;
-                            if (!md.op().equals(String.withCString("VSplat")) || md.ops().count() < (u32)1)
+                            if (!md.isOp(opVSplat) || md.ops().count() < 1)
                                 break;
                             IROperand* so = (IROperand*)md.ops().get((u32)0);
                             IROperand* ko = (IROperand*)0;
@@ -2700,7 +2700,7 @@
                                 if (kdo != (Object*)0)
                                     {
                                     IRInsn* kd = (IRInsn*)kdo;
-                                    if (kd.op().equals(String.withCString("Const")) && kd.ops().count() >= (u32)1
+                                    if (kd.isOp(opConst) && kd.ops().count() >= 1
                                         && ((IROperand*)kd.ops().get((u32)0)).kind() == (u8)OPK_IMMI
                                         && kd.res() != (IRValue*)0 && kd.res().ty().equals(mlane))
                                         ko = (IROperand*)kd.ops().get((u32)0);
@@ -2730,7 +2730,7 @@
                             // A splat of an invariant still in the body: the
                             // preheader makes its own. As the reference.
                             IRInsn* od = (IRInsn*)defOf.get((Hashable*)other.val());
-                            if (od == (IRInsn*)0 || !od.op().equals(String.withCString("VSplat")) || od.ops().count() < (u32)1
+                            if (od == (IRInsn*)0 || !od.isOp(opVSplat) || od.ops().count() < 1
                                 || vecIvCount(uses, other.val()) != (u32)1)
                                 break;
                             IROperand* so = (IROperand*)od.ops().get((u32)0);
@@ -2949,7 +2949,7 @@
         String* vecTy = vacc.ty();
 
         IRInsn* term = H.term();
-        if (term == (IRInsn*)0 || !term.op().equals(String.withCString("CondBranch")) || term.ops().count() < (u32)3)
+        if (term == (IRInsn*)0 || !term.isOp(opCondBranch) || term.ops().count() < 3)
             return;
         IROperand* c0 = (IROperand*)term.ops().get((u32)0);
         if (c0.kind() != (u8)OPK_USE)
@@ -2958,7 +2958,7 @@
         if (go == (Object*)0)
             return;
         IRInsn* guard = (IRInsn*)go;
-        if (!guard.op().equals(String.withCString("ICmp")) || guard.ops().count() < (u32)2)
+        if (!guard.isOp(opICmp) || guard.ops().count() < 2)
             return;
         IROperand* gl = (IROperand*)guard.ops().get((u32)0);
         if (gl.kind() != (u8)OPK_USE || gl.val() != iv)
@@ -3010,9 +3010,9 @@
             return;
         IRInsn* vnextInsn = (IRInsn*)vno;
         IRInsn* ivNextInsn = (IRInsn*)ino;
-        if (!ivNextInsn.op().equals(String.withCString("Add")))
+        if (!ivNextInsn.isOp(opAdd))
             return;
-        if (!vnextInsn.op().equals(String.withCString("VAdd")) && !vnextInsn.op().equals(String.withCString("VMax")) && !vnextInsn.op().equals(String.withCString("VMin")))
+        if (!vnextInsn.isOp(opVAdd) && !vnextInsn.isOp(opVMax) && !vnextInsn.isOp(opVMin))
             return;
         if (vnextInsn.ops().count() < (u32)2)
             return;
@@ -3043,7 +3043,7 @@
         if (io == (Object*)0 || ib == (Object*)0 || (IRBlock*)ib != PH)
             return;
         IRInsn* initInsn = (IRInsn*)io;
-        if (!initInsn.op().equals(String.withCString("VSplat")))
+        if (!initInsn.isOp(opVSplat))
             return;
 
         // As many copies as the trip count divides evenly by.

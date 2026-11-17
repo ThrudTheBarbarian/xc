@@ -61,7 +61,7 @@
         if (H.phis().count() == (u32)0)
             return false;
         IRInsn* term = H.term();
-        if (term == (IRInsn*)0 || !term.op().equals(String.withCString("CondBranch")) || term.ops().count() < (u32)1)
+        if (term == (IRInsn*)0 || !term.isOp(opCondBranch) || term.ops().count() < 1)
             return false;
         IROperand* c0 = (IROperand*)term.ops().get((u32)0);
         if (c0.kind() != (u8)OPK_USE)
@@ -70,7 +70,7 @@
         if (co == (Object*)0)
             return false;
         IRInsn* cmp = (IRInsn*)co;
-        if (!cmp.op().equals(String.withCString("ICmp")) || cmp.ops().count() != (u32)2)
+        if (!cmp.isOp(opICmp) || cmp.ops().count() != 2)
             return false;
         if (!self.hasInsn(H.insns(), cmp))
             return false; // the guard is computed in H
@@ -122,7 +122,7 @@
             if (dobj != (Object*)0)
                 {
                 IRInsn* d = (IRInsn*)dobj;
-                if (d.op().equals(String.withCString("Add")) && d.ops().count() == (u32)2)
+                if (d.isOp(opAdd) && d.ops().count() == 2)
                     {
                     IROperand* a = (IROperand*)d.ops().get((u32)0);
                     IROperand* bb2 = (IROperand*)d.ops().get((u32)1);
@@ -202,7 +202,7 @@
 
     final bool nivUseOK(IRInsn* n, IRValue* iv, IRValue* next)
         {
-        bool wide = n.op().equals(String.withCString("ElementAddr")) || n.op().equals(String.withCString("ZExt")) || n.op().equals(String.withCString("SExt"));
+        bool wide = n.isOp(opElementAddr) || n.isOp(opZExt) || n.isOp(opSExt);
         for (u32 i = (u32)0; i < n.ops().count(); i = i + (u32)1)
             {
             IROperand* o = (IROperand*)n.ops().get(i);
@@ -343,7 +343,7 @@
             IRInsn* def = (IRInsn*)o;
             if (def.ops().count() < (u32)1)
                 return false;
-            if (def.op().equals(String.withCString("Const")))
+            if (def.isOp(opConst))
                 {
                 IROperand* k = (IROperand*)def.ops().get((u32)0);
                 if (k.kind() != (u8)OPK_IMMI)
@@ -351,7 +351,7 @@
                 out[0] = k.imm();
                 return true;
                 }
-            if (!def.op().equals(String.withCString("ZExt")) && !def.op().equals(String.withCString("SExt")) && !def.op().equals(String.withCString("Bitcast")))
+            if (!def.isOp(opZExt) && !def.isOp(opSExt) && !def.isOp(opBitcast))
                 return false;
             IROperand* src = (IROperand*)def.ops().get((u32)0);
             if (src.kind() != (u8)OPK_USE)

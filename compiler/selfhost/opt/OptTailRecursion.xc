@@ -105,7 +105,7 @@
             {
             IRBlock* bb = (IRBlock*)fn.blocks().get(b);
             IRInsn* term = bb.term();
-            if (term == 0 || !term.op().equals(String.withCString("Return")))
+            if (term == 0 || !term.isOp(opReturn))
                 continue;
             if (term.ops().count() == (u32)0)
                 continue;
@@ -214,7 +214,7 @@
 
     final bool callIsSelf(IRModule* m, IRInsn* n, IRFunc* fn)
         {
-        if (!self.isCallOp(n.op()) || n.ops().count() < (u32)2)
+        if (!self.isCallOp(n.opc()) || n.ops().count() < 2)
             return false;
         IROperand* callee = (IROperand*)n.ops().get((u32)0);
         if (callee.kind() != (u8)OPK_SYM || callee.name() == 0)
@@ -460,7 +460,7 @@
             {
             IRBlock* bb = (IRBlock*)fn.blocks().get(b);
             IRInsn* term = bb.term();
-            if (term == 0 || !term.op().equals(String.withCString("Return")))
+            if (term == 0 || !term.isOp(opReturn))
                 continue;
             if (term.ops().count() < (u32)2)
                 continue;

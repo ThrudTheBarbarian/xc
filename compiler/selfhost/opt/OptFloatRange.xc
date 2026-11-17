@@ -88,7 +88,7 @@
                 i64 w = (i64)frBits(n.res().ty());
                 if (w == (i64)0)
                     continue;
-                bool ok = n.op().equals(String.withCString("FpToUI"))
+                bool ok = n.isOp(opFpToUI)
                               ? (nn.get((Hashable*)o.val()) != (Object*)0 && e <= w - (i64)1)
                               : e <= w - (i64)2;
                 if (ok)
@@ -100,7 +100,7 @@
     // A checked float-to-integer conversion.
     static bool frIsConv(IRInsn* n)
         {
-        return (n.op().equals(String.withCString("FpToUI")) || n.op().equals(String.withCString("FpToSI")))
+        return (n.isOp(opFpToUI) || n.isOp(opFpToSI))
                && n.pred() == (String*)0 && n.res() != (IRValue*)0 && n.ops().count() >= (u32)1;
         }
 
@@ -187,7 +187,7 @@
             if (d == (Object*)0)
                 return false;
             IRInsn* di = (IRInsn*)d;
-            if (!di.op().equals(String.withCString("Const")) || di.ops().count() < (u32)1)
+            if (!di.isOp(opConst) || di.ops().count() < 1)
                 return false;
             IROperand* k = (IROperand*)di.ops().get((u32)0);
             if (k.kind() != (u8)OPK_IMMF)
@@ -229,17 +229,17 @@
             IROperand* a = (IROperand*)di.ops().get((u32)0);
             IROperand* c = (IROperand*)di.ops().get((u32)1);
             i64 k = (i64)0;
-            if (di.op().equals(String.withCString("And")) && self.frIntConst(c, defOf, &k) && k >= (i64)0)
+            if (di.isOp(opAnd) && self.frIntConst(c, defOf, &k) && k >= 0)
                 {
                 i64 b = (i64)0;
                 while (b < w && ((i64)1 << b) <= k)
                     b = b + (i64)1;
                 return b < w ? b : w;
                 }
-            if (di.op().equals(String.withCString("LShr")) && self.frIntConst(c, defOf, &k) && k > (i64)0 && k < w)
+            if (di.isOp(opLShr) && self.frIntConst(c, defOf, &k) && k > 0 && k < w)
                 return w - k;
             }
-        if (di.op().equals(String.withCString("ZExt")) && di.ops().count() >= (u32)1)
+        if (di.isOp(opZExt) && di.ops().count() >= 1)
             {
             IROperand* s = (IROperand*)di.ops().get((u32)0);
             if (s.kind() == (u8)OPK_USE && s.val() != (IRValue*)0)
@@ -272,15 +272,15 @@
             if (di.ops().count() < (u32)1)
                 return false;
             IROperand* k = (IROperand*)di.ops().get((u32)0);
-            if (di.op().equals(String.withCString("Const")))
+            if (di.isOp(opConst))
                 {
                 if (k.kind() != (u8)OPK_IMMI)
                     return false;
                 out[0] = k.imm();
                 return true;
                 }
-            if (!di.op().equals(String.withCString("ZExt")) && !di.op().equals(String.withCString("SExt"))
-                && !di.op().equals(String.withCString("Trunc")))
+            if (!di.isOp(opZExt) && !di.isOp(opSExt)
+                && !di.isOp(opTrunc))
                 return false;
             if (k.kind() == (u8)OPK_IMMI)
                 {
@@ -300,31 +300,31 @@
         IRValue* r = n.res();
         if (r == (IRValue*)0 || !frIsFloat(r.ty()) || ex.get((Hashable*)r) != (Object*)0)
             return false;
-        String* op = n.op();
+        u16 oc = n.opc();
         u32 nops = n.ops().count();
         i64 ea = (i64)0;
         i64 eb = (i64)0;
         bool na = false;
         bool nb = false;
-        if (op.equals(String.withCString("Const")) && nops >= (u32)1)
+        if (oc == opConst && nops >= 1)
             {
             IROperand* k = (IROperand*)n.ops().get((u32)0);
             if (k.kind() == (u8)OPK_IMMF && self.frConstBound(k.fpHex(), &ea, &na))
                 return self.frSet(r, ea, na, ex, nn);
             return false;
             }
-        if (op.equals(String.withCString("UIToFp")) && nops >= (u32)1)
+        if (oc == opUIToFp && nops >= 1)
             return self.frSet(r, self.frIntBound((IROperand*)n.ops().get((u32)0), defOf, false), true, ex, nn);
-        if (op.equals(String.withCString("SIToFp")) && nops >= (u32)1)
+        if (oc == opSIToFp && nops >= 1)
             return self.frSet(r, self.frIntBound((IROperand*)n.ops().get((u32)0), defOf, true), false, ex, nn);
-        if ((op.equals(String.withCString("Copy")) || op.equals(String.withCString("FpExt"))
-             || op.equals(String.withCString("FpTrunc")) || op.equals(String.withCString("FNeg"))) && nops >= (u32)1)
+        if ((oc == opCopy || oc == opFpExt
+             || oc == opFpTrunc || oc == opFNeg) && nops >= 1)
             {
             if (!self.frGet((IROperand*)n.ops().get((u32)0), defOf, ex, nn, &ea, &na))
                 return false;
-            return self.frSet(r, ea, na && !op.equals(String.withCString("FNeg")), ex, nn);
+            return self.frSet(r, ea, na && oc != opFNeg, ex, nn);
             }
-        if (op.equals(String.withCString("Select")) && nops == (u32)3)
+        if (oc == opSelect && nops == 3)
             {
             if (!self.frGet((IROperand*)n.ops().get((u32)1), defOf, ex, nn, &ea, &na)
                 || !self.frGet((IROperand*)n.ops().get((u32)2), defOf, ex, nn, &eb, &nb))
@@ -335,7 +335,7 @@
             return false;
         IROperand* a = (IROperand*)n.ops().get((u32)0);
         IROperand* b = (IROperand*)n.ops().get((u32)1);
-        if (op.equals(String.withCString("FDiv")))
+        if (oc == opFDiv)
             {
             // Only by a nonzero normal constant: |b| >= 2^(e-1023).
             u64 bits = (u64)0;
@@ -349,11 +349,11 @@
         if (!self.frGet(a, defOf, ex, nn, &ea, &na) || !self.frGet(b, defOf, ex, nn, &eb, &nb))
             return false;
         i64 mx = ea > eb ? ea : eb;
-        if (op.equals(String.withCString("FMul")))
+        if (oc == opFMul)
             return self.frSet(r, ea + eb, na && nb, ex, nn);
-        if (op.equals(String.withCString("FAdd")))
+        if (oc == opFAdd)
             return self.frSet(r, mx + (i64)1, na && nb, ex, nn);
-        if (op.equals(String.withCString("FSub")))
+        if (oc == opFSub)
             return self.frSet(r, mx + (i64)1, false, ex, nn);
         return false;
         }
@@ -414,9 +414,9 @@
             bool s1 = x1.kind() == (u8)OPK_USE && x1.val() == r;
             i64 grow = (i64)0;
             bool keepNn = ni;
-            if (nx.op().equals(String.withCString("FAdd")) && s0 && s1)
+            if (nx.isOp(opFAdd) && s0 && s1)
                 grow = (i64)1;
-            else if (nx.op().equals(String.withCString("FMul")) && (s0 || s1) && !(s0 && s1))
+            else if (nx.isOp(opFMul) && (s0 || s1) && !(s0 && s1))
                 {
                 u64 bits = (u64)0;
                 if (!self.frConstBits(s0 ? x1 : x0, defOf, &bits))
@@ -445,7 +445,7 @@
     final u32 frTrip(IRBlock* H, IRBlock* L, IRBlock* E, Map* defOf)
         {
         IRInsn* t = L.term();
-        if (t == (IRInsn*)0 || !t.op().equals(String.withCString("CondBranch")) || t.ops().count() != (u32)3)
+        if (t == (IRInsn*)0 || !t.isOp(opCondBranch) || t.ops().count() != 3)
             return (u32)0;
         IROperand* c = (IROperand*)t.ops().get((u32)0);
         IROperand* tt = (IROperand*)t.ops().get((u32)1);
@@ -458,7 +458,7 @@
         if (cd == (Object*)0)
             return (u32)0;
         IRInsn* cmp = (IRInsn*)cd;
-        if (!cmp.op().equals(String.withCString("ICmp")) || cmp.ops().count() != (u32)2 || cmp.pred() == (String*)0)
+        if (!cmp.isOp(opICmp) || cmp.ops().count() != 2 || cmp.pred() == (String*)0)
             return (u32)0;
         IROperand* ca = (IROperand*)cmp.ops().get((u32)0);
         i64 bound = (i64)0;
@@ -490,7 +490,7 @@
             if (ad == (Object*)0)
                 continue;
             IRInsn* add = (IRInsn*)ad;
-            if (!add.op().equals(String.withCString("Add")) || add.ops().count() != (u32)2)
+            if (!add.isOp(opAdd) || add.ops().count() != 2)
                 continue;
             IROperand* a0 = (IROperand*)add.ops().get((u32)0);
             IROperand* a1 = (IROperand*)add.ops().get((u32)1);

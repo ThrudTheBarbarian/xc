@@ -67,11 +67,11 @@
             for (i32 i = (i32)blk.insns().count() - (i32)1; i >= (i32)0; i = i - (i32)1)
                 {
                 IRInsn* n = (IRInsn*)blk.insns().get((u32)i);
-                String* op = n.op();
-                bool pure = op.equals(String.withCString("AddrOf")) || op.equals(String.withCString("Load"))
-                         || op.equals(String.withCString("ICmp")) || op.equals(String.withCString("Const"))
-                         || op.equals(String.withCString("ZExt")) || op.equals(String.withCString("SExt"))
-                         || op.equals(String.withCString("Trunc"));
+                u16 oc = n.opc();
+                bool pure = oc == opAddrOf || oc == opLoad
+                         || oc == opICmp || oc == opConst
+                         || oc == opZExt || oc == opSExt
+                         || oc == opTrunc;
                 if (!pure)
                     continue;
                 bool resUsed = n.res() != (IRValue*)0 && self.hasValue(used, n.res());
@@ -176,7 +176,7 @@
         if (run.phis().count() > (u32)0 || addr == 0 || addr.res() == (IRValue*)0)
             return false;
         IRInsn* t = run.term();
-        if (t == 0 || !t.op().equals(String.withCString("Branch")) || t.ops().count() != (u32)1)
+        if (t == 0 || !t.isOp(opBranch) || t.ops().count() != 1)
             return false;
         IROperand* to = (IROperand*)t.ops().get((u32)0);
         if (to.kind() != (u8)OPK_BLOCK || to.blk() != cont)
@@ -184,9 +184,9 @@
         for (u32 k = (u32)0; k < run.insns().count(); k = k + (u32)1)
             {
             IRInsn* n = (IRInsn*)run.insns().get(k);
-            if (n.op().equals(String.withCString("Const")))
+            if (n.isOp(opConst))
                 continue;
-            if (n.op().equals(String.withCString("Store")) && n.ops().count() >= (u32)2)
+            if (n.isOp(opStore) && n.ops().count() >= 2)
                 {
                 IROperand* a = (IROperand*)n.ops().get((u32)0);
                 if (a.kind() == (u8)OPK_USE && a.val() == addr.res())
@@ -239,7 +239,7 @@
     final bool recogniseGuard(IRModule* m, IRFunc* fn, IRBlock* G, Map* defOf)
         {
         IRInsn* term = G.term();
-        if (term == 0 || !term.op().equals(String.withCString("CondBranch")))
+        if (term == 0 || !term.isOp(opCondBranch))
             return false;
         if (term.ops().count() < (u32)3)
             return false;
@@ -255,7 +255,7 @@
         if (d == 0)
             return false;
         IRInsn* icmp = (IRInsn*)d;
-        if (!icmp.op().equals(String.withCString("ICmp")))
+        if (!icmp.isOp(opICmp))
             return false;
         // Two shapes. Single-threaded: `ICmp EQ flag, 0`, run block stores 1.
         // Threaded (threading.md §9.5): `ICmp NE flag, 2`, run block calls
@@ -281,7 +281,7 @@
         if (dl == 0)
             return false;
         IRInsn* load = (IRInsn*)dl;
-        if (!load.op().equals(String.withCString("Load")))
+        if (!load.isOp(opLoad))
             return false;
         if (load.ops().count() < (u32)1)
             return false;
@@ -292,7 +292,7 @@
         if (da == 0)
             return false;
         IRInsn* addr = (IRInsn*)da;
-        if (!addr.op().equals(String.withCString("AddrOf")))
+        if (!addr.isOp(opAddrOf))
             return false;
         if (addr.ops().count() < (u32)1)
             return false;
@@ -313,7 +313,7 @@
         Array* rp = self.predsOfBlock(fn, run);
         if (rp.count() != (u32)1 || (IRBlock*)rp.get((u32)0) != G)
             return false;
-        if (run.term() == 0 || !run.term().op().equals(String.withCString("Branch")))
+        if (run.term() == 0 || !run.term().isOp(opBranch))
             return false;
         Array* rs = self.successorsOf(run);
         if (rs.count() != (u32)1 || (IRBlock*)rs.get((u32)0) != cont)
@@ -352,13 +352,13 @@
             // happens inside _xtc_sinit_run, so the proof is a call to it whose
             // first argument is this flag.
             IROperand* a = (IROperand*)0;
-            if (n.op().equals(String.withCString("Store")))
+            if (n.isOp(opStore))
                 {
                 if (n.ops().count() < (u32)1)
                     continue;
                 a = (IROperand*)n.ops().get((u32)0);
                 }
-            else if (n.op().equals(String.withCString("Call")))
+            else if (n.isOp(opCall))
                 {
                 if (n.ops().count() < (u32)2)
                     continue;
@@ -377,7 +377,7 @@
             if (d == 0)
                 continue;
             IRInsn* sa = (IRInsn*)d;
-            if (!sa.op().equals(String.withCString("AddrOf")))
+            if (!sa.isOp(opAddrOf))
                 continue;
             if (sa.ops().count() < (u32)1)
                 continue;
@@ -400,7 +400,7 @@
         if (d == 0)
             return false;
         IRInsn* n = (IRInsn*)d;
-        if (!n.op().equals(String.withCString("Const")))
+        if (!n.isOp(opConst))
             return false;
         if (n.ops().count() < (u32)1)
             return false;
@@ -462,7 +462,7 @@
                     break;
                 IRBlock* A = (IRBlock*)fn.blocks().get(a);
                 IRInsn* t = A.term();
-                if (t == 0 || !t.op().equals(String.withCString("Branch")))
+                if (t == 0 || !t.isOp(opBranch))
                     continue;
                 if (t.ops().count() < (u32)1)
                     continue;
@@ -562,7 +562,7 @@
             for (u32 i = (u32)0; i < blk.insns().count(); i = i + (u32)1)
                 {
                 IRInsn* n = (IRInsn*)blk.insns().get(i);
-                if (n.op().equals(String.withCString("Call")))
+                if (n.isOp(opCall))
                     return false;
                 for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
                     {
@@ -648,8 +648,8 @@
     // library's (private:docs/bugs/270).
     final bool isRematerialisable(IRInsn* def)
         {
-        if (!def.op().equals(String.withCString("AddrOf"))
-            && !def.op().equals(String.withCString("Const")))
+        if (!def.isOp(opAddrOf)
+            && !def.isOp(opConst))
             return false;
         if (def.res() == 0 || def.memRes() != 0)
             return false;

@@ -282,13 +282,13 @@
             if (d.ops().count() < (u32)1)
                 return false;
             IROperand* a0 = (IROperand*)d.ops().get((u32)0);
-            if (d.op().equals(String.withCString("Const")) && a0.kind() == (u8)OPK_IMMI)
+            if (d.isOp(opConst) && a0.kind() == OPK_IMMI)
                 {
                 *out = (i32)a0.imm();
                 return true;
                 }
-            if (!d.op().equals(String.withCString("ZExt")) && !d.op().equals(String.withCString("SExt"))
-                && !d.op().equals(String.withCString("Trunc")))
+            if (!d.isOp(opZExt) && !d.isOp(opSExt)
+                && !d.isOp(opTrunc))
                 return false;
             if (a0.kind() != (u8)OPK_USE)
                 return false;
@@ -362,7 +362,7 @@
             if (J.insns().count() != (u32)0 || J.phis().count() != (u32)1)
                 continue;
             IRInsn* term = J.term();
-            if (term == (IRInsn*)0 || !term.op().equals(String.withCString("CondBranch"))
+            if (term == (IRInsn*)0 || !term.isOp(opCondBranch)
                 || term.ops().count() < (u32)3)
                 continue;
             IROperand* c0 = (IROperand*)term.ops().get((u32)0);
@@ -524,7 +524,7 @@
             IRInsn* term = H.term();
             if (term == 0)
                 continue;
-            if (!term.op().equals(String.withCString("CondBranch")))
+            if (!term.isOp(opCondBranch))
                 continue;
             if (term.ops().count() < (u32)3)
                 continue;
@@ -563,7 +563,7 @@
                 IRInsn* fa = fA.term();
                 if (ta == (IRInsn*)0 || fa == (IRInsn*)0)
                     continue;
-                if (!ta.op().equals(String.withCString("Branch")) || !fa.op().equals(String.withCString("Branch")))
+                if (!ta.isOp(opBranch) || !fa.isOp(opBranch))
                     continue;
                 if (ta.ops().count() < (u32)1 || fa.ops().count() < (u32)1)
                     continue;
@@ -638,7 +638,7 @@
         if (M.phis().count() != (u32)0)
             return false;
         IRInsn* t = M.term();
-        if (t == 0 || !t.op().equals(String.withCString("Branch")))
+        if (t == 0 || !t.isOp(opBranch))
             return false;
         if (t.ops().count() < (u32)1)
             return false;
@@ -764,7 +764,7 @@
         if (d == 0)
             return false;
         IRInsn* n = (IRInsn*)d;
-        if (!n.op().equals(String.withCString("Const")))
+        if (!n.isOp(opConst))
             return false;
         if (n.ops().count() < (u32)1)
             return false;
@@ -786,7 +786,7 @@
         if (d == 0)
             return false;
         IRInsn* n = (IRInsn*)d;
-        if (n.op().equals(String.withCString("ICmp")) || n.op().equals(String.withCString("FCmp")))
+        if (n.isOp(opICmp) || n.isOp(opFCmp))
             return true;
         return isBoolConst(defOf, op, (i32)0) || isBoolConst(defOf, op, (i32)1);
         }

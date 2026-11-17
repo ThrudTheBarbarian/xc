@@ -52,7 +52,7 @@
             {
             IRBlock* H = (IRBlock*)fn.blocks().get(hi);
             IRInsn* term = H.term();
-            if (term == (IRInsn*)0 || !term.op().equals(String.withCString("CondBranch"))
+            if (term == (IRInsn*)0 || !term.isOp(opCondBranch)
                 || term.ops().count() < (u32)3)
                 continue;
             IRBlock* t0 = ((IROperand*)term.ops().get((u32)1)).blk();
@@ -101,7 +101,7 @@
                 for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
                     {
                     IRInsn* n = (IRInsn*)bb.insns().get(i);
-                    if (!n.op().equals(String.withCString("ICmp")) || n.ops().count() != (u32)2)
+                    if (!n.isOp(opICmp) || n.ops().count() != 2)
                         continue;
                     u32 side = (u32)2;
                     if (((IROperand*)n.ops().get((u32)1)).kind() == (u8)OPK_IMMI) side = (u32)1;
@@ -193,7 +193,7 @@
             {
             IRBlock* H = (IRBlock*)fn.blocks().get(hi);
             IRInsn* term = H.term();
-            if (term == (IRInsn*)0 || !term.op().equals(String.withCString("CondBranch"))
+            if (term == (IRInsn*)0 || !term.isOp(opCondBranch)
                 || term.ops().count() < (u32)3)
                 continue;
             IRBlock* t0 = ((IROperand*)term.ops().get((u32)1)).blk();
@@ -266,8 +266,8 @@
             // A block that leaves without a branch (a Return) escapes the loop;
             // one that ends in Unreachable (a failed check's trap, trapCut)
             // does not take anything out of it. As the reference.
-            if (b.term().ops().count() == (u32)0 && !b.term().op().equals(String.withCString("Branch"))
-                && !b.term().op().equals(String.withCString("Unreachable")))
+            if (b.term().ops().count() == 0 && !b.term().isOp(opBranch)
+                && !b.term().isOp(opUnreachable))
                 return (Array*)0;
             if (seen.count() > (u32)8) return (Array*)0;
             for (u32 q = (u32)0; q < b.term().ops().count(); q = q + (u32)1)
@@ -306,7 +306,7 @@
             for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
                 {
                 IRInsn* n = (IRInsn*)bb.insns().get(i);
-                if (!n.op().equals(String.withCString("Mul")) || n.res() == (IRValue*)0
+                if (!n.isOp(opMul) || n.res() == (IRValue*)0
                     || n.ops().count() < (u32)2)
                     continue;
                 u32 side = (u32)2;
@@ -426,7 +426,7 @@
                 {
                 IRInsn* only = (IRInsn*)g.get((u32)0);
                 IROperand* oa = (IROperand*)only.ops().get((u32)0);
-                if (only.op().equals(String.withCString("Const")) && oa.kind() == (u8)OPK_IMMF
+                if (only.isOp(opConst) && oa.kind() == OPK_IMMF
                     && oa.fpHex() != (String*)0 && !oa.fpHex().equals(String.withCString("0000000000000000"))
                     && (IRBlock*)firstBlk.get(gi) != entry && chOnCycle((IRBlock*)firstBlk.get(gi)))
                     loopConst = true;
@@ -479,7 +479,7 @@
         if (n.res() == (IRValue*)0 || n.ops().count() < (u32)1)
             return (String*)0;
         IROperand* a = (IROperand*)n.ops().get((u32)0);
-        if (n.op().equals(String.withCString("Const")) && a.kind() == (u8)OPK_IMMF && n.res().ty() != (String*)0)
+        if (n.isOp(opConst) && a.kind() == OPK_IMMF && n.res().ty() != (String*)0)
             {
             String* k = String.withCString("f:");
             k.append(n.res().ty());
@@ -488,7 +488,7 @@
                 k.append(a.fpHex());
             return k;
             }
-        if (_profile.hoistGlobalAddr() && n.op().equals(String.withCString("AddrOf")) && a.kind() == (u8)OPK_SYM && n.res().ty() != (String*)0 && n.res().ty().hasPrefix(String.withCString("Ptr(")))
+        if (_profile.hoistGlobalAddr() && n.isOp(opAddrOf) && a.kind() == OPK_SYM && n.res().ty() != (String*)0 && n.res().ty().hasPrefix(String.withCString("Ptr(")))
             {
             String* k = String.withCString("a:");
             k.append(a.name());
@@ -501,7 +501,7 @@
         // the AddrOf with the rest of the body: matrix_mul's k loop ends up
         // with 32 copies of `AddrOf a` and 32 of `AddrOf b`, 64 live values
         // where two would do.
-        if (_profile.hoistLocalAddr() && n.op().equals(String.withCString("AddrOf"))
+        if (_profile.hoistLocalAddr() && n.isOp(opAddrOf)
             && a.kind() == (u8)OPK_USE && n.res().ty() != (String*)0
             && n.res().ty().hasPrefix(String.withCString("Ptr("))
             && _hoistFn != (IRFunc*)0 && self.aeIsPinned(_hoistFn, a.val()))

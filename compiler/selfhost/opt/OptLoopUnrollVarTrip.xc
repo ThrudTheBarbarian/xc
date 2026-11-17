@@ -106,11 +106,11 @@
         for (u32 i = (u32)0; i < H.insns().count(); i = i + (u32)1)
             {
             IRInsn* n = (IRInsn*)H.insns().get(i);
-            if (n.memRes() != (IRValue*)0 || vtIsCall(n.op()))
+            if (n.memRes() != (IRValue*)0 || vtIsCall(n.opc()))
                 return false;
             }
         IRInsn* term = H.term();
-        if (term == (IRInsn*)0 || !term.op().equals(String.withCString("CondBranch")) || term.ops().count() < (u32)3)
+        if (term == (IRInsn*)0 || !term.isOp(opCondBranch) || term.ops().count() < 3)
             return false;
         IROperand* c0 = (IROperand*)term.ops().get((u32)0);
         if (c0.kind() != (u8)OPK_USE)
@@ -120,7 +120,7 @@
         if (go == (Object*)0 || gb == (Object*)0 || (IRBlock*)gb != H)
             return false;
         IRInsn* guard = (IRInsn*)go;
-        if (!guard.op().equals(String.withCString("ICmp")) || guard.ops().count() < (u32)2)
+        if (!guard.isOp(opICmp) || guard.ops().count() < 2)
             return false;
 
         // The induction phi is whichever header phi the guard tests directly.
@@ -166,8 +166,8 @@
         // handles VLoad/VStore memory tokens like any other.
         for (u32 i = (u32)0; i < B.insns().count(); i = i + (u32)1)
             {
-            String* op = ((IRInsn*)B.insns().get(i)).op();
-            if (vtIsCall(op) || op.equals(String.withCString("VReduceAdd")) || op.equals(String.withCString("VReduceMax")) || op.equals(String.withCString("VReduceMin")))
+            u16 oc = ((IRInsn*)B.insns().get(i)).opc();
+            if (vtIsCall(oc) || oc == opVReduceAdd || oc == opVReduceMax || oc == opVReduceMin)
                 return false;
             }
         _vtIvPhi = ivPhi;
@@ -182,14 +182,14 @@
     // const-trip one: it does not count CallIndirect / VTblDispatch /
     // ProtoDispatch, so a body that dispatches through a vtable still unrolls.
     // The two passes really do differ here.
-    final bool vtIsCall(String* op)
+    final bool vtIsCall(u16 oc)
         {
-        return op.equals(String.withCString("Call")) || op.equals(String.withCString("CallBanked")) || op.equals(String.withCString("CallCloaked"));
+        return IROp.has(oc, OPF_CALL_DIRECT);
         }
 
     final bool vtLatches(IRBlock* b, IRBlock* H)
         {
-        return b != (IRBlock*)0 && b != H && b.term() != (IRInsn*)0 && b.term().op().equals(String.withCString("Branch")) && b.term().ops().count() >= (u32)1 && ((IROperand*)b.term().ops().get((u32)0)).blk() == H;
+        return b != (IRBlock*)0 && b != H && b.term() != (IRInsn*)0 && b.term().isOp(opBranch) && b.term().ops().count() >= 1 && ((IROperand*)b.term().ops().get(0)).blk() == H;
         }
 
     final VTCand* vtAt(IRFunc* fn, IRBlock* H, Map* defOf, Map* defBlk, Map* uses)
@@ -213,7 +213,7 @@
         if (no == (Object*)0 || nb == (Object*)0 || (IRBlock*)nb != B)
             return (VTCand*)0;
         IRInsn* ivNext = (IRInsn*)no;
-        if (!ivNext.op().equals(String.withCString("Add")) || self.countOf(uses, nextOp.val()) != (u32)1 || ivNext.ops().count() < (u32)2)
+        if (!ivNext.isOp(opAdd) || self.countOf(uses, nextOp.val()) != 1 || ivNext.ops().count() < 2)
             return (VTCand*)0;
         IROperand* a0 = (IROperand*)ivNext.ops().get((u32)0);
         IROperand* a1 = (IROperand*)ivNext.ops().get((u32)1);
@@ -391,7 +391,7 @@
         for (u32 i = (u32)0; i < B.insns().count(); i = i + (u32)1)
             {
             IRInsn* n = (IRInsn*)B.insns().get(i);
-            if (n.memRes() != (IRValue*)0 || vtIsCall(n.op()))
+            if (n.memRes() != (IRValue*)0 || vtIsCall(n.opc()))
                 return false;
             Object* ch = (Object*)0;
             for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
@@ -441,7 +441,7 @@
     final bool ucRecognise(IRBlock* L)
         {
         IRInsn* t = L.term();
-        if (t == (IRInsn*)0 || !t.op().equals(String.withCString("CondBranch")) || t.ops().count() < (u32)3)
+        if (t == (IRInsn*)0 || !t.isOp(opCondBranch) || t.ops().count() < 3)
             return false;
         if (((IROperand*)t.ops().get((u32)1)).blk() != L || ((IROperand*)t.ops().get((u32)2)).blk() == L)
             return false;
@@ -473,14 +473,14 @@
             IRInsn* n = (IRInsn*)L.insns().get(i);
             if (n.res() == c0.val())
                 _ucCmp = n;
-            if (n.op().equals(String.withCString("Add")) && n.ops().count() == (u32)2
+            if (n.isOp(opAdd) && n.ops().count() == 2
                 && ((IROperand*)n.ops().get((u32)0)).kind() == (u8)OPK_USE
                 && ((IROperand*)n.ops().get((u32)0)).val() == _ucIv.res()
                 && ((IROperand*)n.ops().get((u32)1)).kind() == (u8)OPK_IMMI
                 && ((IROperand*)n.ops().get((u32)1)).imm() == (i32)1)
                 _ucNext = n;
             }
-        if (_ucNext == (IRInsn*)0 || _ucCmp == (IRInsn*)0 || !_ucCmp.op().equals(String.withCString("ICmp"))
+        if (_ucNext == (IRInsn*)0 || _ucCmp == (IRInsn*)0 || !_ucCmp.isOp(opICmp)
             || _ucCmp.pred() == (String*)0 || !_ucCmp.pred().equals(String.withCString("ULT")) || _ucCmp.ops().count() < (u32)2)
             return false;
         IROperand* ca = (IROperand*)_ucCmp.ops().get((u32)0);
@@ -515,7 +515,7 @@
                 if (((IROperand*)_ucIv.ops().get(k)).blk() != L)
                     _ucPre = ((IROperand*)_ucIv.ops().get(k)).blk();
             if (_ucPre == (IRBlock*)0 || _ucPre.term() == (IRInsn*)0
-                || !_ucPre.term().op().equals(String.withCString("Branch")) || _ucPre.term().ops().count() != (u32)1
+                || !_ucPre.term().isOp(opBranch) || _ucPre.term().ops().count() != 1
                 || ((IROperand*)_ucPre.term().ops().get((u32)0)).blk() != L)
                 return false;
             }
@@ -1054,21 +1054,21 @@
             return false;
         // Vector arithmetic on invariants (sort_small's splat(r) *
         // splat(40503)) is shared the same way. As the reference.
-        bool vecArith = n.op().equals(String.withCString("VAdd")) || n.op().equals(String.withCString("VSub")) || n.op().equals(String.withCString("VMul"))
-                     || n.op().equals(String.withCString("VAnd")) || n.op().equals(String.withCString("VOr")) || n.op().equals(String.withCString("VXor"));
-        if (!vecArith && !n.op().equals(String.withCString("VSplat")) && !n.op().equals(String.withCString("Const")) && !n.op().equals(String.withCString("ZExt")) && !n.op().equals(String.withCString("SExt")) && !n.op().equals(String.withCString("Trunc")))
+        bool vecArith = n.isOp(opVAdd) || n.isOp(opVSub) || n.isOp(opVMul)
+                     || n.isOp(opVAnd) || n.isOp(opVOr) || n.isOp(opVXor);
+        if (!vecArith && !n.isOp(opVSplat) && !n.isOp(opConst) && !n.isOp(opZExt) && !n.isOp(opSExt) && !n.isOp(opTrunc))
             return false;
         // A splat of a value the body defines (a constant the vectoriser left
         // in the body, past its hoisting budget) is made again in each copy:
         // shared, it would be live across all of them, and MD5's rounds have
         // dozens.
-        if (n.op().equals(String.withCString("VSplat")) && n.ops().count() == (u32)1
+        if (n.isOp(opVSplat) && n.ops().count() == 1
             && ((IROperand*)n.ops().get((u32)0)).kind() == (u8)OPK_USE
             && map.get((Hashable*)((IROperand*)n.ops().get((u32)0)).val()) != (Object*)0)
             return false;
         // In a large body none is: each is a register the copies' own values
         // need.
-        if ((vecArith || n.op().equals(String.withCString("VSplat"))) && c.b().insns().count() > (u32)VEC_SPLAT_BIG_BODY)
+        if ((vecArith || n.isOp(opVSplat)) && c.b().insns().count() > VEC_SPLAT_BIG_BODY)
             return false;
         for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
             {
@@ -1126,7 +1126,7 @@
                 {
                 IRInsn* rn = (IRInsn*)c.redNexts().get(i);
                 IRValue* rp = (IRValue*)c.redVals().get(i);
-                if (rn == (IRInsn*)0 || !rn.op().equals(String.withCString("ElementAddr")))
+                if (rn == (IRInsn*)0 || !rn.isOp(opElementAddr))
                     continue;
                 if (rn.ops().count() < (u32)2)
                     continue;

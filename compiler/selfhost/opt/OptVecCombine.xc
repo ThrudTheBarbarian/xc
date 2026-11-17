@@ -135,13 +135,13 @@
     // vcPoolable for a 32- or 64-byte vector of 32-bit integer lanes.
     final IRInsn* vcPoolableWide(IRInsn* n, Map* defIn)
         {
-        if (!n.op().equals(String.withCString("VSplat")) || n.ops().count() != (u32)1 || n.res() == (IRValue*)0)
+        if (!n.isOp(opVSplat) || n.ops().count() != 1 || n.res() == (IRValue*)0)
             return (IRInsn*)0;
         IROperand* o = (IROperand*)n.ops().get((u32)0);
         if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0)
             return (IRInsn*)0;
         IRInsn* d = (IRInsn*)defIn.get((Hashable*)o.val());
-        if (d == (IRInsn*)0 || !d.op().equals(String.withCString("Const")) || d.ops().count() < (u32)1
+        if (d == (IRInsn*)0 || !d.isOp(opConst) || d.ops().count() < 1
             || ((IROperand*)d.ops().get((u32)0)).kind() != (u8)OPK_IMMI)
             return (IRInsn*)0;
         String* t = n.res().ty();
@@ -262,13 +262,13 @@
     // integer constant defined in this block, into a 16-byte integer vector.
     final IRInsn* vcPoolable(IRInsn* n, Map* defIn)
         {
-        if (!n.op().equals(String.withCString("VSplat")) || n.ops().count() != (u32)1 || n.res() == (IRValue*)0)
+        if (!n.isOp(opVSplat) || n.ops().count() != 1 || n.res() == (IRValue*)0)
             return (IRInsn*)0;
         IROperand* o = (IROperand*)n.ops().get((u32)0);
         if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0)
             return (IRInsn*)0;
         IRInsn* d = (IRInsn*)defIn.get((Hashable*)o.val());
-        if (d == (IRInsn*)0 || !d.op().equals(String.withCString("Const")) || d.ops().count() < (u32)1
+        if (d == (IRInsn*)0 || !d.isOp(opConst) || d.ops().count() < 1
             || ((IROperand*)d.ops().get((u32)0)).kind() != (u8)OPK_IMMI)
             return (IRInsn*)0;
         String* lane = laneOfVec(n.res().ty());

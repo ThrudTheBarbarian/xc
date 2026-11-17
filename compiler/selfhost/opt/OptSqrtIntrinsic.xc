@@ -59,7 +59,7 @@
     // `_xm_` intrinsic the arch libraries use.
     final bool isSqrtCall(IRInsn* n)
         {
-        if (!n.op().equals(String.withCString("Call")))
+        if (!n.isOp(opCall))
             return false;
         if (n.res() == 0)
             return false;

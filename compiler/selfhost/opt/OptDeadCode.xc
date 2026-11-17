@@ -34,7 +34,7 @@
         if (d == (IRInsn*)0 || d.ops().count() < (u32)1)
             return (String*)0;
         IROperand* o0 = (IROperand*)d.ops().get((u32)0);
-        if (d.op().equals(String.withCString("AddrOf")))
+        if (d.isOp(opAddrOf))
             {
             if (o0.kind() != (u8)OPK_USE || o0.val() == (IRValue*)0)
                 return (String*)0;
@@ -48,8 +48,8 @@
             k.append(String.withU64((u64)((Number*)seen).asU32()));
             return k;
             }
-        bool fa = d.op().equals(String.withCString("FieldAddr"));
-        if ((fa || d.op().equals(String.withCString("ElementAddr"))) && d.ops().count() == (u32)2
+        bool fa = d.isOp(opFieldAddr);
+        if ((fa || d.isOp(opElementAddr)) && d.ops().count() == 2
             && ((IROperand*)d.ops().get((u32)1)).kind() == (u8)OPK_IMMI)
             {
             String* base = dseKey(o0, defOf, depth + (u32)1);
@@ -87,7 +87,7 @@
             for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
                 {
                 IRInsn* n = (IRInsn*)bb.insns().get(i);
-                if (n.op().equals(String.withCString("Store")) && n.ops().count() == (u32)3 && n.memRes() != (IRValue*)0)
+                if (n.isOp(opStore) && n.ops().count() == 3 && n.memRes() != (IRValue*)0)
                     {
                     String* key = dseKey((IROperand*)n.ops().get((u32)0), defOf, (u32)0);
                     String* t = dseTy(fn, (IROperand*)n.ops().get((u32)1));
@@ -161,9 +161,9 @@
                 if (o0.kind() != (u8)OPK_USE || o0.val() == (IRValue*)0)
                     continue;
                 Object* sl = (Object*)0;
-                if (n.op().equals(String.withCString("AddrOf")) && slots.contains((Hashable*)o0.val()))
+                if (n.isOp(opAddrOf) && slots.contains((Hashable*)o0.val()))
                     sl = (Object*)o0.val();
-                else if (n.op().equals(String.withCString("FieldAddr")) || n.op().equals(String.withCString("ElementAddr")))
+                else if (n.isOp(opFieldAddr) || n.isOp(opElementAddr))
                     sl = slotOf.get((Hashable*)o0.val());
                 if (sl != (Object*)0)
                     {
@@ -179,10 +179,10 @@
         for (u32 i = (u32)0; i < all.count(); i = i + (u32)1)
             {
             IRInsn* n = (IRInsn*)all.get(i);
-            bool isAddrOf = n.op().equals(String.withCString("AddrOf"));
-            bool step = (n.op().equals(String.withCString("FieldAddr")) || n.op().equals(String.withCString("ElementAddr")))
+            bool isAddrOf = n.isOp(opAddrOf);
+            bool step = (n.isOp(opFieldAddr) || n.isOp(opElementAddr))
                 && n.res() != (IRValue*)0 && slotOf.get((Hashable*)n.res()) != (Object*)0;
-            bool store = n.op().equals(String.withCString("Store")) && n.ops().count() == (u32)3 && n.memRes() != (IRValue*)0;
+            bool store = n.isOp(opStore) && n.ops().count() == 3 && n.memRes() != (IRValue*)0;
             for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
                 {
                 IROperand* o = (IROperand*)n.ops().get(k);
@@ -243,14 +243,14 @@
                 for (u32 i = (u32)0; i < ins.count() && !again; i = i + (u32)1)
                     {
                     IRInsn* r = (IRInsn*)ins.get(i);
-                    if (!r.op().equals(String.withCString("Retain")) || r.ops().count() != (u32)2 || r.memRes() == (IRValue*)0
+                    if (!r.isOp(opRetain) || r.ops().count() != 2 || r.memRes() == (IRValue*)0
                         || ((IROperand*)r.ops().get((u32)0)).kind() != (u8)OPK_USE)
                         continue;
                     IRValue* rv = ((IROperand*)r.ops().get((u32)0)).val();
                     for (u32 k = i + (u32)1; k < ins.count(); k = k + (u32)1)
                         {
                         IRInsn* q = (IRInsn*)ins.get(k);
-                        if (q.op().equals(String.withCString("Release")))
+                        if (q.isOp(opRelease))
                             {
                             if (q.ops().count() == (u32)2 && q.memRes() != (IRValue*)0
                                 && ((IROperand*)q.ops().get((u32)0)).kind() == (u8)OPK_USE
@@ -338,9 +338,7 @@
         {
         if (n.memRes() != 0)
             return false;
-        String* op = n.op();
-        if (op.equals(String.withCString("UDiv")) || op.equals(String.withCString("SDiv")) || op.equals(String.withCString("URem")) || op.equals(String.withCString("SRem")) || op.equals(String.withCString("FDiv")) || op.equals(String.withCString("AggBuild")) || op.equals(String.withCString("AggExtract")))
-            return true;
-        return self.speculatable(n);
+        u16 oc = n.opc();
+        return IROp.has(oc, OPF_PURE | OPF_TRAPS) || oc == opAggBuild || oc == opAggExtract;
         }
     }

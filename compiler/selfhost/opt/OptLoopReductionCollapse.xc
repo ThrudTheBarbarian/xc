@@ -125,7 +125,7 @@
             if (o == (Object*)0)
                 return false;
             IRInsn* def = (IRInsn*)o;
-            if (def.op().equals(String.withCString("Const")))
+            if (def.isOp(opConst))
                 {
                 if (def.ops().count() < (u32)1)
                     return false;
@@ -252,7 +252,7 @@
             if (d.ops().count() < (u32)1)
                 return (String*)0;
             IROperand* b = (IROperand*)d.ops().get((u32)0);
-            if (d.op().equals(String.withCString("AddrOf")))
+            if (d.isOp(opAddrOf))
                 {
                 if (b.kind() == (u8)OPK_SYM)
                     {
@@ -275,7 +275,7 @@
                 s.appendFormat("L:%lu", idx);
                 return s;
                 }
-            if (d.op().equals(String.withCString("ElementAddr")) || d.op().equals(String.withCString("Bitcast")))
+            if (d.isOp(opElementAddr) || d.isOp(opBitcast))
                 {
                 a = b;
                 continue;
@@ -411,7 +411,7 @@
                 if (hasBlock(L.body(), bb))
                     continue;
                 for (u32 k = (u32)0; k < bb.insns().count(); k = k + (u32)1)
-                    if (lrcWritesMemory(((IRInsn*)bb.insns().get(k)).op()))
+                    if (lrcWritesMemory(((IRInsn*)bb.insns().get(k)).opc()))
                         return false;
                 }
 
@@ -517,11 +517,11 @@
             for (u32 k = (u32)0; k < bb.insns().count(); k = k + (u32)1)
                 {
                 IRInsn* n = (IRInsn*)bb.insns().get(k);
-                bool isLoad = n.op().equals(String.withCString("Load")) || n.op().equals(String.withCString("LoadVolatile")) || n.op().equals(String.withCString("VLoad"));
-                bool isStore = n.op().equals(String.withCString("Store")) || n.op().equals(String.withCString("StoreVolatile")) || n.op().equals(String.withCString("VStore"));
+                bool isLoad = n.isOp(opLoad) || n.isOp(opLoadVolatile) || n.isOp(opVLoad);
+                bool isStore = n.isOp(opStore) || n.isOp(opStoreVolatile) || n.isOp(opVStore);
                 if (!isLoad && !isStore)
                     {
-                    if (lrcWritesMemory(n.op()))
+                    if (lrcWritesMemory(n.opc()))
                         return false; // side effect
                     continue;
                     }
@@ -574,8 +574,8 @@
             IRBlock* bb = (IRBlock*)O.body().get(i);
             for (u32 k = (u32)0; k < bb.insns().count(); k = k + (u32)1)
                 {
-                String* op = ((IRInsn*)bb.insns().get(k)).op();
-                if (lrcWritesMemory(op) || op.equals(String.withCString("LoadVolatile")))
+                u16 oc = ((IRInsn*)bb.insns().get(k)).opc();
+                if (lrcWritesMemory(oc) || oc == opLoadVolatile)
                     return false;
                 }
             }
@@ -668,7 +668,7 @@
         if (nd == (Object*)0)
             return false;
         IRInsn* nextDef = (IRInsn*)nd;
-        if (!nextDef.op().equals(String.withCString("Add")) || nextDef.ops().count() != (u32)2)
+        if (!nextDef.isOp(opAdd) || nextDef.ops().count() != 2)
             return false;
 
         i64 step = (i64)0;
@@ -686,7 +686,7 @@
         for (u32 k = (u32)0; k < H.insns().count(); k = k + (u32)1)
             {
             IRInsn* n = (IRInsn*)H.insns().get(k);
-            if (!n.op().equals(String.withCString("ICmp")) || n.ops().count() < (u32)2 || n.pred() == (String*)0)
+            if (!n.isOp(opICmp) || n.ops().count() < 2 || n.pred() == (String*)0)
                 continue;
             IROperand* lhs = (IROperand*)n.ops().get((u32)0);
             if (lhs.kind() != (u8)OPK_USE || lhs.val() != phi.res())
@@ -776,7 +776,7 @@
             return (u32)1;
         Object* d = defOf.get((Hashable*)v);
         Object* db = defBlk.get((Hashable*)v);
-        if (d != (Object*)0 && db != (Object*)0 && ((IRInsn*)d).op().equals(String.withCString("Add"))
+        if (d != (Object*)0 && db != (Object*)0 && ((IRInsn*)d).isOp(opAdd)
             && ((IRInsn*)d).ops().count() == (u32)2 && self.hasBlock(region, (IRBlock*)db)
             && (top || self.countOf(_lrcUses, v) == (u32)1))
             {

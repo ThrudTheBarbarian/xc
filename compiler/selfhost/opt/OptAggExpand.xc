@@ -84,10 +84,10 @@
             IROperand* a0 = (IROperand*)d.ops().get((u32)0);
             if (a0.kind() != (u8)OPK_USE)
                 return (IRValue*)0;
-            if (d.op().equals(String.withCString("AddrOf")))
+            if (d.isOp(opAddrOf))
                 return a0.val();
-            if (!d.op().equals(String.withCString("FieldAddr"))
-                && !d.op().equals(String.withCString("ElementAddr")))
+            if (!d.isOp(opFieldAddr)
+                && !d.isOp(opElementAddr))
                 return (IRValue*)0;
             cur = a0.val();
             }
@@ -197,7 +197,7 @@
         for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
             {
             IRInsn* ld = (IRInsn*)bb.insns().get(i);
-            if (!ld.op().equals(String.withCString("Load")))
+            if (!ld.isOp(opLoad))
                 continue;
             if (ld.res() == (IRValue*)0 || !aeIsAgg(ld.res().ty()))
                 continue;
@@ -215,7 +215,7 @@
             for (u32 a = (u32)0; a < addrs.count() && ok; a = a + (u32)1)
                 {
                 IRInsn* ao = (IRInsn*)addrs.get(a);
-                if (!ao.op().equals(String.withCString("AddrOf")) || ao.res() == (IRValue*)0)
+                if (!ao.isOp(opAddrOf) || ao.res() == (IRValue*)0)
                     {
                     ok = false;
                     }
@@ -227,7 +227,7 @@
                     for (u32 q = (u32)0; q < fu.count() && ok; q = q + (u32)1)
                         {
                         IRInsn* f = (IRInsn*)fu.get(q);
-                        if (!f.op().equals(String.withCString("FieldAddr")))
+                        if (!f.isOp(opFieldAddr))
                             ok = false;
                         else
                             fields.add((Object*)f);
@@ -262,12 +262,12 @@
             for (u32 j = i + (u32)1; j <= last && ok; j = j + (u32)1)
                 {
                 IRInsn* mid = (IRInsn*)bb.insns().get(j);
-                if (mid.op().equals(String.withCString("Store")) && mid.ops().count() >= (u32)1
+                if (mid.isOp(opStore) && mid.ops().count() >= 1
                     && ((IROperand*)mid.ops().get((u32)0)).kind() == (u8)OPK_USE)
                     ok = !aeMayAlias(fn, ((IROperand*)mid.ops().get((u32)0)).val(),
                                      srcOp.val(), defOf);
                 else if (mid.memRes() != (IRValue*)0
-                         && !mid.op().equals(String.withCString("Load")))
+                         && !mid.isOp(opLoad))
                     ok = false;         // a call, or anything else opaque
                 }
             if (!ok)
@@ -307,7 +307,7 @@
         for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
             {
             IRInsn* ld = (IRInsn*)bb.insns().get(i);
-            if (!ld.op().equals(String.withCString("Load")))
+            if (!ld.isOp(opLoad))
                 continue;
             if (ld.res() == (IRValue*)0 || ld.memRes() == (IRValue*)0)
                 continue;
@@ -320,7 +320,7 @@
             if (u.count() != (u32)1)
                 continue;
             IRInsn* st = (IRInsn*)u.get((u32)0);
-            if (!st.op().equals(String.withCString("Store")) || st.memRes() == (IRValue*)0)
+            if (!st.isOp(opStore) || st.memRes() == (IRValue*)0)
                 continue;
             if (st.ops().count() < (u32)3)
                 continue;

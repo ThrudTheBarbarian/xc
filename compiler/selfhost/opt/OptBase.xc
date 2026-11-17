@@ -2535,9 +2535,11 @@ class BeFact : Object
         return defOf;
         }
 
-    bool isCallOp(String* op)
+    // A call to a named function: Call, CallBanked, CallCloaked. IRInsn.isCall
+    // also takes the indirect calls.
+    bool isCallOp(u16 oc)
         {
-        return op.equals(String.withCString("Call")) || op.equals(String.withCString("CallBanked")) || op.equals(String.withCString("CallCloaked"));
+        return IROp.has(oc, OPF_CALL_DIRECT);
         }
 
     bool hasInsn(Array* ns, IRInsn* n)
@@ -2739,7 +2741,7 @@ class BeFact : Object
                     continue;
                 IROperand* p = (IROperand*)n.ops().get((u32)0);
                 IROperand* q = (IROperand*)n.ops().get((u32)1);
-                if (n.op().equals(String.withCString("VXor")))
+                if (n.isOp(opVXor))
                     {
                     IRInsn* rx = vcSelectXor(n, p, q, defIn, uses);
                     if (rx == (IRInsn*)0)
@@ -2751,7 +2753,7 @@ class BeFact : Object
                         }
                     continue;
                     }
-                if (!n.op().equals(String.withCString("VOr")))
+                if (!n.isOp(opVOr))
                     continue;
                 IRInsn* r = vcRotate(n, p, q, defIn, uses);
                 if (r == (IRInsn*)0)
@@ -2940,8 +2942,7 @@ class BeFact : Object
         {
         if (n.memRes() != 0)
             return false;
-        String* op = n.op();
-        return op.equals(String.withCString("Const")) || op.equals(String.withCString("Copy")) || op.equals(String.withCString("Add")) || op.equals(String.withCString("Sub")) || op.equals(String.withCString("Mul")) || op.equals(String.withCString("Neg")) || op.equals(String.withCString("And")) || op.equals(String.withCString("Or")) || op.equals(String.withCString("Xor")) || op.equals(String.withCString("Not")) || op.equals(String.withCString("Shl")) || op.equals(String.withCString("LShr")) || op.equals(String.withCString("AShr")) || op.equals(String.withCString("Rol")) || op.equals(String.withCString("Ror")) || op.equals(String.withCString("FAdd")) || op.equals(String.withCString("FSub")) || op.equals(String.withCString("FMul")) || op.equals(String.withCString("FNeg")) || op.equals(String.withCString("FSqrt")) || op.equals(String.withCString("ICmp")) || op.equals(String.withCString("FCmp")) || op.equals(String.withCString("Select")) || op.equals(String.withCString("SExt")) || op.equals(String.withCString("ZExt")) || op.equals(String.withCString("Trunc")) || op.equals(String.withCString("Bitcast")) || op.equals(String.withCString("IntToPtr")) || op.equals(String.withCString("PtrToInt")) || op.equals(String.withCString("FpToSI")) || op.equals(String.withCString("FpToUI")) || op.equals(String.withCString("SIToFp")) || op.equals(String.withCString("UIToFp")) || op.equals(String.withCString("FpExt")) || op.equals(String.withCString("FpTrunc")) || op.equals(String.withCString("AddrOf")) || op.equals(String.withCString("FieldAddr")) || op.equals(String.withCString("ElementAddr"));
+        return n.opHas(OPF_PURE);
         }
 
     Array* predsOfBlock(IRFunc* fn, IRBlock* target)
@@ -3120,7 +3121,7 @@ class BeFact : Object
         IRInsn* n = (IRInsn*)d;
         if (n.ops().count() < (u32)1)
             return false;
-        if (n.op().equals(String.withCString("Const")))
+        if (n.isOp(opConst))
             {
             IROperand* imm = (IROperand*)n.ops().get((u32)0);
             if (imm.kind() != (u8)OPK_IMMI)
@@ -3129,7 +3130,7 @@ class BeFact : Object
             return true;
             }
         // A zero-extend preserves a non-negative constant.
-        if (!n.op().equals(String.withCString("ZExt")))
+        if (!n.isOp(opZExt))
             return false;
         i64 v = (i64)0;
         if (!constValue(defOf, (IROperand*)n.ops().get((u32)0), &v))
@@ -3290,9 +3291,11 @@ class BeFact : Object
         return ps == (Array*)0 ? new Array() : ps;
         }
 
-    bool lrcWritesMemory(String* op)
+    // Leaves out the indirect calls, Autorelease, AggStore and VStore; the
+    // callers that need those add them.
+    bool lrcWritesMemory(u16 oc)
         {
-        return op.equals(String.withCString("Store")) || op.equals(String.withCString("StoreVolatile")) || op.equals(String.withCString("Call")) || op.equals(String.withCString("CallBanked")) || op.equals(String.withCString("CallCloaked")) || op.equals(String.withCString("MemSet")) || op.equals(String.withCString("MemCopy")) || op.equals(String.withCString("Retain")) || op.equals(String.withCString("Release")) || op.equals(String.withCString("WeakRegister")) || op.equals(String.withCString("WeakUnregister")) || op.equals(String.withCString("VTblDispatch")) || op.equals(String.withCString("ProtoDispatch")) || op.equals(String.withCString("Asm"));
+        return IROp.has(oc, OPF_WRITES);
         }
 
     bool unrollUsesValue(IRBlock* bb, IRValue* v)
@@ -3566,7 +3569,7 @@ class BeFact : Object
         {
         if (b == (IRBlock*)0 || b == H || b.phis().count() != (u32)0)
             return false;
-        if (b.term() == (IRInsn*)0 || !b.term().op().equals(String.withCString("Branch")) || b.term().ops().count() < (u32)1)
+        if (b.term() == (IRInsn*)0 || !b.term().isOp(opBranch) || b.term().ops().count() < 1)
             return false;
         return ((IROperand*)b.term().ops().get((u32)0)).blk() == H;
         }

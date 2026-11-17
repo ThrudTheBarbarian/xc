@@ -81,7 +81,7 @@
         if (c.kind() != (u8)OPK_USE || c.val() == (IRValue*)0)
             return false;
         IRInsn* cmp = (IRInsn*)defOf.get((Hashable*)c.val());
-        if (cmp == (IRInsn*)0 || !cmp.op().equals(String.withCString("ICmp")) || cmp.ops().count() != (u32)2
+        if (cmp == (IRInsn*)0 || !cmp.isOp(opICmp) || cmp.ops().count() != 2
             || cmp.pred() == (String*)0)
             return false;
         if (!cmp.pred().equals(String.withCString("EQ")) && !cmp.pred().equals(String.withCString("NE")))
@@ -93,7 +93,7 @@
         if (a.kind() != (u8)OPK_USE || a.val() == (IRValue*)0)
             return false;
         IRInsn* an = (IRInsn*)defOf.get((Hashable*)a.val());
-        if (an == (IRInsn*)0 || !an.op().equals(String.withCString("And")) || an.ops().count() != (u32)2)
+        if (an == (IRInsn*)0 || !an.isOp(opAnd) || an.ops().count() != 2)
             return false;
         i64 k = (i64)0;
         if (!self.constValue(defOf, (IROperand*)an.ops().get((u32)1), &k) || k <= (i64)0)
@@ -167,7 +167,7 @@
             for (u32 i = (u32)0; i < B.insns().count(); i = i + (u32)1)
                 {
                 IRInsn* n = (IRInsn*)B.insns().get(i);
-                if (!n.op().equals(String.withCString("Select")) || n.res() == (IRValue*)0 || n.ops().count() != (u32)3
+                if (!n.isOp(opSelect) || n.res() == (IRValue*)0 || n.ops().count() != 3
                     || !sbFloatTy(n.res().ty()))
                     continue;
                 if (!sbBitTest(defOf, (IROperand*)n.ops().get((u32)0)))

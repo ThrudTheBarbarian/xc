@@ -1183,6 +1183,12 @@ class IrParser
             giveUpAt("expected an opcode");
             return;
             }
+        u16 oc = IROp.find(op);
+        if (oc == opUnknown)
+            {
+            giveUpAt("unknown opcode");
+            return;
+            }
         IRInsn* insn = IRInsn.with(op);
         // -g: the line's own location, and none when it has none.
         IrDbgAt* idb = lineDbg();
@@ -1192,24 +1198,24 @@ class IrParser
             insn.clearDbg();
         insn.setRes(res);
         insn.setMemRes(mem);
-        operands(insn, op);
+        operands(insn, oc);
         if (_failed)
             return;
-        place(blk, insn, op);
+        place(blk, insn, oc);
         nextLine();
         }
 
     // A phi goes in the block's phi list, a terminator in its terminator slot,
     // everything else in the instruction list — the three the printer emits in
     // that order.
-    void place(IRBlock* blk, IRInsn* insn, String* op)
+    void place(IRBlock* blk, IRInsn* insn, u16 oc)
         {
-        if (op.equals(String.withCString("Phi")))
+        if (oc == opPhi)
             {
             blk.addPhi(insn);
             return;
             }
-        if (IrParser.isTerminator(op))
+        if (IrParser.isTerminator(oc))
             {
             blk.setTerm(insn);
             return;
@@ -1217,31 +1223,27 @@ class IrParser
         blk.add(insn);
         }
 
-    static bool isTerminator(String* op)
+    // Every terminator but IndirectBranch, which this parser places as an
+    // ordinary instruction.
+    static bool isTerminator(u16 oc)
         {
-        return op.equals(String.withCString("Return")) || op.equals(String.withCString("Branch")) || op.equals(String.withCString("CondBranch")) || op.equals(String.withCString("Switch")) || op.equals(String.withCString("Unreachable"))
-            || op.equals(String.withCString("Invoke")) || op.equals(String.withCString("Resume"));
+        return IROp.has(oc, OPF_TERM) && oc != opIndirectBranch;
         }
 
-    static bool isCallOp(String* op)
+    void operands(IRInsn* insn, u16 oc)
         {
-        return op.equals(String.withCString("Call")) || op.equals(String.withCString("CallCloaked")) || op.equals(String.withCString("CallBanked")) || op.equals(String.withCString("CallIndirect")) || op.equals(String.withCString("CallBankedIndirect"));
-        }
-
-    void operands(IRInsn* insn, String* op)
-        {
-        if (op.equals(String.withCString("Phi")))
+        if (oc == opPhi)
             {
             phiOperands(insn);
             return;
             }
-        if (IrParser.isCallOp(op))
+        if (IROp.has(oc, OPF_CALL))
             {
             callOperands(insn);
             return;
             }
         // Invoke: a call's operands, then its normal and unwind blocks.
-        if (op.equals(String.withCString("Invoke")))
+        if (oc == opInvoke)
             {
             callOperands(insn);
             for (u32 k = (u32)0; k < (u32)2 && !_failed; k = k + (u32)1)
@@ -1264,7 +1266,7 @@ class IrParser
         // FpToSI / FpToUI [unchecked,] %x: C's casts, whose out-of-range
         // result is undefined (the reference's XTIRConvUnchecked). Only that
         // word: an operand never starts with a letter here, but `undef` could.
-        if (op.equals(String.withCString("FpToSI")) || op.equals(String.withCString("FpToUI")))
+        if (oc == opFpToSI || oc == opFpToUI)
             {
             skipSpace();
             u32 save = _ci;
@@ -1280,8 +1282,8 @@ class IrParser
         // FAdd / FSub [contract,] %a, %b: under :goal(speed), a product feeding
         // it may fuse (Opt's fp-contract; the reference's XTIRFpContract). A
         // float VAdd / VSub carries it too, as the printer writes it.
-        if (op.equals(String.withCString("FAdd")) || op.equals(String.withCString("FSub"))
-            || op.equals(String.withCString("VAdd")) || op.equals(String.withCString("VSub")))
+        if (oc == opFAdd || oc == opFSub
+            || oc == opVAdd || oc == opVSub)
             {
             skipSpace();
             u32 save = _ci;
@@ -1294,7 +1296,7 @@ class IrParser
             else
                 _ci = save;
             }
-        if (op.equals(String.withCString("ICmp")) || op.equals(String.withCString("FCmp")) || op.equals(String.withCString("VICmp")) || op.equals(String.withCString("VFCmp")))
+        if (oc == opICmp || oc == opFCmp || oc == opVICmp || oc == opVFCmp)
             {
             skipSpace();
             if (!atEnd() && IrParser.isIdentChar(_cur.byteAt(_ci)))

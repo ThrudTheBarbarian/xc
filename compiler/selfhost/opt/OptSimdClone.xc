@@ -81,12 +81,12 @@
             for (u32 i = (u32)0; i < bl.insns().count(); i = i + (u32)1)
                 {
                 IRInsn* x = (IRInsn*)bl.insns().get(i);
-                String* op = x.op();
+                u16 oc = x.opc();
                 if (x.res() == (IRValue*)0 || x.res().ty() == (String*)0)
                     continue;
                 bool fp = x.res().ty().equals(String.withCString("F32")) || x.res().ty().equals(String.withCString("F64"));
-                if (fp && (op.equals(String.withCString("FAdd")) || op.equals(String.withCString("FSub"))
-                           || op.equals(String.withCString("FMul")) || op.equals(String.withCString("FDiv"))))
+                if (fp && (oc == opFAdd || oc == opFSub
+                           || oc == opFMul || oc == opFDiv))
                     n = n + (u32)1;
                 }
             }
@@ -105,7 +105,7 @@
             for (u32 i = (u32)0; i < bl.insns().count(); i = i + (u32)1)
                 {
                 IRInsn* x = (IRInsn*)bl.insns().get(i);
-                if (x.res() != (IRValue*)0 && x.op().equals(String.withCString("FMul")))
+                if (x.res() != (IRValue*)0 && x.isOp(opFMul))
                     muls.set((Hashable*)x.res(), (Object*)x);
                 }
             }
@@ -119,7 +119,7 @@
                 IRInsn* x = (IRInsn*)bl.insns().get(i);
                 if (x.pred() == (String*)0 || !x.pred().equals(String.withCString("contract")))
                     continue;
-                if (!x.op().equals(String.withCString("FAdd")) && !x.op().equals(String.withCString("FSub")))
+                if (!x.isOp(opFAdd) && !x.isOp(opFSub))
                     continue;
                 for (u32 k = (u32)0; k < x.ops().count(); k = k + (u32)1)
                     {

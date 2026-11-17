@@ -355,7 +355,7 @@
             for (u32 a = (u32)0; a < sa.count(); a = a + (u32)1)
                 {
                 IRInsn* ao = (IRInsn*)sa.get(a);
-                if (!ao.op().equals(String.withCString("AddrOf")) || ao.res() == (IRValue*)0)
+                if (!ao.isOp(opAddrOf) || ao.res() == (IRValue*)0)
                     return;
                 if (!m2rFieldUsesOk(fn, ao, pl.ty()))
                     return;
@@ -382,7 +382,7 @@
         for (u32 a = (u32)0; a < addrs.count(); a = a + (u32)1)
             {
             IRInsn* ao = (IRInsn*)addrs.get(a);
-            if (!ao.op().equals(String.withCString("AddrOf")) || ao.res() == (IRValue*)0)
+            if (!ao.isOp(opAddrOf) || ao.res() == (IRValue*)0)
                 return;
             Array* fs = self.aeUsersOf(fn, ao.res());
             if (fs.count() == (u32)0)
@@ -390,7 +390,7 @@
             for (u32 q = (u32)0; q < fs.count(); q = q + (u32)1)
                 {
                 IRInsn* f = (IRInsn*)fs.get(q);
-                if (!f.op().equals(String.withCString("FieldAddr")) || f.res() == (IRValue*)0)
+                if (!f.isOp(opFieldAddr) || f.res() == (IRValue*)0)
                     return;
                 if (f.ops().count() < (u32)2)
                     return;
@@ -454,8 +454,8 @@
         for (u32 i = (u32)0; i < us.count(); i = i + (u32)1)
             {
             IRInsn* u = (IRInsn*)us.get(i);
-            bool isLoad = u.op().equals(String.withCString("Load"));
-            bool isStore = u.op().equals(String.withCString("Store"));
+            bool isLoad = u.isOp(opLoad);
+            bool isStore = u.isOp(opStore);
             if (!isLoad && !isStore)
                 return false;
             if (u.ops().count() < (u32)2)
@@ -508,7 +508,7 @@
                 for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
                     {
                     IRInsn* n = (IRInsn*)bb.insns().get(i);
-                    if (n.op().equals(String.withCString("Store"))
+                    if (n.isOp(opStore)
                         && m2rVarOf(n) == (i32)vi)
                         stores = true;
                     }
@@ -612,7 +612,7 @@
                 continue;
             u32 vi = (u32)vn;
             Array* st = (Array*)stacks.get(vi);
-            if (n.op().equals(String.withCString("Load")))
+            if (n.isOp(opLoad))
                 {
                 // A C local read before it is written is undefined there: any
                 // value does, so zero (only for C: optPromoteScalars()).
@@ -627,7 +627,7 @@
                     _m2rDead.add((Object*)n);
                     }
                 }
-            else if (n.op().equals(String.withCString("Store")) && n.ops().count() >= (u32)2)
+            else if (n.isOp(opStore) && n.ops().count() >= 2)
                 {
                 st.add((Object*)m2rResolve((IROperand*)n.ops().get((u32)1), dry));
                 m2rBump(pushed, vi);
@@ -740,7 +740,7 @@
                 IRInsn* n = (IRInsn*)bb.insns().get(i);
                 if (!m2rIsDead(n) || n.memRes() == (IRValue*)0)
                     continue;
-                u32 mi = n.op().equals(String.withCString("Store")) ? (u32)2 : (u32)1;
+                u32 mi = n.isOp(opStore) ? 2 : 1;
                 if (mi >= n.ops().count())
                     continue;
                 self.aeReplaceUses(fn, n.memRes(), (IROperand*)n.ops().get(mi));

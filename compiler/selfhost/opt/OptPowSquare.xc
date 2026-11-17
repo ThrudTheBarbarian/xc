@@ -57,7 +57,7 @@
     // exponent resolves to the literal 2.
     final bool isPowCall(IRInsn* n, Map* defOf)
         {
-        if (!n.op().equals(String.withCString("Call")))
+        if (!n.isOp(opCall))
             return false;
         if (n.res() == 0)
             return false;
@@ -97,7 +97,7 @@
             if (o == 0)
                 return false;
             IRInsn* def = (IRInsn*)o;
-            if (def.op().equals(String.withCString("Const")))
+            if (def.isOp(opConst))
                 {
                 if (def.ops().count() < (u32)1)
                     return false;

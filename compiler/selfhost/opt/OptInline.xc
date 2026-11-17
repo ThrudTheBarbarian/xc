@@ -43,16 +43,16 @@
             for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
                 {
                 IRInsn* n = (IRInsn*)bb.insns().get(i);
-                String* op = n.op();
-                if (op.equals(String.withCString("Call")))
+                u16 oc = n.opc();
+                if (oc == opCall)
                     {
                     IROperand* o = n.ops().count() > (u32)0 ? (IROperand*)n.ops().get((u32)0) : (IROperand*)0;
                     if (o == (IROperand*)0 || o.kind() != (u8)OPK_SYM || o.name() == (String*)0
                         || !o.name().hasPrefix(String.withCString("_xt_check")))
                         return false;
                     }
-                else if (op.hasPrefix(String.withCString("Call")) || op.equals(String.withCString("VTblDispatch"))
-                         || op.equals(String.withCString("ProtoDispatch")))
+                else if (IROp.has(oc, OPF_CALL) || oc == opVTblDispatch
+                         || oc == opProtoDispatch)
                     return false;
                 }
             }
@@ -319,7 +319,7 @@
             IRInsn* t = cbb.term();
             if (t == 0)
                 continue;
-            if (t.op().equals(String.withCString("Return")))
+            if (t.isOp(opReturn))
                 {
                 if (t.ops().count() >= (u32)1)
                     retMem = substBoth(remap, blockMap,
@@ -418,7 +418,7 @@
     // parameter, and a body under the size ceiling.
     final IRFunc* inlinableCallee(IRModule* m, IRInsn* n, IRFunc* caller)
         {
-        if (!n.op().equals(String.withCString("Call")))
+        if (!n.isOp(opCall))
             return (IRFunc*)0;
         if (n.ops().count() < (u32)1)
             return (IRFunc*)0;
@@ -455,12 +455,12 @@
             if (bb.phis().count() > (u32)0)
                 return (IRFunc*)0;
             total = total + bb.insns().count();
-            if (bb.term() != 0 && bb.term().op().equals(String.withCString("Return")))
+            if (bb.term() != 0 && bb.term().isOp(opReturn))
                 returns = returns + (u32)1;
             for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
                 {
-                String* op = ((IRInsn*)bb.insns().get(i)).op();
-                if (op.equals(String.withCString("Asm")))
+                u16 oc = ((IRInsn*)bb.insns().get(i)).opc();
+                if (oc == opAsm)
                     return (IRFunc*)0; // {{XTLOCAL}}
                 // A MULTI-block callee that calls anything could be (mutually)
                 // recursive, and inlining it would re-expose the call and grow
@@ -471,7 +471,7 @@
                 // a check (Checked.xc) inlines as a compare with a cold trap.
                 if (callsTrap((IRInsn*)bb.insns().get(i)))
                     continue;
-                if (isCallOp(op) || op.equals(String.withCString("VTblDispatch")) || op.equals(String.withCString("ProtoDispatch")))
+                if (isCallOp(oc) || oc == opVTblDispatch || oc == opProtoDispatch)
                     return (IRFunc*)0;
                 }
             }

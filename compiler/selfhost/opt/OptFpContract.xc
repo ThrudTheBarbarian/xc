@@ -70,8 +70,8 @@
                 for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
                     {
                     IRInsn* n = (IRInsn*)bb.insns().get(i);
-                    bool vec = n.op().equals(String.withCString("VAdd")) || n.op().equals(String.withCString("VSub"));
-                    if (!n.op().equals(String.withCString("FAdd")) && !n.op().equals(String.withCString("FSub")) && !vec)
+                    bool vec = n.isOp(opVAdd) || n.isOp(opVSub);
+                    if (!n.isOp(opFAdd) && !n.isOp(opFSub) && !vec)
                         continue;
                     if (n.res() == (IRValue*)0 || n.pred() != (String*)0)
                         continue;

@@ -54,7 +54,7 @@
             for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
                 {
                 IRInsn* n = (IRInsn*)bb.insns().get(i);
-                if (!n.op().equals(String.withCString("ICmp")) || n.pred() == (String*)0 || n.ops().count() != (u32)2)
+                if (!n.isOp(opICmp) || n.pred() == (String*)0 || n.ops().count() != 2)
                     continue;
                 bool ule = n.pred().equals(String.withCString("ULE"));
                 bool sle = n.pred().equals(String.withCString("SLE"));
@@ -113,8 +113,8 @@
             for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
                 {
                 IRInsn* n = (IRInsn*)bb.insns().get(i);
-                bool band = n.op().equals(String.withCString("And"));
-                bool icmp = n.op().equals(String.withCString("ICmp")) && n.pred() != (String*)0;
+                bool band = n.isOp(opAnd);
+                bool icmp = n.isOp(opICmp) && n.pred() != (String*)0;
                 bool ult = icmp && n.pred().equals(String.withCString("ULT"));
                 bool uge = icmp && n.pred().equals(String.withCString("UGE"));
                 if ((!band && !ult && !uge) || n.ops().count() != (u32)2)
@@ -129,7 +129,7 @@
                 if (!simpConst((IROperand*)n.ops().get((u32)1), defOf, repl, &k))
                     continue;
                 IRInsn* d = (IRInsn*)defOf.get((Hashable*)a.val());
-                if (d == (IRInsn*)0 || !d.op().equals(String.withCString("And")) || d.ops().count() != (u32)2)
+                if (d == (IRInsn*)0 || !d.isOp(opAnd) || d.ops().count() != 2)
                     continue;
                 IROperand* d0 = (IROperand*)d.ops().get((u32)0);
                 if (d0.kind() != (u8)OPK_USE || d0.val() == (IRValue*)0)
@@ -245,7 +245,7 @@
                 IRInsn* n = (IRInsn*)bb.insns().get(i);
                 IRValue* r = n.res();
                 u32 dn = (u32)0;
-                if (!n.op().equals(String.withCString("Const")))
+                if (!n.isOp(opConst))
                     for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
                         {
                         u32 dk = simpDepthOf((IROperand*)n.ops().get(k), depth, phiIds) + (u32)1;
@@ -398,7 +398,7 @@
         if (d == (IRInsn*)0 || d.ops().count() < (u32)1)
             return false;
         IROperand* d0 = (IROperand*)d.ops().get((u32)0);
-        if (d.op().equals(String.withCString("Const")))
+        if (d.isOp(opConst))
             {
             if (d0.kind() != (u8)OPK_IMMI)
                 return false;
@@ -408,9 +408,9 @@
         // A widened or narrowed constant (a literal the lowering typed
         // narrower): its value under the extension, from a source of 8 to 32
         // bits; the caller wraps to the result's width.
-        bool zx = d.op().equals(String.withCString("ZExt"));
-        bool sx = d.op().equals(String.withCString("SExt"));
-        bool tr = d.op().equals(String.withCString("Trunc"));
+        bool zx = d.isOp(opZExt);
+        bool sx = d.isOp(opSExt);
+        bool tr = d.isOp(opTrunc);
         if (!zx && !sx && !tr)
             return false;
         String* st = d0.kind() == (u8)OPK_USE && d0.val() != (IRValue*)0 ? d0.val().ty() : d0.ty();
@@ -444,7 +444,7 @@
         else if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0)
             {
             IRInsn* d = (IRInsn*)defOf.get((Hashable*)self.resolveReplace(repl, o.val()));
-            if (d == (IRInsn*)0 || !d.op().equals(String.withCString("Const")) || d.ops().count() < (u32)1
+            if (d == (IRInsn*)0 || !d.isOp(opConst) || d.ops().count() < 1
                 || ((IROperand*)d.ops().get((u32)0)).kind() != (u8)OPK_IMMF)
                 return false;
             hex = ((IROperand*)d.ops().get((u32)0)).fpHex();
@@ -467,9 +467,9 @@
         bool f32 = r.ty().equals(String.withCString("F32"));
         if (!f32 && !r.ty().equals(String.withCString("F64")))
             return (IRInsn*)0;
-        String* op = n.op();
-        bool ui = op.equals(String.withCString("UIToFp"));
-        bool si = op.equals(String.withCString("SIToFp"));
+        u16 oc = n.opc();
+        bool ui = oc == opUIToFp;
+        bool si = oc == opSIToFp;
         double v = (double)0;
         if ((ui || si) && n.ops().count() == (u32)1)
             {
@@ -493,10 +493,10 @@
             }
         else
             {
-            bool fadd = op.equals(String.withCString("FAdd"));
-            bool fsub = op.equals(String.withCString("FSub"));
-            bool fmul = op.equals(String.withCString("FMul"));
-            bool fdiv = op.equals(String.withCString("FDiv"));
+            bool fadd = oc == opFAdd;
+            bool fsub = oc == opFSub;
+            bool fmul = oc == opFMul;
+            bool fdiv = oc == opFDiv;
             if ((!fadd && !fsub && !fmul && !fdiv) || n.ops().count() != (u32)2)
                 return (IRInsn*)0;
             double x = (double)0;
@@ -555,8 +555,8 @@
             IRInsn* d = (IRInsn*)defOf.get((Hashable*)cur);
             if (d == (IRInsn*)0 || d.memRes() != (IRValue*)0 || d.ops().count() != (u32)2)
                 break;
-            bool isAdd = d.op().equals(String.withCString("Add"));
-            if (!isAdd && !d.op().equals(String.withCString("Sub")))
+            bool isAdd = d.isOp(opAdd);
+            if (!isAdd && !d.isOp(opSub))
                 break;
             i64 k = (i64)0;
             IROperand* x = (IROperand*)d.ops().get((u32)0);
@@ -596,7 +596,7 @@
                 {
                 IRInsn* n = (IRInsn*)bb.insns().get(i);
                 IRValue* r = n.res();
-                if (r == (IRValue*)0 || n.memRes() != (IRValue*)0 || !n.op().equals(String.withCString("Mul"))
+                if (r == (IRValue*)0 || n.memRes() != (IRValue*)0 || !n.isOp(opMul)
                     || n.ops().count() != (u32)2 || !simpIntTy(r.ty()) || self.irWidth(r.ty()) > (u32)4)
                     continue;
                 i64 k = (i64)0;
@@ -649,7 +649,7 @@
                 if (ci == (Object*)0)
                     {
                     IRValue* r = n.res();
-                    if (r != (IRValue*)0 && n.memRes() == (IRValue*)0 && n.op().equals(String.withCString("Mul"))
+                    if (r != (IRValue*)0 && n.memRes() == (IRValue*)0 && n.isOp(opMul)
                         && n.ops().count() == (u32)2 && simpIntTy(r.ty()) && self.irWidth(r.ty()) <= (u32)4)
                         {
                         i64 k = (i64)0;
@@ -728,7 +728,7 @@
                     }
                 // Neg of a constant (`-7`, which arrives as Neg #7), 8 to 32 bits.
                 i64 kn = (i64)0;
-                if (r != (IRValue*)0 && n.memRes() == (IRValue*)0 && n.op().equals(String.withCString("Neg"))
+                if (r != (IRValue*)0 && n.memRes() == (IRValue*)0 && n.isOp(opNeg)
                     && n.ops().count() == (u32)1 && simpIntTy(r.ty()) && self.irWidth(r.ty()) <= (u32)4
                     && simpConst((IROperand*)n.ops().get((u32)0), defOf, repl, &kn))
                     {
@@ -742,16 +742,16 @@
                     }
                 if (r == (IRValue*)0 || n.memRes() != (IRValue*)0 || n.ops().count() != (u32)2 || !simpIntTy(r.ty()))
                     continue;
-                String* op = n.op();
-                bool add = op.equals(String.withCString("Add"));
-                bool sub = op.equals(String.withCString("Sub"));
-                bool mul = op.equals(String.withCString("Mul"));
-                bool band = op.equals(String.withCString("And"));
-                bool bor = op.equals(String.withCString("Or"));
-                bool bxor = op.equals(String.withCString("Xor"));
-                bool shl = op.equals(String.withCString("Shl"));
-                bool lshr = op.equals(String.withCString("LShr"));
-                bool ashr = op.equals(String.withCString("AShr"));
+                u16 oc = n.opc();
+                bool add = oc == opAdd;
+                bool sub = oc == opSub;
+                bool mul = oc == opMul;
+                bool band = oc == opAnd;
+                bool bor = oc == opOr;
+                bool bxor = oc == opXor;
+                bool shl = oc == opShl;
+                bool lshr = oc == opLShr;
+                bool ashr = oc == opAShr;
                 if (!add && !sub && !mul && !band && !bor && !bxor && !shl && !lshr && !ashr)
                     continue;
                 IROperand* a = (IROperand*)n.ops().get((u32)0);
