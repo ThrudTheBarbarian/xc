@@ -517,7 +517,10 @@ class X86_64
             // peepholeLea again after the tail copies: a copied block that starts
             // with `mov r, r` can land after a 32-bit write of r, which the first
             // pass never saw side by side.
-            module.append(withVzeroupper(peepholeLea(peepholeTailDup(peepholeFlags(peepholeFallthrough(peepholeLea(peepholeCopyProp(_out)))))), fn.simdLevel() != (String*)0));
+            Array* fl = _out.splitOnByte((u8)'\n');
+            fl = peepholeFallthroughLines(peepholeLeaLines(peepholeCopyPropLines(fl)));
+            fl = peepholeLeaLines(peepholeTailDupLines(peepholeFlagsLines(fl)));
+            module.append(withVzeroupper(x86JoinLines(fl), fn.simdLevel() != (String*)0));
             _out = module;
             }
         // The matrix kernels the module calls (idiom-matmul): `_auto` is
@@ -5005,7 +5008,31 @@ class X86_64
     // `[base + idx*scale]` operand. The mnemonic used to come back through a
     // `String**` out-parameter, which leaked it on every line (see Arm64's
     // parseAsmLine).
+    // parseLine, remembered per line text while copy propagation runs
+    // (#333): its scans parse the same lines again and again. A copy goes
+    // out, because callers take the mnemonic off the end (takeMnem).
+    static Map* _parseMemo;
+    static Array* _parseNone;
+
     static Array* parseLine(String* line)
+        {
+        if (_parseMemo == (Map*)0)
+            return parseLineNow(line);
+        Array* got = (Array*)_parseMemo.get((Hashable*)line);
+        if (got == (Array*)0)
+            {
+            got = parseLineNow(line);
+            _parseMemo.set((Hashable*)line, got == (Array*)0 ? (Object*)_parseNone : (Object*)got);
+            }
+        if (got == (Array*)0 || got == _parseNone)
+            return (Array*)0;
+        Array* copy = new Array();
+        for (u32 i = (u32)0; i < got.count(); i = i + (u32)1)
+            copy.add(got.get(i));
+        return copy;
+        }
+
+    static Array* parseLineNow(String* line)
         {
         String* t = line.trimmed();
         if (t.byteLength() == (u32)0 || t.hasSuffix(String.withCString(":")) || t.hasPrefix(String.withCString(".")) || t.hasPrefix(String.withCString("#")))
@@ -5175,10 +5202,23 @@ class X86_64
         return true;
         }
 
-    String* peepholeLea(String* text)
+    // The function's text as one line list through the peephole chain
+    // (#333): each pass split the text and joined it again.
+    static String* x86JoinLines(Array* lines)
+        {
+        String* out = String.withCString("");
+        for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1)
+            {
+            if (i > (u32)0)
+                out.appendCString("\n");
+            out.append((String*)lines.get(i));
+            }
+        return out;
+        }
+
+    Array* peepholeLeaLines(Array* lines)
         {
         string writes32 = "mov movzx movsx add sub and or xor imul lea shl shr sar neg not inc dec";
-        Array* lines = text.splitOnByte((u8)'\n');
         Array* out = new Array();
         bool lastIsInsn = false;
         for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1)
@@ -5239,14 +5279,7 @@ class X86_64
             out.add((Object*)line);
             lastIsInsn = true;
             }
-        String* res = String.withCString("");
-        for (u32 i = (u32)0; i < out.count(); i = i + (u32)1)
-            {
-            if (i > (u32)0)
-                res.appendCString("\n");
-            res.append((String*)out.get(i));
-            }
-        return res;
+        return out;
         }
 
     // ── Fallthrough peephole ─────────────────────────────────────────────
@@ -5585,9 +5618,8 @@ class X86_64
         return (i32)-1;
         }
 
-    String* peepholeFlags(String* text)
+    Array* peepholeFlagsLines(Array* lines)
         {
-        Array* lines = text.splitOnByte((u8)'\n');
         Map* at = new Map();
         for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1)
             {
@@ -5650,14 +5682,7 @@ class X86_64
             lines.set(i + (u32)1, (Object*)nl);
             lines.removeAt(i);
             }
-        String* out = String.withCString("");
-        for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1)
-            {
-            if (i > (u32)0)
-                out.appendCString("\n");
-            out.append((String*)lines.get(i));
-            }
-        return out;
+        return lines;
         }
 
     // A `jmp L` whose target block is short and itself ends in a `jmp` is
@@ -5670,9 +5695,8 @@ class X86_64
     // elsewhere than itself; a jump inside
     // the block it targets is left alone, and copies are not copied again.
     // As the reference's peepholeTailDup.
-    String* peepholeTailDup(String* text)
+    Array* peepholeTailDupLines(Array* lines)
         {
-        Array* lines = text.splitOnByte((u8)'\n');
         Map* at = new Map();
         for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1)
             {
@@ -5680,8 +5704,7 @@ class X86_64
             if (t.byteLength() > (u32)3 && t.hasPrefix(String.withCString(".L")) && t.byteAt(t.byteLength() - (u32)1) == (u8)':')
                 at.set((Hashable*)t.substringToByte(t.byteLength() - (u32)1), (Object*)Number.with(i));
             }
-        String* out = String.withCString("");
-        bool first = true;
+        Array* out = new Array();
         for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1)
             {
             String* t = ((String*)lines.get(i)).trimmed();
@@ -5698,13 +5721,11 @@ class X86_64
                 body = new Array();
                 body.add(lines.get(i));
                 }
+            // A copied block's lines are new strings: a later pass that
+            // rewrote one in place must not reach the original as well.
+            bool copied = body.count() > (u32)1 || body.get((u32)0) != lines.get(i);
             for (u32 k = (u32)0; k < body.count(); k = k + (u32)1)
-                {
-                if (!first)
-                    out.appendCString("\n");
-                out.append((String*)body.get(k));
-                first = false;
-                }
+                out.add(copied ? (Object*)String.withString((String*)body.get(k)) : body.get(k));
             }
         return out;
         }
@@ -5758,9 +5779,8 @@ class X86_64
         return (Array*)0;
         }
 
-    String* peepholeFallthrough(String* text)
+    Array* peepholeFallthroughLines(Array* lines)
         {
-        Array* lines = text.splitOnByte((u8)'\n');
         bool again = true;
         while (again)
             {
@@ -5824,14 +5844,7 @@ class X86_64
                     }
                 }
             }
-        String* out = String.withCString("");
-        for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1)
-            {
-            if (i > (u32)0)
-                out.appendCString("\n");
-            out.append((String*)lines.get(i));
-            }
-        return out;
+        return lines;
         }
 
     // reach[k]: the furthest line candidate k's scans read, for the candidates
@@ -5839,9 +5852,18 @@ class X86_64
     // and its consumer (after i), so a candidate that never read as far as i
     // fails again exactly as before; the scan resumes at the first one that did,
     // instead of at the top. Same rewrites, in the same order (bug 621).
-    String* peepholeCopyProp(String* text)
+    Array* peepholeCopyPropLines(Array* lines)
         {
-        Array* lines = text.splitOnByte((u8)'\n');
+        if (_parseNone == (Array*)0)
+            _parseNone = new Array();
+        _parseMemo = new Map();
+        Array* res = copyPropLinesNow(lines);
+        _parseMemo = (Map*)0;
+        return res;
+        }
+
+    Array* copyPropLinesNow(Array* lines)
+        {
         Array* reach = new Array();
         u32 start = (u32)0;
         bool again = true;
@@ -5925,14 +5947,7 @@ class X86_64
                 again = true;
                 }
             }
-        String* o = String.withCString("");
-        for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1)
-            {
-            if (i > (u32)0)
-                o.appendCString("\n");
-            o.append((String*)lines.get(i));
-            }
-        return o;
+        return lines;
         }
 
     // The first line that USES D as a source, through "transparent" lines only.
