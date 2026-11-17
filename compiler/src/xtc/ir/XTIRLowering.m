@@ -7,6 +7,7 @@
 // memory-touching op; for the current subset (no Load/Store) the
 // thread is trivial — entry Mem flows straight to the Return.
 #import "XTIRLowering.h"
+#import "XTIRRuntimeRoles.h"
 #import "XTIRElemKind.h"
 #import "XTIR.h"
 #import "XTASTNode.h"
@@ -3984,7 +3985,7 @@ static NSString* XTDescribeNodeKind(XTASTNodeKind k)
     {
     // The checks themselves (Checked.xc's _xt_check_*) are not checked: their
     // own reads would call them again, without end.
-    if (!self.boundsCheck || !ptr || !idx || count == 0 || [self.currentFunction.name hasPrefix:@"_xt_check"])
+    if (!self.boundsCheck || !ptr || !idx || count == 0 || XTIRRuntimeIsRuntime(self.currentFunction.name))
         return;
     NSString* site = [NSString stringWithFormat:@"%@:%lu:%lu",
                                                 loc.filename.lastPathComponent ?: @"?",
@@ -4008,7 +4009,7 @@ static NSString* XTDescribeNodeKind(XTASTNodeKind k)
                      index:(XTIRValue*)idx
                         at:(XTSourceLocation*)loc
     {
-    if (!self.boundsCheck || !ptr || !idx || [self.currentFunction.name hasPrefix:@"_xt_check"])
+    if (!self.boundsCheck || !ptr || !idx || XTIRRuntimeIsRuntime(self.currentFunction.name))
         return;
     NSString* site = [NSString stringWithFormat:@"%@:%lu:%lu",
                                                 loc.filename.lastPathComponent ?: @"?",
@@ -4033,7 +4034,7 @@ static NSString* XTDescribeNodeKind(XTASTNodeKind k)
 \****************************************************************************/
 - (void)emitVtblCheck:(XTIRValue*)recv
     {
-    if (!self.boundsCheck || !sCompactObjects || !recv || [self.currentFunction.name hasPrefix:@"_xt_check"])
+    if (!self.boundsCheck || !sCompactObjects || !recv || XTIRRuntimeIsRuntime(self.currentFunction.name))
         return;
     XTSourceLocation* loc = self.vtblSiteLoc;
     NSString* site = [NSString stringWithFormat:@"%@:%lu:%lu",
@@ -7247,7 +7248,7 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
     // review, 2026-10-21): the pointer must be null or a heap object, and then
     // the object must be of the class, as a downcast from Object is checked.
     // Mirrors the self-hosted lowering.
-    if (self.boundsCheck && ![self.currentFunction.name hasPrefix:@"_xt_check"] && src &&
+    if (self.boundsCheck && !XTIRRuntimeIsRuntime(self.currentFunction.name) && src &&
         dstType && dstType.kind == XTTypeKindPointer && srcType && srcType.kind == XTTypeKindPointer)
         {
         XTType* dp = [dstType isKindOfClass:[XTPointerType class]] ? ((XTPointerType*)dstType).pointeeType : nil;

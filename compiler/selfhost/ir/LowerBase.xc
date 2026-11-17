@@ -4234,7 +4234,7 @@ class ClassInfo
     // own reads would call them again, without end.
     bool inChecker(void)
         {
-        return _fn != (IRFunc*)0 && _fn.name() != (String*)0 && _fn.name().hasPrefix(String.withCString("_xt_check"));
+        return _fn != (IRFunc*)0 && IRRuntime.isRuntime(_fn.name());
         }
 
     // The site string, shared by both checks.

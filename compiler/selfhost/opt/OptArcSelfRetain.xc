@@ -149,8 +149,7 @@
         if (!n.op().equals(String.withCString("Call")) || n.ops().count() < (u32)1)
             return false;
         IROperand* c = (IROperand*)n.ops().get((u32)0);
-        return c.kind() == (u8)OPK_SYM && c.name() != 0 && c.name().hasPrefix(String.withCString("_xt_check_"))
-            && c.name().hasSuffix(String.withCString("_trap"));
+        return c.kind() == (u8)OPK_SYM && IRRuntime.isTrap(c.name());
         }
 
     // Drop the bracket, threading the memory token past each removed op so a
@@ -372,7 +371,7 @@
         if (op.equals(String.withCString("Call")) && n.ops().count() > (u32)0)
             {
             IROperand* c = (IROperand*)n.ops().get((u32)0);
-            if (c.kind() == (u8)OPK_SYM && c.name() != (String*)0 && c.name().hasPrefix(String.withCString("_xt_check_")))
+            if (c.kind() == (u8)OPK_SYM && IRRuntime.isRuntime(c.name()))
                 return false;
             }
         // Every call, an indirect one too (lrcWritesMemory leaves those out).
