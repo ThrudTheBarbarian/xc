@@ -97,6 +97,7 @@ bool gCPathFuseMulAdd;
 void cPathSetFuseMulAdd(bool b) { gCPathFuseMulAdd = b; }
 void cPathSetTarget(String* t) { gCPathTarget = t; }
 void cPathSetFpContract(String* v) { gCPathFpContract = v; }
+String* cPathFpContract(void) { return gCPathFpContract; }
 // -std=<x>: the language standard, handed to clang; 0 for clang's default.
 String* gCPathStd;
 void cPathSetStd(String* v) { gCPathStd = v; }

@@ -7179,6 +7179,7 @@ void envUsage(void)
     diag.add((Object*)String.withCString("XTIR_OPT_STOP_AFTER|=<pass>: stop the optimiser after that pass"));
     diag.add((Object*)String.withCString("XC_OPT_CAPS|Say when a capped run-until-settled loop stopped at its cap"));
     diag.add((Object*)String.withCString("XC_OPT_VERIFY|Check every cached optimiser analysis against a fresh build; stop on a difference"));
+    diag.add((Object*)String.withCString("XC_DUMP_DRIVER_STATE|Print the parsed options and stop (the option-table check)"));
     diag.add((Object*)String.withCString("XTIC_OFF|No if-conversion after bounds checks are removed"));
     diag.add((Object*)String.withCString("XTGPU_ESC_TRIPS|=<n>: the escape-loop GPU variant's trip count"));
     diag.add((Object*)String.withCString("XCC_GC_STATS|Print what the ELF link's section GC kept"));
@@ -8601,7 +8602,206 @@ DriverOptions* parseDriverArgs(void)
         d.fe().setParAuto(false);
 #endif
     finishDriverArgs(d);
+    // XC_DUMP_DRIVER_STATE: print what the line parsed to and stop, so two
+    // builds of the driver can be compared on the same command line.
+    if (Platform.env(String.withCString("XC_DUMP_DRIVER_STATE")).byteLength() > (u32)0) {
+        Stdio.printf("%s", driverStateDump(d).cString());
+        Process.exit((i32)0);
+        return (DriverOptions*)0;
+    }
     return d;
+}
+
+// One `name=value` line of driverStateDump for each kind of field. A null
+// object is `<null>`; an array lists its strings between brackets, a map its
+// pairs sorted by key, a target row its name.
+void stateDumpStr(String* out, string name, String* v)
+{
+    out.append(String.withFormat("%s=%s\n", name, v == (String*)0 ? "<null>" : v.cString()));
+}
+
+void stateDumpBool(String* out, string name, bool v)
+{
+    out.append(String.withFormat("%s=%s\n", name, v ? "true" : "false"));
+}
+
+void stateDumpU32(String* out, string name, u32 v)
+{
+    out.append(String.withFormat("%s=%u\n", name, v));
+}
+
+void stateDumpI32(String* out, string name, i32 v)
+{
+    out.append(String.withFormat("%s=%d\n", name, v));
+}
+
+void stateDumpArray(String* out, string name, Array* v)
+{
+    if (v == (Array*)0) { stateDumpStr(out, name, (String*)0); return; }
+    String* s = String.withCString("[");
+    for (u32 k = (u32)0; k < v.count(); k = k + (u32)1) {
+        if (k > (u32)0) s.append(String.withCString(" | "));
+        String* e = (String*)v.get(k);
+        s.append(e == (String*)0 ? String.withCString("<null>") : e);
+    }
+    s.append(String.withCString("]"));
+    stateDumpStr(out, name, s);
+}
+
+void stateDumpMap(String* out, string name, Map* v)
+{
+    if (v == (Map*)0) { stateDumpStr(out, name, (String*)0); return; }
+    Array* ks = v.allKeys();
+    ks.sort();
+    String* s = String.withCString("{");
+    for (u32 k = (u32)0; k < ks.count(); k = k + (u32)1) {
+        if (k > (u32)0) s.append(String.withCString(" | "));
+        String* key = (String*)ks.get(k);
+        String* val = (String*)v.get((Hashable*)key);
+        s.append(key);
+        s.append(String.withCString("="));
+        s.append(val == (String*)0 ? String.withCString("<null>") : val);
+    }
+    s.append(String.withCString("}"));
+    stateDumpStr(out, name, s);
+}
+
+void stateDumpRow(String* out, string name, TargetRow* v)
+{
+    stateDumpStr(out, name, v == (TargetRow*)0 ? (String*)0 : v.name());
+}
+
+// Every field of DriverOptions, its CapOptions and its FeOptions, in
+// declaration order, plus the globals the parse sets. Read by
+// tests/driver/option-table.sh, which compares two drivers' dumps (#337).
+String* driverStateDump(DriverOptions* d)
+{
+    String* out = new String();
+    // DriverOptions
+    stateDumpStr(out, "d._arch", d._arch);
+    stateDumpU32(out, "d._opt", d._opt);
+    stateDumpBool(out, "d._keepAsm", d._keepAsm);
+    stateDumpBool(out, "d._emitLib", d._emitLib);
+    stateDumpBool(out, "d._emitRuntime", d._emitRuntime);
+    stateDumpBool(out, "d._noRuntimeLib", d._noRuntimeLib);
+    stateDumpBool(out, "d._noXcArgs", d._noXcArgs);
+    stateDumpStr(out, "d._bundleDir", d._bundleDir);
+    stateDumpStr(out, "d._bundleName", d._bundleName);
+    stateDumpStr(out, "d._bundleVersion", d._bundleVersion);
+    stateDumpStr(out, "d._bundleResources", d._bundleResources);
+    stateDumpStr(out, "d._bundleKey", d._bundleKey);
+    stateDumpStr(out, "d._publisher", d._publisher);
+    stateDumpStr(out, "d._publisherDomain", d._publisherDomain);
+    stateDumpStr(out, "d._trusted", d._trusted);
+    stateDumpStr(out, "d._rotateFrom", d._rotateFrom);
+    stateDumpArray(out, "d._bundleLibs", d._bundleLibs);
+    stateDumpBool(out, "d._noSign", d._noSign);
+    stateDumpStr(out, "d._signBundle", d._signBundle);
+    stateDumpMap(out, "d._bundleReadonly", d._bundleReadonly);
+    stateDumpMap(out, "d._bundleWriteable", d._bundleWriteable);
+    stateDumpBool(out, "d._emitIfaceOnly", d._emitIfaceOnly);
+    stateDumpBool(out, "d._compileOnly", d._compileOnly);
+    stateDumpArray(out, "d._linkInputs", d._linkInputs);
+    stateDumpArray(out, "d._frameworks", d._frameworks);
+    stateDumpArray(out, "d._objectInputs", d._objectInputs);
+    stateDumpBool(out, "d._lto", d._lto);
+    stateDumpStr(out, "d._signIdentity", d._signIdentity);
+    stateDumpStr(out, "d._signEntitlements", d._signEntitlements);
+    stateDumpStr(out, "d._irText", d._irText);
+    stateDumpBool(out, "d._emitApk", d._emitApk);
+    stateDumpBool(out, "d._quiet", d._quiet);
+    stateDumpI32(out, "d._unroll", d._unroll);
+    stateDumpStr(out, "d._signKey", d._signKey);
+    stateDumpBool(out, "d._sawArch", d._sawArch);
+    stateDumpRow(out, "d._targetRow", d._targetRow);
+    stateDumpBool(out, "d._printTarget", d._printTarget);
+    stateDumpBool(out, "d._print3pDir", d._print3pDir);
+    stateDumpStr(out, "d._layoutSpec", d._layoutSpec);
+    stateDumpStr(out, "d._layoutPath", d._layoutPath);
+    stateDumpStr(out, "d._layoutName", d._layoutName);
+    stateDumpBool(out, "d._dumpLayout", d._dumpLayout);
+    stateDumpBool(out, "d._listLayouts", d._listLayouts);
+    stateDumpBool(out, "d._emitIR", d._emitIR);
+    stateDumpBool(out, "d._emitIROpt", d._emitIROpt);
+    stateDumpBool(out, "d._tailCalls", d._tailCalls);
+    stateDumpBool(out, "d._linkLibs", d._linkLibs);
+    stateDumpArray(out, "d._rawLinkFlags", d._rawLinkFlags);
+    stateDumpArray(out, "d._rpaths", d._rpaths);
+    stateDumpBool(out, "d._rpathPending", d._rpathPending);
+    stateDumpArray(out, "d._ldDirs", d._ldDirs);
+    stateDumpI32(out, "d._inlineMax", d._inlineMax);
+    stateDumpBool(out, "d._dceTrace", d._dceTrace);
+    stateDumpBool(out, "d._quitLoop", d._quitLoop);
+    stateDumpBool(out, "d._xtcStack", d._xtcStack);
+    stateDumpU32(out, "d._fnMinBanked", d._fnMinBanked);
+    stateDumpBool(out, "d._dumpPlacement", d._dumpPlacement);
+    stateDumpBool(out, "d._dumpUsage", d._dumpUsage);
+    // CapOptions
+    CapOptions* c = d._caps;
+    stateDumpStr(out, "caps._alloc", c._alloc);
+    stateDumpStr(out, "caps._malloc", c._malloc);
+    stateDumpBool(out, "caps._pic", c._pic);
+    stateDumpBool(out, "caps._hardFloat", c._hardFloat);
+    stateDumpBool(out, "caps._softFloat", c._softFloat);
+    stateDumpU32(out, "caps._m68kCpu", c._m68kCpu);
+    stateDumpBool(out, "caps._debugInfo", c._debugInfo);
+    stateDumpArray(out, "caps._needed", c._needed);
+    stateDumpArray(out, "caps._withLibs", c._withLibs);
+    stateDumpStr(out, "caps._libName", c._libName);
+    stateDumpArray(out, "caps._manifestAttrs", c._manifestAttrs);
+    stateDumpStr(out, "caps._withDex", c._withDex);
+    stateDumpBool(out, "caps._noSelfHost", c._noSelfHost);
+    stateDumpBool(out, "caps._threadFlag", c._threadFlag);
+    stateDumpStr(out, "caps._simd", c._simd);
+    stateDumpStr(out, "caps._simdFlag", c._simdFlag);
+    stateDumpBool(out, "caps._dynamic", c._dynamic);
+    stateDumpBool(out, "caps._dynamicExplicit", c._dynamicExplicit);
+    stateDumpBool(out, "caps._staticLink", c._staticLink);
+    stateDumpBool(out, "caps._noMatmul", c._noMatmul);
+    // FeOptions
+    FeOptions* o = d._fe;
+    stateDumpStr(out, "fe._input", o._input);
+    stateDumpStr(out, "fe._output", o._output);
+    stateDumpStr(out, "fe._target", o._target);
+    stateDumpStr(out, "fe._libPlatform", o._libPlatform);
+    stateDumpRow(out, "fe._targetRow", o._targetRow);
+    stateDumpStr(out, "fe._home", o._home);
+    stateDumpArray(out, "fe._incs", o._incs);
+    stateDumpArray(out, "fe._stdlibs", o._stdlibs);
+    stateDumpArray(out, "fe._defs", o._defs);
+    stateDumpArray(out, "fe._libs", o._libs);
+    stateDumpBool(out, "fe._verbose", o._verbose);
+    stateDumpBool(out, "fe._boundsCheck", o._boundsCheck);
+    stateDumpBool(out, "fe._boundsReport", o._boundsReport);
+    stateDumpBool(out, "fe._debugInfo", o._debugInfo);
+    stateDumpI32(out, "fe._threadSafeArc", o._threadSafeArc);
+    stateDumpBool(out, "fe._parKernelsAll", o._parKernelsAll);
+    stateDumpBool(out, "fe._parAuto", o._parAuto);
+    stateDumpU32(out, "fe._parDeviceDefault", o._parDeviceDefault);
+    stateDumpBool(out, "fe._parAutoImport", o._parAutoImport);
+    stateDumpU32(out, "fe._goalDefault", o._goalDefault);
+    stateDumpBool(out, "fe._emitIface", o._emitIface);
+    stateDumpBool(out, "fe._libraryBuild", o._libraryBuild);
+    stateDumpBool(out, "fe._emitLib", o._emitLib);
+    stateDumpArray(out, "fe._runtimeMembers", o._runtimeMembers);
+    stateDumpStr(out, "fe._runtimeLibDir", o._runtimeLibDir);
+    stateDumpStr(out, "fe._runtimeLibFile", o._runtimeLibFile);
+    stateDumpBool(out, "fe._compileOnly", o._compileOnly);
+    stateDumpStr(out, "fe._classTable", o._classTable);
+    stateDumpBool(out, "fe._analyze", o._analyze);
+    stateDumpStr(out, "fe._ifaceJson", o._ifaceJson);
+    stateDumpArray(out, "fe._neededLibs", o._neededLibs);
+    stateDumpStr(out, "fe._migrate", o._migrate);
+    stateDumpBool(out, "fe._libcReferenced", o._libcReferenced);
+    stateDumpStr(out, "fe._ppOut", o._ppOut);
+    stateDumpMap(out, "fe._callSites", o._callSites);
+    stateDumpArray(out, "fe._wno", o._wno);
+    // The globals the option loop sets.
+    stateDumpBool(out, "gCSplitPair", gCSplitPair);
+    stateDumpArray(out, "gExtraSources", gExtraSources);
+    stateDumpStr(out, "gCPathStd", cPathStd());
+    stateDumpStr(out, "gCPathFpContract", cPathFpContract());
+    return out;
 }
 
 // What the parse cannot settle argument by argument: $XTC_LDFLAGS joins the
