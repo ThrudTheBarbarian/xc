@@ -129,6 +129,16 @@ static BOOL parseVElem(NSString *s, int *num, int *size, int *idx) {
 
 // Strip an end-of-line comment (`//` — our backend, or `;` — clang's arm64
 // output), respecting double-quoted strings so a `;`/`//` inside .asciz survives.
+// A pair's offset is a signed 7-bit count of access-sized units: a multiple of
+// the access size, within -64..63 of them. Masking it wrapped
+// `stp x29, x30, [sp, #-528]!` round to a small positive offset.
+static BOOL pairOffsetOk(int64_t off, int scale, NSError **error) {
+    if (off & ((1LL << scale) - 1)) { if(error)*error=asmErr(@"ldp/stp offset is not a multiple of the access size"); return NO; }
+    int64_t n = off >> scale;
+    if (n < -64 || n > 63) { if(error)*error=asmErr(@"ldp/stp offset out of range (reaches -64..63 times the access size)"); return NO; }
+    return YES;
+}
+
 static NSString *stripComment(NSString *l) {
     BOOL inStr = NO;
     for (NSUInteger i=0;i<l.length;i++) {
@@ -1198,11 +1208,20 @@ static int xaEncodeSME(NSString *mn, NSArray<NSString *> *ops, uint32_t *out, NS
     if ([mn isEqualToString:@"movz"] || [mn isEqualToString:@"movk"] || [mn isEqualToString:@"movn"]) {
         NEED(2); REG(0, rd, d64, dSP);
         int64_t imm; if (!parseImm(ops[1], &imm)) { if(error)*error=asmErr(@"bad imm"); return 0; }
+        // The immediate is 16 bits and the shift a multiple of 16 inside the
+        // register; both used to be masked (`movz x0, #0x12345` became #0x2345).
+        if ((uint64_t)imm > 0xFFFF) { if(error)*error=asmErr(@"movz/movk/movn immediate is wider than 16 bits"); return 0; }
         uint32_t hw = 0;
         if (ops.count >= 3) { // lsl #s
             int64_t s; NSString *sh = ops[2];
             NSRange r = [sh rangeOfString:@"#"];
-            if (r.location != NSNotFound && parseImm([sh substringFromIndex:r.location], &s)) hw = (uint32_t)(s / 16);
+            if (r.location != NSNotFound && parseImm([sh substringFromIndex:r.location], &s)) {
+                if (s < 0 || s % 16 != 0 || s / 16 > (d64 ? 3 : 1)) {
+                    if(error)*error=asmErr(@"movz/movk/movn shift must be lsl #0, 16, 32 or 48 (0 or 16 for a W register)");
+                    return 0;
+                }
+                hw = (uint32_t)(s / 16);
+            }
         }
         uint32_t base = [mn isEqualToString:@"movk"] ? (d64?0xF2800000u:0x72800000u)
                      : [mn isEqualToString:@"movn"] ? (d64?0x92800000u:0x12800000u)
@@ -1662,6 +1681,7 @@ static int xaEncodeSME(NSString *mn, NSArray<NSString *> *ops, uint32_t *out, NS
             if(!parseMem(ops,1,&fbn,&foff,&fmode,&fe)){if(error)*error=fe;return 0;}
             if (fmode==0 && foff>=0 && (foff%(1<<fscale))==0 && (foff>>fscale)<=0xFFF)
                 return fbase | ((uint32_t)(foff>>fscale)<<10) | ((uint32_t)fbn<<5) | (uint32_t)ft;
+            if (foff < -256 || foff > 255) { if(error)*error=asmErr(@"load/store offset out of range (the unscaled and indexed forms reach -256..255)"); return 0; }
             uint32_t imm9=(uint32_t)(foff&0x1FF);
             uint32_t unscBase=(fbase&0x3FFFFFFFu)|((fz==3)?0xC0000000u:0x80000000u);
             uint32_t idx=(fmode==1)?0xC00u:(fmode==2)?0x400u:0x000u;
@@ -1728,6 +1748,9 @@ static int xaEncodeSME(NSString *mn, NSArray<NSString *> *ops, uint32_t *out, NS
         if (!forceUnscaled && mode==0 && offv>=0 && (offv % (1<<scale))==0 && (offv>>scale)<=0xFFF) {
             return uoff | ((uint32_t)(offv>>scale)<<10) | ((uint32_t)base<<5) | (uint32_t)rd;
         }
+        // The unscaled, pre- and post-index forms carry a signed 9-bit byte
+        // offset; masking a wider one gave a different address in silence.
+        if (offv < -256 || offv > 255) { if(error)*error=asmErr(@"load/store offset out of range (the unscaled and indexed forms reach -256..255)"); return 0; }
         uint32_t imm9 = (uint32_t)(offv & 0x1FF);
         uint32_t idx = (mode==1)?0xC00u : (mode==2)?0x400u : 0x000u; // pre=11,post=01,unscaled=00
         return unsc | (imm9<<12) | idx | ((uint32_t)base<<5) | (uint32_t)rd;
@@ -1740,6 +1763,7 @@ static int xaEncodeSME(NSString *mn, NSArray<NSString *> *ops, uint32_t *out, NS
         if (parseFReg(ops[0],&rt,&fz) && parseFReg(ops[1],&rt2,&fz2)) {   // FP pair: s/d/q
             if(!parseMem(ops,2,&base,&off,&mode,&e)){if(error)*error=e;return 0;}
             int scale=fz; int64_t imm7=off>>scale;                       // s->2,d->3,q->4
+            if (!pairOffsetOk(off, scale, error)) return 0;
             uint32_t fb = (fz==4)?(mode==1?0xAD800000u:mode==2?0xAC800000u:0xAD000000u)
                         : (fz==3)?(mode==1?0x6D800000u:mode==2?0x6C800000u:0x6D000000u)
                                  :(mode==1?0x2D800000u:mode==2?0x2C800000u:0x2D000000u);
@@ -1749,6 +1773,7 @@ static int xaEncodeSME(NSString *mn, NSArray<NSString *> *ops, uint32_t *out, NS
         if(!parseReg(ops[0],&rt,&a64,&aSP)||!parseReg(ops[1],&rt2,&b64,&bSP)){if(error)*error=asmErr(@"bad pair reg");return 0;}
         if(!parseMem(ops,2,&base,&off,&mode,&e)){if(error)*error=e;return 0;}
         int scale=a64?3:2; int64_t imm7=off>>scale;
+        if (!pairOffsetOk(off, scale, error)) return 0;
         uint32_t base32;   // 32-bit: offset 0x29.., pre 0x29800000, post 0x28800000; 64-bit: 0xA9../0xA9800000/0xA8800000
         if (mode==0) base32 = a64?0xA9000000u:0x29000000u;
         else if (mode==1) base32 = a64?0xA9800000u:0x29800000u;
@@ -1789,7 +1814,11 @@ static int xaEncodeSME(NSString *mn, NSArray<NSString *> *ops, uint32_t *out, NS
         NEED(1); NSString *tgt=ops[0]; BOOL isLocal=NO; uint32_t addr=0;
         if (resolve) addr=resolve(tgt,&isLocal);
         uint32_t base=[mn isEqualToString:@"bl"]?0x94000000u:0x14000000u;
-        if (isLocal) { int32_t rel=((int32_t)addr-(int32_t)pc)>>2; return base | ((uint32_t)rel & 0x03FFFFFFu); }
+        if (isLocal) {
+            int32_t rel=((int32_t)addr-(int32_t)pc)>>2;
+            if (rel < -(1 << 25) || rel >= (1 << 25)) { if(error)*error=asmErr(@"b/bl out of range (reaches +/-128MB)"); return 0; }
+            return base | ((uint32_t)rel & 0x03FFFFFFu);
+        }
         XAArm64Fixup *f=[XAArm64Fixup new]; f.offset=pc; f.symbol=tgt; f.kind=XAArm64FixupBranch26;
         if(_fixups)[_fixups addObject:f];
         return base;
