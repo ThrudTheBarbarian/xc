@@ -697,6 +697,310 @@ class OptProfile
         }
     }
 
+    // A function's dominator tree, for the passes that only ask whether one
+    // block dominates another: `dominates` is two comparisons, where a search
+    // of the Array `Opt.dominators` maps a block to was linear in the blocks.
+    //
+    // It answers as `dominators` does, which is the greatest fixed point of
+    // dom(entry) = {entry}, dom(b) = {b} + the intersection of its predecessors'
+    // sets, over EVERY predecessor, reachable or not. So:
+    //   - a block other than the entry with no predecessor dominates itself
+    //     only, and the entry ignores the edges into it: each is a root here,
+    //     under one virtual root;
+    //   - a block no root reaches is dominated by every block of the function
+    //     (its set never shrinks from "all"), and it dominates nothing a root
+    //     reaches;
+    //   - a block the function did not have when the tree was built dominates
+    //     nothing and is dominated by nothing.
+    // The tree is Cooper, Harvey and Kennedy's idom over the reverse postorder
+    // from the virtual root, numbered pre and post by a walk of the tree.
+    class DomTree
+    {
+    Map* _index;      // block -> its position when built
+    Data* _pre;       // u32 per position: entry number in the tree walk
+    Data* _post;      // u32 per position: exit number in the tree walk
+    Data* _reach;     // u8 per position: 1 when a root reaches it
+
+    void init(void)
+        {
+        _index = new Map();
+        }
+
+    bool dominates(IRBlock* a, IRBlock* b)
+        {
+        if (a == (IRBlock*)0 || b == (IRBlock*)0)
+            return false;
+        Number* na = (Number*)_index.get((Hashable*)a);
+        Number* nb = (Number*)_index.get((Hashable*)b);
+        if (na == (Number*)0 || nb == (Number*)0)
+            return false;
+        u32 ia = na.asU32();
+        u32 ib = nb.asU32();
+        u8* reach = _reach.bytes();
+        if (reach[ib] == (u8)0)
+            return true;
+        if (reach[ia] == (u8)0)
+            return false;
+        u32* pre = (u32*)_pre.bytes();
+        u32* post = (u32*)_post.bytes();
+        return pre[ia] <= pre[ib] && post[ib] <= post[ia];
+        }
+
+    void build(IRFunc* fn)
+        {
+        u32 n = fn.blocks().count();
+        // Nodes 0..n-1 are the blocks, n the virtual root; n+1 is "none".
+        u32 V = n;
+        u32 NONE = n + (u32)1;
+        u32 nn = n + (u32)1;
+        _pre = Data.withLength(nn * (u32)4);
+        _post = Data.withLength(nn * (u32)4);
+        _reach = Data.withLength(nn);
+        if (n == (u32)0)
+            return;
+        for (u32 b = (u32)0; b < n; b = b + (u32)1)
+            _index.set((Hashable*)(IRBlock*)fn.blocks().get(b), (Object*)Number.with(b));
+        // Count the edges, and each block's predecessors (any edge at all).
+        Data* npStore = Data.withLength(nn * (u32)4);
+        u32* npred = (u32*)npStore.bytes();
+        for (u32 b = (u32)0; b < nn; b = b + (u32)1)
+            npred[b] = (u32)0;
+        u32 ne = (u32)0;
+        for (u32 b = (u32)0; b < n; b = b + (u32)1)
+            {
+            IRInsn* t = ((IRBlock*)fn.blocks().get(b)).term();
+            if (t == (IRInsn*)0)
+                continue;
+            for (u32 i = (u32)0; i < t.ops().count(); i = i + (u32)1)
+                {
+                IROperand* o = (IROperand*)t.ops().get(i);
+                if (o.kind() != (u8)OPK_BLOCK || o.blk() == (IRBlock*)0)
+                    continue;
+                Number* at = (Number*)_index.get((Hashable*)o.blk());
+                if (at == (Number*)0)
+                    continue;
+                u32 d = at.asU32();
+                npred[d] = npred[d] + (u32)1;
+                if (d != (u32)0)
+                    ne = ne + (u32)1;
+                }
+            }
+        u32 nroots = (u32)1;
+        for (u32 b = (u32)1; b < n; b = b + (u32)1)
+            if (npred[b] == (u32)0)
+                nroots = nroots + (u32)1;
+        ne = ne + nroots;
+        // The edges, as (source, destination): the blocks' own (none into the
+        // entry), then the virtual root's to each root.
+        Data* esStore = Data.withLength(ne * (u32)4);
+        Data* edStore = Data.withLength(ne * (u32)4);
+        u32* es = (u32*)esStore.bytes();
+        u32* ed = (u32*)edStore.bytes();
+        u32 k = (u32)0;
+        for (u32 b = (u32)0; b < n; b = b + (u32)1)
+            {
+            IRInsn* t = ((IRBlock*)fn.blocks().get(b)).term();
+            if (t == (IRInsn*)0)
+                continue;
+            for (u32 i = (u32)0; i < t.ops().count(); i = i + (u32)1)
+                {
+                IROperand* o = (IROperand*)t.ops().get(i);
+                if (o.kind() != (u8)OPK_BLOCK || o.blk() == (IRBlock*)0)
+                    continue;
+                Number* at = (Number*)_index.get((Hashable*)o.blk());
+                if (at == (Number*)0 || at.asU32() == (u32)0)
+                    continue;
+                es[k] = b;
+                ed[k] = at.asU32();
+                k = k + (u32)1;
+                }
+            }
+        es[k] = V;
+        ed[k] = (u32)0;
+        k = k + (u32)1;
+        for (u32 b = (u32)1; b < n; b = b + (u32)1)
+            if (npred[b] == (u32)0)
+                {
+                es[k] = V;
+                ed[k] = b;
+                k = k + (u32)1;
+                }
+        // Successors and predecessors, compressed rows over the nodes.
+        Data* soStore = Data.withLength((nn + (u32)1) * (u32)4);
+        Data* poStore = Data.withLength((nn + (u32)1) * (u32)4);
+        Data* sdStore = Data.withLength(ne * (u32)4);
+        Data* psStore = Data.withLength(ne * (u32)4);
+        u32* so = (u32*)soStore.bytes();
+        u32* po = (u32*)poStore.bytes();
+        u32* sd = (u32*)sdStore.bytes();
+        u32* ps = (u32*)psStore.bytes();
+        for (u32 b = (u32)0; b <= nn; b = b + (u32)1)
+            {
+            so[b] = (u32)0;
+            po[b] = (u32)0;
+            }
+        for (u32 e = (u32)0; e < ne; e = e + (u32)1)
+            {
+            so[es[e] + (u32)1] = so[es[e] + (u32)1] + (u32)1;
+            po[ed[e] + (u32)1] = po[ed[e] + (u32)1] + (u32)1;
+            }
+        for (u32 b = (u32)0; b < nn; b = b + (u32)1)
+            {
+            so[b + (u32)1] = so[b + (u32)1] + so[b];
+            po[b + (u32)1] = po[b + (u32)1] + po[b];
+            }
+        Data* fsStore = Data.withLength(nn * (u32)4);
+        Data* fpStore = Data.withLength(nn * (u32)4);
+        u32* fs = (u32*)fsStore.bytes();
+        u32* fp = (u32*)fpStore.bytes();
+        for (u32 b = (u32)0; b < nn; b = b + (u32)1)
+            {
+            fs[b] = so[b];
+            fp[b] = po[b];
+            }
+        for (u32 e = (u32)0; e < ne; e = e + (u32)1)
+            {
+            sd[fs[es[e]]] = ed[e];
+            fs[es[e]] = fs[es[e]] + (u32)1;
+            ps[fp[ed[e]]] = es[e];
+            fp[ed[e]] = fp[ed[e]] + (u32)1;
+            }
+        // Postorder from the virtual root, without recursion.
+        u8* seen = _reach.bytes();
+        for (u32 b = (u32)0; b < nn; b = b + (u32)1)
+            seen[b] = (u8)0;
+        Data* stStore = Data.withLength(nn * (u32)4);
+        Data* itStore = Data.withLength(nn * (u32)4);
+        Data* ordStore = Data.withLength(nn * (u32)4);
+        Data* pnStore = Data.withLength(nn * (u32)4);
+        u32* st = (u32*)stStore.bytes();
+        u32* it = (u32*)itStore.bytes();
+        u32* ord = (u32*)ordStore.bytes();
+        u32* pn = (u32*)pnStore.bytes();
+        for (u32 b = (u32)0; b < nn; b = b + (u32)1)
+            it[b] = so[b];
+        u32 sp = (u32)0;
+        u32 cnt = (u32)0;
+        st[sp] = V;
+        sp = sp + (u32)1;
+        seen[V] = (u8)1;
+        while (sp > (u32)0)
+            {
+            u32 x = st[sp - (u32)1];
+            if (it[x] < so[x + (u32)1])
+                {
+                u32 y = sd[it[x]];
+                it[x] = it[x] + (u32)1;
+                if (seen[y] == (u8)0)
+                    {
+                    seen[y] = (u8)1;
+                    st[sp] = y;
+                    sp = sp + (u32)1;
+                    }
+                continue;
+                }
+            pn[x] = cnt;
+            ord[cnt] = x;
+            cnt = cnt + (u32)1;
+            sp = sp - (u32)1;
+            }
+        // Immediate dominators, in reverse postorder to the fixed point.
+        Data* idStore = Data.withLength(nn * (u32)4);
+        u32* idom = (u32*)idStore.bytes();
+        for (u32 b = (u32)0; b < nn; b = b + (u32)1)
+            idom[b] = NONE;
+        idom[V] = V;
+        bool changed = true;
+        while (changed)
+            {
+            changed = false;
+            u32 r = cnt - (u32)1;   // ord[cnt-1] is the virtual root
+            while (r > (u32)0)
+                {
+                r = r - (u32)1;
+                u32 b = ord[r];
+                u32 nd = NONE;
+                for (u32 q = po[b]; q < po[b + (u32)1]; q = q + (u32)1)
+                    {
+                    u32 p = ps[q];
+                    if (idom[p] == NONE)
+                        continue;
+                    if (nd == NONE)
+                        {
+                        nd = p;
+                        continue;
+                        }
+                    u32 x = p;
+                    u32 y = nd;
+                    while (x != y)
+                        {
+                        while (pn[x] < pn[y])
+                            x = idom[x];
+                        while (pn[y] < pn[x])
+                            y = idom[y];
+                        }
+                    nd = x;
+                    }
+                if (idom[b] != nd)
+                    {
+                    idom[b] = nd;
+                    changed = true;
+                    }
+                }
+            }
+        // The tree's children, then its pre and post numbers.
+        Data* coStore = Data.withLength((nn + (u32)1) * (u32)4);
+        Data* chStore = Data.withLength(nn * (u32)4);
+        u32* co = (u32*)coStore.bytes();
+        u32* ch = (u32*)chStore.bytes();
+        for (u32 b = (u32)0; b <= nn; b = b + (u32)1)
+            co[b] = (u32)0;
+        for (u32 b = (u32)0; b < n; b = b + (u32)1)
+            if (seen[b] != (u8)0)
+                co[idom[b] + (u32)1] = co[idom[b] + (u32)1] + (u32)1;
+        for (u32 b = (u32)0; b < nn; b = b + (u32)1)
+            co[b + (u32)1] = co[b + (u32)1] + co[b];
+        for (u32 b = (u32)0; b < nn; b = b + (u32)1)
+            fs[b] = co[b];
+        for (u32 b = (u32)0; b < n; b = b + (u32)1)
+            if (seen[b] != (u8)0)
+                {
+                ch[fs[idom[b]]] = b;
+                fs[idom[b]] = fs[idom[b]] + (u32)1;
+                }
+        u32* pre = (u32*)_pre.bytes();
+        u32* post = (u32*)_post.bytes();
+        for (u32 b = (u32)0; b < nn; b = b + (u32)1)
+            {
+            it[b] = co[b];
+            pre[b] = (u32)0;
+            post[b] = (u32)0;
+            }
+        u32 tin = (u32)1;
+        u32 tout = (u32)0;
+        sp = (u32)0;
+        st[sp] = V;
+        sp = sp + (u32)1;
+        while (sp > (u32)0)
+            {
+            u32 x = st[sp - (u32)1];
+            if (it[x] < co[x + (u32)1])
+                {
+                u32 y = ch[it[x]];
+                it[x] = it[x] + (u32)1;
+                pre[y] = tin;
+                tin = tin + (u32)1;
+                st[sp] = y;
+                sp = sp + (u32)1;
+                continue;
+                }
+            post[x] = tout;
+            tout = tout + (u32)1;
+            sp = sp - (u32)1;
+            }
+        }
+    }
+
     // A value carried across iterations besides the induction variable — an
     // accumulator / reduction header phi. `seed` is its value on the preheader
     // edge, `next` the value the body feeds back. Both are SSA uses: the lowering
@@ -2683,8 +2987,19 @@ class BeFact : Object
         return out;
         }
 
+    // fn's dominator tree, for `dominates` questions (DomTree says how it
+    // answers them, which is as `dominators` does).
+    DomTree* domTree(IRFunc* fn)
+        {
+        DomTree* t = new DomTree();
+        t.build(fn);
+        return t;
+        }
+
     // Iterative dominators over the CFG, entry = the first block. A block maps
     // to the ARRAY of blocks that dominate it, in the function's block order.
+    // Mem2Reg reads the arrays; a pass that only asks whether one block
+    // dominates another uses domTree.
     //
     // The sets are bit rows indexed by block position and each block's
     // predecessors are found once: rebuilt per block per pass (a scan of every
@@ -2826,10 +3141,13 @@ class BeFact : Object
         }
 
     // Natural loops, one per back edge (latch → header where the header
-    // dominates the latch).
+    // dominates the latch). The predecessors are found once (lrcPredMap, once
+    // per mention as lrcPreds, which the preheader count depends on) and each
+    // body is a set as well as a list.
     Array* lrcLoops(IRFunc* fn)
         {
-        Map* dom = dominators(fn);
+        DomTree* dom = domTree(fn);
+        Map* preds = lrcPredMap(fn);
         Array* loops = new Array();
         for (u32 li = (u32)0; li < fn.blocks().count(); li = li + (u32)1)
             {
@@ -2838,37 +3156,39 @@ class BeFact : Object
             for (u32 s = (u32)0; s < ss.count(); s = s + (u32)1)
                 {
                 IRBlock* H = (IRBlock*)ss.get(s);
-                Array* dl = (Array*)dom.get((Hashable*)latch);
-                if (dl == (Array*)0 || !hasBlock(dl, H))
+                if (!dom.dominates(H, latch))
                     continue;
                 LRCLoop* L = new LRCLoop();
+                Map* inBody = new Map();
                 L.setHeader(H);
                 L.setLatch(latch);
                 L.body().add((Object*)H);
+                inBody.set((Hashable*)H, (Object*)H);
                 Array* wl = new Array();
                 wl.add((Object*)latch);
                 while (wl.count() > (u32)0)
                     {
                     IRBlock* n = (IRBlock*)wl.get(wl.count() - (u32)1);
                     wl.removeLast();
-                    if (hasBlock(L.body(), n))
+                    if (inBody.get((Hashable*)n) != (Object*)0)
                         continue;
                     L.body().add((Object*)n);
+                    inBody.set((Hashable*)n, (Object*)n);
                     if (n == H)
                         continue;
-                    Array* ps = lrcPreds(fn, n);
+                    Array* ps = lrcPredsIn(preds, n);
                     for (u32 p = (u32)0; p < ps.count(); p = p + (u32)1)
                         wl.add(ps.get(p));
                     }
                 // A unique out-of-loop predecessor is the preheader; anything
                 // else leaves it null (the original's -1).
-                Array* hp = lrcPreds(fn, H);
+                Array* hp = lrcPredsIn(preds, H);
                 IRBlock* pre = (IRBlock*)0;
                 u32 outside = (u32)0;
                 for (u32 p = (u32)0; p < hp.count(); p = p + (u32)1)
                     {
                     IRBlock* pb = (IRBlock*)hp.get(p);
-                    if (hasBlock(L.body(), pb))
+                    if (inBody.get((Hashable*)pb) != (Object*)0)
                         continue;
                     outside = outside + (u32)1;
                     pre = pb;

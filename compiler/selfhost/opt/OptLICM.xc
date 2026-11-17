@@ -33,15 +33,20 @@
         for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
             {
             IRFunc* fn = (IRFunc*)m.funcs().get(f);
+            // A round moves instructions into a preheader's body and never a
+            // terminator, so the blocks and edges stand still: the dominators
+            // and predecessors are found once for all the function's rounds.
+            DomTree* dom = self.domTree(fn);
+            Map* preds = self.lrcPredMap(fn);
             u32 pass = (u32)0;
-            while (pass < (u32)32 && licmOnce(fn))
+            while (pass < (u32)32 && licmOnce(fn, dom, preds))
                 pass = pass + (u32)1;
             if (pass == (u32)32)
                 optRoundCap("LICM", (u32)32, fn);
             }
         }
 
-    final bool licmOnce(IRFunc* fn)
+    final bool licmOnce(IRFunc* fn, DomTree* dom, Map* preds)
         {
         _licmVecPhiIns = new Array();
         for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
@@ -85,7 +90,6 @@
                     defBlk.set((Hashable*)p.res(), (Object*)bb);
                 }
             }
-        Map* dom = self.dominators(fn);
 
         for (u32 li = (u32)0; li < fn.blocks().count(); li = li + (u32)1)
             {
@@ -94,15 +98,14 @@
             for (u32 s = (u32)0; s < ss.count(); s = s + (u32)1)
                 {
                 IRBlock* H = (IRBlock*)ss.get(s);
-                Array* dl = (Array*)dom.get((Hashable*)latch);
                 // A real back edge only: the header must DOMINATE the latch.
                 // Without that test a forward edge into an earlier block —
                 // which inlining and unrolling can produce — masquerades as one,
                 // and the body walk either escapes into an outer preheader or
                 // stops short of a real body block.
-                if (dl == (Array*)0 || !self.hasBlock(dl, H))
+                if (!dom.dominates(H, latch))
                     continue;
-                if (licmLoop(fn, H, latch, dom, defOf, defBlk))
+                if (licmLoop(fn, H, latch, dom, preds, defOf, defBlk))
                     return true;
                 }
             }
@@ -110,14 +113,12 @@
         }
 
     final bool licmLoop(IRFunc* fn, IRBlock* H, IRBlock* latch,
-                  Map* dom, Map* defOf, Map* defBlk)
+                  DomTree* dom, Map* preds, Map* defOf, Map* defBlk)
         {
         // Natural loop body: every block reaching the latch without passing
         // through the header, plus the header itself.
-        // The predecessors are found once for the walk (nothing changes the
-        // function until the hoisting below) and the body is a set as well as
-        // a list.
-        Map* preds = self.lrcPredMap(fn);
+        // The predecessors are the function's, found once (licm says why)
+        // and the body is a set as well as a list.
         Array* body = new Array();
         Map* inBody = new Map();
         body.add((Object*)H);
@@ -147,15 +148,14 @@
         for (u32 p = (u32)0; p < hp.count(); p = p + (u32)1)
             {
             IRBlock* pb = (IRBlock*)hp.get(p);
-            if (hasBlock(body, pb))
+            if (inBody.get((Hashable*)pb) != (Object*)0)
                 continue;
             outside = outside + (u32)1;
             pre = pb;
             }
         if (outside != (u32)1)
             return false;
-        Array* dh = (Array*)dom.get((Hashable*)H);
-        if (dh == (Array*)0 || !self.hasBlock(dh, pre))
+        if (!dom.dominates(pre, H))
             return false;
 
         bool hasMemWrite = false;
@@ -209,7 +209,7 @@
             for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
                 {
                 IRBlock* bb = (IRBlock*)fn.blocks().get(b);
-                if (!self.hasBlock(body, bb))
+                if (inBody.get((Hashable*)bb) == (Object*)0)
                     continue;
                 for (u32 k = (u32)0; k < bb.insns().count(); k = k + (u32)1)
                     {
@@ -231,7 +231,7 @@
                         continue;
                     bool inv = true;
                     for (u32 o = (u32)0; o < n.ops().count(); o = o + (u32)1)
-                        if (!licmOpInvariant((IROperand*)n.ops().get(o), body,
+                        if (!licmOpInvariant((IROperand*)n.ops().get(o), inBody,
                                              defBlk, invariant))
                             {
                             inv = false;
@@ -264,20 +264,20 @@
         // block holds separately, so appending is enough).
         for (u32 i = (u32)0; i < hoist.count(); i = i + (u32)1)
             pre.insns().add(hoist.get(i));
-        return true; // the CFG facts above are stale now; recompute next round
+        return true;
         }
 
     // Is this operand invariant for the loop? Anything not a use is; so is a
     // memory token (advisory in this loose model) and anything defined outside
     // the body or already marked to hoist.
-    final bool licmOpInvariant(IROperand* o, Array* body, Map* defBlk, Map* invariant)
+    final bool licmOpInvariant(IROperand* o, Map* inBody, Map* defBlk, Map* invariant)
         {
         if (o.kind() != (u8)OPK_USE)
             return true;
         if (o.val().ty() != (String*)0 && o.val().ty().equals(String.withCString("Mem")))
             return true;
         Object* db = defBlk.get((Hashable*)o.val());
-        if (db == (Object*)0 || !self.hasBlock(body, (IRBlock*)db))
+        if (db == (Object*)0 || inBody.get((Hashable*)db) == (Object*)0)
             return true;
         return invariant.get((Hashable*)o.val()) != (Object*)0;
         }

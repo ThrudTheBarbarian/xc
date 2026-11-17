@@ -138,7 +138,7 @@
 
         // Redundant: another guard for the SAME class has its straight-through
         // block dominating this one — the flag is set on every path here.
-        Map* dom = self.dominators(fn);
+        DomTree* dom = self.domTree(fn);
         Array* redundant = new Array();
         for (u32 i = (u32)0; i < _sgGuards.count(); i = i + (u32)1)
             {
@@ -148,10 +148,7 @@
                     continue;
                 if (!((String*)_sgSyms.get(j)).equals((String*)_sgSyms.get(i)))
                     continue;
-                Object* ds = dom.get((Hashable*)(IRBlock*)_sgGuards.get(i));
-                if (ds == 0)
-                    continue;
-                if (!self.hasBlock((Array*)ds, (IRBlock*)_sgConts.get(j)))
+                if (!dom.dominates((IRBlock*)_sgConts.get(j), (IRBlock*)_sgGuards.get(i)))
                     continue;
                 redundant.add((Object*)Number.with(i));
                 break;
