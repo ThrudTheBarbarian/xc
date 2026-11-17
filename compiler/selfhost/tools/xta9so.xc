@@ -24,26 +24,13 @@
 #import "Arm32Defs.xc"
 #import <Elf32>
 #import "Elf32Defs.xc"
+#import <SectionBytes>
 
-// `.L<rest>` becomes `.L<index>Z<rest>`, so two separately compiled files
-// cannot collide on `.L0` — a compiler restarts its numbering per file.
+// `.L<rest>` becomes `.L<index>Z<rest>`, labels only: the shared
+// implementation (#290), which leaves strings and paths alone.
 String* namespaceLocals(String* s, u32 idx)
     {
-    String* out = new String();
-    u32 i = (u32)0;
-    while (i < s.byteLength())
-        {
-        if (i + (u32)1 < s.byteLength() && s.byteAt(i) == (u8)'.' && s.byteAt(i + (u32)1) == (u8)'L')
-            {
-            out.appendCString(".L");
-            out.appendFormat("%luZ", idx);
-            i = i + (u32)2;
-            continue;
-            }
-        out.appendByte(s.byteAt(i));
-        i = i + (u32)1;
-        }
-    return out;
+    return AsmText.namespaceLocals(s, idx);
     }
 
 void main(void)

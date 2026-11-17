@@ -123,10 +123,6 @@ int main(int argc, const char* argv[])
             objInputs = objs;
             arInputs = ars;
             NSMutableString* all = [NSMutableString string];
-            NSRegularExpression* localLbl =
-                [NSRegularExpression regularExpressionWithPattern:@"\\.L([A-Za-z0-9_$.]*)"
-                                                          options:0
-                                                            error:NULL];
             for (NSUInteger i = 0; i < inputs.count; i++)
                 {
                 NSString* one = [NSString stringWithContentsOfFile:inputs[i]
@@ -139,8 +135,7 @@ int main(int argc, const char* argv[])
                     return 1;
                     }
                 if (inputs.count > 1)
-                    one = XTRegexReplace(localLbl, one,
-                                         [NSString stringWithFormat:@".L%luZ$1", (unsigned long)i]);
+                    one = XTNamespaceLocals(one, i);
                 [all appendString:one];
                 [all appendString:@"\n"];
                 }
