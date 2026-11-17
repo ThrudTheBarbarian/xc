@@ -34,7 +34,8 @@ NS_ASSUME_NONNULL_END
 // optRoundCap.
 static inline void XTIROptRoundCap(const char* pass, unsigned cap, NSString* fn)
     {
-    if (!getenv("XC_OPT_CAPS"))
+    const char* e = getenv("XC_OPT_CAPS");
+    if (!e || !*e)
         return;
     fprintf(stderr, "xcc: note: %s stopped at its round cap (%u) in '%s'\n", pass, cap,
             fn.length ? fn.UTF8String : "?");

@@ -79,7 +79,10 @@ u8* optGetenv(u8* name) { return _xt_getenv(name); }
 // says which pass, in which function. Output is unchanged either way.
 void optRoundCap(u8* pass, u32 cap, IRFunc* fn)
 {
-    if (_xt_getenv("XC_OPT_CAPS") == (u8*)0)
+    // Set and non-empty, as ppEnvSet reads a switch: the runtime gives an
+    // empty string, not 0, for a variable that is not set.
+    u8* e = _xt_getenv("XC_OPT_CAPS");
+    if (e == (u8*)0 || e[0] == (u8)0)
         return;
     Stdio.error(String.withFormat("xcc: note: %s stopped at its round cap (%u) in '%s'\n", pass, cap,
                                   fn != (IRFunc*)0 && fn.name() != (String*)0 ? fn.name().cString() : "?"));
