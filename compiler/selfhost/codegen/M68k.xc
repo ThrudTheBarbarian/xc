@@ -3811,20 +3811,68 @@ class M68k
     // needed is decided by SCANNING THE ALREADY-EMITTED CODE — the stubs are
     // appended after it, so their own labels are not present yet and cannot
     // make a helper look used by defining it.
+    //
+    // The names `jsr`ed so far, read off _out as it grows (#335): each query
+    // used to search the whole output, about 120 times per module. Each call
+    // first reads the complete lines appended since the last, so a stub that
+    // calls a helper makes it used for the queries after it, as before.
+    Map* _jsrSeen;
+    u32 _jsrScanned;
+    String* _jsrFor;   // the _out the set was read from
     bool usesHelper(String* name)
         {
-        String* needle = String.withCString("\tjsr\t");
-        needle.append(name);
-        needle.appendCString("\n");
-        return _out.byteIndexOf(needle) != (u32)$FFFF_FFFF;
+        if (_jsrSeen == (Map*)0 || _jsrFor != _out || _jsrScanned > _out.byteLength())
+            {
+            _jsrSeen = new Map();
+            _jsrScanned = (u32)0;
+            _jsrFor = _out;
+            }
+        u32 n = _out.byteLength();
+        u32 i = _jsrScanned;
+        while (i < n)
+            {
+            u32 e = i;
+            while (e < n && _out.byteAt(e) != (u8)10)
+                e = e + (u32)1;
+            if (e >= n)
+                break;   // a line not finished yet: read it next time
+            // "\tjsr\t<name>" as the whole line: the old needle was
+            // "\tjsr\t<name>\n", found anywhere, so the line may carry text
+            // before the tab.
+            u32 t = i;
+            while (t + (u32)5 <= e)
+                {
+                if (_out.byteAt(t) == (u8)9 && _out.byteAt(t + (u32)1) == (u8)'j' && _out.byteAt(t + (u32)2) == (u8)'s'
+                    && _out.byteAt(t + (u32)3) == (u8)'r' && _out.byteAt(t + (u32)4) == (u8)9)
+                    {
+                    String* nm = _out.substringBytes(t + (u32)5, e - t - (u32)5);
+                    _jsrSeen.set((Hashable*)nm, (Object*)nm);
+                    }
+                t = t + (u32)1;
+                }
+            i = e + (u32)1;
+            }
+        _jsrScanned = i;
+        return _jsrSeen.get((Hashable*)name) != (Object*)0;
         }
 
+    // The module's function names, as a set built on first use (#335): the
+    // module does not change while its stubs are written.
+    Map* _definedFns;
+    IRModule* _definedFor;
     bool moduleDefines(IRModule* m, String* name)
         {
-        for (u32 i = (u32)0; i < m.funcs().count(); i = i + (u32)1)
-            if (((IRFunc*)m.funcs().get(i)).name().equals(name))
-                return true;
-        return false;
+        if (_definedFns == (Map*)0 || _definedFor != m)
+            {
+            _definedFns = new Map();
+            _definedFor = m;
+            for (u32 i = (u32)0; i < m.funcs().count(); i = i + (u32)1)
+                {
+                String* fnm = ((IRFunc*)m.funcs().get(i)).name();
+                _definedFns.set((Hashable*)fnm, (Object*)fnm);
+                }
+            }
+        return _definedFns.get((Hashable*)name) != (Object*)0;
         }
 
     void emitRuntimeStubs(IRModule* m)
