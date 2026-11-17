@@ -1,3 +1,4 @@
+//xtc-na: xt6502 — no par runtime on this target (no ParDevice)
 // par_gpu_narrow_memory.xc — `par` blocks over arrays of 8- and 16-bit values
 // and bools, and with captured bools and bytes. On a Vulkan GPU these are
 // bound as 32-bit words: a load shifts and masks, a store updates its bits with

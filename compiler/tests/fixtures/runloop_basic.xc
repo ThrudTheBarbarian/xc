@@ -1,5 +1,5 @@
 //xtc-flags: target=arm64
-//xtc-na: wasm32 xt6502 m68k arm9 — RunLoop needs threads and a monotonic clock
+//xtc-na: wasm32,xt6502,m68k,arm9 — RunLoop needs threads and a monotonic clock
 // A block posted from another thread runs on the loop; a cancelled timer
 // never fires; a repeating timer cancels itself after three ticks; stop()
 // ends run().

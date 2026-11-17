@@ -1,3 +1,4 @@
+//xtc-na: xt6502 — no par runtime on this target (no ParDevice)
 // par_gpu_writes_all.xc — a block that overwrites a global array whole is not
 // copied to the device first (gpuWritesAll), one that writes only half of one
 // is, and one that reads what it writes is. The untouched half must keep its

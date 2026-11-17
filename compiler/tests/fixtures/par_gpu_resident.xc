@@ -1,3 +1,4 @@
+//xtc-na: xt6502 — no par runtime on this target (no ParDevice)
 // par_gpu_resident.xc — a small table a par block only reads stays on the
 // device between runs while it is unchanged. The host changing it between
 // runs, and another block using the same device slot in between, must both

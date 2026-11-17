@@ -1,3 +1,4 @@
+//xtc-na: xt6502 — no par runtime on this target (no ParDevice)
 //xtc-flags: target=arm64
 //xtc-warn: because it uses double, which Apple GPUs do not have
 //xtc-warn: because it uses a captured value its Vulkan version cannot hold

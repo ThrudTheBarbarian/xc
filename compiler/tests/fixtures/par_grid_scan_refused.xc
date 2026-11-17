@@ -1,3 +1,4 @@
+//xtc-na: xt6502 — no par runtime on this target (no ParDevice)
 //xtc-flags: expect=sema-error
 // A `par :grid` block's work items must not read each other's results either:
 // the element left of this one is another item's.

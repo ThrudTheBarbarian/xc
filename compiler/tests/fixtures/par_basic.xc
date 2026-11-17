@@ -1,3 +1,4 @@
+//xtc-na: xt6502 — no par runtime on this target (no ParDevice)
 //xtc-flags: target=arm64
 // par_basic.xc — `par` blocks on the CPU: a map over an array, `+` and `max`
 // reductions, a captured scalar, an inclusive range, a named and an unnamed

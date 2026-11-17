@@ -1,5 +1,5 @@
 //xtc-flags: target=arm64
-//xtc-na: wasm32 xt6502 m68k arm9 — RunLoop needs threads and a monotonic clock
+//xtc-na: wasm32,xt6502,m68k,arm9 — RunLoop needs threads and a monotonic clock
 // A loop whose thread waits somewhere else (a UI event loop) installs a wake
 // hook: every post, from any thread, calls it, and the owner then drains the
 // queue with runPending(). Here a worker posts five progress updates; the

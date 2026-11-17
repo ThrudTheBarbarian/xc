@@ -1,3 +1,4 @@
+//xtc-na: xt6502 — no par runtime on this target (no ParDevice)
 // A work item's own array (`u32 a[32];` in the body): Astronomancy's median
 // combine kept every such block on the CPU ("it uses an operation its GPU
 // version cannot express yet"). It is a per-thread array in every kernel: a

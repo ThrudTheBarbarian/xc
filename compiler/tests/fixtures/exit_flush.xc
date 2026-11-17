@@ -7,7 +7,7 @@
 // target=arm64: native backends only — the x86-64 sweep picks that up too,
 // and x86-64 is where the in-house crt owns the exit path.
 //xtc-flags: target=arm64
-//xtc-na: win64 wasm32 — mingw's C printf writes CRLF in text mode, so the
+//xtc-na: win64,wasm32 — mingw's C printf writes CRLF in text mode, so the
 //        byte oracle can never match (win64's exit path was verified
 //        unaffected by hand); wasm32 has no host printf at all — and the
 //        backend currently emits INVALID wasm for a bodyless C-variadic

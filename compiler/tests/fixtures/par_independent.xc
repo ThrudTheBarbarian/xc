@@ -1,3 +1,4 @@
+//xtc-na: xt6502 — no par runtime on this target (no ParDevice)
 //xtc-flags: target=arm64
 // par_independent.xc — what the independence rule (par-blocks.md §4) lets a
 // `par` body do: read and rewrite its own element, write at a fixed offset

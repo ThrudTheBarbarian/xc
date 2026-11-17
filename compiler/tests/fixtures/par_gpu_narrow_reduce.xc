@@ -1,3 +1,4 @@
+//xtc-na: xt6502 — no par runtime on this target (no ParDevice)
 // par_gpu_narrow_reduce.xc — reductions of 8- and 16-bit values and bools in
 // a `par` block: a wrapping u8 sum, an i8 max, an i16 min, a u16 xor, and a
 // bool "any" and "all". On Vulkan and WebGPU each thread's partial is a

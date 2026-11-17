@@ -1,3 +1,4 @@
+//xtc-na: xt6502 — no par runtime on this target (no ParDevice)
 //xtc-flags: expect=sema-error
 // A `par` block's items must not read each other's results: b[i - 1] is
 // written by another item, so this is a scan (a prefix sum), not a par.

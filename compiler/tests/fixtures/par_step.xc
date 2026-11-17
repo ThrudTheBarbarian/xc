@@ -1,3 +1,4 @@
+//xtc-na: xt6502 — no par runtime on this target (no ParDevice)
 //xtc-flags: target=arm64 --par-style=auto
 // par_step.xc — a `par` loop with a stride (`step s`, a literal above 1):
 // the work items are its iterations, counted from 0, with i = a + k*s. A

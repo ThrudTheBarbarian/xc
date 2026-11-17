@@ -1,3 +1,4 @@
+//xtc-na: xt6502 — no par runtime on this target (no ParDevice)
 //xtc-flags: expect=sema-error
 // Phase 1 takes the loop form only: the body is one ascending `for (T i in a..b)`.
 #import "Par.xc"

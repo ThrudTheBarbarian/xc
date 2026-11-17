@@ -1,5 +1,5 @@
 //xtc-flags: target=arm64
-//xtc-na: wasm32 win64 — bodyless+`...` means the C ABI, and the wasm module has no C world to call (host interop is the `env` import package instead); win64 because dprintf is POSIX-only — msvcrt/UCRT has no such symbol, so the link rightly refuses
+//xtc-na: wasm32,win64 — bodyless+`...` means the C ABI, and the wasm module has no C world to call (host interop is the `env` import package instead); win64 because dprintf is POSIX-only — msvcrt/UCRT has no such symbol, so the link rightly refuses
 // The bounded C-variadic rule (blewit item 2, Task #1082): a BODY-LESS
 // declaration ending in `...` names a C callee, so the call is C-ABI — the
 // tail is default-promoted and passed natively, no pack buffer and no

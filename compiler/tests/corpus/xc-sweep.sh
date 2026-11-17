@@ -110,6 +110,7 @@ if [ "${1:-}" = "--one" ]; then
         ( cd "$XCWORK/run" && $XCTIMEOUT "$XCSIM" -m xt -d \
               "$XCWORK/bin/$b.xex" > "$XCWORK/out/$b" 2> "$XCWORK/log/$b.sim" )
         rc=$?
+        [ $rc -eq 142 ] && rc=124   # the perl timeout's SIGALRM is timeout(1)'s 124
         # The simulator surfaces the 6502 program's OWN exit code — main's
         # return value — as its process status, so a clean run routinely exits
         # non-zero and rc is not the criterion. A genuine crash is an illegal
@@ -137,6 +138,7 @@ if [ "${1:-}" = "--one" ]; then
         # in the tree.
         ( cd "$XCWORK/run" && $XCTIMEOUT $XC_ARM64_LAUNCH "$XCWORK/bin/$b" > "$XCWORK/out/$b" 2>&1 )
         rc=$?
+        [ $rc -eq 142 ] && rc=124
     fi
     if [ $rc -eq 124 ]; then printf 'TIMEOUT\t%s\n' "$b" > "$XCWORK/res/$b"; exit 0; fi
     if [ $rc -ne 0 ]; then printf 'RUN\t%s\t(exit %s)\n' "$b" "$rc" > "$XCWORK/res/$b"; exit 0; fi
@@ -177,10 +179,22 @@ else trap 'rm -rf "$WORK"' EXIT; fi
 # stall the sweep forever and look like a slow build).
 if command -v timeout  >/dev/null 2>&1; then XCTIMEOUT="timeout $TIMEOUT"
 elif command -v gtimeout >/dev/null 2>&1; then XCTIMEOUT="gtimeout $TIMEOUT"
+# Stock macOS has neither, but has perl, whose alarm survives exec: the
+# program gets SIGALRM when the time is up, as timeout(1) would send TERM.
+elif command -v perl >/dev/null 2>&1; then XCTIMEOUT="perl -e alarm(shift);exec(@ARGV)||die $TIMEOUT"
 else XCTIMEOUT=""; echo "xc-sweep: WARNING — no timeout(1); a hung fixture will stall the sweep"; fi
 
 # The driver is a HOST tool: it has to run here, so it is built for this host's
 # own arch, not for arm64 because the Mac happens to be arm64.
+# XC_DRIVER=<path> uses an xc driver already built for this host (the split
+# build's bin/<plat>/xcc-xc, say) instead of building one: the one-unit build
+# below takes most of an hour, and a run that has just built the compiler has
+# one to hand.
+if [ -n "${XC_DRIVER:-}" ]; then
+    [ -x "$XC_DRIVER" ] || { echo "--- xc corpus sweep: BROKEN (XC_DRIVER=$XC_DRIVER is not executable)"; exit 1; }
+    cp "$XC_DRIVER" "$WORK/xcc-xc"
+    echo "using the xc driver $XC_DRIVER"
+else
 echo "building the xc driver (selfhost/tools/xcc.xc → $XC_DRIVER_ARCH)…"
 # ...paired with the matching standard library. The two are not interchangeable:
 # the arm64 Stdio emits bytes through `_putc`, which the x86-64 runtime does not
@@ -191,6 +205,7 @@ echo "building the xc driver (selfhost/tools/xcc.xc → $XC_DRIVER_ARCH)…"
     -I selfhost/lexer -I selfhost/defs -I selfhost/preproc -I selfhost/parser -I selfhost/sema \
     -I selfhost/ir -I selfhost/defs -I selfhost/opt -I selfhost/codegen -I selfhost/asm \
     -I selfhost/link -I selfhost/defs -I selfhost/driver > "$WORK/build.log" 2>&1
+fi
 if [ ! -x "$WORK/xcc-xc" ]; then
     echo "--- xc corpus sweep: BROKEN (the xc driver did not build)"
     sed 's/^/    /' "$WORK/build.log" | head -25

@@ -1,3 +1,4 @@
+//xtc-na: xt6502 — no par runtime on this target (no ParDevice)
 // par_ran_on — Par.ranOn names the hardware a block's last run used
 // (2026-10-27, owner: float results can differ between devices; say which
 // device made them rather than promise they cannot). Before the block runs

@@ -1,3 +1,4 @@
+//xtc-na: xt6502 — no par runtime on this target (no ParDevice)
 // par_vec_chain.xc — par bodies that are a serial chain per item, the shape
 // the escape vectoriser takes for a par item loop (2026-10-30): an in-place
 // u32 multiply-add, a shift/xor/add, a float multiply-add and a narrow

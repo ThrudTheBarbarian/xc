@@ -1,3 +1,4 @@
+//xtc-na: xt6502 — no par runtime on this target (no ParDevice)
 // par_gpu_wide_div.xc — 64-bit division, remainder and float conversion in a
 // `par` block: u64 and i64 quotients and remainders of hashed values by
 // divisors of every size, and u64/i64 to float and back. WGSL has no 64-bit
