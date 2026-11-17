@@ -335,8 +335,16 @@ class Arm64
             Array* asmBodies = new Array();
             String* emitted = _out;
             bool hasAsm = emitted.contains(String.withCString("    // inline asm\n"));
-            String* pp = peepholeFallthrough(peepholeUsra(peepholeRedundantCmp(peepholeAndsFold(peepholeCopyProp(
-                    peepholeRedundantReloads(peepholeSpills(hasAsm ? hideAsm(emitted, asmBodies) : emitted)))))));
+            // The text passes take and give lines: split once here, joined
+            // once after (#333).
+            Array* pl = linesOf(hasAsm ? hideAsm(emitted, asmBodies) : emitted);
+            Arm64._parseMemo = new Map();
+            if (Arm64._parseNone == (Array*)0)
+                Arm64._parseNone = new Array();
+            pl = peepholeFallthroughLines(peepholeUsraLines(peepholeRedundantCmpLines(peepholeAndsFoldLines(
+                    peepholeCopyPropLines(peepholeRedundantReloadsLines(peepholeSpillsLines(pl)))))));
+            Arm64._parseMemo = (Map*)0;
+            String* pp = joinLines(pl);
             if (hasAsm) pp = restoreAsm(pp, asmBodies, emitted);
             module.append(tbzInRange(elideLeafFrame(expandStagedSlots(pp))));
             _out = module;
@@ -6565,9 +6573,16 @@ class Arm64
         return m.equals(String.withCString("fcsel")) || m.equals(String.withCString("csel")) || m.equals(String.withCString("csinc")) || m.equals(String.withCString("csinv")) || m.equals(String.withCString("csneg")) || m.equals(String.withCString("cset")) || m.equals(String.withCString("csetm")) || m.equals(String.withCString("fadd")) || m.equals(String.withCString("fsub")) || m.equals(String.withCString("fmul")) || m.equals(String.withCString("fdiv")) || m.equals(String.withCString("fmadd")) || m.equals(String.withCString("fmsub")) || m.equals(String.withCString("fnmadd")) || m.equals(String.withCString("fnmsub")) || m.equals(String.withCString("fnmul")) || m.equals(String.withCString("fneg")) || m.equals(String.withCString("fabs")) || m.equals(String.withCString("fmov")) || m.equals(String.withCString("mov")) || m.equals(String.withCString("movz")) || m.equals(String.withCString("movk")) || m.equals(String.withCString("and")) || m.equals(String.withCString("orr")) || m.equals(String.withCString("eor")) || m.equals(String.withCString("add")) || m.equals(String.withCString("sub")) || m.equals(String.withCString("lsl")) || m.equals(String.withCString("lsr")) || m.equals(String.withCString("asr")) || m.equals(String.withCString("mul")) || m.equals(String.withCString("madd")) || m.equals(String.withCString("msub")) || m.equals(String.withCString("ldr")) || m.equals(String.withCString("ldrb")) || m.equals(String.withCString("ldrh")) || m.equals(String.withCString("ldrsw")) || m.equals(String.withCString("str")) || m.equals(String.withCString("strb")) || m.equals(String.withCString("strh")) || m.equals(String.withCString("ucvtf")) || m.equals(String.withCString("scvtf")) || m.equals(String.withCString("fcvtzu")) || m.equals(String.withCString("fcvtzs")) || m.equals(String.withCString("fcvt")) || m.equals(String.withCString("sxtw")) || m.equals(String.withCString("uxtw")) || m.equals(String.withCString("ubfx")) || m.equals(String.withCString("sbfx"))
             || m.equals(String.withCString("tbz")) || m.equals(String.withCString("tbnz"));
     }
+    // The text as lines, passed from pass to pass without joining and
+    // re-splitting between them (#333).
     String* peepholeRedundantCmp(String* text)
     {
-        Array* lines = linesOf(text);
+        return joinLines(peepholeRedundantCmpLines(linesOf(text)));
+    }
+
+    Array* peepholeRedundantCmpLines(Array* text)
+    {
+        Array* lines = text;
         Array* out = new Array();
         String* last = (String*)0;      // the compare the flags hold, trimmed
         String* ra = (String*)0;
@@ -6612,7 +6627,7 @@ class Arm64
             }
             out.add((Object*)ln);
         }
-        return joinLines(out);
+        return out;
     }
 
     // `and D, S, #c` then `cmp D, #0` is `ands D, S, #c`, and a later
@@ -6648,9 +6663,16 @@ class Arm64
         return t.isEmpty() || t.hasSuffix(String.withCString(":")) || t.hasPrefix(String.withCString("."))
             || t.hasPrefix(String.withCString("//"));
     }
+    // The text as lines, passed from pass to pass without joining and
+    // re-splitting between them (#333).
     String* peepholeAndsFold(String* text)
     {
-        Array* lines = linesOf(text);
+        return joinLines(peepholeAndsFoldLines(linesOf(text)));
+    }
+
+    Array* peepholeAndsFoldLines(Array* text)
+    {
+        Array* lines = text;
         Array* skip = new Array();
         for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1)
             skip.add((Object*)Number.withU32((u32)0));
@@ -6723,7 +6745,7 @@ class Arm64
             if (!done)
                 out.add((Object*)ln);
         }
-        return joinLines(out);
+        return out;
     }
 
     // ── usra: a shifted term folded into its accumulator (#25) ─────────
@@ -6804,9 +6826,16 @@ class Arm64
         }
         return false;
     }
+    // The text as lines, passed from pass to pass without joining and
+    // re-splitting between them (#333).
     String* peepholeUsra(String* text)
     {
-        Array* lines = linesOf(text);
+        return joinLines(peepholeUsraLines(linesOf(text)));
+    }
+
+    Array* peepholeUsraLines(Array* text)
+    {
+        Array* lines = text;
         for (u32 i = (u32)0; i + (u32)1 < lines.count(); i = i + (u32)1) {
             Array* o3 = parseAsmLine((String*)lines.get(i));
             String* m3 = takeMnem(o3);
@@ -6890,12 +6919,19 @@ class Arm64
             lines.removeAt(i);
             i = (u32)first;
         }
-        return joinLines(lines);
+        return lines;
     }
 
+    // The text as lines, passed from pass to pass without joining and
+    // re-splitting between them (#333).
     String* peepholeRedundantReloads(String* text)
     {
-        Array* lines = linesOf(text);
+        return joinLines(peepholeRedundantReloadsLines(linesOf(text)));
+    }
+
+    Array* peepholeRedundantReloadsLines(Array* text)
+    {
+        Array* lines = text;
         Array* out = new Array();
         Array* hOff = new Array();      // slot offset, as text
         Array* hReg = new Array();      // the register believed to hold it
@@ -6990,12 +7026,19 @@ class Arm64
             }
             out.add((Object*)ln);
         }
-        return joinLines(out);
+        return out;
     }
 
+    // The text as lines, passed from pass to pass without joining and
+    // re-splitting between them (#333).
     String* peepholeSpills(String* text)
     {
-        Array* lines = linesOf(text);
+        return joinLines(peepholeSpillsLines(linesOf(text)));
+    }
+
+    Array* peepholeSpillsLines(Array* text)
+    {
+        Array* lines = text;
         bool clean = true;               // no non-frame stp/ldp
         bool spAddrTaken = false;        // some frame address escaped
         Map* loads = new Map();          // slot offset text -> load count
@@ -7066,7 +7109,7 @@ class Arm64
             out.add((Object*)ln);
             i = i + (u32)1;
         }
-        return joinLines(out);
+        return out;
     }
 
     static u32 countIn(Map* m, String* k)
@@ -7088,7 +7131,28 @@ class Arm64
     // released: every assembly line the peepholes read leaked its mnemonic,
     // some 70 million strings and most of the 16 GB this compiler took to
     // compile itself. An array releases what it holds.
+    // parseAsmLine's answers for the function the text passes are working on
+    // (#333): the seven passes re-parsed every line, each of them. A line is
+    // parsed once; each caller gets its own copy, since takeMnem edits it.
+    // Live only while one function's passes run (see assembly), so nothing
+    // outlives the text it describes.
+    static Map* _parseMemo;
+    static Array* _parseNone;   // the memo's mark for a line that does not parse
     static Array* parseAsmLine(String* line)
+    {
+        if (_parseMemo != (Map*)0)
+            {
+            Object* hit = _parseMemo.get((Hashable*)line);
+            if (hit != (Object*)0)
+                return (Array*)hit == _parseNone ? (Array*)0 : ((Array*)hit).copy();
+            Array* r = parseAsmLineNow(line);
+            _parseMemo.set((Hashable*)String.withString(line), (Object*)(r == (Array*)0 ? _parseNone : r.copy()));
+            return r;
+            }
+        return parseAsmLineNow(line);
+    }
+
+    static Array* parseAsmLineNow(String* line)
     {
         String* t = line.trimmed();
         if (t.byteLength() == (u32)0 || t.hasSuffix(String.withCString(":"))
@@ -7118,16 +7182,19 @@ class Arm64
     // Mnemonics whose FIRST operand is not a written register — stores,
     // compares, branches, returns. A value's liveness has to keep walking past
     // them rather than treating operand 0 as a kill.
+    // As a set built once (#333): it built two strings and searched one on
+    // every call.
+    static Map* _noReg0;
     static bool mnemWritesReg0(String* m)
     {
-        string no = "str strb strh stp stur cmp cmn fcmp tst b bl br blr ret cbz cbnz tbz tbnz";
-        String* hay = String.withCString(" ");
-        hay.appendCString(no);
-        hay.appendCString(" ");
-        String* needle = String.withCString(" ");
-        needle.append(m);
-        needle.appendCString(" ");
-        return hay.byteIndexOf(needle) == (u32)$FFFF_FFFF;
+        if (_noReg0 == (Map*)0)
+            {
+            _noReg0 = new Map();
+            Array* ws = String.withCString("str strb strh stp stur cmp cmn fcmp tst b bl br blr ret cbz cbnz tbz tbnz").splitOnByte((u8)' ');
+            for (u32 i = (u32)0; i < ws.count(); i = i + (u32)1)
+                _noReg0.set((Hashable*)ws.get(i), ws.get(i));
+            }
+        return m == (String*)0 || _noReg0.get((Hashable*)m) == (Object*)0;
     }
 
     static bool isBranchMnem(String* m)
@@ -7189,9 +7256,16 @@ class Arm64
     // i fails again exactly as before: the scan resumes at the first one that
     // did, instead of at line 0. Same rewrites, in the same order.
     u32 _cpFar;
+    // The text as lines, passed from pass to pass without joining and
+    // re-splitting between them (#333).
     String* peepholeCopyProp(String* text)
     {
-        Array* lines = linesOf(text);
+        return joinLines(peepholeCopyPropLines(linesOf(text)));
+    }
+
+    Array* peepholeCopyPropLines(Array* text)
+    {
+        Array* lines = text;
         Array* reach = new Array();
         u32 start = (u32)0;
         bool again = true;
@@ -7302,7 +7376,7 @@ class Arm64
                 again = true;
             }
         }
-        return joinLines(lines);
+        return lines;
     }
 
     // Sets _cpFar to the furthest line it read.
@@ -7446,9 +7520,16 @@ class Arm64
         return at;
     }
 
+    // The text as lines, passed from pass to pass without joining and
+    // re-splitting between them (#333).
     String* peepholeFallthrough(String* text)
     {
-        Array* lines = linesOf(text);
+        return joinLines(peepholeFallthroughLines(linesOf(text)));
+    }
+
+    Array* peepholeFallthroughLines(Array* text)
+    {
+        Array* lines = text;
         u32 i = (u32)0;
         while (i < lines.count()) {
             if (fallthroughAt(lines, i))
@@ -7456,7 +7537,7 @@ class Arm64
             else
                 i = i + (u32)1;
         }
-        return joinLines(lines);
+        return lines;
     }
 
     // One fallthrough rewrite of the branch at line i, if it has one: true
