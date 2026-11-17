@@ -15,6 +15,7 @@
 #import "Stdio.xc"
 #import "Files.xc"
 #import "Process.xc"
+#import <External>
 #import "Bundle.xc"
 #import <TokenType>
 #import "TokenTypeDefs.xc"
@@ -535,14 +536,14 @@ class FeOptions
             Frontend.flushEarly(early);
             for (u32 e = (u32)0; e < pp.errors().count(); e = e + (u32)1)
                 Frontend.printDiagnostic((String*)pp.errors().get(e));
-            Process.exit((i32)1);
+            driverExit((i32)1);
             return (IRModule*)0;
             }
         if (source == 0)
             {
             Frontend.flushEarly(early);
             Stdio.printf("xc-fe: error: cannot read '%s'\n", o.input().cString());
-            Process.exit((i32)1);
+            driverExit((i32)1);
             return (IRModule*)0;
             }
         // -E <path>: the text the lexer is about to see, platform prelude and
@@ -554,7 +555,7 @@ class FeOptions
             Frontend.flushEarly(early);
             Stdio.printf("xcc: error: cannot write -E output to '%s'\n",
                          o.preprocessedPath().cString());
-            Process.exit((i32)1);
+            driverExit((i32)1);
             return (IRModule*)0;
             }
 
@@ -571,7 +572,7 @@ class FeOptions
             Frontend.flushEarly(early);
             for (u32 e = (u32)0; e < lex.diagnostics().count(); e = e + (u32)1)
                 Frontend.printDiagnostic((String*)lex.diagnostics().get(e));
-            Process.exit((i32)1);
+            driverExit((i32)1);
             return (IRModule*)0;
             }
         Parser* parser = Parser.with(tokens);
@@ -653,7 +654,7 @@ class FeOptions
                                  "front end reads .wasm modules, .dylib, .so and .dll "
                                  "libraries, and bare .xtc.iface files\n",
                                  mp.cString());
-                    Process.exit((i32)1);
+                    driverExit((i32)1);
                     return (IRModule*)0;
                     }
                 IfaceImport.setNeedsV2(o.targetRow() != (TargetRow*)0 && o.targetRow().compactObjects());
@@ -803,7 +804,7 @@ class FeOptions
                 Frontend.printDiagnostic((String*)parser.errors().get(e));
             // Status 1, as the reference: 3 is "unsupported", which the
             // differentials skip, and a program refused is not that.
-            Process.exit((i32)1);
+            driverExit((i32)1);
             return (IRModule*)0;
             }
         u32 at = (u32)0;
@@ -922,7 +923,7 @@ class FeOptions
                                      "layouts and cannot be linked together\n",
                                      l.cString(),
                                      (u32)((Number*)prev).asU32(), (u32)slot);
-                        Process.exit((i32)1);
+                        driverExit((i32)1);
                         return (IRModule*)0;
                         }
                     ambientSeen.set((Hashable*)l, (Object*)Number.withU32(slot));
@@ -972,7 +973,7 @@ class FeOptions
             // it came from had a position, and a bare `error:` when it did not.
             for (u32 e = (u32)0; e < sema.errors().count(); e = e + (u32)1)
                 Frontend.printDiagnostic((String*)sema.errors().get(e));
-            Process.exit((i32)1);
+            driverExit((i32)1);
             return (IRModule*)0;
             }
 
@@ -1239,14 +1240,14 @@ class FeOptions
                 Frontend.printDiagnostic((String*)lower.errors().get(e));
             // As the reference's driver ends a failed lowering.
             Stdio.error(String.withCString("xcc: IR lowering failed\n"));
-            Process.exit((i32)1);
+            driverExit((i32)1);
             return (IRModule*)0;
             }
         if (mod == 0 || lower.failed())
             {
             Stdio.printf("xc-fe: %s: unsupported: %s\n", o.input().cString(),
                          lower.why() == 0 ? "?" : lower.why().cString());
-            Process.exit((i32)3);
+            driverExit((i32)3);
             return (IRModule*)0;
             }
 
@@ -1466,7 +1467,7 @@ String* platformOf(FeOptions* o)
     Stdio.printf("       (every target this driver drives must be named in "
                  "platformOf; falling back to another platform's library would "
                  "build something that runs and does nothing)\n");
-    Process.exit((i32)2);
+    driverExit((i32)2);
     return (String*)0;
     }
 
@@ -2003,7 +2004,7 @@ u32 pointerWidthOf(FeOptions* o)
     if (p.equals(String.withCString("xt6502")))
         return (u32)3;
     Stdio.printf("xc-fe: error: no pointer width is mapped for platform '%s'\n", p.cString());
-    Process.exit((i32)2);
+    driverExit((i32)2);
     return (u32)0;
     }
 
@@ -2022,7 +2023,7 @@ u32 fieldAlignCapOf(FeOptions* o)
     if (p.equals(String.withCString("xt6502")))
         return (u32)1;
     Stdio.printf("xc-fe: error: no field-alignment cap is mapped for platform '%s'\n", p.cString());
-    Process.exit((i32)2);
+    driverExit((i32)2);
     return (u32)0;
     }
 
@@ -2667,7 +2668,7 @@ void predefine(Preprocessor* pp, FeOptions* o)
         Stdio.printf("       (a shared library dispatches on ARCH_<cpu> and OS_<os>; falling\n"
                      "        back to another target's branch compiles something\n"
                      "        that builds, runs, and is wrong)\n");
-        Process.exit((i32)2);
+        driverExit((i32)2);
         }
     Array* ms = o.targetRow().macros();
     for (u32 i = (u32)0; i < ms.count(); i = i + (u32)1)
