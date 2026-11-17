@@ -913,6 +913,12 @@ int main(int argc, const char *argv[]) {
                             objcSections:objcSects
                                   dylibs:dDylibs
                                bssLength:bssLen];
+            // Fixups that do not fit their instruction (#285).
+            if ([XTMachOWriter lastLinkErrors].count) {
+                for (NSString *e in [XTMachOWriter lastLinkErrors])
+                    fprintf(stderr, "xcc: error: %s\n", e.UTF8String);
+                return 1;
+            }
             if (![dylib writeToFile:outPath atomically:YES]) {
                 fprintf(stderr, "xcc-ln-arm64: cannot write '%s'\n", argv[6]); return 1;
             }
@@ -1108,6 +1114,12 @@ int main(int argc, const char *argv[]) {
                                                 bssLength:bssLen];
         // Bug 580: a call no linked library exports, and libSystem does not
         // have, is a link error rather than a launch-time `Symbol not found`.
+        // Fixups that do not fit their instruction (#285).
+        if ([XTMachOWriter lastLinkErrors].count) {
+            for (NSString *e in [XTMachOWriter lastLinkErrors])
+                fprintf(stderr, "xcc: error: %s\n", e.UTF8String);
+            return 1;
+        }
         NSArray<NSString *> *unexported = [XTMachOWriter lastUnexportedSystemImports];
         if (unexported.count) {
             for (NSString *s in unexported) {

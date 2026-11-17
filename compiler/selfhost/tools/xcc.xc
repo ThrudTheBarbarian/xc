@@ -1138,8 +1138,12 @@ String* appleSdkRoot(DriverOptions* d)
 // (#350): the writer refuses it rather than leave the address zero.
 void checkPageImports(MachO* m)
 {
+    // Fixups that do not fit their instruction (#285).
+    Array* le = m.linkErrors();
+    for (u32 i = (u32)0; i < le.count(); i = i + (u32)1)
+        Stdio.printf("xcc: error: %s\n", ((String*)le.get(i)).cString());
     Array* bad = m.unreachableImports();
-    if (bad.count() == (u32)0) return;
+    if (bad.count() == (u32)0 && le.count() == (u32)0) return;
     for (u32 i = (u32)0; i < bad.count(); i = i + (u32)1) {
         Array* pair = (Array*)bad.get(i);
         String* s = (String*)pair.get((u32)0);
