@@ -164,7 +164,7 @@
         for (u32 i = (u32)0; i < mainF.params().count() && m0 == (IRValue*)0; i = i + (u32)1)
             {
             IRValue* p = (IRValue*)mainF.params().get(i);
-            if (p.ty() != (String*)0 && p.ty().equals(String.withCString("Mem")))
+            if (p.ty() != (String*)0 && IRType.is(p.ty(), tyMem))
                 m0 = p;
             }
         if (m0 == (IRValue*)0)
@@ -189,7 +189,7 @@
     // A global's bytes when it is an array of a numeric type, else 0.
     static u32 gpuGlobalBytes(IRModule* m, String* ty)
         {
-        if (ty == (String*)0 || !ty.hasPrefix(String.withCString("Agg(")))
+        if (ty == (String*)0 || !IRType.isAgg(ty))
             return (u32)0;
         u32 id = (u32)0;
         for (u32 k = (u32)4; k < ty.byteLength() && ty.byteAt(k) >= (u8)'0' && ty.byteAt(k) <= (u8)'9'; k = k + (u32)1)

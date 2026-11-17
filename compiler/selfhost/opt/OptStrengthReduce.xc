@@ -69,7 +69,7 @@
                 for (u32 i = bb.insns().count(); i > (u32)0; i = i - (u32)1)
                     {
                     IRInsn* n = (IRInsn*)bb.insns().get(i - (u32)1);
-                    if (!srIsPure(n.op()))
+                    if (!srIsPure(n.opc()))
                         continue;
                     if (n.res() == (IRValue*)0 || n.memRes() != (IRValue*)0)
                         continue;
@@ -92,9 +92,9 @@
             }
         }
 
-    final bool srIsPure(String* op)
+    final bool srIsPure(u16 op)
         {
-        return op.equals(String.withCString("Const")) || op.equals(String.withCString("ZExt")) || op.equals(String.withCString("SExt")) || op.equals(String.withCString("Trunc"));
+        return op == opConst || op == opZExt || op == opSExt || op == opTrunc;
         }
 
     final bool srInsn(IRBlock* bb, u32 i, Map* defOf)
@@ -201,7 +201,7 @@
                 if (contract && (!n.pred().equals(String.withCString("contract")) || !n.isOp(opFAdd)))
                     continue;
                 String* ty = n.res().ty();
-                if (!ty.equals(String.withCString("F32")) && !ty.equals(String.withCString("F64")))
+                if (!IRType.is(ty, tyF32) && !IRType.is(ty, tyF64))
                     continue;
                 IROperand* a = (IROperand*)n.ops().get((u32)0);
                 IROperand* c = (IROperand*)n.ops().get((u32)1);
@@ -214,7 +214,7 @@
                     IRInsn* k = srfConstOf(defOf, c, ty);
                     if (k == (IRInsn*)0)
                         continue;
-                    String* rh = srfRecipHex(((IROperand*)k.ops().get((u32)0)).fpHex(), ty.equals(String.withCString("F32")));
+                    String* rh = srfRecipHex(((IROperand*)k.ops().get(0)).fpHex(), IRType.is(ty, tyF32));
                     if (rh == (String*)0)
                         continue;
                     Array* us = (Array*)uses.get((Hashable*)c.val());
@@ -510,15 +510,10 @@
         return k;
         }
 
-    // Byte width of a scalar type spelling. Wider than irWidth (which the
-    // narrower needs kept as it is) because a Mul result can be 64-bit.
+    // Byte width of a scalar type spelling (a Mul result can be 64-bit).
     final u32 srWidth(String* t)
         {
-        if (t == (String*)0)
-            return (u32)0;
-        if (t.equals(String.withCString("I64")) || t.equals(String.withCString("U64")))
-            return (u32)8;
-        return self.irWidth(t);
+        return IRType.bytes(t);
         }
 
     // ── const-operand-fold ───────────────────────────────────────────────
@@ -549,12 +544,12 @@
         {
         if (t == (String*)0)
             return false;
-        if (t.equals(String.withCString("I8")))  { *bits = (u32)8;  *sgn = true;  return true; }
-        if (t.equals(String.withCString("U8")))  { *bits = (u32)8;  *sgn = false; return true; }
-        if (t.equals(String.withCString("I16"))) { *bits = (u32)16; *sgn = true;  return true; }
-        if (t.equals(String.withCString("U16"))) { *bits = (u32)16; *sgn = false; return true; }
-        if (t.equals(String.withCString("I32"))) { *bits = (u32)32; *sgn = true;  return true; }
-        if (t.equals(String.withCString("U32"))) { *bits = (u32)32; *sgn = false; return true; }
+        if (IRType.is(t, tyI8))  { *bits = 8;  *sgn = true;  return true; }
+        if (IRType.is(t, tyU8))  { *bits = 8;  *sgn = false; return true; }
+        if (IRType.is(t, tyI16)) { *bits = 16; *sgn = true;  return true; }
+        if (IRType.is(t, tyU16)) { *bits = 16; *sgn = false; return true; }
+        if (IRType.is(t, tyI32)) { *bits = 32; *sgn = true;  return true; }
+        if (IRType.is(t, tyU32)) { *bits = 32; *sgn = false; return true; }
         return false;
         }
 
@@ -619,11 +614,11 @@
     // Add, Mul and the bitwise ops do not care which side a constant is on,
     // but the immediate fold only looks at the RHS. Canonicalising puts the
     // constant where it can be used.
-    final bool cofCommutative(String* op)
+    final bool cofCommutative(u16 op)
         {
-        return op.equals(String.withCString("Add")) || op.equals(String.withCString("Mul"))
-            || op.equals(String.withCString("And")) || op.equals(String.withCString("Or"))
-            || op.equals(String.withCString("Xor"));
+        return op == opAdd || op == opMul
+            || op == opAnd || op == opOr
+            || op == opXor;
         }
 
     final bool cofInFunc(IRFunc* fn)
@@ -636,7 +631,7 @@
             for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
                 {
                 IRInsn* n = (IRInsn*)bb.insns().get(i);
-                if (!cofFoldable(n.op()) || n.ops().count() < (u32)2)
+                if (!cofFoldable(n.opc()) || n.ops().count() < 2)
                     continue;
                 IROperand* lhs = (IROperand*)n.ops().get((u32)0);
                 IROperand* rhs = (IROperand*)n.ops().get((u32)1);
@@ -675,7 +670,7 @@
                     }
                 // Constant on the left of a commutative op: swap it to the
                 // right, where the immediate fold can see it.
-                if (haveL && !haveR && cofCommutative(n.op())
+                if (haveL && !haveR && cofCommutative(n.opc())
                     && lhs.kind() == (u8)OPK_USE && rhs.kind() == (u8)OPK_USE)
                     {
                     n.ops().set((u32)0, (Object*)rhs);
@@ -761,9 +756,9 @@
             }
         }
 
-    final bool cofFoldable(String* op)
+    final bool cofFoldable(u16 op)
         {
-        return op.equals(String.withCString("Add")) || op.equals(String.withCString("Sub")) || op.equals(String.withCString("And")) || op.equals(String.withCString("Or")) || op.equals(String.withCString("Xor")) || op.equals(String.withCString("ICmp")) || op.equals(String.withCString("Mul")) || op.equals(String.withCString("Shl")) || op.equals(String.withCString("LShr")) || op.equals(String.withCString("AShr")) || op.equals(String.withCString("UDiv")) || op.equals(String.withCString("SDiv")) || op.equals(String.withCString("URem")) || op.equals(String.withCString("SRem"));
+        return op == opAdd || op == opSub || op == opAnd || op == opOr || op == opXor || op == opICmp || op == opMul || op == opShl || op == opLShr || op == opAShr || op == opUDiv || op == opSDiv || op == opURem || op == opSRem;
         }
 
     // A compile-time integer through ZExt / SExt / Trunc of a Const.

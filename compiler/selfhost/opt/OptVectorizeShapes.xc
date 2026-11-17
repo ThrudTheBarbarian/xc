@@ -75,7 +75,7 @@
             if (p.res() == g0.val())
                 _esIvPhi = p;
             }
-        if (_esIvPhi == (IRInsn*)0 || !Opt.escLane32(_esIvPhi.res().ty()) || _esIvPhi.res().ty().equals(String.withCString("F32")))
+        if (_esIvPhi == (IRInsn*)0 || !Opt.escLane32(_esIvPhi.res().ty()) || IRType.is(_esIvPhi.res().ty(), tyF32))
             return false;
         // The latch is the predecessor whose value is iv + 1; the other enters.
         IRBlock* p0 = (IRBlock*)ps.get((u32)0);
@@ -283,9 +283,9 @@
         // immediate. As the reference.
         i32 k = (i32)0;
         String* rt = n.res().ty();
-        bool intTy = rt.equals(String.withCString("U8")) || rt.equals(String.withCString("I8"))
-                  || rt.equals(String.withCString("U16")) || rt.equals(String.withCString("I16")) || Opt.escLane32(rt);
-        return intTy && !rt.equals(String.withCString("F32"))
+        bool intTy = IRType.is(rt, tyU8) || IRType.is(rt, tyI8)
+                  || IRType.is(rt, tyU16) || IRType.is(rt, tyI16) || Opt.escLane32(rt);
+        return intTy && !IRType.is(rt, tyF32)
             && vecConst(IROperand.useVal(n.res()), _esDefOf, &k);
         }
 
@@ -425,7 +425,7 @@
         for (u32 i = (u32)0; i < VI.phis().count(); i = i + (u32)1)
             {
             IRInsn* p = (IRInsn*)VI.phis().get(i);
-            if (p.res() == (IRValue*)0 || !(p.res().ty().hasPrefix(String.withCString("Vec(")) || Opt.escJamUses(p, D)))
+            if (p.res() == (IRValue*)0 || !(IRType.isVec(p.res().ty()) || Opt.escJamUses(p, D)))
                 continue;
             D.add((Hashable*)p.res());
             Array* rs = new Array();
@@ -569,7 +569,7 @@
     // p an integer: 0 if p is not such a counter.
     final IRInsn* escCounterOf(IRInsn* p)
         {
-        if (p.res().ty().equals(String.withCString("F32")))
+        if (IRType.is(p.res().ty(), tyF32))
             return (IRInsn*)0;
         IROperand* back = Opt.escFrom(p, _esL);
         if (back == (IROperand*)0 || back.kind() != (u8)OPK_USE)
@@ -936,7 +936,7 @@
         // iv itself (`a[i] = i`, `a[i] = (i * K) ^ x`), with or without a
         // load. The iv is then a lane value, lane l holding i + l.
         bool wantIota = _profile != (OptProfile*)0 && _profile.iota();
-        bool ivLaneOK = iv.ty().equals(String.withCString("I32")) || iv.ty().equals(String.withCString("U32"));
+        bool ivLaneOK = IRType.is(iv.ty(), tyI32) || IRType.is(iv.ty(), tyU32);
         _vrMapUsesIv = false;
         if (wantIota && ivLaneOK)
             elems.add((Object*)iv);
@@ -945,10 +945,10 @@
             IRInsn* n = (IRInsn*)B.insns().get(i);
             if (n == ivNext)
                 continue;
-            String* op = n.op();
-            if (op.equals(String.withCString("AddrOf")))
+            u16 op = n.opc();
+            if (op == opAddrOf)
                 continue;
-            if (op.equals(String.withCString("ElementAddr")))
+            if (op == opElementAddr)
                 {
                 if (n.ops().count() < (u32)2)
                     return (String*)0;
@@ -968,7 +968,7 @@
                     }
                 continue;
                 }
-            if (op.equals(String.withCString("Load")))
+            if (op == opLoad)
                 {
                 if (n.ops().count() < (u32)1 || n.res() == (IRValue*)0)
                     return (String*)0;
@@ -988,7 +988,7 @@
                 ldBases.add((Object*)self.vecElemBase((IROperand*)n.ops().get((u32)0), defOf));
                 continue;
                 }
-            if (op.equals(String.withCString("Store")))
+            if (op == opStore)
                 {
                 if (n.ops().count() < (u32)2)
                     return (String*)0;
@@ -1010,7 +1010,7 @@
                 }
             // Scalar plumbing, kept verbatim — constants and the widen/narrow
             // of the step or of an invariant operand.
-            if (op.equals(String.withCString("Const")) || op.equals(String.withCString("ZExt")) || op.equals(String.withCString("SExt")) || op.equals(String.withCString("Trunc")))
+            if (op == opConst || op == opZExt || op == opSExt || op == opTrunc)
                 continue;
             // A conversion between 32-bit integer and float lanes (#27), of a
             // lane value.
@@ -1071,10 +1071,10 @@
         return _profile != (OptProfile*)0 && _profile.escapeVec() && self.irWidth(a) == self.irWidth(b);
         }
 
-    static bool vecConvOp(String* op)
+    static bool vecConvOp(u16 op)
         {
-        return op.equals(String.withCString("SIToFp")) || op.equals(String.withCString("UIToFp"))
-            || op.equals(String.withCString("FpToSI")) || op.equals(String.withCString("FpToUI"));
+        return op == opSIToFp || op == opUIToFp
+            || op == opFpToSI || op == opFpToUI;
         }
 
     // The conversions the map vectoriser rewrites (#27): I32 or U32 to F32 and
@@ -1092,13 +1092,13 @@
         String* r = n.res().ty();
         u16 oc = n.opc();
         if (oc == opSIToFp)
-            return s.equals(String.withCString("I32")) && r.equals(String.withCString("F32"));
+            return IRType.is(s, tyI32) && IRType.is(r, tyF32);
         if (oc == opUIToFp)
-            return s.equals(String.withCString("U32")) && r.equals(String.withCString("F32"));
+            return IRType.is(s, tyU32) && IRType.is(r, tyF32);
         if (oc == opFpToSI)
-            return s.equals(String.withCString("F32")) && r.equals(String.withCString("I32"));
+            return IRType.is(s, tyF32) && IRType.is(r, tyI32);
         if (oc == opFpToUI)
-            return s.equals(String.withCString("F32")) && r.equals(String.withCString("U32"));
+            return IRType.is(s, tyF32) && IRType.is(r, tyU32);
         return false;
         }
 
@@ -1349,7 +1349,7 @@
         IRValue* acc = accPhi.res();
         // The accumulator is unsigned 32-bit — that is what makes the widening
         // regrouping sound.
-        if (!acc.ty().equals(String.withCString("U32")))
+        if (!IRType.is(acc.ty(), tyU32))
             return (VecCand*)0;
 
         IROperand* accBack = self.vecBackOp(accPhi, B);
@@ -1392,7 +1392,7 @@
         if (!load.isOp(opLoad) || load.res() == (IRValue*)0 || load.ops().count() < 1)
             return (VecCand*)0;
         String* lt = load.res().ty();
-        if (lt == (String*)0 || (!lt.equals(String.withCString("U8")) && !lt.equals(String.withCString("U16"))))
+        if (lt == (String*)0 || (!IRType.is(lt, tyU8) && !IRType.is(lt, tyU16)))
             return (VecCand*)0;
         if (!self.vecIsElemAddr((IROperand*)load.ops().get((u32)0), iv, defOf))
             return (VecCand*)0;
@@ -1854,10 +1854,10 @@
             IRInsn* n = (IRInsn*)B.insns().get(i);
             if (n == _vcCmp || n == _vcIncr || n == _vcAccNext || n == ivNext)
                 continue;
-            String* op = n.op();
-            if (op.equals(String.withCString("AddrOf")) || op.equals(String.withCString("Const")) || op.equals(String.withCString("ZExt")) || op.equals(String.withCString("SExt")) || op.equals(String.withCString("Trunc")))
+            u16 op = n.opc();
+            if (op == opAddrOf || op == opConst || op == opZExt || op == opSExt || op == opTrunc)
                 continue;
-            if (op.equals(String.withCString("ElementAddr")))
+            if (op == opElementAddr)
                 {
                 if (n.ops().count() < (u32)2)
                     return false;
@@ -1866,7 +1866,7 @@
                     return false;
                 continue;
                 }
-            if (op.equals(String.withCString("Load")))
+            if (op == opLoad)
                 {
                 if (n.ops().count() < (u32)1 || n.res() == (IRValue*)0)
                     return false;
@@ -1880,9 +1880,9 @@
                 // narrow lane only ever holds ONE iteration's mask before being
                 // widened — the accumulation happens at 32 bits — so there is no
                 // overflow beyond the delta having to fit the lane.
-                if (!lt.equals(String.withCString("I32")) && !lt.equals(String.withCString("U32"))
-                 && !lt.equals(String.withCString("I8"))  && !lt.equals(String.withCString("U8"))
-                 && !lt.equals(String.withCString("I16")) && !lt.equals(String.withCString("U16")))
+                if (!IRType.is(lt, tyI32) && !IRType.is(lt, tyU32)
+                 && !IRType.is(lt, tyI8)  && !IRType.is(lt, tyU8)
+                 && !IRType.is(lt, tyI16) && !IRType.is(lt, tyU16))
                     return false;
                 if (_vcLaneTy != (String*)0 && !_vcLaneTy.equals(lt))
                     return false;
@@ -2107,7 +2107,7 @@
         if (!gtFam && !ltFam)
             return (VecCand*)0;
         bool signedCmp = pr.equals(String.withCString("SGT")) || pr.equals(String.withCString("SLT")) || pr.equals(String.withCString("SGE")) || pr.equals(String.withCString("SLE"));
-        if (signedCmp != laneTy.equals(String.withCString("I32")))
+        if (signedCmp != IRType.is(laneTy, tyI32))
             return (VecCand*)0;
         bool isMax = elemLeft ? gtFam : ltFam;
 
@@ -2580,7 +2580,7 @@
             IRValue* withInit = new IRValue(c.laneTy());
             // FADD for a float lane: the seed is an f32 (nbody's 0.0f) and an
             // integer Add with s-registers is not an encodable instruction.
-            bool laneF = c.laneTy() != (String*)0 && c.laneTy().equals(String.withCString("F32"));
+            bool laneF = c.laneTy() != (String*)0 && IRType.is(c.laneTy(), tyF32);
             IRInsn* ai = IRInsn.with(String.withCString(laneF ? "FAdd" : "Add"));
             ai.setRes(withInit);
             ai.add(IROperand.useVal(red));
@@ -2769,8 +2769,8 @@
                 _vecMap.set((Hashable*)n.res(), (Object*)vnext);
                 continue;
                 }
-            String* op = n.op();
-            if (op.equals(String.withCString("AddrOf")) || op.equals(String.withCString("ElementAddr")) || op.equals(String.withCString("Const")) || op.equals(String.withCString("ZExt")) || op.equals(String.withCString("SExt")) || op.equals(String.withCString("Trunc")))
+            u16 op = n.opc();
+            if (op == opAddrOf || op == opElementAddr || op == opConst || op == opZExt || op == opSExt || op == opTrunc)
                 {
                 _vecBody.add((Object*)n);
                 continue;
@@ -2783,7 +2783,7 @@
                 _vecBody.add((Object*)n);
                 continue;
                 }
-            if (op.equals(String.withCString("Load")))
+            if (op == opLoad)
                 {
                 // Mirror the recogniser: a fully DEAD load is dropped, so a
                 // guard's leftover flag load does not become a bogus VLoad.
@@ -2805,7 +2805,7 @@
             // whole vector at once. Mirrors the map applier; the recogniser has
             // already proved the address is iv-indexed and the value is
             // elementwise.
-            if (op.equals(String.withCString("Store")))
+            if (op == opStore)
                 {
                 IROperand* vval = vecSplatOperand((IROperand*)n.ops().get((u32)1));
                 IRInsn* vs = IRInsn.with(String.withCString("VStore"));
@@ -2822,7 +2822,7 @@
             // recogniser did not clear would mean the loop should never have
             // been accepted, and the only "generic" lowering available is a
             // vector UDiv that no back end implements.
-            if (op.equals(String.withCString("UDiv")))
+            if (op == opUDiv)
                 {
                 Object* mo = c.divMagic() == (Map*)0
                                  ? (Object*)0
@@ -2863,7 +2863,7 @@
             // as an immediate, not a splatted vector, so the second operand is
             // NOT run through vecSplatOperand. Splatting it would produce a
             // lane-wise variable shift that no back end here implements.
-            if (op.equals(String.withCString("LShr")))
+            if (op == opLShr)
                 {
                 i32 sh = (i32)0;
                 if (!vecConst((IROperand*)n.ops().get((u32)1), _vecSplatDefs, &sh))
@@ -2884,7 +2884,7 @@
                 }
             // Shift left by a constant: as the shift right, the amount an
             // immediate.
-            if (op.equals(String.withCString("Shl")))
+            if (op == opShl)
                 {
                 i32 shl = (i32)0;
                 if (!vecConst((IROperand*)n.ops().get((u32)1), _vecSplatDefs, &shl))
@@ -2904,7 +2904,7 @@
                 continue;
                 }
             // A bitwise not: one operand.
-            if (op.equals(String.withCString("Not")))
+            if (op == opNot)
                 {
                 IROperand* nx = vecSplatOperand((IROperand*)n.ops().get((u32)0));
                 IRValue* nv = new IRValue(_vecTy);
@@ -2917,7 +2917,7 @@
                 continue;
                 }
             // A lane square root (ONE operand) — the default below reads two.
-            if (op.equals(String.withCString("FSqrt")))
+            if (op == opFSqrt)
                 {
                 IROperand* va = vecSplatOperand((IROperand*)n.ops().get((u32)0));
                 IRValue* vr = new IRValue(_vecTy);

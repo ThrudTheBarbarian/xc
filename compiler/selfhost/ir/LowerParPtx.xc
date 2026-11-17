@@ -25,40 +25,40 @@
 
     class Lower (ParPtx)
     {
-    final bool ptxNarrow(String* t) { return ptxIs(t, "I8") || ptxIs(t, "U8") || ptxIs(t, "I16") || ptxIs(t, "U16"); }
-    final bool ptxSigned(String* t) { return ptxIs(t, "I8") || ptxIs(t, "I16") || ptxIs(t, "I32") || ptxIs(t, "I64"); }
-    final bool ptxWide(String* t) { return ptxIs(t, "I64") || ptxIs(t, "U64") || mslIsPtr(t); }
-    final bool ptxFloat(String* t) { return ptxIs(t, "F32") || ptxIs(t, "F64"); }
+    final bool ptxNarrow(String* t) { return IRType.is(t, tyI8) || IRType.is(t, tyU8) || IRType.is(t, tyI16) || IRType.is(t, tyU16); }
+    final bool ptxSigned(String* t) { return IRType.is(t, tyI8) || IRType.is(t, tyI16) || IRType.is(t, tyI32) || IRType.is(t, tyI64); }
+    final bool ptxWide(String* t) { return IRType.is(t, tyI64) || IRType.is(t, tyU64) || mslIsPtr(t); }
+    final bool ptxFloat(String* t) { return IRType.isFloat(t); }
     final String* ptxRegType(String* t)
         {
         if (t == (String*)0) return (String*)0;
-        if (ptxNarrow(t) || self.ptxIs(t, "I32") || self.ptxIs(t, "U32")) return self.ptxS(".b32");
+        if (ptxNarrow(t) || IRType.is(t, tyI32) || IRType.is(t, tyU32)) return self.ptxS(".b32");
         if (ptxWide(t)) return self.ptxS(".b64");
-        if (ptxIs(t, "F32")) return self.ptxS(".f32");
-        if (ptxIs(t, "F64")) return self.ptxS(".f64");
-        if (ptxIs(t, "Bool")) return self.ptxS(".pred");
+        if (IRType.is(t, tyF32)) return self.ptxS(".f32");
+        if (IRType.is(t, tyF64)) return self.ptxS(".f64");
+        if (IRType.is(t, tyBool)) return self.ptxS(".pred");
         return (String*)0;
         }
     final String* ptxArith(String* t)
         {
-        if (ptxIs(t, "I32")) return self.ptxS("s32");
-        if (ptxIs(t, "U32")) return self.ptxS("u32");
-        if (ptxIs(t, "I64")) return self.ptxS("s64");
-        if (ptxIs(t, "U64") || self.mslIsPtr(t)) return self.ptxS("u64");
-        if (ptxIs(t, "F32")) return self.ptxS("f32");
-        if (ptxIs(t, "F64")) return self.ptxS("f64");
+        if (IRType.is(t, tyI32)) return self.ptxS("s32");
+        if (IRType.is(t, tyU32)) return self.ptxS("u32");
+        if (IRType.is(t, tyI64)) return self.ptxS("s64");
+        if (IRType.is(t, tyU64) || self.mslIsPtr(t)) return self.ptxS("u64");
+        if (IRType.is(t, tyF32)) return self.ptxS("f32");
+        if (IRType.is(t, tyF64)) return self.ptxS("f64");
         return (String*)0;
         }
     final String* ptxMem(String* t)
         {
-        if (ptxIs(t, "I8")) return self.ptxS("s8");
-        if (ptxIs(t, "U8") || self.ptxIs(t, "Bool")) return self.ptxS("u8");
-        if (ptxIs(t, "I16")) return self.ptxS("s16");
-        if (ptxIs(t, "U16")) return self.ptxS("u16");
-        if (ptxIs(t, "I32") || self.ptxIs(t, "U32")) return self.ptxS("u32");
-        if (ptxIs(t, "I64") || self.ptxIs(t, "U64") || self.mslIsPtr(t)) return self.ptxS("u64");
-        if (ptxIs(t, "F32")) return self.ptxS("f32");
-        if (ptxIs(t, "F64")) return self.ptxS("f64");
+        if (IRType.is(t, tyI8)) return self.ptxS("s8");
+        if (IRType.is(t, tyU8) || IRType.is(t, tyBool)) return self.ptxS("u8");
+        if (IRType.is(t, tyI16)) return self.ptxS("s16");
+        if (IRType.is(t, tyU16)) return self.ptxS("u16");
+        if (IRType.is(t, tyI32) || IRType.is(t, tyU32)) return self.ptxS("u32");
+        if (IRType.is(t, tyI64) || IRType.is(t, tyU64) || self.mslIsPtr(t)) return self.ptxS("u64");
+        if (IRType.is(t, tyF32)) return self.ptxS("f32");
+        if (IRType.is(t, tyF64)) return self.ptxS("f64");
         return (String*)0;
         }
     // A type's size in bytes (an aggregate's is its layout's).
@@ -105,19 +105,19 @@
     // its own signedness.
     final i64 ptxNarrowValue(String* t, i64 v)
         {
-        if (ptxIs(t, "I8")) return (i64)(i8)v;
-        if (ptxIs(t, "U8")) return (i64)(u8)v;
-        if (ptxIs(t, "I16")) return (i64)(i16)v;
-        if (ptxIs(t, "U16")) return (i64)(u16)v;
+        if (IRType.is(t, tyI8)) return (i8)v;
+        if (IRType.is(t, tyU8)) return (u8)v;
+        if (IRType.is(t, tyI16)) return (i16)v;
+        if (IRType.is(t, tyU16)) return (u16)v;
         return v;
         }
     // The line that puts a narrow result in r back in its register form.
     final String* ptxNarrowFix(String* t, String* r)
         {
-        if (ptxIs(t, "U8")) return ptx3(ptxS("and.b32"), r, r, self.ptxS("255"));
-        if (ptxIs(t, "U16")) return ptx3(ptxS("and.b32"), r, r, self.ptxS("65535"));
-        if (ptxIs(t, "I8")) return ptxBfe(r, "8");
-        if (ptxIs(t, "I16")) return ptxBfe(r, "16");
+        if (IRType.is(t, tyU8)) return ptx3(ptxS("and.b32"), r, r, self.ptxS("255"));
+        if (IRType.is(t, tyU16)) return ptx3(ptxS("and.b32"), r, r, self.ptxS("65535"));
+        if (IRType.is(t, tyI8)) return ptxBfe(r, "8");
+        if (IRType.is(t, tyI16)) return ptxBfe(r, "16");
         return self.ptxS("");
         }
 
@@ -140,7 +140,7 @@
                 u64 d = c >= (u8)'a' ? (u64)(c - (u8)'a' + (u8)10) : c >= (u8)'A' ? (u64)(c - (u8)'A' + (u8)10) : (u64)(c - (u8)'0');
                 raw = (raw << (u64)4) | d;
                 }
-            if (ptxIs(t, "F64"))
+            if (IRType.is(t, tyF64))
                 {
                 String* s = self.ptxS("0d");
                 s.append(ptxHex(raw, (i32)16));
@@ -177,7 +177,7 @@
             for (u32 i = (u32)0; i < bb.phis().count(); i = i + (u32)1)
                 {
                 IRInsn* ip = (IRInsn*)bb.phis().get(i);
-                if (ip.res() == (IRValue*)0 || ip.res().ty().equals(self.ptxS("Mem"))) continue;
+                if (ip.res() == (IRValue*)0 || IRType.is(ip.res().ty(), tyMem)) continue;
                 String* rt = ptxRegType(ip.res().ty());
                 if (rt == (String*)0) return (String*)0;
                 String* o = ptxOrdOf(ip.res());
@@ -186,7 +186,7 @@
             for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
                 {
                 IRInsn* ip = (IRInsn*)bb.insns().get(i);
-                if (ip.res() == (IRValue*)0 || ip.res().ty().equals(self.ptxS("Mem"))) continue;
+                if (ip.res() == (IRValue*)0 || IRType.is(ip.res().ty(), tyMem)) continue;
                 String* rt = ptxRegType(ip.res().ty());
                 if (rt == (String*)0) return (String*)0;
                 d.appendCString("\t.reg "); d.append(rt); d.appendCString(" "); d.append(ptxReg(ip.res())); d.appendCString(";\n");
@@ -203,7 +203,7 @@
         for (u32 i = (u32)0; i < target.phis().count(); i = i + (u32)1)
             {
             IRInsn* ph = (IRInsn*)target.phis().get(i);
-            if (ph.res() == (IRValue*)0 || ph.res().ty().equals(self.ptxS("Mem"))) continue;
+            if (ph.res() == (IRValue*)0 || IRType.is(ph.res().ty(), tyMem)) continue;
             IROperand* inc = (IROperand*)0;
             for (u32 k = (u32)0; k + (u32)1 < ph.ops().count(); k = k + (u32)2)
                 if (((IROperand*)ph.ops().get(k)).blk() == from)
@@ -248,14 +248,14 @@
     final String* ptxBinary(IRInsn* ip, String* r, String* rt)
         {
         // Logic on predicates (the reference explains).
-        if (ptxIs(rt, "Bool") && (ip.op().equals(self.ptxS("And")) || ip.op().equals(self.ptxS("Or")) || ip.op().equals(self.ptxS("Xor")))
+        if (IRType.is(rt, tyBool) && (ip.isOp(opAnd) || ip.isOp(opOr) || ip.isOp(opXor))
             && ((IROperand*)ip.ops().get((u32)0)).kind() == (u8)OPK_USE && ((IROperand*)ip.ops().get((u32)1)).kind() == (u8)OPK_USE)
             {
             String* pa = ptxOp((IROperand*)ip.ops().get((u32)0), rt);
             String* pb = ptxOp((IROperand*)ip.ops().get((u32)1), rt);
             if (pa == (String*)0 || pb == (String*)0) return (String*)0;
             String* pl = self.ptxS("\t");
-            pl.appendCString(ip.op().equals(self.ptxS("And")) ? "and" : ip.op().equals(self.ptxS("Or")) ? "or" : "xor");
+            pl.appendCString(ip.isOp(opAnd) ? "and" : ip.isOp(opOr) ? "or" : "xor");
             pl.appendCString(".pred "); pl.append(r); pl.appendCString(", "); pl.append(pa); pl.appendCString(", ");
             pl.append(pb); pl.appendCString(";\n");
             return pl;
@@ -266,10 +266,10 @@
             // its own signedness: the operation in 32 bits, and its result
             // put back in that form. A division, remainder or right shift
             // whose signedness is not the type's stays refused.
-            String* nop = ip.op();
+            u16 nop = ip.opc();
             bool sg = ptxSigned(rt);
-            bool uop = nop.equals(self.ptxS("UDiv")) || nop.equals(self.ptxS("URem")) || nop.equals(self.ptxS("LShr"));
-            bool sop = nop.equals(self.ptxS("SDiv")) || nop.equals(self.ptxS("SRem")) || nop.equals(self.ptxS("AShr"));
+            bool uop = nop == opUDiv || nop == opURem || nop == opLShr;
+            bool sop = nop == opSDiv || nop == opSRem || nop == opAShr;
             if ((uop && sg) || (sop && !sg)) return (String*)0;
             IROperand* nb = (IROperand*)ip.ops().get((u32)1);
             if (nb.kind() == (u8)OPK_USE && ptxWide(mslTypeOf(nb))) return (String*)0;
@@ -278,22 +278,22 @@
             if (na == (String*)0 || nbs == (String*)0) return (String*)0;
             String* n32 = self.ptxS(sg ? "s32" : "u32");
             String* nl = (String*)0;
-            if (nop.equals(self.ptxS("Add"))) nl = ptxCat("add.", n32);
-            else if (nop.equals(self.ptxS("Sub"))) nl = ptxCat("sub.", n32);
-            else if (nop.equals(self.ptxS("Mul"))) nl = ptxCat("mul.lo.", n32);
-            else if (nop.equals(self.ptxS("UDiv")) || nop.equals(self.ptxS("SDiv"))) nl = ptxCat("div.", n32);
-            else if (nop.equals(self.ptxS("URem")) || nop.equals(self.ptxS("SRem"))) nl = ptxCat("rem.", n32);
-            else if (nop.equals(self.ptxS("And"))) nl = self.ptxS("and.b32");
-            else if (nop.equals(self.ptxS("Or"))) nl = self.ptxS("or.b32");
-            else if (nop.equals(self.ptxS("Xor"))) nl = self.ptxS("xor.b32");
-            else if (nop.equals(self.ptxS("Shl"))) nl = self.ptxS("shl.b32");
-            else if (nop.equals(self.ptxS("LShr")) || nop.equals(self.ptxS("AShr"))) nl = ptxCat("shr.", n32);
+            if (nop == opAdd) nl = ptxCat("add.", n32);
+            else if (nop == opSub) nl = ptxCat("sub.", n32);
+            else if (nop == opMul) nl = ptxCat("mul.lo.", n32);
+            else if (nop == opUDiv || nop == opSDiv) nl = ptxCat("div.", n32);
+            else if (nop == opURem || nop == opSRem) nl = ptxCat("rem.", n32);
+            else if (nop == opAnd) nl = self.ptxS("and.b32");
+            else if (nop == opOr) nl = self.ptxS("or.b32");
+            else if (nop == opXor) nl = self.ptxS("xor.b32");
+            else if (nop == opShl) nl = self.ptxS("shl.b32");
+            else if (nop == opLShr || nop == opAShr) nl = ptxCat("shr.", n32);
             if (nl == (String*)0) return (String*)0;
             String* ns = ptx3(nl, r, na, nbs);
             ns.append(ptxNarrowFix(rt, r));
             return ns;
             }
-        if (self.ptxIs(rt, "Bool")) return (String*)0; // no bool arithmetic
+        if (IRType.is(rt, tyBool)) return (String*)0; // no bool arithmetic
         String* a = ptxOp((IROperand*)ip.ops().get((u32)0), rt);
         String* b = ptxOp((IROperand*)ip.ops().get((u32)1), rt);
         String* sfx = ptxArith(rt);
@@ -302,32 +302,32 @@
         String* bits = self.ptxS(w ? "b64" : "b32");
         String* us = self.ptxS(w ? "u64" : "u32");
         String* ss = self.ptxS(w ? "s64" : "s32");
-        String* op = ip.op();
+        u16 op = ip.opc();
         String* line = (String*)0;
-        if (op.equals(self.ptxS("Add"))) line = ptxCat("add.", sfx);
-        else if (op.equals(self.ptxS("Sub"))) line = ptxCat("sub.", sfx);
-        else if (op.equals(self.ptxS("Mul"))) line = ptxCat("mul.lo.", sfx);
-        else if (op.equals(self.ptxS("UDiv"))) line = ptxCat("div.", us);
-        else if (op.equals(self.ptxS("SDiv"))) line = ptxCat("div.", ss);
-        else if (op.equals(self.ptxS("URem"))) line = ptxCat("rem.", us);
-        else if (op.equals(self.ptxS("SRem"))) line = ptxCat("rem.", ss);
-        else if (op.equals(self.ptxS("And"))) line = ptxCat("and.", bits);
-        else if (op.equals(self.ptxS("Or"))) line = ptxCat("or.", bits);
-        else if (op.equals(self.ptxS("Xor"))) line = ptxCat("xor.", bits);
+        if (op == opAdd) line = ptxCat("add.", sfx);
+        else if (op == opSub) line = ptxCat("sub.", sfx);
+        else if (op == opMul) line = ptxCat("mul.lo.", sfx);
+        else if (op == opUDiv) line = ptxCat("div.", us);
+        else if (op == opSDiv) line = ptxCat("div.", ss);
+        else if (op == opURem) line = ptxCat("rem.", us);
+        else if (op == opSRem) line = ptxCat("rem.", ss);
+        else if (op == opAnd) line = ptxCat("and.", bits);
+        else if (op == opOr) line = ptxCat("or.", bits);
+        else if (op == opXor) line = ptxCat("xor.", bits);
         // Bug 643: `.rn` pins every float op to its exact result, so ptxas may
         // not contract a mul and an add into an FMA and a divide takes the
         // correctly rounded sequence. A block whose goal is speed drops the
         // modifier (plain add/mul contract) and divides approximately; f64
         // keeps .rn, PTX has no approximate f64 divide. :goal(accuracy) is
         // unchanged.
-        else if (op.equals(self.ptxS("FAdd"))) line = _mFast ? ptxCat("add.", sfx) : ptxCat("add.rn.", sfx);
-        else if (op.equals(self.ptxS("FSub"))) line = _mFast ? ptxCat("sub.", sfx) : ptxCat("sub.rn.", sfx);
-        else if (op.equals(self.ptxS("FMul"))) line = _mFast ? ptxCat("mul.", sfx) : ptxCat("mul.rn.", sfx);
-        else if (op.equals(self.ptxS("FDiv"))) line = (_mFast && self.ptxIs(rt, "F32")) ? self.ptxS("div.approx.ftz.f32") : ptxCat("div.rn.", sfx);
-        else if (op.equals(self.ptxS("Shl")) || op.equals(self.ptxS("LShr")) || op.equals(self.ptxS("AShr")))
+        else if (op == opFAdd) line = _mFast ? ptxCat("add.", sfx) : ptxCat("add.rn.", sfx);
+        else if (op == opFSub) line = _mFast ? ptxCat("sub.", sfx) : ptxCat("sub.rn.", sfx);
+        else if (op == opFMul) line = _mFast ? ptxCat("mul.", sfx) : ptxCat("mul.rn.", sfx);
+        else if (op == opFDiv) line = (_mFast && IRType.is(rt, tyF32)) ? self.ptxS("div.approx.ftz.f32") : ptxCat("div.rn.", sfx);
+        else if (op == opShl || op == opLShr || op == opAShr)
             {
             // The shift count is a u32 operand.
-            String* sop = op.equals(self.ptxS("Shl")) ? ptxCat("shl.", bits) : op.equals(self.ptxS("LShr")) ? ptxCat("shr.", us) : ptxCat("shr.", ss);
+            String* sop = op == opShl ? ptxCat("shl.", bits) : op == opLShr ? ptxCat("shr.", us) : ptxCat("shr.", ss);
             // A 64-bit count is narrowed first; a 32-bit one is already the operand.
             if (w && ((IROperand*)ip.ops().get((u32)1)).kind() == (u8)OPK_USE && ptxWide(mslTypeOf((IROperand*)ip.ops().get((u32)1))))
                 {
@@ -348,7 +348,7 @@
         String* t = o0.kind() == (u8)OPK_USE ? self.mslTypeOf(o0) : self.mslTypeOf(o1);
         // Two predicates are equal when their exclusive or is false; one
         // against a constant is itself or its negation.
-        if (t != (String*)0 && self.ptxIs(t, "Bool") && ip.op().equals(self.ptxS("ICmp"))
+        if (t != (String*)0 && IRType.is(t, tyBool) && ip.isOp(opICmp)
             && (ip.pred().equals(self.ptxS("EQ")) || ip.pred().equals(self.ptxS("NE"))))
             {
             bool eq = ip.pred().equals(self.ptxS("EQ"));
@@ -365,14 +365,14 @@
             }
         // An 8- or 16-bit value sits in its 32-bit register extended by its
         // own signedness, so it compares as a 32-bit one.
-        if (t == (String*)0 || self.ptxIs(t, "Bool")) return (String*)0;
+        if (t == (String*)0 || IRType.is(t, tyBool)) return (String*)0;
         String* a = ptxOp(o0, t);
         String* b = ptxOp(o1, t);
         if (a == (String*)0 || b == (String*)0) return (String*)0;
         String* p = ip.pred();
         String* cmp = (String*)0;
         String* ty = (String*)0;
-        if (ip.op().equals(self.ptxS("FCmp")))
+        if (ip.isOp(opFCmp))
             {
             if (p.equals(self.ptxS("OEQ"))) cmp = self.ptxS("eq");
             else if (p.equals(self.ptxS("ONE"))) cmp = self.ptxS("ne");
@@ -409,14 +409,14 @@
         String* callee = o0.name();
         if (callee.equals(self.ptxS("_xtc_sinit_run")) || callee.hasSuffix(self.ptxS("$init")))
             return self.ptxS("");
-        bool isVoid = rt == (String*)0 || rt.equals(self.ptxS("Mem"));
+        bool isVoid = rt == (String*)0 || IRType.is(rt, tyMem);
         Array* args = new Array();
         Array* argTypes = new Array();
         for (u32 k = (u32)1; k < ip.ops().count(); k = k + (u32)1)
             {
             IROperand* o = (IROperand*)ip.ops().get(k);
             String* at = o.kind() == (u8)OPK_USE ? self.mslTypeOf(o) : rt;
-            if (ptxIs(at, "Mem")) continue;
+            if (IRType.is(at, tyMem)) continue;
             String* e = ptxOp(o, at);
             if (e == (String*)0) return (String*)0;
             args.add((Object*)e);
@@ -428,7 +428,7 @@
         u32 n = args.count();
         if (!isVoid && fl && m.equals(self.ptxS("sqrt")) && n == (u32)1)
             {
-            if (_mFast && self.ptxIs(rt, "F32")) // bug 643
+            if (_mFast && IRType.is(rt, tyF32)) // bug 643
                 return ptx2(ptxS("sqrt.approx.ftz.f32"), r, (String*)args.get((u32)0));
             return ptx2(ptxCat("sqrt.rn.", ptxArith(rt)), r, (String*)args.get((u32)0));
             }
@@ -459,7 +459,7 @@
             // No precise PTX instruction: the CPU runs this block, unless its
             // goal is speed and it is single precision, where the GPU's own
             // approximations will do (exp through ex2, ln through lg2).
-            if (!_mFast || isVoid || !self.ptxIs(rt, "F32")) return (String*)0;
+            if (!_mFast || isVoid || !IRType.is(rt, tyF32)) return (String*)0;
             if ((m.equals(self.ptxS("sin")) || m.equals(self.ptxS("cos"))) && n == (u32)1)
                 {
                 String* op = String.withString(m);
@@ -556,18 +556,18 @@
     final String* ptxConvert(IRInsn* ip, String* r, String* rt)
         {
         IROperand* o0 = (IROperand*)ip.ops().get((u32)0);
-        String* op = ip.op();
+        u16 op = ip.opc();
         String* st = o0.kind() == (u8)OPK_USE ? self.mslTypeOf(o0) : rt;
         String* a = ptxOp(o0, st);
         if (a == (String*)0 || st == (String*)0) return (String*)0;
-        if (ptxIs(st, "Bool"))
+        if (IRType.is(st, tyBool))
             {
-            if (ptxIs(rt, "Bool")) return ptx2(ptxS("mov.pred"), r, a);
+            if (IRType.is(rt, tyBool)) return ptx2(ptxS("mov.pred"), r, a);
             String* s = self.ptxS("\tselp.");
             s.appendCString(ptxWide(rt) ? "b64 " : "b32 "); s.append(r); s.appendCString(", 1, 0, "); s.append(a); s.appendCString(";\n");
             return s;
             }
-        if (ptxIs(rt, "Bool"))
+        if (IRType.is(rt, tyBool))
             {
             String* s = self.ptxS("\tsetp.ne.");
             s.appendCString(ptxWide(st) ? "u64 " : "u32 "); s.append(r); s.appendCString(", "); s.append(a); s.appendCString(", 0;\n");
@@ -575,43 +575,43 @@
             }
         bool sw = ptxWide(st);
         bool rw = ptxWide(rt);
-        if (op.equals(self.ptxS("Trunc")))
+        if (op == opTrunc)
             {
             String* lo = sw ? ptx2(ptxS("cvt.u32.u64"), r, a) : ptx2(ptxS("mov.b32"), r, a);
             if (rw) return ptx2(ptxS("mov.b64"), r, a);
-            if (ptxIs(rt, "U8")) { lo.append(ptx3(ptxS("and.b32"), r, r, self.ptxS("255"))); return lo; }
-            if (ptxIs(rt, "U16")) { lo.append(ptx3(ptxS("and.b32"), r, r, self.ptxS("65535"))); return lo; }
-            if (ptxIs(rt, "I8")) { lo.append(ptxBfe(r, "8")); return lo; }
-            if (ptxIs(rt, "I16")) { lo.append(ptxBfe(r, "16")); return lo; }
+            if (IRType.is(rt, tyU8)) { lo.append(ptx3(ptxS("and.b32"), r, r, self.ptxS("255"))); return lo; }
+            if (IRType.is(rt, tyU16)) { lo.append(ptx3(ptxS("and.b32"), r, r, self.ptxS("65535"))); return lo; }
+            if (IRType.is(rt, tyI8)) { lo.append(ptxBfe(r, "8")); return lo; }
+            if (IRType.is(rt, tyI16)) { lo.append(ptxBfe(r, "16")); return lo; }
             return lo;
             }
-        if (op.equals(self.ptxS("SExt")) && ptxNarrow(st))
+        if (op == opSExt && ptxNarrow(st))
             {
-            String* bits = self.ptxS((self.ptxIs(st, "I8") || self.ptxIs(st, "U8")) ? "8" : "16");
+            String* bits = self.ptxS((IRType.is(st, tyI8) || IRType.is(st, tyU8)) ? "8" : "16");
             String* x = self.ptxS("\tbfe.s32 %k, ");
             x.append(a); x.appendCString(", 0, "); x.append(bits); x.appendCString(";\n");
             if (rw) x.append(ptx2(ptxS("cvt.s64.s32"), r, self.ptxS("%k")));
             else x.append(ptx2(ptxS("mov.b32"), r, self.ptxS("%k")));
             return x;
             }
-        if (op.equals(self.ptxS("ZExt")) && (self.ptxIs(st, "I8") || self.ptxIs(st, "I16")))
+        if (op == opZExt && (IRType.is(st, tyI8) || IRType.is(st, tyI16)))
             {
             // A signed narrow value is sign-extended in its register:
             // zero-extending it clears those bits first.
-            String* x = ptx3(ptxS("and.b32"), self.ptxS("%k"), a, self.ptxS(ptxIs(st, "I8") ? "255" : "65535"));
+            String* x = ptx3(ptxS("and.b32"), self.ptxS("%k"), a, self.ptxS(IRType.is(st, tyI8) ? "255" : "65535"));
             if (rw) x.append(ptx2(ptxS("cvt.u64.u32"), r, self.ptxS("%k")));
             else x.append(ptx2(ptxS("mov.b32"), r, self.ptxS("%k")));
             return x;
             }
         if (!sw && rw)
-            return ptx2(ptxS(op.equals(self.ptxS("SExt")) ? "cvt.s64.s32" : "cvt.u64.u32"), r, a);
+            return ptx2(ptxS(op == opSExt ? "cvt.s64.s32" : "cvt.u64.u32"), r, a);
         return ptx2(ptxS(rw ? "mov.b64" : "mov.b32"), r, a);
         }
 
     final String* ptxFpConvert(IRInsn* ip, String* r, String* rt)
         {
         IROperand* o0 = (IROperand*)ip.ops().get((u32)0);
-        String* op = ip.op();
+        u16 op = ip.opc();
         String* st = o0.kind() == (u8)OPK_USE ? self.mslTypeOf(o0) : rt;
         String* a = ptxOp(o0, st);
         if (a == (String*)0) return (String*)0;
@@ -626,36 +626,36 @@
         // float, never narrow.
         String* d = ptxArith(rt);
         String* s = ptxArith(st);
-        if (op.equals(self.ptxS("UIToFp"))) s = self.ptxS(ptxWide(st) ? "u64" : "u32");
-        if (op.equals(self.ptxS("FpToUI"))) d = self.ptxS(ptxWide(rt) ? "u64" : "u32");
-        if (op.equals(self.ptxS("SIToFp"))) s = self.ptxS(ptxWide(st) ? "s64" : "s32");
-        if (op.equals(self.ptxS("FpToSI"))) d = self.ptxS(ptxWide(rt) ? "s64" : "s32");
+        if (op == opUIToFp) s = self.ptxS(ptxWide(st) ? "u64" : "u32");
+        if (op == opFpToUI) d = self.ptxS(ptxWide(rt) ? "u64" : "u32");
+        if (op == opSIToFp) s = self.ptxS(ptxWide(st) ? "s64" : "s32");
+        if (op == opFpToSI) d = self.ptxS(ptxWide(rt) ? "s64" : "s32");
         if (d == (String*)0 || s == (String*)0) return (String*)0;
         String* c = self.ptxS("cvt");
-        if (op.equals(self.ptxS("FpToSI")) || op.equals(self.ptxS("FpToUI"))) c.appendCString(".rzi");
-        else if (!op.equals(self.ptxS("FpExt"))) c.appendCString(".rn");
+        if (op == opFpToSI || op == opFpToUI) c.appendCString(".rzi");
+        else if (op != opFpExt) c.appendCString(".rn");
         c.appendCString("."); c.append(d); c.appendCString("."); c.append(s);
         String* out = ptx2(c, r, a);
-        if ((op.equals(self.ptxS("FpToUI")) || op.equals(self.ptxS("FpToSI"))) && ptxNarrow(rt))
+        if ((op == opFpToUI || op == opFpToSI) && ptxNarrow(rt))
             {
-            if (ptxIs(rt, "U8")) out.append(ptx3(ptxS("and.b32"), r, r, self.ptxS("255")));
-            else if (ptxIs(rt, "U16")) out.append(ptx3(ptxS("and.b32"), r, r, self.ptxS("65535")));
-            else if (ptxIs(rt, "I8")) out.append(ptxBfe(r, "8"));
-            else if (ptxIs(rt, "I16")) out.append(ptxBfe(r, "16"));
+            if (IRType.is(rt, tyU8)) out.append(ptx3(ptxS("and.b32"), r, r, self.ptxS("255")));
+            else if (IRType.is(rt, tyU16)) out.append(ptx3(ptxS("and.b32"), r, r, self.ptxS("65535")));
+            else if (IRType.is(rt, tyI8)) out.append(ptxBfe(r, "8"));
+            else if (IRType.is(rt, tyI16)) out.append(ptxBfe(r, "16"));
             }
         return out;
         }
 
     final String* ptxStatement(IRInsn* ip)
         {
-        String* op = ip.op();
+        u16 op = ip.opc();
         IRValue* rv = ip.res();
         String* rt = rv != (IRValue*)0 ? rv.ty() : (String*)0;
         String* r = rv != (IRValue*)0 ? ptxReg(rv) : (String*)0;
         IROperand* o0 = ip.ops().count() > (u32)0 ? (IROperand*)ip.ops().get((u32)0) : (IROperand*)0;
-        if (op.equals(self.ptxS("Const")))
+        if (op == opConst)
             {
-            if (ptxIs(rt, "Bool"))
+            if (IRType.is(rt, tyBool))
                 {
                 String* s = self.ptxS("\tmov.b32 %k, ");
                 s.append(String.withI64(o0.imm())); s.appendCString(";\n\tsetp.ne.s32 "); s.append(r); s.appendCString(", %k, 0;\n");
@@ -666,13 +666,13 @@
             if (v == (String*)0 || t == (String*)0) return (String*)0;
             return ptx2(ptxCat("mov", t), r, v);
             }
-        if (op.equals(self.ptxS("Add")) || op.equals(self.ptxS("Sub")) || op.equals(self.ptxS("Mul")) || op.equals(self.ptxS("UDiv")) || op.equals(self.ptxS("SDiv")) || op.equals(self.ptxS("URem")) || op.equals(self.ptxS("SRem")) || op.equals(self.ptxS("And")) || op.equals(self.ptxS("Or")) || op.equals(self.ptxS("Xor")) || op.equals(self.ptxS("Shl")) || op.equals(self.ptxS("LShr")) || op.equals(self.ptxS("AShr")) || op.equals(self.ptxS("FAdd")) || op.equals(self.ptxS("FSub")) || op.equals(self.ptxS("FMul")) || op.equals(self.ptxS("FDiv")))
+        if (op == opAdd || op == opSub || op == opMul || op == opUDiv || op == opSDiv || op == opURem || op == opSRem || op == opAnd || op == opOr || op == opXor || op == opShl || op == opLShr || op == opAShr || op == opFAdd || op == opFSub || op == opFMul || op == opFDiv)
             return ptxBinary(ip, r, rt);
-        if (op.equals(self.ptxS("Not")))
+        if (op == opNot)
             {
             String* a = ptxOp(o0, rt);
             if (a == (String*)0) return (String*)0;
-            if (ptxIs(rt, "Bool")) return ptx2(ptxS("not.pred"), r, a);
+            if (IRType.is(rt, tyBool)) return ptx2(ptxS("not.pred"), r, a);
             if (ptxNarrow(rt))
                 {
                 // In 32 bits, then back in the register form.
@@ -683,7 +683,7 @@
                 }
             return ptx2(ptxS(ptxWide(rt) ? "not.b64" : "not.b32"), r, a);
             }
-        if (op.equals(self.ptxS("Neg")) || op.equals(self.ptxS("FNeg")))
+        if (op == opNeg || op == opFNeg)
             {
             String* a = ptxOp(o0, rt);
             if (a != (String*)0 && ptxNarrow(rt))
@@ -696,40 +696,40 @@
                 }
             String* sfx = ptxArith(rt);
             if (a == (String*)0 || sfx == (String*)0) return (String*)0;
-            if (ptxIs(rt, "U32")) sfx = self.ptxS("s32");
-            if (ptxIs(rt, "U64")) sfx = self.ptxS("s64");
+            if (IRType.is(rt, tyU32)) sfx = self.ptxS("s32");
+            if (IRType.is(rt, tyU64)) sfx = self.ptxS("s64");
             return ptx2(ptxCat("neg.", sfx), r, a);
             }
-        if (op.equals(self.ptxS("FSqrt")))
+        if (op == opFSqrt)
             {
             String* a = ptxOp(o0, rt);
             if (a == (String*)0 || ptxArith(rt) == (String*)0) return (String*)0;
             // bug 643: approximate under :goal(speed), for f32
-            if (_mFast && self.ptxIs(rt, "F32"))
+            if (_mFast && IRType.is(rt, tyF32))
                 return ptx2(ptxS("sqrt.approx.ftz.f32"), r, a);
             return ptx2(ptxCat("sqrt.rn.", ptxArith(rt)), r, a);
             }
-        if (op.equals(self.ptxS("ICmp")) || op.equals(self.ptxS("FCmp")))
+        if (op == opICmp || op == opFCmp)
             return ptxCompare(ip, r);
-        if (op.equals(self.ptxS("ZExt")) || op.equals(self.ptxS("SExt")) || op.equals(self.ptxS("Trunc")) || op.equals(self.ptxS("Copy")))
+        if (op == opZExt || op == opSExt || op == opTrunc || op == opCopy)
             return ptxConvert(ip, r, rt);
-        if (op.equals(self.ptxS("SIToFp")) || op.equals(self.ptxS("UIToFp")) || op.equals(self.ptxS("FpToSI")) || op.equals(self.ptxS("FpToUI")) || op.equals(self.ptxS("FpExt")) || op.equals(self.ptxS("FpTrunc")))
+        if (op == opSIToFp || op == opUIToFp || op == opFpToSI || op == opFpToUI || op == opFpExt || op == opFpTrunc)
             return ptxFpConvert(ip, r, rt);
-        if (op.equals(self.ptxS("Bitcast")))
+        if (op == opBitcast)
             {
             // The same bits under another type: a move, and a narrow result
             // put back in its register form (an i8 read as a u8).
             String* st = o0.kind() == (u8)OPK_USE ? self.mslTypeOf(o0) : rt;
             String* a = ptxOp(o0, st);
-            if (a == (String*)0 || st == (String*)0 || self.ptxIs(rt, "Bool") || self.ptxIs(st, "Bool")) return (String*)0;
-            bool w = ptxWide(rt) || self.ptxIs(rt, "F64");
+            if (a == (String*)0 || st == (String*)0 || IRType.is(rt, tyBool) || IRType.is(st, tyBool)) return (String*)0;
+            bool w = ptxWide(rt) || IRType.is(rt, tyF64);
             String* s = ptx2(ptxS(w ? "mov.b64" : "mov.b32"), r, a);
             s.append(ptxNarrowFix(rt, r));
             return s;
             }
-        if (op.equals(self.ptxS("Select")))
+        if (op == opSelect)
             {
-            if (ptxIs(rt, "Bool")) return (String*)0;
+            if (IRType.is(rt, tyBool)) return (String*)0;
             String* c = ptxOp(o0, (String*)0);
             String* a = ptxOp((IROperand*)ip.ops().get((u32)1), rt);
             String* b = ptxOp((IROperand*)ip.ops().get((u32)2), rt);
@@ -740,7 +740,7 @@
             u.appendCString(", "); u.append(c); u.appendCString(";\n");
             return u;
             }
-        if (op.equals(self.ptxS("FieldAddr")))
+        if (op == opFieldAddr)
             {
             i64 k = self.mslSelfField(ip);
             if (k >= (i64)0 && self.mslIsPtr(_mObj.typeAt((u32)k)))
@@ -752,7 +752,7 @@
             if (l == (IRLayout*)0 || fo.kind() != (u8)OPK_IMMI || fo.imm() < (i64)0 || fo.imm() >= (i64)l.fieldCount()) return (String*)0;
             return ptx3(ptxS("add.u64"), r, ptxReg(o0.val()), String.withU32(l.offsetAt((u32)fo.imm())));
             }
-        if (op.equals(self.ptxS("ElementAddr")))
+        if (op == opElementAddr)
             {
             u32 size = ptxSize(mslPointee(self.mslTypeOf(o0)));
             String* base = ptxReg(o0.val());
@@ -772,7 +772,7 @@
             s.append(u);
             return s;
             }
-        if (op.equals(self.ptxS("AddrOf")))
+        if (op == opAddrOf)
             {
             if (_mSinit.get((Hashable*)self.mslKey(rv)) != (Object*)0) return self.ptxS("");
             // A work item's own array: a .local array of the thread's. As the reference.
@@ -793,7 +793,7 @@
             s.append(ptx2(ptxS("cvta.to.global.u64"), r, r));
             return s;
             }
-        if (op.equals(self.ptxS("Load")))
+        if (op == opLoad)
             {
             String* buf = (String*)_mBufOf.get((Hashable*)self.mslKey(rv));
             if (buf != (String*)0)
@@ -810,7 +810,7 @@
             String* a = ptxReg(o0.val());
             String* ld = self.ptxS("ld.");
             ld.append(sp); ld.appendCString(".");
-            if (ptxIs(rt, "Bool"))
+            if (IRType.is(rt, tyBool))
                 {
                 ld.appendCString("u8");
                 String* s = ptx2(ld, self.ptxS("%k"), ptxCat("[", ptxCat("", a)));
@@ -825,7 +825,7 @@
             s.append(ld); s.appendCString(" "); s.append(r); s.appendCString(", ["); s.append(a); s.appendCString("];\n");
             return s;
             }
-        if (op.equals(self.ptxS("Store")))
+        if (op == opStore)
             {
             if (o0.kind() != (u8)OPK_USE) return (String*)0;
             String* pt = self.mslPointee(mslTypeOf(o0));
@@ -837,7 +837,7 @@
             String* a = ptxReg(o0.val());
             String* st = self.ptxS("\tst.");
             st.append(sp); st.appendCString(".");
-            if (ptxIs(pt, "Bool"))
+            if (IRType.is(pt, tyBool))
                 {
                 String* s = self.ptxS("");
                 if (vo.kind() != (u8)OPK_USE) s.append(ptx2(ptxS("mov.b32"), self.ptxS("%k"), v));
@@ -857,9 +857,9 @@
             s.append(m); s.appendCString(" ["); s.append(a); s.appendCString("], "); s.append(v); s.appendCString(";\n");
             return s;
             }
-        if (op.equals(self.ptxS("Call")))
+        if (op == opCall)
             return ptxCall(ip, r, rt);
-        if (op.equals(self.ptxS("DbgValue")))
+        if (op == opDbgValue)
             return self.ptxS("");
         return (String*)0;
         }
@@ -880,14 +880,14 @@
                 }
             IRInsn* t = b.term();
             if (t == (IRInsn*)0) return (String*)0;
-            if (t.op().equals(self.ptxS("Branch")))
+            if (t.isOp(opBranch))
                 {
                 IRBlock* to = ((IROperand*)t.ops().get((u32)0)).blk();
                 String* c = ptxCopies(b, to);
                 if (c == (String*)0) return (String*)0;
                 s.append(c); s.appendCString("\tbra.uni BB"); s.append((String*)_mBlk.get((Hashable*)to.name())); s.appendCString(";\n");
                 }
-            else if (t.op().equals(self.ptxS("CondBranch")))
+            else if (t.isOp(opCondBranch))
                 {
                 IRBlock* tt = ((IROperand*)t.ops().get((u32)1)).blk();
                 IRBlock* ff = ((IROperand*)t.ops().get((u32)2)).blk();
@@ -902,13 +902,13 @@
                 s.appendCString("E"); s.append(e); s.appendCString(":\n");
                 s.append(ct); s.appendCString("\tbra.uni BB"); s.append((String*)_mBlk.get((Hashable*)tt.name())); s.appendCString(";\n");
                 }
-            else if (t.op().equals(self.ptxS("Return")))
+            else if (t.isOp(opReturn))
                 {
                 if (_mHelper)
                     {
                     IROperand* rv = t.ops().count() > (u32)0 ? (IROperand*)t.ops().get((u32)0) : (IROperand*)0;
                     String* rvt = rv == (IROperand*)0 ? (String*)0 : rv.kind() == (u8)OPK_USE ? self.mslTypeOf(rv) : f.ret();
-                    if (rvt != (String*)0 && !rvt.equals(self.ptxS("Mem")) && !rvt.equals(self.ptxS("Void")))
+                    if (rvt != (String*)0 && !IRType.is(rvt, tyMem) && !IRType.is(rvt, tyVoid))
                         {
                         String* v = ptxOp(rv, rvt);
                         String* pt = ptxRegType(rvt);
@@ -936,13 +936,13 @@
             for (u32 i = (u32)0; i < bb.phis().count(); i = i + (u32)1)
                 {
                 IRInsn* ip = (IRInsn*)bb.phis().get(i);
-                if (ip.res() != (IRValue*)0 && !ip.res().ty().equals(self.ptxS("Mem")))
+                if (ip.res() != (IRValue*)0 && !IRType.is(ip.res().ty(), tyMem))
                     { _mOrd.set((Hashable*)self.mslKey(ip.res()), (Object*)String.withU32(ord)); ord = ord + (u32)1; }
                 }
             for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
                 {
                 IRInsn* ip = (IRInsn*)bb.insns().get(i);
-                if (ip.res() != (IRValue*)0 && !ip.res().ty().equals(self.ptxS("Mem")))
+                if (ip.res() != (IRValue*)0 && !IRType.is(ip.res().ty(), tyMem))
                     { _mOrd.set((Hashable*)self.mslKey(ip.res()), (Object*)String.withU32(ord)); ord = ord + (u32)1; }
                 }
             }
@@ -1333,7 +1333,7 @@
             loads.appendCString("\tld.param"); loads.append(t); loads.appendCString(" %a"); loads.append(kk); loads.appendCString(", [p"); loads.append(kk); loads.appendCString("];\n");
             }
         String* rt = g.ret();
-        bool isVoid = rt == (String*)0 || rt.equals(self.ptxS("Void")) || rt.equals(self.ptxS("Mem"));
+        bool isVoid = rt == (String*)0 || IRType.is(rt, tyVoid) || IRType.is(rt, tyMem);
         String* rtt = isVoid ? (String*)0 : ptxRegType(rt);
         if (!isVoid && (rtt == (String*)0 || rtt.equals(self.ptxS(".pred")))) return (String*)0;
         String* decls = ptxDecls(g);
@@ -1356,11 +1356,11 @@
     // tree's order is fixed, so the result is the same run to run.
     final String* ptxRedStep(String* op, String* t, string d, string a, string b)
         {
-        bool f = self.ptxIs(t, "F32") || self.ptxIs(t, "F64");
-        bool w = self.ptxIs(t, "I64") || self.ptxIs(t, "U64") || self.ptxIs(t, "F64");
+        bool f = IRType.is(t, tyF32) || IRType.is(t, tyF64);
+        bool w = IRType.is(t, tyI64) || IRType.is(t, tyU64) || IRType.is(t, tyF64);
         string bits = w ? "64" : "32";
-        string ft = self.ptxIs(t, "F64") ? "f64" : "f32";
-        bool sg = self.ptxIs(t, "I8") || self.ptxIs(t, "I16") || self.ptxIs(t, "I32") || self.ptxIs(t, "I64");
+        string ft = IRType.is(t, tyF64) ? "f64" : "f32";
+        bool sg = IRType.is(t, tyI8) || IRType.is(t, tyI16) || IRType.is(t, tyI32) || IRType.is(t, tyI64);
         String* ins = (String*)0;
         if (op.equals(self.ptxS("+")))
             ins = f ? String.withFormat("add.rn.%s", ft) : String.withFormat("add.s%s", bits);
@@ -1392,7 +1392,7 @@
         _pEdge = (u32)0;
         if (f.params().count() == (u32)0) return (String*)0;
         _mObj = self.mslLayoutOf(mslPointee(((IRValue*)f.params().get((u32)0)).ty()));
-        if (_mObj == (IRLayout*)0 || _mObj.fieldCount() < (u32)3 || !_mObj.typeAt((u32)1).equals(self.ptxS("I64")) || !_mObj.typeAt((u32)2).equals(self.ptxS("I64")))
+        if (_mObj == (IRLayout*)0 || _mObj.fieldCount() < 3 || !IRType.is(_mObj.typeAt(1), tyI64) || !IRType.is(_mObj.typeAt(2), tyI64))
             return (String*)0;
         if (!self.mslAnalyse(f)) return (String*)0;
         _mHelperText = new Array();

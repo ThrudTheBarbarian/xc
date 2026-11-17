@@ -56,7 +56,7 @@
         if (nParams == (u32)0)
             return;
         IRValue* memParam = (IRValue*)fn.params().get(nParams - (u32)1);
-        if (!memParam.ty().equals(String.withCString("Mem")))
+        if (!IRType.is(memParam.ty(), tyMem))
             return;
         u32 userParams = nParams - (u32)1;
 
@@ -136,7 +136,7 @@
                 continue;
             if (cmb.ops().count() != (u32)2 || cmb.res() == 0)
                 continue;
-            if (!isCombineOp(cmb.op()))
+            if (!isCombineOp(cmb.opc()))
                 continue;
             if (irWidth(cmb.res().ty()) == (u32)0)
                 continue; // integers only
@@ -224,9 +224,9 @@
 
     // Associative AND commutative with an unambiguous identity: `And`'s is
     // width-dependent to materialise and is left out, as in the original.
-    final bool isCombineOp(String* op)
+    final bool isCombineOp(u16 op)
         {
-        return op.equals(String.withCString("Add")) || op.equals(String.withCString("Or")) || op.equals(String.withCString("Xor")) || op.equals(String.withCString("Mul"));
+        return op == opAdd || op == opOr || op == opXor || op == opMul;
         }
 
     final i32 combineIdentity(String* op)

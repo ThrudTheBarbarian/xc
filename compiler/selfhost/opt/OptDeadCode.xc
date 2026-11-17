@@ -91,8 +91,8 @@
                     {
                     String* key = dseKey((IROperand*)n.ops().get((u32)0), defOf, (u32)0);
                     String* t = dseTy(fn, (IROperand*)n.ops().get((u32)1));
-                    if (key == (String*)0 || t == (String*)0 || t.hasPrefix(String.withCString("Agg"))
-                        || t.hasPrefix(String.withCString("Vec")))
+                    if (key == (String*)0 || t == (String*)0 || IRType.isAgg(t)
+                        || IRType.isVec(t))
                         continue; // a store elsewhere reads nothing: no barrier
                     IRInsn* prev = (IRInsn*)pending.get((Hashable*)key);
                     if (prev != (IRInsn*)0)

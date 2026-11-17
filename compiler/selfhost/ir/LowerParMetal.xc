@@ -29,26 +29,26 @@
     final String* mslSigned(String* t)
         {
         String* b = (String*)0;
-        if (t.equals(String.withCString("I8")) || t.equals(String.withCString("U8"))) b = String.withCString("char");
-        else if (t.equals(String.withCString("I16")) || t.equals(String.withCString("U16"))) b = String.withCString("short");
-        else if (t.equals(String.withCString("I32")) || t.equals(String.withCString("U32"))) b = String.withCString("int");
-        else if (t.equals(String.withCString("I64")) || t.equals(String.withCString("U64"))) b = String.withCString("long");
+        if (IRType.is(t, tyI8) || IRType.is(t, tyU8)) b = String.withCString("char");
+        else if (IRType.is(t, tyI16) || IRType.is(t, tyU16)) b = String.withCString("short");
+        else if (IRType.is(t, tyI32) || IRType.is(t, tyU32)) b = String.withCString("int");
+        else if (IRType.is(t, tyI64) || IRType.is(t, tyU64)) b = String.withCString("long");
         else return self.mslScalar(t);
         if (_mVecW == (u32)2) b.appendCString("2");
         return b;
         }
     final bool mslSignedInt(String* t)
         {
-        return t.equals(String.withCString("I8")) || t.equals(String.withCString("I16"))
-            || t.equals(String.withCString("I32")) || t.equals(String.withCString("I64"));
+        return IRType.is(t, tyI8) || IRType.is(t, tyI16)
+            || IRType.is(t, tyI32) || IRType.is(t, tyI64);
         }
     final String* mslUnsigned(String* t)
         {
         String* b = (String*)0;
-        if (t.equals(String.withCString("I8")) || t.equals(String.withCString("U8"))) b = String.withCString("uchar");
-        else if (t.equals(String.withCString("I16")) || t.equals(String.withCString("U16"))) b = String.withCString("ushort");
-        else if (t.equals(String.withCString("I32")) || t.equals(String.withCString("U32"))) b = String.withCString("uint");
-        else if (t.equals(String.withCString("I64")) || t.equals(String.withCString("U64"))) b = String.withCString("ulong");
+        if (IRType.is(t, tyI8) || IRType.is(t, tyU8)) b = String.withCString("uchar");
+        else if (IRType.is(t, tyI16) || IRType.is(t, tyU16)) b = String.withCString("ushort");
+        else if (IRType.is(t, tyI32) || IRType.is(t, tyU32)) b = String.withCString("uint");
+        else if (IRType.is(t, tyI64) || IRType.is(t, tyU64)) b = String.withCString("ulong");
         else return self.mslScalar(t);
         if (_mVecW == (u32)2) b.appendCString("2");
         return b;
@@ -62,7 +62,7 @@
             {
             String* t = want != (String*)0 ? self.mslScalar(want) : String.withCString("long");
             if (t == (String*)0) return (String*)0;
-            if (want != (String*)0 && want.equals(String.withCString("Bool")))
+            if (want != (String*)0 && IRType.is(want, tyBool))
                 return String.withCString(op.imm() != (i64)0 ? "true" : "false");
             String* s = String.withString(t);
             s.appendCString("(");
@@ -72,7 +72,7 @@
             }
         if (op.kind() == (u8)OPK_IMMF)
             {
-            if (want == (String*)0 || !want.equals(String.withCString("F32"))) return (String*)0;
+            if (want == (String*)0 || !IRType.is(want, tyF32)) return (String*)0;
             u64 raw = (u64)0;
             String* h = op.fpHex();
             for (u32 i = (u32)0; i < h.byteLength(); i = i + (u32)1)
@@ -116,7 +116,7 @@
     final String* mslDecl(IRValue* v)
         {
         String* t = v.ty();
-        if (t.equals(String.withCString("Mem"))) return String.withCString("");
+        if (IRType.is(t, tyMem)) return String.withCString("");
         if (mslIsPtr(t))
             {
             String* pt = mslPtrType(t, (String*)_mSpace.get((Hashable*)self.mslKey(v)));
@@ -128,7 +128,7 @@
         String* n = self.mslScalar(t);
         if (n == (String*)0)
             {
-            self.parBecause(String.withCString(t.equals(String.withCString("F64")) ? "it uses double, which Apple GPUs do not have" : "it uses a value its GPU version cannot hold yet"));
+            self.parBecause(String.withCString(IRType.is(t, tyF64) ? "it uses double, which Apple GPUs do not have" : "it uses a value its GPU version cannot hold yet"));
             _mFailed = true;
             return String.withCString("");
             }
@@ -162,7 +162,7 @@
         for (u32 i = (u32)0; i < target.phis().count(); i = i + (u32)1)
             {
             IRInsn* ph = (IRInsn*)target.phis().get(i);
-            if (ph.res() == (IRValue*)0 || ph.res().ty().equals(String.withCString("Mem"))) continue;
+            if (ph.res() == (IRValue*)0 || IRType.is(ph.res().ty(), tyMem)) continue;
             IROperand* inc = (IROperand*)0;
             for (u32 k = (u32)0; k + (u32)1 < ph.ops().count(); k = k + (u32)2)
                 if (((IROperand*)ph.ops().get(k)).blk() == from)
@@ -230,7 +230,7 @@
                 {
                 IROperand* rv = t.ops().count() > (u32)0 ? (IROperand*)t.ops().get((u32)0) : (IROperand*)0;
                 String* rvt = rv != (IROperand*)0 ? self.mslTypeOf(rv) : (String*)0;
-                if (rvt != (String*)0 && !rvt.equals(String.withCString("Mem")))
+                if (rvt != (String*)0 && !IRType.is(rvt, tyMem))
                     {
                     String* ex = mslExpr(rv, rvt);
                     if (ex == (String*)0) return false;
@@ -362,7 +362,7 @@
             }
         if (sym == (String*)0) return (String*)0;
         String* s = String.withCString("(");
-        if (cast != (String*)0 && !t.equals(String.withCString("Bool")))
+        if (cast != (String*)0 && !IRType.is(t, tyBool))
             {
             s.append(cast); s.appendCString("("); s.append(a); s.appendCString(")"); s.append(sym);
             s.append(cast); s.appendCString("("); s.append(b); s.appendCString(")");
@@ -466,7 +466,7 @@
             {
             String* a = mslExpr(o0, rt);
             if (a == (String*)0) return (String*)0;
-            if (rt.equals(String.withCString("Bool"))) return mslAssign(r, mslCat3(String.withCString(""), "!", a));
+            if (IRType.is(rt, tyBool)) return mslAssign(r, mslCat3(String.withCString(""), "!", a));
             String* e = String.withString(self.mslScalar(rt)); e.appendCString("(~"); e.append(a); e.appendCString(")");
             return mslAssign(r, e);
             }
@@ -574,7 +574,7 @@
             // The speed goal: Metal's fast versions, in place of the precise ones.
             if (_mFast && fn != (String*)0 && fn.hasPrefix(String.withCString("precise::")))
                 fn = self.ptxCat("fast::", fn.substringFromByte((u32)9));
-            bool isVoid = rt == (String*)0 || rt.equals(String.withCString("Mem"));
+            bool isVoid = rt == (String*)0 || IRType.is(rt, tyMem);
             if (fn == (String*)0)
                 {
                 // A function of the program (the subset check has walked it):
@@ -603,7 +603,7 @@
                 {
                 IROperand* o = (IROperand*)ip.ops().get(k);
                 String* ot = self.mslTypeOf(o);
-                if (ot != (String*)0 && ot.equals(String.withCString("Mem"))) continue;
+                if (ot != (String*)0 && IRType.is(ot, tyMem)) continue;
                 String* a = mslExpr(o, ot != (String*)0 ? ot : rt);
                 if (a == (String*)0) return (String*)0;
                 if (!first) e.appendCString(", ");
@@ -643,13 +643,13 @@
             for (u32 i = (u32)0; i < bb.phis().count(); i = i + (u32)1)
                 {
                 IRInsn* ip = (IRInsn*)bb.phis().get(i);
-                if (ip.res() != (IRValue*)0 && !ip.res().ty().equals(String.withCString("Mem")))
+                if (ip.res() != (IRValue*)0 && !IRType.is(ip.res().ty(), tyMem))
                     { _mOrd.set((Hashable*)self.mslKey(ip.res()), (Object*)String.withU32(ord)); ord = ord + (u32)1; }
                 }
             for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
                 {
                 IRInsn* ip = (IRInsn*)bb.insns().get(i);
-                if (ip.res() != (IRValue*)0 && !ip.res().ty().equals(String.withCString("Mem")))
+                if (ip.res() != (IRValue*)0 && !IRType.is(ip.res().ty(), tyMem))
                     { _mOrd.set((Hashable*)self.mslKey(ip.res()), (Object*)String.withU32(ord)); ord = ord + (u32)1; }
                 }
             }
@@ -659,7 +659,7 @@
             for (u32 i = (u32)0; i < bb.phis().count(); i = i + (u32)1)
                 {
                 IRInsn* ph = (IRInsn*)bb.phis().get(i);
-                if (ph.res() == (IRValue*)0 || ph.res().ty().equals(String.withCString("Mem"))) continue;
+                if (ph.res() == (IRValue*)0 || IRType.is(ph.res().ty(), tyMem)) continue;
                 // A phi of pointers takes its incomings' space.
                 if (mslIsPtr(ph.res().ty()))
                     for (u32 k = (u32)1; k < ph.ops().count(); k = k + (u32)2)
@@ -672,7 +672,7 @@
             for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
                 {
                 IRInsn* ip = (IRInsn*)bb.insns().get(i);
-                if (ip.res() != (IRValue*)0 && !ip.res().ty().equals(String.withCString("Mem")))
+                if (ip.res() != (IRValue*)0 && !IRType.is(ip.res().ty(), tyMem))
                     decls.append(mslDecl(ip.res()));
                 }
             }
@@ -708,7 +708,7 @@
                 // A helper returns its value; the kernel just stops.
                 IROperand* rv = t.ops().count() > (u32)0 ? (IROperand*)t.ops().get((u32)0) : (IROperand*)0;
                 String* rvt = rv != (IROperand*)0 ? self.mslTypeOf(rv) : (String*)0;
-                if (_mHelper && rvt != (String*)0 && !rvt.equals(String.withCString("Mem")))
+                if (_mHelper && rvt != (String*)0 && !IRType.is(rvt, tyMem))
                     {
                     String* e = mslExpr(rv, rvt);
                     if (e == (String*)0) return false;
@@ -764,7 +764,7 @@
             params.append(t); params.appendCString(" p"); params.append(String.withU32(k));
             }
         String* rt = g.ret();
-        String* ret = (rt == (String*)0 || rt.equals(String.withCString("Void")) || rt.equals(String.withCString("Mem")))
+        String* ret = (rt == (String*)0 || IRType.is(rt, tyVoid) || IRType.is(rt, tyMem))
                           ? String.withCString("void") : self.mslScalar(rt);
         if (ret == (String*)0) return (String*)0;
         String* decls = String.withCString("");

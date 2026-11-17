@@ -137,7 +137,7 @@
                         {
                         IROperand* o = (IROperand*)n.ops().get(k);
                         if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0 && o.val().ty() != (String*)0
-                            && o.val().ty().equals(String.withCString("Mem")))
+                            && IRType.is(o.val().ty(), tyMem))
                             memIn = o.val();
                         }
                     if (memIn == (IRValue*)0)

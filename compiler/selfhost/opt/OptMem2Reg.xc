@@ -103,7 +103,7 @@
             z = new IRValue(t);
             c.add(IROperand.immF(String.withCString("0000000000000000"), t));
             }
-        else if (t.hasPrefix(String.withCString("Ptr(")))
+        else if (IRType.isPtr(t))
             {
             // A null pointer: zero, then the pointer.
             IRValue* zi = new IRValue(String.withCString("I64"));
@@ -347,7 +347,7 @@
             {
             // A C local (optPromoteScalars()): the slot is one variable, and
             // each AddrOf of it is a pointer to that variable.
-            if (!optPromoteScalars() || pl.ty().equals(String.withCString("Mem")))
+            if (!optPromoteScalars() || IRType.is(pl.ty(), tyMem))
                 return;
             Array* sa = self.aeUsersOf(fn, pl.val());
             if (sa.count() == (u32)0)
@@ -403,7 +403,7 @@
                 String* ft = lay.typeAt((u32)k);
                 // Plain scalars only — see the note in the original.
                 if (ft == (String*)0 || self.aeIsAgg(ft) || m2rIsPtrTy(ft)
-                    || ft.equals(String.withCString("Mem")))
+                    || IRType.is(ft, tyMem))
                     return;
                 if (!m2rFieldUsesOk(fn, f, ft))
                     return;

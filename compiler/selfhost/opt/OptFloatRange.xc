@@ -107,20 +107,12 @@
     // The bit width of an integer type, 0 for anything else.
     static u32 frBits(String* t)
         {
-        if (t.equals(String.withCString("I8")) || t.equals(String.withCString("U8")))
-            return (u32)8;
-        if (t.equals(String.withCString("I16")) || t.equals(String.withCString("U16")))
-            return (u32)16;
-        if (t.equals(String.withCString("I32")) || t.equals(String.withCString("U32")))
-            return (u32)32;
-        if (t.equals(String.withCString("I64")) || t.equals(String.withCString("U64")))
-            return (u32)64;
-        return (u32)0;
+        return IRType.isInt(t) ? IRType.bytes(t) * 8 : 0;
         }
 
     static bool frIsFloat(String* t)
         {
-        return t.equals(String.withCString("F32")) || t.equals(String.withCString("F64"));
+        return IRType.isFloat(t);
         }
 
     // Record v's bound, when it is a usable one for v's type (an F32 near its
@@ -129,7 +121,7 @@
         {
         if (v == (IRValue*)0 || ex.get((Hashable*)v) != (Object*)0)
             return false;
-        i64 cap = v.ty().equals(String.withCString("F32")) ? (i64)120 : (i64)1000;
+        i64 cap = IRType.is(v.ty(), tyF32) ? 120 : 1000;
         if (e > cap)
             return false;
         if (e < (i64)-1100)

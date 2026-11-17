@@ -807,6 +807,255 @@ class IROp
         }
     }
 
+// IR types, parsed once. A type stays its spelling everywhere it is printed or
+// built; IRType answers questions about one (what kind, how wide, how many
+// lanes, what it points at) from a record parsed the first time a spelling is
+// seen and cached by its text, so equal spellings share one record and a test
+// allocates nothing. Every entry point takes the spelling and answers false or
+// 0 for a null one.
+enum IRTypeTag = {
+    tyOther = 0, // a spelling none of the kinds below covers
+    tyVoid,
+    tyBool,
+    tyI8,
+    tyU8,
+    tyI16,
+    tyU16,
+    tyI32,
+    tyU32,
+    tyI64,
+    tyU64,
+    tyF32,
+    tyF64,
+    tyMem,       // the memory token
+    tyPtr,       // `Ptr(X, bank)`
+    tyAgg,       // `Agg(N)`
+    tyVec        // `Vec(L)` (16 bytes) or `Vec(L, bytes)`
+};
+
+class IRType
+    {
+    String* _spell; // the spelling, a private copy
+    u8 _tag;        // IRTypeTag
+    u32 _bytes;     // a scalar's byte width (Bool, the integers, the floats); 0 for any other
+    u32 _vecBytes;  // a vector's byte width
+    u32 _lanes;     // a vector's lane count, when its lane is a scalar
+    u32 _aggId;     // an aggregate's layout number
+    String* _sub;   // a vector's lane spelling, or a pointer's pointee
+    static Map* _cache; // spelling -> its record
+    static IRType* _last; // the record the last question was about
+
+    static IRType* of(String* t)
+        {
+        if (t == (String*)0)
+            return (IRType*)0;
+        if (_last != (IRType*)0 && t.equals(_last._spell))
+            return _last;
+        if (_cache == (Map*)0)
+            _cache = new Map();
+        IRType* r = (IRType*)_cache.get((Hashable*)t);
+        if (r == (IRType*)0)
+            {
+            r = IRType.parse(String.withString(t));
+            _cache.set((Hashable*)r._spell, (Object*)r);
+            }
+        _last = r;
+        return r;
+        }
+
+    static u8 scalarTag(String* t)
+        {
+        u32 n = t.byteLength();
+        if (n < 2 || n > 4)
+            return tyOther;
+        u8* b = t.cString();
+        if (n == 4 && b[0] == 'V' && b[1] == 'o' && b[2] == 'i' && b[3] == 'd')
+            return tyVoid;
+        if (n == 4 && b[0] == 'B' && b[1] == 'o' && b[2] == 'o' && b[3] == 'l')
+            return tyBool;
+        if (n == 3 && b[0] == 'M' && b[1] == 'e' && b[2] == 'm')
+            return tyMem;
+        if (n == 4)
+            return tyOther;
+        u8 k = b[0];
+        u32 bits = 0;
+        if (n == 2 && b[1] == '8')
+            bits = 8;
+        else if (n == 3 && b[1] == '1' && b[2] == '6')
+            bits = 16;
+        else if (n == 3 && b[1] == '3' && b[2] == '2')
+            bits = 32;
+        else if (n == 3 && b[1] == '6' && b[2] == '4')
+            bits = 64;
+        if (bits == 0)
+            return tyOther;
+        if (k == 'F' && bits == 32)
+            return tyF32;
+        if (k == 'F' && bits == 64)
+            return tyF64;
+        if (k == 'I' && bits == 8)
+            return tyI8;
+        if (k == 'U' && bits == 8)
+            return tyU8;
+        if (k == 'I' && bits == 16)
+            return tyI16;
+        if (k == 'U' && bits == 16)
+            return tyU16;
+        if (k == 'I' && bits == 32)
+            return tyI32;
+        if (k == 'U' && bits == 32)
+            return tyU32;
+        if (k == 'I' && bits == 64)
+            return tyI64;
+        if (k == 'U' && bits == 64)
+            return tyU64;
+        return tyOther;
+        }
+
+    static u32 tagBytes(u8 tag)
+        {
+        if (tag == tyBool || tag == tyI8 || tag == tyU8)
+            return 1;
+        if (tag == tyI16 || tag == tyU16)
+            return 2;
+        if (tag == tyI32 || tag == tyU32 || tag == tyF32)
+            return 4;
+        if (tag == tyI64 || tag == tyU64 || tag == tyF64)
+            return 8;
+        return 0;
+        }
+
+    static IRType* parse(String* t)
+        {
+        IRType* r = new IRType();
+        r._spell = t;
+        r._tag = IRType.scalarTag(t);
+        r._bytes = IRType.tagBytes(r._tag);
+        if (r._tag != tyOther)
+            return r;
+        u32 n = t.byteLength();
+        if (n < 4 || t.byteAt(3) != '(')
+            return r;
+        u8 c0 = t.byteAt(0);
+        u8 c1 = t.byteAt(1);
+        u8 c2 = t.byteAt(2);
+        if (c0 == 'P' && c1 == 't' && c2 == 'r')
+            {
+            // `Ptr(X, bank)` -> X, which may hold its own parentheses.
+            r._tag = tyPtr;
+            u32 depth = 0;
+            for (u32 i = 4; i < n; i = i + 1)
+                {
+                u8 c = t.byteAt(i);
+                if (c == '(')
+                    depth = depth + 1;
+                else if (c == ')' && depth > 0)
+                    depth = depth - 1;
+                else if ((c == ')' || c == ',') && depth == 0)
+                    {
+                    r._sub = t.substringBytes(4, i - 4);
+                    break;
+                    }
+                }
+            }
+        else if (c0 == 'A' && c1 == 'g' && c2 == 'g')
+            {
+            r._tag = tyAgg;
+            for (u32 i = 4; i < n; i = i + 1)
+                {
+                u8 c = t.byteAt(i);
+                if (c < '0' || c > '9')
+                    break;
+                r._aggId = r._aggId * 10 + (c - '0');
+                }
+            }
+        else if (c0 == 'V' && c1 == 'e' && c2 == 'c')
+            {
+            // `Vec(L)` is 16 bytes wide, `Vec(L, bytes)` as many as it says.
+            r._tag = tyVec;
+            r._vecBytes = 16;
+            if (t.byteAt(n - 1) != ')')
+                return r;
+            u32 end = n - 1;
+            for (u32 i = 4; i < end; i = i + 1)
+                {
+                u8 c = t.byteAt(i);
+                if (c == '(')
+                    return r;
+                if (c == ',')
+                    {
+                    u32 w = 0;
+                    for (u32 j = i + 1; j < end; j = j + 1)
+                        {
+                        u8 d = t.byteAt(j);
+                        if (d >= '0' && d <= '9')
+                            w = w * 10 + (d - '0');
+                        }
+                    r._vecBytes = w;
+                    end = i;
+                    break;
+                    }
+                }
+            r._sub = t.substringBytes(4, end - 4);
+            u32 lb = IRType.tagBytes(IRType.scalarTag(r._sub));
+            if (lb != 0)
+                r._lanes = r._vecBytes / lb;
+            }
+        return r;
+        }
+
+    // Questions about a spelling.
+    static u8 tagOf(String* t)
+        {
+        IRType* r = IRType.of(t);
+        return r == (IRType*)0 ? tyOther : r._tag;
+        }
+    static bool is(String* t, u8 tag)
+        {
+        return t != (String*)0 && IRType.of(t)._tag == tag;
+        }
+    static bool isInt(String* t)
+        {
+        u8 g = IRType.tagOf(t);
+        return g >= tyI8 && g <= tyU64;
+        }
+    static bool isFloat(String* t)
+        {
+        u8 g = IRType.tagOf(t);
+        return g == tyF32 || g == tyF64;
+        }
+    static bool isPtr(String* t)
+        {
+        return IRType.tagOf(t) == tyPtr;
+        }
+    static bool isAgg(String* t)
+        {
+        return IRType.tagOf(t) == tyAgg;
+        }
+    static bool isVec(String* t)
+        {
+        return IRType.tagOf(t) == tyVec;
+        }
+    // A scalar's byte width (Bool, the integers, the floats); 0 for a pointer,
+    // an aggregate, a vector or anything else.
+    static u32 bytes(String* t)
+        {
+        IRType* r = IRType.of(t);
+        return r == (IRType*)0 ? 0 : r._bytes;
+        }
+
+    // Questions about a record.
+    u8 tag(void)          { return _tag; }
+    String* spelling(void) { return _spell; }
+    u32 scalarBytes(void) { return _bytes; }
+    u32 vecBytes(void)    { return _vecBytes; }
+    u32 lanes(void)       { return _lanes; }
+    u32 aggId(void)       { return _aggId; }
+    // A vector's lane spelling or a pointer's pointee (shared: copy before
+    // changing it); null when the spelling has none.
+    String* sub(void)     { return _sub; }
+    }
+
     class IRInsn
     {
     String* _op; // the mnemonic, exactly as the printer spells it
@@ -836,6 +1085,18 @@ class IROp
         IRInsn* i = new IRInsn();
         i._op = mnemonic;
         i._opc = IROp.of(mnemonic);
+        if (IRDbg.hasCurrent())
+            i.setDbg(IRDbg.currentFile(), IRDbg.currentLine(), IRDbg.currentCol());
+        return i;
+        }
+
+    // A new instruction with from's opcode, which needs no lookup: what a pass
+    // that clones an instruction starts from.
+    static IRInsn* withOpOf(IRInsn* from)
+        {
+        IRInsn* i = new IRInsn();
+        i._op = from._op;
+        i._opc = from._opc;
         if (IRDbg.hasCurrent())
             i.setDbg(IRDbg.currentFile(), IRDbg.currentLine(), IRDbg.currentCol());
         return i;
@@ -1566,7 +1827,7 @@ class IROp
             out.appendFormat("%%%ld: %s", (i32)v.pid(), v.ty().cString());
             }
         out.appendCString(") -> ");
-        if (_ret.equals(String.withCString("Void")))
+        if (IRType.is(_ret, tyVoid))
             out.appendCString("Mem");
         else
             out.appendFormat("(%s, Mem)", _ret.cString());

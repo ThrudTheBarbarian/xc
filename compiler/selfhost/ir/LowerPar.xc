@@ -465,8 +465,8 @@
         if (d.res() == (IRValue*)0 || d.res().ty() == (String*)0)
             return false;
         String* t = d.res().ty();
-        return t.equals(String.withCString("I32")) || t.equals(String.withCString("U32"))
-            || t.equals(String.withCString("I64")) || t.equals(String.withCString("U64"));
+        return IRType.is(t, tyI32) || IRType.is(t, tyU32)
+            || IRType.is(t, tyI64) || IRType.is(t, tyU64);
         }
     // a * b fits comfortably in an i64: both under 2^31 in magnitude.
     static bool parMulOk(i64 a, i64 b)
@@ -591,9 +591,9 @@
         {
         if (t == (String*)0)
             return false;
-        return t.equals(String.withCString("I8")) || t.equals(String.withCString("U8")) || t.equals(String.withCString("I16"))
-            || t.equals(String.withCString("U16")) || t.equals(String.withCString("I32")) || t.equals(String.withCString("U32"))
-            || t.equals(String.withCString("I64")) || t.equals(String.withCString("U64"));
+        return IRType.is(t, tyI8) || IRType.is(t, tyU8) || IRType.is(t, tyI16)
+            || IRType.is(t, tyU16) || IRType.is(t, tyI32) || IRType.is(t, tyU32)
+            || IRType.is(t, tyI64) || IRType.is(t, tyU64);
         }
     // Whether a read at r and a write at w (symbolic forms) can be settled by
     // the run, and the guard "slot:m:d0:k" if so (as the reference's
@@ -1749,23 +1749,23 @@
 
     // Arithmetic / compare / convert, the ops that count as per-item compute
     // for the cost model (not loads, stores, address maths, phis or branches).
-    final bool parIsComputeOp(String* op)
+    final bool parIsComputeOp(u16 op)
         {
-        return op.equals(String.withCString("Add")) || op.equals(String.withCString("Sub"))
-            || op.equals(String.withCString("Mul")) || op.equals(String.withCString("UDiv"))
-            || op.equals(String.withCString("SDiv")) || op.equals(String.withCString("URem"))
-            || op.equals(String.withCString("SRem")) || op.equals(String.withCString("Shl"))
-            || op.equals(String.withCString("LShr")) || op.equals(String.withCString("AShr"))
-            || op.equals(String.withCString("And")) || op.equals(String.withCString("Or"))
-            || op.equals(String.withCString("Xor")) || op.equals(String.withCString("Neg"))
-            || op.equals(String.withCString("Not")) || op.equals(String.withCString("FAdd"))
-            || op.equals(String.withCString("FSub")) || op.equals(String.withCString("FMul"))
-            || op.equals(String.withCString("FDiv")) || op.equals(String.withCString("FNeg"))
-            || op.equals(String.withCString("FSqrt")) || op.equals(String.withCString("ICmp"))
-            || op.equals(String.withCString("FCmp")) || op.equals(String.withCString("Select"))
-            || op.equals(String.withCString("SIToFp")) || op.equals(String.withCString("UIToFp"))
-            || op.equals(String.withCString("FpToSI")) || op.equals(String.withCString("FpToUI"))
-            || op.equals(String.withCString("FpExt")) || op.equals(String.withCString("FpTrunc"));
+        return op == opAdd || op == opSub
+            || op == opMul || op == opUDiv
+            || op == opSDiv || op == opURem
+            || op == opSRem || op == opShl
+            || op == opLShr || op == opAShr
+            || op == opAnd || op == opOr
+            || op == opXor || op == opNeg
+            || op == opNot || op == opFAdd
+            || op == opFSub || op == opFMul
+            || op == opFDiv || op == opFNeg
+            || op == opFSqrt || op == opICmp
+            || op == opFCmp || op == opSelect
+            || op == opSIToFp || op == opUIToFp
+            || op == opFpToSI || op == opFpToUI
+            || op == opFpExt || op == opFpTrunc;
         }
     // The block's per-item cost, for par-auto's static classifier
     // (par-auto-parallelisation.md): `ops=<n>` the compute-op count, and `loop`
@@ -1790,7 +1790,7 @@
             for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
                 {
                 IRInsn* ins = (IRInsn*)bb.insns().get(i);
-                if (parIsComputeOp(ins.op()))
+                if (parIsComputeOp(ins.opc()))
                     *ops = *ops + (i64)1;
                 if ((ins.isOp(opCall) || ins.isOp(opCallBanked)
                      || ins.isOp(opCallCloaked))
@@ -1844,7 +1844,7 @@
             u32 at = ord;
             ord = ord + (u32)1;
             String* t = lay.typeAt(k);
-            bool isFloat = t != (String*)0 && (t.equals(String.withCString("F32")) || t.equals(String.withCString("F64")));
+            bool isFloat = t != (String*)0 && (IRType.is(t, tyF32) || IRType.is(t, tyF64));
             bool m = op.equals(String.withCString("min")) || op.equals(String.withCString("max"));
             bool arith = op.equals(String.withCString("+")) || op.equals(String.withCString("*"));
             if (!isFloat)
@@ -2500,7 +2500,7 @@
                     // another field of the element would lose: only at the
                     // item's own index, which no other item writes.
                     else if (ip.isOp(opStore)
-                             && (self.mslWidth(t) < self.mslWidth(wt) || t.equals(String.withCString("Bool"))))
+                             && (self.mslWidth(t) < self.mslWidth(wt) || IRType.is(t, tyBool)))
                         {
                         IRValue* rv = (IRValue*)cRoot.get((Hashable*)vk);
                         IRInsn* re = (IRInsn*)def.get((Hashable*)String.withU32(rv.seq()));
@@ -2751,7 +2751,7 @@
         u32 w = self.mslWidth(t);
         u32 ww = self.mslWidth(wt);
         bool load = ip.isOp(opLoad);
-        if (w == ww && !t.equals(String.withCString("Bool")))
+        if (w == ww && !IRType.is(t, tyBool))
             {
             if (t.equals(wt))
                 return i + (u32)1;
@@ -2802,7 +2802,7 @@
                 IRValue* zl = new IRValue(String.withCString("U64"));
                 IRValue* zh = new IRValue(String.withCString("U64"));
                 IRValue* sh = new IRValue(String.withCString("U64"));
-                IRValue* both = t.equals(String.withCString("U64")) ? orig : new IRValue(String.withCString("U64"));
+                IRValue* both = IRType.is(t, tyU64) ? orig : new IRValue(String.withCString("U64"));
                 bb.insns().insert(i, (Object*)parWordOp("ZExt", zl, IROperand.useVal(lo), (IROperand*)0));
                 bb.insns().insert(i + (u32)1, (Object*)parWordOp("ZExt", zh, IROperand.useVal(hi), (IROperand*)0));
                 bb.insns().insert(i + (u32)2, (Object*)parWordOp("Shl", sh, IROperand.useVal(zh), IROperand.immI((i64)32, String.withCString("U64"))));
@@ -2816,7 +2816,7 @@
                 return i;
                 }
             IROperand* v = parWordValue(bb, &i, (IROperand*)ip.ops().get((u32)1), t);
-            if (!t.equals(String.withCString("U64")))
+            if (!IRType.is(t, tyU64))
                 {
                 IRValue* u = new IRValue(String.withCString("U64"));
                 bb.insns().insert(i, (Object*)parWordOp("Bitcast", u, v, (IROperand*)0));
@@ -2859,7 +2859,7 @@
                 i = i + (u32)1;
                 x = IROperand.useVal(sv);
                 }
-            if (t.equals(String.withCString("Bool")))
+            if (IRType.is(t, tyBool))
                 {
                 IRValue* bv = new IRValue(wt);
                 bb.insns().insert(i, (Object*)parWordOp("And", bv, x, IROperand.immI(mask, wt)));
@@ -3177,11 +3177,11 @@
             msl = String.withCString("// xcpar cpu");
             IRValue* selfV = f.params().count() > (u32)0 ? (IRValue*)f.params().get((u32)0) : (IRValue*)0;
             String* selfPointee = selfV != (IRValue*)0 ? self.mslPointee(selfV.ty()) : (String*)0;
-            IRLayout* bl = selfPointee != (String*)0 && selfPointee.hasPrefix(String.withCString("Agg(")) ? self.layoutOfAgg(selfPointee) : (IRLayout*)0;
+            IRLayout* bl = selfPointee != (String*)0 && IRType.isAgg(selfPointee) ? self.layoutOfAgg(selfPointee) : (IRLayout*)0;
             for (u32 k = (u32)3; bl != (IRLayout*)0 && k < bl.fieldCount(); k = k + (u32)1)
                 {
                 String* e = self.mslPointee(bl.typeAt(k));
-                if (e == (String*)0 || e.hasPrefix(String.withCString("Agg(")) || self.irWidth(e) == (u32)0)
+                if (e == (String*)0 || IRType.isAgg(e) || self.irWidth(e) == 0)
                     continue;
                 // An array reduction's pointer is a chunk's own copy, or the
                 // array itself, which no other buffer names.

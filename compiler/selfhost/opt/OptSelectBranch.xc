@@ -38,13 +38,13 @@
 
     final bool sbFloatTy(String* t)
         {
-        return t != (String*)0 && (t.equals(String.withCString("F32")) || t.equals(String.withCString("F64")));
+        return t != (String*)0 && (IRType.is(t, tyF32) || IRType.is(t, tyF64));
         }
 
-    final bool sbArith(String* op)
+    final bool sbArith(u16 op)
         {
-        return op.equals(String.withCString("FAdd")) || op.equals(String.withCString("FSub"))
-            || op.equals(String.withCString("FMul")) || op.equals(String.withCString("FNeg"));
+        return op == opFAdd || op == opFSub
+            || op == opFMul || op == opFNeg;
         }
 
     // How many operands in fn read v.
@@ -182,7 +182,7 @@
                     if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0)
                         continue;
                     i32 j = sbIndexIn(B, o.val());
-                    if (j < (i32)0 || (u32)j >= i || !sbArith(((IRInsn*)B.insns().get((u32)j)).op()))
+                    if (j < 0 || (u32)j >= i || !sbArith(((IRInsn*)B.insns().get(j)).opc()))
                         continue;
                     if (sbUses(fn, o.val()) != (u32)1)
                         continue;

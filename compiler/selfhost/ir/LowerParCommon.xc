@@ -29,16 +29,16 @@
         {
         if (t == (String*)0) return (String*)0;
         String* base = (String*)0;
-        if (t.equals(String.withCString("I8"))) base = String.withCString("char");
-        else if (t.equals(String.withCString("U8"))) base = String.withCString("uchar");
-        else if (t.equals(String.withCString("I16"))) base = String.withCString("short");
-        else if (t.equals(String.withCString("U16"))) base = String.withCString("ushort");
-        else if (t.equals(String.withCString("I32"))) base = String.withCString("int");
-        else if (t.equals(String.withCString("U32"))) base = String.withCString("uint");
-        else if (t.equals(String.withCString("I64"))) base = String.withCString("long");
-        else if (t.equals(String.withCString("U64"))) base = String.withCString("ulong");
-        else if (t.equals(String.withCString("F32"))) base = String.withCString("float");
-        else if (t.equals(String.withCString("Bool"))) return String.withCString("bool");
+        if (IRType.is(t, tyI8)) base = String.withCString("char");
+        else if (IRType.is(t, tyU8)) base = String.withCString("uchar");
+        else if (IRType.is(t, tyI16)) base = String.withCString("short");
+        else if (IRType.is(t, tyU16)) base = String.withCString("ushort");
+        else if (IRType.is(t, tyI32)) base = String.withCString("int");
+        else if (IRType.is(t, tyU32)) base = String.withCString("uint");
+        else if (IRType.is(t, tyI64)) base = String.withCString("long");
+        else if (IRType.is(t, tyU64)) base = String.withCString("ulong");
+        else if (IRType.is(t, tyF32)) base = String.withCString("float");
+        else if (IRType.is(t, tyBool)) return String.withCString("bool");
         else return (String*)0; // f64 (refused on Metal, §7), aggregates, vectors
         // Inside a vectorised body every value is a lane vector: uint -> uint2.
         if (_mVecW == (u32)2)
@@ -47,14 +47,13 @@
         }
     final u32 mslWidth(String* t)
         {
-        if (t.equals(String.withCString("I8")) || t.equals(String.withCString("U8")) || t.equals(String.withCString("Bool"))) return (u32)1;
-        if (t.equals(String.withCString("I16")) || t.equals(String.withCString("U16"))) return (u32)2;
-        if (t.equals(String.withCString("I32")) || t.equals(String.withCString("U32")) || t.equals(String.withCString("F32"))) return (u32)4;
-        return (u32)8;
+        // Anything but a scalar (a pointer among them) reads as 8.
+        u32 w = IRType.bytes(t);
+        return w != 0 ? w : 8;
         }
     final bool mslIsPtr(String* t)
         {
-        return t != (String*)0 && t.hasPrefix(String.withCString("Ptr("));
+        return IRType.isPtr(t);
         }
     // `Ptr(X, window)` -> X (X may hold its own parentheses).
     final String* mslPointee(String* t)
@@ -73,7 +72,7 @@
     // `Agg(n)` -> layout n.
     final IRLayout* mslLayoutOf(String* t)
         {
-        if (t == (String*)0 || !t.hasPrefix(String.withCString("Agg("))) return (IRLayout*)0;
+        if (t == (String*)0 || !IRType.isAgg(t)) return (IRLayout*)0;
         u32 n = (u32)0;
         for (u32 i = (u32)4; i < t.byteLength() && t.byteAt(i) >= (u8)'0' && t.byteAt(i) <= (u8)'9'; i = i + (u32)1)
             n = n * (u32)10 + (u32)(t.byteAt(i) - (u8)'0');
@@ -188,7 +187,7 @@
                     if (_mArrRed != (Map*)0 && _mArrRed.get((Hashable*)String.withI64(k)) != (Object*)0)
                         {
                         String* pe = mslPointee(r.ty());
-                        if (!pe.equals(String.withCString("U32")) && !pe.equals(String.withCString("I32")))
+                        if (!IRType.is(pe, tyU32) && !IRType.is(pe, tyI32))
                             {
                             String* w = String.withCString("its array reduction (:reduce(op a[])) is over ");
                             w.append(String.withU32(mslWidth(pe) * (u32)8));
@@ -233,7 +232,7 @@
                         String* en = mslIsPtr(r.ty()) ? mslScalar(mslPointee(r.ty())) : (String*)0;
                         u32 ew = en != (String*)0 ? mslWidth(mslPointee(r.ty())) : (u32)0;
                         u32 total = (u32)0;
-                        if (pl != (IRPinned*)0 && pl.ty().hasPrefix(String.withCString("Agg(")))
+                        if (pl != (IRPinned*)0 && IRType.isAgg(pl.ty()))
                             {
                             IRLayout* pll = self.layoutOfAgg(pl.ty());
                             if (pll != (IRLayout*)0)
@@ -301,7 +300,7 @@
                         {
                         String* w = String.withCString("it uses ");
                         w.append(parShown(gn));
-                        bool dbl = r != (IRValue*)0 && mslIsPtr(r.ty()) && self.ptxIs(mslPointee(r.ty()), "F64");
+                        bool dbl = r != (IRValue*)0 && mslIsPtr(r.ty()) && IRType.is(mslPointee(r.ty()), tyF64);
                         w.appendCString(dbl ? ", an array of double; the GPU holds arrays of float and integers" : ", which is not a global array of numbers");
                         parBecause(w);
                         return false;
@@ -486,10 +485,10 @@
             for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
                 {
                 IRInsn* ip = (IRInsn*)bb.insns().get(i);
-                String* op = ip.op();
-                if (op.equals(String.withCString("DbgValue")))
+                u16 op = ip.opc();
+                if (op == opDbgValue)
                     continue;
-                if (op.equals(String.withCString("Store")) && mslArrMatch(ip))
+                if (op == opStore && mslArrMatch(ip))
                     {
                     _mArrSkip.set((Hashable*)mslKey(_mArrLd), (Object*)String.withCString("1"));
                     _mArrSkip.set((Hashable*)mslKey(_mArrBin), (Object*)String.withCString("1"));
@@ -506,9 +505,9 @@
                     bool elem = _mArrEl.get((Hashable*)mslKey(o.val())) != (Object*)0;
                     if (!base && !elem)
                         continue;
-                    if (q == (u32)0 && base && op.equals(String.withCString("ElementAddr")))
+                    if (q == 0 && base && op == opElementAddr)
                         continue;
-                    if (q == (u32)0 && elem && op.equals(String.withCString("Load")))
+                    if (q == 0 && elem && op == opLoad)
                         continue;
                     return false;
                     }
@@ -743,14 +742,14 @@
                 // is reinterpreted where it is read or written (see
                 // parWordStructs).
                 if (w != (u32)4 || mslWidth(l.typeAt(k)) != (u32)4 || mslScalar(l.typeAt(k)) == (String*)0
-                    || l.typeAt(k).equals(String.withCString("Bool")))
+                    || IRType.is(l.typeAt(k), tyBool))
                     return (String*)0;
                 mixed = true;
                 }
             }
         if (mixed)
             {
-            if (ft.equals(String.withCString("Bool")))
+            if (IRType.is(ft, tyBool))
                 return (String*)0;
             return String.withCString("U32");
             }
@@ -806,7 +805,7 @@
     // A number a struct's field may hold in a kernel's words.
     final bool parLeaf(String* t)
         {
-        return t != (String*)0 && (self.mslScalar(t) != (String*)0 || t.equals(String.withCString("F64")));
+        return t != (String*)0 && (self.mslScalar(t) != (String*)0 || IRType.is(t, tyF64));
         }
 
     final void parBecause(String* why)
@@ -832,7 +831,7 @@
                 }
             return parCallFailed(callee, (String*)0);
             }
-        if (!ptx && ip.res() != (IRValue*)0 && ip.res().ty().equals(String.withCString("F64")))
+        if (!ptx && ip.res() != (IRValue*)0 && IRType.is(ip.res().ty(), tyF64))
             return String.withCString("it uses double, which Apple GPUs do not have");
         // Named, so the warning says what to change (astronomancy, 2026-10-24). As the reference.
         String* w = String.withCString("it uses an operation its GPU version cannot express yet (IR op ");

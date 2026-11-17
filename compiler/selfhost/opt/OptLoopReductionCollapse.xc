@@ -135,7 +135,7 @@
                 out[0] = k.imm();
                 return true;
                 }
-            if (!lrcIsCast(def.op()))
+            if (!lrcIsCast(def.opc()))
                 return false;
             if (def.ops().count() < (u32)1)
                 return false;
@@ -147,9 +147,9 @@
         return false;
         }
 
-    final bool lrcIsCast(String* op)
+    final bool lrcIsCast(u16 op)
         {
-        return op.equals(String.withCString("ZExt")) || op.equals(String.withCString("SExt")) || op.equals(String.withCString("Trunc")) || op.equals(String.withCString("Bitcast"));
+        return op == opZExt || op == opSExt || op == opTrunc || op == opBitcast;
         }
 
     // Exact iteration count of an ascending counted loop, in closed form. No
@@ -883,7 +883,7 @@
                     Object* db = defBlk.get((Hashable*)op.val());
                     if (db == (Object*)0 || !self.hasBlock(body, (IRBlock*)db))
                         continue;
-                    if (op.val().ty() != (String*)0 && op.val().ty().equals(String.withCString("Mem")))
+                    if (op.val().ty() != (String*)0 && IRType.is(op.val().ty(), tyMem))
                         continue;
                     if (op.val() != acc)
                         return LRC_LEAK;

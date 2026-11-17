@@ -262,7 +262,7 @@
             if (phi.res() != 0 && mmIsUse((IROperand*)guard.ops().get((u32)0), phi.res()))
                 iv = phi;
             }
-        if (iv == 0 || !iv.res().ty().equals(String.withCString("U32")) || iv.ops().count() != (u32)4)
+        if (iv == 0 || !IRType.is(iv.res().ty(), tyU32) || iv.ops().count() != 4)
             return false;
         IRBlock* body = ((IROperand*)t.ops().get((u32)1)).blk();
         IRBlock* exitB = ((IROperand*)t.ops().get((u32)2)).blk();
@@ -296,7 +296,7 @@
         i64 v = (i64)0;
         if (constValue(defOf, o, &v))
             return v >= (i64)0 && v <= (i64)$FFFFFFFF;
-        return o.kind() == (u8)OPK_USE && o.val() != 0 && o.val().ty().equals(String.withCString("U32"));
+        return o.kind() == OPK_USE && o.val() != 0 && IRType.is(o.val().ty(), tyU32);
         }
 
     final bool mmInBlocks(Array* bs, IRBlock* b)
@@ -374,13 +374,13 @@
             if (sPhi.res() == 0 || sPhi.ops().count() != (u32)4)
                 continue;
             String* fty = sPhi.res().ty();
-            bool f64 = fty.equals(String.withCString("F64"));
+            bool f64 = IRType.is(fty, tyF64);
             // An integer nest (u32, i32, u64 or i64 elements, Add and Mul)
             // goes to the target's integer kernel, where it has one. As the
             // reference.
-            bool isInt = fty.equals(String.withCString("U32")) || fty.equals(String.withCString("I32"))
-                         || fty.equals(String.withCString("U64")) || fty.equals(String.withCString("I64"));
-            if (!f64 && !isInt && !fty.equals(String.withCString("F32")))
+            bool isInt = IRType.is(fty, tyU32) || IRType.is(fty, tyI32)
+                         || IRType.is(fty, tyU64) || IRType.is(fty, tyI64);
+            if (!f64 && !isInt && !IRType.is(fty, tyF32))
                 continue;
             if (isInt && !_profile.matMulInts())
                 continue;
@@ -636,13 +636,13 @@
             _mxExit = Ei;
             _mmF64 = f64;
             _mmElem = String.withCString(f64 ? "f64" : "f32");
-            if (fty.equals(String.withCString("U32")))
+            if (IRType.is(fty, tyU32))
                 _mmElem = String.withCString("u32");
-            else if (fty.equals(String.withCString("I32")))
+            else if (IRType.is(fty, tyI32))
                 _mmElem = String.withCString("i32");
-            else if (fty.equals(String.withCString("U64")))
+            else if (IRType.is(fty, tyU64))
                 _mmElem = String.withCString("u64");
-            else if (fty.equals(String.withCString("I64")))
+            else if (IRType.is(fty, tyI64))
                 _mmElem = String.withCString("i64");
             _mxM = M; _mxN = N; _mxK = K;
             _mxLda = lda; _mxLdb = ldb; _mxLdc = ldc;

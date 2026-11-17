@@ -98,7 +98,7 @@
                 return false;
             IROperand* c = (IROperand*)_esAccCond.get(i);
             if (c != (IROperand*)0 && (c.kind() != (u8)OPK_USE || !self.escOperandOK(c, true)
-                                       || !c.val().ty().equals(String.withCString("Bool"))
+                                       || !IRType.is(c.val().ty(), tyBool)
                                        || !_esRegion.contains((Hashable*)c.val())))
                 return false;
             }
@@ -219,7 +219,7 @@
         if (n.res() == (IRValue*)0)
             return false;
         String* t = n.res().ty();
-        bool isBool = t.equals(String.withCString("Bool"));
+        bool isBool = IRType.is(t, tyBool);
         if (!Opt.escLane32(t) && !isBool)
             return false;
         u32 nops = n.ops().count();
@@ -229,7 +229,7 @@
             return !isBool && nops == (u32)2 && self.escOperandOK((IROperand*)n.ops().get((u32)0), false)
                 && self.escOperandOK((IROperand*)n.ops().get((u32)1), false);
         if (oc == opAnd || oc == opOr || oc == opXor)
-            return nops == (u32)2 && !t.equals(String.withCString("F32"))
+            return nops == 2 && !IRType.is(t, tyF32)
                 && self.escOperandOK((IROperand*)n.ops().get((u32)0), isBool)
                 && self.escOperandOK((IROperand*)n.ops().get((u32)1), isBool)
                 && (!isBool || (((IROperand*)n.ops().get((u32)0)).kind() == (u8)OPK_USE
@@ -238,23 +238,23 @@
             return isBool && nops == (u32)1 && self.escOperandOK((IROperand*)n.ops().get((u32)0), true)
                 && ((IROperand*)n.ops().get((u32)0)).kind() == (u8)OPK_USE;
         if (oc == opFSqrt)
-            return t.equals(String.withCString("F32")) && nops == (u32)1 && self.escOperandOK((IROperand*)n.ops().get((u32)0), false);
+            return IRType.is(t, tyF32) && nops == 1 && self.escOperandOK((IROperand*)n.ops().get(0), false);
         if (oc == opShl || oc == opLShr)
             {
             i64 k = nops == (u32)2 ? self.escConstOf((IROperand*)n.ops().get((u32)1)) : (i64)0 - (i64)1;
-            return !isBool && !t.equals(String.withCString("F32")) && k >= (i64)0 && k < (i64)32
+            return !isBool && !IRType.is(t, tyF32) && k >= 0 && k < 32
                 && self.escOperandOK((IROperand*)n.ops().get((u32)0), false);
             }
         if (oc == opURem || oc == opUDiv)
-            return !isBool && !t.equals(String.withCString("F32")) && nops == (u32)2
+            return !isBool && !IRType.is(t, tyF32) && nops == 2
                 && Opt.escLog2(escConstOf((IROperand*)n.ops().get((u32)1))) >= (i64)0
                 && self.escOperandOK((IROperand*)n.ops().get((u32)0), false);
         if (oc == opSIToFp || oc == opUIToFp)
             {
-            if (nops != (u32)1 || !t.equals(String.withCString("F32")))
+            if (nops != 1 || !IRType.is(t, tyF32))
                 return false;
             IROperand* a = (IROperand*)n.ops().get((u32)0);
-            if (!self.escOperandOK(a, false) || a.kind() != (u8)OPK_USE || a.val().ty().equals(String.withCString("F32")))
+            if (!self.escOperandOK(a, false) || a.kind() != OPK_USE || IRType.is(a.val().ty(), tyF32))
                 return false;
             return oc == opSIToFp || self.escSmallUnsigned(a);
             }
@@ -275,7 +275,7 @@
             if (isBool || nops != (u32)3)
                 return false;
             IROperand* c = (IROperand*)n.ops().get((u32)0);
-            return c.kind() == (u8)OPK_USE && self.escOperandOK(c, true) && c.val().ty().equals(String.withCString("Bool"))
+            return c.kind() == OPK_USE && self.escOperandOK(c, true) && IRType.is(c.val().ty(), tyBool)
                 && self.escOperandOK((IROperand*)n.ops().get((u32)1), false)
                 && self.escOperandOK((IROperand*)n.ops().get((u32)2), false);
             }
@@ -1618,10 +1618,10 @@
             IRInsn* n = (IRInsn*)B.insns().get(i);
             if (n == ivNext || n == accNext)
                 continue;
-            String* op = n.op();
-            if (op.equals(String.withCString("AddrOf")))
+            u16 op = n.opc();
+            if (op == opAddrOf)
                 continue;
-            if (op.equals(String.withCString("ElementAddr")))
+            if (op == opElementAddr)
                 {
                 if (n.ops().count() < (u32)2)
                     return (String*)0;
@@ -1641,7 +1641,7 @@
                     }
                 continue;
                 }
-            if (op.equals(String.withCString("Load")))
+            if (op == opLoad)
                 {
                 // A fully DEAD load — its value AND memory token unused — has no
                 // effect: skip it rather than refuse the loop. A static-init
@@ -1655,7 +1655,7 @@
                 if (!self.vecIsElemAddr((IROperand*)n.ops().get((u32)0), iv, defOf))
                     return (String*)0;
                 String* lt = n.res().ty();
-                if (!self.vecRedux32(lt) && !(floatRedux && lt.equals(String.withCString("F32"))))
+                if (!self.vecRedux32(lt) && !(floatRedux && IRType.is(lt, tyF32)))
                     return (String*)0;
                 if (laneTy != (String*)0 && !laneTy.equals(lt))
                     return (String*)0;
@@ -1664,7 +1664,7 @@
                 elems.add((Object*)n.res());
                 continue;
                 }
-            if (op.equals(String.withCString("Const")) || op.equals(String.withCString("ZExt")) || op.equals(String.withCString("SExt")) || op.equals(String.withCString("Trunc")))
+            if (op == opConst || op == opZExt || op == opSExt || op == opTrunc)
                 continue;
             // A value computed from constants alone (`32 - c`): itself a
             // constant, which its users read as one.
@@ -1673,7 +1673,7 @@
                 continue;
             // A shift LEFT by a compile-time amount, as the shift right below
             // (a rotate is one of each: MD5's rounds), lowered as VShl.
-            if (op.equals(String.withCString("Shl")) && _profile.laneShift())
+            if (op == opShl && _profile.laneShift())
                 {
                 if (n.res() == (IRValue*)0 || !self.vecRedux32(n.res().ty()))
                     return (String*)0;
@@ -1694,7 +1694,7 @@
                 }
             // A bitwise not (one operand), lowered as VNot; gated with the
             // shifts (the back ends that lower those lower this).
-            if (op.equals(String.withCString("Not")) && _profile.laneShift())
+            if (op == opNot && _profile.laneShift())
                 {
                 if (n.res() == (IRValue*)0 || !self.vecRedux32(n.res().ty()))
                     return (String*)0;
@@ -1712,9 +1712,9 @@
             // divide; it becomes a magic multiply, which needs the HIGH half of
             // the lane product. Only the simple magic form is taken (see
             // vecMagicU32) and only where the back end lowers VMulHi.
-            if (op.equals(String.withCString("UDiv")) && _profile.highMul())
+            if (op == opUDiv && _profile.highMul())
                 {
-                if (n.res() == (IRValue*)0 || !n.res().ty().equals(String.withCString("U32")))
+                if (n.res() == (IRValue*)0 || !IRType.is(n.res().ty(), tyU32))
                     return (String*)0;
                 if (n.ops().count() < (u32)2)
                     return (String*)0;
@@ -1737,7 +1737,7 @@
             // the shapes this recognises is by a literal. Gated on the flag that
             // says the back end lowers VLShr — emitting it where it is not
             // lowered is silence, not a build failure.
-            if (op.equals(String.withCString("LShr")) && _profile.laneShift())
+            if (op == opLShr && _profile.laneShift())
                 {
                 if (n.res() == (IRValue*)0 || !self.vecRedux32(n.res().ty()))
                     return (String*)0;
@@ -1758,11 +1758,11 @@
                 }
             // FLOAT lane ops, only in a float reduction: a lane square root
             // (nbody's sqrt(d2)) and a lane divide.
-            if (floatRedux && (op.equals(String.withCString("FSqrt")) || op.equals(String.withCString("FDiv"))))
+            if (floatRedux && (op == opFSqrt || op == opFDiv))
                 {
-                if (n.res() == (IRValue*)0 || !n.res().ty().equals(String.withCString("F32")))
+                if (n.res() == (IRValue*)0 || !IRType.is(n.res().ty(), tyF32))
                     return (String*)0;
-                u32 want = op.equals(String.withCString("FSqrt")) ? (u32)1 : (u32)2;
+                u32 want = op == opFSqrt ? 1 : 2;
                 if (n.ops().count() < want)
                     return (String*)0;
                 for (u32 k = (u32)0; k < want; k = k + (u32)1)
@@ -1774,7 +1774,7 @@
             if (vecElementwise(op))
                 {
                 if (n.res() == (IRValue*)0
-                    || (!self.vecRedux32(n.res().ty()) && !(floatRedux && n.res().ty().equals(String.withCString("F32")))))
+                    || (!self.vecRedux32(n.res().ty()) && !(floatRedux && IRType.is(n.res().ty(), tyF32))))
                     return (String*)0;
                 if (n.ops().count() < (u32)2)
                     return (String*)0;
@@ -1796,7 +1796,7 @@
             // The stored value is already in the elementwise set; the address is
             // the only new shape and it must be an iv-indexed ElementAddr, the
             // same one a Load uses.
-            if (op.equals(String.withCString("Store")))
+            if (op == opStore)
                 {
                 if (n.ops().count() < (u32)2)
                     return (String*)0;
@@ -1920,13 +1920,13 @@
                 _vecBody.add((Object*)add);
                 continue;
                 }
-            String* op = n.op();
-            if (op.equals(String.withCString("AddrOf")) || op.equals(String.withCString("ElementAddr")) || op.equals(String.withCString("Const")) || op.equals(String.withCString("ZExt")) || op.equals(String.withCString("SExt")) || op.equals(String.withCString("Trunc")))
+            u16 op = n.opc();
+            if (op == opAddrOf || op == opElementAddr || op == opConst || op == opZExt || op == opSExt || op == opTrunc)
                 {
                 _vecBody.add((Object*)n); // address, splat source, dead plumbing
                 continue;
                 }
-            if (op.equals(String.withCString("Load")))
+            if (op == opLoad)
                 {
                 IRValue* vr = new IRValue(self.vecTyOf(n.res().ty(), c.vecBytes()));
                 IRInsn* vl = IRInsn.with(String.withCString("VLoad"));
@@ -1939,7 +1939,7 @@
                 _vecMap.set((Hashable*)n.res(), (Object*)vr);
                 continue;
                 }
-            if (op.equals(String.withCString("Store")))
+            if (op == opStore)
                 {
                 self.vecSetLane(Opt.vecOperandTy((IROperand*)n.ops().get((u32)1)), c);
                 IROperand* vval = self.vecOperandFor((IROperand*)n.ops().get((u32)1),
@@ -2387,8 +2387,8 @@
                 _vecMap.set((Hashable*)n.res(), (Object*)vr);
                 continue;
                 }
-            String* op = n.op();
-            if (op.equals(String.withCString("AddrOf")) || op.equals(String.withCString("ElementAddr")) || op.equals(String.withCString("Const")) || op.equals(String.withCString("ZExt")) || op.equals(String.withCString("SExt")) || op.equals(String.withCString("Trunc")))
+            u16 op = n.opc();
+            if (op == opAddrOf || op == opElementAddr || op == opConst || op == opZExt || op == opSExt || op == opTrunc)
                 {
                 _vecBody.add((Object*)n);
                 continue;
@@ -2672,7 +2672,7 @@
                         if (isMul)
                             {
                             String* mlane = vuLaneOf(nextL.res().ty());
-                            if (mlane == (String*)0 || !(mlane.equals(String.withCString("I32")) || mlane.equals(String.withCString("U32"))))
+                            if (mlane == (String*)0 || !(IRType.is(mlane, tyI32) || IRType.is(mlane, tyU32)))
                                 break;
                             Object* mdo = defOf.get((Hashable*)other.val());
                             if (mdo == (Object*)0)
@@ -2787,7 +2787,7 @@
                             other = IROperand.useVal(cs);
                             }
                         IRValue* nv = new IRValue(L.res().ty());
-                        IRInsn* ia = IRInsn.with(L.op());
+                        IRInsn* ia = IRInsn.withOpOf(L);
                         ia.setRes(nv);
                         if (left)
                             {
@@ -2805,7 +2805,7 @@
                     IRValue* kc = new IRValue(lane);
                     i64 laneStep = step;
                     if (mulLinks.count() > (u32)0)
-                        laneStep = vecIvLane32(vecIvMul32(step, stepK), lane.equals(String.withCString("I32")));
+                        laneStep = vecIvLane32(vecIvMul32(step, stepK), IRType.is(lane, tyI32));
                     IRInsn* ik = IRInsn.with(String.withCString("Const"));
                     ik.setRes(kc);
                     ik.add(IROperand.immI(laneStep, lane));

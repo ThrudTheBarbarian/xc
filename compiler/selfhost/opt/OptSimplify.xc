@@ -171,10 +171,10 @@
             }
         }
 
-    final bool simpAssoc(String* op)
+    final bool simpAssoc(u16 op)
         {
-        return op.equals(String.withCString("Add")) || op.equals(String.withCString("Xor"))
-            || op.equals(String.withCString("And")) || op.equals(String.withCString("Or"));
+        return op == opAdd || op == opXor
+            || op == opAnd || op == opOr;
         }
 
     final u32 simpDepthOf(IROperand* o, Map* depth, Map* phiIds)
@@ -253,7 +253,7 @@
                             dn = dk;
                         }
                 bool tree = r != (IRValue*)0 && n.memRes() == (IRValue*)0 && n.ops().count() == (u32)2
-                    && simpAssoc(n.op()) && simpIntTy(r.ty());
+                    && simpAssoc(n.opc()) && simpIntTy(r.ty());
                 if (tree)
                     {
                     // A root: not the one use of a like node in this block.
@@ -309,7 +309,7 @@
                     items.removeAt(p1);
                     idep.removeAt(p1);
                     IRValue* nv = built.count() < inner.count() ? ((IRInsn*)inner.get(built.count())).res() : r;
-                    IRInsn* c = IRInsn.with(n.op());
+                    IRInsn* c = IRInsn.withOpOf(n);
                     c.copyDbg(n);
                     c.setRes(nv);
                     c.add(x);
@@ -366,10 +366,10 @@
 
     final bool simpIntTy(String* t)
         {
-        return t != (String*)0 && (t.equals(String.withCString("I8")) || t.equals(String.withCString("U8"))
-            || t.equals(String.withCString("I16")) || t.equals(String.withCString("U16"))
-            || t.equals(String.withCString("I32")) || t.equals(String.withCString("U32"))
-            || t.equals(String.withCString("I64")) || t.equals(String.withCString("U64")));
+        return t != (String*)0 && (IRType.is(t, tyI8) || IRType.is(t, tyU8)
+            || IRType.is(t, tyI16) || IRType.is(t, tyU16)
+            || IRType.is(t, tyI32) || IRType.is(t, tyU32)
+            || IRType.is(t, tyI64) || IRType.is(t, tyU64));
         }
 
     // v wrapped to t's width (8 to 32 bits).
@@ -464,8 +464,8 @@
         IRValue* r = n.res();
         if (r == (IRValue*)0 || n.memRes() != (IRValue*)0)
             return (IRInsn*)0;
-        bool f32 = r.ty().equals(String.withCString("F32"));
-        if (!f32 && !r.ty().equals(String.withCString("F64")))
+        bool f32 = IRType.is(r.ty(), tyF32);
+        if (!f32 && !IRType.is(r.ty(), tyF64))
             return (IRInsn*)0;
         u16 oc = n.opc();
         bool ui = oc == opUIToFp;

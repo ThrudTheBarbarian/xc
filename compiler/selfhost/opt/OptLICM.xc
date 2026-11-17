@@ -55,7 +55,7 @@
             for (u32 i = (u32)0; i < pb.phis().count(); i = i + (u32)1)
                 {
                 IRInsn* p = (IRInsn*)pb.phis().get(i);
-                if (p.res() == (IRValue*)0 || p.res().ty() == (String*)0 || !p.res().ty().hasPrefix(String.withCString("Vec(")))
+                if (p.res() == (IRValue*)0 || p.res().ty() == (String*)0 || !IRType.isVec(p.res().ty()))
                     continue;
                 for (u32 q = (u32)0; q < p.ops().count(); q = q + (u32)1)
                     {
@@ -227,7 +227,7 @@
                     if (keepSplats && n.isOp(opVSplat))
                         continue;
                     if (hasCall && n.res() != (IRValue*)0 && n.res().ty() != (String*)0
-                        && n.res().ty().hasPrefix(String.withCString("Vec(")))
+                        && IRType.isVec(n.res().ty()))
                         continue;
                     bool inv = true;
                     for (u32 o = (u32)0; o < n.ops().count(); o = o + (u32)1)
@@ -274,7 +274,7 @@
         {
         if (o.kind() != (u8)OPK_USE)
             return true;
-        if (o.val().ty() != (String*)0 && o.val().ty().equals(String.withCString("Mem")))
+        if (o.val().ty() != (String*)0 && IRType.is(o.val().ty(), tyMem))
             return true;
         Object* db = defBlk.get((Hashable*)o.val());
         if (db == (Object*)0 || inBody.get((Hashable*)db) == (Object*)0)
@@ -286,7 +286,7 @@
         {
         // A vector feeding a phi is an accumulator's seed and must be made on
         // every entry (the reference explains).
-        if (n.res() != (IRValue*)0 && n.res().ty() != (String*)0 && n.res().ty().hasPrefix(String.withCString("Vec("))
+        if (n.res() != (IRValue*)0 && n.res().ty() != (String*)0 && IRType.isVec(n.res().ty())
             && _licmVecPhiIns != (Array*)0 && Opt.bmHas2(_licmVecPhiIns, n.res()))
             return false;
         if (n.isOp(opLoad))

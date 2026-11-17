@@ -155,7 +155,7 @@
 
     static u32 fieldWidth4(String* t)
         {
-        if (t != (String*)0 && (t.equals(String.withCString("I32")) || t.equals(String.withCString("U32"))))
+        if (t != (String*)0 && (IRType.is(t, tyI32) || IRType.is(t, tyU32)))
             return (u32)4;
         return (u32)0;
         }
@@ -248,7 +248,7 @@
     // The lane of a 16-byte vector type `Vec(L)`; null for any other.
     final String* laneOfVec(String* t)
         {
-        if (t == (String*)0 || !t.hasPrefix(String.withCString("Vec(")) || !t.hasSuffix(String.withCString(")")))
+        if (t == (String*)0 || !IRType.isVec(t) || !t.hasSuffix(String.withCString(")")))
             return (String*)0;
         String* inner = t.substringFromByte((u32)4);
         String* lane = inner.substringToByte(inner.byteLength() - (u32)1);

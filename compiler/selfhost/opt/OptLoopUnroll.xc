@@ -743,7 +743,7 @@
                 {
                 IROperand* o = (IROperand*)n.ops().get(k);
                 if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0 && o.val().ty() != (String*)0 &&
-                    o.val().ty().equals(String.withCString("Mem")))
+                    IRType.is(o.val().ty(), tyMem))
                     {
                     firstMem = n;
                     break;
@@ -758,7 +758,7 @@
             IROperand* o = (IROperand*)firstMem.ops().get(k);
             if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0)
                 continue;
-            if (o.val().ty() != (String*)0 && o.val().ty().equals(String.withCString("Mem")))
+            if (o.val().ty() != (String*)0 && IRType.is(o.val().ty(), tyMem))
                 {
                 tin = o.val();
                 break;
@@ -839,7 +839,7 @@
         for (u32 i = (u32)0; i < B.insns().count(); i = i + (u32)1)
             {
             IRInsn* n = (IRInsn*)B.insns().get(i);
-            IRInsn* cl = IRInsn.with(n.op());
+            IRInsn* cl = IRInsn.withOpOf(n);
             cl.copyDbg(n);
             cl.setPred(n.pred());
             cl.setCc(n.cc());

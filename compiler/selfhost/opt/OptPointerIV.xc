@@ -100,7 +100,7 @@
                 continue;
             if (!pivInvariantBase(baseOp.val(), H, B, defOf, defBlk))
                 continue;
-            if (baseOp.val().ty() == (String*)0 || !baseOp.val().ty().hasPrefix(String.withCString("Ptr(")))
+            if (baseOp.val().ty() == (String*)0 || !IRType.isPtr(baseOp.val().ty()))
                 continue;
             i32 off = (i32)0;
             i64 af[5];

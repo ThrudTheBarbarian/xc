@@ -804,7 +804,7 @@
                 if (def == 0)
                     continue;
                 IRValue* rv = new IRValue(def.res().ty());
-                IRInsn* re = IRInsn.with(def.op());
+                IRInsn* re = IRInsn.withOpOf(def);
                 re.setRes(rv);
                 for (u32 j = (u32)0; j < def.ops().count(); j = j + (u32)1)
                     re.add((IROperand*)def.ops().get(j));
@@ -820,7 +820,7 @@
 
     final IRInsn* cloneWithFreshResults(Map* map, IRInsn* n)
         {
-        IRInsn* cl = IRInsn.with(n.op());
+        IRInsn* cl = IRInsn.withOpOf(n);
         cl.copyDbg(n);
         cl.setPred(n.pred());
         cl.setCc(n.cc());

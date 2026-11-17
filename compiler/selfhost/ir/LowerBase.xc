@@ -1538,19 +1538,9 @@ class ClassInfo
         {
         if (ir == 0)
             return (u32)0;
-        if (ir.hasPrefix(String.withCString("Agg(")))
+        if (IRType.isAgg(ir))
             return layoutSizeOf(ir);
-        if (ir.hasPrefix(String.withCString("Ptr(")))
-            return (u32)0;
-        if (ir.equals(String.withCString("U8")) || ir.equals(String.withCString("I8")) || ir.equals(String.withCString("Bool")))
-            return (u32)1;
-        if (ir.equals(String.withCString("U16")) || ir.equals(String.withCString("I16")))
-            return (u32)2;
-        if (ir.equals(String.withCString("U32")) || ir.equals(String.withCString("I32")) || ir.equals(String.withCString("F32")))
-            return (u32)4;
-        if (ir.equals(String.withCString("F64")) || ir.equals(String.withCString("U64")) || ir.equals(String.withCString("I64")))
-            return (u32)8;
-        return (u32)0;
+        return IRType.bytes(ir);
         }
 
     // Is this element spelling a PRIMITIVE? The answer decides the SHAPE of the
@@ -1949,16 +1939,12 @@ class ClassInfo
 
     bool isFloatIr(String* t)
         {
-        if (t == 0)
-            return false;
-        return t.equals(String.withCString("F32")) || t.equals(String.withCString("F64"));
+        return IRType.isFloat(t);
         }
 
     bool isPtrIr(String* t)
         {
-        if (t == 0)
-            return false;
-        return t.hasPrefix(String.withCString("Ptr("));
+        return IRType.isPtr(t);
         }
 
     // ── coercion ─────────────────────────────────────────────────────────
@@ -2090,7 +2076,7 @@ class ClassInfo
         // Same reasoning as the float gate: the WIDTH is the value's, not the
         // spelling's. A Bool is one unsigned byte whatever the analyser called
         // the expression that produced it.
-        bool srcBool = v.ty().equals(String.withCString("Bool"));
+        bool srcBool = IRType.is(v.ty(), tyBool);
         // astWidth, not Types.byteWidth: an ENUM's width is its members', and
         // the scalar table has never heard of the name. An ARRAY's is the
         // whole array — which is what makes `(u16)arr` a narrowing.
@@ -2909,7 +2895,7 @@ class ClassInfo
             _blk.add(ne);
             return ne.res();
             }
-        if (t.hasPrefix(String.withCString("Agg(")))
+        if (IRType.isAgg(t))
             return (IRValue*)0;
         u32 w = irWidth(t);
         if (w != (u32)2 && w != (u32)4 && w != (u32)8)
@@ -4171,8 +4157,8 @@ class ClassInfo
     IRValue* checkIndexU64(IRValue* idx)
         {
         String* t = idx.ty();
-        bool sgn = t.equals(String.withCString("I8")) || t.equals(String.withCString("I16")) || t.equals(String.withCString("I32"));
-        bool uns = t.equals(String.withCString("U8")) || t.equals(String.withCString("U16")) || t.equals(String.withCString("U32"));
+        bool sgn = IRType.is(t, tyI8) || IRType.is(t, tyI16) || IRType.is(t, tyI32);
+        bool uns = IRType.is(t, tyU8) || IRType.is(t, tyU16) || IRType.is(t, tyU32);
         if (!sgn && !uns)
             return idx;
         Array* xo = new Array();
@@ -4391,7 +4377,7 @@ class ClassInfo
             Array* fops = new Array();
             fops.add((Object*)IROperand.immF(
                 fpBitsOfBytes(bytesOfData(FloatEncoding.ieeeBytes(
-                    n.name(), fty.equals(String.withCString("F64"))))),
+                    n.name(), IRType.is(fty, tyF64)))),
                 fty));
             return emit(String.withCString("Const"), fty, fops);
             }
@@ -5052,11 +5038,11 @@ class ClassInfo
             IRValue* idx = lowerExpr(idxSide);
             if (_failed)
                 return (IRValue*)0;
-            if (idx.ty().equals(String.withCString("U8")) || idx.ty().equals(String.withCString("I8")))
+            if (IRType.is(idx.ty(), tyU8) || IRType.is(idx.ty(), tyI8))
                 {
                 Array* zops = new Array();
                 zops.add((Object*)IROperand.useVal(idx));
-                idx = emit(String.withCString(idx.ty().equals(String.withCString("I8")) ? "SExt" : "ZExt"),
+                idx = emit(String.withCString(IRType.is(idx.ty(), tyI8) ? "SExt" : "ZExt"),
                            String.withCString("U16"), zops);
                 }
             // The Neg must be typed at the index's OWN width, not a fixed
@@ -6052,7 +6038,7 @@ class ClassInfo
             if (_tupleIrRet == (String*)0)
                 {
                 String* bvr = methodCallRet(methodSymbolFor(_curClass, n), ret);
-                if (bvr.hasPrefix(String.withCString("Agg(")))
+                if (IRType.isAgg(bvr))
                     _tupleIrRet = bvr;
                 }
             IRValue* sres = (IRValue*)0;
@@ -6413,13 +6399,13 @@ class ClassInfo
         if (v == 0 || srcAst == 0 || dstAst == 0)
             return v;
         String* dstIr = irType(dstAst);
-        if (dstIr.equals(String.withCString("Void")) || isPtrIr(dstIr))
+        if (IRType.is(dstIr, tyVoid) || isPtrIr(dstIr))
             return v;
         // A plain function pointer reaching a `^` parameter WIDENS into one:
         // the pair's recv word carries the code address and its code word a
         // trampoline that jumps through it. That is what lets a free function
         // and a bound method share one parameter type with no second ABI.
-        if (dstIr.hasPrefix(String.withCString("Agg(")))
+        if (IRType.isAgg(dstIr))
             {
             if (isBoundSig(stripQual(dstAst)) && isFnPointer(srcAst))
                 return widenToBound(v, dstAst);
@@ -6454,7 +6440,7 @@ class ClassInfo
         u32 srcW = astWidth(srcAst);
         u32 dstW = irWidth(dstIr);
         bool srcSgn = Types.isSigned(srcAst);
-        bool dstSgn = dstIr.equals(String.withCString("I8")) || dstIr.equals(String.withCString("I16")) || dstIr.equals(String.withCString("I32")) || dstIr.equals(String.withCString("I64"));
+        bool dstSgn = IRType.is(dstIr, tyI8) || IRType.is(dstIr, tyI16) || IRType.is(dstIr, tyI32) || IRType.is(dstIr, tyI64);
         if (srcW == dstW && srcSgn == dstSgn)
             return v;
         Array* ops = new Array();
@@ -7202,7 +7188,7 @@ class ClassInfo
             // A callback member (`^`: the receiver and code words) is an
             // aggregate with no struct declaration: each word is zeroed, as
             // the reference's recursion into its two-field struct does.
-            if (fir.hasPrefix(String.withCString("Agg(")))
+            if (IRType.isAgg(fir))
                 {
                 IRLayout* cl = layoutOfAgg(fir);
                 if (cl == (IRLayout*)0)
@@ -7599,9 +7585,7 @@ class ClassInfo
     // 16 KB arm64 frame budget: inlining it there took the function over.
     bool isAggIr(String* t)
         {
-        if (t == 0)
-            return false;
-        return t.hasPrefix(String.withCString("Agg("));
+        return IRType.isAgg(t);
         }
 
     IRValue* lowerCondition(Node* e)
@@ -9355,7 +9339,7 @@ class ClassInfo
                 // A class returned by value leaves as its bytes, read now,
                 // before the teardown, while the instance is still whole.
                 ClassInfo* rvc = valueClassOf(n.kid((u32)0).ty());
-                if (rvc != 0 && isPtrIr(v.ty()) && _fn.ret().hasPrefix(String.withCString("Agg(")))
+                if (rvc != 0 && isPtrIr(v.ty()) && IRType.isAgg(_fn.ret()))
                     v = loadThroughIr(v, rvc.agg());
                 // Every class pointer LEAVES at +1. A value that is already
                 // owned here — a call's result, or a strong local whose
@@ -9688,7 +9672,7 @@ class ClassInfo
             // Any initialiser yielding the class: a call's result, or another
             // instance, whose bytes are copied (owner, 2026-10-28).
             if (vco != 0 && n.kidCount() > (u32)0 && n.kid((u32)0).kind() != (u16)nkNew && valueClassOf(n.kid((u32)0).ty()) != 0
-                && pin.ty().hasPrefix(String.withCString("Agg(")))
+                && IRType.isAgg(pin.ty()))
                 {
                 if (valueClassInit(n.kid((u32)0), pin, (ClassInfo*)vco))
                     return;
@@ -9704,7 +9688,7 @@ class ClassInfo
                 // The SLOT's type, not the declared one: an auto-zeroing
                 // pointer's slot is the whole [prev, next, payload], and an
                 // aggregate has no scalar zero to store.
-                if (pin.ty().hasPrefix(String.withCString("Agg(")))
+                if (IRType.isAgg(pin.ty()))
                     {
                     // A struct local with no initialiser is zero-filled, as a
                     // stack class instance is (owner, 2026-10-24): the same
@@ -10629,7 +10613,7 @@ class ClassInfo
         if (rhs.kind() == (u16)nkNew || valueClassOf(rhs.ty()) == 0)
             return false;
         IRPinned* vpin = pinOf(name);
-        if (vpin == 0 || !vpin.ty().hasPrefix(String.withCString("Agg(")))
+        if (vpin == 0 || !IRType.isAgg(vpin.ty()))
             return false;
         Object* vco = _valueClass.get((Hashable*)name);
         if (vco == 0)
@@ -10688,7 +10672,7 @@ class ClassInfo
     // The module layout an `Agg(N)` spelling names.
     IRLayout* layoutOfAgg(String* agg)
         {
-        if (agg == 0 || !agg.hasPrefix(String.withCString("Agg(")))
+        if (agg == 0 || !IRType.isAgg(agg))
             return (IRLayout*)0;
         u32 idx = (u32)0;
         u8* cs = agg.cString();
@@ -10792,7 +10776,7 @@ class ClassInfo
                     continue;
                     }
                 String* ir = irType(ty);
-                if (ir.hasPrefix(String.withCString("Agg(")))
+                if (IRType.isAgg(ir))
                     continue;
                 IRValue* fa = fieldAddr(addr, slot, ptrTo(ir));
                 IRValue* z = (IRValue*)0;
@@ -11675,9 +11659,9 @@ class ClassInfo
             IRValue* slot = byteSlotAddr(bufPtr, byteOff, u8Ptr);
             IRValue* v = (IRValue*)args.get(i);
             String* vt = v.ty();
-            if (irWidth(vt) < (u32)2 && (vt.equals(String.withCString("U8")) || vt.equals(String.withCString("I8")) || vt.equals(String.withCString("Bool"))))
+            if (irWidth(vt) < 2 && (IRType.is(vt, tyU8) || IRType.is(vt, tyI8) || IRType.is(vt, tyBool)))
                 {
-                bool sgn = vt.equals(String.withCString("I8"));
+                bool sgn = IRType.is(vt, tyI8);
                 String* wide = sgn ? String.withCString("I16") : String.withCString("U16");
                 Array* wops = new Array();
                 wops.add((Object*)IROperand.useVal(v));
@@ -11687,7 +11671,7 @@ class ClassInfo
             storeThrough(slot, v, false); // the buffer owns nothing
             // A struct by value copies sizeof(T) bytes, so the cursor moves by
             // exactly that; everything else keeps the fixed slot stride.
-            if (vt.hasPrefix(String.withCString("Agg(")) && irWidth(vt) > (u32)0)
+            if (IRType.isAgg(vt) && irWidth(vt) > 0)
                 byteOff = byteOff + irWidth(vt);
             else
                 byteOff = byteOff + (u32)8;
@@ -11719,15 +11703,15 @@ class ClassInfo
             String* t = v.ty();
             Array* ops = new Array();
             ops.add((Object*)IROperand.useVal(v));
-            if (t.equals(String.withCString("F32")))
+            if (IRType.is(t, tyF32))
                 {
                 v = emit(String.withCString("FpExt"), String.withCString("F64"), ops);
                 }
-            else if (t.equals(String.withCString("I8")) || t.equals(String.withCString("I16")))
+            else if (IRType.is(t, tyI8) || IRType.is(t, tyI16))
                 {
                 v = emit(String.withCString("SExt"), String.withCString("I32"), ops);
                 }
-            else if (t.equals(String.withCString("U8")) || t.equals(String.withCString("U16")))
+            else if (IRType.is(t, tyU8) || IRType.is(t, tyU16))
                 {
                 v = emit(String.withCString("ZExt"), String.withCString("I32"), ops);
                 }
@@ -12005,7 +11989,7 @@ class ClassInfo
         if (_tupleIrRet == (String*)0)
             {
             String* bvr = methodCallRet(methodSymbolFor(ci, n), retTy);
-            if (bvr.hasPrefix(String.withCString("Agg(")))
+            if (IRType.isAgg(bvr))
                 _tupleIrRet = bvr;
             }
         IRValue* res = (IRValue*)0;
@@ -12764,7 +12748,7 @@ class ClassInfo
     String* methodCallRet(String* sym, String* retTy)
         {
         Object* fr = sym != 0 ? _methodRetIr.get((Hashable*)sym) : (Object*)0;
-        if (fr != 0 && ((String*)fr).hasPrefix(String.withCString("Agg(")) && valueClassOf(retTy) != 0)
+        if (fr != 0 && IRType.isAgg((String*)fr) && valueClassOf(retTy) != 0)
             return (String*)fr;
         return irType(retTy);
         }
@@ -12782,7 +12766,7 @@ class ClassInfo
     // the instance pointer every use of a class value expects.
     IRValue* spillClassValue(IRValue* r, Node* call)
         {
-        if (r == 0 || !r.ty().hasPrefix(String.withCString("Agg(")))
+        if (r == 0 || !IRType.isAgg(r.ty()))
             return r;
         ClassInfo* ci = valueClassOf(call.ty());
         if (ci == 0 || !ci.agg().equals(r.ty()))
@@ -15426,7 +15410,6 @@ class ClassInfo
     void setParPTX(bool b) { _parPTX = b; }
 
     String* ptxS(string c) { return String.withCString(c); }
-    bool ptxIs(String* t, string c) { return t != (String*)0 && t.equals(String.withCString(c)); }
 
     // The callee's maths name, as mslIntrinsic reads it: Math$ and _xm_ off,
     // an overload's __ tail off, a trailing f off.
@@ -15912,7 +15895,7 @@ class ClassInfo
             // slot — the prologue already spills every parameter — so it pins
             // to its own value and stays OUT of the frame list, where counting
             // it would allocate the storage a second time.
-            if (irType(p.op()).hasPrefix(String.withCString("Agg(")))
+            if (IRType.isAgg(irType(p.op())))
                 {
                 _pins.set((Hashable*)p.name(),
                           (Object*)IRPinned.with(v, v.ty(), (u32)0, false));

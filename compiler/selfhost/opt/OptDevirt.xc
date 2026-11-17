@@ -600,7 +600,7 @@
         if (memP == (IROperand*)0 && self.lrcPredsIn(preds, up).count() == (u32)0 && fn.params().count() > (u32)0)
             {
             IRValue* lp = (IRValue*)fn.params().get(fn.params().count() - (u32)1);
-            if (lp.ty() != (String*)0 && lp.ty().equals(String.withCString("Mem")))
+            if (lp.ty() != (String*)0 && IRType.is(lp.ty(), tyMem))
                 memP = IROperand.useVal(lp);
             }
         if (memP == (IROperand*)0)
@@ -805,7 +805,7 @@
         {
         if (ph.memRes() != (IRValue*)0)
             return ph.memRes();
-        if (ph.res() != (IRValue*)0 && ph.res().ty() != (String*)0 && ph.res().ty().equals(String.withCString("Mem")))
+        if (ph.res() != (IRValue*)0 && ph.res().ty() != (String*)0 && IRType.is(ph.res().ty(), tyMem))
             return ph.res();
         return (IRValue*)0;
         }
@@ -926,7 +926,7 @@
 
     final IRInsn* dvCloneInsn(IRInsn* n, Map* vmap, Map* bmap)
         {
-        IRInsn* c = IRInsn.with(n.op());
+        IRInsn* c = IRInsn.withOpOf(n);
         c.copyDbg(n);
         c.setPred(n.pred());
         c.setCc(n.cc());
@@ -1108,7 +1108,7 @@
                         continue;
                     // A memory token keeps naming the original loop's: it is
                     // laid out last before X, so its token is the latest.
-                    if (o.val().ty() != (String*)0 && o.val().ty().equals(String.withCString("Mem")))
+                    if (o.val().ty() != (String*)0 && IRType.is(o.val().ty(), tyMem))
                         continue;
                     IRValue* pv = (IRValue*)phiOf.get((Hashable*)o.val());
                     if (pv == (IRValue*)0)

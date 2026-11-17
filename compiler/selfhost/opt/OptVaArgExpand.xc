@@ -115,7 +115,7 @@
             {
             // The packer widened a narrow int to two bytes: read it wide and
             // truncate, or the high byte is read as the next argument.
-            bool sgn = resT.equals(String.withCString("I8"));
+            bool sgn = IRType.is(resT, tyI8);
             String* wide = String.withCString(sgn ? "I16" : "U16");
             IRValue* wv = new IRValue(wide);
             IRValue* m2 = new IRValue(String.withCString("Mem"));
@@ -243,7 +243,7 @@
 
     final bool isNarrowInt(String* t)
         {
-        return t.equals(String.withCString("U8")) || t.equals(String.withCString("I8"));
+        return IRType.is(t, tyU8) || IRType.is(t, tyI8);
         }
 
     // `Ptr(Agg(N), unbanked)` -> the size layout N records.

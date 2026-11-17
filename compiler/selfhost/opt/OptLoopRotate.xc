@@ -671,7 +671,7 @@
         for (u32 i = (u32)0; i < H.insns().count(); i = i + (u32)1)
             {
             IRInsn* n = (IRInsn*)H.insns().get(i);
-            IRInsn* cl = IRInsn.with(n.op());
+            IRInsn* cl = IRInsn.withOpOf(n);
             cl.copyDbg(n);
             cl.setPred(n.pred());
             cl.setCc(n.cc());
@@ -1014,7 +1014,7 @@
 
     final IRInsn* rcCopy(IRInsn* n, IRValue* res, Map* m)
         {
-        IRInsn* cl = IRInsn.with(n.op());
+        IRInsn* cl = IRInsn.withOpOf(n);
         cl.copyDbg(n);
         cl.setPred(n.pred());
         cl.setCc(n.cc());

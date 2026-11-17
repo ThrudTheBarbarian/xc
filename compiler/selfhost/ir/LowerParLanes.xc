@@ -79,14 +79,14 @@
         if (p.kind() != (u8)OPK_USE) return (i64)-1;
         return self.mslSelfField(mslDefVal(p.val()));
         }
-    final bool mslLaneOp(String* op)
+    final bool mslLaneOp(u16 op)
         {
-        return op.equals(String.withCString("Const")) || op.equals(String.withCString("Add"))
-            || op.equals(String.withCString("Sub")) || op.equals(String.withCString("Mul"))
-            || op.equals(String.withCString("And")) || op.equals(String.withCString("Or"))
-            || op.equals(String.withCString("Xor")) || op.equals(String.withCString("Not"))
-            || op.equals(String.withCString("Shl")) || op.equals(String.withCString("LShr"))
-            || op.equals(String.withCString("AShr"));
+        return op == opConst || op == opAdd
+            || op == opSub || op == opMul
+            || op == opAnd || op == opOr
+            || op == opXor || op == opNot
+            || op == opShl || op == opLShr
+            || op == opAShr;
         }
     final bool mslSameVal(IRValue* a, IRValue* b)
         {
@@ -173,7 +173,7 @@
         if (mslSameVal(p0.res(), indPhiVal)) { indPhi = p0; redPhi = p1; }
         else if (mslSameVal(p1.res(), indPhiVal)) { indPhi = p1; redPhi = p0; }
         else return false;
-        if (!indPhi.res().ty().equals(String.withCString("U32")) || !redPhi.res().ty().equals(String.withCString("U32"))) return false;
+        if (!IRType.is(indPhi.res().ty(), tyU32) || !IRType.is(redPhi.res().ty(), tyU32)) return false;
         // lo/hi must be exactly ParChunk's fields 1 and 2, since the emitted
         // loop uses the kernel's own lo/hi.
         if (mslFieldVia(mslPhiNot(indPhi, body)) != (i64)1) return false;               // induction starts at lo
@@ -189,7 +189,7 @@
             IRInsn* ip = (IRInsn*)body.insns().get(i);
             IRValue* r = ip.res();
             if (r != (IRValue*)0 && (mslSameVal(r, indNext) || mslSameVal(r, cmp.res()))) continue;
-            if (!mslLaneOp(ip.op())) return false;
+            if (!mslLaneOp(ip.opc())) return false;
             // Every input must be a lane value (a phi or a body result); a use
             // of a value defined outside the body cannot be vectorised here.
             for (u32 k = (u32)0; k < ip.ops().count(); k = k + (u32)1)
@@ -240,7 +240,7 @@
         if (f.params().count() == (u32)0) return (String*)0;
         _mObj = self.mslLayoutOf(mslPointee(((IRValue*)f.params().get((u32)0)).ty()));
         // lo and hi are ParChunk's two i64 ivars, fields 1 and 2 (0 is the vtable).
-        if (_mObj == (IRLayout*)0 || _mObj.fieldCount() < (u32)3 || !_mObj.typeAt((u32)1).equals(String.withCString("I64")) || !_mObj.typeAt((u32)2).equals(String.withCString("I64")))
+        if (_mObj == (IRLayout*)0 || _mObj.fieldCount() < 3 || !IRType.is(_mObj.typeAt(1), tyI64) || !IRType.is(_mObj.typeAt(2), tyI64))
             return (String*)0;
         if (!self.mslAnalyse(f)) return (String*)0;
         String* decls = String.withCString("");
@@ -318,7 +318,7 @@
             // threadgroup memory, combined in a fixed tree; thread 0 writes
             // its one partial.
             String* rop = _mRedOps != (Map*)0 ? (String*)_mRedOps.get((Hashable*)String.withU32(k)) : (String*)0;
-            bool isFloat = self.ptxIs(_mObj.typeAt(k), "F32") || self.ptxIs(_mObj.typeAt(k), "F64");
+            bool isFloat = IRType.is(_mObj.typeAt(k), tyF32) || IRType.is(_mObj.typeAt(k), tyF64);
             String* comb = (String*)0;
             if (rop != (String*)0 && (rop.equals(self.ptxS("min")) || rop.equals(self.ptxS("max"))))
                 comb = String.withFormat("%s(sh_%u[lid], sh_%u[lid + s])", rop.cString(), k, k);
@@ -449,7 +449,7 @@
                 String* et = self.mslScalar(_mObj.typeAt(k));
                 if (et == (String*)0) continue;
                 String* rop = (String*)_mRedOps.get((Hashable*)String.withU32(k));
-                bool isF = self.ptxIs(_mObj.typeAt(k), "F32") || self.ptxIs(_mObj.typeAt(k), "F64");
+                bool isF = IRType.is(_mObj.typeAt(k), tyF32) || IRType.is(_mObj.typeAt(k), tyF64);
                 String* cmb = (String*)0;
                 String* accop = (String*)0;
                 if (rop != (String*)0 && (rop.equals(self.ptxS("min")) || rop.equals(self.ptxS("max"))))

@@ -29,17 +29,17 @@
 
     final string wgKExit(void) { return "4294967295u"; }
 
-    final bool wgWide(String* t) { return ptxIs(t, "I64") || ptxIs(t, "U64"); }
-    final bool wgSigned(String* t) { return ptxIs(t, "I8") || ptxIs(t, "I16") || ptxIs(t, "I32") || ptxIs(t, "I64"); }
-    final bool wgIsFloat(String* t) { return ptxIs(t, "F32") || ptxIs(t, "F64"); }
+    final bool wgWide(String* t) { return IRType.is(t, tyI64) || IRType.is(t, tyU64); }
+    final bool wgSigned(String* t) { return IRType.is(t, tyI8) || IRType.is(t, tyI16) || IRType.is(t, tyI32) || IRType.is(t, tyI64); }
+    final bool wgIsFloat(String* t) { return IRType.isFloat(t); }
     final String* wgType(String* t)
         {
         if (t == (String*)0) return (String*)0;
-        if (ptxIs(t, "I8") || self.ptxIs(t, "U8") || self.ptxIs(t, "I16") || self.ptxIs(t, "U16") || self.ptxIs(t, "I32") || self.ptxIs(t, "U32"))
+        if (IRType.is(t, tyI8) || IRType.is(t, tyU8) || IRType.is(t, tyI16) || IRType.is(t, tyU16) || IRType.is(t, tyI32) || IRType.is(t, tyU32))
             return self.spvS("u32");
         if (wgWide(t)) return self.spvS("vec2<u32>");
-        if (ptxIs(t, "F32")) return self.spvS("f32");
-        if (ptxIs(t, "Bool")) return self.spvS("bool");
+        if (IRType.is(t, tyF32)) return self.spvS("f32");
+        if (IRType.is(t, tyBool)) return self.spvS("bool");
         return (String*)0;
         }
     final bool wgSameType(String* a, String* b)
@@ -75,7 +75,7 @@
         {
         u32 bits = self.spvNarrowBits(t);
         if (bits == (u32)0) return v;
-        if (ptxIs(t, "U8") || self.ptxIs(t, "U16"))
+        if (IRType.is(t, tyU8) || IRType.is(t, tyU16))
             return String.withFormat("((%s) & 0x%xu)", v.cString(), ((u32)1 << bits) - (u32)1);
         return String.withFormat("u32(i32((%s) << %uu) >> %uu)", v.cString(), (u32)32 - bits, (u32)32 - bits);
         }
@@ -91,7 +91,7 @@
         if (op.kind() == (u8)OPK_IMMI)
             {
             if (want == (String*)0) return (String*)0;
-            if (ptxIs(want, "Bool")) return self.spvS(op.imm() != (i64)0 ? "true" : "false");
+            if (IRType.is(want, tyBool)) return self.spvS(op.imm() != 0 ? "true" : "false");
             if (wgIsFloat(want) || wgType(want) == (String*)0) return (String*)0;
             i64 iv = op.imm();
             if (wgWide(want))
@@ -108,7 +108,7 @@
             }
         if (op.kind() == (u8)OPK_IMMF)
             {
-            if (!self.ptxIs(want, "F32")) return (String*)0;
+            if (!IRType.is(want, tyF32)) return (String*)0;
             u64 raw = (u64)0;
             String* h = op.fpHex();
             for (u32 i = (u32)0; i < h.byteLength(); i = i + (u32)1)
@@ -130,7 +130,7 @@
     final bool wgBinary(IRInsn* ip)
         {
         String* t = ip.res().ty();
-        String* o = ip.op();
+        u16 o = ip.opc();
         IROperand* o1 = (IROperand*)ip.ops().get((u32)1);
         String* a = wgValue((IROperand*)ip.ops().get((u32)0), t);
         String* b = wgValue(o1, t);
@@ -144,31 +144,31 @@
             if (!wgWide(ct) && o1.kind() == (u8)OPK_USE)
                 b = wgValue(o1, ct);
             String* e = (String*)0;
-            if (o.equals(self.spvS("Add"))) e = wgFmt2("xc_add64(%s, %s)", a, b);
-            else if (o.equals(self.spvS("Sub"))) e = wgFmt2("xc_sub64(%s, %s)", a, b);
-            else if (o.equals(self.spvS("Mul"))) e = wgFmt2("xc_mul64(%s, %s)", a, b);
-            else if (o.equals(self.spvS("And"))) e = wgFmt2("(%s & %s)", a, b);
-            else if (o.equals(self.spvS("Or"))) e = wgFmt2("(%s | %s)", a, b);
-            else if (o.equals(self.spvS("Xor"))) e = wgFmt2("(%s ^ %s)", a, b);
-            else if (o.equals(self.spvS("Shl"))) e = wgFmt2("xc_shl64(%s, %s)", a, cnt);
-            else if (o.equals(self.spvS("LShr"))) e = wgFmt2("xc_lshr64(%s, %s)", a, cnt);
-            else if (o.equals(self.spvS("AShr"))) e = wgFmt2("xc_ashr64(%s, %s)", a, cnt);
-            else if (o.equals(self.spvS("UDiv"))) e = wgFmt2("xc_udiv64(%s, %s)", a, b);
-            else if (o.equals(self.spvS("URem"))) e = wgFmt2("xc_urem64(%s, %s)", a, b);
-            else if (o.equals(self.spvS("SDiv"))) e = wgFmt2("xc_sdiv64(%s, %s)", a, b);
-            else if (o.equals(self.spvS("SRem"))) e = wgFmt2("xc_srem64(%s, %s)", a, b);
+            if (o == opAdd) e = wgFmt2("xc_add64(%s, %s)", a, b);
+            else if (o == opSub) e = wgFmt2("xc_sub64(%s, %s)", a, b);
+            else if (o == opMul) e = wgFmt2("xc_mul64(%s, %s)", a, b);
+            else if (o == opAnd) e = wgFmt2("(%s & %s)", a, b);
+            else if (o == opOr) e = wgFmt2("(%s | %s)", a, b);
+            else if (o == opXor) e = wgFmt2("(%s ^ %s)", a, b);
+            else if (o == opShl) e = wgFmt2("xc_shl64(%s, %s)", a, cnt);
+            else if (o == opLShr) e = wgFmt2("xc_lshr64(%s, %s)", a, cnt);
+            else if (o == opAShr) e = wgFmt2("xc_ashr64(%s, %s)", a, cnt);
+            else if (o == opUDiv) e = wgFmt2("xc_udiv64(%s, %s)", a, b);
+            else if (o == opURem) e = wgFmt2("xc_urem64(%s, %s)", a, b);
+            else if (o == opSDiv) e = wgFmt2("xc_sdiv64(%s, %s)", a, b);
+            else if (o == opSRem) e = wgFmt2("xc_srem64(%s, %s)", a, b);
             else
                 return false;
             wgSet(ip, e);
             return true;
             }
-        if (ptxIs(t, "F32"))
+        if (IRType.is(t, tyF32))
             {
             string op = (string)0;
-            if (o.equals(self.spvS("FAdd"))) op = "+";
-            else if (o.equals(self.spvS("FSub"))) op = "-";
-            else if (o.equals(self.spvS("FMul"))) op = "*";
-            else if (o.equals(self.spvS("FDiv")))
+            if (o == opFAdd) op = "+";
+            else if (o == opFSub) op = "-";
+            else if (o == opFMul) op = "*";
+            else if (o == opFDiv)
                 {
                 if (!_mFast)
                     {
@@ -188,12 +188,12 @@
             wgSet(ip, String.withFormat("(%s %s %s)", a.cString(), op, b.cString()));
             return true;
             }
-        if (ptxIs(t, "Bool"))
+        if (IRType.is(t, tyBool))
             {
             string op = (string)0;
-            if (o.equals(self.spvS("And"))) op = "&";
-            else if (o.equals(self.spvS("Or"))) op = "|";
-            else if (o.equals(self.spvS("Xor"))) op = "!=";
+            if (o == opAnd) op = "&";
+            else if (o == opOr) op = "|";
+            else if (o == opXor) op = "!=";
             else return false;
             wgSet(ip, String.withFormat("(%s %s %s)", a.cString(), op, b.cString()));
             return true;
@@ -201,8 +201,8 @@
         // A narrow operand is held in its own type's form; an operation of
         // the other signedness rereads its bits that way first.
         u32 nb = self.spvNarrowBits(t);
-        bool wantsUnsigned = o.equals(self.spvS("UDiv")) || o.equals(self.spvS("URem")) || o.equals(self.spvS("LShr"));
-        bool wantsSigned = o.equals(self.spvS("SDiv")) || o.equals(self.spvS("SRem")) || o.equals(self.spvS("AShr"));
+        bool wantsUnsigned = o == opUDiv || o == opURem || o == opLShr;
+        bool wantsSigned = o == opSDiv || o == opSRem || o == opAShr;
         if (nb != (u32)0)
             {
             String* as = (String*)0;
@@ -213,24 +213,24 @@
             if (as != (String*)0)
                 {
                 a = wgCanon(a, as);
-                if (!o.equals(self.spvS("LShr")) && !o.equals(self.spvS("AShr")))
+                if (o != opLShr && o != opAShr)
                     b = wgCanon(b, as);
                 }
             }
         String* e = (String*)0;
-        if (o.equals(self.spvS("Add"))) e = wgFmt2("(%s + %s)", a, b);
-        else if (o.equals(self.spvS("Sub"))) e = wgFmt2("(%s - %s)", a, b);
-        else if (o.equals(self.spvS("Mul"))) e = wgFmt2("(%s * %s)", a, b);
-        else if (o.equals(self.spvS("UDiv"))) e = wgFmt2("(%s / %s)", a, b);
-        else if (o.equals(self.spvS("URem"))) e = wgFmt2("(%s %% %s)", a, b);
-        else if (o.equals(self.spvS("SDiv"))) e = wgFmt2("u32(i32(%s) / i32(%s))", a, b);
-        else if (o.equals(self.spvS("SRem"))) e = wgFmt2("u32(i32(%s) %% i32(%s))", a, b);
-        else if (o.equals(self.spvS("And"))) e = wgFmt2("(%s & %s)", a, b);
-        else if (o.equals(self.spvS("Or"))) e = wgFmt2("(%s | %s)", a, b);
-        else if (o.equals(self.spvS("Xor"))) e = wgFmt2("(%s ^ %s)", a, b);
-        else if (o.equals(self.spvS("Shl"))) e = wgFmt2("(%s << (%s & 31u))", a, b);
-        else if (o.equals(self.spvS("LShr"))) e = wgFmt2("(%s >> (%s & 31u))", a, b);
-        else if (o.equals(self.spvS("AShr"))) e = wgFmt2("u32(i32(%s) >> (%s & 31u))", a, b);
+        if (o == opAdd) e = wgFmt2("(%s + %s)", a, b);
+        else if (o == opSub) e = wgFmt2("(%s - %s)", a, b);
+        else if (o == opMul) e = wgFmt2("(%s * %s)", a, b);
+        else if (o == opUDiv) e = wgFmt2("(%s / %s)", a, b);
+        else if (o == opURem) e = wgFmt2("(%s %% %s)", a, b);
+        else if (o == opSDiv) e = wgFmt2("u32(i32(%s) / i32(%s))", a, b);
+        else if (o == opSRem) e = wgFmt2("u32(i32(%s) %% i32(%s))", a, b);
+        else if (o == opAnd) e = wgFmt2("(%s & %s)", a, b);
+        else if (o == opOr) e = wgFmt2("(%s | %s)", a, b);
+        else if (o == opXor) e = wgFmt2("(%s ^ %s)", a, b);
+        else if (o == opShl) e = wgFmt2("(%s << (%s & 31u))", a, b);
+        else if (o == opLShr) e = wgFmt2("(%s >> (%s & 31u))", a, b);
+        else if (o == opAShr) e = wgFmt2("u32(i32(%s) >> (%s & 31u))", a, b);
         else return false;
         wgSet(ip, wgCanon(e, t));
         return true;
@@ -247,7 +247,7 @@
         if (a == (String*)0 || b == (String*)0) return false;
         String* p = ip.pred();
         String* e = (String*)0;
-        if (ip.op().equals(self.spvS("FCmp")))
+        if (ip.isOp(opFCmp))
             {
             string op = (string)0;
             if (p.equals(self.spvS("OEQ"))) op = "==";
@@ -256,7 +256,7 @@
             else if (p.equals(self.spvS("OGT"))) op = ">";
             else if (p.equals(self.spvS("OLE"))) op = "<=";
             else if (p.equals(self.spvS("OGE"))) op = ">=";
-            if (op == (string)0 || !self.ptxIs(t, "F32")) return false;
+            if (op == (string)0 || !IRType.is(t, tyF32)) return false;
             e = String.withFormat("(%s %s %s)", a.cString(), op, b.cString());
             }
         else if (wgWide(t))
@@ -273,7 +273,7 @@
             else if (p.equals(self.spvS("UGE"))) e = wgFmt2("!xc_ult64(%s, %s)", a, b);
             else return false;
             }
-        else if (ptxIs(t, "Bool"))
+        else if (IRType.is(t, tyBool))
             {
             if (p.equals(self.spvS("EQ"))) e = wgFmt2("(%s == %s)", a, b);
             else if (p.equals(self.spvS("NE"))) e = wgFmt2("(%s != %s)", a, b);
@@ -304,22 +304,22 @@
     final bool wgConvert(IRInsn* ip)
         {
         String* rt = ip.res().ty();
-        String* o = ip.op();
+        u16 o = ip.opc();
         IROperand* o0 = (IROperand*)ip.ops().get((u32)0);
         String* st = o0.kind() == (u8)OPK_USE ? self.mslTypeOf(o0) : rt;
         String* a = wgValue(o0, st);
         if (a == (String*)0 || wgType(rt) == (String*)0 || wgType(st) == (String*)0)
             return false;
         String* v = (String*)0;
-        if (ptxIs(st, "Bool") && !self.ptxIs(rt, "Bool"))
+        if (IRType.is(st, tyBool) && !IRType.is(rt, tyBool))
             {
             if (wgIsFloat(rt)) return false;
             v = wgWide(rt) ? String.withFormat("vec2<u32>(select(0u, 1u, %s), 0u)", a.cString())
                            : String.withFormat("select(0u, 1u, %s)", a.cString());
             }
-        else if (ptxIs(rt, "Bool"))
+        else if (IRType.is(rt, tyBool))
             {
-            if (ptxIs(st, "Bool")) v = a;
+            if (IRType.is(st, tyBool)) v = a;
             else if (wgIsFloat(st)) return false;
             else v = wgWide(st) ? String.withFormat("any(%s != vec2<u32>(0u, 0u))", a.cString())
                                 : String.withFormat("(%s != 0u)", a.cString());
@@ -330,38 +330,38 @@
             // reference explains).
             if (wgWide(st) && wgIsFloat(rt))
                 {
-                bool sg = o.equals(self.spvS("SIToFp")) || (o.equals(self.spvS("Copy")) && wgSigned(st));
+                bool sg = o == opSIToFp || (o == opCopy && wgSigned(st));
                 wgSet(ip, String.withFormat(sg ? "xc_s64tof32(%s)" : "xc_u64tof32(%s)", a.cString()));
                 return true;
                 }
             if (wgIsFloat(st) && wgWide(rt))
                 {
-                bool sg = o.equals(self.spvS("FpToSI")) || (o.equals(self.spvS("Copy")) && wgSigned(rt));
+                bool sg = o == opFpToSI || (o == opCopy && wgSigned(rt));
                 wgSet(ip, String.withFormat(sg ? "xc_f32tos64(%s)" : "xc_f32tou64(%s)", a.cString()));
                 return true;
                 }
-            bool isCopy = o.equals(self.spvS("Copy"));
-            if (!isCopy && !o.equals(self.spvS("SIToFp")) && !o.equals(self.spvS("UIToFp")) && !o.equals(self.spvS("FpToSI")) && !o.equals(self.spvS("FpToUI")))
+            bool isCopy = o == opCopy;
+            if (!isCopy && o != opSIToFp && o != opUIToFp && o != opFpToSI && o != opFpToUI)
                 return false;
             if (wgIsFloat(st) && wgIsFloat(rt))
                 v = a;
             else if (wgIsFloat(rt))
                 {
-                bool s = o.equals(self.spvS("SIToFp")) || (isCopy && wgSigned(st));
+                bool s = o == opSIToFp || (isCopy && wgSigned(st));
                 v = s ? String.withFormat("f32(i32(%s))", a.cString()) : String.withFormat("f32(%s)", a.cString());
                 }
             else
                 {
-                bool s = o.equals(self.spvS("FpToSI")) || (isCopy && wgSigned(rt));
+                bool s = o == opFpToSI || (isCopy && wgSigned(rt));
                 v = wgCanon(s ? String.withFormat("u32(i32(%s))", a.cString()) : String.withFormat("u32(%s)", a.cString()), rt);
                 }
             }
         else
             {
-            if (!o.equals(self.spvS("ZExt")) && !o.equals(self.spvS("SExt")) && !o.equals(self.spvS("Trunc")) && !o.equals(self.spvS("Copy")))
+            if (o != opZExt && o != opSExt && o != opTrunc && o != opCopy)
                 return false;
             u32 sb = self.spvNarrowBits(st);
-            bool extSigned = o.equals(self.spvS("SExt")) || (!o.equals(self.spvS("ZExt")) && wgSigned(st));
+            bool extSigned = o == opSExt || (o != opZExt && wgSigned(st));
             String* x = a;
             if (sb != (u32)0 && extSigned != wgSigned(st))
                 {
@@ -383,8 +383,8 @@
     final String* wgMaths(String* callee, String* t, Array* args)
         {
         String* m = self.ptxMathName(callee);
-        bool f = self.ptxIs(t, "F32");
-        if (!f && (wgWide(t) || wgType(t) == (String*)0 || self.ptxIs(t, "Bool")))
+        bool f = IRType.is(t, tyF32);
+        if (!f && (wgWide(t) || wgType(t) == (String*)0 || IRType.is(t, tyBool)))
             return (String*)0;
         String* j = new String();
         String* ij = new String();
@@ -450,12 +450,12 @@
         if (callee.equals(self.spvS("_xtc_sinit_run")) || callee.hasSuffix(self.spvS("$init")))
             return true;
         String* rt = ip.res() != (IRValue*)0 ? ip.res().ty() : (String*)0;
-        bool isVoid = rt == (String*)0 || self.ptxIs(rt, "Mem");
+        bool isVoid = rt == (String*)0 || IRType.is(rt, tyMem);
         Array* args = new Array();
         for (u32 k = (u32)1; k < ip.ops().count(); k = k + (u32)1)
             {
             IROperand* o = (IROperand*)ip.ops().get(k);
-            if (o.kind() == (u8)OPK_USE && self.ptxIs(mslTypeOf(o), "Mem"))
+            if (o.kind() == OPK_USE && IRType.is(mslTypeOf(o), tyMem))
                 continue;
             String* at = o.kind() == (u8)OPK_USE ? self.mslTypeOf(o) : rt;
             String* v = wgValue(o, at);
@@ -517,7 +517,7 @@
     final String* wgNarrowFrom(String* word, String* shift, String* t)
         {
         String* v = String.withFormat("(%s >> %s)", word.cString(), shift.cString());
-        if (ptxIs(t, "Bool")) return String.withFormat("((%s & 0xffu) != 0u)", v.cString());
+        if (IRType.is(t, tyBool)) return String.withFormat("((%s & 0xffu) != 0u)", v.cString());
         if (wgSigned(t)) return wgCanon(v, t);
         return String.withFormat("(%s & 0x%xu)", v.cString(), ((u32)1 << self.spvNarrowBits(t)) - (u32)1);
         }
@@ -533,36 +533,36 @@
         {
         IRValue* res = ip.res();
         String* rt = res != (IRValue*)0 ? res.ty() : (String*)0;
-        String* o = ip.op();
-        if (res != (IRValue*)0 && !self.ptxIs(rt, "Mem") && _wf.used.get((Hashable*)self.mslKey(res)) == (Object*)0 &&
-            !o.equals(self.spvS("Call")) && !o.equals(self.spvS("Store")))
+        u16 o = ip.opc();
+        if (res != (IRValue*)0 && !IRType.is(rt, tyMem) && _wf.used.get((Hashable*)self.mslKey(res)) == (Object*)0 &&
+            o != opCall && o != opStore)
             return true;
         IROperand* o0 = ip.ops().count() > (u32)0 ? (IROperand*)ip.ops().get((u32)0) : (IROperand*)0;
-        if (o.equals(self.spvS("Const")))
+        if (o == opConst)
             {
             String* v = wgValue(o0, rt);
             if (v == (String*)0) return false;
             wgSet(ip, v);
             return true;
             }
-        if (o.equals(self.spvS("Add")) || o.equals(self.spvS("Sub")) || o.equals(self.spvS("Mul")) || o.equals(self.spvS("UDiv")) ||
-            o.equals(self.spvS("SDiv")) || o.equals(self.spvS("URem")) || o.equals(self.spvS("SRem")) || o.equals(self.spvS("And")) ||
-            o.equals(self.spvS("Or")) || o.equals(self.spvS("Xor")) || o.equals(self.spvS("Shl")) || o.equals(self.spvS("LShr")) ||
-            o.equals(self.spvS("AShr")) || o.equals(self.spvS("FAdd")) || o.equals(self.spvS("FSub")) || o.equals(self.spvS("FMul")) ||
-            o.equals(self.spvS("FDiv")))
+        if (o == opAdd || o == opSub || o == opMul || o == opUDiv ||
+            o == opSDiv || o == opURem || o == opSRem || o == opAnd ||
+            o == opOr || o == opXor || o == opShl || o == opLShr ||
+            o == opAShr || o == opFAdd || o == opFSub || o == opFMul ||
+            o == opFDiv)
             return wgBinary(ip);
-        if (o.equals(self.spvS("Not")))
+        if (o == opNot)
             {
             String* a = wgValue(o0, rt);
             if (a == (String*)0) return false;
-            wgSet(ip, self.ptxIs(rt, "Bool") ? String.withFormat("!%s", a.cString()) : wgCanon(String.withFormat("~%s", a.cString()), rt));
+            wgSet(ip, IRType.is(rt, tyBool) ? String.withFormat("!%s", a.cString()) : wgCanon(String.withFormat("~%s", a.cString()), rt));
             return true;
             }
-        if (o.equals(self.spvS("Neg")) || o.equals(self.spvS("FNeg")))
+        if (o == opNeg || o == opFNeg)
             {
             String* a = wgValue(o0, rt);
             if (a == (String*)0) return false;
-            if (ptxIs(rt, "F32"))
+            if (IRType.is(rt, tyF32))
                 wgSet(ip, String.withFormat("-%s", a.cString()));
             else if (wgWide(rt))
                 wgSet(ip, String.withFormat("xc_sub64(vec2<u32>(0u, 0u), %s)", a.cString()));
@@ -570,10 +570,10 @@
                 wgSet(ip, wgCanon(String.withFormat("(0u - %s)", a.cString()), rt));
             return true;
             }
-        if (o.equals(self.spvS("FSqrt")))
+        if (o == opFSqrt)
             {
             String* a = wgValue(o0, rt);
-            if (a == (String*)0 || !self.ptxIs(rt, "F32")) return false;
+            if (a == (String*)0 || !IRType.is(rt, tyF32)) return false;
             if (!_mFast)
                 {
                 String* h = wgHelperName(spvS("xcFsqrtRn"));
@@ -588,12 +588,12 @@
             wgSet(ip, String.withFormat("sqrt(%s)", a.cString()));
             return true;
             }
-        if (o.equals(self.spvS("ICmp")) || o.equals(self.spvS("FCmp")))
+        if (o == opICmp || o == opFCmp)
             return wgCompare(ip);
-        if (o.equals(self.spvS("ZExt")) || o.equals(self.spvS("SExt")) || o.equals(self.spvS("Trunc")) || o.equals(self.spvS("SIToFp")) ||
-            o.equals(self.spvS("UIToFp")) || o.equals(self.spvS("FpToSI")) || o.equals(self.spvS("FpToUI")) || o.equals(self.spvS("Copy")))
+        if (o == opZExt || o == opSExt || o == opTrunc || o == opSIToFp ||
+            o == opUIToFp || o == opFpToSI || o == opFpToUI || o == opCopy)
             return wgConvert(ip);
-        if (o.equals(self.spvS("Select")))
+        if (o == opSelect)
             {
             String* c = wgValue(o0, (String*)0);
             String* a = wgValue((IROperand*)ip.ops().get((u32)1), rt);
@@ -602,7 +602,7 @@
             wgSet(ip, String.withFormat("select(%s, %s, %s)", b.cString(), a.cString(), c.cString()));
             return true;
             }
-        if (o.equals(self.spvS("FieldAddr")))
+        if (o == opFieldAddr)
             {
             i64 k = self.mslSelfField(ip);
             if (k < (i64)0) return false;   // a field of a struct element: not in this cut
@@ -615,7 +615,7 @@
             _wf.recipeOf.set((Hashable*)self.mslKey(res), (Object*)r);
             return true;
             }
-        if (o.equals(self.spvS("ElementAddr")))
+        if (o == opElementAddr)
             {
             WgRecipe* b = o0.kind() == (u8)OPK_USE && o0.val() != (IRValue*)0 ? (WgRecipe*)_wf.recipeOf.get((Hashable*)self.mslKey(o0.val())) : (WgRecipe*)0;
             String* pe = self.mslPointee(rt);
@@ -626,7 +626,7 @@
             IROperand* o1 = (IROperand*)ip.ops().get((u32)1);
             String* it = o1.kind() == (u8)OPK_USE ? self.mslTypeOf(o1) : self.spvS("I64");
             String* idx = wgValue(o1, it);
-            if (idx == (String*)0 || wgIsFloat(it) || self.ptxIs(it, "Bool") || wgType(it) == (String*)0) return false;
+            if (idx == (String*)0 || wgIsFloat(it) || IRType.is(it, tyBool) || wgType(it) == (String*)0) return false;
             if (wgWide(it)) idx = String.withFormat("%s.x", idx.cString());
             if (b.index != (String*)0) idx = String.withFormat("(%s + %s)", b.index.cString(), idx.cString());
             // In a function variable: the pointer may be used in another block.
@@ -647,7 +647,7 @@
             _wf.recipeOf.set((Hashable*)self.mslKey(res), (Object*)r);
             return true;
             }
-        if (o.equals(self.spvS("Bitcast")))
+        if (o == opBitcast)
             {
             if (mslIsPtr(rt))
                 {
@@ -669,7 +669,7 @@
                 return false;
             return true;
             }
-        if (o.equals(self.spvS("Load")))
+        if (o == opLoad)
             {
             String* buf = res != (IRValue*)0 ? (String*)_mBufOf.get((Hashable*)self.mslKey(res)) : (String*)0;
             if (buf != (String*)0)
@@ -704,7 +704,7 @@
             wgSet(ip, wgAccess(r));
             return true;
             }
-        if (o.equals(self.spvS("Store")))
+        if (o == opStore)
             {
             if (o0.kind() != (u8)OPK_USE || o0.val() == (IRValue*)0) return false;
             // A class's static-init flag: the host ran the init before the
@@ -720,7 +720,7 @@
                 if (w == (String*)0) return false;
                 String* sh = _wgShift;
                 u32 mask = self.spvNarrowBytes(r.pointee) == (u32)1 ? (u32)$FF : (u32)$FFFF;
-                String* bits = self.ptxIs(r.pointee, "Bool") ? String.withFormat("select(0u, 1u, %s)", v.cString())
+                String* bits = IRType.is(r.pointee, tyBool) ? String.withFormat("select(0u, 1u, %s)", v.cString())
                                                         : String.withFormat("(%s & 0x%xu)", v.cString(), mask);
                 wgLine(String.withFormat("atomicAnd(&%s[%s], ~(0x%xu << %s));", r.base.cString(), w.cString(), mask, sh.cString()));
                 wgLine(String.withFormat("atomicOr(&%s[%s], %s << %s);", r.base.cString(), w.cString(), bits.cString(), sh.cString()));
@@ -731,9 +731,9 @@
             wgLine(l);
             return true;
             }
-        if (o.equals(self.spvS("Call")))
+        if (o == opCall)
             return wgCall(ip);
-        if (o.equals(self.spvS("AddrOf")))
+        if (o == opAddrOf)
             {
             if (res != (IRValue*)0 && _mSinit.get((Hashable*)self.mslKey(res)) != (Object*)0)
                 return true;
@@ -765,7 +765,7 @@
             _wf.recipeOf.set((Hashable*)self.mslKey(res), (Object*)r);
             return true;
             }
-        if (o.equals(self.spvS("DbgValue")))
+        if (o == opDbgValue)
             return true;
         return false;
         }
@@ -776,7 +776,7 @@
         for (u32 i = (u32)0; i < target.phis().count(); i = i + (u32)1)
             {
             IRInsn* ph = (IRInsn*)target.phis().get(i);
-            if (ph.res() == (IRValue*)0 || self.ptxIs(ph.res().ty(), "Mem")) continue;
+            if (ph.res() == (IRValue*)0 || IRType.is(ph.res().ty(), tyMem)) continue;
             if (mslIsPtr(ph.res().ty())) return false;
             IROperand* inc = (IROperand*)0;
             for (u32 k = (u32)0; k + (u32)1 < ph.ops().count(); k = k + (u32)2)
@@ -833,14 +833,14 @@
             if (t == (IRInsn*)0) return false;
             Array* lets = new Array();
             Array* dsts = new Array();
-            if (t.op().equals(self.spvS("Branch")))
+            if (t.isOp(opBranch))
                 {
                 IRBlock* to = ((IROperand*)t.ops().get((u32)0)).blk();
                 if (!wgEdge(b, to, (String*)0, true, lets, dsts)) return false;
                 wgStores(lets, dsts);
                 wgLine(String.withFormat("pc = %su;", wgBlockNum(to).cString()));
                 }
-            else if (t.op().equals(self.spvS("CondBranch")))
+            else if (t.isOp(opCondBranch))
                 {
                 String* c = wgValue((IROperand*)t.ops().get((u32)0), (String*)0);
                 if (c == (String*)0) return false;
@@ -856,11 +856,11 @@
                 wgStores(lets, dsts);
                 wgLine(String.withFormat("pc = select(%su, %su, %s);", wgBlockNum(no).cString(), wgBlockNum(yes).cString(), c.cString()));
                 }
-            else if (t.op().equals(self.spvS("Return")))
+            else if (t.isOp(opReturn))
                 {
                 IROperand* rv = t.ops().count() > (u32)0 ? (IROperand*)t.ops().get((u32)0) : (IROperand*)0;
                 String* rvt = rv == (IROperand*)0 ? (String*)0 : rv.kind() == (u8)OPK_USE ? self.mslTypeOf(rv) : f.ret();
-                if (_mHelper && rvt != (String*)0 && !self.ptxIs(rvt, "Mem"))
+                if (_mHelper && rvt != (String*)0 && !IRType.is(rvt, tyMem))
                     {
                     String* v = wgValue(rv, rvt);
                     if (v == (String*)0 || _wf.retVar == (String*)0) return false;
@@ -929,7 +929,7 @@
                     }
         IRInsn* t = b.term();
         if (t == (IRInsn*)0) return false;
-        if (t.op().equals(self.spvS("Return")))
+        if (t.isOp(opReturn))
             {
             if (_mHelper)
                 {
@@ -937,7 +937,7 @@
                 String* rvt = rv == (IROperand*)0 ? (String*)0 : rv.kind() == (u8)OPK_USE ? self.mslTypeOf(rv) : _sFn.ret();
                 if (!_wf.dry)
                     {
-                    if (rvt != (String*)0 && !self.ptxIs(rvt, "Mem"))
+                    if (rvt != (String*)0 && !IRType.is(rvt, tyMem))
                         {
                         String* v = wgValue(rv, rvt);
                         if (v == (String*)0) return false;
@@ -956,9 +956,9 @@
             wgStructLine("break;");
             return true;
             }
-        if (t.op().equals(self.spvS("Branch")))
+        if (t.isOp(opBranch))
             return wgSJump(x, self.sIndexOf(((IROperand*)t.ops().get((u32)0)).blk()), h, e, fo);
-        if (!t.op().equals(self.spvS("CondBranch"))) return false;
+        if (!t.isOp(opCondBranch)) return false;
         u32 n = _sFn.blocks().count();
         i64 j = ((Number*)_sIpdom.get(x)).asI64();
         if (j < (i64)0) return false;
@@ -1021,13 +1021,13 @@
             for (u32 i = (u32)0; i < bb.phis().count(); i = i + (u32)1)
                 {
                 IRInsn* ip = (IRInsn*)bb.phis().get(i);
-                if (ip.res() != (IRValue*)0 && !ip.res().ty().equals(self.spvS("Mem")))
+                if (ip.res() != (IRValue*)0 && !IRType.is(ip.res().ty(), tyMem))
                     { _mOrd.set((Hashable*)self.mslKey(ip.res()), (Object*)String.withU32(ord)); ord = ord + (u32)1; }
                 }
             for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
                 {
                 IRInsn* ip = (IRInsn*)bb.insns().get(i);
-                if (ip.res() != (IRValue*)0 && !ip.res().ty().equals(self.spvS("Mem")))
+                if (ip.res() != (IRValue*)0 && !IRType.is(ip.res().ty(), tyMem))
                     { _mOrd.set((Hashable*)self.mslKey(ip.res()), (Object*)String.withU32(ord)); ord = ord + (u32)1; }
                 }
             }
@@ -1062,11 +1062,11 @@
                 IRInsn* ip = (IRInsn*)all.get(i);
                 if (ip.res() == (IRValue*)0) continue;
                 String* t = ip.res().ty();
-                if (ptxIs(t, "Mem") || self.mslIsPtr(t) || used.get((Hashable*)self.mslKey(ip.res())) == (Object*)0) continue;
+                if (IRType.is(t, tyMem) || self.mslIsPtr(t) || used.get((Hashable*)self.mslKey(ip.res())) == (Object*)0) continue;
                 String* ty = wgType(t);
                 if (ty == (String*)0)
                     {
-                    self.parBecause(ptxIs(t, "F64") ? self.spvS("it uses a double, which WebGPU does not have") : self.spvS("it uses a value its WebGPU version cannot hold"));
+                    self.parBecause(IRType.is(t, tyF64) ? self.spvS("it uses a double, which WebGPU does not have") : self.spvS("it uses a value its WebGPU version cannot hold"));
                     return false;
                     }
                 String* n = self.mslName(ip.res());
@@ -1088,7 +1088,7 @@
             u32 ew = self.mslWidth(et);
             if (ty == (String*)0 || ew == (u32)0)
                 {
-                self.parBecause(ptxIs(et, "F64") ? self.spvS("it uses a double, which WebGPU does not have") : self.spvS("it uses a local value its WebGPU version cannot place"));
+                self.parBecause(IRType.is(et, tyF64) ? self.spvS("it uses a double, which WebGPU does not have") : self.spvS("it uses a local value its WebGPU version cannot place"));
                 return false;
                 }
             _wf.vars.appendCString("  var loc_");
@@ -1136,7 +1136,7 @@
         for (u32 bi = (u32)0; bi < g.blocks().count(); bi = bi + (u32)1)
             _mBlk.set((Hashable*)((IRBlock*)g.blocks().get(bi)).name(), (Object*)String.withU32(bi));
         String* rt = g.ret();
-        bool isVoid = rt == (String*)0 || self.ptxIs(rt, "Void") || self.ptxIs(rt, "Mem");
+        bool isVoid = rt == (String*)0 || IRType.is(rt, tyVoid) || IRType.is(rt, tyMem);
         String* ret = isVoid ? (String*)0 : wgType(rt);
         if (!isVoid && ret == (String*)0) return false;
         _wf = new WgFn();
@@ -1186,15 +1186,15 @@
         if (spvNarrowBytes(t) != (u32)0)
             return wgNarrowFrom(String.withFormat("args[%uu]", w), wgU32Lit((off & (u32)3) * (u32)8), t);
         if ((off & (u32)3) != (u32)0) return (String*)0;
-        if (ptxIs(t, "I32") || self.ptxIs(t, "U32")) return String.withFormat("args[%uu]", w);
-        if (ptxIs(t, "F32")) return String.withFormat("bitcast<f32>(args[%uu])", w);
+        if (IRType.is(t, tyI32) || IRType.is(t, tyU32)) return String.withFormat("args[%uu]", w);
+        if (IRType.is(t, tyF32)) return String.withFormat("bitcast<f32>(args[%uu])", w);
         if (wgWide(t)) return String.withFormat("vec2<u32>(args[%uu], args[%uu])", w, w + (u32)1);
         return (String*)0;
         }
     final String* wgDeclare(String* decls, String* name, String* et)
         {
         String* t = wgType(et);
-        if (t == (String*)0 || self.ptxIs(et, "F64")) return (String*)0;
+        if (t == (String*)0 || IRType.is(et, tyF64)) return (String*)0;
         bool narrow = self.spvNarrowBytes(et) != (u32)0;
         decls.append(String.withFormat("@group(0) @binding(%u) var<storage, read_write> %s: array<%s>;\n", _wgBinding,
                                        name.cString(), narrow ? "atomic<u32>" : t.cString()));
@@ -1214,7 +1214,7 @@
         _mGlobalOf = new Map();
         if (f.params().count() == (u32)0) return false;
         _mObj = self.mslLayoutOf(mslPointee(((IRValue*)f.params().get((u32)0)).ty()));
-        if (_mObj == (IRLayout*)0 || _mObj.fieldCount() < (u32)3 || !self.ptxIs(_mObj.typeAt((u32)1), "I64") || !self.ptxIs(_mObj.typeAt((u32)2), "I64"))
+        if (_mObj == (IRLayout*)0 || _mObj.fieldCount() < 3 || !IRType.is(_mObj.typeAt(1), tyI64) || !IRType.is(_mObj.typeAt(2), tyI64))
             return false;
         if (!self.mslAnalyse(f)) return false;
         for (u32 bi = (u32)0; bi < f.blocks().count(); bi = bi + (u32)1)
@@ -1234,7 +1234,7 @@
             for (u32 i = (u32)0; i < b.insns().count(); i = i + (u32)1)
                 {
                 IRInsn* ip = (IRInsn*)b.insns().get(i);
-                if (!ip.op().equals(self.spvS("FieldAddr")) || ip.res() == (IRValue*)0) continue;
+                if (!ip.isOp(opFieldAddr) || ip.res() == (IRValue*)0) continue;
                 i64 k = self.mslSelfField(ip);
                 if (k >= (i64)0 && !self.mslIsPtr(_mObj.typeAt((u32)k)))
                     used.set((Hashable*)String.withI64(k), (Object*)self.spvS("1"));
@@ -1250,7 +1250,7 @@
             String* from = ty != (String*)0 ? wgFieldFrom(_mObj.offsetAt(k), ft) : (String*)0;
             if (from == (String*)0)
                 {
-                self.parBecause(ptxIs(ft, "F64") ? self.spvS("it uses a double, which WebGPU does not have") : self.spvS("it uses a captured value its WebGPU version cannot hold"));
+                self.parBecause(IRType.is(ft, tyF64) ? self.spvS("it uses a double, which WebGPU does not have") : self.spvS("it uses a captured value its WebGPU version cannot hold"));
                 return false;
                 }
             _wf.vars.append(String.withFormat("  var f%u: %s;\n", k, ty.cString()));
@@ -1271,7 +1271,7 @@
             String* n = wgDeclare(decls, String.withFormat("b%u", k), et);
             if (n == (String*)0)
                 {
-                self.parBecause(ptxIs(et, "F64") ? self.spvS("it uses an array of doubles, which WebGPU does not have") : self.spvS("it uses an array of values its WebGPU version cannot hold"));
+                self.parBecause(IRType.is(et, tyF64) ? self.spvS("it uses an array of doubles, which WebGPU does not have") : self.spvS("it uses an array of values its WebGPU version cannot hold"));
                 return false;
                 }
             meta.appendCString(" buf="); meta.append(String.withU32(_mObj.offsetAt(k))); meta.appendCString(":");
@@ -1332,11 +1332,11 @@
             decls.append(String.withFormat("@group(0) @binding(%u) var<storage, read_write> r%u: array<%s>;\n", _wgBinding, k,
                                            narrow ? "u32" : wgType(t).cString()));
             _wgBinding = _wgBinding + (u32)1;
-            if (ptxIs(t, "Bool")) reds.add((Object*)String.withFormat("r%u[tid] = select(0u, 1u, f%u);", k, k));
+            if (IRType.is(t, tyBool)) reds.add((Object*)String.withFormat("r%u[tid] = select(0u, 1u, f%u);", k, k));
             else reds.add((Object*)String.withFormat("r%u[tid] = f%u;", k, k));
             String* op = _mRedOps != (Map*)0 ? (String*)_mRedOps.get((Hashable*)String.withU32(k)) : (String*)0;
-            bool isF = self.ptxIs(t, "F32");
-            bool okT = self.ptxIs(t, "I32") || self.ptxIs(t, "U32") || isF;
+            bool isF = IRType.is(t, tyF32);
+            bool okT = IRType.is(t, tyI32) || IRType.is(t, tyU32) || isF;
             String* comb = (String*)0;
             if (okT && op != (String*)0 && (op.equals(self.spvS("min")) || op.equals(self.spvS("max"))))
                 comb = String.withFormat("%s(w%u[lid], w%u[lid + s])", op.cString(), k, k);

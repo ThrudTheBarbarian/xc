@@ -781,7 +781,7 @@
                     if (x == (IRInsn*)0 || x.ops().count() != (u32)1 || ((IROperand*)x.ops().get((u32)0)).kind() != (u8)OPK_USE)
                         continue;
                     IRValue* src = ((IROperand*)x.ops().get((u32)0)).val();
-                    if (src == (IRValue*)0 || !src.ty().equals(String.withCString("I32")))
+                    if (src == (IRValue*)0 || !IRType.is(src.ty(), tyI32))
                         continue;
                     bool ok = x.isOp(opSExt);
                     if (!ok && x.isOp(opZExt))
@@ -827,7 +827,7 @@
         else
             return (String*)0;
         IRInsn* u = (IRInsn*)defOf.get((Hashable*)upd);
-        if (u == (IRInsn*)0 || u.ops().count() != (u32)2 || !ppRedOp(u.op()))
+        if (u == (IRInsn*)0 || u.ops().count() != 2 || !ppRedOp(u.opc()))
             return (String*)0;
         IROperand* a = (IROperand*)u.ops().get((u32)0);
         IROperand* b = (IROperand*)u.ops().get((u32)1);
@@ -1001,7 +1001,7 @@
         else
             return (String*)0;
         IRInsn* u = (IRInsn*)defOf.get((Hashable*)upd);
-        if (u == (IRInsn*)0 || u.ops().count() != (u32)2 || !ppRedOp(u.op()))
+        if (u == (IRInsn*)0 || u.ops().count() != 2 || !ppRedOp(u.opc()))
             return (String*)0;
         IROperand* a = (IROperand*)u.ops().get((u32)0);
         IROperand* b = (IROperand*)u.ops().get((u32)1);
@@ -1138,7 +1138,7 @@
                     {
                     u32 size = (u32)0;
                     String* gt = g.globalTy();
-                    if (gt != (String*)0 && gt.hasPrefix(String.withCString("Agg(")))
+                    if (gt != (String*)0 && IRType.isAgg(gt))
                         {
                         u32 id = (u32)0;
                         for (u32 k = (u32)4; k < gt.byteLength() && gt.byteAt(k) >= (u8)'0' && gt.byteAt(k) <= (u8)'9'; k = k + (u32)1)
@@ -1186,7 +1186,7 @@
         for (u32 i = (u32)0; i < liveIns.count(); i = i + (u32)1)
             {
             String* t = ((IRValue*)liveIns.get(i)).ty();
-            if (!t.hasPrefix(String.withCString("Ptr(")))
+            if (!IRType.isPtr(t))
                 continue;
             u32 comma = t.indexOfByte((u8)',');
             u32 es = comma == (u32)$FFFFFFFF ? (u32)0 : self.irWidth(t.substringBytes((u32)4, comma - (u32)4));
@@ -1609,12 +1609,12 @@
         return (i64)-1;
         }
 
-    static bool ppRedOp(String* op)
+    static bool ppRedOp(u16 op)
         {
-        return op.equals(String.withCString("Add")) || op.equals(String.withCString("FAdd"))
-            || op.equals(String.withCString("Mul")) || op.equals(String.withCString("FMul"))
-            || op.equals(String.withCString("Xor")) || op.equals(String.withCString("Or"))
-            || op.equals(String.withCString("And"));
+        return op == opAdd || op == opFAdd
+            || op == opMul || op == opFMul
+            || op == opXor || op == opOr
+            || op == opAnd;
         }
 
     // ── IR outlining, stage 3: a block the par runtime runs ─────────────────
@@ -1825,7 +1825,7 @@
             if (step == (IRInsn*)0 || step.ops().count() != (u32)2)
                 return ppNo("a value carried round it is not one step of the loop");
             bool addI = step.isOp(opAdd);
-            if (!addI && !ppRedOp(step.op()))
+            if (!addI && !ppRedOp(step.opc()))
                 return ppNo("a value carried round it is neither a counter nor a reduction");
             IROperand* s0 = (IROperand*)step.ops().get((u32)0);
             IROperand* s1 = (IROperand*)step.ops().get((u32)1);
@@ -2154,7 +2154,7 @@
                         if (n.res() != (IRValue*)0 && hoistOnly.contains((Hashable*)n.res()))
                             continue;
                         if (!n.isOp(opBitcast) || n.res() == (IRValue*)0
-                            || !n.res().ty().hasPrefix(String.withCString("Ptr(")))
+                            || !IRType.isPtr(n.res().ty()))
                             ok = false;
                         else if (tt == (String*)0)
                             tt = n.res().ty();
@@ -2224,7 +2224,7 @@
         // against the plain build's 6.0 (2026-10-25).
         i32 boundN = (i32)0;
         bool unsignedTest = pred.equals(String.withCString("ULT")) || pred.equals(String.withCString("ULE"));
-        if (unsignedTest && (ivT.equals(String.withCString("I32")) || ivT.equals(String.withCString("U32")))
+        if (unsignedTest && (IRType.is(ivT, tyI32) || IRType.is(ivT, tyU32))
             && self.vecConst((IROperand*)cmp.ops().get((u32)1), defOf, &boundN) && boundN > (i32)0
             && (le ? boundN < (i32)$7FFFFFFF : true))
             {
@@ -2891,9 +2891,9 @@
 
     static bool ppIntType(String* t)
         {
-        return t.equals(String.withCString("I32")) || t.equals(String.withCString("U32"))
-            || t.equals(String.withCString("I64")) || t.equals(String.withCString("U64"))
-            || t.equals(String.withCString("I16")) || t.equals(String.withCString("U16"));
+        return IRType.is(t, tyI32) || IRType.is(t, tyU32)
+            || IRType.is(t, tyI64) || IRType.is(t, tyU64)
+            || IRType.is(t, tyI16) || IRType.is(t, tyU16);
         }
 
     // Whether v is made of constants alone: Const, through widenings,
@@ -2906,7 +2906,7 @@
         if (d.isOp(opConst))
             return true;
         // Arithmetic on constants (`#define N (1024 * 1024)`, `D * H * W`).
-        if (ppConstBinOp(d.op()) && d.ops().count() == (u32)2)
+        if (ppConstBinOp(d.opc()) && d.ops().count() == 2)
             {
             for (u32 k = (u32)0; k < (u32)2; k = k + (u32)1)
                 {
@@ -2925,19 +2925,19 @@
         return false;
         }
 
-    static bool ppConstBinOp(String* op)
+    static bool ppConstBinOp(u16 op)
         {
-        return op.equals(String.withCString("Add")) || op.equals(String.withCString("Sub"))
-            || op.equals(String.withCString("Mul")) || op.equals(String.withCString("Shl"))
-            || op.equals(String.withCString("And")) || op.equals(String.withCString("Or"))
-            || op.equals(String.withCString("Xor"));
+        return op == opAdd || op == opSub
+            || op == opMul || op == opShl
+            || op == opAnd || op == opOr
+            || op == opXor;
         }
 
     // A copy of a constant chain (ppConstChain), appended to b.
     final IRValue* ppRemat(IRBlock* b, IRValue* v, Map* defOf)
         {
         IRInsn* d = (IRInsn*)defOf.get((Hashable*)v);
-        IRInsn* c = IRInsn.with(d.op());
+        IRInsn* c = IRInsn.withOpOf(d);
         IRValue* r = new IRValue(v.ty());
         c.setRes(r);
         if (d.isOp(opConst))
@@ -3620,7 +3620,7 @@
                 k = i;
         String* pt = _ppAddrTy != (String*)0 ? _ppAddrTy : addr.ty();
         u32 es = (u32)0;
-        if (pt.hasPrefix(String.withCString("Ptr(")))
+        if (IRType.isPtr(pt))
             {
             // The element: `Agg(N), ...` holds a comma inside, so the last one.
             u32 comma = (u32)$FFFFFFFF;
@@ -3633,7 +3633,7 @@
             if (comma != (u32)$FFFFFFFF)
                 {
                 String* et = pt.substringBytes((u32)4, comma - (u32)4);
-                if (et.hasPrefix(String.withCString("Agg(")) && _ppModule != (IRModule*)0)
+                if (IRType.isAgg(et) && _ppModule != (IRModule*)0)
                     {
                     u32 lid = self.aeLayoutId(_ppModule, et);
                     if (lid < _ppModule.layouts().count())
@@ -3728,7 +3728,7 @@
             // The body: the twin's result for the same arguments.
             u32 np = fn.params().count();
             IRValue* mem = np > 0 ? (IRValue*)fn.params().get(np - 1) : (IRValue*)0;
-            if (mem == (IRValue*)0 || !mem.ty().equals(String.withCString("Mem")))
+            if (mem == (IRValue*)0 || !IRType.is(mem.ty(), tyMem))
                 continue;
             IRBlock* b = new IRBlock(String.withCString("bb_entry"));
             IRInsn* c = IRInsn.with(String.withCString("Call"));
@@ -3738,7 +3738,7 @@
                 c.add(IROperand.useVal((IRValue*)fn.params().get(p)));
             c.add(IROperand.useVal(mem));
             IRValue* r = (IRValue*)0;
-            if (!fn.ret().equals(String.withCString("Void")))
+            if (!IRType.is(fn.ret(), tyVoid))
                 {
                 r = new IRValue(fn.ret());
                 c.setRes(r);
@@ -3778,13 +3778,13 @@
     // An integer element's width in bytes, or 0.
     static i64 ppIntBytes(String* t)
         {
-        if (t.equals(String.withCString("U8")) || t.equals(String.withCString("I8")))
+        if (IRType.is(t, tyU8) || IRType.is(t, tyI8))
             return (i64)1;
-        if (t.equals(String.withCString("U16")) || t.equals(String.withCString("I16")))
+        if (IRType.is(t, tyU16) || IRType.is(t, tyI16))
             return (i64)2;
-        if (t.equals(String.withCString("U32")) || t.equals(String.withCString("I32")))
+        if (IRType.is(t, tyU32) || IRType.is(t, tyI32))
             return (i64)4;
-        if (t.equals(String.withCString("U64")) || t.equals(String.withCString("I64")))
+        if (IRType.is(t, tyU64) || IRType.is(t, tyI64))
             return (i64)8;
         return (i64)0;
         }
@@ -3906,7 +3906,7 @@
                 IRSymbol* g = self.symNamed(_ppModule, key.substringFromByte((u32)1));
                 String* gt = g != (IRSymbol*)0 ? g.globalTy() : (String*)0;
                 i64 size = (i64)0;
-                if (gt != (String*)0 && gt.hasPrefix(String.withCString("Agg(")))
+                if (gt != (String*)0 && IRType.isAgg(gt))
                     {
                     u32 lid = self.aeLayoutId(_ppModule, gt);
                     if (lid < _ppModule.layouts().count())
@@ -4544,7 +4544,7 @@
     // A memory token: it orders the loads and stores, it carries no value.
     final bool ppIsMem(IRValue* v)
         {
-        return v != (IRValue*)0 && v.ty() != (String*)0 && v.ty().equals(String.withCString("Mem"));
+        return v != (IRValue*)0 && v.ty() != (String*)0 && IRType.is(v.ty(), tyMem);
         }
 
     // Whether the frame slot `addr` takes the address of is reached only from
@@ -4642,7 +4642,7 @@
     // a pointer (the span the guard keeps clear of the loop's stores).
     final bool ppScalarLoad(String* t)
         {
-        return self.irWidth(t) > (u32)0 || (t != (String*)0 && t.hasPrefix(String.withCString("Ptr(")));
+        return self.irWidth(t) > 0 || (t != (String*)0 && IRType.isPtr(t));
         }
 
     // Whether v is a load the memory check took as one from an address the
@@ -4763,7 +4763,7 @@
         if (h != (IRValue*)0)
             return h;
         IRInsn* d = (IRInsn*)defOf.get((Hashable*)v);
-        IRInsn* c = IRInsn.with(d.op());
+        IRInsn* c = IRInsn.withOpOf(d);
         IRValue* r = new IRValue(v.ty());
         c.setRes(r);
         if (d.isOp(opLoad))

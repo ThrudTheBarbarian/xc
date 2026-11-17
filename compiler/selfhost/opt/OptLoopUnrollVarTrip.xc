@@ -294,9 +294,9 @@
             if (bi.res() == (IRValue*)0)
                 continue;
             String* bt = bi.res().ty();
-            if (bt.hasPrefix(String.withCString("Vec("))
-                || bt.equals(String.withCString("F32"))
-                || bt.equals(String.withCString("F64")))
+            if (IRType.isVec(bt)
+                || IRType.is(bt, tyF32)
+                || IRType.is(bt, tyF64))
                 vecBody = true;
             }
         c.setVectorBody(vecBody);
@@ -552,7 +552,7 @@
             IRInsn* n = (IRInsn*)L.insns().get(i);
             if (n == _ucNext || n == _ucCmp)
                 continue;
-            IRInsn* cl = IRInsn.with(n.op());
+            IRInsn* cl = IRInsn.withOpOf(n);
             cl.copyDbg(n);
             cl.setPred(n.pred());
             cl.setCc(n.cc());
@@ -626,7 +626,7 @@
             IRInsn* n = (IRInsn*)L.insns().get(i);
             if (n == _ucCmp)
                 continue;
-            IRInsn* cl = IRInsn.with(n.op());
+            IRInsn* cl = IRInsn.withOpOf(n);
             cl.copyDbg(n);
             cl.setPred(n.pred());
             cl.setCc(n.cc());
@@ -786,7 +786,7 @@
             if (p.res() == (IRValue*)0 || p.memRes() != (IRValue*)0 || p.ops().count() != (u32)4)
                 return false;
             String* rt = p.res().ty();
-            if (rt == (String*)0 || rt.equals(String.withCString("Mem")) || rt.equals(String.withCString("Void")) || rt.hasPrefix(String.withCString("Agg(")))
+            if (rt == (String*)0 || IRType.is(rt, tyMem) || IRType.is(rt, tyVoid) || IRType.isAgg(rt))
                 return false;
             IROperand* rNextOp = self.vecBackOp(p, B);
             if (rNextOp == (IROperand*)0 || rNextOp.kind() != (u8)OPK_USE)
@@ -1134,7 +1134,7 @@
                 IROperand* b1 = (IROperand*)rn.ops().get((u32)1);
                 if (b0.kind() != (u8)OPK_USE || b0.val() != rp || b1.kind() != (u8)OPK_IMMI)
                     continue;
-                if (!rp.ty().hasPrefix(String.withCString("Ptr(")))
+                if (!IRType.isPtr(rp.ty()))
                     continue;
                 IRValue* rv = new IRValue(rp.ty());
                 IRInsn* ea = IRInsn.with(String.withCString("ElementAddr"));
@@ -1163,7 +1163,7 @@
                 map.set((Hashable*)n.res(), (Object*)n.res());
                 continue;
                 }
-            IRInsn* hc = IRInsn.with(n.op());
+            IRInsn* hc = IRInsn.withOpOf(n);
             hc.copyDbg(n);
             hc.setPred(n.pred());
             hc.setCc(n.cc());
@@ -1189,7 +1189,7 @@
                 map.set((Hashable*)n.res(), _vtSharedPure.get((Hashable*)n.res()));
                 continue; // copies 1..U-1 reuse copy 0's
                 }
-            IRInsn* cl = IRInsn.with(n.op());
+            IRInsn* cl = IRInsn.withOpOf(n);
             cl.copyDbg(n);
             cl.setPred(n.pred());
             cl.setCc(n.cc());
@@ -1246,7 +1246,7 @@
             // through to the next copy or leaves for the exit.
             Map* gmap = new Map();
             gmap.set((Hashable*)c.iv(), (Object*)cloneIvNext);
-            IRInsn* g = IRInsn.with(c.guard().op());
+            IRInsn* g = IRInsn.withOpOf(c.guard());
             g.copyDbg(c.guard());
             g.setPred(c.guard().pred());
             g.setRes(new IRValue(c.guard().res().ty()));

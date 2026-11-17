@@ -349,7 +349,7 @@
             for (u32 f = (u32)0; f < n; f = f + (u32)1)
                 {
                 String* ft = lay.typeAt(f);
-                if (ft == (String*)0 || aeIsAgg(ft) || ft.equals(String.withCString("Mem")))
+                if (ft == (String*)0 || aeIsAgg(ft) || IRType.is(ft, tyMem))
                     scalarOnly = false;
                 }
             if (!scalarOnly)

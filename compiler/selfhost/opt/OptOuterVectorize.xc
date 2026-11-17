@@ -73,13 +73,13 @@
         }
 
     // FAdd/FSub/FMul too, on f32 lanes (the reference explains).
-    static bool ovArith(String* op)
+    static bool ovArith(u16 op)
         {
-        return op.equals(String.withCString("Add")) || op.equals(String.withCString("Sub"))
-            || op.equals(String.withCString("Mul")) || op.equals(String.withCString("And"))
-            || op.equals(String.withCString("Or")) || op.equals(String.withCString("Xor"))
-            || op.equals(String.withCString("FAdd")) || op.equals(String.withCString("FSub"))
-            || op.equals(String.withCString("FMul"));
+        return op == opAdd || op == opSub
+            || op == opMul || op == opAnd
+            || op == opOr || op == opXor
+            || op == opFAdd || op == opFSub
+            || op == opFMul;
         }
 
     final IRValue* ovRoot(IRValue* v, Map* defOf)
@@ -315,8 +315,8 @@
         if (kPhi == (IRInsn*)0 || sPhi == (IRInsn*)0 || sPhi.res() == (IRValue*)0 || sPhi.ops().count() != (u32)4)
             return false;
         String* laneTy = sPhi.res().ty();
-        if (laneTy == (String*)0 || !(laneTy.equals(String.withCString("U32")) || laneTy.equals(String.withCString("I32"))
-                                      || laneTy.equals(String.withCString("F32"))))
+        if (laneTy == (String*)0 || !(IRType.is(laneTy, tyU32) || IRType.is(laneTy, tyI32)
+                                      || IRType.is(laneTy, tyF32)))
             return false;
         // The width this function may use: a dispatch clone's own level, else
         // the target's (vectorBytes). It was a fixed four lanes, which left
@@ -355,12 +355,12 @@
                 IRInsn* n = (IRInsn*)blk.insns().get(i);
                 if (n == jNext)
                     continue;
-                String* op = n.op();
+                u16 op = n.opc();
                 bool anyNon = false;
                 for (u32 q = (u32)0; q < n.ops().count(); q = q + (u32)1)
                     if (ovRoleOf((IROperand*)n.ops().get(q)) != (u32)0)
                         anyNon = true;
-                if (op.equals(String.withCString("Load")))
+                if (op == opLoad)
                     {
                     if (n.ops().count() < (u32)1 || ((IROperand*)n.ops().get((u32)0)).kind() != (u8)OPK_USE)
                         return false;
@@ -374,7 +374,7 @@
                     _ovRole.set((Hashable*)n.res(), (Object*)Number.withU32((u32)3));
                     continue;
                     }
-                if (op.equals(String.withCString("Store")))
+                if (op == opStore)
                     {
                     if (blk != Ek || n.ops().count() < (u32)2 || ovRoleOf((IROperand*)n.ops().get((u32)0)) != (u32)2
                         || ovRoleOf((IROperand*)n.ops().get((u32)1)) != (u32)3
@@ -389,7 +389,7 @@
                     return false;
                 if (!anyNon)
                     continue;
-                if (op.equals(String.withCString("Add")) && n.ops().count() == (u32)2)
+                if (op == opAdd && n.ops().count() == 2)
                     {
                     u32 r0 = ovRoleOf((IROperand*)n.ops().get((u32)0));
                     u32 r1 = ovRoleOf((IROperand*)n.ops().get((u32)1));
@@ -399,7 +399,7 @@
                         continue;
                         }
                     }
-                if (op.equals(String.withCString("ElementAddr")) && n.ops().count() == (u32)2
+                if (op == opElementAddr && n.ops().count() == 2
                     && ovRoleOf((IROperand*)n.ops().get((u32)0)) == (u32)0 && ovRoleOf((IROperand*)n.ops().get((u32)1)) == (u32)1)
                     {
                     if (n.res().ty() == (String*)0 || !n.res().ty().hasPrefix(addrPre))

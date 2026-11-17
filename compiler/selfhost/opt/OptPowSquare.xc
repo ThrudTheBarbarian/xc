@@ -62,7 +62,7 @@
         if (n.res() == 0)
             return false;
         String* t = n.res().ty();
-        if (!t.equals(String.withCString("F32")) && !t.equals(String.withCString("F64")))
+        if (!IRType.is(t, tyF32) && !IRType.is(t, tyF64))
             return false;
         if (n.ops().count() != (u32)4)
             return false;
@@ -107,7 +107,7 @@
                 out[0] = k.imm();
                 return true;
                 }
-            if (!isWidening(def.op()))
+            if (!isWidening(def.opc()))
                 return false;
             if (def.ops().count() < (u32)1)
                 return false;
@@ -119,8 +119,8 @@
         return false;
         }
 
-    final bool isWidening(String* op)
+    final bool isWidening(u16 op)
         {
-        return op.equals(String.withCString("ZExt")) || op.equals(String.withCString("SExt")) || op.equals(String.withCString("Trunc")) || op.equals(String.withCString("SIToFp")) || op.equals(String.withCString("UIToFp"));
+        return op == opZExt || op == opSExt || op == opTrunc || op == opSIToFp || op == opUIToFp;
         }
     }

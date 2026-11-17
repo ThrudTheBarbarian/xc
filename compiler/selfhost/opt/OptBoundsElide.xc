@@ -415,7 +415,7 @@
             return false;
         // Arithmetic, casts and compares of values the loop can have: the
         // guard and the bound of an inner loop, moving on out.
-        if (bhPure(d.op()))
+        if (bhPure(d.opc()))
             {
             for (u32 k = (u32)0; k < d.ops().count(); k = k + (u32)1)
                 {
@@ -461,13 +461,13 @@
         return true;
         }
 
-    static bool bhPure(String* op)
+    static bool bhPure(u16 op)
         {
-        return op.equals(String.withCString("Bitcast")) || op.equals(String.withCString("Select")) || op.equals(String.withCString("ICmp"))
-            || op.equals(String.withCString("Const")) || op.equals(String.withCString("IntToPtr")) || op.equals(String.withCString("PtrToInt"))
-            || op.equals(String.withCString("ZExt")) || op.equals(String.withCString("SExt")) || op.equals(String.withCString("Trunc"))
-            || op.equals(String.withCString("Add")) || op.equals(String.withCString("Sub")) || op.equals(String.withCString("And"))
-            || op.equals(String.withCString("Or")) || op.equals(String.withCString("Xor"));
+        return op == opBitcast || op == opSelect || op == opICmp
+            || op == opConst || op == opIntToPtr || op == opPtrToInt
+            || op == opZExt || op == opSExt || op == opTrunc
+            || op == opAdd || op == opSub || op == opAnd
+            || op == opOr || op == opXor;
         }
 
     // Does H leave the loop through a CondBranch with one edge in, holding
@@ -613,7 +613,7 @@
             for (u32 i = (u32)0; i < H.insns().count(); i = i + (u32)1)
                 {
                 IRInsn* n = (IRInsn*)H.insns().get(i);
-                IRInsn* c = IRInsn.with(n.op());
+                IRInsn* c = IRInsn.withOpOf(n);
                 c.setPred(n.pred());
                 c.setCc(n.cc());
                 c.copyDbg(n);
@@ -963,7 +963,7 @@
         IRInsn* phi = (IRInsn*)defOf.get((Hashable*)iv);
         if (phi == (IRInsn*)0 || !phi.isOp(opPhi) || (IRBlock*)defBlk.get((Hashable*)iv) != H
             || phi.ops().count() != (u32)4 || iv.ty() == (String*)0
-            || !(iv.ty().equals(String.withCString("U32")) || iv.ty().equals(String.withCString("U64"))))
+            || !(IRType.is(iv.ty(), tyU32) || IRType.is(iv.ty(), tyU64)))
             return false;
         // The step: the value from the latch is i + 1.
         IROperand* step = (IROperand*)0;
@@ -1018,12 +1018,12 @@
                              && ((IROperand*)z.ops().get((u32)0)).kind() == (u8)OPK_USE)
                     ? (IRInsn*)defOf.get((Hashable*)((IROperand*)z.ops().get((u32)0)).val()) : (IRInsn*)0;
                 if (a == (IRInsn*)0 || !a.isOp(opAdd) || a.ops().count() != 2
-                    || !iv.ty().equals(String.withCString("U32")))
+                    || !IRType.is(iv.ty(), tyU32))
                     continue;
                 IROperand* a0 = (IROperand*)a.ops().get((u32)0);
                 IROperand* a1 = (IROperand*)a.ops().get((u32)1);
                 IROperand* ko = a0.kind() == (u8)OPK_USE && a0.val() == iv ? a1 : (a1.kind() == (u8)OPK_USE && a1.val() == iv ? a0 : (IROperand*)0);
-                if (ko == (IROperand*)0 || ko.kind() != (u8)OPK_USE || ko.val().ty() == (String*)0 || !ko.val().ty().equals(String.withCString("U32")))
+                if (ko == (IROperand*)0 || ko.kind() != OPK_USE || ko.val().ty() == (String*)0 || !IRType.is(ko.val().ty(), tyU32))
                     continue;
                 Object* kb = defBlk.get((Hashable*)ko.val());
                 if (kb != (Object*)0 && inBody.get((Hashable*)kb) != (Object*)0)
@@ -1075,7 +1075,7 @@
                 IROperand* o = (IROperand*)u.ops().get(k);
                 if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0)
                     continue;
-                if (o.val().ty() != (String*)0 && o.val().ty().equals(String.withCString("Mem")))
+                if (o.val().ty() != (String*)0 && IRType.is(o.val().ty(), tyMem))
                     continue;
                 Object* db = defBlk.get((Hashable*)o.val());
                 if (db != (Object*)0 && inBody.get((Hashable*)db) != (Object*)0)
@@ -1095,7 +1095,7 @@
         for (u32 k = (u32)0; k < nchain.count(); k = k + (u32)1)
             {
             IRInsn* n = (IRInsn*)nchain.get(k);
-            IRInsn* cl = IRInsn.with(n.op());
+            IRInsn* cl = IRInsn.withOpOf(n);
             cl.setPred(n.pred());
             cl.setCc(n.cc());
             cl.copyDbg(n);
@@ -1117,7 +1117,7 @@
             }
         IROperand* n0 = self.substOperand(pmap, IROperand.useVal(nv));
         // n as a u64, against each bound: every index the loop checks is below n.
-        if (nv.ty().equals(String.withCString("U32")))
+        if (IRType.is(nv.ty(), tyU32))
             {
             IRValue* w = new IRValue(String.withCString("U64"));
             IRInsn* z = IRInsn.with(String.withCString("ZExt"));
@@ -1301,7 +1301,7 @@
                     IROperand* o = (IROperand*)u.ops().get(k);
                     if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0 || vmap.get((Hashable*)o.val()) == (Object*)0)
                         continue;
-                    if (o.val().ty() != (String*)0 && o.val().ty().equals(String.withCString("Mem")))
+                    if (o.val().ty() != (String*)0 && IRType.is(o.val().ty(), tyMem))
                         continue;
                     IRValue* pv = (IRValue*)phiOf.get((Hashable*)o.val());
                     if (pv == (IRValue*)0)
@@ -1342,10 +1342,10 @@
         if (k.kind() != (u8)OPK_USE || k.val() == (IRValue*)0)
             return (IROperand*)0;
         String* t = k.val().ty();
-        if (t.equals(String.withCString("U64")) || t.equals(String.withCString("I64")))
+        if (IRType.is(t, tyU64) || IRType.is(t, tyI64))
             return IROperand.useVal(k.val());
-        bool sgn = t.equals(String.withCString("I8")) || t.equals(String.withCString("I16")) || t.equals(String.withCString("I32"));
-        bool uns = t.equals(String.withCString("U8")) || t.equals(String.withCString("U16")) || t.equals(String.withCString("U32"));
+        bool sgn = IRType.is(t, tyI8) || IRType.is(t, tyI16) || IRType.is(t, tyI32);
+        bool uns = IRType.is(t, tyU8) || IRType.is(t, tyU16) || IRType.is(t, tyU32);
         if (!sgn && !uns)
             return (IROperand*)0;
         IRInsn* x = IRInsn.with(sgn ? String.withCString("SExt") : String.withCString("ZExt"));
@@ -1482,7 +1482,7 @@
         if (a.kind() != (u8)OPK_USE || a.val() == (IRValue*)0)
             return (IRValue*)0;
         String* t = a.val().ty();
-        if (t == (String*)0 || !(t.equals(String.withCString("I32")) || t.equals(String.withCString("U32"))))
+        if (t == (String*)0 || !(IRType.is(t, tyI32) || IRType.is(t, tyU32)))
             return (IRValue*)0;
         return a.val();
         }
@@ -1517,14 +1517,14 @@
             return false;
         i64 w = (i64)0;
         bool isSigned = false;
-        if (ty.equals(String.withCString("U8"))) w = (i64)8;
-        else if (ty.equals(String.withCString("U16"))) w = (i64)16;
-        else if (ty.equals(String.withCString("U32"))) w = (i64)32;
-        else if (ty.equals(String.withCString("U64"))) w = (i64)62;
-        else if (ty.equals(String.withCString("I8"))) { w = (i64)8; isSigned = true; }
-        else if (ty.equals(String.withCString("I16"))) { w = (i64)16; isSigned = true; }
-        else if (ty.equals(String.withCString("I32"))) { w = (i64)32; isSigned = true; }
-        else if (ty.equals(String.withCString("I64"))) { w = (i64)62; isSigned = true; }
+        if (IRType.is(ty, tyU8)) w = 8;
+        else if (IRType.is(ty, tyU16)) w = 16;
+        else if (IRType.is(ty, tyU32)) w = 32;
+        else if (IRType.is(ty, tyU64)) w = 62;
+        else if (IRType.is(ty, tyI8)) { w = 8; isSigned = true; }
+        else if (IRType.is(ty, tyI16)) { w = 16; isSigned = true; }
+        else if (IRType.is(ty, tyI32)) { w = 32; isSigned = true; }
+        else if (IRType.is(ty, tyI64)) { w = 62; isSigned = true; }
         else
             return false;
         if (isSigned)

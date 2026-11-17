@@ -62,7 +62,7 @@
                 }
             // The narrow op REUSES the Trunc's result value, so every consumer
             // follows without being rewritten.
-            IRInsn* nOp = IRInsn.with(src.op());
+            IRInsn* nOp = IRInsn.withOpOf(src);
             nOp.copyDbg(tr);
             nOp.setRes(tr.res());
             for (u32 k = (u32)0; k < nops.count(); k = k + (u32)1)
@@ -96,7 +96,7 @@
         if (d == 0)
             return (IRInsn*)0;
         IRInsn* src = (IRInsn*)d;
-        if (!isNarrowable(src.op()))
+        if (!isNarrowable(src.opc()))
             return (IRInsn*)0;
         if (src.res() == 0 || src.ops().count() < (u32)2)
             return (IRInsn*)0;
@@ -159,9 +159,9 @@
 
     // Ops whose low W bits depend only on the operands' low W bits. Div, the
     // shifts and the remainders are NOT among them: their high bits leak down.
-    final bool isNarrowable(String* op)
+    final bool isNarrowable(u16 op)
         {
-        return op.equals(String.withCString("Add")) || op.equals(String.withCString("Sub")) || op.equals(String.withCString("Mul")) || op.equals(String.withCString("And")) || op.equals(String.withCString("Or")) || op.equals(String.withCString("Xor"));
+        return op == opAdd || op == opSub || op == opMul || op == opAnd || op == opOr || op == opXor;
         }
 
     // Value -> the INSTRUCTION that defines it, phis excluded (the original's

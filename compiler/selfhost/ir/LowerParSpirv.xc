@@ -28,40 +28,35 @@
     {
 
     final String* spvS(string c) { return String.withCString(c); }
-    final bool spvIsFloat(String* t) { return ptxIs(t, "F32") || ptxIs(t, "F64"); }
+    final bool spvIsFloat(String* t) { return IRType.isFloat(t); }
     final u32 spvNarrowBits(String* t)
         {
-        if (ptxIs(t, "I8") || self.ptxIs(t, "U8")) return (u32)8;
-        if (ptxIs(t, "I16") || self.ptxIs(t, "U16")) return (u32)16;
-        return (u32)0;
+        u32 w = IRType.isInt(t) ? IRType.bytes(t) : 0;
+        return w <= 2 ? w * 8 : 0;
         }
-    final bool spvNarrowSigned(String* t) { return ptxIs(t, "I8") || ptxIs(t, "I16"); }
+    final bool spvNarrowSigned(String* t) { return IRType.is(t, tyI8) || IRType.is(t, tyI16); }
     // The bytes of a value memory holds narrower than a word: 8/16-bit, or a bool.
     final u32 spvNarrowBytes(String* t)
         {
-        if (ptxIs(t, "I8") || self.ptxIs(t, "U8") || self.ptxIs(t, "Bool")) return (u32)1;
-        if (ptxIs(t, "I16") || self.ptxIs(t, "U16")) return (u32)2;
-        return (u32)0;
+        u32 w = IRType.bytes(t);
+        return w <= 2 ? w : 0;
         }
-    final bool spvWide(String* t) { return ptxIs(t, "I64") || ptxIs(t, "U64"); }
+    final bool spvWide(String* t) { return IRType.is(t, tyI64) || IRType.is(t, tyU64); }
     final u32 spvWidth(String* t)
         {
-        if (ptxIs(t, "I8") || self.ptxIs(t, "U8") || self.ptxIs(t, "Bool")) return (u32)1;
-        if (ptxIs(t, "I16") || self.ptxIs(t, "U16")) return (u32)2;
-        if (ptxIs(t, "I32") || self.ptxIs(t, "U32") || self.ptxIs(t, "F32")) return (u32)4;
-        if (ptxIs(t, "I64") || self.ptxIs(t, "U64") || self.ptxIs(t, "F64") || self.mslIsPtr(t)) return (u32)8;
-        return (u32)0;
+        if (IRType.isPtr(t)) return 8;
+        return IRType.bytes(t);
         }
 
     // A scalar type's id; 0 for a type this cut does not print.
     final u32 spvType(String* t)
         {
         if (t == (String*)0) return (u32)0;
-        if (spvNarrowBits(t) != (u32)0 || self.ptxIs(t, "I32") || self.ptxIs(t, "U32")) return _sMod.typeInt((u32)32);
-        if (ptxIs(t, "I64") || self.ptxIs(t, "U64")) return _sMod.typeInt((u32)64);
-        if (ptxIs(t, "F32")) return _sMod.typeFloat((u32)32);
-        if (ptxIs(t, "F64")) return _sMod.typeFloat((u32)64);
-        if (ptxIs(t, "Bool")) return _sMod.typeBool();
+        if (spvNarrowBits(t) != 0 || IRType.is(t, tyI32) || IRType.is(t, tyU32)) return _sMod.typeInt(32);
+        if (IRType.is(t, tyI64) || IRType.is(t, tyU64)) return _sMod.typeInt(64);
+        if (IRType.is(t, tyF32)) return _sMod.typeFloat(32);
+        if (IRType.is(t, tyF64)) return _sMod.typeFloat(64);
+        if (IRType.is(t, tyBool)) return _sMod.typeBool();
         return (u32)0;
         }
 
@@ -139,7 +134,7 @@
         {
         if (want == (String*)0)
             return (u32)0;
-        if (ptxIs(want, "Bool"))
+        if (IRType.is(want, tyBool))
             return _sMod.constBool(iv != (i64)0);
         u32 t = spvType(want);
         if (t == (u32)0 || spvIsFloat(want))
@@ -187,9 +182,9 @@
                 u64 d = c >= (u8)'a' ? (u64)(c - (u8)'a' + (u8)10) : c >= (u8)'A' ? (u64)(c - (u8)'A' + (u8)10) : (u64)(c - (u8)'0');
                 raw = (raw << (u64)4) | d;
                 }
-            if (ptxIs(want, "F64"))
+            if (IRType.is(want, tyF64))
                 return _sMod.constant(_sMod.typeFloat((u32)64), raw, true);
-            if (!self.ptxIs(want, "F32"))
+            if (!IRType.is(want, tyF32))
                 return (u32)0;
             double dv = *(double*)(pointer)&raw;
             float fv = (float)dv;
@@ -251,7 +246,7 @@
         {
         u32 w32 = _sMod.typeInt((u32)32);
         u32 v = spvEmitR((u32)SPV_SHIFTRIGHTLOGICAL, w32, spvA2(word, shift));
-        if (ptxIs(t, "Bool"))
+        if (IRType.is(t, tyBool))
             {
             u32 b = spvEmitR((u32)SPV_BITWISEAND, w32, spvA2(v, _sMod.u32c((u32)$FF)));
             u32 bt = _sMod.typeBool();
@@ -297,7 +292,7 @@
         u32 word = spvEmitR((u32)SPV_LOAD, w32, spvA1(p));
         u32 sh = r.wordShift - (u32)1;
         u32 low = ((u32)1 << ((u32)8 * spvNarrowBytes(r.pointee))) - (u32)1;   // a bool is a byte
-        if (ptxIs(r.pointee, "Bool"))
+        if (IRType.is(r.pointee, tyBool))
             v = spvEmitR((u32)SPV_SELECT, w32, spvA3(v, _sMod.u32c((u32)1), _sMod.u32c((u32)0)));
         u32 bits = spvEmitR((u32)SPV_SHIFTLEFTLOGICAL, w32,
                             spvA2(spvEmitR((u32)SPV_BITWISEAND, w32, spvA2(v, _sMod.u32c(low))), _sMod.u32c(sh)));
@@ -317,7 +312,7 @@
         u32 shift = _spvShift;
         u32 mask = _sMod.u32c(spvNarrowBytes(r.pointee) == (u32)1 ? (u32)$FF : (u32)$FFFF);
         u32 bits = (u32)0;
-        if (ptxIs(r.pointee, "Bool"))
+        if (IRType.is(r.pointee, tyBool))
             {
             u32 one = _sMod.u32c((u32)1);
             u32 zero = _sMod.u32c((u32)0);
@@ -356,7 +351,7 @@
             return (u32)0;
         u32 w32 = _sMod.typeInt((u32)32);
         u32 b = spvEmitR((u32)SPV_LOAD, _sMod.typeInt8Storage(), spvA1(p));
-        if (ptxIs(r.pointee, "Bool"))
+        if (IRType.is(r.pointee, tyBool))
             {
             u32 wv = spvEmitR((u32)SPV_UCONVERT, w32, spvA1(b));
             return spvEmitR((u32)SPV_INOTEQUAL, _sMod.typeBool(), spvA2(wv, _sMod.u32c((u32)0)));
@@ -371,7 +366,7 @@
             return false;
         u32 w32 = _sMod.typeInt((u32)32);
         u32 wv = v;
-        if (ptxIs(r.pointee, "Bool"))
+        if (IRType.is(r.pointee, tyBool))
             wv = spvEmitR((u32)SPV_SELECT, w32, spvA3(v, _sMod.u32c((u32)1), _sMod.u32c((u32)0)));
         spvEmit((u32)SPV_STORE, spvA2(p, spvEmitR((u32)SPV_UCONVERT, _sMod.typeInt8Storage(), spvA1(wv))));
         return true;
@@ -385,12 +380,12 @@
         u32 b = spvValue((IROperand*)ip.ops().get((u32)1), t);
         if (ty == (u32)0 || a == (u32)0 || b == (u32)0)
             return false;
-        String* o = ip.op();
+        u16 o = ip.opc();
         u32 nb = spvNarrowBits(t);
         if (nb != (u32)0)
             {
-            bool wantsUnsigned = o.equals(spvS("UDiv")) || o.equals(spvS("URem")) || o.equals(spvS("LShr"));
-            bool wantsSigned = o.equals(spvS("SDiv")) || o.equals(spvS("SRem")) || o.equals(spvS("AShr"));
+            bool wantsUnsigned = o == opUDiv || o == opURem || o == opLShr;
+            bool wantsSigned = o == opSDiv || o == opSRem || o == opAShr;
             String* as = (String*)0;
             if (wantsUnsigned && spvNarrowSigned(t))
                 as = spvS(nb == (u32)8 ? "U8" : "U16");
@@ -399,29 +394,29 @@
             if (as != (String*)0)
                 {
                 a = spvCanon(a, as);
-                if (!o.equals(spvS("LShr")) && !o.equals(spvS("AShr")))
+                if (o != opLShr && o != opAShr)
                     b = spvCanon(b, as);
                 }
             }
-        bool isBool = self.ptxIs(t, "Bool");
+        bool isBool = IRType.is(t, tyBool);
         u32 op = (u32)0;
-        if (o.equals(spvS("Add"))) op = (u32)SPV_IADD;
-        else if (o.equals(spvS("Sub"))) op = (u32)SPV_ISUB;
-        else if (o.equals(spvS("Mul"))) op = (u32)SPV_IMUL;
-        else if (o.equals(spvS("UDiv"))) op = (u32)SPV_UDIV;
-        else if (o.equals(spvS("SDiv"))) op = (u32)SPV_SDIV;
-        else if (o.equals(spvS("URem"))) op = (u32)SPV_UMOD;
-        else if (o.equals(spvS("SRem"))) op = (u32)SPV_SREM;
-        else if (o.equals(spvS("And"))) op = isBool ? (u32)SPV_LOGICALAND : (u32)SPV_BITWISEAND;
-        else if (o.equals(spvS("Or"))) op = isBool ? (u32)SPV_LOGICALOR : (u32)SPV_BITWISEOR;
-        else if (o.equals(spvS("Xor"))) op = isBool ? (u32)SPV_LOGICALNOTEQUAL : (u32)SPV_BITWISEXOR;
-        else if (o.equals(spvS("Shl"))) op = (u32)SPV_SHIFTLEFTLOGICAL;
-        else if (o.equals(spvS("LShr"))) op = (u32)SPV_SHIFTRIGHTLOGICAL;
-        else if (o.equals(spvS("AShr"))) op = (u32)SPV_SHIFTRIGHTARITHMETIC;
-        else if (o.equals(spvS("FAdd"))) op = (u32)SPV_FADD;
-        else if (o.equals(spvS("FSub"))) op = (u32)SPV_FSUB;
-        else if (o.equals(spvS("FMul"))) op = (u32)SPV_FMUL;
-        else if (o.equals(spvS("FDiv")))
+        if (o == opAdd) op = SPV_IADD;
+        else if (o == opSub) op = SPV_ISUB;
+        else if (o == opMul) op = SPV_IMUL;
+        else if (o == opUDiv) op = SPV_UDIV;
+        else if (o == opSDiv) op = SPV_SDIV;
+        else if (o == opURem) op = SPV_UMOD;
+        else if (o == opSRem) op = SPV_SREM;
+        else if (o == opAnd) op = isBool ? SPV_LOGICALAND : SPV_BITWISEAND;
+        else if (o == opOr) op = isBool ? SPV_LOGICALOR : SPV_BITWISEOR;
+        else if (o == opXor) op = isBool ? SPV_LOGICALNOTEQUAL : SPV_BITWISEXOR;
+        else if (o == opShl) op = SPV_SHIFTLEFTLOGICAL;
+        else if (o == opLShr) op = SPV_SHIFTRIGHTLOGICAL;
+        else if (o == opAShr) op = SPV_SHIFTRIGHTARITHMETIC;
+        else if (o == opFAdd) op = SPV_FADD;
+        else if (o == opFSub) op = SPV_FSUB;
+        else if (o == opFMul) op = SPV_FMUL;
+        else if (o == opFDiv)
             {
             // An accuracy block divides in integer arithmetic (the reference explains).
             if (!_mFast)
@@ -439,12 +434,12 @@
             }
         else
             return false;
-        bool isSgn = self.ptxIs(t, "I8") || self.ptxIs(t, "I16") || self.ptxIs(t, "I32") || self.ptxIs(t, "I64");
+        bool isSgn = IRType.is(t, tyI8) || IRType.is(t, tyI16) || IRType.is(t, tyI32) || IRType.is(t, tyI64);
         // A signed divide carries the SIGNED type on the instruction; a signed
         // REMAINDER is not OpSRem at all (the reference explains both, bug 649).
         if (isSgn && (op == (u32)SPV_SDIV || op == (u32)SPV_SREM))
             {
-            u32 sg = _sMod.typeIntSigned(self.ptxIs(t, "I64") ? (u32)64 : (u32)32);
+            u32 sg = _sMod.typeIntSigned(IRType.is(t, tyI64) ? 64 : 32);
             u32 sa = spvEmitR((u32)SPV_BITCAST, sg, spvA1(a));
             u32 sb = spvEmitR((u32)SPV_BITCAST, sg, spvA1(b));
             u32 q = spvEmitR((u32)SPV_SDIV, sg, spvA2(sa, sb));
@@ -480,7 +475,7 @@
             return false;
         String* p = ip.pred();
         u32 op = (u32)0;
-        if (ip.op().equals(spvS("FCmp")))
+        if (ip.isOp(opFCmp))
             {
             if (p.equals(spvS("OEQ"))) op = (u32)SPV_FORDEQUAL;
             else if (p.equals(spvS("ONE"))) op = (u32)SPV_FUNORDNOTEQUAL;
@@ -503,7 +498,7 @@
             else if (p.equals(spvS("ULE"))) op = (u32)SPV_ULESSTHANEQUAL;
             else if (p.equals(spvS("UGE"))) op = (u32)SPV_UGREATERTHANEQUAL;
             else return false;
-            if (ptxIs(t, "Bool"))
+            if (IRType.is(t, tyBool))
                 {
                 if (p.equals(spvS("EQ"))) op = (u32)SPV_LOGICALEQUAL;
                 else if (p.equals(spvS("NE"))) op = (u32)SPV_LOGICALNOTEQUAL;
@@ -536,8 +531,8 @@
             return false;
         bool sameWidth = spvWidth(st) == spvWidth(rt);
         u32 v = (u32)0;
-        String* o = ip.op();
-        if (ptxIs(st, "Bool") && !self.ptxIs(rt, "Bool"))
+        u16 o = ip.opc();
+        if (IRType.is(st, tyBool) && !IRType.is(rt, tyBool))
             {
             if (spvIsFloat(rt))
                 return false;
@@ -545,9 +540,9 @@
             u32 zero = spvImm((i64)0, rt);
             v = spvEmitR((u32)SPV_SELECT, ty, spvA3(a, one, zero));
             }
-        else if (ptxIs(rt, "Bool"))
+        else if (IRType.is(rt, tyBool))
             {
-            if (ptxIs(st, "Bool"))
+            if (IRType.is(st, tyBool))
                 v = a;
             else if (spvIsFloat(st))
                 return false;
@@ -560,11 +555,11 @@
             bool sWide = spvWide(st);
             bool rWide = spvWide(rt);
             u32 w32 = _sMod.typeInt((u32)32);
-            if (o.equals(spvS("ZExt")) || o.equals(spvS("SExt")) || o.equals(spvS("Trunc")) || o.equals(spvS("Copy")))
+            if (o == opZExt || o == opSExt || o == opTrunc || o == opCopy)
                 {
                 if (spvIsFloat(st) || spvIsFloat(rt))
                     {
-                    if (!o.equals(spvS("Copy")))
+                    if (o != opCopy)
                         return false;
                     if (spvIsFloat(st) && spvIsFloat(rt))
                         v = sameWidth ? a : spvEmitR((u32)SPV_FCONVERT, ty, spvA1(a));
@@ -575,7 +570,7 @@
                     }
                 else
                     {
-                    bool extSigned = o.equals(spvS("SExt")) || (!o.equals(spvS("ZExt")) && self.ptxSigned(st));
+                    bool extSigned = o == opSExt || (o != opZExt && self.ptxSigned(st));
                     u32 x = a;
                     if (sb != (u32)0 && extSigned != spvNarrowSigned(st))
                         {
@@ -588,13 +583,13 @@
                     v = spvCanon(x, rt);
                     }
                 }
-            else if (o.equals(spvS("SIToFp")))
+            else if (o == opSIToFp)
                 v = spvEmitR((u32)SPV_CONVERTSTOF, ty, spvA1(a));
-            else if (o.equals(spvS("UIToFp")))
+            else if (o == opUIToFp)
                 v = spvEmitR((u32)SPV_CONVERTUTOF, ty, spvA1(a));
-            else if (o.equals(spvS("FpToSI")))
+            else if (o == opFpToSI)
                 v = spvCanon(spvEmitR((u32)SPV_CONVERTFTOS, ty, spvA1(a)), rt);
-            else if (o.equals(spvS("FpToUI")))
+            else if (o == opFpToUI)
                 v = spvCanon(spvEmitR((u32)SPV_CONVERTFTOU, ty, spvA1(a)), rt);
             else
                 return false;
@@ -664,12 +659,12 @@
         if (callee.equals(spvS("_xtc_sinit_run")) || callee.hasSuffix(spvS("$init")))
             return true;
         String* rt = ip.res() != (IRValue*)0 ? ip.res().ty() : (String*)0;
-        bool isVoid = rt == (String*)0 || self.ptxIs(rt, "Mem");
+        bool isVoid = rt == (String*)0 || IRType.is(rt, tyMem);
         Array* args = new Array();
         for (u32 k = (u32)1; k < ip.ops().count(); k = k + (u32)1)
             {
             IROperand* o = (IROperand*)ip.ops().get(k);
-            if (o.kind() == (u8)OPK_USE && self.ptxIs(mslTypeOf(o), "Mem"))
+            if (o.kind() == OPK_USE && IRType.is(mslTypeOf(o), tyMem))
                 continue;
             String* at = o.kind() == (u8)OPK_USE ? self.mslTypeOf(o) : rt;
             u32 v = spvValue(o, at);
@@ -689,7 +684,7 @@
                 return false;
             u32 g = spvGlslFor(callee, rt);
             // An accuracy block's square root (the reference explains).
-            if (g == (u32)0 && !_mFast && self.ptxIs(rt, "F32") && self.ptxMathName(callee).equals(spvS("sqrt")))
+            if (g == 0 && !_mFast && IRType.is(rt, tyF32) && self.ptxMathName(callee).equals(spvS("sqrt")))
                 {
                 u32 sfid = spvHelperId(spvS("xcFsqrtRn"));
                 if (sfid != (u32)0)
@@ -736,46 +731,46 @@
         {
         IRValue* res = ip.res();
         String* rt = res != (IRValue*)0 ? res.ty() : (String*)0;
-        String* o = ip.op();
+        u16 o = ip.opc();
         // A value nothing reads, from an instruction with no other effect.
-        if (res != (IRValue*)0 && !self.ptxIs(rt, "Mem") && _spvFn.used.get((Hashable*)self.mslKey(res)) == (Object*)0 &&
-            !o.equals(spvS("Call")) && !o.equals(spvS("Store")))
+        if (res != (IRValue*)0 && !IRType.is(rt, tyMem) && _spvFn.used.get((Hashable*)self.mslKey(res)) == (Object*)0 &&
+            o != opCall && o != opStore)
             return true;
         IROperand* o0 = ip.ops().count() > (u32)0 ? (IROperand*)ip.ops().get((u32)0) : (IROperand*)0;
-        if (o.equals(spvS("Const")))
+        if (o == opConst)
             {
             u32 v = spvValue(o0, rt);
             if (v == (u32)0) return false;
             spvSetResult(ip, v);
             return true;
             }
-        if (o.equals(spvS("Add")) || o.equals(spvS("Sub")) || o.equals(spvS("Mul")) || o.equals(spvS("UDiv")) ||
-            o.equals(spvS("SDiv")) || o.equals(spvS("URem")) || o.equals(spvS("SRem")) || o.equals(spvS("And")) ||
-            o.equals(spvS("Or")) || o.equals(spvS("Xor")) || o.equals(spvS("Shl")) || o.equals(spvS("LShr")) ||
-            o.equals(spvS("AShr")) || o.equals(spvS("FAdd")) || o.equals(spvS("FSub")) || o.equals(spvS("FMul")) ||
-            o.equals(spvS("FDiv")))
+        if (o == opAdd || o == opSub || o == opMul || o == opUDiv ||
+            o == opSDiv || o == opURem || o == opSRem || o == opAnd ||
+            o == opOr || o == opXor || o == opShl || o == opLShr ||
+            o == opAShr || o == opFAdd || o == opFSub || o == opFMul ||
+            o == opFDiv)
             return spvBinary(ip);
-        if (o.equals(spvS("Not")))
+        if (o == opNot)
             {
             u32 a = spvValue(o0, rt);
             if (a == (u32)0) return false;
-            spvSetResult(ip, spvCanon(spvEmitR(self.ptxIs(rt, "Bool") ? (u32)SPV_LOGICALNOT : (u32)SPV_NOT, spvType(rt), spvA1(a)), rt));
+            spvSetResult(ip, spvCanon(spvEmitR(IRType.is(rt, tyBool) ? SPV_LOGICALNOT : SPV_NOT, spvType(rt), spvA1(a)), rt));
             return true;
             }
-        if (o.equals(spvS("Neg")) || o.equals(spvS("FNeg")))
+        if (o == opNeg || o == opFNeg)
             {
             u32 a = spvValue(o0, rt);
             if (a == (u32)0) return false;
             spvSetResult(ip, spvCanon(spvEmitR(spvIsFloat(rt) ? (u32)SPV_FNEGATE : (u32)SPV_SNEGATE, spvType(rt), spvA1(a)), rt));
             return true;
             }
-        if (o.equals(spvS("FSqrt")))
+        if (o == opFSqrt)
             {
             u32 a = spvValue(o0, rt);
             if (a == (u32)0) return false;
             if (!_mFast)
                 {
-                u32 fid = self.ptxIs(rt, "F32") ? spvHelperId(spvS("xcFsqrtRn")) : (u32)0;
+                u32 fid = IRType.is(rt, tyF32) ? spvHelperId(spvS("xcFsqrtRn")) : 0;
                 if (fid == (u32)0)
                     {
                     self.parBecause(spvS("it takes a square root, which a Vulkan GPU does not round exactly, and the block's goal is accuracy"));
@@ -787,12 +782,12 @@
             spvSetResult(ip, spvEmitR((u32)SPV_EXTINST, spvType(rt), spvA3(_sMod.glslImport(), (u32)GLSL_SQRT, a)));
             return true;
             }
-        if (o.equals(spvS("ICmp")) || o.equals(spvS("FCmp")))
+        if (o == opICmp || o == opFCmp)
             return spvCompare(ip);
-        if (o.equals(spvS("ZExt")) || o.equals(spvS("SExt")) || o.equals(spvS("Trunc")) || o.equals(spvS("SIToFp")) ||
-            o.equals(spvS("UIToFp")) || o.equals(spvS("FpToSI")) || o.equals(spvS("FpToUI")) || o.equals(spvS("Copy")))
+        if (o == opZExt || o == opSExt || o == opTrunc || o == opSIToFp ||
+            o == opUIToFp || o == opFpToSI || o == opFpToUI || o == opCopy)
             return spvConvert(ip);
-        if (o.equals(spvS("Select")))
+        if (o == opSelect)
             {
             u32 c = spvValue(o0, (String*)0);
             u32 a = spvValue((IROperand*)ip.ops().get((u32)1), rt);
@@ -801,7 +796,7 @@
             spvSetResult(ip, spvEmitR((u32)SPV_SELECT, spvType(rt), spvA3(c, a, b)));
             return true;
             }
-        if (o.equals(spvS("FieldAddr")))
+        if (o == opFieldAddr)
             {
             i64 k = self.mslSelfField(ip);
             if (k >= (i64)0)
@@ -828,7 +823,7 @@
                 }
             return false;
             }
-        if (o.equals(spvS("ElementAddr")))
+        if (o == opElementAddr)
             {
             SpvRecipe* b = o0.kind() == (u8)OPK_USE && o0.val() != (IRValue*)0 ? (SpvRecipe*)_spvFn.recipeOf.get((Hashable*)self.mslKey(o0.val())) : (SpvRecipe*)0;
             String* pe = self.mslPointee(rt);
@@ -841,11 +836,11 @@
             // word in an array of structs): the 32-bit span form then needs
             // no 64-bit integer for it.
             String* it = o1.kind() == (u8)OPK_USE ? self.mslTypeOf(o1) : spvS("I64");
-            if (o1.kind() == (u8)OPK_IMMI && o1.ty() != (String*)0 && (self.ptxIs(o1.ty(), "U32") || self.ptxIs(o1.ty(), "I32")))
+            if (o1.kind() == OPK_IMMI && o1.ty() != (String*)0 && (IRType.is(o1.ty(), tyU32) || IRType.is(o1.ty(), tyI32)))
                 it = o1.ty();
             u32 ity = spvType(it);
             u32 idx = spvValue(o1, it);
-            if (ity == (u32)0 || idx == (u32)0 || spvIsFloat(it) || self.ptxIs(it, "Bool")) return false;
+            if (ity == 0 || idx == 0 || spvIsFloat(it) || IRType.is(it, tyBool)) return false;
             SpvRecipe* r = b.copy();
             r.pointee = pe;
             if (b.indexVar != (u32)0)
@@ -864,7 +859,7 @@
             _spvFn.recipeOf.set((Hashable*)self.mslKey(res), (Object*)r);
             return true;
             }
-        if (o.equals(spvS("Bitcast")))
+        if (o == opBitcast)
             {
             if (mslIsPtr(rt))
                 {
@@ -882,7 +877,7 @@
             spvSetResult(ip, spvCanon(spvEmitR((u32)SPV_BITCAST, spvType(rt), spvA1(a)), rt));
             return true;
             }
-        if (o.equals(spvS("Load")))
+        if (o == opLoad)
             {
             String* buf = res != (IRValue*)0 ? (String*)_mBufOf.get((Hashable*)self.mslKey(res)) : (String*)0;
             if (buf != (String*)0)
@@ -929,7 +924,7 @@
             spvSetResult(ip, spvEmitR((u32)SPV_LOAD, ty, spvA1(p)));
             return true;
             }
-        if (o.equals(spvS("Store")))
+        if (o == opStore)
             {
             if (o0.kind() != (u8)OPK_USE || o0.val() == (IRValue*)0) return false;
             SpvRecipe* r = (SpvRecipe*)_spvFn.recipeOf.get((Hashable*)self.mslKey(o0.val()));
@@ -946,9 +941,9 @@
             spvEmit((u32)SPV_STORE, spvA2(p, v));
             return true;
             }
-        if (o.equals(spvS("Call")))
+        if (o == opCall)
             return spvCall(ip);
-        if (o.equals(spvS("AddrOf")))
+        if (o == opAddrOf)
             {
             if (res != (IRValue*)0 && _mSinit.get((Hashable*)self.mslKey(res)) != (Object*)0)
                 return true;
@@ -1007,7 +1002,7 @@
             _spvFn.recipeOf.set((Hashable*)self.mslKey(res), (Object*)r);
             return true;
             }
-        if (o.equals(spvS("DbgValue")))
+        if (o == opDbgValue)
             return true;
         return false;
         }
@@ -1019,7 +1014,7 @@
         for (u32 i = (u32)0; i < target.phis().count(); i = i + (u32)1)
             {
             IRInsn* ph = (IRInsn*)target.phis().get(i);
-            if (ph.res() == (IRValue*)0 || self.ptxIs(ph.res().ty(), "Mem")) continue;
+            if (ph.res() == (IRValue*)0 || IRType.is(ph.res().ty(), tyMem)) continue;
             if (mslIsPtr(ph.res().ty())) return false;
             IROperand* inc = (IROperand*)0;
             for (u32 k = (u32)0; k + (u32)1 < ph.ops().count(); k = k + (u32)2)
@@ -1101,14 +1096,14 @@
             if (t == (IRInsn*)0) return false;
             Array* vals = new Array();
             Array* dsts = new Array();
-            if (t.op().equals(spvS("Branch")))
+            if (t.isOp(opBranch))
                 {
                 IRBlock* to = ((IROperand*)t.ops().get((u32)0)).blk();
                 if (!spvEdge(b, to, (u32)0, true, vals, dsts)) return false;
                 spvStores(vals, dsts);
                 spvEmit((u32)SPV_STORE, spvA2(fn.pcVar, spvBlockNumber(to)));
                 }
-            else if (t.op().equals(spvS("CondBranch")))
+            else if (t.isOp(opCondBranch))
                 {
                 u32 c = spvValue((IROperand*)t.ops().get((u32)0), (String*)0);
                 if (c == (u32)0) return false;
@@ -1124,11 +1119,11 @@
                 u32 next = spvEmitR((u32)SPV_SELECT, _sMod.typeInt((u32)32), spvA3(c, spvBlockNumber(yes), spvBlockNumber(no)));
                 spvEmit((u32)SPV_STORE, spvA2(fn.pcVar, next));
                 }
-            else if (t.op().equals(spvS("Return")))
+            else if (t.isOp(opReturn))
                 {
                 IROperand* rv = t.ops().count() > (u32)0 ? (IROperand*)t.ops().get((u32)0) : (IROperand*)0;
                 String* rvt = rv == (IROperand*)0 ? (String*)0 : rv.kind() == (u8)OPK_USE ? self.mslTypeOf(rv) : f.ret();
-                if (_mHelper && rvt != (String*)0 && !self.ptxIs(rvt, "Mem"))
+                if (_mHelper && rvt != (String*)0 && !IRType.is(rvt, tyMem))
                     {
                     u32 v = spvValue(rv, rvt);
                     if (v == (u32)0 || fn.retVar == (u32)0) return false;
@@ -1234,7 +1229,7 @@
                     }
         IRInsn* t = b.term();
         if (t == (IRInsn*)0) return false;
-        if (t.op().equals(spvS("Return")))
+        if (t.isOp(opReturn))
             {
             if (_mHelper)
                 {
@@ -1243,7 +1238,7 @@
                 String* rvt = rv == (IROperand*)0 ? (String*)0 : rv.kind() == (u8)OPK_USE ? self.mslTypeOf(rv) : _sFn.ret();
                 if (!f.dry)
                     {
-                    if (rvt != (String*)0 && !self.ptxIs(rvt, "Mem"))
+                    if (rvt != (String*)0 && !IRType.is(rvt, tyMem))
                         {
                         u32 v = spvValue(rv, rvt);
                         if (v == (u32)0) return false;
@@ -1261,9 +1256,9 @@
             spvBranchTo(f.exitLabel);
             return true;
             }
-        if (t.op().equals(spvS("Branch")))
+        if (t.isOp(opBranch))
             return spvSJump(x, self.sIndexOf(((IROperand*)t.ops().get((u32)0)).blk()), h, e, fo);
-        if (!t.op().equals(spvS("CondBranch"))) return false;
+        if (!t.isOp(opCondBranch)) return false;
         u32 n = _sFn.blocks().count();
         i64 j = ((Number*)_sIpdom.get(x)).asI64();
         if (j < (i64)0) return false;
@@ -1374,7 +1369,7 @@
                 IRInsn* ip = (IRInsn*)all.get(i);
                 if (ip.res() == (IRValue*)0) continue;
                 String* t = spvValType(ip.res());
-                if (ptxIs(t, "Mem") || self.mslIsPtr(t) || _spvFn.used.get((Hashable*)self.mslKey(ip.res())) == (Object*)0) continue;
+                if (IRType.is(t, tyMem) || self.mslIsPtr(t) || _spvFn.used.get((Hashable*)self.mslKey(ip.res())) == (Object*)0) continue;
                 u32 ty = spvType(t);
                 if (ty == (u32)0)
                     {
@@ -1437,7 +1432,7 @@
             _mBlk.set((Hashable*)((IRBlock*)g.blocks().get(bi)).name(), (Object*)String.withU32(bi));
             }
         String* rt = g.ret();
-        bool isVoid = rt == (String*)0 || self.ptxIs(rt, "Void") || self.ptxIs(rt, "Mem");
+        bool isVoid = rt == (String*)0 || IRType.is(rt, tyVoid) || IRType.is(rt, tyMem);
         u32 ret = isVoid ? _sMod.typeVoid() : spvType(rt);
         if (ret == (u32)0) return (u32)0;
         Array* fnTypeWords = new Array();
@@ -1542,7 +1537,7 @@
                     IRInsn* ip = (IRInsn*)all.get(i);
                     if (pass == (u32)0)
                         {
-                        if (ip.op().equals(spvS("FieldAddr")) && ip.res() != (IRValue*)0)
+                        if (ip.isOp(opFieldAddr) && ip.res() != (IRValue*)0)
                             {
                             i64 k = self.mslSelfField(ip);
                             if (k == (i64)1 || k == (i64)2)
@@ -1552,16 +1547,16 @@
                         }
                     if (pass == (u32)1)
                         {
-                        if (!ip.op().equals(spvS("Load")) || ip.res() == (IRValue*)0 || ip.ops().count() == (u32)0) continue;
+                        if (!ip.isOp(opLoad) || ip.res() == (IRValue*)0 || ip.ops().count() == 0) continue;
                         IROperand* o0 = (IROperand*)ip.ops().get((u32)0);
                         if (o0.kind() == (u8)OPK_USE && o0.val() != (IRValue*)0 && addrs.get((Hashable*)self.mslKey(o0.val())) != (Object*)0)
                             loads.set((Hashable*)self.mslKey(ip.res()), (Object*)spvS("1"));
                         continue;
                         }
                     // pass 2: a use other than a truncation to 32 bits or less widens it.
-                    bool narrowing = ip.op().equals(spvS("Trunc")) && ip.res() != (IRValue*)0 &&
-                        (self.ptxIs(ip.res().ty(), "U32") || self.ptxIs(ip.res().ty(), "I32") || self.ptxIs(ip.res().ty(), "U16") ||
-                         self.ptxIs(ip.res().ty(), "I16") || self.ptxIs(ip.res().ty(), "U8") || self.ptxIs(ip.res().ty(), "I8"));
+                    bool narrowing = ip.isOp(opTrunc) && ip.res() != (IRValue*)0 &&
+                        (IRType.is(ip.res().ty(), tyU32) || IRType.is(ip.res().ty(), tyI32) || IRType.is(ip.res().ty(), tyU16) ||
+                         IRType.is(ip.res().ty(), tyI16) || IRType.is(ip.res().ty(), tyU8) || IRType.is(ip.res().ty(), tyI8));
                     for (u32 k = (u32)0; k < ip.ops().count(); k = k + (u32)1)
                         {
                         IROperand* op = (IROperand*)ip.ops().get(k);
@@ -1605,18 +1600,18 @@
                 IRValue* res = ip.res();
                 IROperand* o0 = ip.ops().count() > (u32)0 ? (IROperand*)ip.ops().get((u32)0) : (IROperand*)0;
                 bool u0 = o0 != (IROperand*)0 && o0.kind() == (u8)OPK_USE && o0.val() != (IRValue*)0;
-                if (pass == (u32)0 && ip.op().equals(spvS("FieldAddr")) && res != (IRValue*)0)
+                if (pass == 0 && ip.isOp(opFieldAddr) && res != (IRValue*)0)
                     {
                     i64 k = self.mslSelfField(ip);
                     if (k == (i64)1 || k == (i64)2) addrK.set((Hashable*)self.mslKey(res), (Object*)String.withI64(k));
                     }
-                if (pass == (u32)1 && ip.op().equals(spvS("Load")) && res != (IRValue*)0 && u0 &&
+                if (pass == 1 && ip.isOp(opLoad) && res != (IRValue*)0 && u0 &&
                     addrK.get((Hashable*)self.mslKey(o0.val())) != (Object*)0 && _sNarrowVals.get((Hashable*)self.mslKey(res)) != (Object*)0)
                     loadK.set((Hashable*)self.mslKey(res), addrK.get((Hashable*)self.mslKey(o0.val())));
-                if (pass == (u32)2 && ip.op().equals(spvS("Trunc")) && res != (IRValue*)0 && u0 &&
+                if (pass == 2 && ip.isOp(opTrunc) && res != (IRValue*)0 && u0 &&
                     loadK.get((Hashable*)self.mslKey(o0.val())) != (Object*)0)
                     truncK.set((Hashable*)self.mslKey(res), loadK.get((Hashable*)self.mslKey(o0.val())));
-                if (pass == (u32)3 && ip.op().equals(spvS("Phi")) && res != (IRValue*)0)
+                if (pass == 3 && ip.isOp(opPhi) && res != (IRValue*)0)
                     for (u32 k = (u32)0; k < ip.ops().count(); k = k + (u32)1)
                         {
                         IROperand* op = (IROperand*)ip.ops().get(k);
@@ -1626,7 +1621,7 @@
                             if (tk != (String*)0 && tk.equals(spvS("1"))) phiLo.set((Hashable*)self.mslKey(res), (Object*)spvS("1"));
                             }
                         }
-                if (pass == (u32)4 && ip.op().equals(spvS("Add")) && res != (IRValue*)0 && u0 && ip.ops().count() == (u32)2 &&
+                if (pass == 4 && ip.isOp(opAdd) && res != (IRValue*)0 && u0 && ip.ops().count() == 2 &&
                     phiLo.get((Hashable*)self.mslKey(o0.val())) != (Object*)0)
                     {
                     IROperand* o1 = (IROperand*)ip.ops().get((u32)1);
@@ -1638,7 +1633,7 @@
         for (u32 i = (u32)0; i < insns.count(); i = i + (u32)1)
             {
             IRInsn* ip = (IRInsn*)insns.get(i);
-            if (!ip.op().equals(spvS("Phi")) || ip.res() == (IRValue*)0 || phiLo.get((Hashable*)self.mslKey(ip.res())) == (Object*)0) continue;
+            if (!ip.isOp(opPhi) || ip.res() == (IRValue*)0 || phiLo.get((Hashable*)self.mslKey(ip.res())) == (Object*)0) continue;
             for (u32 k = (u32)0; k < ip.ops().count(); k = k + (u32)1)
                 {
                 IROperand* op = (IROperand*)ip.ops().get(k);
@@ -1662,7 +1657,7 @@
                 String* tk = (String*)truncK.get((Hashable*)self.mslKey(op.val()));
                 if (tk == (String*)0 || !tk.equals(spvS("2"))) continue;
                 // A use of hi: only as the right side of lo < hi or i + 1 < hi.
-                if (!ip.op().equals(spvS("ICmp")) || k != (u32)1 || ip.res() == (IRValue*)0 ||
+                if (!ip.isOp(opICmp) || k != 1 || ip.res() == (IRValue*)0 ||
                     !(ip.pred().equals(spvS("ULT")) || ip.pred().equals(spvS("SLT"))))
                     return (Map*)0;
                 IROperand* a = (IROperand*)ip.ops().get((u32)0);
@@ -1692,7 +1687,7 @@
         _mGlobalOf = new Map();
         if (f.params().count() == (u32)0) return false;
         _mObj = self.mslLayoutOf(mslPointee(((IRValue*)f.params().get((u32)0)).ty()));
-        if (_mObj == (IRLayout*)0 || _mObj.fieldCount() < (u32)3 || !self.ptxIs(_mObj.typeAt((u32)1), "I64") || !self.ptxIs(_mObj.typeAt((u32)2), "I64"))
+        if (_mObj == (IRLayout*)0 || _mObj.fieldCount() < 3 || !IRType.is(_mObj.typeAt(1), tyI64) || !IRType.is(_mObj.typeAt(2), tyI64))
             return false;
         if (!self.mslAnalyse(f)) return false;
         SpvFn* fn = new SpvFn();
@@ -1723,7 +1718,7 @@
             for (u32 i = (u32)0; i < b.insns().count(); i = i + (u32)1)
                 {
                 IRInsn* ip = (IRInsn*)b.insns().get(i);
-                if (!ip.op().equals(spvS("FieldAddr")) || ip.res() == (IRValue*)0) continue;
+                if (!ip.isOp(opFieldAddr) || ip.res() == (IRValue*)0) continue;
                 i64 k = self.mslSelfField(ip);
                 if (k >= (i64)0 && !self.mslIsPtr(_mObj.typeAt((u32)k)))
                     used.set((Hashable*)String.withI64(k), (Object*)spvS("1"));
@@ -1816,8 +1811,8 @@
             anyRed = true;
             String* rt = _mObj.typeAt(k);
             String* op = _mRedOps != (Map*)0 ? (String*)_mRedOps.get((Hashable*)String.withU32(k)) : (String*)0;
-            bool isF = self.ptxIs(rt, "F32") || self.ptxIs(rt, "F64");
-            bool okT = self.ptxIs(rt, "I32") || self.ptxIs(rt, "U32") || self.ptxIs(rt, "I64") || self.ptxIs(rt, "U64") || isF;
+            bool isF = IRType.is(rt, tyF32) || IRType.is(rt, tyF64);
+            bool okT = IRType.is(rt, tyI32) || IRType.is(rt, tyU32) || IRType.is(rt, tyI64) || IRType.is(rt, tyU64) || isF;
             bool okOp = op != (String*)0 && (op.equals(spvS("+")) || op.equals(spvS("*")) || op.equals(spvS("min")) ||
                         op.equals(spvS("max")) ||
                         (!isF && (op.equals(spvS("&")) || op.equals(spvS("|")) || op.equals(spvS("^")))));
@@ -2041,8 +2036,8 @@
                 u32 k = ((Number*)redFields.get(di)).asU32();
                 String* rt = _mObj.typeAt(k);
                 String* op = (String*)_mRedOps.get((Hashable*)String.withU32(k));
-                bool isF = self.ptxIs(rt, "F32") || self.ptxIs(rt, "F64");
-                bool sgn = self.ptxIs(rt, "I32") || self.ptxIs(rt, "I64");
+                bool isF = IRType.is(rt, tyF32) || IRType.is(rt, tyF64);
+                bool sgn = IRType.is(rt, tyI32) || IRType.is(rt, tyI64);
                 u32 t = spvType(rt);
                 u32 sv = ((Number*)shVars.get(di)).asU32();
                 u32 pW = m.ptrType((u32)SPV_ST_WORKGROUP, t);
@@ -2182,8 +2177,8 @@
                 u32 k = ((Number*)redFields.get(di)).asU32();
                 String* rt = _mObj.typeAt(k);
                 String* op = (String*)_mRedOps.get((Hashable*)String.withU32(k));
-                bool isF = self.ptxIs(rt, "F32") || self.ptxIs(rt, "F64");
-                bool sgn = self.ptxIs(rt, "I32") || self.ptxIs(rt, "I64");
+                bool isF = IRType.is(rt, tyF32) || IRType.is(rt, tyF64);
+                bool sgn = IRType.is(rt, tyI32) || IRType.is(rt, tyI64);
                 u32 t = spvType(rt);
                 u32 bT = m.typeBool();
                 u32 sv = ((Number*)shVars.get(di)).asU32();

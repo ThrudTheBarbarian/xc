@@ -385,7 +385,7 @@
 
     final IRInsn* cloneInsn(Map* remap, Map* blockMap, IRInsn* bi)
         {
-        IRInsn* cl = IRInsn.with(bi.op());
+        IRInsn* cl = IRInsn.withOpOf(bi);
         cl.setPred(bi.pred());
         cl.setCc(bi.cc());
         cl.copyDbg(bi);
@@ -494,7 +494,7 @@
         // reliably addressable. Pass it through a real call.
         if (!_profile.inlineAggParams())
             for (u32 k = (u32)0; k < nUser; k = k + (u32)1)
-                if (((IRValue*)callee.params().get(k)).ty().hasPrefix(String.withCString("Agg(")))
+                if (IRType.isAgg(((IRValue*)callee.params().get(k)).ty()))
                     return (IRFunc*)0;
         return callee;
         }
@@ -540,7 +540,7 @@
         for (u32 i = (u32)0; i < cb.insns().count(); i = i + (u32)1)
             {
             IRInsn* bi = (IRInsn*)cb.insns().get(i);
-            IRInsn* cl = IRInsn.with(bi.op());
+            IRInsn* cl = IRInsn.withOpOf(bi);
             cl.setPred(bi.pred());
             cl.setCc(bi.cc());
             cl.copyDbg(bi);

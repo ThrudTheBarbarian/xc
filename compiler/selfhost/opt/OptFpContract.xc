@@ -78,7 +78,7 @@
                     // A vector add over float lanes too (the reference says why).
                     String* t = n.res().ty();
                     bool flt = vec ? (t.hasPrefix(String.withCString("Vec(F32")) || t.hasPrefix(String.withCString("Vec(F64")))
-                                   : (t.equals(String.withCString("F32")) || t.equals(String.withCString("F64")));
+                                   : (IRType.is(t, tyF32) || IRType.is(t, tyF64));
                     if (!flt)
                         continue;
                     n.setPred(String.withCString("contract"));

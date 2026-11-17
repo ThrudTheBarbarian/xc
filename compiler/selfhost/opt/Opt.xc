@@ -259,7 +259,7 @@
 
     static void escTripsClone(IRInsn* i, IRBlock* B, Map* m)
         {
-        IRInsn* c = IRInsn.with(i.op());
+        IRInsn* c = IRInsn.withOpOf(i);
         c.copyDbg(i);
         c.setPred(i.pred());
         for (u32 k = (u32)0; k < i.ops().count(); k = k + (u32)1)
@@ -325,8 +325,8 @@
                 for (u32 q = (u32)0; ok && q < H.phis().count(); q = q + (u32)1)
                     {
                     IRInsn* p = (IRInsn*)H.phis().get(q);
-                    if (p.res() == (IRValue*)0 || p.ops().count() != (u32)4 || p.res().ty().equals(String.withCString("Mem"))
-                        || p.res().ty().hasPrefix(String.withCString("Ptr")))
+                    if (p.res() == (IRValue*)0 || p.ops().count() != 4 || IRType.is(p.res().ty(), tyMem)
+                        || IRType.isPtr(p.res().ty()))
                         {
                         ok = false;
                         continue;

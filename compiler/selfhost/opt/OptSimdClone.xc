@@ -41,7 +41,7 @@
                 IRInsn* n = (IRInsn*)(k < bl.phis().count() ? bl.phis().get(k)
                                                             : bl.insns().get(k - bl.phis().count()));
                 if (n.res() != (IRValue*)0 && n.res().ty() != (String*)0
-                    && n.res().ty().hasPrefix(String.withCString("Vec("))
+                    && IRType.isVec(n.res().ty())
                     && n.res().ty().hasSuffix(sfx))
                     return true;
                 }
@@ -84,7 +84,7 @@
                 u16 oc = x.opc();
                 if (x.res() == (IRValue*)0 || x.res().ty() == (String*)0)
                     continue;
-                bool fp = x.res().ty().equals(String.withCString("F32")) || x.res().ty().equals(String.withCString("F64"));
+                bool fp = IRType.is(x.res().ty(), tyF32) || IRType.is(x.res().ty(), tyF64);
                 if (fp && (oc == opFAdd || oc == opFSub
                            || oc == opFMul || oc == opFDiv))
                     n = n + (u32)1;

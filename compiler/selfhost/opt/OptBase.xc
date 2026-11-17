@@ -2610,17 +2610,7 @@ class BeFact : Object
     // narrowing candidates, and report 0.
     u32 irWidth(String* t)
         {
-        if (t == 0)
-            return (u32)0;
-        if (t.equals(String.withCString("U8")) || t.equals(String.withCString("I8")) || t.equals(String.withCString("Bool")))
-            return (u32)1;
-        if (t.equals(String.withCString("U16")) || t.equals(String.withCString("I16")))
-            return (u32)2;
-        if (t.equals(String.withCString("U32")) || t.equals(String.withCString("I32")) || t.equals(String.withCString("F32")))
-            return (u32)4;
-        if (t.equals(String.withCString("U64")) || t.equals(String.withCString("I64")) || t.equals(String.withCString("F64")))
-            return (u32)8;
-        return (u32)0;
+        return IRType.bytes(t);
         }
 
     // Whether fn's vector code may use the bit select and the lane rotate:
@@ -3583,7 +3573,7 @@ class BeFact : Object
 
     bool isVectorType(String* t)
         {
-        return t != (String*)0 && t.hasPrefix(String.withCString("Vec"));
+        return IRType.isVec(t);
         }
 
     bool hasValue(Array* vs, IRValue* v)
@@ -3596,9 +3586,7 @@ class BeFact : Object
 
     bool isIntType(String* t)
         {
-        if (t == (String*)0)
-            return false;
-        return t.equals(String.withCString("I8")) || t.equals(String.withCString("U8")) || t.equals(String.withCString("I16")) || t.equals(String.withCString("U16")) || t.equals(String.withCString("I32")) || t.equals(String.withCString("U32")) || t.equals(String.withCString("I64")) || t.equals(String.withCString("U64"));
+        return IRType.isInt(t);
         }
 
     void pivReplaceIn(IRInsn* n, Map* replace)
@@ -3650,7 +3638,7 @@ class BeFact : Object
 
     IRInsn* vecCloneInsn(IRInsn* n, Map* vmap, Map* bmap)
         {
-        IRInsn* cl = IRInsn.with(n.op());
+        IRInsn* cl = IRInsn.withOpOf(n);
         cl.copyDbg(n);
         cl.setPred(n.pred());
         cl.setCc(n.cc());
@@ -3738,7 +3726,7 @@ class BeFact : Object
             IRInsn* phi = (IRInsn*)H.phis().get(i);
             if (phi.res() == (IRValue*)0)
                 continue;
-            IRInsn* cl = IRInsn.with(phi.op());
+            IRInsn* cl = IRInsn.withOpOf(phi);
             cl.copyDbg(phi);
             cl.setRes((IRValue*)vmap.get((Hashable*)phi.res()));
             for (u32 k = (u32)0; k < phi.ops().count(); k = k + (u32)1)

@@ -488,7 +488,7 @@
                 k.append(a.fpHex());
             return k;
             }
-        if (_profile.hoistGlobalAddr() && n.isOp(opAddrOf) && a.kind() == OPK_SYM && n.res().ty() != (String*)0 && n.res().ty().hasPrefix(String.withCString("Ptr(")))
+        if (_profile.hoistGlobalAddr() && n.isOp(opAddrOf) && a.kind() == OPK_SYM && n.res().ty() != (String*)0 && IRType.isPtr(n.res().ty()))
             {
             String* k = String.withCString("a:");
             k.append(a.name());
@@ -503,7 +503,7 @@
         // where two would do.
         if (_profile.hoistLocalAddr() && n.isOp(opAddrOf)
             && a.kind() == (u8)OPK_USE && n.res().ty() != (String*)0
-            && n.res().ty().hasPrefix(String.withCString("Ptr("))
+            && IRType.isPtr(n.res().ty())
             && _hoistFn != (IRFunc*)0 && self.aeIsPinned(_hoistFn, a.val()))
             {
             String* k = String.withCString("l:");

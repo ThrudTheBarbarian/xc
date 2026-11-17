@@ -36,17 +36,17 @@
             }
         }
 
-    static bool raOp(String* op)
+    static bool raOp(u16 op)
         {
-        return op.equals(String.withCString("Add")) || op.equals(String.withCString("Mul"))
-            || op.equals(String.withCString("And")) || op.equals(String.withCString("Or"))
-            || op.equals(String.withCString("Xor"));
+        return op == opAdd || op == opMul
+            || op == opAnd || op == opOr
+            || op == opXor;
         }
 
     static bool raType(String* t)
         {
-        return t != (String*)0 && (t.equals(String.withCString("I32")) || t.equals(String.withCString("U32"))
-                                || t.equals(String.withCString("I64")) || t.equals(String.withCString("U64")));
+        return t != (String*)0 && (IRType.is(t, tyI32) || IRType.is(t, tyU32)
+                                || IRType.is(t, tyI64) || IRType.is(t, tyU64));
         }
 
     // The link feeding `cur` through `o`: same op, same type, in `bb`, and read
@@ -148,7 +148,7 @@
         for (u32 ti = (u32)0; ti < bb.insns().count(); ti = ti + (u32)1)
             {
             IRInsn* T = (IRInsn*)bb.insns().get(ti);
-            if (!raOp(T.op()) || T.ops().count() != (u32)2 || T.res() == (IRValue*)0 || T.memRes() != (IRValue*)0
+            if (!raOp(T.opc()) || T.ops().count() != 2 || T.res() == (IRValue*)0 || T.memRes() != (IRValue*)0
                 || !raType(T.res().ty()))
                 continue;
             // T must END its chain.
@@ -217,7 +217,7 @@
                 for (u32 q = (u32)0; q + (u32)1 < rest.count(); q = q + (u32)2)
                     {
                     IRValue* rv = new IRValue(ty);
-                    IRInsn* ni = IRInsn.with(T.op());
+                    IRInsn* ni = IRInsn.withOpOf(T);
                     ni.copyDbg(T);
                     ni.setRes(rv);
                     ni.add((IROperand*)rest.get(q));
@@ -724,7 +724,7 @@
         // `cond ? rhs : false` is `cond & rhs`, and `cond ? true : rhs` is
         // `cond | rhs` — one instruction, no condition to materialise. Only
         // when BOTH inputs are strictly 0/1: And(2,1) is 0 where 2?1:0 is 1.
-        bool isBool = ty.equals(String.withCString("Bool"));
+        bool isBool = IRType.is(ty, tyBool);
         bool condOK = isBool01(defOf, condUse);
         IRInsn* repl;
         if (isBool && condOK && isBoolConst(defOf, selFalse, (i32)0) && isBool01(defOf, selTrue))
@@ -771,7 +771,7 @@
         IROperand* imm = (IROperand*)n.ops().get((u32)0);
         if (imm.kind() != (u8)OPK_IMMI)
             return false;
-        if (imm.ty() == 0 || !imm.ty().equals(String.withCString("Bool")))
+        if (imm.ty() == 0 || !IRType.is(imm.ty(), tyBool))
             return false;
         return imm.imm() == want;
         }

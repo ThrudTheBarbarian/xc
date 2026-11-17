@@ -64,7 +64,7 @@
         if (n.res() == 0)
             return false;
         String* t = n.res().ty();
-        if (!t.equals(String.withCString("F32")) && !t.equals(String.withCString("F64")))
+        if (!IRType.is(t, tyF32) && !IRType.is(t, tyF64))
             return false;
         if (n.ops().count() != (u32)3)
             return false;
