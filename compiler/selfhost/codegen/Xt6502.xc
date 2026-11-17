@@ -32,6 +32,7 @@
 #import <CgCommon>
 #import "IrDefs.xc"
 #import <Layout>
+u8* _xt_getenv(u8* name);
 
 class Xt6502
 {
@@ -1022,10 +1023,18 @@ class Xt6502
         // Refinement measures exactly, so it packs against a much smaller
         // margin — 1 KB, to absorb the assembler's own branch expansion.
         u32 refined = bankSize > (u32)1024 ? bankSize - (u32)1024 : bankSize;
+        bool settled = false;
         for (u32 iter = (u32)0; iter < (u32)8; iter = iter + (u32)1) {
             Map* before = _bankMap;
             packBanks(m, measureSizes(m, true), refined);
-            if (sameBankMap(m, before, _bankMap)) break;
+            if (sameBankMap(m, before, _bankMap)) { settled = true; break; }
+        }
+        // Stopping at the cap and settling look the same from outside; under
+        // XC_OPT_CAPS say which (#334), as the optimiser's loops do.
+        if (!settled) {
+            u8* e = _xt_getenv("XC_OPT_CAPS");
+            if (e != (u8*)0 && e[0] != (u8)0)
+                Stdio.error(String.withCString("xcc: note: xt6502 bank placement stopped at its round cap (8) in 'the module'\n"));
         }
         // The emission loop runs 1.._bankCount, so the count MUST come from the
         // FINAL map: a function the refinement pushed into a bank beyond a

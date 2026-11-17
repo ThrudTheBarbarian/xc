@@ -7,6 +7,7 @@
 #import "XTFloatEncoding.h"
 #import "XTType.h"
 #import "XTMemoryModel.h"
+#import "XTIROptPass.h"
 
 // Default ZP var pool when no memory model is supplied: $A0..$FF.
 // Matches the historical hard-coded pool so a nil-model call is
@@ -4984,6 +4985,7 @@ static NSString *padLeft(NSString *s, NSUInteger width) {
         // tail without giving back the call-expansion gain.
         NSUInteger refinedBudget = bankSize > 1024 ? bankSize - 1024 : bankSize;
         NSUInteger maxIter = 8;
+        BOOL settled = NO;
         for (NSUInteger iter = 0; iter < maxIter; iter++) {
             NSMutableDictionary<NSString *, NSNumber *> *measured =
                 [NSMutableDictionary dictionary];
@@ -5043,9 +5045,11 @@ static NSString *padLeft(NSString *s, NSUInteger width) {
                 newCurUsed += sz;
             }
             if (overflowSingle) return nil;
-            if ([newBankMap isEqual:bankMap]) break;
+            if ([newBankMap isEqual:bankMap]) { settled = YES; break; }
             bankMap = newBankMap;
         }
+        if (!settled)   // under XC_OPT_CAPS, say the cap was hit (#334)
+            XTIROptRoundCap("xt6502 bank placement", (unsigned)maxIter, @"the module");
 
         // The refinement re-packs with cross-bank call-expansion sizes,
         // which can need MORE banks than the initial single-shot estimate.
