@@ -2328,6 +2328,7 @@ class BeFact : Object
     IRBlock* _rotB;   // the body's entry (becomes the loop header)
     IRBlock* _rotL;   // the latch: the one body block that branches back to H
     Array* _rotR;     // the body: everything reachable from B without passing H
+    Map* _rotRSet;    // _rotR's blocks, for membership
     IRBlock* _rotE;
     IRValue* _rotCond;
     bool _rotEntryTrue;   // the guard holds on the entry values: no zero-trip path
@@ -2374,6 +2375,26 @@ class BeFact : Object
     // everything else must be pure and speculation-safe.
     // Values that are an incoming of a vector phi, set by licmOnce.
     Array* _licmVecPhiIns;
+
+    // ── per-function analyses, cached within a pass ──────────────────────
+    //
+    // A pass that asks the same question of a function many times while the
+    // function stands still (loop-rotate's recogniser, the vectoriser's) gets
+    // the answer from here. faBegin names the function and the pass and starts
+    // empty; faEnd drops it all. Between them the pass says what it changed:
+    // invalidateCfg after blocks, edges or terminators change (drops every
+    // analysis), invalidateDefs after instructions or operands change (drops
+    // def and use maps). A request for any other function builds afresh and
+    // caches nothing. XC_OPT_VERIFY=1 rebuilds each cached answer as it is
+    // handed out and stops the compile on a difference.
+    IRFunc* _faFn;
+    String* _faPass;
+    u8 _faVerify;       // 0 not yet read, 1 off, 2 on
+    Map* _faPreds;      // block -> its predecessors, each once (predsOfBlock)
+    Map* _faDefs;       // value -> defining insn, phis and insns (defMap)
+    Map* _faResBlk;     // value -> defining block, phi and insn results only
+    Map* _faUses;       // value -> use count (useCounts)
+    Array* _dcRemoved;  // dead-code: what the current sweep removed
 
     // The pipeline, in the original's order. Each pass is gated on the level it
     // declares (`minOptLevel`) and, where it has one, on a profile knob.
@@ -2986,6 +3007,244 @@ class BeFact : Object
                 out.add((Object*)o.blk());
             }
         return out;
+        }
+
+    // ── the per-function analysis cache (see _faFn) ──────────────────────
+    void faBegin(IRFunc* fn, string pass)
+        {
+        faDrop();
+        _faFn = fn;
+        _faPass = String.withCString(pass);
+        }
+
+    void faEnd(void)
+        {
+        faDrop();
+        _faFn = (IRFunc*)0;
+        }
+
+    void faDrop(void)
+        {
+        _faPreds = (Map*)0;
+        invalidateDefsNow();
+        }
+
+    void invalidateDefsNow(void)
+        {
+        _faDefs = (Map*)0;
+        _faResBlk = (Map*)0;
+        _faUses = (Map*)0;
+        }
+
+    // Blocks, edges or terminators of fn changed.
+    void invalidateCfg(IRFunc* fn)
+        {
+        if (fn == _faFn)
+            faDrop();
+        }
+
+    // Instructions or operands of fn changed (the CFG did not).
+    void invalidateDefs(IRFunc* fn)
+        {
+        if (fn == _faFn)
+            invalidateDefsNow();
+        }
+
+    bool faVerifying(void)
+        {
+        if (_faVerify == (u8)0)
+            _faVerify = ppEnvSet("XC_OPT_VERIFY") ? (u8)2 : (u8)1;
+        return _faVerify == (u8)2;
+        }
+
+    void faCheck(bool same, string what, String* detail)
+        {
+        if (same)
+            return;
+        String* msg = String.withCString("xcc: XC_OPT_VERIFY: pass ");
+        msg.append(_faPass);
+        msg.appendCString(", function ");
+        msg.append(_faFn.name());
+        msg.appendCString(": the cached ");
+        msg.appendCString(what);
+        if (detail != (String*)0)
+            {
+            msg.appendCString(" of ");
+            msg.append(detail);
+            }
+        msg.appendCString(" differs from a fresh one\n");
+        Stdio.error(msg);
+        Process.exit((i32)3);
+        }
+
+    // Two value maps hold the same keys, each to the same object.
+    bool faSameRefs(Map* a, Map* b)
+        {
+        if (a.count() != b.count())
+            return false;
+        Array* ks = b.allKeys();
+        for (u32 i = (u32)0; i < ks.count(); i = i + (u32)1)
+            {
+            Hashable* k = (Hashable*)ks.get(i);
+            if (a.get(k) != b.get(k))
+                return false;
+            }
+        return true;
+        }
+
+    // Two use-count maps give every value the same count (countOf: a value
+    // with no entry counts 0, so an entry of 0 is the same as none).
+    bool faSameCounts(Map* a, Map* b)
+        {
+        return faCountsWithin(a, b) && faCountsWithin(b, a);
+        }
+
+    bool faCountsWithin(Map* a, Map* b)
+        {
+        Array* ks = a.allKeys();
+        for (u32 i = (u32)0; i < ks.count(); i = i + (u32)1)
+            {
+            IRValue* k = (IRValue*)ks.get(i);
+            if (countOf(a, k) != countOf(b, k))
+                return false;
+            }
+        return true;
+        }
+
+    // Instructions were removed from fn: their operands leave the cached use
+    // counts, and the other def and use maps are dropped.
+    void faDropUses(IRFunc* fn, Array* removed)
+        {
+        if (fn != _faFn || removed.count() == (u32)0)
+            return;
+        Map* uses = _faUses;
+        invalidateDefsNow();
+        if (uses == (Map*)0)
+            return;
+        for (u32 r = (u32)0; r < removed.count(); r = r + (u32)1)
+            {
+            IRInsn* n = (IRInsn*)removed.get(r);
+            for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
+                {
+                IROperand* o = (IROperand*)n.ops().get(k);
+                if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0)
+                    continue;
+                uses.set((Hashable*)o.val(), (Object*)Number.with(countOf(uses, o.val()) - (u32)1));
+                }
+            }
+        _faUses = uses;
+        }
+
+    // predsOfBlock for every block at once: target -> the blocks whose
+    // terminator names it, each once, in fn's block order.
+    Map* predMapOf(IRFunc* fn)
+        {
+        Map* out = new Map();
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* src = (IRBlock*)fn.blocks().get(b);
+            IRInsn* t = src.term();
+            if (t == (IRInsn*)0)
+                continue;
+            for (u32 i = (u32)0; i < t.ops().count(); i = i + (u32)1)
+                {
+                IROperand* o = (IROperand*)t.ops().get(i);
+                if (o.kind() != (u8)OPK_BLOCK || o.blk() == (IRBlock*)0)
+                    continue;
+                Array* ps = (Array*)out.get((Hashable*)o.blk());
+                if (ps == (Array*)0)
+                    {
+                    ps = new Array();
+                    out.set((Hashable*)o.blk(), (Object*)ps);
+                    }
+                if (ps.count() > (u32)0 && (IRBlock*)ps.get(ps.count() - (u32)1) == src)
+                    continue;
+                ps.add((Object*)src);
+                }
+            }
+        return out;
+        }
+
+    // predsOfBlock(fn, b), from the cache. The array is shared: read it only.
+    Array* faPreds(IRFunc* fn, IRBlock* b)
+        {
+        if (fn == (IRFunc*)0 || fn != _faFn || b == (IRBlock*)0)
+            return predsOfBlock(fn, b);
+        if (_faPreds == (Map*)0)
+            _faPreds = predMapOf(fn);
+        Array* ps = (Array*)_faPreds.get((Hashable*)b);
+        if (ps == (Array*)0)
+            ps = new Array();
+        if (faVerifying())
+            {
+            Array* fresh = predsOfBlock(fn, b);
+            bool same = fresh.count() == ps.count();
+            for (u32 i = (u32)0; same && i < ps.count(); i = i + (u32)1)
+                if (fresh.get(i) != ps.get(i))
+                    same = false;
+            faCheck(same, "predecessors", b.name());
+            }
+        return ps;
+        }
+
+    // useCounts(fn), from the cache. Shared: read it only.
+    Map* faUseCounts(IRFunc* fn)
+        {
+        if (fn == (IRFunc*)0 || fn != _faFn)
+            return useCounts(fn);
+        if (_faUses == (Map*)0)
+            _faUses = useCounts(fn);
+        else if (faVerifying())
+            faCheck(faSameCounts(_faUses, useCounts(fn)), "use counts", (String*)0);
+        return _faUses;
+        }
+
+    // defMap(fn), from the cache: phi and instruction results to their
+    // instruction. Shared: read it only.
+    Map* faDefMap(IRFunc* fn)
+        {
+        if (fn == (IRFunc*)0 || fn != _faFn)
+            return defMap(fn);
+        if (_faDefs == (Map*)0)
+            _faDefs = defMap(fn);
+        else if (faVerifying())
+            faCheck(faSameRefs(_faDefs, defMap(fn)), "def map", (String*)0);
+        return _faDefs;
+        }
+
+    // Phi and instruction results to the block defining them (no memory
+    // results, no terminator), as the vectoriser's recognisers read it.
+    Map* resBlockMap(IRFunc* fn)
+        {
+        Map* defBlk = new Map();
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            for (u32 i = (u32)0; i < bb.phis().count(); i = i + (u32)1)
+                {
+                IRInsn* p = (IRInsn*)bb.phis().get(i);
+                if (p.res() != (IRValue*)0)
+                    defBlk.set((Hashable*)p.res(), (Object*)bb);
+                }
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)bb.insns().get(i);
+                if (n.res() != (IRValue*)0)
+                    defBlk.set((Hashable*)n.res(), (Object*)bb);
+                }
+            }
+        return defBlk;
+        }
+
+    Map* faResBlockMap(IRFunc* fn)
+        {
+        if (fn == (IRFunc*)0 || fn != _faFn)
+            return resBlockMap(fn);
+        if (_faResBlk == (Map*)0)
+            _faResBlk = resBlockMap(fn);
+        else if (faVerifying())
+            faCheck(faSameRefs(_faResBlk, resBlockMap(fn)), "def-block map", (String*)0);
+        return _faResBlk;
         }
 
     // fn's dominator tree, for `dominates` questions (DomTree says how it

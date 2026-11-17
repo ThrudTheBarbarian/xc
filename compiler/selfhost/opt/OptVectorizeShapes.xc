@@ -593,7 +593,7 @@
     final bool vecReassociateIn(IRFunc* fn, IRBlock* B, Map* accs)
         {
         bool changed = false;
-        Map* uses = self.useCounts(fn);
+        Map* uses = self.faUseCounts(fn);
         for (u32 oi = (u32)0; oi < B.insns().count(); oi = oi + (u32)1)
             {
             IRInsn* outer = (IRInsn*)B.insns().get(oi);
@@ -655,6 +655,7 @@
                 outer.ops().set((u32)1, (Object*)IROperand.useVal(spine.val()));
                 B.insns().removeAt(ii);
                 B.insns().insert(oi - (u32)1, (Object*)inner);
+                self.invalidateDefs(fn);
                 changed = true;
                 break;
                 }
