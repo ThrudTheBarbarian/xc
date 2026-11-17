@@ -997,6 +997,7 @@ class IRValue
     void numberFreshValues(void)
         {
         Array* fresh = new Array();
+        _freshSet = new Map();
         for (u32 i = (u32)0; i < _params.count(); i = i + (u32)1)
             noteFresh(fresh, (IRValue*)_params.get(i));
         for (u32 b = (u32)0; b < _blocks.count(); b = b + (u32)1)
@@ -1042,11 +1043,15 @@ class IRValue
         // A value the parser registered already owns its id.
         if (v.pid() < _byId.count() && (IRValue*)_byId.get(v.pid()) == v)
             return;
-        for (u32 i = (u32)0; i < fresh.count(); i = i + (u32)1)
-            if ((IRValue*)fresh.get(i) == v)
-                return;
+        // A set beside the list (#335): scanning the list per operand made
+        // this quadratic in the function's pass-made values.
+        if (_freshSet.get((Hashable*)v) != (Object*)0)
+            return;
+        _freshSet.set((Hashable*)v, (Object*)v);
         fresh.add((Object*)v);
         }
+
+    Map* _freshSet;
 
     static void sortBySeq(Array* a)
         {
@@ -1145,33 +1150,39 @@ class IRValue
     // Which blocks branch here. Read off the terminators, exactly as the
     // original does — a block is its own predecessor's business, not a
     // fact the block stores.
-    String* predsOf(IRBlock* target)
+    // Every block's predecessor list at once, for text() (#335): asking per
+    // block scanned every terminator per block. Same rules as that walk:
+    // in block order, each predecessor once, a self-loop left out.
+    Map* predsAll(void)
         {
-        String* out = String.withCString("");
-        u32 n = (u32)0;
+        Map* lists = new Map();
         for (u32 b = (u32)0; b < _blocks.count(); b = b + (u32)1)
             {
             IRBlock* src = (IRBlock*)_blocks.get(b);
-            if (src == target)
-                continue;
             IRInsn* t = src.term();
             if (t == 0)
                 continue;
+            Map* once = new Map();
             for (u32 i = (u32)0; i < t.ops().count(); i = i + (u32)1)
                 {
                 IROperand* o = (IROperand*)t.ops().get(i);
-                if (o.kind() != (u8)OPK_BLOCK || o.blk() != target)
+                if (o.kind() != (u8)OPK_BLOCK || o.blk() == src || o.blk() == 0)
                     continue;
-                if (n > (u32)0)
-                    out.appendCString(", ");
-                out.append(src.name());
-                n = n + (u32)1;
-                break;
+                if (once.get((Hashable*)o.blk()) != (Object*)0)
+                    continue;
+                once.set((Hashable*)o.blk(), (Object*)src);
+                String* l = (String*)lists.get((Hashable*)o.blk());
+                if (l == (String*)0)
+                    {
+                    l = String.withCString("");
+                    lists.set((Hashable*)o.blk(), (Object*)l);
+                    }
+                else
+                    l.appendCString(", ");
+                l.append(src.name());
                 }
             }
-        if (n == (u32)0)
-            return String.withCString("-");
-        return out;
+        return lists;
         }
 
     String* text(void)
@@ -1256,11 +1267,13 @@ class IRValue
             out.appendCString("]\n");
             }
 
+        Map* preds = predsAll();
         for (u32 b = (u32)0; b < _blocks.count(); b = b + (u32)1)
             {
             IRBlock* blk = (IRBlock*)_blocks.get(b);
             out.appendFormat("    %s:\n", blk.name().cString());
-            out.appendFormat("      preds: %s\n", predsOf(blk).cString());
+            String* pl = (String*)preds.get((Hashable*)blk);
+            out.appendFormat("      preds: %s\n", pl == (String*)0 ? "-" : pl.cString());
             for (u32 i = (u32)0; i < blk.phis().count(); i = i + (u32)1)
                 out.appendFormat("      %s\n", ((IRInsn*)blk.phis().get(i)).text().cString());
             // -g: ` !dbg` on instructions and terminators, never on a phi —
