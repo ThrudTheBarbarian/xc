@@ -11062,25 +11062,31 @@ class Arm64
 
     // Deepest loop use first, then static use count. Insertion sort: the
     // candidate lists are register-pool sized in practice.
+    // Loop depth first, then use count, both descending; ties keep their
+    // order. Each value's key is read once (#335): comparing through the
+    // maps cost four lookups per comparison.
     void sortByHotness(Array* a)
     {
-        for (u32 i = (u32)1; i < a.count(); i = i + (u32)1) {
+        u32 n = a.count();
+        if (n < (u32)2) return;
+        u64* key = new u64[n];
+        for (u32 i = (u32)0; i < n; i = i + (u32)1) {
             IRValue* v = (IRValue*)a.get(i);
+            key[i] = ((u64)hotDepthOf(v) << (u64)32) | (u64)useCount(v);
+        }
+        for (u32 i = (u32)1; i < n; i = i + (u32)1) {
+            Object* v = a.get(i);
+            u64 k = key[i];
             u32 j = i;
-            while (j > (u32)0 && hotter(v, (IRValue*)a.get(j - (u32)1))) {
+            while (j > (u32)0 && k > key[j - (u32)1]) {
                 a.set(j, a.get(j - (u32)1));
+                key[j] = key[j - (u32)1];
                 j = j - (u32)1;
             }
-            a.set(j, (Object*)v);
+            a.set(j, v);
+            key[j] = k;
         }
-    }
-
-    bool hotter(IRValue* a, IRValue* b)
-    {
-        u32 da = hotDepthOf(a);
-        u32 db = hotDepthOf(b);
-        if (da != db) return da > db;
-        return useCount(a) > useCount(b);
+        delete key;
     }
 
 
