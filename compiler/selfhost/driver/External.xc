@@ -45,10 +45,31 @@ class External
         _unused = (u8)0;
     }
 
-    // One argument, quoted for a POSIX shell: inside single quotes nothing is
-    // special except the quote itself, which becomes '\''.
+    // One argument, quoted for the shell system() runs: the one helper every
+    // command line uses (#337; CPath.quoted was a second, and on Windows it
+    // only wrapped the text in quotes). For a POSIX shell, inside single
+    // quotes nothing is special except the quote itself, which becomes '\''.
+    // For Windows, a C runtime's argument rules: in double quotes, a `"` is
+    // written \", and backslashes are doubled where they come before a quote
+    // or the closing quote, so "C:\dir\" stays a directory.
     static String* quote(String* s)
     {
+#if OS_windows
+        String* out = String.withCString("\"");
+        u32 slashes = (u32)0;
+        for (u32 i = (u32)0; i < s.byteLength(); i = i + (u32)1) {
+            u8 c = s.byteAt(i);
+            if (c == (u8)92) { slashes = slashes + (u32)1; out.appendByte(c); continue; }
+            if (c == (u8)34) {
+                for (u32 k = (u32)0; k < slashes + (u32)1; k = k + (u32)1) out.appendByte((u8)92);
+            }
+            slashes = (u32)0;
+            out.appendByte(c);
+        }
+        for (u32 k = (u32)0; k < slashes; k = k + (u32)1) out.appendByte((u8)92);
+        out.appendCString("\"");
+        return out;
+#else
         String* out = String.withCString("'");
         for (u32 i = (u32)0; i < s.byteLength(); i = i + (u32)1) {
             u8 c = s.byteAt(i);
@@ -57,6 +78,7 @@ class External
         }
         out.appendCString("'");
         return out;
+#endif
     }
 
     // Run argv[0] with the rest as its arguments, stdout and stderr passed
