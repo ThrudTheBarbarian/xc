@@ -4400,122 +4400,13 @@ class X86_64
         // the inliner removes it, so it took a protocol receiver and seven
         // arguments to show at all. Same pre-pass as the direct path, so the
         // two agree by construction.
-        u32 cIreg = vMemRet ? (u32)1 : (u32)0;
-        u32 cFreg = (u32)0;
-        u32 nstack = (u32)0;
-        for (u32 i = (u32)0; i < args.count(); i = i + (u32)1)
-            {
-            IROperand* a = (IROperand*)args.get(i);
-            String* t = a.kind() == (u8)OPK_USE && a.val() != (IRValue*)0 ? a.val().ty() : (String*)0;
-            if (isAggTy(t))
-                {
-                u32 nr = (aggSize(layoutOf(t)) + (u32)7) / (u32)8;
-                if (cIreg + nr <= (u32)6)
-                    cIreg = cIreg + nr;
-                else
-                    nstack = nstack + nr; // whole, on the stack (#301)
-                }
-            else if (isFloatTy(t))
-                {
-                // A float past xmm7 takes the next stack slot, as an integer
-                // past r9 does (#313).
-                if (cFreg < (u32)8)
-                    cFreg = cFreg + (u32)1;
-                else
-                    nstack = nstack + (u32)1;
-                }
-            else if (cIreg < (u32)6)
-                {
-                cIreg = cIreg + (u32)1;
-                }
-            else
-                {
-                nstack = nstack + (u32)1;
-                }
-            }
+        Array* sTys = sysvArgTys(args);
+        u32 nstack = sysvStackWords(sTys, vMemRet);
         u32 vResv = ((nstack * (u32)8) + (u32)15) & ~(u32)15; // 16-align
         if (vResv != (u32)0)
             rspReserve(vResv);
 
-        u32 ireg = vMemRet ? (u32)1 : (u32)0;
-        u32 freg = (u32)0;
-        u32 sidx = (u32)0;
-        for (u32 i = (u32)0; i < args.count(); i = i + (u32)1)
-            {
-            IROperand* a = (IROperand*)args.get(i);
-            String* t = a.kind() == (u8)OPK_USE && a.val() != (IRValue*)0 ? a.val().ty() : (String*)0;
-            if (isAggTy(t))
-                {
-                // A by-value aggregate — INCLUDING a two-word bound method
-                // (receiver, code) — occupies ceil(size/8) consecutive GP
-                // argument registers, the same private convention the plain call
-                // path uses. Loading a single register per argument truncated a
-                // 16-byte `^` to its receiver word and dropped the code word,
-                // which only ever showed across a shared object, since a local
-                // call devirtualises to a direct one.
-                u32 nregs = (aggSize(layoutOf(t)) + (u32)7) / (u32)8;
-                if (ireg + nregs <= (u32)6)
-                    {
-                    for (u32 k = (u32)0; k < nregs; k = k + (u32)1)
-                        {
-                        if (hasSlot(a.val()))
-                            _out.appendFormat("\tmov\t%s, [rbp-%lu]\n",
-                                              ((String*)ir64.get(ireg)).cString(),
-                                              slotOf(a.val()) - (u32)8 * k);
-                        ireg = ireg + (u32)1;
-                        }
-                    }
-                else
-                    {
-                    // Past the registers it goes WHOLE on the stack, its words
-                    // in order at the next outgoing slots, and the registers
-                    // left stay for later arguments, as SysV passes it (#301).
-                    // rax is free here, as for a scalar stack argument.
-                    for (u32 k = (u32)0; k < nregs; k = k + (u32)1)
-                        {
-                        if (hasSlot(a.val()))
-                            {
-                            _out.appendFormat("\tmov\trax, [rbp-%lu]\n", slotOf(a.val()) - (u32)8 * k);
-                            _out.appendFormat("\tmov\t[rsp+%lu], rax\n", (u32)8 * sidx);
-                            }
-                        sidx = sidx + (u32)1;
-                        }
-                    }
-                }
-            else if (isFloatTy(t))
-                {
-                if (freg < (u32)8)
-                    {
-                    String* x = String.withCString("xmm");
-                    x.appendFormat("%lu", freg);
-                    loadF(a, x);
-                    freg = freg + (u32)1;
-                    }
-                else
-                    {
-                    // Past xmm7 its bits go through rax, which is not an
-                    // argument register, to the next outgoing stack slot in
-                    // source order (#313).
-                    loadZX(a, (u8)'a');
-                    _out.appendFormat("\tmov\t[rsp+%lu], rax\n", (u32)8 * sidx);
-                    sidx = sidx + (u32)1;
-                    }
-                }
-            else if (ireg < (u32)6)
-                {
-                readArgOp(a, (String*)ir64.get(ireg), (String*)ir32.get(ireg));
-                ireg = ireg + (u32)1;
-                }
-            else
-                {
-                // Through rax into the reserved area — [rsp+0], [rsp+8], … in
-                // source order, exactly as the direct path does. rax is free
-                // scratch: it is reloaded with the receiver below.
-                loadZX(a, (u8)'a');
-                _out.appendFormat("\tmov\t[rsp+%lu], rax\n", (u32)8 * sidx);
-                sidx = sidx + (u32)1;
-                }
-            }
+        u32 freg = sysvMarshal(args, sTys, vMemRet, ir64, ir32);
         loadZX((IROperand*)n.ops().get((u32)0), (u8)'a');
         _out.appendCString("\tmov\tr11, [rax]\n"); // the vtable at object+0
         _out.appendFormat("\tmov\tr11, [r11 + %ld]\n", slotOp.imm() * (i32)8);
@@ -4569,111 +4460,12 @@ class X86_64
         Array* ir64 = sysvArgRegs();
         Array* ir32 = sysvArgRegs32();
         bool vMemRet = n.res() != (IRValue*)0 && returnsSysVMemAgg(n.res().ty());
-        u32 cIreg = vMemRet ? (u32)1 : (u32)0;
-        u32 cFreg = (u32)0;
-        u32 nstack = (u32)0;
-        for (u32 i = (u32)0; i < args.count(); i = i + (u32)1)
-            {
-            IROperand* a = (IROperand*)args.get(i);
-            String* t = a.kind() == (u8)OPK_USE && a.val() != (IRValue*)0 ? a.val().ty() : (String*)0;
-            if (isAggTy(t))
-                {
-                u32 nr = (aggSize(layoutOf(t)) + (u32)7) / (u32)8;
-                if (cIreg + nr <= (u32)6)
-                    cIreg = cIreg + nr;
-                else
-                    nstack = nstack + nr; // whole, on the stack (#301)
-                }
-            else if (isFloatTy(t))
-                {
-                // A float past xmm7 takes the next stack slot, as an integer
-                // past r9 does (#313).
-                if (cFreg < (u32)8)
-                    cFreg = cFreg + (u32)1;
-                else
-                    nstack = nstack + (u32)1;
-                }
-            else if (cIreg < (u32)6)
-                {
-                cIreg = cIreg + (u32)1;
-                }
-            else
-                {
-                nstack = nstack + (u32)1;
-                }
-            }
+        Array* sTys = sysvArgTys(args);
+        u32 nstack = sysvStackWords(sTys, vMemRet);
         u32 vResv = ((nstack * (u32)8) + (u32)15) & ~(u32)15;
         if (vResv != (u32)0)
             rspReserve(vResv);
-        u32 ireg = vMemRet ? (u32)1 : (u32)0;
-        u32 freg = (u32)0;
-        u32 sidx = (u32)0;
-        for (u32 i = (u32)0; i < args.count(); i = i + (u32)1)
-            {
-            IROperand* a = (IROperand*)args.get(i);
-            String* t = a.kind() == (u8)OPK_USE && a.val() != (IRValue*)0 ? a.val().ty() : (String*)0;
-            if (isAggTy(t))
-                {
-                u32 nregs = (aggSize(layoutOf(t)) + (u32)7) / (u32)8;
-                if (ireg + nregs <= (u32)6)
-                    {
-                    for (u32 k = (u32)0; k < nregs; k = k + (u32)1)
-                        {
-                        if (hasSlot(a.val()))
-                            _out.appendFormat("\tmov\t%s, [rbp-%lu]\n",
-                                              ((String*)ir64.get(ireg)).cString(),
-                                              slotOf(a.val()) - (u32)8 * k);
-                        ireg = ireg + (u32)1;
-                        }
-                    }
-                else
-                    {
-                    // Past the registers it goes WHOLE on the stack, its words
-                    // in order at the next outgoing slots, and the registers
-                    // left stay for later arguments, as SysV passes it (#301).
-                    // rax is free here, as for a scalar stack argument.
-                    for (u32 k = (u32)0; k < nregs; k = k + (u32)1)
-                        {
-                        if (hasSlot(a.val()))
-                            {
-                            _out.appendFormat("\tmov\trax, [rbp-%lu]\n", slotOf(a.val()) - (u32)8 * k);
-                            _out.appendFormat("\tmov\t[rsp+%lu], rax\n", (u32)8 * sidx);
-                            }
-                        sidx = sidx + (u32)1;
-                        }
-                    }
-                }
-            else if (isFloatTy(t))
-                {
-                if (freg < (u32)8)
-                    {
-                    String* x = String.withCString("xmm");
-                    x.appendFormat("%lu", freg);
-                    loadF(a, x);
-                    freg = freg + (u32)1;
-                    }
-                else
-                    {
-                    // Past xmm7 its bits go through rax, which is not an
-                    // argument register, to the next outgoing stack slot in
-                    // source order (#313).
-                    loadZX(a, (u8)'a');
-                    _out.appendFormat("\tmov\t[rsp+%lu], rax\n", (u32)8 * sidx);
-                    sidx = sidx + (u32)1;
-                    }
-                }
-            else if (ireg < (u32)6)
-                {
-                readArgOp(a, (String*)ir64.get(ireg), (String*)ir32.get(ireg));
-                ireg = ireg + (u32)1;
-                }
-            else
-                {
-                loadZX(a, (u8)'a');
-                _out.appendFormat("\tmov\t[rsp+%lu], rax\n", (u32)8 * sidx);
-                sidx = sidx + (u32)1;
-                }
-            }
+        u32 freg = sysvMarshal(args, sTys, vMemRet, ir64, ir32);
         // ── itable walk: recv -> vtable -> itable(entry 1) -> match protoId -> &table -> [index]
         u32 lbl = _arcLabel;
         _arcLabel = _arcLabel + (u32)1;
@@ -6880,20 +6672,33 @@ class X86_64
             }
         }
 
-    void emitSysVCall(IRFunc* fn, IRInsn* n, bool indirect, u32 argEnd)
+    // The SysV argument passing every call path shares (#336): ops and their
+    // types (an empty string where an operand has none). A by-value aggregate
+    // takes ceil(size/8) consecutive GP registers or goes whole on the stack
+    // (#301); a float takes the next xmm or, past xmm7, the next stack slot
+    // (#313); anything else the next GP register or stack slot. The three
+    // call paths (plain, vtable, protocol) carried this twice each.
+    static Array* sysvArgTys(Array* args)
         {
-        // A pre-pass sizes the outgoing area so ONE `sub rsp` reserves it, kept
-        // 16-aligned: integer stack arguments, and a struct past the integer
-        // registers, which goes whole on the stack (#301).
-        // A >16-byte aggregate RESULT is MEMORY class: rdi carries a hidden
-        // pointer to the result slot, shifting the GP arguments right by one.
-        bool memRet = n.res() != (IRValue*)0 && returnsSysVMemAgg(n.res().ty());
+        Array* tys = new Array();
+        for (u32 i = (u32)0; i < args.count(); i = i + (u32)1)
+            {
+            IROperand* a = (IROperand*)args.get(i);
+            String* t = a.kind() == (u8)OPK_USE && a.val() != (IRValue*)0 ? a.val().ty() : (String*)0;
+            tys.add((Object*)(t == (String*)0 ? String.withCString("") : t));
+            }
+        return tys;
+        }
+
+    // The outgoing stack words the arguments need.
+    u32 sysvStackWords(Array* tys, bool memRet)
+        {
         u32 cIreg = memRet ? (u32)1 : (u32)0;
         u32 cFreg = (u32)0;
         u32 nstack = (u32)0;
-        for (u32 i = (u32)1; i < argEnd; i = i + (u32)1)
+        for (u32 i = (u32)0; i < tys.count(); i = i + (u32)1)
             {
-            String* t = argTypeOf(n, i);
+            String* t = (String*)tys.get(i);
             if (isAggTy(t))
                 {
                 u32 nr = (aggSize(layoutOf(t)) + (u32)7) / (u32)8;
@@ -6920,19 +6725,20 @@ class X86_64
                 nstack = nstack + (u32)1;
                 }
             }
-        u32 resv = ((nstack * (u32)8) + (u32)15) & ~(u32)15;
-        if (resv != (u32)0)
-            rspReserve(resv);
+        return nstack;
+        }
 
-        Array* ir64 = sysvArgRegs();
-        Array* ir32 = sysvArgRegs32();
+    // Loads the arguments into their registers and stack slots (the area
+    // already reserved); answers the number of xmm registers used, for al.
+    u32 sysvMarshal(Array* ops, Array* tys, bool memRet, Array* ir64, Array* ir32)
+        {
         u32 ireg = memRet ? (u32)1 : (u32)0;
         u32 freg = (u32)0;
         u32 sidx = (u32)0;
-        for (u32 i = (u32)1; i < argEnd; i = i + (u32)1)
+        for (u32 i = (u32)0; i < ops.count(); i = i + (u32)1)
             {
-            IROperand* a = (IROperand*)n.ops().get(i);
-            String* t = argTypeOf(n, i);
+            IROperand* a = (IROperand*)ops.get(i);
+            String* t = (String*)tys.get(i);
             if (isAggTy(t))
                 {
                 // The private xtc convention, shared with arm64: a by-value
@@ -7003,6 +6809,33 @@ class X86_64
                 sidx = sidx + (u32)1;
                 }
             }
+        return freg;
+        }
+
+    void emitSysVCall(IRFunc* fn, IRInsn* n, bool indirect, u32 argEnd)
+        {
+        // A pre-pass sizes the outgoing area so ONE `sub rsp` reserves it, kept
+        // 16-aligned: integer stack arguments, and a struct past the integer
+        // registers, which goes whole on the stack (#301).
+        // A >16-byte aggregate RESULT is MEMORY class: rdi carries a hidden
+        // pointer to the result slot, shifting the GP arguments right by one.
+        bool memRet = n.res() != (IRValue*)0 && returnsSysVMemAgg(n.res().ty());
+        Array* sOps = new Array();
+        Array* sTys = new Array();
+        for (u32 i = (u32)1; i < argEnd; i = i + (u32)1)
+            {
+            sOps.add(n.ops().get(i));
+            String* at = argTypeOf(n, i);
+            sTys.add((Object*)(at == (String*)0 ? String.withCString("") : at));
+            }
+        u32 nstack = sysvStackWords(sTys, memRet);
+        u32 resv = ((nstack * (u32)8) + (u32)15) & ~(u32)15;
+        if (resv != (u32)0)
+            rspReserve(resv);
+
+        Array* ir64 = sysvArgRegs();
+        Array* ir32 = sysvArgRegs32();
+        u32 freg = sysvMarshal(sOps, sTys, memRet, ir64, ir32);
         if (indirect)
             {
             loadZX((IROperand*)n.ops().get((u32)0), (u8)'a');
