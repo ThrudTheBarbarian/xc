@@ -1595,11 +1595,6 @@ class BeFact : Object
     // one, and a Load of a pointer already loaded in this block hands back the
     // value already read. Anything that may write memory — or a bank-state op,
     // which repoints what a pointer addresses — clears the load cache.
-    //
-    // The port has no value ids, so a value's key is a number handed out on
-    // first sight; the keys only have to be stable within one function.
-    Map* _cseIds;
-    u32 _cseNext;
 
     // Defining instruction per value, so the alias test can look through a
     // pointer to the FieldAddr that produced it.
