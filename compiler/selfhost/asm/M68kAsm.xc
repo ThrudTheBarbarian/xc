@@ -487,6 +487,10 @@ class MOp
         u32 k = o.kind();
         if (k == (u32)MOP_INDDISP || k == (u32)MOP_PCDISP)
             {
+            // A d16 past -32768..32767 was masked, so a field 40000 bytes in
+            // was stored 25 KB below the object (#289); it is refused.
+            if (!pcDisp16Ok(o.value()))
+                fail(String.withFormat("displacement %ld does not fit 16 bits", o.value()));
             a16((u32)o.value() & (u32)$FFFF);
             return;
             }
@@ -514,7 +518,11 @@ class MOp
                 }
             else
                 {
-                a16((u32)symVal(syms, o) & (u32)$FFFF);
+                // A word immediate, signed or unsigned (#289).
+                i32 iv = symVal(syms, o);
+                if (_rr != (Array*)0 && (iv < (i32)-32768 || iv > (i32)65535))
+                    fail(String.withFormat("immediate %ld does not fit 16 bits", iv));
+                a16((u32)iv & (u32)$FFFF);
                 }
             }
         }
@@ -704,6 +712,8 @@ class MOp
             return;
         i32 target = symVal(syms, o0);
         a16((u32)$F280 | (u32)p);
+        if (!pcDisp16Ok(target - (i32)(curOff + (u32)2)))
+            fail(String.withFormat("%s: branch out of the 16-bit range", mnem.cString()));
         a16((u32)(target - (i32)(curOff + (u32)2)) & (u32)$FFFF);
         _hit = true;
         }
@@ -734,6 +744,8 @@ class MOp
         i32 target = symVal(syms, o0);
         i32 disp = target - (i32)(curOff + (u32)2);
         a16((u32)$6000 | ((u32)cc << (u32)8));
+        if (!pcDisp16Ok(disp))
+            fail(String.withFormat("%s: branch out of the 16-bit range", mnem.cString()));
         a16((u32)disp & (u32)$FFFF);
         _hit = true;
         }
@@ -770,13 +782,22 @@ class MOp
     // ── The binary ALU group ─────────────────────────────────────────────
     void encAlu(String* mnem, u32 size, u32 sb, MOp* o0, MOp* o1, Map* syms)
         {
+        // adda/suba/cmpa are the add/sub/cmp forms with an address register
+        // destination, which the code generator now names (#289).
+        if (mnem.equals(String.withCString("adda")))
+            mnem = String.withCString("add");
+        else if (mnem.equals(String.withCString("suba")))
+            mnem = String.withCString("sub");
+        else if (mnem.equals(String.withCString("cmpa")))
+            mnem = String.withCString("cmp");
         i32 base = aluBase(mnem);
         if (base < (i32)0)
             return;
         bool isEor = mnem.equals(String.withCString("eor"));
         bool isCmp = mnem.equals(String.withCString("cmp"));
-        // the xxxI forms
-        if (o0.kind() == (u32)MOP_IMM)
+        // the xxxI forms; an address register takes an immediate only through
+        // ADDA/SUBA/CMPA #imm,An (ADDI to An does not exist), below
+        if (o0.kind() == (u32)MOP_IMM && o1.kind() != (u32)MOP_AREG)
             {
             i32 ik = aluImmKind(mnem);
             a16(((u32)ik << (u32)9) | (sb << (u32)6) | eaField(o1));

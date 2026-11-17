@@ -2935,6 +2935,14 @@ class M68k
             u32 off = fieldByteOffset(ea);
             if (off == (u32)0)
                 return String.withCString("(a0)");
+            // A d16 reaches 32767 bytes: a field further in goes through a0
+            // moved to it first (#289), where `40000(a0)` was assembled as
+            // -25536(a0), 25 KB below the object.
+            if (off > (u32)32767)
+                {
+                _out.appendFormat("\tadda.l\t#%lu,a0\n", off);
+                return String.withCString("(a0)");
+                }
             String* o = String.withCString("");
             o.appendFormat("%lu(a0)", off);
             return o;
