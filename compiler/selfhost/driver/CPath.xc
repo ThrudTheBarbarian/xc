@@ -19,6 +19,7 @@
 #import <LlvmRead>
 #import <Frontend>
 #import <Language>
+#import <External>
 
 // clang's object for the part of the C program xcc does not compile (the
 // globals, and any function the reader did not read); the link adds it.
@@ -168,17 +169,17 @@ class CPath
 #endif
         }
 
-    // A scratch path for clang's output, this process's own.
+    // A scratch path for clang's output: `c` in the run's private scratch
+    // directory (External.tempDir, #337), which goes when the run ends. It
+    // was /tmp/xcc-c-<pid>, beside it and ignoring $TMPDIR.
     static String* scratch(void)
         {
 #if OS_windows
-        // %TEMP%, as every Windows program's scratch: there is no /tmp.
-        String* t = Platform.env(String.withCString("TEMP"));
-        if (t.byteLength() == (u32)0)
-            t = String.withCString(".");
-        return String.withFormat("%s\\xcc-c-%ld", t.cString(), getpid());
+        String* p = External.tempDir();
+        p.appendCString("\\c");
+        return p;
 #else
-        return String.withFormat("/tmp/xcc-c-%ld", getpid());
+        return External.tempPath("c");
 #endif
         }
 
