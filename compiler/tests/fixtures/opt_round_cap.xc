@@ -1,3 +1,4 @@
+//xtc-na: xt6502 — seventy loops in one function exceed the 6502 frame budget
 // Seventy independent pointer-walk loops in one function: the pointer-IV
 // pass rewrites one loop per round under a cap of 64 rounds, so it stops
 // at the cap with loops left (#334). XC_OPT_CAPS=1 reports that; the
@@ -152,7 +153,7 @@ i32 main(i32 argc, u8** argv)
     {
     u32 a[16];
     for (u32 i = (u32)0; i < (u32)16; i = i + (u32)1)
-        a[i] = i + (u32)argc;
+        a[i] = i + (u32)(argc > 99 ? argc : 1);   // as argc 1, on every target (argc is 0 on some)
     Stdio.printf("%u\n", walk(&a[0], (u32)16));
     return 0;
     }
