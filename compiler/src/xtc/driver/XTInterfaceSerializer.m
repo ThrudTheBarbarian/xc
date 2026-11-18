@@ -117,6 +117,11 @@ static void appendCanonicalJSON(NSMutableString *out, id v) {
     // can refuse a client-side override (the iface has no chain shape to give
     // it). Written only when set, keeping every other iface byte-stable.
     if (m.isChainMethod) d[@"chain"] = @YES;
+    // A final method takes no vtable slot. Written only when set, so an
+    // importer leaves it out of the numbering too: without it, every file that
+    // saw the class through its interface counted one more slot than the file
+    // that defined it (#393).
+    if (m.isFinal) d[@"final"] = @YES;
     return d;
 }
 

@@ -277,6 +277,12 @@ class IfaceWrite
         IfaceWrite.kb(out, "static", m.hasFlag((u32)NF_STATIC), true);
         IfaceWrite.kb(out, "optional", m.hasFlag((u32)NF_OPTIONAL), true);
         IfaceWrite.kb(out, "varargs", m.hasFlag((u32)NF_VARARGS), true);
+        // A final method takes no vtable slot. Written only when set (other
+        // interfaces stay byte-stable), so an importer leaves it out of the
+        // numbering too: without it, every file that saw the class through its
+        // interface counted one more slot than the file that defined it (#393).
+        if (m.hasFlag((u32)NF_FINAL))
+            IfaceWrite.kb(out, "final", true, true);
         IfaceWrite.params(out, m);
         IfaceWrite.returnsList(out, m);
     }
