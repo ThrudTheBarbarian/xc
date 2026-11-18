@@ -2884,8 +2884,10 @@ class ParRemoteServe
         ParWorker* w = (ParWorker*)0;
         Array* pending = new Array();   // tiles sent and not yet taken
         u32 inFlight = (u32)0;
-        // XC_PAR_DIE_AFTER=<n>: the connection is dropped after n tiles have
-        // been taken — the test of a program surviving a lost worker.
+        // XC_PAR_DIE_AFTER=<n>: the test of a program surviving a lost
+        // worker. The daemon runs the first n tiles it is sent, and the next
+        // one drops the connection unanswered, so the program always has a
+        // tile out on it to issue again.
         i64 dieAfter = (i64)-1;
         String* dieV = Platform.env(String.withCString("XC_PAR_DIE_AFTER"));
         if (dieV.byteLength() > (u32)0)
@@ -2894,7 +2896,7 @@ class ParRemoteServe
             for (u32 i = (u32)0; i < dieV.byteLength(); i = i + (u32)1)
                 dieAfter = dieAfter * (i64)10 + (i64)(dieV.byteAt(i) - (u8)'0');
             }
-        i64 taken = (i64)0;
+        i64 received = (i64)0;
         // One wait for a frame or a finished tile, where the platform has
         // an EventQueue and the worker a waitFor; else the 1 ms poll.
         EventQueue* evq = EventQueue.make();
@@ -2917,13 +2919,6 @@ class ParRemoteServe
                     if (watching)
                         watch.add(w, t0);
                     inFlight = inFlight + (u32)1;
-                    taken = taken + (i64)1;
-                    if (dieAfter >= (i64)0 && taken >= dieAfter)
-                        {
-                        Log.info("xcd: dropping the connection after %ld tiles (XC_PAR_DIE_AFTER)", taken);
-                        s.close();
-                        break;
-                        }
                     }
                 if (watching)
                     {
@@ -3156,6 +3151,13 @@ class ParRemoteServe
                 }
             else if (ParWire.tagIs(&tag[0], "TILE") && w != (ParWorker*)0)
                 {
+                if (dieAfter >= (i64)0 && received >= dieAfter)
+                    {
+                    Log.info("xcd: dropping the connection on tile %ld, after %ld (XC_PAR_DIE_AFTER)", received + 1, received);
+                    s.close();
+                    break;
+                    }
+                received = received + 1;
                 ParTile* t1 = new ParTile();
                 t1.index = ParWire.getI64(f, "INDEX", (i64)0);
                 t1.lo = ParWire.getI64(f, "LO", (i64)0);
