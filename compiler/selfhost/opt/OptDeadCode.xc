@@ -147,6 +147,13 @@
             if (bb.term() != 0)
                 all.add((Object*)bb.term());
             }
+        // Inline asm names locals inside its text (the constant pool), not as
+        // operands, so in a function with an Asm any slot may be read and none
+        // is write-only (#361: every store feeding Gfx8's asm went, so every
+        // gfx8 program drew nothing at -O2).
+        for (u32 i = (u32)0; i < all.count(); i = i + (u32)1)
+            if (((IRInsn*)all.get(i)).op().equals(String.withCString("Asm")))
+                return;
         Map* slotOf = new Map();
         bool grew = true;
         while (grew)

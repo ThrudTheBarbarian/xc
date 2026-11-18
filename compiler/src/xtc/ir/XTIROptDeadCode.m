@@ -208,6 +208,13 @@ static NSString* XTIRDSEKey(XTIROperand* p, NSDictionary<NSNumber*, XTIRInsn*>* 
         if (bb.terminator)
             [all addObject:bb.terminator];
         }
+    // Inline asm names locals inside its text (the constant pool), not as
+    // operands, so in a function with an Asm any slot may be read and none is
+    // write-only (#361: every store feeding Gfx8's asm went, so every gfx8
+    // program drew nothing at -O2).
+    for (XTIRInsn* insn in all)
+        if (insn.opcode == XTIROpAsm)
+            return;
     // The slot each address value points into, AddrOf first, then the steps
     // (a fixed point over the list, whatever the block order).
     NSMutableDictionary<NSNumber*, NSNumber*>* slotOf = [NSMutableDictionary dictionary];
