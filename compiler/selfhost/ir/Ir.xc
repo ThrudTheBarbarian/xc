@@ -209,7 +209,7 @@ class IRValue
     // reproduce the same frame.
     u32 _seq;
     static u32 _nextSeq;
-    // The arm64 back end's liveness numbers values densely per run (LiveSet):
+    // The arm64 back end's liveness numbers values densely per run (lvIndex):
     // the run, and the number in it.
     u32 _lsRun;
     u32 _lsIndex;
@@ -1298,6 +1298,9 @@ class IRType
     Array* _phis;
     Array* _insns;
     IRInsn* _term;
+    // Its place in its function's block list when a back end last numbered
+    // the blocks (Arm64.blockIndexOf, which checks it before trusting it).
+    u32 _bix;
 
     void init(void)
         {
@@ -1322,6 +1325,14 @@ class IRType
     Array* insns(void)
         {
         return _insns;
+        }
+    u32 bix(void)
+        {
+        return _bix;
+        }
+    void setBix(u32 i)
+        {
+        _bix = i;
         }
     IRInsn* term(void)
         {
