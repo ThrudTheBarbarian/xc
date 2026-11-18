@@ -31,6 +31,13 @@
 @property(nonatomic, readwrite, copy) NSArray<NSString*>* libExts;
 @property(nonatomic, readwrite, copy) NSString* checkedRuntime;
 @property(nonatomic, readwrite, copy) NSString* cTriple;
+@property(nonatomic, readwrite) NSUInteger pointerWidth;
+@property(nonatomic, readwrite) NSUInteger countWidth;
+@property(nonatomic, readwrite) NSUInteger fieldAlign;
+@property(nonatomic, readwrite) NSUInteger tailAlign;
+@property(nonatomic, readwrite) BOOL itables;
+@property(nonatomic, readwrite) BOOL itableAlways;
+@property(nonatomic, readwrite) BOOL nativeVarargs;
 @end
 
 @implementation XTTarget
@@ -84,6 +91,20 @@ static XTTarget* row(NSString* name, NSString* cpu, NSInteger variant, NSString*
         if (a.length)
             [al addObject:a];
     r.aliases = al;
+    // The layout and dispatch columns, from the back end: every row on one
+    // back end shares them, so they are written once, here, rather than as a
+    // list of platforms at each decision. As the port's setLayout.
+    BOOL wide = [backend isEqualToString:@"arm64"] || [backend isEqualToString:@"x86_64"]
+             || [backend isEqualToString:@"win64"];
+    BOOL reg = wide || [backend isEqualToString:@"arm9"] || [backend isEqualToString:@"wasm32"];
+    BOOL m68k = [backend isEqualToString:@"atarist"];
+    r.pointerWidth = wide ? 8 : (reg || m68k) ? 4 : 3;
+    r.countWidth = reg ? 4 : 2;
+    r.fieldAlign = reg ? 8 : m68k ? 2 : 1;
+    r.tailAlign = m68k ? 2 : 8;
+    r.itables = reg;
+    r.itableAlways = [backend isEqualToString:@"arm9"];
+    r.nativeVarargs = [backend isEqualToString:@"arm9"] || [backend isEqualToString:@"arm64"];
     return r;
     }
 

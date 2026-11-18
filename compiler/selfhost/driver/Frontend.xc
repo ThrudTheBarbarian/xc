@@ -930,7 +930,7 @@ class FeOptions
         sema.setMigrateBase(migrateBaseOf(o.migrate()));
         // arm64 and arm9 pass variadic arguments by the C ABI; every other
         // target shares one pack buffer, which sema guards (bug 273).
-        sema.setNativeVarargs(platformOf(o).equals(String.withCString("arm9")) || platformOf(o).equals(String.withCString("arm64")));
+        sema.setNativeVarargs(layoutRow(o).nativeVarargs());
         sema.setCloakedTransitiveWarns(o.warningSuppressed(String.withCString("cloaked-transitive")));
         // Adopt each imported module's vtable numbering — its vtables are emitted,
         // so its slots are authoritative and local numbering continues above them.
@@ -1238,7 +1238,7 @@ class FeOptions
         // Where a program-global protocol slot cannot be handed out, dispatch
         // goes through the itable (bugs 201, 266).
         lower.setItableDispatch(itableProtos);
-        lower.setNativeVarargs(platformOf(o).equals(String.withCString("arm9")) || platformOf(o).equals(String.withCString("arm64")));                         // bug 179
+        lower.setNativeVarargs(layoutRow(o).nativeVarargs());                         // bug 179
         // The race-free static-init once (threading.md §9.5). -1 = decide per
         // module; -f[no-]thread-safe-arc forces it, because atomic ARC and this
         // once ride the same switch and a program that asks for one gets both.
@@ -1743,8 +1743,7 @@ Map* functionNameSet(Node* program)
 // length.
 bool carriesItable(FeOptions* o)
     {
-    String* p = platformOf(o);
-    return p.equals(String.withCString("arm64")) || p.equals(String.withCString("x86_64")) || p.equals(String.withCString("win64")) || p.equals(String.withCString("arm9")) || p.equals(String.withCString("wasm32"));
+    return layoutRow(o).itables();
     }
 
 // Does a call through a protocol go through the itable rather than a vtable
@@ -1760,13 +1759,10 @@ bool carriesItable(FeOptions* o)
 // cross the interface. win64 joined them with its DLLs (bug 255).
 bool itableDispatchOf(FeOptions* o, bool importsLibrary)
     {
-    String* p = platformOf(o);
-    if (p.equals(String.withCString("arm9")))
+    TargetRow* r = layoutRow(o);
+    if (r.itableAlways())
         return true;
-    if (p.equals(String.withCString("arm64")) || p.equals(String.withCString("x86_64"))
-        || p.equals(String.withCString("win64")) || p.equals(String.withCString("wasm32")))
-        return o.libraryBuild() || importsLibrary;
-    return false;
+    return r.itables() && (o.libraryBuild() || importsLibrary);
     }
 
 // The helper takes the object's ALREADY-VALIDATED vtable pointer: the caller
@@ -2062,37 +2058,36 @@ bool hasPlatformPrelude(FeOptions* o)
 // the same call, silently shortened iteration (bug 234).
 u32 countWidthOf(FeOptions* o)
     {
-    String* p = platformOf(o);
-    // Capped at 4 even where the header holds 8 (arm64): it keeps `.length`
-    // the same type on every 32/64-bit target and keeps u64 out of the index
-    // arithmetic the for-in and slice paths share.
-    if (p.equals(String.withCString("arm64")) || p.equals(String.withCString("x86_64"))
-        || p.equals(String.withCString("win64")) || p.equals(String.withCString("arm9"))
-        || p.equals(String.withCString("wasm32")))
-        return (u32)4;
-    // atarist: the m68k header really is [count:2][elemSize:2]. xt6502 writes
-    // no count at all and its `.length` soft-fails at compile time.
-    return (u32)2;
+    // The row's: 4 on the 32/64-bit targets, capped there even where the
+    // header holds 8 (arm64), which keeps `.length` the same type everywhere
+    // and u64 out of the for-in and slice index arithmetic. 2 on m68k, whose
+    // header is [count:2][elemSize:2]; xt6502 writes no count at all and its
+    // `.length` soft-fails at compile time.
+    return layoutRow(o).countWidth();
+    }
+
+// The target row the layout and dispatch columns are read from: the one the
+// driver handed over, or the front end's own target's. A target with no row
+// has no layout to give.
+TargetRow* layoutRow(FeOptions* o)
+    {
+    TargetRow* r = o.targetRow();
+    if (r == (TargetRow*)0)
+        {
+        Stdio.printf("xc-fe: error: no target row for platform '%s'\n", platformOf(o).cString());
+        driverExit((i32)2);
+        }
+    return r;
     }
 
 u32 pointerWidthOf(FeOptions* o)
     {
-    String* p = platformOf(o);
-    if (p.equals(String.withCString("arm64")) || p.equals(String.withCString("x86_64")) || p.equals(String.withCString("win64")))
-        return (u32)8;
-    if (p.equals(String.withCString("arm9")) || p.equals(String.withCString("atarist")) || p.equals(String.withCString("wasm32")))
-        return (u32)4;
-    // xt6502: [addr-lo, addr-hi, bank]. Named rather than defaulted — wasm32
-    // was absent from this chain and inherited the 6502's THREE-byte pointer,
-    // so the shipped compiler laid out wasm structs with 3-byte pointer fields
-    // while the back end loaded 4 (bug 083). That is the type-width invariant
-    // in private:docs/Design/type-width-invariant.md, and it does not surface as a
-    // layout error — it surfaces as a wrong address.
-    if (p.equals(String.withCString("xt6502")))
-        return (u32)3;
-    Stdio.printf("xc-fe: error: no pointer width is mapped for platform '%s'\n", p.cString());
-    driverExit((i32)2);
-    return (u32)0;
+    // The row's: 8, 4, or 3 for xt6502 ([addr-lo, addr-hi, bank]). wasm32 was
+    // once missing from a list here and inherited the 6502's three bytes, so
+    // structs had 3-byte pointer fields the back end loaded as 4 (bug 083;
+    // private:docs/Design/type-width-invariant.md). It surfaces as a wrong
+    // address, not a layout error.
+    return layoutRow(o).pointerWidth();
     }
 
 // Struct FIELD alignment cap (blewit #5): fields align to min(natural, cap),
@@ -2102,16 +2097,7 @@ u32 pointerWidthOf(FeOptions* o)
 // original driver's setFieldAlignmentCap: site.
 u32 fieldAlignCapOf(FeOptions* o)
     {
-    String* p = platformOf(o);
-    if (p.equals(String.withCString("arm64")) || p.equals(String.withCString("x86_64")) || p.equals(String.withCString("win64")) || p.equals(String.withCString("arm9")) || p.equals(String.withCString("wasm32")))
-        return (u32)8;
-    if (p.equals(String.withCString("atarist")))
-        return (u32)2;
-    if (p.equals(String.withCString("xt6502")))
-        return (u32)1;
-    Stdio.printf("xc-fe: error: no field-alignment cap is mapped for platform '%s'\n", p.cString());
-    driverExit((i32)2);
-    return (u32)0;
+    return layoutRow(o).fieldAlign();
     }
 
 // The TAIL cap — what sizeof rounds up to: 2 on m68k (its C ABI), 8 everywhere
@@ -2119,9 +2105,7 @@ u32 fieldAlignCapOf(FeOptions* o)
 // its fields pack.
 u32 tailAlignCapOf(FeOptions* o)
     {
-    if (platformOf(o).equals(String.withCString("atarist")))
-        return (u32)2;
-    return (u32)8;
+    return layoutRow(o).tailAlign();
     }
 
 // -I paths first, then the platform's lib, then the generic one — a platform

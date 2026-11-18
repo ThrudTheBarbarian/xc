@@ -1531,12 +1531,9 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     // NB: the front end is spawned with `-m <platform>`, not `-A <arch>`, so key
     // off the platform flag as well — `-m atarist` sets m68kPlatform, not
     // useM68kBackend, and m68k would otherwise fall through to the 6502's 3.
-    NSUInteger ptrWidth = 3; // xt6502
-    if (arm64 || _options.useX86_64Backend || _options.useWin64Backend)
-        ptrWidth = 8;
-    else if (_options.useM68kBackend || _options.m68kPlatform || _options.useArm9Backend || _options.useWasm32Backend)
-        ptrWidth = 4;
-    [XTPointerType setHeapPointerWidth:ptrWidth];
+    // The widths and caps below are the target row's layout columns.
+    XTTarget* layoutRow = [_options effectiveTarget];
+    [XTPointerType setHeapPointerWidth:layoutRow.pointerWidth];
     // …and the width of the allocation header's COUNT field, which is a
     // different number: arm9 and m68k share a 4-byte pointer but hold 4- and
     // 2-byte counts. `.length` is typed from this, so a wrong value here
@@ -1550,11 +1547,8 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     // any real use, and it keeps `.length` the SAME type on every 32/64-bit
     // target, so portable source sees one width and the for-in / slice index
     // arithmetic never has to carry a u64.
-    NSUInteger cntWidth = 2; // m68k [count:2][elemSize:2]; xt6502 stores none
-    if (arm64 || _options.useX86_64Backend || _options.useWin64Backend ||
-        _options.useArm9Backend || _options.useWasm32Backend)
-        cntWidth = 4;
-    [XTPointerType setHeapCountWidth:cntWidth];
+    // m68k: [count:2][elemSize:2]; xt6502 stores none.
+    [XTPointerType setHeapCountWidth:layoutRow.countWidth];
     // Struct FIELD alignment cap (blewit #5): fields align to
     // min(natural alignment, cap), and the offsets land in the IR layout,
     // which every backend reads verbatim. 8 = full C natural alignment on
@@ -1562,12 +1556,9 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     // off odd addresses, where a 68000 takes an address error); 1 = the
     // xt6502's tightly packed layout, unchanged. `:packed` structs ignore
     // the cap entirely.
-    NSUInteger alignCap = 1; // xt6502
-    if (arm64 || _options.useX86_64Backend || _options.useWin64Backend || _options.useArm9Backend || _options.useWasm32Backend)
-        alignCap = 8;
-    else if (_options.useM68kBackend || _options.m68kPlatform)
-        alignCap = 2;
-    [XTStructType setFieldAlignmentCap:alignCap];
+    // The tail cap (what sizeof rounds up to) is 2 on m68k and 8 elsewhere,
+    // xt6502 included.
+    [XTStructType setFieldAlignmentCap:layoutRow.fieldAlign tailCap:layoutRow.tailAlign];
     // `float` is 4-byte IEEE single on every target. Native backends have a
     // hardware FPU; xt6502 reaches IEEE through the MECH math coprocessor
     // (private:docs/Design/mech-offload-xt6502.md), so the bespoke 5-byte softfloat is
@@ -2043,7 +2034,7 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     // helper the `(P@ ?)obj` downcast lowers to. Injected before sema so it is
     // analysed like user code; dead-function-elim drops it when unused. (Gated on
     // _options — the XTIRLowering flags are set later, at sema setup.)
-    if (_options.useArm64Backend || _options.useX86_64Backend || _options.useWin64Backend || _options.useArm9Backend || _options.useWasm32Backend)
+    if ([_options effectiveTarget].itables)
         {
         ast = [self injectConformanceHelper:ast typeTable:tt arm64:arm64];
         if (_diagnostics.errorCount > 0)
@@ -2190,16 +2181,15 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     // is derived alike everywhere, so no numbering has to cross the interface.
     // win64 joined them with its DLLs (bug 255).
     BOOL multiModule = sema.libraryBuild || xtcLibJsons.count > 0;
-    BOOL itableDispatch = _options.useArm9Backend ||
-                          ((_options.useArm64Backend || _options.useX86_64Backend || _options.useWin64Backend
-                            || _options.useWasm32Backend) && multiModule);
+    XTTarget* dispatchRow = [_options effectiveTarget];
+    BOOL itableDispatch = dispatchRow.itableAlways || (dispatchRow.itables && multiModule);
     sema.itableProtocols = itableDispatch;
     // Native AAPCS varargs — a variadic's args ride the C ABI (arm9: regs+stack;
     // arm64: all on the stack, Apple's rule), NOT the $04B0 pack buffer. Unifying
     // arm64 onto it (bug 179) lets a cross-unit xc variadic and a C native share
     // one ABI, so a bodyless `...` prototype reaches EITHER — fixing the
     // cross-unit variadic call that arrived empty (c2xc 33).
-    sema.nativeVarargs = _options.useArm9Backend || _options.useArm64Backend;
+    sema.nativeVarargs = dispatchRow.nativeVarargs;
     [XTIRLowering setItableProtocols:itableDispatch];
     // The race-free static-init once rides the SAME switch as atomic ARC: both
     // answer "can two threads touch this at once?", so -f[no-]thread-safe-arc
@@ -2291,7 +2281,7 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     mod = [XTIRLowering lowerProgram:ast
                           moduleName:modName
                          diagnostics:_diagnostics
-                       nativeVarargs:(_options.useArm9Backend || _options.useArm64Backend)
+                       nativeVarargs:[_options effectiveTarget].nativeVarargs
                          boundsCheck:(_options.boundsCheck)];
     // Instructions an optimisation pass makes later carry no location of their
     // own; they must not take the last statement's.

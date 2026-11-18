@@ -43,6 +43,14 @@ class TargetRow
     Array* _libExts;    // of String*: a library's extensions, in the order #import <X> tries them
     String* _checkedRuntime; // -fbounds-check's reporter (support/<cpu>/runtime), or "": Checked.xc reports
     String* _cTriple;   // the clang target of a C program built for it off its host, or "" (host only)
+    // Layout and dispatch, one value per back end (setLayout):
+    u32 _ptrWidth;      // a pointer's bytes: 8, 4, or 3 (xt6502: lo, hi, bank)
+    u32 _countWidth;    // an allocation header's count field (`.length`): 4, or 2
+    u32 _fieldAlign;    // a struct field's alignment cap: 8, 2 (m68k), 1 (xt6502)
+    u32 _tailAlign;     // what sizeof rounds up to: 8, or 2 (m68k)
+    bool _itables;      // classes carry the conformance itable; vtables a parent link
+    bool _itableAlways; // protocol calls always go through it (else: a library build or an import)
+    bool _nativeVarargs; // a variadic's arguments ride the C ABI, not the pack buffer
 
     void init(void)
         {
@@ -82,6 +90,33 @@ class TargetRow
     Array* libExts(void) { return _libExts; }
     String* checkedRuntime(void) { return _checkedRuntime; }
     String* cTriple(void) { return _cTriple; }
+    u32 pointerWidth(void) { return _ptrWidth; }
+    u32 countWidth(void) { return _countWidth; }
+    u32 fieldAlign(void) { return _fieldAlign; }
+    u32 tailAlign(void) { return _tailAlign; }
+    bool itables(void) { return _itables; }
+    bool itableAlways(void) { return _itableAlways; }
+    bool nativeVarargs(void) { return _nativeVarargs; }
+
+    // The layout and dispatch columns, from the back end: every row on one back
+    // end shares them, so they are written once per back end, here, rather
+    // than as a list of platforms at each decision (two past bugs were a
+    // target missing from one such list). As the reference's XTTarget.
+    void setLayout(void)
+        {
+        String* b = _backend;
+        bool wide = b.equals(String.withCString("arm64")) || b.equals(String.withCString("x86_64"))
+                 || b.equals(String.withCString("win64"));
+        bool reg = wide || b.equals(String.withCString("arm9")) || b.equals(String.withCString("wasm32"));
+        bool m68k = b.equals(String.withCString("atarist"));
+        _ptrWidth = wide ? (u32)8 : (reg || m68k) ? (u32)4 : (u32)3;
+        _countWidth = reg ? (u32)4 : (u32)2;
+        _fieldAlign = reg ? (u32)8 : m68k ? (u32)2 : (u32)1;
+        _tailAlign = m68k ? (u32)2 : (u32)8;
+        _itables = reg;
+        _itableAlways = b.equals(String.withCString("arm9"));
+        _nativeVarargs = b.equals(String.withCString("arm9")) || b.equals(String.withCString("arm64"));
+        }
     static String* orNull(string s)
         {
         String* v = String.withCString(s);
@@ -132,6 +167,7 @@ class TargetRow
         r._cTriple = String.withCString(ctriple);
         r._compact = compact;
         r._aliases = TargetRow.words(String.withCString(aliases));
+        r.setLayout();
         return r;
         }
 

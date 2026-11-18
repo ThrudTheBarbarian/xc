@@ -75,6 +75,14 @@ NS_ASSUME_NONNULL_BEGIN
 // The clang target a C program is compiled for when it is not the host's
 // (the C path), or "" where a C program builds only on the host.
 @property(nonatomic, readonly, copy) NSString* cTriple;
+// Layout and dispatch, one value per back end (set from `backend`):
+@property(nonatomic, readonly) NSUInteger pointerWidth; // 8, 4, or 3 (xt6502: lo, hi, bank)
+@property(nonatomic, readonly) NSUInteger countWidth;   // an allocation header's count field: 4, or 2
+@property(nonatomic, readonly) NSUInteger fieldAlign;   // a struct field's alignment cap: 8, 2 (m68k), 1 (xt6502)
+@property(nonatomic, readonly) NSUInteger tailAlign;    // what sizeof rounds up to: 8, or 2 (m68k)
+@property(nonatomic, readonly) BOOL itables;            // classes carry the conformance itable
+@property(nonatomic, readonly) BOOL itableAlways;       // protocol calls always go through it
+@property(nonatomic, readonly) BOOL nativeVarargs;      // a variadic's arguments ride the C ABI
 
 // Every row, in the order both compilers list them.
 + (NSArray<XTTarget*>*)rows;
