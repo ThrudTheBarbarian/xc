@@ -42,6 +42,13 @@
         if (IRType.is(t, tyBool)) return self.spvS("bool");
         return (String*)0;
         }
+    // The variable holding captured field k (the reference's wgFieldName):
+    // f<k>, except where that spells a WGSL type or a likely one (f64).
+    final String* wgFieldName(u32 k)
+        {
+        if (k == (u32)16 || k == (u32)32 || k == (u32)64) return String.withFormat("f%u_", k);
+        return String.withFormat("f%u", k);
+        }
     final bool wgSameType(String* a, String* b)
         {
         String* x = wgType(a);
@@ -608,7 +615,7 @@
             if (k < (i64)0) return false;   // a field of a struct element: not in this cut
             if (mslIsPtr(_mObj.typeAt((u32)k))) return true;
             WgRecipe* r = new WgRecipe();
-            r.base = String.withFormat("f%u", (u32)k);
+            r.base = wgFieldName((u32)k);
             r.index = (String*)0;
             r.pointee = _mObj.typeAt((u32)k);
             r.words = false;
@@ -1253,8 +1260,8 @@
                 self.parBecause(IRType.is(ft, tyF64) ? self.spvS("it uses a double, which WebGPU does not have") : self.spvS("it uses a captured value its WebGPU version cannot hold"));
                 return false;
                 }
-            _wf.vars.append(String.withFormat("  var f%u: %s;\n", k, ty.cString()));
-            fieldInit.append(String.withFormat("  f%u = %s;\n", k, from.cString()));
+            _wf.vars.append(String.withFormat("  var %s: %s;\n", wgFieldName(k).cString(), ty.cString()));
+            fieldInit.append(String.withFormat("  %s = %s;\n", wgFieldName(k).cString(), from.cString()));
             }
 
         String* meta = self.spvS("// xcpar wgsl size=");
@@ -1332,8 +1339,8 @@
             decls.append(String.withFormat("@group(0) @binding(%u) var<storage, read_write> r%u: array<%s>;\n", _wgBinding, k,
                                            narrow ? "u32" : wgType(t).cString()));
             _wgBinding = _wgBinding + (u32)1;
-            if (IRType.is(t, tyBool)) reds.add((Object*)String.withFormat("r%u[tid] = select(0u, 1u, f%u);", k, k));
-            else reds.add((Object*)String.withFormat("r%u[tid] = f%u;", k, k));
+            if (IRType.is(t, tyBool)) reds.add((Object*)String.withFormat("r%u[tid] = select(0u, 1u, %s);", k, wgFieldName(k).cString()));
+            else reds.add((Object*)String.withFormat("r%u[tid] = %s;", k, wgFieldName(k).cString()));
             String* op = _mRedOps != (Map*)0 ? (String*)_mRedOps.get((Hashable*)String.withU32(k)) : (String*)0;
             bool isF = IRType.is(t, tyF32);
             bool okT = IRType.is(t, tyI32) || IRType.is(t, tyU32) || isF;
@@ -1348,7 +1355,7 @@
             else
                 {
                 wgDecls.append(String.withFormat("var<workgroup> w%u: array<%s, 256>;\n", k, wgType(t).cString()));
-                wgTail.append(String.withFormat("  w%u[lid] = f%u;\n  workgroupBarrier();\n", k, k));
+                wgTail.append(String.withFormat("  w%u[lid] = %s;\n  workgroupBarrier();\n", k, wgFieldName(k).cString()));
                 wgTail.appendCString("  for (var s = 128u; s > 0u; s = s >> 1u) {\n");
                 wgTail.append(String.withFormat("    if (lid < s) { w%u[lid] = %s; }\n    workgroupBarrier();\n  }\n", k, comb.cString()));
                 wgTail.append(String.withFormat("  if (lid == 0u) { r%u[wid.x + wid.y * 65535u] = w%u[0]; }\n", k, k));

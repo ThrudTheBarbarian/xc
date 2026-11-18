@@ -107,6 +107,15 @@ static NSString* wgType(XTIRType* t)
         }
     }
 
+// The variable holding captured field k: f<k>, except where that spells a
+// WGSL type (f16, f32) or a likely one (f64), which take a trailing underscore.
+static NSString* wgFieldName(NSUInteger k)
+    {
+    if (k == 16 || k == 32 || k == 64)
+        return [NSString stringWithFormat:@"f%lu_", (unsigned long)k];
+    return [NSString stringWithFormat:@"f%lu", (unsigned long)k];
+    }
+
 // The 64-bit helpers, printed once at the top of every module that has a
 // kernel: (low, high) pairs, wrapping as xc's 64-bit integers do.
 static NSString* const kWg64 =
@@ -892,7 +901,7 @@ static char kWf, kWgHelpers, kWgHelperText, kWgWordBufs, kWgBufName;
             if (self.objLayout.fields[(NSUInteger)k].type.kind == XTIRTypeKindPtr)
                 return YES;   // a captured array's slot: only ever loaded, as the buffer
             XTWgRecipe* r = [XTWgRecipe new];
-            r.base = [NSString stringWithFormat:@"f%ld", (long)k];
+            r.base = wgFieldName((NSUInteger)k);
             r.pointee = self.objLayout.fields[(NSUInteger)k].type;
             self.wf.recipeOf[@(i.result.valueId)] = r;
             return YES;
@@ -1544,8 +1553,8 @@ static char kWf, kWgHelpers, kWgHelperText, kWgWordBufs, kWgBufName;
             *stop = YES;
             return;
             }
-        [self.wf.vars appendFormat:@"  var f%lu: %@;\n", (unsigned long)k, ty];
-        [fieldInit appendFormat:@"  f%lu = %@;\n", (unsigned long)k, from];
+        [self.wf.vars appendFormat:@"  var %@: %@;\n", wgFieldName(k), ty];
+        [fieldInit appendFormat:@"  %@ = %@;\n", wgFieldName(k), from];
     }];
     if (bad)
         return nil;
@@ -1627,8 +1636,8 @@ static char kWf, kWgHelpers, kWgHelperText, kWgWordBufs, kWgBufName;
         [decls appendFormat:@"@group(0) @binding(%u) var<storage, read_write> %@: array<%@>;\n", binding++, n,
                             narrow ? @"u32" : wgType(t)];
         [reds addObject:t.kind == XTIRTypeKindBool
-                            ? [NSString stringWithFormat:@"%@[tid] = select(0u, 1u, f%lu);", n, (unsigned long)k]
-                            : [NSString stringWithFormat:@"%@[tid] = f%lu;", n, (unsigned long)k]];
+                            ? [NSString stringWithFormat:@"%@[tid] = select(0u, 1u, %@);", n, wgFieldName(k)]
+                            : [NSString stringWithFormat:@"%@[tid] = %@;", n, wgFieldName(k)]];
         NSString* op = self.redOps[@(k)];
         BOOL isF = t.kind == XTIRTypeKindF32;
         BOOL okT = t.kind == XTIRTypeKindI32 || t.kind == XTIRTypeKindU32 || isF;
@@ -1643,11 +1652,11 @@ static char kWf, kWgHelpers, kWgHelperText, kWgWordBufs, kWgBufName;
         else
             {
             [wgDecls appendFormat:@"var<workgroup> w%lu: array<%@, 256>;\n", (unsigned long)k, wgType(t)];
-            [wgTail appendFormat:@"  w%lu[lid] = f%lu;\n  workgroupBarrier();\n"
+            [wgTail appendFormat:@"  w%lu[lid] = %@;\n  workgroupBarrier();\n"
                                  @"  for (var s = 128u; s > 0u; s = s >> 1u) {\n"
                                  @"    if (lid < s) { w%lu[lid] = %@; }\n    workgroupBarrier();\n  }\n"
                                  @"  if (lid == 0u) { %@[wid.x + wid.y * 65535u] = w%lu[0]; }\n",
-                                 (unsigned long)k, (unsigned long)k, (unsigned long)k, comb, n, (unsigned long)k];
+                                 (unsigned long)k, wgFieldName(k), (unsigned long)k, comb, n, (unsigned long)k];
             }
     }];
     if (bad)
