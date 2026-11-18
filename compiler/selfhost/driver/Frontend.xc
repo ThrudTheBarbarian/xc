@@ -867,7 +867,7 @@ class FeOptions
             Frontend.flushEarly(early);
             for (u32 e = (u32)0; e < designErrors.count(); e = e + (u32)1)
                 Stdio.printf("%s", ((String*)designErrors.get(e)).cString());
-            Process.exit((i32)1);
+            driverExit((i32)1);
             return (IRModule*)0;
             }
         if (carriesItable(o))
