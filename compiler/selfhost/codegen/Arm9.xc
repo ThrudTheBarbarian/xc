@@ -18,6 +18,7 @@
 
 #import "Foundation.xc"
 #import <Ir>
+#import <CgCommon>
 #import "IrDefs.xc"
 #import <Homing>
 #import "Process.xc"
@@ -367,7 +368,7 @@ class Arm9
     String* assembly(IRModule* mod)
         {
         _m = mod;
-        _atomicArc = _arcOverride >= (i32)0 ? _arcOverride != (i32)0 : arcAtomic(mod);
+        _atomicArc = _arcOverride >= (i32)0 ? _arcOverride != (i32)0 : CgCommon.arcAtomic(mod, false);
         _out = String.withCString("");
         // A `.file` naming the MODULE, not the temp `.s`: without one gas falls
         // back to whatever temporary object name it was handed, which is random
@@ -3331,71 +3332,6 @@ class Arm9
         // multiply-accumulate.
         emitMovImm((i32)es, String.withCString("r2"));
         _out.appendCString("\tmla\tr0, r1, r2, r0\n");
-        }
-
-    // ARC: the refcount is a halfword just below the object. A pointer below
-    // 0x10000 is a non-heap object (a static instance, or null) and is left
-    // alone — the same test both the runtime and every other backend uses.
-    // Does anything in this module call the runtime's thread-create primitive?
-    // The instruction stream is the question, not the symbol table.
-    bool spawnsThreads(IRModule* m)
-        {
-        return referencesSymbol(m, String.withCString("_xt_thread_create"));
-        }
-
-    // Atomic reference counts, as x86-64's arcAtomic (the security review,
-    // #303): on when the module spawns a thread, has no main (a library or a
-    // plugin, whose caller may have threads of its own), or loads a plugin.
-    bool arcAtomic(IRModule* m)
-        {
-        if (spawnsThreads(m))
-            return true;
-        bool hasMain = false;
-        for (u32 f = (u32)0; f < m.funcs().count() && !hasMain; f = f + (u32)1)
-            hasMain = ((IRFunc*)m.funcs().get(f)).name().equals(String.withCString("main"));
-        if (!hasMain)
-            return true;
-        return referencesSymbol(m, String.withCString("Plugin$load"));
-        }
-
-    bool referencesSymbol(IRModule* m, String* want)
-        {
-        for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
-            {
-            IRFunc* fn = (IRFunc*)m.funcs().get(f);
-            for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
-                {
-                IRBlock* bb = (IRBlock*)fn.blocks().get(b);
-                if (insnsName(bb.phis(), want))
-                    return true;
-                if (insnsName(bb.insns(), want))
-                    return true;
-                if (bb.term() != (IRInsn*)0 && insnNames(bb.term(), want))
-                    return true;
-                }
-            }
-        return false;
-        }
-
-    bool insnsName(Array* list, String* want)
-        {
-        for (u32 i = (u32)0; i < list.count(); i = i + (u32)1)
-            if (insnNames((IRInsn*)list.get(i), want))
-                return true;
-        return false;
-        }
-
-    bool insnNames(IRInsn* n, String* want)
-        {
-        for (u32 i = (u32)0; i < n.ops().count(); i = i + (u32)1)
-            {
-            IROperand* o = (IROperand*)n.ops().get(i);
-            if (o.kind() != (u8)OPK_SYM)
-                continue;
-            if (o.name() != (String*)0 && o.name().equals(want))
-                return true;
-            }
-        return false;
         }
 
     void emitRetain(Array* ops)

@@ -28,6 +28,7 @@
 #import "Process.xc"
 #import <Ir>
 #import "IrDefs.xc"
+#import <CgCommon>
 #import <Homing>
 
 // C/C++ input (the driver sets it): after each prologue, where the frame keeps
@@ -251,11 +252,6 @@ class X86_64
             v = v * (u32)10 + (u32)(c - (u8)48);
             }
         return v;
-        }
-
-    static bool isFloatTy(String* t)
-        {
-        return t != (String*)0 && (t.equals(String.withCString("F32")) || t.equals(String.withCString("F64")));
         }
 
     static bool isSignedTy(String* t)
@@ -482,7 +478,7 @@ class X86_64
     String* assembly(IRModule* m)
         {
         _m = m;
-        _atomicArc = _arcOverride >= (i32)0 ? _arcOverride != (i32)0 : arcAtomic(m);
+        _atomicArc = _arcOverride >= (i32)0 ? _arcOverride != (i32)0 : CgCommon.arcAtomic(m, false);
         _out = new String();
         _out.appendCString("\t.intel_syntax noprefix\n\t.text\n");
         // Runtime SIMD dispatch (-msimd=auto), as the reference: a dispatched
@@ -533,7 +529,7 @@ class X86_64
                 u8* et = e == (u32)0 ? "f32" : "f64";
                 u8* tier = t == (u32)0 ? "auto" : (t == (u32)1 ? "base" : (t == (u32)2 ? "avx2" : "avx512"));
                 String* nm = String.withFormat("__xt_x86_gemm_%s_%s", et, tier);
-                if (!referencesSymbol(m, nm))
+                if (!CgCommon.referencesSymbol(m, nm))
                     continue;
                 bool f64 = e == (u32)1;
                 if (t != (u32)0)
@@ -1068,14 +1064,14 @@ class X86_64
                         }
                     }
                 }
-            else if (isFloatTy(t) && freg < (u32)8)
+            else if (CgCommon.isFloatTy(t) && freg < (u32)8)
                 {
                 if (hasSlot(pv))
                     _out.appendFormat("\tmov%s\t[rbp-%lu], xmm%lu\n",
                                       t.equals(String.withCString("F64")) ? "sd" : "ss", s, freg);
                 freg = freg + (u32)1;
                 }
-            else if (isFloatTy(t))
+            else if (CgCommon.isFloatTy(t))
                 {
                 // Past xmm7 the caller passed it on the stack, in the next
                 // slot in parameter order, as an integer past r9 (#313).
@@ -1166,7 +1162,7 @@ class X86_64
                 pos = pos + (u32)1;
                 continue;
                 }
-            if (isFloatTy(t))
+            if (CgCommon.isFloatTy(t))
                 {
                 if (pos < (u32)4)
                     {
@@ -1295,7 +1291,7 @@ class X86_64
         String* rt = d.res().ty();
         if (d.op().equals(String.withCString("Const"))) {
             if (a0.kind() != (u8)OPK_IMMI) return false;
-            *out = fitConst((i64)a0.imm(), rt, constSigned(rt));
+            *out = CgCommon.fitConst((i64)a0.imm(), rt, CgCommon.constSigned(rt));
             return true;
         }
         bool sx = d.op().equals(String.withCString("SExt"));
@@ -1305,29 +1301,9 @@ class X86_64
         if (!constThrough(a0.val(), &s, depth + (u32)1)) return false;
         // An extension reads its source at the source's width: sign bits for
         // SExt, zero bits for ZExt, whatever the source's own signedness.
-        if (sx || zx) s = fitConst(s, a0.val().ty(), sx);
-        *out = fitConst(s, rt, constSigned(rt));
+        if (sx || zx) s = CgCommon.fitConst(s, a0.val().ty(), sx);
+        *out = CgCommon.fitConst(s, rt, CgCommon.constSigned(rt));
         return true;
-    }
-
-    static bool constSigned(String* t)
-    {
-        return t != (String*)0 && t.hasPrefix(String.withCString("I"));
-    }
-
-    // `v` as a value of type `t`'s width: its low bits, sign- or zero-extended.
-    static i64 fitConst(i64 v, String* t, bool sgn)
-    {
-        u32 b = (u32)8;
-        if (t != (String*)0) {
-            if (t.equals(String.withCString("I8")) || t.equals(String.withCString("U8")) || t.equals(String.withCString("Bool"))) b = (u32)1;
-            else if (t.equals(String.withCString("I16")) || t.equals(String.withCString("U16"))) b = (u32)2;
-            else if (t.equals(String.withCString("I32")) || t.equals(String.withCString("U32"))) b = (u32)4;
-        }
-        if (b == (u32)8) return v;
-        u32 sh = (u32)64 - b * (u32)8;
-        if (sgn) return (v << sh) >> sh;
-        return (i64)(((u64)v << sh) >> sh);
     }
 
     Map* _defOf;
@@ -1368,7 +1344,7 @@ class X86_64
         u32 M = (u32)0;
         u32 addInd = (u32)0;
         u32 sh = (u32)0;
-        magicU((u32)dC, (u32)32, &M, &addInd, &sh);
+        CgCommon.magicU((u32)dC, (u32)32, &M, &addInd, &sh);
         IROperand* x = (IROperand*)n.ops().get((u32)0);
         loadExt(x, (u8)'a', false, (u32)4);
         _out.appendFormat("\tmov\tecx, %lu\n", M);
@@ -1407,7 +1383,7 @@ class X86_64
         {
         i32 Ms = (i32)0;
         u32 sh = (u32)0;
-        magicS(dC, &Ms, &sh);
+        CgCommon.magicS(dC, &Ms, &sh);
         IROperand* x = (IROperand*)n.ops().get((u32)0);
         loadExt(x, (u8)'a', true, (u32)4);
         _out.appendFormat("\tmov\tecx, %lu\n", (u32)Ms);
@@ -1442,174 +1418,6 @@ class X86_64
             }
         }
 
-    static void magicU(u32 d, u32 W, u32* Mout, u32* aout, u32* sout)
-        {
-        u32 twoWm1 = (u32)1 << (W - (u32)1);
-        u32 maxu = W == (u32)32 ? (u32)$FFFF_FFFF : (((u32)1 << W) - (u32)1);
-        u32 a = (u32)0;
-        u32 p = W - (u32)1;
-        u32 nc = maxu - ((maxu % d) + (u32)1) % d;
-        u32 q1 = twoWm1 / nc;
-        u32 r1 = twoWm1 - q1 * nc;
-        bool q1over = false;
-        u32 q2 = (twoWm1 - (u32)1) / d;
-        u32 r2 = (twoWm1 - (u32)1) - q2 * d;
-        u32 delta = (u32)0;
-        bool again = true;
-        while (again)
-            {
-            p = p + (u32)1;
-            if (q1 >= twoWm1)
-                q1over = true;
-            if (r1 >= nc - r1)
-                {
-                q1 = q1 + q1 + (u32)1;
-                r1 = r1 - (nc - r1);
-                }
-            else
-                {
-                q1 = q1 + q1;
-                r1 = r1 + r1;
-                }
-            if (r2 + (u32)1 >= d - r2)
-                {
-                if (q2 >= twoWm1 - (u32)1)
-                    a = (u32)1;
-                q2 = q2 + q2 + (u32)1;
-                r2 = r2 - (d - r2 - (u32)1);
-                }
-            else
-                {
-                if (q2 >= twoWm1)
-                    a = (u32)1;
-                q2 = q2 + q2;
-                r2 = r2 + r2 + (u32)1;
-                }
-            delta = d - (u32)1 - r2;
-            again = p < (u32)2 * W && !q1over && (q1 < delta || (q1 == delta && r1 == (u32)0));
-            }
-        *Mout = (q2 + (u32)1) & maxu;
-        *aout = a;
-        *sout = p - W;
-        }
-
-    static void magicS(i32 dIn, i32* Mout, u32* sout)
-        {
-        u32 twoWm1 = (u32)$8000_0000;
-        u32 ad = (u32)(dIn < (i32)0 ? -dIn : dIn);
-        u32 t = twoWm1 + (((u32)dIn >> (u32)31) & (u32)1);
-        u32 anc = t - (u32)1 - t % ad;
-        u32 p = (u32)31;
-        u32 q1 = twoWm1 / anc;
-        u32 r1 = twoWm1 - q1 * anc;
-        bool q1over = false;
-        u32 q2 = twoWm1 / ad;
-        u32 r2 = twoWm1 - q2 * ad;
-        u32 delta = (u32)0;
-        bool again = true;
-        while (again)
-            {
-            p = p + (u32)1;
-            if (q1 >= twoWm1)
-                q1over = true;
-            q1 = q1 + q1;
-            r1 = r1 + r1;
-            if (r1 >= anc)
-                {
-                q1 = q1 + (u32)1;
-                r1 = r1 - anc;
-                }
-            q2 = q2 + q2;
-            r2 = r2 + r2;
-            if (r2 >= ad)
-                {
-                q2 = q2 + (u32)1;
-                r2 = r2 - ad;
-                }
-            delta = ad - r2;
-            again = !q1over && (q1 < delta || (q1 == delta && r1 == (u32)0));
-            }
-        i32 M = (i32)(q2 + (u32)1);
-        if (dIn < (i32)0)
-            M = -M;
-        *Mout = M;
-        *sout = p - (u32)32;
-        }
-
-    // The unsigned magic number, add-indicator and shift for `d` at W = 64
-    // (#309; Hacker's Delight 10-10). The reference works in 128-bit
-    // arithmetic; here the two places that need it are handled as magicU
-    // does at W = 32: 2^64 mod d is ((2^64 - 1) mod d + 1) mod d, and q1's
-    // doubling carries an overflow flag (an overflowed q1 is never less than
-    // delta, so the loop ends). q2 is meant to wrap.
-    static void magicU64(u64 d, u64* Mout, u32* aout, u32* sout)
-    {
-        u64 twoWm1 = (u64)$8000_0000_0000_0000;
-        u64 maxu = (u64)$FFFF_FFFF_FFFF_FFFF;
-        u32 a = (u32)0;
-        u32 p = (u32)63;
-        u64 nc = maxu - ((maxu % d) + (u64)1) % d;
-        u64 q1 = twoWm1 / nc;
-        u64 r1 = twoWm1 - q1 * nc;
-        bool q1over = false;
-        u64 q2 = (twoWm1 - (u64)1) / d;
-        u64 r2 = (twoWm1 - (u64)1) - q2 * d;
-        u64 delta = (u64)0;
-        bool again = true;
-        while (again) {
-            p = p + (u32)1;
-            if (q1 >= twoWm1) q1over = true;
-            if (r1 >= nc - r1) { q1 = q1 + q1 + (u64)1; r1 = r1 - (nc - r1); }
-            else { q1 = q1 + q1; r1 = r1 + r1; }
-            if (r2 + (u64)1 >= d - r2) {
-                if (q2 >= twoWm1 - (u64)1) a = (u32)1;
-                q2 = q2 + q2 + (u64)1;
-                r2 = r2 - (d - r2 - (u64)1);
-            } else {
-                if (q2 >= twoWm1) a = (u32)1;
-                q2 = q2 + q2;
-                r2 = r2 + r2 + (u64)1;
-            }
-            delta = d - (u64)1 - r2;
-            again = p < (u32)128 && !q1over && (q1 < delta || (q1 == delta && r1 == (u64)0));
-        }
-        *Mout = q2 + (u64)1;
-        *aout = a;
-        *sout = p - (u32)64;
-    }
-
-    // The signed magic number and shift for `dIn` at W = 64 (#309; Hacker's
-    // Delight 10-1), |dIn| >= 2 and not a power of two.
-    static void magicS64(i64 dIn, i64* Mout, u32* sout)
-    {
-        u64 twoWm1 = (u64)$8000_0000_0000_0000;
-        u64 ad = dIn < (i64)0 ? (u64)0 - (u64)dIn : (u64)dIn;
-        u64 t = twoWm1 + (dIn < (i64)0 ? (u64)1 : (u64)0);
-        u64 anc = t - (u64)1 - t % ad;
-        u32 p = (u32)63;
-        u64 q1 = twoWm1 / anc;
-        u64 r1 = twoWm1 - q1 * anc;
-        bool q1over = false;
-        u64 q2 = twoWm1 / ad;
-        u64 r2 = twoWm1 - q2 * ad;
-        u64 delta = (u64)0;
-        bool again = true;
-        while (again) {
-            p = p + (u32)1;
-            if (q1 >= twoWm1) q1over = true;
-            q1 = q1 + q1; r1 = r1 + r1;
-            if (r1 >= anc) { q1 = q1 + (u64)1; r1 = r1 - anc; }
-            q2 = q2 + q2; r2 = r2 + r2;
-            if (r2 >= ad) { q2 = q2 + (u64)1; r2 = r2 - ad; }
-            delta = ad - r2;
-            again = !q1over && (q1 < delta || (q1 == delta && r1 == (u64)0));
-        }
-        i64 M = (i64)(q2 + (u64)1);
-        if (dIn < (i64)0) M = (i64)0 - M;
-        *Mout = M;
-        *sout = p - (u32)64;
-    }
-
     // r = x - q*d for a 64-bit remainder, q in rdx: d in an imul immediate
     // when it fits 32 signed bits, else in rcx.
     void emitRem64(IROperand* x, i64 d, bool sgn, IRValue* res)
@@ -1632,7 +1440,7 @@ class X86_64
         u64 M = (u64)0;
         u32 addInd = (u32)0;
         u32 sh = (u32)0;
-        magicU64(d, &M, &addInd, &sh);
+        CgCommon.magicU64(d, &M, &addInd, &sh);
         IROperand* x = (IROperand*)n.ops().get((u32)0);
         loadExt(x, (u8)'a', false, (u32)8);
         _out.appendFormat("\tmovabs\trcx, %llu\n", M);
@@ -1662,7 +1470,7 @@ class X86_64
         {
         i64 Ms = (i64)0;
         u32 sh = (u32)0;
-        magicS64(dC, &Ms, &sh);
+        CgCommon.magicS64(dC, &Ms, &sh);
         IROperand* x = (IROperand*)n.ops().get((u32)0);
         loadExt(x, (u8)'a', true, (u32)8);
         _out.appendFormat("\tmovabs\trcx, %lld\n", Ms);
@@ -2183,7 +1991,7 @@ class X86_64
             return;
         // A folded address is the memory operand itself.
         String* memop = vecMemOp((IROperand*)n.ops().get((u32)0));
-        bool flt = isFloatTy(laneOf(n.res().ty()));
+        bool flt = CgCommon.isFloatTy(laneOf(n.res().ty()));
         bool W = isYmm(d);
         if (isZmm(d))
             {
@@ -2243,7 +2051,7 @@ class X86_64
         String* sv = vecOf(v.val());
         if (sv == (String*)0)
             return;
-        bool flt = isFloatTy(laneOf(v.val().ty()));
+        bool flt = CgCommon.isFloatTy(laneOf(v.val().ty()));
         String* memop = vecMemOp((IROperand*)n.ops().get((u32)0));
         bool W = isYmm(sv);
         if (isZmm(sv))
@@ -2391,7 +2199,7 @@ class X86_64
             unsupported(String.withCString("VBin:lane"));
             return;
             }
-        bool flt = isFloatTy(lane);
+        bool flt = CgCommon.isFloatTy(lane);
         // 256-bit: the VEX three-operand form, which keeps both sources.
         if (isYmm(d))
             {
@@ -2433,7 +2241,7 @@ class X86_64
     // Integer lanes need SSE2, and pmulld SSE4.1; float lanes plain SSE.
     static String* sseMnemFor(String* op, String* lane)
         {
-        bool flt = isFloatTy(lane);
+        bool flt = CgCommon.isFloatTy(lane);
         if (flt)
             {
             bool d = lane.equals(String.withCString("F64"));
@@ -2685,7 +2493,7 @@ class X86_64
         String* a = vecOf(o0.val());
         if (d == (String*)0 || a == (String*)0) { unsupported(n.op()); return; }
         String* lane = laneOf(n.res().ty());
-        if (!isFloatTy(lane)) { unsupported(n.op()); return; }
+        if (!CgCommon.isFloatTy(lane)) { unsupported(n.op()); return; }
         String* mn = sseMnemFor(n.op(), lane);
         if (mn == (String*)0) { unsupported(n.op()); return; }
         if (isYmm(d) || isZmm(d))
@@ -2711,7 +2519,7 @@ class X86_64
         // sit within rounding of zero, so a different pairing gave a different
         // checksum on one machine. Two scratch registers, because fdstFor may
         // place the destination in xmm0 itself.
-        if (isFloatTy(n.res().ty()))
+        if (CgCommon.isFloatTy(n.res().ty()))
             {
             bool dq = n.res().ty().equals(String.withCString("F64"));
             String* add = String.withCString(dq ? "addpd" : "addps");
@@ -4177,69 +3985,6 @@ class X86_64
         return false;
         }
 
-    bool spawnsThreads(IRModule* m)
-        {
-        return referencesSymbol(m, String.withCString("_xt_thread_create"));
-        }
-
-    // Atomic reference counts (the security review, 2026-10-21): an object
-    // two threads retain and release with plain loads and stores can be freed
-    // twice. On when the module spawns a thread, as before; when it has no
-    // main (a library or a plugin, whose caller may have threads of its own);
-    // and when it loads a plugin (whose threads may share its objects). Not
-    // always, as arm64 is: a locked add costs arc_alloc 3.2x here.
-    bool arcAtomic(IRModule* m)
-        {
-        if (spawnsThreads(m))
-            return true;
-        bool hasMain = false;
-        for (u32 f = (u32)0; f < m.funcs().count() && !hasMain; f = f + (u32)1)
-            hasMain = ((IRFunc*)m.funcs().get(f)).name().equals(String.withCString("main"));
-        if (!hasMain)
-            return true;
-        return referencesSymbol(m, String.withCString("Plugin$load"));
-        }
-
-    bool referencesSymbol(IRModule* m, String* want)
-        {
-        for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
-            {
-            IRFunc* fn = (IRFunc*)m.funcs().get(f);
-            for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
-                {
-                IRBlock* bb = (IRBlock*)fn.blocks().get(b);
-                if (insnsName(bb.phis(), want))
-                    return true;
-                if (insnsName(bb.insns(), want))
-                    return true;
-                if (bb.term() != (IRInsn*)0 && insnNames(bb.term(), want))
-                    return true;
-                }
-            }
-        return false;
-        }
-
-    bool insnsName(Array* list, String* want)
-        {
-        for (u32 i = (u32)0; i < list.count(); i = i + (u32)1)
-            if (insnNames((IRInsn*)list.get(i), want))
-                return true;
-        return false;
-        }
-
-    bool insnNames(IRInsn* n, String* want)
-        {
-        for (u32 i = (u32)0; i < n.ops().count(); i = i + (u32)1)
-            {
-            IROperand* o = (IROperand*)n.ops().get(i);
-            if (o.kind() != (u8)OPK_SYM)
-                continue;
-            if (o.name() != (String*)0 && o.name().equals(want))
-                return true;
-            }
-        return false;
-        }
-
     void emitRetain(IRInsn* n)
         {
         if (n.ops().count() < (u32)1)
@@ -4594,7 +4339,7 @@ class X86_64
                 pos = pos + (u32)1;
                 continue;
                 }
-            if (isFloatTy(t))
+            if (CgCommon.isFloatTy(t))
                 {
                 if (pos < (u32)4)
                     {
@@ -4794,7 +4539,7 @@ class X86_64
         _out.appendCString("\t# inline asm\n");
         // A `;` ends a statement, as the 6502's asm blocks write them, and the
         // x86-64 assembler takes none.
-        Array* lines = asmStatements(text);
+        Array* lines = CgCommon.asmStatements(text);
         for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1)
             {
             String* t = ((String*)lines.get(i)).trimmed();
@@ -4802,29 +4547,6 @@ class X86_64
                 _out.appendFormat("\t%s\n", t.cString());
             }
         }
-
-    // An asm block's lines, each cut at a `;` outside a string literal: a `;`
-    // ends the statement, as on the 6502, and the rest of the line is a
-    // comment (bindAsmNames leaves it unbound). A line with no `;` stays as
-    // it is.
-    static Array* asmStatements(String* text)
-    {
-        Array* out = new Array();
-        Array* lines = text.splitOnByte((u8)'\n');
-        for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1) {
-            String* l = (String*)lines.get(i);
-            if (l.byteIndexOf(String.withCString(";")) == (u32)$FFFF_FFFF) { out.add((Object*)l); continue; }
-            bool quoted = false;
-            u32 k = (u32)0;
-            while (k < l.byteLength() && (quoted || l.byteAt(k) != (u8)';')) {
-                if (l.byteAt(k) == (u8)'"') quoted = !quoted;
-                k = k + (u32)1;
-            }
-            String* part = l.substringBytes((u32)0, k).trimmed();
-            if (part.byteLength() > (u32)0) out.add((Object*)part);
-        }
-        return out;
-    }
 
     String* resolveAsmLocals(String* text)
         {
@@ -6093,7 +5815,7 @@ class X86_64
                 if (!vlFoldOp(n.op()) || n.res() == (IRValue*)0 || n.ops().count() != (u32)2)
                     continue;
                 String* t = n.res().ty();
-                if (!(isWideVecTy(t) || isWide512VecTy(t)) || isFloatTy(laneOf(t)))
+                if (!(isWideVecTy(t) || isWide512VecTy(t)) || CgCommon.isFloatTy(laneOf(t)))
                     continue;
                 for (u32 kk = (u32)0; kk < (u32)2; kk = kk + (u32)1)
                     {
@@ -6409,7 +6131,7 @@ class X86_64
                         IRValue* xv2 = ((IROperand*)d2.ops().get((u32)0)).val();
                         u32 xw2 = widthOfValue(xv2);
                         i64 m2 = ((IROperand*)d2.ops().get((u32)1)).imm();
-                        if (!isFloatTy(xv2.ty()) && !xv2.ty().hasPrefix(String.withCString("Vec"))
+                        if (!CgCommon.isFloatTy(xv2.ty()) && !xv2.ty().hasPrefix(String.withCString("Vec"))
                             && xw2 >= (u32)1 && xw2 <= (u32)8 && m2 > (i64)0 && m2 <= (i64)2147483647
                             && (xw2 >= (u32)4 || m2 < ((i64)1 << (i64)((u32)8 * xw2))))
                             {
@@ -6460,7 +6182,7 @@ class X86_64
                 {
                 IRInsn* in2 = (IRInsn*)bb2.insns().get(i2);
                 if (!in2.op().equals(String.withCString("Select")) || in2.res() == (IRValue*)0
-                    || in2.ops().count() < (u32)3 || !isFloatTy(in2.res().ty()))
+                    || in2.ops().count() < (u32)3 || !CgCommon.isFloatTy(in2.res().ty()))
                     continue;
                 IROperand* t2 = (IROperand*)in2.ops().get((u32)1);
                 if (t2.kind() != (u8)OPK_USE || t2.val() == (IRValue*)0 || useCount(uc, t2.val()) != (u32)1)
@@ -6603,7 +6325,7 @@ class X86_64
                 pos = pos + (u32)1;
                 continue;
                 }
-            if (isFloatTy(t))
+            if (CgCommon.isFloatTy(t))
                 {
                 if (pos < (u32)4)
                     {
@@ -6707,7 +6429,7 @@ class X86_64
                 else
                     nstack = nstack + nr; // whole, on the stack (#301)
                 }
-            else if (isFloatTy(t))
+            else if (CgCommon.isFloatTy(t))
                 {
                 // A float past xmm7 takes the next stack slot, as an integer
                 // past r9 does (#313).
@@ -6775,7 +6497,7 @@ class X86_64
                         }
                     }
                 }
-            else if (isFloatTy(t))
+            else if (CgCommon.isFloatTy(t))
                 {
                 if (freg < (u32)8)
                     {
@@ -6875,7 +6597,7 @@ class X86_64
             aggFromRetRegs(res);
             return;
             }
-        if (isFloatTy(res.ty()))
+        if (CgCommon.isFloatTy(res.ty()))
             {
             storeF(String.withCString("xmm0"), res);
             return;
@@ -7266,7 +6988,7 @@ class X86_64
             // A FLOAT loads straight into an xmm. It used to go through a
             // general register and then movd/movq across — two instructions and
             // a domain crossing for what movss/movsd does in one.
-            if (isFloatTy(rt))
+            if (CgCommon.isFloatTy(rt))
                 {
                 String* Df = fdstFor(n.res(), (IROperand*)0, (IROperand*)0);
                 _out.appendFormat("\tmov%s\t%s, %s\n",
@@ -7289,7 +7011,7 @@ class X86_64
                 copyAgg(aggSize(layoutOf(rt)), String.withCString("rax"), slotOf(n.res()), true);
             return;
             }
-        if (isFloatTy(rt))
+        if (CgCommon.isFloatTy(rt))
             {
             String* Df = fdstFor(n.res(), (IROperand*)0, (IROperand*)0);
             _out.appendFormat("\tmov%s\t%s, [rax]\n",
@@ -7317,7 +7039,7 @@ class X86_64
             // A FLOAT goes straight out of an xmm. Its source is chosen before
             // the address is formed, as rdx is below — though an xmm could not
             // be clobbered by the rax/rcx address scratch in any case.
-            if (isFloatTy(vt))
+            if (CgCommon.isFloatTy(vt))
                 {
                 String* Sf = fsrcForStore(v);
                 String* memopF = foldedMemOp((IRInsn*)_fold.get((Hashable*)p.val()));
@@ -7341,7 +7063,7 @@ class X86_64
                 copyAgg(aggSize(layoutOf(vt)), String.withCString("rax"), slotOf(v.val()), false);
             return;
             }
-        if (isFloatTy(vt))
+        if (CgCommon.isFloatTy(vt))
             {
             String* Sf = fsrcForStore(v);
             _out.appendFormat("\tmov%s\t[rax], %s\n",
@@ -7564,7 +7286,7 @@ class X86_64
                     aggToRetRegs(v);
                 break;
                 }
-            if (v != (IRValue*)0 && isFloatTy(v.ty()))
+            if (v != (IRValue*)0 && CgCommon.isFloatTy(v.ty()))
                 {
                 loadF(o, String.withCString("xmm0"));
                 break;
@@ -7845,7 +7567,7 @@ class X86_64
                 // A float between an xmm home and a slot is one movss/movsd,
                 // not movd to eax and a mov.
                 IRValue* fdv = (IRValue*)dests.get(i);
-                if (isFloatTy(fdv.ty()) && src.kind() == (u8)OPK_USE && src.val() != (IRValue*)0)
+                if (CgCommon.isFloatTy(fdv.ty()) && src.kind() == (u8)OPK_USE && src.val() != (IRValue*)0)
                     {
                     if (sh != (String*)0 && isXmmHome(sh) && dh == (String*)0)
                         {
@@ -7863,7 +7585,7 @@ class X86_64
                 // `mov eax, edi; mov r15d, eax` on every back edge).
                 u32 gw = widthOfValue(fdv);
                 if (dh != (String*)0 && sh != (String*)0 && !isXmmHome(dh) && !isXmmHome(sh)
-                    && gw >= (u32)4 && !isFloatTy(fdv.ty()))
+                    && gw >= (u32)4 && !CgCommon.isFloatTy(fdv.ty()))
                     {
                     u32 vw = gw >= (u32)8 ? (u32)8 : (u32)4;
                     _out.appendFormat("\tmov\t%s, %s\n", regView(dh, vw).cString(), regView(sh, vw).cString());
@@ -8879,7 +8601,7 @@ class X86_64
         // float_math's `double acc = 0.0` then started at whatever the seeding
         // loop had left in that xmm, and came out exactly 1 too high.
         String* chome = homeOf(n.res());
-        if (isFloatTy(n.res().ty()) && k.kind() == (u8)OPK_IMMF && isXmmHome(chome))
+        if (CgCommon.isFloatTy(n.res().ty()) && k.kind() == (u8)OPK_IMMF && isXmmHome(chome))
             {
             String* h2 = k.fpHex();
             if (n.res().ty().equals(String.withCString("F64")))
@@ -8894,7 +8616,7 @@ class X86_64
                 }
             return;
             }
-        if (isFloatTy(n.res().ty()) && k.kind() == (u8)OPK_IMMF && hasSlot(n.res()))
+        if (CgCommon.isFloatTy(n.res().ty()) && k.kind() == (u8)OPK_IMMF && hasSlot(n.res()))
             {
             // The immediate carries the raw IEEE DOUBLE bits; the slot is read
             // back with movss/movsd, so the pattern goes straight in. An F32
@@ -9383,7 +9105,7 @@ class X86_64
         {
         if (n.res() == (IRValue*)0 || n.ops().count() < (u32)3)
             return;
-        if (isFloatTy(n.res().ty()))
+        if (CgCommon.isFloatTy(n.res().ty()))
             {
             emitSelectF(n);
             return;
@@ -9804,7 +9526,7 @@ class X86_64
             return false;
         if (a.res() == (IRValue*)0 || b.res() == (IRValue*)0 || a.ops().count() < (u32)3 || b.ops().count() < (u32)3)
             return false;
-        if (!isFloatTy(a.res().ty()) || !isFloatTy(b.res().ty()))
+        if (!CgCommon.isFloatTy(a.res().ty()) || !CgCommon.isFloatTy(b.res().ty()))
             return false;
         IROperand* ca = (IROperand*)a.ops().get((u32)0);
         IROperand* cb = (IROperand*)b.ops().get((u32)0);
@@ -10161,7 +9883,7 @@ class X86_64
             // whatever its declared width, so an F32 would otherwise keep the
             // double's low four (zero) bytes. A byte-list initialiser already
             // matches the slot size and bypasses this.
-            else if (isFloatTy(gt) && bytes.count() != fieldWidth(gt))
+            else if (CgCommon.isFloatTy(gt) && bytes.count() != fieldWidth(gt))
                 bytes = relayFloat(bytes, gt);
             // A file-scope global has EXTERNAL linkage in C — export it so
             // separate units share one definition. Local-only gave each unit

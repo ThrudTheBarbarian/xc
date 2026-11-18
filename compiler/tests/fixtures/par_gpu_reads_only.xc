@@ -1,3 +1,4 @@
+//xtc-na: xt6502 — no par runtime on this target (no ParDevice)
 // par_gpu_reads_only.xc — arrays a par block only reads (a captured local, a
 // global table) are not copied back from the device (gpuReadsOnly), and the
 // host's own later write to one must stand. Every sum must be the CPU's.

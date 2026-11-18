@@ -7494,20 +7494,29 @@ class ClassInfo
 
             // Phi pairs follow each predecessor's index in the function — the
             // order the verifier walks predecessors in.
+            // Each predecessor's index read once (#335): the bubble sort asked
+            // blockIndex, a scan of the function's blocks, on every
+            // comparison. A stable insertion sort on the same keys gives the
+            // same order the stable bubble sort did.
             Array* order = new Array();
+            Array* keys = new Array();
             for (u32 e = (u32)0; e < blocks.count(); e = e + (u32)1)
-                order.add((Object*)Number.withU32(e));
-            for (u32 a = (u32)0; a + (u32)1 < order.count(); a = a + (u32)1)
                 {
-                for (u32 b2 = (u32)0; b2 + (u32)1 < order.count() - a; b2 = b2 + (u32)1)
+                order.add((Object*)Number.withU32(e));
+                keys.add((Object*)Number.withU32(blockIndex((IRBlock*)blocks.get(e))));
+                }
+            for (u32 a = (u32)1; a < order.count(); a = a + (u32)1)
+                {
+                u32 j = a;
+                while (j > (u32)0 && ((Number*)keys.get(j - (u32)1)).asU32() > ((Number*)keys.get(j)).asU32())
                     {
-                    u32 x = ((Number*)order.get(b2)).asU32();
-                    u32 y = ((Number*)order.get(b2 + (u32)1)).asU32();
-                    if (blockIndex((IRBlock*)blocks.get(x)) > blockIndex((IRBlock*)blocks.get(y)))
-                        {
-                        order.set(b2, (Object*)Number.withU32(y));
-                        order.set(b2 + (u32)1, (Object*)Number.withU32(x));
-                        }
+                    Object* to = order.get(j - (u32)1);
+                    order.set(j - (u32)1, order.get(j));
+                    order.set(j, to);
+                    Object* tk = keys.get(j - (u32)1);
+                    keys.set(j - (u32)1, keys.get(j));
+                    keys.set(j, tk);
+                    j = j - (u32)1;
                     }
                 }
 
@@ -8457,10 +8466,15 @@ class ClassInfo
 
     void sortEdgesByBlock(Array* blks, Array* vals)
         {
+        // Each block's index read once (#335), not on every comparison; the
+        // keys move with their blocks, so the stable sort's order is as before.
+        Array* keys = new Array();
+        for (u32 i = (u32)0; i < blks.count(); i = i + (u32)1)
+            keys.add((Object*)Number.withU32(blockIndex((IRBlock*)blks.get(i))));
         for (u32 i = (u32)1; i < blks.count(); i = i + (u32)1)
             {
             u32 j = i;
-            while (j > (u32)0 && blockIndex((IRBlock*)blks.get(j - (u32)1)) > blockIndex((IRBlock*)blks.get(j)))
+            while (j > (u32)0 && ((Number*)keys.get(j - (u32)1)).asU32() > ((Number*)keys.get(j)).asU32())
                 {
                 Object* tb = blks.get(j - (u32)1);
                 blks.set(j - (u32)1, blks.get(j));
@@ -8468,6 +8482,9 @@ class ClassInfo
                 Object* tv = vals.get(j - (u32)1);
                 vals.set(j - (u32)1, vals.get(j));
                 vals.set(j, tv);
+                Object* tk = keys.get(j - (u32)1);
+                keys.set(j - (u32)1, keys.get(j));
+                keys.set(j, tk);
                 j = j - (u32)1;
                 }
             }

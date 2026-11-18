@@ -1,3 +1,4 @@
+//xtc-na: xt6502 — no par runtime on this target (no ParDevice)
 // par_escape_trips.xc — a GPU kernel's escape loop runs several trips per exit
 // test, and every lane still ends where the plain loop ends it (2026-11-01).
 //

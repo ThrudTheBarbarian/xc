@@ -10,6 +10,7 @@
 #import "Foundation.xc"
 #import "Stdio.xc"
 #import "Process.xc"
+#import <External>
 #import <Node>
 #import "NodeDefs.xc"
 #import <Lexer>

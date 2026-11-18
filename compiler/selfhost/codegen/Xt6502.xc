@@ -29,6 +29,7 @@
 #import "Foundation.xc"
 #import "Stdio.xc"
 #import <Ir>
+#import <CgCommon>
 #import "IrDefs.xc"
 #import <Layout>
 
@@ -98,12 +99,6 @@ class Xt6502
 
     static bool isMemTy(String* t)
     { return t != (String*)0 && t.equals(String.withCString("Mem")); }
-
-    static bool isFloatTy(String* t)
-    {
-        return t != (String*)0 && (t.equals(String.withCString("F32"))
-                                || t.equals(String.withCString("F64")));
-    }
 
     static bool isSignedTy(String* t)
     {
@@ -1305,7 +1300,7 @@ class Xt6502
             // here. Copying the eight bytes through would write a double where
             // the loads read a single.
             if (bytes != (Array*)0 && bytes.count() > (u32)0
-                && isFloatTy(s.globalTy()) && bytes.count() != size)
+                && CgCommon.isFloatTy(s.globalTy()) && bytes.count() != size)
                 bytes = encodeFloatHex(hexOfBytes(bytes), size);
             if (bytes != (Array*)0 && bytes.count() > (u32)0) {
                 String* vals = new String();
@@ -2181,7 +2176,7 @@ class Xt6502
         if (n.ops().count() < (u32)1 || n.res() == (IRValue*)0) { unsupported(n.op()); return; }
         IROperand* op = (IROperand*)n.ops().get((u32)0);
         String* ty = n.res().ty();
-        if (isFloatTy(ty)) {
+        if (CgCommon.isFloatTy(ty)) {
             // The IR carries the abstract value as raw IEEE double bits; the
             // BACK END owns the byte layout, so it encodes here and splats.
             Array* enc = encodeFloatHex(op.kind() == (u8)OPK_IMMF
@@ -2374,7 +2369,7 @@ class Xt6502
         if (n.res() != (IRValue*)0) {
             u32 rW = byteWidth(n.res().ty());
             String* rt = n.res().ty();
-            if (isFloatTy(rt) || isAggTy(rt) || rW > (u32)4) {
+            if (CgCommon.isFloatTy(rt) || isAggTy(rt) || rW > (u32)4) {
                 for (u32 b = (u32)0; b < rW && b < (u32)16; b = b + (u32)1) {
                     _out.appendFormat("    LDA $%s\n", hex2((u32)$B0 + b).cString());
                     storeAToValue(n.res(), b);
@@ -2942,7 +2937,7 @@ class Xt6502
             u32 rW = byteWidth(n.res().ty());
             // A 64-bit scalar rides the mailbox too: A/X/Y plus $89 carry four
             // bytes and no more, and $B0.. already moves eight for a double.
-            bool viaMailbox = isFloatTy(n.res().ty()) || isAggTy(n.res().ty())
+            bool viaMailbox = CgCommon.isFloatTy(n.res().ty()) || isAggTy(n.res().ty())
                            || byteWidth(n.res().ty()) > (u32)4;
             if (viaMailbox) {
                 if (rW > (u32)16) { unsupported(String.withCString("Call:aggwidth")); return; }
@@ -3624,7 +3619,7 @@ class Xt6502
         // Nothing in the tree took the address of a 64-bit GLOBAL until
         // tests/fixtures/int64_unary.xc, so the two stayed silently out of step
         // and the port emitted a dead `LDA #<_sym` triple the reference elides.
-        return isFloatTy(t) || t.equals(String.withCString("Bool"))
+        return CgCommon.isFloatTy(t) || t.equals(String.withCString("Bool"))
             || t.equals(String.withCString("I8"))  || t.equals(String.withCString("U8"))
             || t.equals(String.withCString("I16")) || t.equals(String.withCString("U16"))
             || t.equals(String.withCString("I32")) || t.equals(String.withCString("U32"))
@@ -3845,7 +3840,7 @@ class Xt6502
         IROperand* v = hasValue ? (IROperand*)n.ops().get((u32)0) : (IROperand*)0;
         IRValue* rvv = hasValue && v.kind() == (u8)OPK_USE ? v.val() : (IRValue*)0;
         u32 rW = rvv != (IRValue*)0 ? byteWidth(rvv.ty()) : (u32)1;
-        bool isFloat = rvv != (IRValue*)0 && isFloatTy(rvv.ty());
+        bool isFloat = rvv != (IRValue*)0 && CgCommon.isFloatTy(rvv.ty());
         bool isAgg = rvv != (IRValue*)0 && isAggTy(rvv.ty());
         // A scalar wider than the A/X/Y/$89 quartet — i64/u64 — is LEFT in the
         // $B0.. mailbox for the caller to harvest, the same contract float,

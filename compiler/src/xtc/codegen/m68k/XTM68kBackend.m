@@ -2535,6 +2535,13 @@ static NSString* m68kRefusePredicate(int p, NSString* dflt)
         XTIRValue* bv = [fn valueForId:ea.operands[0].valueId];
         XTIRLayout* lay = bv.type.pointeeType.layout;
         uint32_t off = lay ? (uint32_t)[self m68kFieldOffset:lay index:(int)ea.operands[1].intValue] : 0;
+        // A d16 reaches 32767 bytes: a field further in goes through a0 moved
+        // to it first (#289). As the port's foldedMemOp.
+        if (off > 32767)
+            {
+            [out appendFormat:@"\tadda.l\t#%u,a0\n", off];
+            return @"(a0)";
+            }
         return off ? [NSString stringWithFormat:@"%u(a0)", off] : @"(a0)";
         }
     XTIRType* rt = ea.result.type;

@@ -1,3 +1,4 @@
+//xtc-na: xt6502 — no par runtime on this target (no ParDevice)
 //xtc-flags: target=arm64
 //xtc-warn: because it calls Math.sin, which a Vulkan GPU has only in an approximate form
 // par_gpu_goal.xc — a `par` block's goal: speed (the default) or accuracy.

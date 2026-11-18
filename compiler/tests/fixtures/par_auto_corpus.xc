@@ -1,3 +1,4 @@
+//xtc-na: xt6502 — no par runtime on this target (no ParDevice)
 //xtc-flags: target=arm64 --par-style=auto
 // par_auto_corpus.xc — the corpus's own --par-style=auto fixture (the sweeps pass
 // the flag a fixture names in its //xtc-flags: line). An element map and an

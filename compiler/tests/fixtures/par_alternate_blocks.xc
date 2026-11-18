@@ -1,3 +1,4 @@
+//xtc-na: xt6502 — no par runtime on this target (no ParDevice)
 // Two par blocks run in turn over their own arrays, and the host changes one
 // between runs (2026-10-24, CUDA residency): a GPU keeps each block's array
 // resident (CUDA parks a slot's copy when another block takes the slot), and

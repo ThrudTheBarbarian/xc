@@ -1,7 +1,7 @@
 // Thread.setPriority: a worker lowers its own priority, first thing in its
 // body, and still runs to the end. Lowering is allowed everywhere it means
 // something (raising again may need privileges on Linux, so it is not tested).
-//xtc-na: xt6502 m68k wasm32 arm9 — no threads with priorities
+//xtc-na: xt6502,m68k,wasm32,arm9 — no threads with priorities
 #import "Stdio.xc"
 #import "Thread.xc"
 class Worker : Object

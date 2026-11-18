@@ -77,24 +77,11 @@ class X86Link
         }
 
     // `.L<rest>` becomes `.L<index>Z<rest>` — what the reference linker does,
-    // and what lets two separately compiled files be joined at all.
+    // and what lets two separately compiled files be joined at all. Labels
+    // only (#290); the one implementation is AsmText's.
     static String* namespaceLocals(String* s, u32 idx)
         {
-        String* out = new String();
-        u32 i = (u32)0;
-        while (i < s.byteLength())
-            {
-            if (i + (u32)1 < s.byteLength() && s.byteAt(i) == (u8)'.' && s.byteAt(i + (u32)1) == (u8)'L')
-                {
-                out.appendCString(".L");
-                out.appendFormat("%luZ", idx);
-                i = i + (u32)2;
-                continue;
-                }
-            out.appendByte(s.byteAt(i));
-            i = i + (u32)1;
-            }
-        return out;
+        return AsmText.namespaceLocals(s, idx);
         }
 
     // srcs: assembly texts, in order. objs/ars: paths.

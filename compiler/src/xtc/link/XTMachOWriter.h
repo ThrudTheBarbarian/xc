@@ -29,6 +29,8 @@ NS_ASSUME_NONNULL_BEGIN
 // `.tbd` in the SDK exports. Each would link and then stop dyld at launch with
 // "Symbol not found". Empty when no SDK is found (nothing is known then).
 + (NSArray<NSString*>*)lastUnexportedSystemImports;
+// Fixups that do not fit their instruction, from the last link (#285).
++ (NSArray<NSString*>*)lastLinkErrors;
 // Build an executable from assembled __text bytes. `symbols` maps
 // name -> offset-in-text (defined labels). `fixups` are the assembler's
 // unresolved references; Branch26 fixups to names not in `symbols` become

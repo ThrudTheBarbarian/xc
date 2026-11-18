@@ -1,3 +1,4 @@
+//xtc-na: xt6502 — no par runtime on this target (no ParDevice)
 //xtc-flags: target=arm64
 // par_gpu_narrow.xc — 8- and 16-bit values in a `par` block that can run on
 // the GPU (XC_PAR=gpu). A GPU keeps them in 32-bit registers; the kernel keeps

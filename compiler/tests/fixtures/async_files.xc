@@ -1,5 +1,5 @@
 //xtc-flags: target=arm64
-//xtc-na: wasm32 xt6502 m68k — AsyncFiles runs its queue on a Thread
+//xtc-na: wasm32,xt6502,m68k — AsyncFiles runs its queue on a Thread
 // AsyncFiles runs Files operations on one worker, in order: a write, an
 // append and a read of the same file see each other, a missing file reads
 // as null, and drain() returns once every completion has run.

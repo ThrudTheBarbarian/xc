@@ -1,3 +1,4 @@
+//xtc-na: xt6502 — no par runtime on this target (no ParDevice)
 // par_gpu_signed_div.xc — signed division and REMAINDER by a negative divisor,
 // at 32 and at 64 bits, in a `par` block.
 //

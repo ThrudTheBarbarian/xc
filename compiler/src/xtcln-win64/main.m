@@ -237,10 +237,6 @@ int main(int argc, const char* argv[])
         // land inside the second.
         NSError* err = nil;
         NSMutableString* src = [NSMutableString string];
-        NSRegularExpression* localLbl =
-            [NSRegularExpression regularExpressionWithPattern:@"\\.L([A-Za-z0-9_$.]*)"
-                                                      options:0
-                                                        error:NULL];
         // `.o` inputs are merged AFTER the assembled text (below); everything else
         // is source and is concatenated here. Stage 2 of separate-compilation.
         // `.a` inputs are POOLS, pulled from on demand further down.
@@ -269,8 +265,7 @@ int main(int argc, const char* argv[])
                 return 1;
                 }
             if (inputs.count > 1)
-                one = XTRegexReplace(localLbl, one,
-                                     [NSString stringWithFormat:@".L%luZ$1", (unsigned long)i]);
+                one = XTNamespaceLocals(one, i);
             [src appendString:one];
             [src appendString:@"\n"];
             }

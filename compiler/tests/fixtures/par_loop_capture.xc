@@ -1,3 +1,4 @@
+//xtc-na: xt6502 — no par runtime on this target (no ParDevice)
 //xtc-flags: target=arm64
 // par_loop_capture.xc — a `par` block inside a loop uses that loop's
 // variable. A loop header's variable was not bound for capture, so the block

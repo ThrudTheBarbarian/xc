@@ -1,3 +1,4 @@
+//xtc-na: xt6502 — no par runtime on this target (no ParDevice)
 // par_device_default — a block's :device(…) default (owner 2026-10-31).
 //
 // `par name :device(gpu) { … }` is the developer's DEFAULT device: XC_PAR, the

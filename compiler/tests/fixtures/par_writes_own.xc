@@ -1,3 +1,4 @@
+//xtc-na: xt6502 — no par runtime on this target (no ParDevice)
 // par_writes_own.xc — a captured array the block overwrites whole is not
 // sent to the device (2026-10-25): its old contents are never read, so only
 // its space is made there (gpuWritesAllOwn, as gpuWritesAll for a global).

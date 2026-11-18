@@ -146,6 +146,11 @@
                 continue;
             Array* reg = new Array();
             reg.add((Object*)b);
+            // The region's blocks as a set beside the list (#335): each block
+            // reached asked hasBlock, a scan of the region, which made the
+            // recogniser quadratic in a loop body's size.
+            Set* regSet = new Set();
+            regSet.add((Hashable*)b);
             Array* work = new Array();
             work.add((Object*)b);
             bool okR = true;
@@ -179,14 +184,15 @@
                         okR = false; // a second exit
                         break;
                         }
-                    if (!self.hasBlock(reg, sb))
+                    if (!regSet.contains((Hashable*)sb))
                         {
                         reg.add((Object*)sb);
+                        regSet.add((Hashable*)sb);
                         work.add((Object*)sb);
                         }
                     }
                 }
-            if (!okR || latchBlk == (IRBlock*)0 || self.hasBlock(reg, e))
+            if (!okR || latchBlk == (IRBlock*)0 || regSet.contains((Hashable*)e))
                 continue;
             // Nothing outside the region may enter it except H into B.
             bool closed = true;
@@ -197,7 +203,7 @@
                 for (u32 q = (u32)0; q < ps.count(); q = q + (u32)1)
                     {
                     IRBlock* pb = (IRBlock*)ps.get(q);
-                    if (!self.hasBlock(reg, pb) && !(x == b && pb == H))
+                    if (!regSet.contains((Hashable*)pb) && !(x == b && pb == H))
                         closed = false;
                     }
                 }

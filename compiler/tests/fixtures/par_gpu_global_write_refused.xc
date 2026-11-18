@@ -1,3 +1,4 @@
+//xtc-na: xt6502 — no par runtime on this target (no ParDevice)
 //xtc-flags: expect=sema-error
 // A `par` body may not write a global scalar (every work item would race on
 // it). Reading one is fine, and so is writing a global ARRAY element by element.

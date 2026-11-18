@@ -878,7 +878,9 @@ static NSString* sExecutablePath = nil;
         else if ([arg isEqualToString:@"-fnew-ir"] || [arg isEqualToString:@"--with-ir"])
             {
             // Deprecated no-op: the IR pipeline is now the only/default path.
-            // Still accepted so existing scripts and Makefiles don't break.
+            // Still accepted so existing scripts and Makefiles don't break,
+            // with a warning that it goes (#337).
+            fprintf(stderr, "xcc: warning: %s has no effect and will be removed\n", arg.UTF8String);
             opts.useNewIR = YES;
             }
         else if ([arg isEqualToString:@"-o"] || [arg isEqualToString:@"--output"])
@@ -1247,6 +1249,7 @@ static NSString* sExecutablePath = nil;
             }
         else if ([arg isEqualToString:@"--emit-asm-from-ir"])
             {
+            fprintf(stderr, "xcc: warning: --emit-asm-from-ir will be removed; it is -S\n");
             opts.emitAsmFromIR = YES;
             }
         else if ([arg hasPrefix:@"-fauto-cloak="])
@@ -1256,6 +1259,7 @@ static NSString* sExecutablePath = nil;
                 [val isEqualToString:@"auto"] ||
                 [val isEqualToString:@"always"])
                 {
+                fprintf(stderr, "xcc: warning: -fauto-cloak= has no effect and will be removed\n");
                 opts.autoCloakMode = val;
                 }
             else
@@ -1306,11 +1310,7 @@ static NSString* sExecutablePath = nil;
             // expensive; xt6502's hardware stack and banked runtime made that
             // case much weaker, and manual lifetime management deserves a
             // design rather than a flag that half-existed.
-            fprintf(stderr,
-                    "xcc: warning: %s is retired and does nothing — ARC is always "
-                    "on. `delete` on a struct or primitive array is still allowed "
-                    "(ARC never managed those); on a class instance it is not.\n",
-                    arg.UTF8String);
+            fprintf(stderr, "xcc: warning: %s has no effect and will be removed\n", arg.UTF8String);
             }
         else if ([arg hasPrefix:@"--stack-size="] || [arg hasPrefix:@"-ss="] || [arg isEqualToString:@"--stack-size"] || [arg isEqualToString:@"-ss"])
             {
@@ -1358,6 +1358,9 @@ static NSString* sExecutablePath = nil;
                         val.UTF8String);
                 return nil;
                 }
+            NSRange eqr = [arg rangeOfString:@"="];
+            fprintf(stderr, "xcc: warning: %s has no effect and will be removed\n",
+                    (eqr.location != NSNotFound ? [arg substringToIndex:eqr.location] : arg).UTF8String);
             opts.stackSize = (NSUInteger)n;
             }
         else if ([arg hasPrefix:@"-Wno-"])
