@@ -268,6 +268,13 @@ NS_ASSUME_NONNULL_BEGIN
 \****************************************************************************/
 @property(nonatomic, readonly) BOOL usesClassNames;
 
+/****************************************************************************\
+|* YES once a printf-family format literal (or a format wrapper's) holds `%@`.
+|* Stdio's `%@` support pulls in the Object root and is compiled in only for
+|* a program that passes one (HAS_ATFMT, set by the driver).
+\****************************************************************************/
+@property(nonatomic, readonly) BOOL usesAtFormat;
+
 @end
 
 NS_ASSUME_NONNULL_END

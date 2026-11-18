@@ -81,6 +81,7 @@ class Sema
     Array* _cloakedDecls;
     bool _cloakedWarn;         // -Wno-cloaked-transitive: a warning, not an error
     bool _usesClassNames;      // a call resolved to Object.className() or Object.newInstanceOfClass()
+    bool _usesAtFormat;        // a printf-family format literal holds `%@`
     // The escape walk (escWalkStmt), per body: stack class locals by the
     // block depth that declared them, and pointer locals by the stack local
     // whose address they hold.
@@ -172,6 +173,7 @@ class Sema
         _cloakedDecls = new Array();
         _cloakedWarn = false;
         _usesClassNames = false;
+        _usesAtFormat = false;
         _scopes = new Array();
         _globals = new Map();
         _structs = new Map();
@@ -228,6 +230,13 @@ class Sema
     bool usesClassNames(void)
         {
         return _usesClassNames;
+        }
+    // Did a printf-family format (or a format wrapper's) hold `%@`? Stdio's
+    // `%@` support pulls in the Object root and is compiled in only for a
+    // program that passes one (HAS_ATFMT, Frontend.lower).
+    bool usesAtFormat(void)
+        {
+        return _usesAtFormat;
         }
     // A method call has resolved to `m`, declared by the class `owner`.
     void noteClassNameUse(String* owner, Node* m)
@@ -5715,6 +5724,10 @@ class Sema
         if (lit.kind() != (u16)nkStr || lit.name() == 0)
             return;
         String* f = lit.name();
+        // Every literal format passes here first, before an enum's `%@` is
+        // respelled `%e` below.
+        if (f.byteIndexOf(String.withCString("%@")) != String.notFound())
+            _usesAtFormat = true;
         String* out = String.withCString("");
         u32 intW = fmtIntWidth();
         u32 copied = (u32)0;

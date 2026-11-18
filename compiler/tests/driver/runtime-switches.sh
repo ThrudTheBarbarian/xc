@@ -1,5 +1,5 @@
 #!/bin/bash
-# runtime-switches.sh — parts of the runtime are switched on by what the
+# runtime-switches.sh — two parts of the runtime are switched on by what the
 # program does, not by how its text is spelled (#338):
 #
 #   the class-name table   on when a call resolves to Object.className() or
@@ -8,9 +8,14 @@
 #                          name); off for a struct field or a static method
 #                          of that name, and for the spellings in a comment or
 #                          a string.
+#   `%@` in Stdio          (HAS_ATFMT) on when a printf-family format, or a
+#                          format wrapper's, holds `%@`; off for `%@` in a
+#                          comment or in a string that is not a format.
 #
 # Both compilers. The table shows in the arm64 assembly as `_xtc_cname_`
-# functions.
+# functions; HAS_ATFMT shows in the xt6502 assembly, where a program built
+# without it differs from the same program with `%@` respelled only in that
+# string.
 #
 #   bash tests/driver/runtime-switches.sh
 set -u
@@ -64,5 +69,42 @@ for c in "$REF" "$XC"; do
     table "$c" "$W/subnew.xc" yes "$W/subnew.want"
 done
 
+# ── `%@` in Stdio ───────────────────────────────────────────────────────────
+cat > "$W/real.xc" <<'XC'
+#import "Stdio.xc"
+i32 main(void) { String* s = String.withCString("obj"); Stdio.printf("%@\n", s); return 0; }
+XC
+cat > "$W/wrapper.xc" <<'XC'
+#import "Stdio.xc"
+void say(string fmt, ...) { Stdio.printf(fmt, ...); }
+i32 main(void) { String* s = String.withCString("obj"); say("%@\n", s); return 0; }
+XC
+cat > "$W/use.xc" <<'XC'
+#import "Stdio.xc"
+use Stdio;
+i32 main(void) { String* s = String.withCString("obj"); printf("%@\n", s); return 0; }
+XC
+# The number of lines two builds differ by: <compiler> <source> <respelled>.
+lines() {
+    "$1" -q -O2 -A xt6502 -H . -S -o "$W/a.s" "$2" 2> /dev/null || { echo build; return; }
+    "$1" -q -O2 -A xt6502 -H . -S -o "$W/b.s" "$3" 2> /dev/null || { echo build; return; }
+    diff "$W/a.s" "$W/b.s" | grep -c '^<'
+}
+atfmt() {  # <compiler> <source> <want: on|off>
+    local c=$1 src=$2 want=$3 n
+    sed 's/%@/%_/' "$src" > "$W/respelled.xc"
+    n=$(lines "$c" "$src" "$W/respelled.xc")
+    case "$n" in build) bad "$c $src does not build for xt6502"; return ;; esac
+    # Off: only the string's own line differs.
+    if [ "$want" = off ] && [ "$n" != 1 ]; then bad "$c $src: HAS_ATFMT is on ($n lines differ)"; fi
+    if [ "$want" = on ] && [ "$n" -le 1 ]; then bad "$c $src: HAS_ATFMT is off"; fi
+}
+for c in "$REF" "$XC"; do
+    [ -x "$c" ] || continue
+    atfmt "$c" $F/printf_at_unformatted.xc off
+    atfmt "$c" "$W/real.xc" on
+    atfmt "$c" "$W/wrapper.xc" on
+    atfmt "$c" "$W/use.xc" on
+done
 [ $fail = 0 ] && echo "runtime-switches: ok"
 exit $fail

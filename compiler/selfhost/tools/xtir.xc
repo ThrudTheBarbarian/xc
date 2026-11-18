@@ -114,77 +114,84 @@ void main(void)
         }
 
     // The `%@` gate. Stdio pulls in the Object root (and String) for
-    // `%@` → description() dispatch ONLY when the program actually uses one,
-    // and the spec can live in an imported library — so it is found by a
-    // THROWAWAY expansion of the whole source, then declared on the real
-    // preprocessor before it evaluates the guard. Without it the port compiles
-    // a different program than the driver does.
-    if (!raw)
+    // `%@` → description() dispatch only when the program passes a format
+    // that holds one, in its own code or an imported file's. Sema finds that
+    // (Sema.usesAtFormat): the first pass is built with HAS_ATFMT 0, and a
+    // program that uses `%@` is built again with 1, as the driver does.
+    // Without it the port compiles a different program than the driver does.
+    bool hasAt = false;
+    String* source = (String*)0;
+    Node* program = (Node*)0;
+    Sema* sema = (Sema*)0;
+    for (u32 pass = (u32)0; pass < (u32)2; pass = pass + (u32)1)
         {
-        Preprocessor* scan = new Preprocessor();
-        predefine(scan);
-        for (u32 pi = (u32)0; pi < incs.count(); pi = pi + (u32)1)
-            scan.addIncludePath((String*)incs.get(pi));
-        for (u32 di = (u32)0; di < defs.count(); di = di + (u32)1)
-            defineArg(scan, (String*)defs.get(di));
-        scan.define(String.withCString("HAS_ATFMT"), String.withCString("0"));
-        String* probe = scan.preprocessFile(input);
-        bool hasAt = probe != 0 && probe.byteIndexOf(String.withCString("%@")) != String.notFound();
-        pp.define(String.withCString("HAS_ATFMT"),
-                  String.withCString(hasAt ? "1" : "0"));
-        }
-
-    // The implicit platform prelude, gated exactly as the oracle's driver
-    // gates it — a Platform.xc anywhere on the search path (task #36). The
-    // %@ scan above stays preludeless, mirroring setupObjectFmtGateOnto:.
-    if (!raw)
-        {
-        for (u32 pi = (u32)0; pi < incs.count(); pi = pi + (u32)1)
+        if (pass > (u32)0)
             {
-            String* pth = String.withCString(((String*)incs.get(pi)).cString());
-            pth.appendCString("/Platform.xc");
-            if (Files.exists(pth))
+            pp = new Preprocessor();
+            predefine(pp);
+            for (u32 pi = (u32)0; pi < incs.count(); pi = pi + (u32)1)
+                pp.addIncludePath((String*)incs.get(pi));
+            for (u32 di = (u32)0; di < defs.count(); di = di + (u32)1)
+                defineArg(pp, (String*)defs.get(di));
+            }
+        if (!raw)
+            pp.define(String.withCString("HAS_ATFMT"),
+                      String.withCString(hasAt ? "1" : "0"));
+
+        // The implicit platform prelude, gated exactly as the oracle's driver
+        // gates it — a Platform.xc anywhere on the search path (task #36).
+        if (!raw)
+            {
+            for (u32 pi = (u32)0; pi < incs.count(); pi = pi + (u32)1)
                 {
-                pp.setPrelude(String.withCString("Platform.xc"));
-                pi = incs.count();
+                String* pth = String.withCString(((String*)incs.get(pi)).cString());
+                pth.appendCString("/Platform.xc");
+                if (Files.exists(pth))
+                    {
+                    pp.setPrelude(String.withCString("Platform.xc"));
+                    pi = incs.count();
+                    }
                 }
             }
-        }
 
-    String* source = raw ? Files.readText(input) : pp.preprocessFile(input);
-    if (source == 0)
-        {
-        Stdio.printf("xtir: cannot read '%s'\n", input.cString());
-        Process.exit((i32)1);
-        return;
-        }
+        source = raw ? Files.readText(input) : pp.preprocessFile(input);
+        if (source == 0)
+            {
+            Stdio.printf("xtir: cannot read '%s'\n", input.cString());
+            Process.exit((i32)1);
+            return;
+            }
 
-    Lexer* lex = Lexer.with(source, input);
-    Array* tokens = lex.tokenise();
-    Parser* parser = Parser.with(tokens);
-    parser.setGoalDefault(pp.goal());   // a #goal in the file, as the front end honours it
-    parser.setLibraryFiles(pp.libraryFiles());
-    Node* program = parser.parse();
-    // uxkit/026: the oracle for this harness is `xcc-fe`, and xcc-fe
-    // synthesises the designable bodies before sema. Without the same call
-    // here the two sides lower DIFFERENT programs and the differential is
-    // comparing the wrong thing rather than finding a real divergence.
-    Array* designErrors = synthesizeDesignable(program);
-    if (designErrors.count() > (u32)0)
-        {
-        for (u32 e = (u32)0; e < designErrors.count(); e = e + (u32)1)
-            Stdio.printf("%s", ((String*)designErrors.get(e)).cString());
-        Process.exit((i32)1);
-        return;
-        }
+        Lexer* lex = Lexer.with(source, input);
+        Array* tokens = lex.tokenise();
+        Parser* parser = Parser.with(tokens);
+        parser.setGoalDefault(pp.goal());   // a #goal in the file, as the front end honours it
+        parser.setLibraryFiles(pp.libraryFiles());
+        program = parser.parse();
+        // uxkit/026: the oracle for this harness is `xcc-fe`, and xcc-fe
+        // synthesises the designable bodies before sema. Without the same call
+        // here the two sides lower DIFFERENT programs and the differential is
+        // comparing the wrong thing rather than finding a real divergence.
+        Array* designErrors = synthesizeDesignable(program);
+        if (designErrors.count() > (u32)0)
+            {
+            for (u32 e = (u32)0; e < designErrors.count(); e = e + (u32)1)
+                Stdio.printf("%s", ((String*)designErrors.get(e)).cString());
+            Process.exit((i32)1);
+            return;
+            }
 
-    Sema* sema = Sema.make();
-    // This tool is compared against `xcc-fe -m xt`, whose pointer width is 3.
-    // Stated rather than defaulted, and stated for BOTH halves below, because
-    // sema picks the ptrdiff type while lowering builds the value: if they
-    // disagree the cast is selected from one width and applied to the other.
-    sema.setPointerWidth((u32)3);
-    sema.analyse(program);
+        sema = Sema.make();
+        // This tool is compared against `xcc-fe -m xt`, whose pointer width is 3.
+        // Stated rather than defaulted, and stated for BOTH halves below, because
+        // sema picks the ptrdiff type while lowering builds the value: if they
+        // disagree the cast is selected from one width and applied to the other.
+        sema.setPointerWidth((u32)3);
+        sema.analyse(program);
+        if (raw || hasAt || !sema.usesAtFormat())
+            break;
+        hasAt = true;
+        }
 
     // --dump-vslots mirrors XTC_DUMP_VSLOTS on xtc-fe, so the two slot
     // assignments can be diffed line for line rather than inferred from what

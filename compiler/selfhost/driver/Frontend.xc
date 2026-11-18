@@ -74,6 +74,8 @@ class FeOptions
     // Sema found a call to Object.className() or Object.newInstanceOfClass():
     // the class-name table is on (injectClassNames, and the restart in lower).
     bool _classNames;
+    // Sema found a printf-family format holding `%@`: HAS_ATFMT is 1 (lower).
+    bool _atFormat;
     u32 _goalDefault;    // -fgoal=: the unit's default goal (0 built-in, 1 speed, 2 accuracy); a #goal overrides it
     bool _emitIface;   // compute the module interface (--emit-lib, -c, --emit-iface)
     // …and, SEPARATELY, whether this is a LIBRARY build. The two used to be one
@@ -145,6 +147,7 @@ class FeOptions
         _parDeviceDefault = (u32)0;
         _parAutoImport = false;
         _classNames = false;
+        _atFormat = false;
         _goalDefault = (u32)0;
         // par-auto is opt-in (-Wpar-auto): what --par-style=auto wrapped or demoted
         // is useful to see once, and noise in every build after.
@@ -458,6 +461,14 @@ class FeOptions
         {
         return _classNames;
         }
+    bool atFormat(void)
+        {
+        return _atFormat;
+        }
+    void setAtFormat(bool b)
+        {
+        _atFormat = b;
+        }
     void setClassNames(bool b)
         {
         _classNames = b;
@@ -493,14 +504,15 @@ class FeOptions
     static IRModule* lower(FeOptions* o)
         {
         o.setClassNames(false);
+        o.setAtFormat(false);
         return Frontend.lowerUnit(o);
         }
 
     // One pass of the front end. It starts again from the top, with an option
     // turned on, when the program turns out to need what that option adds:
-    // the par runtime (after the parse), and the class-name table (after
-    // sema). Anything said before such a restart is held in `early` and
-    // dropped by it, so each message prints once.
+    // the par runtime (after the parse), and the class-name table and Stdio's
+    // `%@` support (after sema). Anything said before such a restart is held
+    // in `early` and dropped by it, so each message prints once.
     static IRModule* lowerUnit(FeOptions* o)
         {
         resolveIncludePaths(o);
@@ -517,18 +529,14 @@ class FeOptions
                 Stdio.printf("xc-fe:   %s\n", ((String*)o.incs().get(i)).cString());
             }
 
-        // The `%@` gate, decided by a THROWAWAY expansion of the whole source: the
-        // library pulls in the Object root for `%@` → description() dispatch only
-        // when the program actually uses one, and the use can be inside an
-        // imported file.
-        Preprocessor* scan = buildPP(o);
-        scan.define(String.withCString("HAS_ATFMT"), String.withCString("0"));
-        String* probe = scan.preprocessFile(o.input());
-        bool hasAt = probe != 0 && probe.byteIndexOf(String.withCString("%@")) != String.notFound();
-
+        // The `%@` gate: Stdio pulls in the Object root for `%@` →
+        // description() dispatch only when the program passes a format that
+        // holds one, in its own code or an imported file's. Sema finds that
+        // (Sema.usesAtFormat), so the first pass is built without it and the
+        // restart after sema turns it on.
         Preprocessor* pp = buildPP(o);
         pp.define(String.withCString("HAS_ATFMT"),
-                  String.withCString(hasAt ? "1" : "0"));
+                  String.withCString(o.atFormat() ? "1" : "0"));
 
         String* source = pp.preprocessFile(o.input());
         // What this pass says before the parse is held here and printed after
@@ -981,13 +989,19 @@ class FeOptions
                 }
             }
         sema.analyse(program);
-        // The class-name table is decided by the program: sema saw a call
-        // resolve to Object.className() or Object.newInstanceOfClass(). This
-        // pass was built without the table, so start again with it; the
-        // first pass's diagnostics are dropped with it.
-        if (namesSwitch && sema.usesClassNames() && !o.classNames())
+        // The class-name table and HAS_ATFMT are decided by the program: sema
+        // saw a call resolve to Object.className() or
+        // Object.newInstanceOfClass(), or a format holding `%@`. This pass was
+        // built without them, so start again with them; the first pass's
+        // diagnostics are dropped with it.
+        bool wantNames = namesSwitch && sema.usesClassNames() && !o.classNames();
+        bool wantAt = sema.usesAtFormat() && !o.atFormat();
+        if (wantNames || wantAt)
             {
-            o.setClassNames(true);
+            if (wantNames)
+                o.setClassNames(true);
+            if (wantAt)
+                o.setAtFormat(true);
             return Frontend.lowerUnit(o);
             }
         Frontend.flushEarly(early);

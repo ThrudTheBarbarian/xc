@@ -2304,20 +2304,23 @@ static void failBothBackends(XTCorpusResult *r, XTCorpusOutcome outcome) {
 // NO and sets *outcome / *msg. The arch-neutral lowering is the same
 // code either way; only the imported platform sources differ.
 //
-// One pass: `classNames` switches the class-name table on. A pass built
-// without it stops after sema with *usesClassNames set when the program
-// calls Object.className() or Object.newInstanceOfClass(), and the caller
-// (corpusFrontend) runs it again with the table, as the driver does.
+// One pass: `classNames` switches the class-name table on, and `atFmt`
+// Stdio's `%@` support. A pass built without one stops after sema with
+// *usesClassNames / *usesAtFmt set when the program calls Object.className()
+// or Object.newInstanceOfClass(), or passes a format holding `%@`, and the
+// caller (corpusFrontend) runs it again with them, as the driver does.
 static BOOL corpusFrontendPass(NSString *rawSource, NSString *xtPath,
                                NSString *name,
                                NSArray<NSString *> *includePaths,
                                XTPointerPlacement defaultPlacement,
                                BOOL arm64Target,
                                BOOL classNames, BOOL *usesClassNames,
+                               BOOL atFmt, BOOL *usesAtFmt,
                                XTIRModule **outMod, XTIRFunction **outEntry,
                                XTCorpusOutcome *outcome, NSString **msg) {
     *outMod = nil; *outEntry = nil;
     *usesClassNames = NO;
+    *usesAtFmt = NO;
     if (!sCorpusFrameworks) sCorpusFrameworks = [NSMutableArray array];
     XTDiagnosticEngine *diag = [[XTDiagnosticEngine alloc] init];
     XTPreprocessor *pp = [[XTPreprocessor alloc] initWithDiagnostics:diag];
@@ -2378,31 +2381,9 @@ static BOOL corpusFrontendPass(NSString *rawSource, NSString *xtPath,
         }
     }
 
-    // Mirror XTCompilerDriver.setupObjectFmtGateOnto: — gate the `%@` / Object
-    // dependency by a throwaway preprocess of the fully-expanded source (the
-    // spec may live in an imported library; the preprocessor strips comments so
-    // Stdio's own doc lines don't count). This is the only printf format-feature
-    // gate left after phase-559 removed the xt6502-only width/float gates — it
-    // fences off a heavy dependency, not just a code branch, and every backend's
-    // Stdio uses it. (support/6502 parks the flat-6502 Stdio that still gates
-    // widths/floats too.)
-    XTPreprocessor *scanPP = [[XTPreprocessor alloc]
-        initWithDiagnostics:[[XTDiagnosticEngine alloc] init]];
-    scanPP.includePaths = includePaths;
-    [scanPP defineMacro:@"XT_STDIO_FMT_BUF" value:[NSString stringWithFormat:@"$%04lX", (unsigned long)fmtB]];
-    [scanPP defineMacro:@"XT_PRINTF_BUF" value:[NSString stringWithFormat:@"$%04lX", (unsigned long)pfB]];
-    [scanPP defineMacro:@"XT_PRINTF_DATA_BUF" value:[NSString stringWithFormat:@"$%04lX", (unsigned long)(pfB + 2)]];
-    if (defaultPlacement == XTPointerPlacementMain) {
-        [scanPP defineMacro:@"ARCH_arm64" value:@"1"];
-    } else {
-        [scanPP defineMacro:@"ARCH_6502" value:@"1"];
-    }
-    NSString *scanExpanded = nil;
-    @try { scanExpanded = [scanPP preprocessSource:rawSource filename:xtPath]; }
-    @catch (NSException *e) { scanExpanded = rawSource; }
-    if (!scanExpanded) scanExpanded = rawSource;
-    BOOL hasAtFmt = [scanExpanded rangeOfString:@"%@"].location != NSNotFound;
-    [pp defineMacro:@"HAS_ATFMT" value:hasAtFmt ? @"1" : @"0"];
+    // The `%@` / Object dependency, as the driver gates it: HAS_ATFMT is on
+    // when sema finds a format holding `%@` (see corpusFrontend).
+    [pp defineMacro:@"HAS_ATFMT" value:atFmt ? @"1" : @"0"];
 
     // Surface the heap pointer width so foundation-library inline asm
     // (Array.xc / Map.xc / Set.xc) can select the correct bank-byte
@@ -2550,8 +2531,9 @@ static BOOL corpusFrontendPass(NSString *rawSource, NSString *xtPath,
         *msg = [NSString stringWithFormat:@"sema exception: %@", e.reason];
         return NO;
     }
-    if (!classNames && sema.usesClassNames) {
-        *usesClassNames = YES;
+    if ((!classNames && sema.usesClassNames) || (!atFmt && sema.usesAtFormat)) {
+        *usesClassNames = sema.usesClassNames;
+        *usesAtFmt = sema.usesAtFormat;
         return NO;
     }
     if (diag.hasFatalError) {
@@ -2729,12 +2711,14 @@ static BOOL corpusFrontend(NSString *rawSource, NSString *xtPath,
                            BOOL arm64Target,
                            XTIRModule **outMod, XTIRFunction **outEntry,
                            XTCorpusOutcome *outcome, NSString **msg) {
-    BOOL names = NO;
+    BOOL names = NO, at = NO;
     BOOL ok = corpusFrontendPass(rawSource, xtPath, name, includePaths, defaultPlacement,
-                                 arm64Target, NO, &names, outMod, outEntry, outcome, msg);
-    if (names)
+                                 arm64Target, NO, &names, NO, &at, outMod, outEntry, outcome, msg);
+    if (names || at) {
+        BOOL n2 = NO, a2 = NO;
         ok = corpusFrontendPass(rawSource, xtPath, name, includePaths, defaultPlacement,
-                                arm64Target, YES, &names, outMod, outEntry, outcome, msg);
+                                arm64Target, names, &n2, at, &a2, outMod, outEntry, outcome, msg);
+    }
     return ok;
 }
 
