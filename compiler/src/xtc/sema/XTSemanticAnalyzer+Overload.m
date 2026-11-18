@@ -2302,6 +2302,7 @@ static BOOL XTIsErasedKeyType(XTType* t)
                     NSString* calleeLbl = [NSString stringWithFormat:
                                                         @"_cls_%@_%@", bestClass, key];
                     [self recordCallEdgeToLabel:calleeLbl];
+                    [self noteClassNameUseOwner:bestClass method:bestM];
                     NSMutableArray<XTType*>* pt = [NSMutableArray array];
                     for (XTParamNode* p in bestM.parameters)
                         {
@@ -2454,6 +2455,7 @@ static BOOL XTIsErasedKeyType(XTType* t)
                     NSString* calleeLbl =
                         [NSString stringWithFormat:@"_cls_%@_%@", cls, key];
                     [self recordCallEdgeToLabel:calleeLbl];
+                    [self noteClassNameUseOwner:cls method:chosen];
                     // PR8: virtual dispatch picks the right body at
                     // runtime; bare `foo()` inside a method body that
                     // resolves to an overridden method emits the
@@ -3241,6 +3243,7 @@ static NSInteger XTFmtWrapperIndex(BOOL isVarArgs, NSArray<XTParamNode*>* params
         NSString* calleeLbl =
             [NSString stringWithFormat:@"_cls_%@_%@", ownerCls.className, key];
         [self recordCallEdgeToLabel:calleeLbl];
+        [self noteClassNameUseOwner:ownerCls.className method:chosen];
         // `super.foo` intentionally bypasses the override guard —
         // the user's writing `super.foo` is the whole point of
         // non-virtual dispatch.
@@ -3735,6 +3738,7 @@ static NSInteger XTFmtWrapperIndex(BOOL isVarArgs, NSArray<XTParamNode*>* params
                 NSString* calleeLbl =
                     [NSString stringWithFormat:@"_cls_%@_%@", ownerName, key];
                 [self recordCallEdgeToLabel:calleeLbl];
+                [self noteClassNameUseOwner:ownerName method:chosen];
                 // PR8: calls resolving to a method that's overridden
                 // somewhere in the program pick up a vtable slot;
                 // codegen detects that via `virtualSlotByLabel` and

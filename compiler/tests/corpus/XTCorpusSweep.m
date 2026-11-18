@@ -2303,14 +2303,21 @@ static void failBothBackends(XTCorpusResult *r, XTCorpusOutcome outcome) {
 // success returns YES and sets *outMod / *outEntry; on failure returns
 // NO and sets *outcome / *msg. The arch-neutral lowering is the same
 // code either way; only the imported platform sources differ.
-static BOOL corpusFrontend(NSString *rawSource, NSString *xtPath,
-                           NSString *name,
-                           NSArray<NSString *> *includePaths,
-                           XTPointerPlacement defaultPlacement,
-                           BOOL arm64Target,
-                           XTIRModule **outMod, XTIRFunction **outEntry,
-                           XTCorpusOutcome *outcome, NSString **msg) {
+//
+// One pass: `classNames` switches the class-name table on. A pass built
+// without it stops after sema with *usesClassNames set when the program
+// calls Object.className() or Object.newInstanceOfClass(), and the caller
+// (corpusFrontend) runs it again with the table, as the driver does.
+static BOOL corpusFrontendPass(NSString *rawSource, NSString *xtPath,
+                               NSString *name,
+                               NSArray<NSString *> *includePaths,
+                               XTPointerPlacement defaultPlacement,
+                               BOOL arm64Target,
+                               BOOL classNames, BOOL *usesClassNames,
+                               XTIRModule **outMod, XTIRFunction **outEntry,
+                               XTCorpusOutcome *outcome, NSString **msg) {
     *outMod = nil; *outEntry = nil;
+    *usesClassNames = NO;
     if (!sCorpusFrameworks) sCorpusFrameworks = [NSMutableArray array];
     XTDiagnosticEngine *diag = [[XTDiagnosticEngine alloc] init];
     XTPreprocessor *pp = [[XTPreprocessor alloc] initWithDiagnostics:diag];
@@ -2477,8 +2484,8 @@ static BOOL corpusFrontend(NSString *rawSource, NSString *xtPath,
     {
         XTCompilerDriver *cn = [[XTCompilerDriver alloc]
                                    initWithOptions:[[XTCommandLineOptions alloc] init]];
-        ast = [cn injectClassNames:ast tokens:tokens ifaceJsons:@[] ifacePaths:@[]
-                         typeTable:tt arm64:arm64Target];
+        ast = [cn injectClassNames:ast classNames:classNames ifaceJsons:@[] ifacePaths:@[]
+                         typeTable:tt arm64:arm64Target switchable:NULL];
         if (!ast || cn.diagnostics.errorCount > 0) {
             *outcome = XTCorpusFailParse;
             *msg = @"class-name table";
@@ -2541,6 +2548,10 @@ static BOOL corpusFrontend(NSString *rawSource, NSString *xtPath,
     } @catch (NSException *e) {
         *outcome = XTCorpusFailSema;
         *msg = [NSString stringWithFormat:@"sema exception: %@", e.reason];
+        return NO;
+    }
+    if (!classNames && sema.usesClassNames) {
+        *usesClassNames = YES;
         return NO;
     }
     if (diag.hasFatalError) {
@@ -2709,6 +2720,24 @@ static NSSet<NSString *> *corpusNASetForSource(NSString *rawSource) {
 // that exercise a feature no current corpus backend supports (e.g. the XE
 // :cloaked formatters: arm64 and xt neither has them). The file stays in
 // the tree as documentation/future coverage; it's just not counted.
+// The front end for one backend, with the class-name table switched on when
+// the program calls for it (see corpusFrontendPass).
+static BOOL corpusFrontend(NSString *rawSource, NSString *xtPath,
+                           NSString *name,
+                           NSArray<NSString *> *includePaths,
+                           XTPointerPlacement defaultPlacement,
+                           BOOL arm64Target,
+                           XTIRModule **outMod, XTIRFunction **outEntry,
+                           XTCorpusOutcome *outcome, NSString **msg) {
+    BOOL names = NO;
+    BOOL ok = corpusFrontendPass(rawSource, xtPath, name, includePaths, defaultPlacement,
+                                 arm64Target, NO, &names, outMod, outEntry, outcome, msg);
+    if (names)
+        ok = corpusFrontendPass(rawSource, xtPath, name, includePaths, defaultPlacement,
+                                arm64Target, YES, &names, outMod, outEntry, outcome, msg);
+    return ok;
+}
+
 static BOOL corpusSkipForSource(NSString *rawSource) {
     for (NSString *line in [rawSource componentsSeparatedByString:@"\n"]) {
         NSString *t = [line stringByTrimmingCharactersInSet:

@@ -66,6 +66,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (nullable NSString*)bodyStackSignalReason:(XTASTNode*)node;
 - (BOOL)asmBlockTouchesXtcStack:(XTAsmBlockNode*)blk;
 - (void)recordCallEdgeToLabel:(NSString*)calleeLabel;
+- (void)noteClassNameUseOwner:(nullable NSString*)owner method:(XTMethodDeclNode*)m;
 - (void)classifyFunctionStackUse:(XTFunctionDeclNode*)fn
                            label:(NSString*)label;
 - (void)classifyMethodStackUse:(XTMethodDeclNode*)m

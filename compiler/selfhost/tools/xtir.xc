@@ -169,7 +169,14 @@ void main(void)
     // synthesises the designable bodies before sema. Without the same call
     // here the two sides lower DIFFERENT programs and the differential is
     // comparing the wrong thing rather than finding a real divergence.
-    synthesizeDesignable(program);
+    Array* designErrors = synthesizeDesignable(program);
+    if (designErrors.count() > (u32)0)
+        {
+        for (u32 e = (u32)0; e < designErrors.count(); e = e + (u32)1)
+            Stdio.printf("%s", ((String*)designErrors.get(e)).cString());
+        Process.exit((i32)1);
+        return;
+        }
 
     Sema* sema = Sema.make();
     // This tool is compared against `xcc-fe -m xt`, whose pointer width is 3.

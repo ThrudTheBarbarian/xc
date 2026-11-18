@@ -260,6 +260,14 @@ NS_ASSUME_NONNULL_BEGIN
 \****************************************************************************/
 @property(nonatomic, readonly) NSArray<NSString*>* usedClassNames;
 
+/****************************************************************************\
+|* YES once a method call has resolved to Object.className() or
+|* Object.newInstanceOfClass(). Those read the per-module class-name table,
+|* which the driver emits only for a program that calls one (see
+|* -[XTCompilerDriver injectClassNames:…]).
+\****************************************************************************/
+@property(nonatomic, readonly) BOOL usesClassNames;
+
 @end
 
 NS_ASSUME_NONNULL_END

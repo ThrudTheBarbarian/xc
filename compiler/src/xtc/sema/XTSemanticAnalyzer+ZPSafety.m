@@ -403,6 +403,18 @@
     }
 
 /****************************************************************************\
+|* A method call has resolved to `m`, declared by the class `owner`. A call to
+|* Object.className() or Object.newInstanceOfClass() switches the class-name
+|* table on (the driver's injectClassNames). As the port's noteClassNameUse.
+\****************************************************************************/
+- (void)noteClassNameUseOwner:(nullable NSString*)owner method:(XTMethodDeclNode*)m
+    {
+    if ([owner isEqualToString:@"Object"] &&
+        ([m.methodName isEqualToString:@"className"] || [m.methodName isEqualToString:@"newInstanceOfClass"]))
+        self.usesClassNames = YES;
+    }
+
+/****************************************************************************\
 |* Record a resolved call edge from the currently-walked function body to
 |* `calleeLabel`. No-op if we're at file scope (no enclosing function) —
 |* top-level initialisers for globals aren't the cloaked-analysis target.
