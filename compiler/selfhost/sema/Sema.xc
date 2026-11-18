@@ -8121,6 +8121,49 @@ class Sema
                 group = kept;
                 _functions.set((Hashable*)names.get(i), (Object*)group);
                 }
+            // Two DEFINITIONS with the same parameter types are an error,
+            // wherever they come from: the program and a file it imports
+            // (#418), or one file twice. The second is reported, naming where
+            // the first is; both stay in the group, so the names mangle as the
+            // reference's do (the build stops at the error either way).
+            // Without this -O0 failed at assembly ("duplicate label") and -O2
+            // kept the import's body without a word. As the reference.
+            if (group.count() > (u32)1)
+                {
+                Array* firstSigs = new Array();
+                Array* firstNodes = new Array();
+                for (u32 j = (u32)0; j < group.count(); j = j + (u32)1)
+                    {
+                    Node* fn = (Node*)group.get(j);
+                    bool hasBody = false;
+                    for (u32 b = (u32)0; b < fn.kidCount(); b = b + (u32)1)
+                        if (fn.kid(b).kind() == (u16)nkBlock)
+                            hasBody = true;
+                    if (!hasBody)
+                        continue;
+                    String* sg = mangledFor(fn);
+                    Node* first = (Node*)0;
+                    for (u32 x = (u32)0; x < firstSigs.count(); x = x + (u32)1)
+                        if (((String*)firstSigs.get(x)).equals(sg))
+                            first = (Node*)firstNodes.get(x);
+                    if (first == (Node*)0)
+                        {
+                        firstSigs.add((Object*)sg);
+                        firstNodes.add((Object*)fn);
+                        continue;
+                        }
+                    String* m = String.withCString("Redefinition of '");
+                    m.append(fn.name());
+                    m.appendCString("' with same parameter types");
+                    if (first.line() != (u32)0)
+                        {
+                        m.appendCString(" (previously defined at ");
+                        m.append(first.file() != 0 ? first.file() : String.withCString("<input>"));
+                        m.appendFormat(":%u)", first.line());
+                        }
+                    _errorAt(m, fn);
+                    }
+                }
             // Mirror of the original's C-linkage rule: a body-less member is
             // an external C function, and a DIFFERENT-signature member cannot
             // overload it — overloading would mangle the C symbol away. The

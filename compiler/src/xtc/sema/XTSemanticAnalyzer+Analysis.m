@@ -495,8 +495,16 @@
                 }
             if (![[self currentScope] defineSymbol:sym])
                 {
-                [self.diagnostics emitError:[NSString stringWithFormat:@"Redefinition of '%@' with same parameter types",
-                                                                       fn.funcName]
+                // Name where the first definition is (#418): the second may
+                // come from a file the program imports.
+                XTSymbol* prev = [[self currentScope] lookupLocalSymbol:sym.symbolName];
+                NSString* where = @"";
+                if (prev.definedAt && prev.definedAt.line > 0)
+                    where = [NSString stringWithFormat:@" (previously defined at %@:%lu)",
+                                                       prev.definedAt.filename ?: @"<input>",
+                                                       (unsigned long)prev.definedAt.line];
+                [self.diagnostics emitError:[NSString stringWithFormat:@"Redefinition of '%@' with same parameter types%@",
+                                                                       fn.funcName, where]
                                          at:fn.location];
                 }
             }
