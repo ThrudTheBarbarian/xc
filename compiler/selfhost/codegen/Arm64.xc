@@ -40,130 +40,76 @@
 bool gArm64EhTables;
 void arm64SetEhTables(bool on) { gArm64EhTables = on; }
 
-// A set of values that keeps the order they were added in (the allocator's
-// candidate order reads it), with a map for membership. The liveness sets were
-// plain Arrays, searched linearly on every add: quadratic in a function's value
-// count, and a module's class-table function grows with its classes (an object
-// of 1,600 classes took four minutes, 2026-11-02).
-class LiveSet
+// A growable list of u32 on the heap, freed explicitly (release). The liveness
+// run keeps its per-block member lists and its per-value tables in these: the
+// sets of boxed values it used to build allocated and hashed on every add and
+// copy, and that was most of the arm64 back end's time on a large module.
+class LiveVec
     {
-    // The members in the order they were added (which the allocation that
-    // follows depends on), and a bit per member for has(). The bit is the
-    // value's number in this liveness run (index): a Map here made the
-    // solver's has, add and copy hash every member, and on a module of 1,600
-    // classes liveness was most of the arm64 back end's time (#18).
-    Array* _items;
-    u8* _bits;
-    u32 _cap;               // bytes in _bits
-    static u32 _run;        // the run values are numbered in (newRun)
-    static u32 _next;       // the next number in it
+    u32* _v;
+    u32 _n;
+    u32 _cap;
 
     void init(void)
         {
-        _items = new Array();
-        _cap = (u32)0;
-        }
-    // A new liveness run: numbers start again from 0. Every LiveSet lives in
-    // one run (Arm64.computeIntervals), so none sees another's numbers.
-    static void newRun(void)
-        {
-        _run = _run + (u32)1;
-        _next = (u32)0;
-        }
-    static u32 index(IRValue* v)
-        {
-        if (v.lsRun() != _run)
-            {
-            v.setLs(_run, _next);
-            _next = _next + (u32)1;
-            }
-        return v.lsIndex();
+        _n = 0;
+        _cap = 0;
         }
     u32 count(void)
         {
-        return _items.count();
+        return _n;
         }
-    IRValue* get(u32 i)
+    u32 get(u32 i)
         {
-        return (IRValue*)_items.get(i);
+        return _v[i];
         }
-    bool has(IRValue* v)
+    void set(u32 i, u32 x)
         {
-        if (v == (IRValue*)0)
-            return false;
-        u32 i = index(v);
-        return (i >> 3) < _cap && (_bits[i >> 3] & ((u8)1 << (u8)(i & (u32)7))) != (u8)0;
+        _v[i] = x;
         }
-    void grow(u32 bytes)
+    // The entry at i, or 0 past the end.
+    u32 at(u32 i)
         {
-        u32 c = _cap == (u32)0 ? (u32)16 : _cap;
-        while (c < bytes)
-            c = c * (u32)2;
-        u8* nb = new u8[c];
-        for (u32 k = (u32)0; k < c; k = k + (u32)1)
-            nb[k] = k < _cap ? _bits[k] : (u8)0;
-        _bits = nb;
+        return i < _n ? _v[i] : 0;
+        }
+    void push(u32 x)
+        {
+        if (_n == _cap)
+            grow(_n + 1);
+        _v[_n] = x;
+        _n = _n + 1;
+        }
+    // Sets entry i, first extending the list with zeros to reach it.
+    void put(u32 i, u32 x)
+        {
+        if (i >= _cap)
+            grow(i + 1);
+        while (_n <= i)
+            {
+            _v[_n] = 0;
+            _n = _n + 1;
+            }
+        _v[i] = x;
+        }
+    void grow(u32 need)
+        {
+        u32 c = _cap == 0 ? 64 : _cap;
+        while (c < need)
+            c = c * 2;
+        u32* nv = new u32[c];
+        for (u32 k = 0; k < _n; k = k + 1)
+            nv[k] = _v[k];
+        if (_cap > 0)
+            delete _v;
+        _v = nv;
         _cap = c;
         }
-    void add(IRValue* v)
+    void release(void)
         {
-        if (v == (IRValue*)0)
-            return;
-        u32 i = index(v);
-        if ((i >> 3) >= _cap)
-            grow((i >> 3) + (u32)1);
-        u8 m = (u8)1 << (u8)(i & (u32)7);
-        if ((_bits[i >> 3] & m) != (u8)0)
-            return;
-        _bits[i >> 3] = _bits[i >> 3] | m;
-        _items.add((Object*)v);
-        }
-    LiveSet* copy(void)
-        {
-        LiveSet* o = new LiveSet();
-        for (u32 i = (u32)0; i < _items.count(); i = i + (u32)1)
-            o._items.add(_items.get(i));
-        if (_cap > (u32)0)
-            {
-            o._bits = new u8[_cap];
-            for (u32 k = (u32)0; k < _cap; k = k + (u32)1)
-                o._bits[k] = _bits[k];
-            o._cap = _cap;
-            }
-        return o;
-        }
-    void unionWith(LiveSet* b)
-        {
-        for (u32 i = (u32)0; i < b.count(); i = i + (u32)1)
-            add(b.get(i));
-        }
-    // Removes b's members, keeping the order of what stays.
-    void minus(LiveSet* b)
-        {
-        if (b.count() == (u32)0)
-            return;
-        Array* kept = new Array();
-        for (u32 i = (u32)0; i < _items.count(); i = i + (u32)1)
-            {
-            IRValue* v = (IRValue*)_items.get(i);
-            if (b.has(v))
-                {
-                u32 x = index(v);
-                _bits[x >> 3] = _bits[x >> 3] & ~((u8)1 << (u8)(x & (u32)7));
-                }
-            else
-                kept.add((Object*)v);
-            }
-        _items = kept;
-        }
-    bool same(LiveSet* b)
-        {
-        if (count() != b.count())
-            return false;
-        for (u32 i = (u32)0; i < _items.count(); i = i + (u32)1)
-            if (!b.has((IRValue*)_items.get(i)))
-                return false;
-        return true;
+        if (_cap > 0)
+            delete _v;
+        _cap = 0;
+        _n = 0;
         }
     }
 
@@ -3016,7 +2962,7 @@ class Arm64
             // A phi whose register its back-edge value was coalesced onto holds
             // that value from its definition on, whatever the phi's interval
             // says: not safe to read late.
-            if (hasVal(_phiRes, m.val()) && sharesHome(m.val())) return (IRInsn*)0;
+            if (inSet(_phiRes, m.val()) && sharesHome(m.val())) return (IRInsn*)0;
         }
         return n;
     }
@@ -9807,11 +9753,21 @@ class Arm64
         return depth;
     }
 
+    // b's index in fn's block list, or the block count when it is not there.
+    // Each block remembers the index it was last given; when that is stale the
+    // blocks are numbered again.
     u32 blockIndexOf(IRFunc* fn, IRBlock* b)
     {
-        for (u32 i = (u32)0; i < fn.blocks().count(); i = i + (u32)1)
-            if ((IRBlock*)fn.blocks().get(i) == b) return i;
-        return fn.blocks().count();
+        Array* bs = fn.blocks();
+        u32 n = bs.count();
+        if (b == (IRBlock*)0) return n;
+        u32 i = b.bix();
+        if (i < n && (IRBlock*)bs.get(i) == b) return i;
+        for (u32 k = 0; k < n; k = k + 1)
+            ((IRBlock*)bs.get(k)).setBix(k);
+        i = b.bix();
+        if (i < n && (IRBlock*)bs.get(i) == b) return i;
+        return n;
     }
 
     // Which values are eligible for a home, and how hot each is. Anything whose
@@ -9821,14 +9777,14 @@ class Arm64
     // the body refers to slots directly and cannot be told a value moved.
     Map*  _uses;        // value -> static use count
     Map*  _hotDepth;    // value -> deepest loop nesting it is read at
-    Array* _addrTaken;  // values whose address escapes
+    Map*  _addrTaken;   // values whose address escapes
     bool  _hasAsm;
 
     void scanUses(IRFunc* fn)
     {
         _uses = new Map();
         _hotDepth = new Map();
-        _addrTaken = new Array();
+        _addrTaken = new Map();
         _hasAsm = false;
         Array* depth = blockDepths(fn);
         for (u32 bi = (u32)0; bi < fn.blocks().count(); bi = bi + (u32)1) {
@@ -9851,8 +9807,8 @@ class Arm64
         if (n.isOp(opAsm)) _hasAsm = true;
         if (n.isOp(opAddrOf) && n.ops().count() >= 1) {
             IROperand* o = (IROperand*)n.ops().get((u32)0);
-            if (o.kind() == (u8)OPK_USE && !hasVal(_addrTaken, o.val()))
-                _addrTaken.add((Object*)o.val());
+            if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0)
+                _addrTaken.set((Hashable*)o.val(), (Object*)o.val());
         }
         for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1) {
             IROperand* o = (IROperand*)n.ops().get(k);
@@ -9893,9 +9849,8 @@ class Arm64
     Map* _start;        // value -> interval start
     Map* _linearStart;  // the same before loopExtendStarts; see coalescePhiInputs
     Map* _end;          // value -> interval end
-    Array* _phiRes;     // values defined by a phi
-    Array* _crossCall;  // values live across a call
-    Array* _callPos;    // undoubled positions of call-emitting instructions
+    Map* _phiRes;       // values defined by a phi
+    Map* _crossCall;    // values live across a call
 
     i32 startOf(IRValue* v)
     { Object* o = _start.get((Hashable*)v); return o == (Object*)0 ? (i32)0 : ((Number*)o).asI32(); }
@@ -9915,193 +9870,304 @@ class Arm64
     }
 
     // The backward dataflow. Per block: the values it defines, its
-    // upward-exposed uses, the phi results it holds, and the values its
-    // SUCCESSORS' phis read along the edge from it. Then live-in / live-out to
-    // a fixpoint, and one interval per value.
+    // upward-exposed uses, and the values its SUCCESSORS' phis read along the
+    // edge from it. Then live-in / live-out to a fixpoint, and one interval per
+    // value.
+    //
+    // Values are numbered densely per run (lvIndex) as the walk meets them.
+    // Each block's defs, uses and phi-edge reads are lists of those numbers,
+    // and live-in / live-out are rows of bits, one word per 64 values.
     void computeIntervals(IRFunc* fn)
     {
-        LiveSet.newRun();
+        _lvRun = _lvRun + 1;
+        _lvNext = 0;
+        _lvVals = new Array();
         _start = new Map();
         _end = new Map();
-        _phiRes = new Array();
+        _phiRes = new Map();
         _fwdPhi = new Map();
-        _crossCall = new Array();
-        _callPos = new Array();
+        _crossCall = new Map();
         u32 nb = fn.blocks().count();
-        if (nb == (u32)0) return;
+        if (nb == 0) return;
 
-        Array* defSet = new Array();
-        Array* ueUse = new Array();
-        Array* phiResAt = new Array();
-        Array* phiEdge = new Array();
         Array* blkEnd = new Array();
-        for (u32 i = (u32)0; i < nb; i = i + (u32)1) {
-            defSet.add((Object*)new LiveSet());   ueUse.add((Object*)new LiveSet());
-            phiResAt.add((Object*)new LiveSet()); phiEdge.add((Object*)new LiveSet());
-            blkEnd.add((Object*)Number.withI32((i32)0));
-        }
-        _defPos = new Map();
-        _lastUse = new Map();
-        numberBlocks(fn, nb, defSet, ueUse, phiResAt, blkEnd);
-        buildPhiEdges(fn, nb, phiEdge);
-        Array* succIdx = buildSuccIdx(fn, nb);
-        Array* liveOut = solveLiveness(nb, defSet, ueUse, phiResAt, phiEdge, succIdx);
-        finishIntervals(fn, nb, blkEnd, liveOut);
+        for (u32 i = 0; i < nb; i = i + 1)
+            blkEnd.add((Object*)Number.withI32(0));
+        _lvDefBlk = new LiveVec();
+        _lvDefPos = new LiveVec();
+        _lvLastUse = new LiveVec();
+        _lvDefs = new LiveVec();
+        _lvDefAt = new LiveVec();
+        _lvUe = new LiveVec();
+        _lvUeAt = new LiveVec();
+        _lvCalls = new LiveVec();
+        numberBlocks(fn, nb, blkEnd);
+        LiveVec* edge = new LiveVec();
+        LiveVec* edgeAt = new LiveVec();
+        buildPhiEdges(fn, nb, edge, edgeAt);
+        LiveVec* succ = new LiveVec();
+        LiveVec* succAt = new LiveVec();
+        buildSuccIdx(fn, nb, succ, succAt);
+        u32 w = (_lvNext + 63) / 64;
+        u64* liveOut = solveLiveness(nb, w, edge, edgeAt, succ, succAt);
+        finishIntervals(fn, nb, blkEnd, liveOut, w);
+        delete liveOut;
+        edge.release();
+        edgeAt.release();
+        succ.release();
+        succAt.release();
+        _lvDefBlk.release();
+        _lvDefPos.release();
+        _lvLastUse.release();
+        _lvDefs.release();
+        _lvDefAt.release();
+        _lvUe.release();
+        _lvUeAt.release();
+        _lvCalls.release();
         _blkEnd = blkEnd;   // slot colouring needs the loop spans (see buildSlots)
     }
 
-    Map* _defPos;
-    Map* _lastUse;
+    static u32 _lvRun;      // the run values are numbered in (IRValue.setLs)
+    u32 _lvNext;            // the next number in it
+    Array* _lvVals;         // number -> value
+    LiveVec* _lvDefBlk;     // number -> 1 + the block that last defined it
+    LiveVec* _lvDefPos;     // number -> 1 + its def position, 0 for none
+    LiveVec* _lvLastUse;    // number -> 1 + its last read position, 0 for none
+    LiveVec* _lvDefs;       // the blocks' defs, block after block
+    LiveVec* _lvDefAt;      // where each block's run of _lvDefs starts (nb + 1 entries)
+    LiveVec* _lvUe;         // the blocks' upward-exposed uses, the same way
+    LiveVec* _lvUeAt;
+    LiveVec* _lvCalls;      // undoubled positions of call-emitting instructions, ascending
     Map* _phiOf;         // phi value -> its Phi (finishIntervals), for lookups that must not search
     Map* _fwdPhi;        // phis of forward joins: ordinary intervals (finishIntervals); a map, as a function may hold thousands
     Array* _blkEnd;      // each block's LAST undoubled position
 
-    // Walk the blocks once, numbering every instruction and recording defs,
-    // upward-exposed uses, phi results and call positions.
-    void numberBlocks(IRFunc* fn, u32 nb, Array* defSet, Array* ueUse,
-                      Array* phiResAt, Array* blkEnd)
+    // v's number in this run, given the first time the run meets it.
+    u32 lvIndex(IRValue* v)
     {
-        Map* defPos = _defPos;
-        Map* lastUse = _lastUse;
-        i32 pos = (i32)0;
-        for (u32 bi = (u32)0; bi < nb; bi = bi + (u32)1) {
-            IRBlock* b = (IRBlock*)fn.blocks().get(bi);
-            LiveSet* defs = (LiveSet*)defSet.get(bi);
-            LiveSet* ue = (LiveSet*)ueUse.get(bi);
-            for (u32 i = (u32)0; i < b.phis().count(); i = i + (u32)1) {
-                IRInsn* p = (IRInsn*)b.phis().get(i);
-                if (p.res() != (IRValue*)0) {
-                    defPos.set((Hashable*)p.res(), (Object*)Number.withI32(pos));
-                    defs.add(p.res());
-                    ((LiveSet*)phiResAt.get(bi)).add(p.res());
-                    addVal(_phiRes, p.res());
-                }
-                pos = pos + (i32)1;      // a phi's operands are EDGE uses, below
-            }
-            for (u32 i = (u32)0; i < b.insns().count(); i = i + (u32)1) {
-                IRInsn* n = (IRInsn*)b.insns().get(i);
-                noteUses(n, defs, ue, lastUse, pos);
-                if (emitsCall(n.opc())) _callPos.add((Object*)Number.withI32(pos));
-                if (n.res() != (IRValue*)0) {
-                    defPos.set((Hashable*)n.res(), (Object*)Number.withI32(pos));
-                    defs.add(n.res());
-                }
-                pos = pos + (i32)1;
-            }
-            if (b.term() != (IRInsn*)0) {
-                noteUses(b.term(), defs, ue, lastUse, pos);
-                if (emitsCall(b.term().opc())) _callPos.add((Object*)Number.withI32(pos));
-                // An Invoke's result is defined where it ends its block.
-                if (b.term().res() != (IRValue*)0) {
-                    defPos.set((Hashable*)b.term().res(), (Object*)Number.withI32(pos));
-                    defs.add(b.term().res());
-                }
-                pos = pos + (i32)1;
-            }
-            blkEnd.set(bi, (Object*)Number.withI32(pos - (i32)1));
+        if (v.lsRun() != _lvRun) {
+            v.setLs(_lvRun, _lvNext);
+            _lvVals.add((Object*)v);
+            _lvNext = _lvNext + 1;
         }
+        return v.lsIndex();
     }
 
-    Array* buildSuccIdx(IRFunc* fn, u32 nb)
+    // v's entry in a per-number table, 0 when the run never numbered v.
+    u32 lvAt(LiveVec* t, IRValue* v)
     {
-        Array* succIdx = new Array();
-        for (u32 bi = (u32)0; bi < nb; bi = bi + (u32)1) {
-            Array* s = new Array();
+        return v.lsRun() == _lvRun ? t.at(v.lsIndex()) : 0;
+    }
+
+    void lvDef(IRValue* v, u32 bi, i32 pos)
+    {
+        u32 x = lvIndex(v);
+        _lvDefPos.put(x, (u32)pos + 1);
+        _lvDefBlk.put(x, bi + 1);
+        _lvDefs.push(x);
+    }
+
+    // Walk the blocks once, numbering every instruction and recording defs,
+    // upward-exposed uses, phi results and call positions.
+    void numberBlocks(IRFunc* fn, u32 nb, Array* blkEnd)
+    {
+        i32 pos = 0;
+        for (u32 bi = 0; bi < nb; bi = bi + 1) {
+            IRBlock* b = (IRBlock*)fn.blocks().get(bi);
+            _lvDefAt.push(_lvDefs.count());
+            _lvUeAt.push(_lvUe.count());
+            for (u32 i = 0; i < b.phis().count(); i = i + 1) {
+                IRInsn* p = (IRInsn*)b.phis().get(i);
+                if (p.res() != (IRValue*)0) {
+                    lvDef(p.res(), bi, pos);
+                    _phiRes.set((Hashable*)p.res(), (Object*)p.res());
+                }
+                pos = pos + 1;      // a phi's operands are EDGE uses, below
+            }
+            for (u32 i = 0; i < b.insns().count(); i = i + 1) {
+                IRInsn* n = (IRInsn*)b.insns().get(i);
+                noteUses(n, bi, pos);
+                if (emitsCall(n.opc())) _lvCalls.push((u32)pos);
+                if (n.res() != (IRValue*)0) lvDef(n.res(), bi, pos);
+                pos = pos + 1;
+            }
+            if (b.term() != (IRInsn*)0) {
+                noteUses(b.term(), bi, pos);
+                if (emitsCall(b.term().opc())) _lvCalls.push((u32)pos);
+                // An Invoke's result is defined where it ends its block.
+                if (b.term().res() != (IRValue*)0) lvDef(b.term().res(), bi, pos);
+                pos = pos + 1;
+            }
+            blkEnd.set(bi, (Object*)Number.withI32(pos - 1));
+        }
+        _lvDefAt.push(_lvDefs.count());
+        _lvUeAt.push(_lvUe.count());
+    }
+
+    // Each block's successors, as block indices: succ[succAt[b] .. succAt[b+1]).
+    void buildSuccIdx(IRFunc* fn, u32 nb, LiveVec* succ, LiveVec* succAt)
+    {
+        for (u32 bi = 0; bi < nb; bi = bi + 1) {
+            succAt.push(succ.count());
             IRInsn* t = ((IRBlock*)fn.blocks().get(bi)).term();
             if (t != (IRInsn*)0)
-                for (u32 k = (u32)0; k < t.ops().count(); k = k + (u32)1) {
+                for (u32 k = 0; k < t.ops().count(); k = k + 1) {
                     IROperand* o = (IROperand*)t.ops().get(k);
                     if (o.kind() != (u8)OPK_BLOCK || o.blk() == (IRBlock*)0) continue;
                     u32 si = blockIndexOf(fn, o.blk());
-                    if (si < nb) s.add((Object*)Number.withU32(si));
+                    if (si < nb) succ.push(si);
                 }
-            succIdx.add((Object*)s);
         }
-        return succIdx;
+        succAt.push(succ.count());
     }
 
     // A successor's phi reads its incoming value on the edge FROM this block,
     // so that value is live out of the predecessor even though the predecessor
-    // never mentions it.
-    void buildPhiEdges(IRFunc* fn, u32 nb, Array* phiEdge)
+    // never mentions it. Grouped by predecessor: edge[edgeAt[b] .. edgeAt[b+1]).
+    void buildPhiEdges(IRFunc* fn, u32 nb, LiveVec* edge, LiveVec* edgeAt)
     {
-        for (u32 si = (u32)0; si < nb; si = si + (u32)1) {
+        LiveVec* pbs = new LiveVec();
+        LiveVec* xs = new LiveVec();
+        for (u32 si = 0; si < nb; si = si + 1) {
             IRBlock* sb = (IRBlock*)fn.blocks().get(si);
-            for (u32 i = (u32)0; i < sb.phis().count(); i = i + (u32)1) {
+            for (u32 i = 0; i < sb.phis().count(); i = i + 1) {
                 IRInsn* phi = (IRInsn*)sb.phis().get(i);
-                for (u32 k = (u32)0; k + (u32)1 < phi.ops().count(); k = k + (u32)2) {
+                for (u32 k = 0; k + 1 < phi.ops().count(); k = k + 2) {
                     IROperand* bo = (IROperand*)phi.ops().get(k);
-                    IROperand* vo = (IROperand*)phi.ops().get(k + (u32)1);
+                    IROperand* vo = (IROperand*)phi.ops().get(k + 1);
                     if (bo.kind() != (u8)OPK_BLOCK || bo.blk() == (IRBlock*)0) continue;
-                    if (vo.kind() != (u8)OPK_USE) continue;
+                    if (vo.kind() != (u8)OPK_USE || vo.val() == (IRValue*)0) continue;
                     u32 pb = blockIndexOf(fn, bo.blk());
-                    if (pb < nb) ((LiveSet*)phiEdge.get(pb)).add(vo.val());
+                    if (pb < nb) {
+                        pbs.push(pb);
+                        xs.push(lvIndex(vo.val()));
+                    }
                 }
             }
         }
-
+        // A counting sort by predecessor.
+        for (u32 b = 0; b <= nb; b = b + 1)
+            edgeAt.push(0);
+        for (u32 i = 0; i < pbs.count(); i = i + 1)
+            edgeAt.set(pbs.get(i) + 1, edgeAt.get(pbs.get(i) + 1) + 1);
+        for (u32 b = 0; b < nb; b = b + 1)
+            edgeAt.set(b + 1, edgeAt.get(b + 1) + edgeAt.get(b));
+        LiveVec* fill = new LiveVec();
+        for (u32 b = 0; b < nb; b = b + 1)
+            fill.push(edgeAt.get(b));
+        edge.put(pbs.count(), 0);
+        for (u32 i = 0; i < pbs.count(); i = i + 1) {
+            u32 pb = pbs.get(i);
+            edge.set(fill.get(pb), xs.get(i));
+            fill.set(pb, fill.get(pb) + 1);
+        }
+        fill.release();
+        pbs.release();
+        xs.release();
     }
 
-    Array* solveLiveness(u32 nb, Array* defSet, Array* ueUse, Array* phiResAt,
-                         Array* phiEdge, Array* succIdx)
+    static void setBit(u64* row, u32 x)
     {
-        Array* liveIn = new Array();
-        Array* liveOut = new Array();
-        for (u32 i = (u32)0; i < nb; i = i + (u32)1) {
-            liveIn.add((Object*)new LiveSet());
-            liveOut.add((Object*)new LiveSet());
+        row[x >> 6] = row[x >> 6] | ((u64)1 << (u64)(x & 63));
+    }
+
+    static void clearBit(u64* row, u32 x)
+    {
+        row[x >> 6] = row[x >> 6] & ~((u64)1 << (u64)(x & 63));
+    }
+
+    // Live-out per block, nb rows of w words. Live-in of b is its uses plus
+    // its live-out less its defs; live-out is the phi-edge reads plus the
+    // successors' live-in. The original also takes a successor's phi results
+    // out of its live-in before the union; none is ever in it, since a phi
+    // result is a def of that block before anything there reads.
+    u64* solveLiveness(u32 nb, u32 w, LiveVec* edge, LiveVec* edgeAt,
+                       LiveVec* succ, LiveVec* succAt)
+    {
+        u32 total = nb * w + 1;
+        u64* lin = new u64[total];
+        u64* lout = new u64[total];
+        for (u32 k = 0; k < total; k = k + 1) {
+            lin[k] = 0;
+            lout[k] = 0;
         }
+        u64* tOut = new u64[w + 1];
+        u64* tIn = new u64[w + 1];
         bool changed = true;
         while (changed) {
             changed = false;
-            for (u32 r = nb; r > (u32)0; r = r - (u32)1) {
-                u32 bi = r - (u32)1;
-                LiveSet* out = ((LiveSet*)phiEdge.get(bi)).copy();
-                Array* ss = (Array*)succIdx.get(bi);
-                for (u32 k = (u32)0; k < ss.count(); k = k + (u32)1) {
-                    u32 sn = ((Number*)ss.get(k)).asU32();
-                    LiveSet* sin = ((LiveSet*)liveIn.get(sn)).copy();
-                    sin.minus((LiveSet*)phiResAt.get(sn));
-                    out.unionWith(sin);
+            for (u32 r = nb; r > 0; r = r - 1) {
+                u32 bi = r - 1;
+                for (u32 k = 0; k < w; k = k + 1)
+                    tOut[k] = 0;
+                for (u32 e = edgeAt.get(bi); e < edgeAt.get(bi + 1); e = e + 1)
+                    setBit(tOut, edge.get(e));
+                for (u32 s = succAt.get(bi); s < succAt.get(bi + 1); s = s + 1) {
+                    u32 sb = succ.get(s) * w;
+                    for (u32 k = 0; k < w; k = k + 1)
+                        tOut[k] = tOut[k] | lin[sb + k];
                 }
-                LiveSet* inn = ((LiveSet*)ueUse.get(bi)).copy();
-                LiveSet* od = out.copy();
-                od.minus((LiveSet*)defSet.get(bi));
-                inn.unionWith(od);
-                if (!out.same((LiveSet*)liveOut.get(bi))
-                 || !inn.same((LiveSet*)liveIn.get(bi))) {
-                    liveOut.set(bi, (Object*)out);
-                    liveIn.set(bi, (Object*)inn);
+                for (u32 k = 0; k < w; k = k + 1)
+                    tIn[k] = tOut[k];
+                for (u32 d = _lvDefAt.get(bi); d < _lvDefAt.get(bi + 1); d = d + 1)
+                    clearBit(tIn, _lvDefs.get(d));
+                for (u32 u = _lvUeAt.get(bi); u < _lvUeAt.get(bi + 1); u = u + 1)
+                    setBit(tIn, _lvUe.get(u));
+                u32 base = bi * w;
+                bool same = true;
+                for (u32 k = 0; k < w && same; k = k + 1)
+                    if (tOut[k] != lout[base + k] || tIn[k] != lin[base + k]) same = false;
+                if (!same) {
+                    for (u32 k = 0; k < w; k = k + 1) {
+                        lout[base + k] = tOut[k];
+                        lin[base + k] = tIn[k];
+                    }
                     changed = true;
                 }
             }
         }
-
-        return liveOut;
+        delete tOut;
+        delete tIn;
+        delete lin;
+        return lout;
     }
 
     // A value's interval ends at the later of its last read and the end of any
     // block it is live out of.
-    void finishIntervals(IRFunc* fn, u32 nb, Array* blkEnd, Array* liveOut)
+    void finishIntervals(IRFunc* fn, u32 nb, Array* blkEnd, u64* liveOut, u32 w)
     {
-        Map* defPos = _defPos;
-        Map* lastUse = _lastUse;
-        Map* endByVal = new Map();
-        LiveSet* allSet = new LiveSet();
-        for (u32 bi = (u32)0; bi < nb; bi = bi + (u32)1) {
-            i32 be = (i32)2 * ((Number*)blkEnd.get(bi)).asI32() + (i32)2;
-            LiveSet* lo = (LiveSet*)liveOut.get(bi);
-            for (u32 k = (u32)0; k < lo.count(); k = k + (u32)1) {
-                IRValue* v = lo.get(k);
-                Object* cur = endByVal.get((Hashable*)v);
-                if (cur == (Object*)0 || be > ((Number*)cur).asI32())
-                    endByVal.set((Hashable*)v, (Object*)Number.withI32(be));
-                allSet.add(v);
+        LiveVec* endBy = new LiveVec();      // number -> 1 + the latest block end it is live out of
+        u64* anyOut = new u64[w + 1];
+        for (u32 k = 0; k < w; k = k + 1)
+            anyOut[k] = 0;
+        for (u32 bi = 0; bi < nb; bi = bi + 1) {
+            i32 be = 2 * ((Number*)blkEnd.get(bi)).asI32() + 2;
+            u32 base = bi * w;
+            for (u32 k = 0; k < w; k = k + 1) {
+                u64 bits = liveOut[base + k];
+                if (bits == (u64)0) continue;
+                anyOut[k] = anyOut[k] | bits;
+                for (u32 j = 0; j < 64; j = j + 1) {
+                    if (((bits >> (u64)j) & (u64)1) == (u64)0) continue;
+                    u32 x = k * 64 + j;
+                    u32 cur = endBy.at(x);
+                    if (cur == 0 || be > (i32)cur - 1)
+                        endBy.put(x, (u32)be + 1);
+                }
             }
         }
+        // The values live out of some block, in number order, then every other
+        // value the function mentions. The order is that of _start's keys,
+        // which nothing reads in order.
         Array* all = new Array();
-        for (u32 k = (u32)0; k < allSet.count(); k = k + (u32)1)
-            all.add((Object*)allSet.get(k));
+        for (u32 k = 0; k < w; k = k + 1) {
+            u64 bits = anyOut[k];
+            if (bits == (u64)0) continue;
+            for (u32 j = 0; j < 64; j = j + 1)
+                if (((bits >> (u64)j) & (u64)1) != (u64)0)
+                    all.add(_lvVals.get(k * 64 + j));
+        }
+        delete anyOut;
         collectKeys(all, fn);
 
         // Block -> index, and phi value -> its Phi and its block's index, so a
@@ -10109,32 +10175,32 @@ class Arm64
         Map* fwdIdx = new Map();
         Map* fwdPhiBlk = new Map();
         _phiOf = new Map();
-        for (u32 bi = (u32)0; bi < fn.blocks().count(); bi = bi + (u32)1) {
+        for (u32 bi = 0; bi < fn.blocks().count(); bi = bi + 1) {
             IRBlock* b = (IRBlock*)fn.blocks().get(bi);
             fwdIdx.set((Hashable*)b, (Object*)Number.withU32(bi));
-            for (u32 q = (u32)0; q < b.phis().count(); q = q + (u32)1) {
+            for (u32 q = 0; q < b.phis().count(); q = q + 1) {
                 IRInsn* pq = (IRInsn*)b.phis().get(q);
                 if (pq.res() == (IRValue*)0) continue;
                 _phiOf.set((Hashable*)pq.res(), (Object*)pq);
                 fwdPhiBlk.set((Hashable*)pq.res(), (Object*)Number.withU32(bi));
             }
         }
-        for (u32 i = (u32)0; i < all.count(); i = i + (u32)1) {
+        u32 nCalls = _lvCalls.count();
+        for (u32 i = 0; i < all.count(); i = i + 1) {
             IRValue* v = (IRValue*)all.get(i);
-            Object* dp = defPos.get((Hashable*)v);
+            u32 dp = lvAt(_lvDefPos, v);
             // No def position means a parameter or an entry-live value: its
             // interval starts at 0.
-            i32 st = dp == (Object*)0 ? (i32)0
-                   : (i32)2 * ((Number*)dp).asI32() + (i32)1;
+            i32 st = dp == 0 ? 0 : 2 * ((i32)dp - 1) + 1;
             i32 en = st;
-            Object* lu = lastUse.get((Hashable*)v);
-            if (lu != (Object*)0) {
-                i32 e2 = (i32)2 * ((Number*)lu).asI32();
+            u32 lu = lvAt(_lvLastUse, v);
+            if (lu != 0) {
+                i32 e2 = 2 * ((i32)lu - 1);
                 if (e2 > en) en = e2;
             }
-            Object* eb = endByVal.get((Hashable*)v);
-            if (eb != (Object*)0) {
-                i32 e3 = ((Number*)eb).asI32();
+            u32 eb = lvAt(endBy, v);
+            if (eb != 0) {
+                i32 e3 = (i32)eb - 1;
                 if (e3 > en) en = e3;
             }
             // A phi whose predecessors all come before its block is written by
@@ -10147,17 +10213,25 @@ class Arm64
             // blocks between are not on the path from an earlier
             // predecessor (a devirtualised call's join kept its w1).
             i32 cst = st;
-            if (dp != (Object*)0 && inMap(_phiOf, v)) {
+            if (dp != 0 && inMap(_phiOf, v)) {
                 i32 fs = forwardPhiStart(v, blkEnd, fwdIdx, _phiOf, fwdPhiBlk);
-                if (fs >= (i32)0) { st = fs; _fwdPhi.set((Hashable*)v, (Object*)v); }
+                if (fs >= 0) { st = fs; _fwdPhi.set((Hashable*)v, (Object*)v); }
             }
             _start.set((Hashable*)v, (Object*)Number.withI32(st));
             _end.set((Hashable*)v, (Object*)Number.withI32(en));
-            for (u32 c = (u32)0; c < _callPos.count(); c = c + (u32)1) {
-                i32 cp = (i32)2 * ((Number*)_callPos.get(c)).asI32();
-                if (cst <= cp && cp <= en) { addVal(_crossCall, v); break; }
+            // The first call at or after cst (the positions ascend): v is live
+            // across a call when that one is no later than en.
+            u32 lo = 0;
+            u32 hi = nCalls;
+            while (lo < hi) {
+                u32 mid = (lo + hi) / 2;
+                if (2 * (i32)_lvCalls.get(mid) < cst) lo = mid + 1;
+                else hi = mid;
             }
+            if (lo < nCalls && 2 * (i32)_lvCalls.get(lo) <= en)
+                _crossCall.set((Hashable*)v, (Object*)v);
         }
+        endBy.release();
     }
 
     // The doubled position of the earliest predecessor's terminator, where
@@ -10275,9 +10349,9 @@ class Arm64
         }
     }
 
-    void noteUses(IRInsn* n, LiveSet* defs, LiveSet* ue, Map* lastUse, i32 pos)
+    void noteUses(IRInsn* n, u32 bi, i32 pos)
     {
-        noteOperands(n, defs, ue, lastUse, pos);
+        noteOperands(n, bi, pos);
         if (n.ops().count() < (u32)1) return;
         IROperand* p0 = (IROperand*)n.ops().get((u32)0);
         if (p0.kind() != (u8)OPK_USE || p0.val() == (IRValue*)0) return;
@@ -10287,39 +10361,41 @@ class Arm64
         // index die at the now-elided address op and reuses its register for
         // something defined before the load, clobbering it.
         Object* fa = _foldInfo.get((Hashable*)p0.val());
-        if (fa != (Object*)0) noteOperands((IRInsn*)fa, defs, ue, lastUse, pos);
+        if (fa != (Object*)0) noteOperands((IRInsn*)fa, bi, pos);
         // A CondBranch or a Select that fuses its comparison re-emits the
         // cmp/fcmp here, so its operands are read at THIS position, not the
         // elided comparison's. Same hazard: a value defined between the two
         // would otherwise take an operand's register.
-        if ((n.isOp(opCondBranch) || n.isOp(opSelect))
-         && inMap(_fusedCmps, p0.val()))
-            noteOperands((IRInsn*)_fusedCmps.get((Hashable*)p0.val()), defs, ue, lastUse, pos);
+        if ((n.isOp(opCondBranch) || n.isOp(opSelect)) && inMap(_fusedCmps, p0.val()))
+            noteOperands((IRInsn*)_fusedCmps.get((Hashable*)p0.val()), bi, pos);
         // A bit test reads the And's x at the branch (tbz/tbnz).
         if (n.isOp(opCondBranch) && _bitTests != (Map*)0 && inMap(_bitTests, p0.val()))
-            noteOperands((IRInsn*)_bitTests.get((Hashable*)p0.val()), defs, ue, lastUse, pos);
+            noteOperands((IRInsn*)_bitTests.get((Hashable*)p0.val()), bi, pos);
         // And the same for a fused short-circuit &&: both comparisons are emitted
         // at the branch, so THEIR operands are read there too.
         if (n.isOp(opCondBranch) && inMap(_fusedAnds, p0.val())) {
             Array* both = (Array*)_fusedAnds.get((Hashable*)p0.val());
             for (u32 k = (u32)0; k < both.count(); k = k + (u32)1)
-                noteOperands((IRInsn*)both.get(k), defs, ue, lastUse, pos);
+                noteOperands((IRInsn*)both.get(k), bi, pos);
         }
         // ...and for a fused ||, whose two comparisons are emitted there too.
         if (n.isOp(opCondBranch) && inMap(_fusedOrs, p0.val())) {
             Array* both = (Array*)_fusedOrs.get((Hashable*)p0.val());
             for (u32 k = (u32)0; k < both.count(); k = k + (u32)1)
-                noteOperands((IRInsn*)both.get(k), defs, ue, lastUse, pos);
+                noteOperands((IRInsn*)both.get(k), bi, pos);
         }
     }
 
-    void noteOperands(IRInsn* n, LiveSet* defs, LiveSet* ue, Map* lastUse, i32 pos)
+    // A read of each operand at pos: upward-exposed unless block bi has
+    // already defined it.
+    void noteOperands(IRInsn* n, u32 bi, i32 pos)
     {
-        for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1) {
+        for (u32 k = 0; k < n.ops().count(); k = k + 1) {
             IROperand* o = (IROperand*)n.ops().get(k);
             if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0) continue;
-            if (!defs.has(o.val())) ue.add(o.val());
-            lastUse.set((Hashable*)o.val(), (Object*)Number.withI32(pos));
+            u32 x = lvIndex(o.val());
+            if (_lvDefBlk.at(x) != bi + 1) _lvUe.push(x);
+            _lvLastUse.put(x, (u32)pos + 1);
         }
     }
 
@@ -10654,8 +10730,8 @@ class Arm64
             String* vt = v.ty();
             if (vt == (String*)0 || isMemTy(vt) || isAggTy(vt) || isVecTy(vt)) return false;
             if (isFPReg(R) != CgCommon.isFloatTy(vt)) return false;
-            if (inMap(_phiOf, v) || hasVal(_addrTaken, v) || !hasIvl(v)) return false;
-            if (hasVal(_crossCall, v) && !(hasStr(gpCallee, R) || hasStr(fpCallee, R))) return false;
+            if (inMap(_phiOf, v) || inSet(_addrTaken, v) || !hasIvl(v)) return false;
+            if (inSet(_crossCall, v) && !(hasStr(gpCallee, R) || hasStr(fpCallee, R))) return false;
         }
         // w is made in A; u is read only in B, in A up to w's def, and by P.
         i32 wAt = (i32)-1;
@@ -10865,9 +10941,9 @@ class Arm64
                     Object* vh = _home.get((Hashable*)vIn);
                     if (vh != (Object*)0) {
                         if (((String*)vh).equals(R)) continue;
-                        if (hasVal(_phiRes, vIn)) continue;
+                        if (inSet(_phiRes, vIn)) continue;
                     }
-                    if (hasVal(_addrTaken, vIn)) continue;
+                    if (inSet(_addrTaken, vIn)) continue;
                     String* vt = vIn.ty();
                     if (vt == (String*)0) continue;
                     if (isMemTy(vt) || isAggTy(vt) || IRType.is(vt, tyVoid)) continue;
@@ -10909,7 +10985,7 @@ class Arm64
                     // Any register outside the callee-saved sets is clobbered
                     // by a call — the argument tier x0-x7 included, which the
                     // caller-saved list does not name.
-                    if (hasVal(_crossCall, vIn)
+                    if (inSet(_crossCall, vIn)
                      && !(hasStr(gpCallee, R) || hasStr(fpCallee, R))) continue;
                     _home.set((Hashable*)vIn, (Object*)R);
                     addVal(coalesced, phi.res());
@@ -10950,7 +11026,7 @@ class Arm64
             IRValue* v = (IRValue*)all.get(i);
             String* t = v.ty();
             if (t == (String*)0) continue;
-            if (hasVal(_addrTaken, v)) continue;
+            if (inSet(_addrTaken, v)) continue;
             if (isMemTy(t) || isAggTy(t) || isVecTy(t)
                 || IRType.is(t, tyVoid)) continue;
             if (useCount(v) == (u32)0) continue;
@@ -11081,30 +11157,29 @@ class Arm64
                 }
         }
 
-        // Per register: the intervals already placed there, and whether a phi
-        // has claimed it exclusively.
-        Array* lo = new Array();
-        Array* hi = new Array();
+        // Per register: the intervals already placed there, as start, end
+        // pairs, and whether a phi has claimed it exclusively.
+        Array* ivl = new Array();
         Array* excl = new Array();
         for (u32 i = (u32)0; i < regs.count(); i = i + (u32)1) {
-            lo.add((Object*)new Array());
-            hi.add((Object*)new Array());
+            ivl.add((Object*)new LiveVec());
             excl.add((Object*)Number.withU32((u32)0));
         }
         // The vector values on the float registers (vecHomeSeeds).
         for (u32 q = (u32)0; _fpSeedReg != (Array*)0 && q < _fpSeedReg.count(); q = q + (u32)1)
             for (u32 r = (u32)0; r < regs.count(); r = r + (u32)1)
                 if (((String*)regs.get(r)).equals((String*)_fpSeedReg.get(q))) {
-                    ((Array*)lo.get(r)).add(_fpSeedLo.get(q));
-                    ((Array*)hi.get(r)).add(_fpSeedHi.get(q));
+                    LiveVec* sv = (LiveVec*)ivl.get(r);
+                    sv.push((u32)((Number*)_fpSeedLo.get(q)).asI32());
+                    sv.push((u32)((Number*)_fpSeedHi.get(q)).asI32());
                 }
 
         for (u32 c = (u32)0; c < cands.count(); c = c + (u32)1) {
             IRValue* v = (IRValue*)cands.get(c);
             i32 s = startOf(v);
             i32 e = endOf(v);
-            bool isPhi = hasVal(_phiRes, v) && !inMap(_fwdPhi, v);
-            bool mayCaller = !hasVal(_crossCall, v);
+            bool isPhi = inSet(_phiRes, v) && !inMap(_fwdPhi, v);
+            bool mayCaller = !inSet(_crossCall, v);
             bool isParam = isParamValue(fn, v);
             u32 chosen = regs.count();
             Object* own = (mayCaller && !isPhi) ? ownArg.get((Hashable*)v) : (Object*)0;
@@ -11112,15 +11187,7 @@ class Arm64
                 for (u32 r = (u32)0; r < regs.count(); r = r + (u32)1) {
                     if (!((String*)regs.get(r)).equals((String*)own)) continue;
                     if (((Number*)excl.get(r)).asU32() != (u32)0) break;
-                    Array* olo = (Array*)lo.get(r);
-                    Array* ohi = (Array*)hi.get(r);
-                    bool ok = true;
-                    for (u32 k = (u32)0; k < olo.count(); k = k + (u32)1) {
-                        i32 s2 = ((Number*)olo.get(k)).asI32();
-                        i32 e2 = ((Number*)ohi.get(k)).asI32();
-                        if (s <= e2 && s2 <= e) { ok = false; break; }
-                    }
-                    if (ok) chosen = r;
+                    if (!overlapsAny((LiveVec*)ivl.get(r), s, e)) chosen = r;
                     break;
                 }
             }
@@ -11128,32 +11195,36 @@ class Arm64
                 if (!mayCaller && r < nCaller) continue;
                 if (isParam && isArgReg((String*)regs.get(r))) continue;
                 if (((Number*)excl.get(r)).asU32() != (u32)0) continue;
-                Array* rlo = (Array*)lo.get(r);
+                LiveVec* rv = (LiveVec*)ivl.get(r);
                 if (isPhi) {
                     // A phi's register is written by the predecessor-edge
                     // copies, whose timing the interval model does not model,
                     // so it must be untouched by anything else.
-                    if (rlo.count() == (u32)0) { chosen = r; break; }
+                    if (rv.count() == 0) { chosen = r; break; }
                     continue;
                 }
-                Array* rhi = (Array*)hi.get(r);
-                bool ok = true;
-                for (u32 k = (u32)0; k < rlo.count(); k = k + (u32)1) {
-                    i32 s2 = ((Number*)rlo.get(k)).asI32();
-                    i32 e2 = ((Number*)rhi.get(k)).asI32();
-                    if (s <= e2 && s2 <= e) { ok = false; break; }
-                }
-                if (ok) { chosen = r; break; }
+                if (!overlapsAny(rv, s, e)) { chosen = r; break; }
             }
             if (chosen == regs.count()) continue;      // unhomed: stays in its slot
             String* reg = (String*)regs.get(chosen);
             _home.set((Hashable*)v, (Object*)reg);
-            ((Array*)lo.get(chosen)).add((Object*)Number.withI32(s));
-            ((Array*)hi.get(chosen)).add((Object*)Number.withI32(e));
+            LiveVec* cv = (LiveVec*)ivl.get(chosen);
+            cv.push((u32)s);
+            cv.push((u32)e);
             if (isPhi) excl.set(chosen, (Object*)Number.withU32((u32)1));
             if (chosen >= nCaller && !hasStr(_savedRegs, reg))
                 _savedRegs.add((Object*)reg);
         }
+        for (u32 r = 0; r < ivl.count(); r = r + 1)
+            ((LiveVec*)ivl.get(r)).release();
+    }
+
+    // Does [s, e] meet any of the start, end pairs in iv?
+    static bool overlapsAny(LiveVec* iv, i32 s, i32 e)
+    {
+        for (u32 k = 0; k + 1 < iv.count(); k = k + 2)
+            if (s <= (i32)iv.get(k + 1) && (i32)iv.get(k) <= e) return true;
+        return false;
     }
 
     // The prologue and every epilogue walk _savedRegs together, so the order
@@ -11300,6 +11371,11 @@ class Arm64
     // lengthens intervals, so it can remove reuse but never introduce a clobber.
     void loopExtendStarts(IRFunc* fn)
     {
+            // Every value's start and end, read once: the keys stay and only
+            // starts move, which st follows.
+            Array* ks = (Array*)0;
+            LiveVec* st = (LiveVec*)0;
+            LiveVec* en = (LiveVec*)0;
             for (u32 li = (u32)0; li < fn.blocks().count(); li = li + (u32)1) {
                 if (_blkEnd == (Array*)0 || li >= _blkEnd.count()) continue;
                 IRBlock* lb = (IRBlock*)fn.blocks().get(li);
@@ -11307,18 +11383,23 @@ class Arm64
                 for (u32 k = (u32)0; k < lb.term().ops().count(); k = k + (u32)1) {
                     IROperand* o = (IROperand*)lb.term().ops().get(k);
                     if (o.kind() != (u8)OPK_BLOCK || o.blk() == (IRBlock*)0) continue;
-                    i32 hb = (i32)-1;
-                    for (u32 q = (u32)0; q < fn.blocks().count(); q = q + (u32)1)
-                        if ((IRBlock*)fn.blocks().get(q) == o.blk()) { hb = (i32)q; break; }
-                    if (hb < (i32)0 || (u32)hb > li) continue;   // forward edge, not a loop
+                    i32 hb = (i32)blockIndexOf(fn, o.blk());
+                    if ((u32)hb > li) continue;   // forward edge (or none), not a loop
                     i32 loopLo = hb == (i32)0 ? (i32)0
                         : (i32)2 * (((Number*)_blkEnd.get((u32)(hb - (i32)1))).asI32() + (i32)1);
                     i32 latchEnd = (i32)2 * ((Number*)_blkEnd.get(li)).asI32() + (i32)2;
-                    Array* ks = _start.allKeys();
+                    if (ks == (Array*)0) {
+                        ks = _start.allKeys();
+                        st = new LiveVec();
+                        en = new LiveVec();
+                        for (u32 q = 0; q < ks.count(); q = q + 1) {
+                            st.push((u32)startOf((IRValue*)ks.get(q)));
+                            en.push((u32)endOf((IRValue*)ks.get(q)));
+                        }
+                    }
                     for (u32 q = (u32)0; q < ks.count(); q = q + (u32)1) {
-                        IRValue* v = (IRValue*)ks.get(q);
-                        if (endOf(v) < latchEnd) continue;
-                        if (startOf(v) <= loopLo) continue;
+                        if ((i32)en.get(q) < latchEnd) continue;
+                        if ((i32)st.get(q) <= loopLo) continue;
                         // ...and it must be DEFINED IN THIS LOOP. Without this
                         // a value defined entirely AFTER the loop still
                         // matched — its end is past the latch and its start is
@@ -11330,10 +11411,15 @@ class Arm64
                         // other, no register could ever be reused, and the
                         // allocator degenerated to "the first 22 by rank win,
                         // the rest spill".
-                        if (startOf(v) > latchEnd) continue;
-                        _start.set((Hashable*)v, (Object*)Number.withI32(loopLo));
+                        if ((i32)st.get(q) > latchEnd) continue;
+                        st.set(q, (u32)loopLo);
+                        _start.set((Hashable*)ks.get(q), (Object*)Number.withI32(loopLo));
                     }
                 }
+            }
+            if (st != (LiveVec*)0) {
+                st.release();
+                en.release();
             }
     }
 
@@ -11593,6 +11679,10 @@ class Arm64
 
     static bool inMap(Map* m, IRValue* v)
     { return m.get((Hashable*)v) != (Object*)0; }
+
+    // Membership in a set kept as a map of value -> value; null is in none.
+    static bool inSet(Map* m, IRValue* v)
+    { return v != (IRValue*)0 && m.get((Hashable*)v) != (Object*)0; }
 
     // ── Address folding, and the ICmp/CondBranch fusion ──────────────────
     //
