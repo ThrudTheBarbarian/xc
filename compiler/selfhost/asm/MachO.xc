@@ -1481,21 +1481,13 @@ class MachOSha256
         return false;
         }
 
-    // Insertion sort on the byte order of the name — what `compare:` gives,
-    // and what makes the file reproducible.
+    // Byte order of the name, what `compare:` gives and what makes the file
+    // reproducible. The library's quicksort, not an insertion sort: an object
+    // with tens of thousands of symbols spent minutes here. Equal names are
+    // byte-identical, so their relative order cannot show in the output.
     static void sortNames(Array* a)
         {
-        for (u32 i = (u32)1; i < a.count(); i = i + (u32)1)
-            {
-            Object* cur = a.get(i);
-            u32 j = i;
-            while (j > (u32)0 && ((String*)a.get(j - (u32)1)).compare((String*)cur) > (i32)0)
-                {
-                a.set(j, a.get(j - (u32)1));
-                j = j - (u32)1;
-                }
-            a.set(j, cur);
-            }
+        a.sort();
         }
 
     // ── Mach-O constants ─────────────────────────────────────────────────
