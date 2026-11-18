@@ -47,6 +47,8 @@
     BOOL _parAutoImport;               // --par-style=auto wraps a loop in a program without Par.xc: import it
     NSArray<NSString*>* _stdlibDirs;   // the preprocessor's standard-library directories
     NSMutableSet<NSString*>* _noDebugInfoWarned;   // libraries already warned about, once across a --par-style=auto restart
+    BOOL _classNamesUsed;              // sema found a call to Object.className()/newInstanceOfClass(): the class-name table is on
+    BOOL _arm9LibcWarned;              // the arm9 missing-libc warning, once across a restart
     }
 
 #pragma mark - Standard-library state across a library boundary
@@ -927,20 +929,28 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
 |*                                         class first
 |*
 |* The table is emitted when this module is a library or `-c` object, imports
-|* another xc module, or names either method (a `.className` or
-|* `.newInstanceOfClass` token). Otherwise only the root is emitted, returning
-|* null, and dead-function elimination removes it. The table's name is a hash
-|* of its body, so two objects that emit the same table merge harmlessly at
-|* link and two different ones cannot collide.
+|* another xc module, or calls either method (`named`). A call is found by
+|* sema, where it resolves to Object's method (noteClassNameUseOwner:), so the
+|* first pass is built without the table and the front end starts again with
+|* `named` set when sema finds one. Otherwise only the root is emitted,
+|* returning null, and dead-function elimination removes it. The table's name
+|* is a hash of its body, so two objects that emit the same table merge
+|* harmlessly at link and two different ones cannot collide.
+|*
+|* *switchable is set when a call would change what is emitted: the program
+|* has the library Object, and nothing else has switched the table on.
 \****************************************************************************/
 - (XTProgramNode*)injectClassNames:(XTProgramNode*)ast
-                            tokens:(NSArray<XTToken*>*)tokens
+                        classNames:(BOOL)named
                         ifaceJsons:(NSArray<NSString*>*)ifaceJsons
                         ifacePaths:(NSArray<NSString*>*)ifacePaths
                          typeTable:(XTTypeTable*)tt
                              arm64:(BOOL)arm64
+                        switchable:(nullable BOOL*)switchable
     {
     _classTableSymbol = nil;
+    if (switchable)
+        *switchable = NO;
     // Only where Object declares the methods: not on the 6502, and not when
     // the program runs without the library Object.
     BOOL haveObject = NO;
@@ -966,20 +976,10 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     if (!haveObject)
         return ast;
     BOOL m68k = _options.m68kPlatform;
-    BOOL named = NO;
-    for (NSUInteger i = 1; i < tokens.count; i++)
-        {
-        XTToken* t = tokens[i];
-        XTTokenType pt = tokens[i - 1].type;
-        if (t.type == XTTokenIdentifier && (pt == XTTokenDot || pt == XTTokenArrow) &&
-            ([t.value isEqualToString:@"className"] || [t.value isEqualToString:@"newInstanceOfClass"]))
-            {
-            named = YES;
-            break;
-            }
-        }
     BOOL isLib = _options.emitLib || _options.compileOnly;
     BOOL emit = named || (!m68k && (isLib || ifaceJsons.count > 0));
+    if (switchable)
+        *switchable = !emit;
     BOOL isRoot = !_options.compileOnly || definesMain;
 
     // The classes this module defines, by name.
@@ -1347,6 +1347,16 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
 // compileFile: (in-process backend) and xtc-fe (writes IR text and exits)
 // call this — the split keeps the frontend in one canonical place.
 - (nullable XTIRModule*)compileFrontendForFile:(NSString*)inputFile
+    {
+    _classNamesUsed = NO;
+    return [self frontendPassForFile:inputFile];
+    }
+
+// One pass of the front end. It starts again from the top, with an option
+// turned on, when the program turns out to need what that option adds: the
+// par runtime (after the parse), and the class-name table (after sema). The
+// first pass's diagnostics are dropped by the restart. As the port's lowerUnit.
+- (nullable XTIRModule*)frontendPassForFile:(NSString*)inputFile
     {
     BOOL arm64 = _options.useArm64Backend;
 
@@ -1719,8 +1729,9 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
         // pointing INTO support/arm9/lib/Stdio.xc — a file they did not write and
         // that is not wrong. Say what actually happened instead. A warning, not an
         // error: a freestanding arm9 program that touches no C function still links.
-        if (!libc)
+        if (!libc && !_arm9LibcWarned)
             {
+            _arm9LibcWarned = YES;
             fprintf(stderr, "xcc: warning: arm9: no libc.so found on the library "
                             "search path — C functions (snprintf, calloc, write, …) "
                             "will not resolve, and the standard library will fail to "
@@ -1854,7 +1865,7 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
         {
         _parAutoImport = YES;
         [_diagnostics truncateToCount:diagMark];
-        return [self compileFrontendForFile:inputFile];
+        return [self frontendPassForFile:inputFile];
         }
     if (!ast || _diagnostics.hasFatalError)
         {
@@ -2057,13 +2068,16 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
         }
 
     // Runtime class names (className / newInstanceOfClass): the per-module
-    // tables, before sema like the helpers above.
+    // tables, before sema like the helpers above. `namesSwitch`: a call to
+    // either method would change them (see after sema).
+    BOOL namesSwitch = NO;
     ast = [self injectClassNames:ast
-                          tokens:tokens
+                      classNames:_classNamesUsed
                       ifaceJsons:xtcLibJsons
                       ifacePaths:xtcLibPaths
                        typeTable:tt
-                           arm64:arm64];
+                           arm64:arm64
+                      switchable:&namesSwitch];
     if (_diagnostics.errorCount > 0)
         {
         [_diagnostics printAll];
@@ -2241,6 +2255,15 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     sema.importedProtocolSlots = impProtoSlots.count ? impProtoSlots : nil;
     sema.importedMethodSlots = impMethodSlots.count ? impMethodSlots : nil;
     [sema analyzeProgram:ast];
+    // The class-name table is decided by the program: sema saw a call resolve
+    // to Object.className() or Object.newInstanceOfClass(). This pass was
+    // built without the table, so start again with it.
+    if (namesSwitch && sema.usesClassNames && !_classNamesUsed)
+        {
+        _classNamesUsed = YES;
+        [_diagnostics truncateToCount:diagMark];
+        return [self frontendPassForFile:inputFile];
+        }
     if (_diagnostics.hasFatalError)
         {
         [_diagnostics printAll];

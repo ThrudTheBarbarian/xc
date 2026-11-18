@@ -75,11 +75,12 @@ NS_ASSUME_NONNULL_BEGIN
 // before sema. Exposed for the in-process corpus sweep, which parses and
 // analyses without the driver's full pipeline.
 - (XTProgramNode *)injectClassNames:(XTProgramNode *)ast
-                            tokens:(NSArray<XTToken *> *)tokens
+                        classNames:(BOOL)named
                         ifaceJsons:(NSArray<NSString *> *)ifaceJsons
                         ifacePaths:(NSArray<NSString *> *)ifacePaths
                          typeTable:(XTTypeTable *)tt
-                             arm64:(BOOL)arm64;
+                             arm64:(BOOL)arm64
+                        switchable:(nullable BOOL *)switchable;
 // The runtime helper a `(P* ?)obj` downcast lowers to on the backends that carry
 // the conformance list, injected before sema. Exposed for the same sweep.
 - (XTProgramNode *)injectConformanceHelper:(XTProgramNode *)ast

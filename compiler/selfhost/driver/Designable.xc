@@ -67,8 +67,11 @@ bool nameIsOneOf(String* n, String* a, String* b)
     return n != 0 && (n.equals(a) || n.equals(b));
     }
 
-void synthesizeDesignable(Node* program)
+// Returns the errors, each a line ready to print (empty when there are none):
+// the caller prints them and stops, after whatever it has held back.
+Array* synthesizeDesignable(Node* program)
     {
+    Array* errors = new Array();
     // 1. Local designable classes only — an imported class already carries its
     //    synthesised bodies in the library, and re-synthesising across a module
     //    boundary would give it a second, differently-numbered set.
@@ -84,7 +87,7 @@ void synthesizeDesignable(Node* program)
             designable.add((Object*)d);
         }
     if (designable.count() == (u32)0)
-        return;
+        return errors;
 
     // 2. The binding protocol must be in scope: a class cannot conform to a
     //    protocol it cannot see. The NAMES are discovered rather than fixed —
@@ -123,12 +126,11 @@ void synthesizeDesignable(Node* program)
         {
         // At the class, as the reference reports it.
         Node* at = (Node*)designable.get((u32)0);
-        Stdio.printf("%s:%u:%u: error: a class with an `outlet` field or `:action` method "
-                     "must import the UI framework — it auto-conforms to the "
-                     "UXDesignable protocol declared there\n",
-                     at.file() != 0 ? at.file().cString() : "?", at.line(), at.col());
-        driverExit((i32)1);
-        return;
+        errors.add((Object*)String.withFormat("%s:%u:%u: error: a class with an `outlet` field or `:action` method "
+                                              "must import the UI framework — it auto-conforms to the "
+                                              "UXDesignable protocol declared there\n",
+                                              at.file() != 0 ? at.file().cString() : "?", at.line(), at.col()));
+        return errors;
         }
     // wireAction's parameter type. Falling back to Object keeps a class with
     // outlets but no actions compiling in a tree that has the protocol but no
@@ -165,18 +167,15 @@ void synthesizeDesignable(Node* program)
                 }
             if (!voidRet || nparams != (u32)1 || !objParam)
                 {
-                Stdio.printf("xc-fe: error: `:action` method '%s' must return void and "
-                             "take exactly one object-pointer parameter (the sender)\n",
-                             m.name() == 0 ? "?" : m.name().cString());
+                errors.add((Object*)String.withFormat("xc-fe: error: `:action` method '%s' must return void and "
+                                                      "take exactly one object-pointer parameter (the sender)\n",
+                                                      m.name() == 0 ? "?" : m.name().cString()));
                 bad = true;
                 }
             }
         }
     if (bad)
-        {
-        driverExit((i32)1);
-        return;
-        }
+        return errors;
 
     // 4. The synthesis source. `_xtc_streq` because `u8@ ==` is a POINTER
     //    compare and a nib matches by bytes; `_xtc_nibNew` so the loader can
@@ -341,7 +340,7 @@ void synthesizeDesignable(Node* program)
         }
     Node* synth = parser.parse();
     if (synth == 0)
-        return;
+        return errors;
 
     // 6. Transplant. The free functions join the program; each __xtc_synth_<C>
     //    hands its methods to the real C and adds the conformance — the
@@ -386,4 +385,5 @@ void synthesizeDesignable(Node* program)
             break;
             }
         }
+    return errors;
     }

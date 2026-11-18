@@ -72,6 +72,9 @@ class FeOptions
     bool _parAuto;       // --par-style auto|threads|gpu (the default auto): a plain range loop becomes a par block where its shape allows
     u32 _parDeviceDefault; // --par-style's device for a block with no :device: 1 the CPU, 2 the GPU, 0 the run's choice
     bool _parAutoImport; // --par-style=auto wraps a loop in a program without Par.xc: import it
+    // Sema found a call to Object.className() or Object.newInstanceOfClass():
+    // the class-name table is on (injectClassNames, and the restart in lower).
+    bool _classNames;
     u32 _goalDefault;    // -fgoal=: the unit's default goal (0 built-in, 1 speed, 2 accuracy); a #goal overrides it
     bool _emitIface;   // compute the module interface (--emit-lib, -c, --emit-iface)
     // …and, SEPARATELY, whether this is a LIBRARY build. The two used to be one
@@ -142,6 +145,7 @@ class FeOptions
         _parAuto = true;
         _parDeviceDefault = (u32)0;
         _parAutoImport = false;
+        _classNames = false;
         _goalDefault = (u32)0;
         // par-auto is opt-in (-Wpar-auto): what --par-style=auto wrapped or demoted
         // is useful to see once, and noise in every build after.
@@ -451,6 +455,14 @@ class FeOptions
         {
         _parAutoImport = b;
         }
+    bool classNames(void)
+        {
+        return _classNames;
+        }
+    void setClassNames(bool b)
+        {
+        _classNames = b;
+        }
     u32 goalDefault(void)
         {
         return _goalDefault;
@@ -480,6 +492,17 @@ class FeOptions
         }
 
     static IRModule* lower(FeOptions* o)
+        {
+        o.setClassNames(false);
+        return Frontend.lowerUnit(o);
+        }
+
+    // One pass of the front end. It starts again from the top, with an option
+    // turned on, when the program turns out to need what that option adds:
+    // the par runtime (after the parse), and the class-name table (after
+    // sema). Anything said before such a restart is held in `early` and
+    // dropped by it, so each message prints once.
+    static IRModule* lowerUnit(FeOptions* o)
         {
         resolveIncludePaths(o);
         // The optimiser tells the library's code from the program's by where
@@ -770,9 +793,8 @@ class FeOptions
         if (parser.parAutoWantsRuntime() && !o.parAutoImport() && parRuntimeAvailable(o))
             {
             o.setParAutoImport(true);
-            return Frontend.lower(o);
+            return Frontend.lowerUnit(o);
             }
-        Frontend.flushEarly(early);
         // A PARSE ERROR MUST FAIL THE BUILD. The parser collected these all
         // along and nothing ever read them, so the shipped compiler took
         // `i32 x = ;`, said nothing, exited 0 and wrote a runnable binary —
@@ -794,10 +816,11 @@ class FeOptions
             String* line = raw.substringBytes(tab + (u32)1,
                                               raw.byteLength() - tab - (u32)1);
             line.appendByte((u8)'\n');
-            Stdio.error(line);
+            Frontend.holdEarly(early, line, false);
             }
         if (parser.errors().count() > (u32)0)
             {
+            Frontend.flushEarly(early);
             // Each message carries its own `file:line:col: error:` now (#78);
             // printDiagnostic adds the source line and the caret under it.
             for (u32 e = (u32)0; e < parser.errors().count(); e = e + (u32)1)
@@ -830,12 +853,21 @@ class FeOptions
         // auto-conforms to the binding protocol and has its setOutlet /
         // wireAction bodies written for it. BEFORE sema, so the synthesised
         // methods are what conformance checking sees.
-        synthesizeDesignable(program);
+        Array* designErrors = synthesizeDesignable(program);
+        if (designErrors.count() > (u32)0)
+            {
+            Frontend.flushEarly(early);
+            for (u32 e = (u32)0; e < designErrors.count(); e = e + (u32)1)
+                Stdio.printf("%s", ((String*)designErrors.get(e)).cString());
+            Process.exit((i32)1);
+            return (IRModule*)0;
+            }
         if (carriesItable(o))
             injectConformanceHelper(program);
         // Runtime class names (className / newInstanceOfClass): the
-        // per-module tables, before sema like the helpers above.
-        injectClassNames(program, o, tokens, importedIfaces, xtcImports);
+        // per-module tables, before sema like the helpers above. True when a
+        // call to either method would change them (see after sema).
+        bool namesSwitch = injectClassNames(program, o, importedIfaces, xtcImports);
         // The C interface the driver reads out of libc's DWARF. The port has no
         // DWARF reader, so the same declarations come from a bundled stub — and
         // everything in it is marked C-ABI here, because that is a property of
@@ -917,6 +949,7 @@ class FeOptions
                     Object* prev = ambientSeen.get((Hashable*)l);
                     if (prev != (Object*)0 && ((Number*)prev).asU32() != slot)
                         {
+                        Frontend.flushEarly(early);
                         Stdio.printf("xc-fe: error: imported libraries disagree "
                                      "about the vtable slot of '%s' (%lu vs %lu); "
                                      "they were built against different ambient "
@@ -949,6 +982,16 @@ class FeOptions
                 }
             }
         sema.analyse(program);
+        // The class-name table is decided by the program: sema saw a call
+        // resolve to Object.className() or Object.newInstanceOfClass(). This
+        // pass was built without the table, so start again with it; the
+        // first pass's diagnostics are dropped with it.
+        if (namesSwitch && sema.usesClassNames() && !o.classNames())
+            {
+            o.setClassNames(true);
+            return Frontend.lowerUnit(o);
+            }
+        Frontend.flushEarly(early);
         // SEMA warnings — same shape and same suppression as the parser's
         // ("<category>\t<text>"), and printed BEFORE the error check so a
         // warning about the code that then failed still reaches the reader.
@@ -1732,12 +1775,17 @@ void injectConformanceHelper(Node* program)
 //                                         class first
 //
 // The table is emitted for a library or `-c` object, for a module that
-// imports another xc module, and for one that names either method (a
-// `.className` or `.newInstanceOfClass` token). Otherwise only the root is,
-// returning null, and dead-function elimination drops it. The table's name is
-// a hash of its body, so equal tables merge at link and different ones cannot
-// collide.
-void injectClassNames(Node* program, FeOptions* o, Array* tokens, Array* ifaces, u32 xtcImports)
+// imports another xc module, and for one that calls either method. A call is
+// found by sema, where it resolves to Object's method (Sema.noteClassNameUse),
+// so this pass is built without the table and Frontend.lower starts again
+// with `o.classNames()` set when one is found. Otherwise only the root is
+// emitted, returning null, and dead-function elimination drops it. The
+// table's name is a hash of its body, so equal tables merge at link and
+// different ones cannot collide.
+//
+// Returns true when a call would change what is emitted here: the program has
+// the library Object, and nothing else has already switched the table on.
+bool injectClassNames(Node* program, FeOptions* o, Array* ifaces, u32 xtcImports)
     {
     o.setClassTable((String*)0);
     bool haveObject = false;
@@ -1764,19 +1812,10 @@ void injectClassNames(Node* program, FeOptions* o, Array* tokens, Array* ifaces,
             }
         }
     if (!haveObject)
-        return;
+        return false;
     bool m68k = platformOf(o).equals(String.withCString("atarist"));
-    bool named = false;
-    for (u32 i = (u32)1; i < tokens.count() && !named; i = i + (u32)1)
-        {
-        Token* t = (Token*)tokens.get(i);
-        u16 pt = ((Token*)tokens.get(i - (u32)1)).type();
-        if (t.type() == (u16)tokIdentifier && (pt == (u16)tokDot || pt == (u16)tokArrow) &&
-            (t.value().equals(String.withCString("className")) ||
-             t.value().equals(String.withCString("newInstanceOfClass"))))
-            named = true;
-        }
-    bool emit = named || (!m68k && (o.libraryBuild() || xtcImports > (u32)0));
+    bool always = !m68k && (o.libraryBuild() || xtcImports > (u32)0);
+    bool emit = o.classNames() || always;
     bool isRoot = !o.compileOnly() || definesMain;
 
     // The classes this module defines, by name. `$` cannot occur in a name
@@ -1919,8 +1958,9 @@ void injectClassNames(Node* program, FeOptions* o, Array* tokens, Array* ifaces,
             }
         src.appendCString("return (String*)0;\n}\n");
         }
+    bool switchable = !emit;
     if (src.byteLength() == (u32)0)
-        return;
+        return switchable;
 
     Lexer* lex = Lexer.with(src, String.withCString("<class-names>"));
     Parser* parser = Parser.with(lex.tokenise());
@@ -1930,7 +1970,7 @@ void injectClassNames(Node* program, FeOptions* o, Array* tokens, Array* ifaces,
         parser.addTypeName((String*)names.get(i));
     Node* synth = parser.parse();
     if (synth == 0)
-        return;
+        return switchable;
     // wasm32: a table imported from a library resolves in that library's
     // package, like every other function it exports.
     for (u32 i = (u32)0; i < ifaces.count(); i = i + (u32)1)
@@ -1948,6 +1988,7 @@ void injectClassNames(Node* program, FeOptions* o, Array* tokens, Array* ifaces,
     o.setClassTable(table);
     for (u32 i = (u32)0; i < synth.kidCount(); i = i + (u32)1)
         program.add(synth.kid(i));
+    return switchable;
     }
 
 // Is there a `Platform.xc` on the search path? That is what gates the implicit

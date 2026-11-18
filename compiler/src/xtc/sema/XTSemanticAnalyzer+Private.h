@@ -273,6 +273,7 @@
 // visitUseDecl as the AST is walked, so use directives only
 // affect calls textually after them.
 @property(nonatomic) NSMutableArray<NSString*>* usedClassNames;
+@property(nonatomic, readwrite) BOOL usesClassNames;
 // Function names whose only free declaration is an AUTO-IMPORTED C proto
 // (XTFunctionDeclNode.isCImport — the DWARF libc import). Bare-call
 // resolution demotes these below a matching `use`-promoted static: libc's

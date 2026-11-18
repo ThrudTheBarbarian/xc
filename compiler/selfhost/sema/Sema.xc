@@ -80,6 +80,7 @@ class Sema
     Array* _cloakedNames;
     Array* _cloakedDecls;
     bool _cloakedWarn;         // -Wno-cloaked-transitive: a warning, not an error
+    bool _usesClassNames;      // a call resolved to Object.className() or Object.newInstanceOfClass()
     // The escape walk (escWalkStmt), per body: stack class locals by the
     // block depth that declared them, and pointer locals by the stack local
     // whose address they hold.
@@ -170,6 +171,7 @@ class Sema
         _cloakedNames = new Array();
         _cloakedDecls = new Array();
         _cloakedWarn = false;
+        _usesClassNames = false;
         _scopes = new Array();
         _globals = new Map();
         _structs = new Map();
@@ -219,6 +221,19 @@ class Sema
     Array* warnings(void)
         {
         return _warnings;
+        }
+    // Did a call resolve to Object.className() or Object.newInstanceOfClass()?
+    // Those read the per-module class-name table, which the front end emits
+    // only for a program that calls one (Frontend.injectClassNames).
+    bool usesClassNames(void)
+        {
+        return _usesClassNames;
+        }
+    // A method call has resolved to `m`, declared by the class `owner`.
+    void noteClassNameUse(String* owner, Node* m)
+        {
+        if (_isOp(owner, "Object") && (_isOp(m.name(), "className") || _isOp(m.name(), "newInstanceOfClass")))
+            _usesClassNames = true;
         }
     void setChainCapable(bool c)
         {
@@ -4076,6 +4091,7 @@ class Sema
                 n.setTy(firstReturn(m.op()));
                 n.setSym(m.sym());
                 noteCallEdge(clsLabel(mOwner.name(), m.sym() != 0 ? m.sym() : m.name()));
+                noteClassNameUse(mOwner.name(), m);
                 // An implicit-self call DOES reach the method through the
                 // class's own storage, so it counts as a stack receiver. A
                 // `use`-promoted bare call (below) does not — measured, not
@@ -4227,6 +4243,7 @@ class Sema
             n.setTy(firstReturn(m.op()));
             n.setSym(m.sym());
             noteCallEdge(clsLabel(cls.name(), m.sym() != 0 ? m.sym() : m.name()));
+            noteClassNameUse(cls.name(), m);
             // The static and the demoted C proto can share a symbol name
             // (`printf`), so the lowering is told which class answered.
             if (demotedC)
@@ -4761,6 +4778,7 @@ class Sema
                     n.setSym(best.sym());
                     n.setCls(p.name());
                     noteCallEdge(clsLabel(p.name(), best.sym() != 0 ? best.sym() : best.name()));
+                    noteClassNameUse(p.name(), best);
                     checkThrowsCall(best, n, n.name());
                     return;
                     }
@@ -5011,6 +5029,7 @@ class Sema
         notePackOrForward(n, m, owner);
         n.setSym(m.sym());
         noteCallEdge(clsLabel(owner2 != 0 ? owner2.name() : owner, m.sym() != 0 ? m.sym() : m.name()));
+        noteClassNameUse(owner2 != 0 ? owner2.name() : owner, m);
         rewriteFormat(n, owner);
         checkFormat(n, owner);
         promoteFormat(n, owner);
