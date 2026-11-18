@@ -134,6 +134,144 @@ class VRegRef
     { VRegRef* r = new VRegRef(); r._ok = true; r._num = n; r._size = sz; r._q = q; r._idx = idx; return r; }
 }
 
+// Mnemonics as numbers. encodeLine looks the mnemonic up once, and the
+// encoders and their tables compare the number instead of the String, each
+// comparison of which built and freed a String. Every mnemonic an encoder
+// tests is here, plus the operation names lseOpcFor reads off an LSE atomic
+// (`clr`, `set`). Anything else is a64Unknown and still reaches the
+// "unhandled mnemonic" error. The numbering is private to the process.
+enum Arm64Mnemonic = {
+    a64Unknown = 0,
+    a64Abs, a64Add, a64Adds, a64Addv, a64Adr, a64Adrp,
+    a64And, a64Ands, a64Asr, a64B, a64Bic, a64Bics,
+    a64Bif, a64Bit, a64Bl, a64Blr, a64Br, a64Brk,
+    a64Bsl, a64Cbnz, a64Cbz, a64Ccmn, a64Ccmp, a64Cinc,
+    a64Cinv, a64Clr, a64Clrex, a64Cmeq, a64Cmge, a64Cmgt,
+    a64Cmhi, a64Cmhs, a64Cmn, a64Cmp, a64Cmphi, a64Cneg,
+    a64Cnt, a64Cntb, a64Cntd, a64Cnth, a64Cntw, a64Csel,
+    a64Cset, a64Csetm, a64Csinc, a64Csinv, a64Csneg, a64Dmb,
+    a64Dsb, a64Dup, a64Dupm, a64Eon, a64Eor, a64Ext,
+    a64Fabs, a64Fadd, a64Faddp, a64Fcmeq, a64Fcmge, a64Fcmgt,
+    a64Fcmp, a64Fcmuo, a64Fcsel, a64Fcvt, a64Fcvtzs, a64Fcvtzu,
+    a64Fdiv, a64Fmadd, a64Fmax, a64Fmin, a64Fmla, a64Fmls,
+    a64Fmopa, a64Fmov, a64Fmsub, a64Fmul, a64Fneg, a64Fnmadd,
+    a64Fnmsub, a64Frintz, a64Fsqrt, a64Fsub, a64Hlt, a64Isb,
+    a64Ld1, a64Ld1d, a64Ld1w, a64Ldp, a64Ldr, a64Ldrb,
+    a64Ldrh, a64Ldrsb, a64Ldrsh, a64Ldrsw, a64Ldur, a64Ldurb,
+    a64Ldurh, a64Ldursb, a64Ldursh, a64Ldursw, a64Lsl, a64Lsr,
+    a64Madd, a64Mla, a64Mls, a64Mov, a64Mova, a64Movk,
+    a64Movn, a64Movz, a64Msub, a64Msubl, a64Mul, a64Mvn,
+    a64Neg, a64Nop, a64Not, a64Orn, a64Orr, a64Pfalse,
+    a64Ptest, a64Ptrue, a64Rdsvl, a64Ret, a64Rev16, a64Rev32,
+    a64Rev64, a64Ror, a64Saba, a64Sabd, a64Saddlp, a64Saddlv,
+    a64Scvtf, a64Sdiv, a64Set, a64Shl, a64Sli, a64Smaddl,
+    a64Smax, a64Smaxv, a64Smin, a64Sminv, a64Smopa, a64Smstart,
+    a64Smstop, a64Smulh, a64Smull, a64Smull2, a64Sshl, a64Sshr,
+    a64St1, a64St1d, a64St1w, a64Stp, a64Str, a64Strb,
+    a64Strh, a64Stur, a64Sturb, a64Sturh, a64Sub, a64Subs,
+    a64Sumopa, a64Svc, a64Sxtb, a64Sxth, a64Sxtw, a64Tbnz,
+    a64Tbz, a64Trn1, a64Trn2, a64Tst, a64Uaba, a64Uabd,
+    a64Uaddlp, a64Uaddlv, a64Ucvtf, a64Udiv, a64Umaddl, a64Umax,
+    a64Umaxv, a64Umin, a64Uminv, a64Umopa, a64Umulh, a64Umull,
+    a64Umull2, a64Ushl, a64Ushr, a64Usmopa, a64Usra, a64Uxtb,
+    a64Uxth, a64Uxtw, a64Uzp1, a64Uzp2, a64Whilelo, a64Whilelt,
+    a64Zero, a64Zip1, a64Zip2
+};
+
+class Arm64Mn
+{
+    static Map* _byName;   // mnemonic -> its number (Number@)
+    u8 _unused;            // no instances: every entry point is static
+
+    static void def(u16 mc, string name)
+    {
+        _byName.set((Hashable*)String.withCString(name), (Object*)Number.with(mc));
+    }
+
+    static void build(void)
+    {
+        _byName = new Map();
+        Arm64Mn.def(a64Abs, "abs"); Arm64Mn.def(a64Add, "add"); Arm64Mn.def(a64Adds, "adds");
+        Arm64Mn.def(a64Addv, "addv"); Arm64Mn.def(a64Adr, "adr"); Arm64Mn.def(a64Adrp, "adrp");
+        Arm64Mn.def(a64And, "and"); Arm64Mn.def(a64Ands, "ands"); Arm64Mn.def(a64Asr, "asr");
+        Arm64Mn.def(a64B, "b"); Arm64Mn.def(a64Bic, "bic"); Arm64Mn.def(a64Bics, "bics");
+        Arm64Mn.def(a64Bif, "bif"); Arm64Mn.def(a64Bit, "bit"); Arm64Mn.def(a64Bl, "bl");
+        Arm64Mn.def(a64Blr, "blr"); Arm64Mn.def(a64Br, "br"); Arm64Mn.def(a64Brk, "brk");
+        Arm64Mn.def(a64Bsl, "bsl"); Arm64Mn.def(a64Cbnz, "cbnz"); Arm64Mn.def(a64Cbz, "cbz");
+        Arm64Mn.def(a64Ccmn, "ccmn"); Arm64Mn.def(a64Ccmp, "ccmp"); Arm64Mn.def(a64Cinc, "cinc");
+        Arm64Mn.def(a64Cinv, "cinv"); Arm64Mn.def(a64Clr, "clr"); Arm64Mn.def(a64Clrex, "clrex");
+        Arm64Mn.def(a64Cmeq, "cmeq"); Arm64Mn.def(a64Cmge, "cmge"); Arm64Mn.def(a64Cmgt, "cmgt");
+        Arm64Mn.def(a64Cmhi, "cmhi"); Arm64Mn.def(a64Cmhs, "cmhs"); Arm64Mn.def(a64Cmn, "cmn");
+        Arm64Mn.def(a64Cmp, "cmp"); Arm64Mn.def(a64Cmphi, "cmphi"); Arm64Mn.def(a64Cneg, "cneg");
+        Arm64Mn.def(a64Cnt, "cnt"); Arm64Mn.def(a64Cntb, "cntb"); Arm64Mn.def(a64Cntd, "cntd");
+        Arm64Mn.def(a64Cnth, "cnth"); Arm64Mn.def(a64Cntw, "cntw"); Arm64Mn.def(a64Csel, "csel");
+        Arm64Mn.def(a64Cset, "cset"); Arm64Mn.def(a64Csetm, "csetm"); Arm64Mn.def(a64Csinc, "csinc");
+        Arm64Mn.def(a64Csinv, "csinv"); Arm64Mn.def(a64Csneg, "csneg"); Arm64Mn.def(a64Dmb, "dmb");
+        Arm64Mn.def(a64Dsb, "dsb"); Arm64Mn.def(a64Dup, "dup"); Arm64Mn.def(a64Dupm, "dupm");
+        Arm64Mn.def(a64Eon, "eon"); Arm64Mn.def(a64Eor, "eor"); Arm64Mn.def(a64Ext, "ext");
+        Arm64Mn.def(a64Fabs, "fabs"); Arm64Mn.def(a64Fadd, "fadd"); Arm64Mn.def(a64Faddp, "faddp");
+        Arm64Mn.def(a64Fcmeq, "fcmeq"); Arm64Mn.def(a64Fcmge, "fcmge"); Arm64Mn.def(a64Fcmgt, "fcmgt");
+        Arm64Mn.def(a64Fcmp, "fcmp"); Arm64Mn.def(a64Fcmuo, "fcmuo"); Arm64Mn.def(a64Fcsel, "fcsel");
+        Arm64Mn.def(a64Fcvt, "fcvt"); Arm64Mn.def(a64Fcvtzs, "fcvtzs"); Arm64Mn.def(a64Fcvtzu, "fcvtzu");
+        Arm64Mn.def(a64Fdiv, "fdiv"); Arm64Mn.def(a64Fmadd, "fmadd"); Arm64Mn.def(a64Fmax, "fmax");
+        Arm64Mn.def(a64Fmin, "fmin"); Arm64Mn.def(a64Fmla, "fmla"); Arm64Mn.def(a64Fmls, "fmls");
+        Arm64Mn.def(a64Fmopa, "fmopa"); Arm64Mn.def(a64Fmov, "fmov"); Arm64Mn.def(a64Fmsub, "fmsub");
+        Arm64Mn.def(a64Fmul, "fmul"); Arm64Mn.def(a64Fneg, "fneg"); Arm64Mn.def(a64Fnmadd, "fnmadd");
+        Arm64Mn.def(a64Fnmsub, "fnmsub"); Arm64Mn.def(a64Frintz, "frintz"); Arm64Mn.def(a64Fsqrt, "fsqrt");
+        Arm64Mn.def(a64Fsub, "fsub"); Arm64Mn.def(a64Hlt, "hlt"); Arm64Mn.def(a64Isb, "isb");
+        Arm64Mn.def(a64Ld1, "ld1"); Arm64Mn.def(a64Ld1d, "ld1d"); Arm64Mn.def(a64Ld1w, "ld1w");
+        Arm64Mn.def(a64Ldp, "ldp"); Arm64Mn.def(a64Ldr, "ldr"); Arm64Mn.def(a64Ldrb, "ldrb");
+        Arm64Mn.def(a64Ldrh, "ldrh"); Arm64Mn.def(a64Ldrsb, "ldrsb"); Arm64Mn.def(a64Ldrsh, "ldrsh");
+        Arm64Mn.def(a64Ldrsw, "ldrsw"); Arm64Mn.def(a64Ldur, "ldur"); Arm64Mn.def(a64Ldurb, "ldurb");
+        Arm64Mn.def(a64Ldurh, "ldurh"); Arm64Mn.def(a64Ldursb, "ldursb"); Arm64Mn.def(a64Ldursh, "ldursh");
+        Arm64Mn.def(a64Ldursw, "ldursw"); Arm64Mn.def(a64Lsl, "lsl"); Arm64Mn.def(a64Lsr, "lsr");
+        Arm64Mn.def(a64Madd, "madd"); Arm64Mn.def(a64Mla, "mla"); Arm64Mn.def(a64Mls, "mls");
+        Arm64Mn.def(a64Mov, "mov"); Arm64Mn.def(a64Mova, "mova"); Arm64Mn.def(a64Movk, "movk");
+        Arm64Mn.def(a64Movn, "movn"); Arm64Mn.def(a64Movz, "movz"); Arm64Mn.def(a64Msub, "msub");
+        Arm64Mn.def(a64Msubl, "msubl"); Arm64Mn.def(a64Mul, "mul"); Arm64Mn.def(a64Mvn, "mvn");
+        Arm64Mn.def(a64Neg, "neg"); Arm64Mn.def(a64Nop, "nop"); Arm64Mn.def(a64Not, "not");
+        Arm64Mn.def(a64Orn, "orn"); Arm64Mn.def(a64Orr, "orr"); Arm64Mn.def(a64Pfalse, "pfalse");
+        Arm64Mn.def(a64Ptest, "ptest"); Arm64Mn.def(a64Ptrue, "ptrue"); Arm64Mn.def(a64Rdsvl, "rdsvl");
+        Arm64Mn.def(a64Ret, "ret"); Arm64Mn.def(a64Rev16, "rev16"); Arm64Mn.def(a64Rev32, "rev32");
+        Arm64Mn.def(a64Rev64, "rev64"); Arm64Mn.def(a64Ror, "ror"); Arm64Mn.def(a64Saba, "saba");
+        Arm64Mn.def(a64Sabd, "sabd"); Arm64Mn.def(a64Saddlp, "saddlp"); Arm64Mn.def(a64Saddlv, "saddlv");
+        Arm64Mn.def(a64Scvtf, "scvtf"); Arm64Mn.def(a64Sdiv, "sdiv"); Arm64Mn.def(a64Set, "set");
+        Arm64Mn.def(a64Shl, "shl"); Arm64Mn.def(a64Sli, "sli"); Arm64Mn.def(a64Smaddl, "smaddl");
+        Arm64Mn.def(a64Smax, "smax"); Arm64Mn.def(a64Smaxv, "smaxv"); Arm64Mn.def(a64Smin, "smin");
+        Arm64Mn.def(a64Sminv, "sminv"); Arm64Mn.def(a64Smopa, "smopa"); Arm64Mn.def(a64Smstart, "smstart");
+        Arm64Mn.def(a64Smstop, "smstop"); Arm64Mn.def(a64Smulh, "smulh"); Arm64Mn.def(a64Smull, "smull");
+        Arm64Mn.def(a64Smull2, "smull2"); Arm64Mn.def(a64Sshl, "sshl"); Arm64Mn.def(a64Sshr, "sshr");
+        Arm64Mn.def(a64St1, "st1"); Arm64Mn.def(a64St1d, "st1d"); Arm64Mn.def(a64St1w, "st1w");
+        Arm64Mn.def(a64Stp, "stp"); Arm64Mn.def(a64Str, "str"); Arm64Mn.def(a64Strb, "strb");
+        Arm64Mn.def(a64Strh, "strh"); Arm64Mn.def(a64Stur, "stur"); Arm64Mn.def(a64Sturb, "sturb");
+        Arm64Mn.def(a64Sturh, "sturh"); Arm64Mn.def(a64Sub, "sub"); Arm64Mn.def(a64Subs, "subs");
+        Arm64Mn.def(a64Sumopa, "sumopa"); Arm64Mn.def(a64Svc, "svc"); Arm64Mn.def(a64Sxtb, "sxtb");
+        Arm64Mn.def(a64Sxth, "sxth"); Arm64Mn.def(a64Sxtw, "sxtw"); Arm64Mn.def(a64Tbnz, "tbnz");
+        Arm64Mn.def(a64Tbz, "tbz"); Arm64Mn.def(a64Trn1, "trn1"); Arm64Mn.def(a64Trn2, "trn2");
+        Arm64Mn.def(a64Tst, "tst"); Arm64Mn.def(a64Uaba, "uaba"); Arm64Mn.def(a64Uabd, "uabd");
+        Arm64Mn.def(a64Uaddlp, "uaddlp"); Arm64Mn.def(a64Uaddlv, "uaddlv"); Arm64Mn.def(a64Ucvtf, "ucvtf");
+        Arm64Mn.def(a64Udiv, "udiv"); Arm64Mn.def(a64Umaddl, "umaddl"); Arm64Mn.def(a64Umax, "umax");
+        Arm64Mn.def(a64Umaxv, "umaxv"); Arm64Mn.def(a64Umin, "umin"); Arm64Mn.def(a64Uminv, "uminv");
+        Arm64Mn.def(a64Umopa, "umopa"); Arm64Mn.def(a64Umulh, "umulh"); Arm64Mn.def(a64Umull, "umull");
+        Arm64Mn.def(a64Umull2, "umull2"); Arm64Mn.def(a64Ushl, "ushl"); Arm64Mn.def(a64Ushr, "ushr");
+        Arm64Mn.def(a64Usmopa, "usmopa"); Arm64Mn.def(a64Usra, "usra"); Arm64Mn.def(a64Uxtb, "uxtb");
+        Arm64Mn.def(a64Uxth, "uxth"); Arm64Mn.def(a64Uxtw, "uxtw"); Arm64Mn.def(a64Uzp1, "uzp1");
+        Arm64Mn.def(a64Uzp2, "uzp2"); Arm64Mn.def(a64Whilelo, "whilelo"); Arm64Mn.def(a64Whilelt, "whilelt");
+        Arm64Mn.def(a64Zero, "zero"); Arm64Mn.def(a64Zip1, "zip1"); Arm64Mn.def(a64Zip2, "zip2");
+    }
+
+    // The number of a mnemonic, or a64Unknown for one no encoder tests.
+    static u16 find(String* mnemonic)
+    {
+        if (_byName == (Map*)0)
+            Arm64Mn.build();
+        Number* mc = (Number*)_byName.get((Hashable*)mnemonic);
+        if (mc == (Number*)0)
+            return a64Unknown;
+        return mc.asU16();
+    }
+}
+
 class Arm64Asm
 {
     // The exception tables of the last text assembled (C/C++ input): per
@@ -772,16 +910,18 @@ class Arm64Asm
         String* rest = sp == (u32)$FFFF_FFFF ? String.withCString("")
                                              : line.substringFromByte(sp).trimmed();
         Array* ops = splitOperands(rest);
+        // The encoders test this number, not the String (#330).
+        u16 mc = Arm64Mn.find(mn);
 
-        u32 w = encSme(mn, ops);           if (_hit) return w;
-        w = encNeon(mn, ops, pc);           if (_hit) return w;
-        w = encAtomics(mn, ops, pc);        if (_hit) return w;
-        w = encMoves(mn, ops, pc);          if (_hit) return w;
-        w = encFloat(mn, ops, pc);          if (_hit) return w;
-        w = encAddSubLogic(mn, ops, pc);    if (_hit) return w;
-        w = encBitfieldMul(mn, ops, pc);    if (_hit) return w;
-        w = encMemory(mn, ops, pc);         if (_hit) return w;
-        w = encBranches(mn, ops, pc);       if (_hit) return w;
+        u32 w = encSme(mn, mc, ops);            if (_hit) return w;
+        w = encNeon(mn, mc, ops, pc);           if (_hit) return w;
+        w = encAtomics(mn, mc, ops, pc);        if (_hit) return w;
+        w = encMoves(mn, mc, ops, pc);          if (_hit) return w;
+        w = encFloat(mn, mc, ops, pc);          if (_hit) return w;
+        w = encAddSubLogic(mn, mc, ops, pc);    if (_hit) return w;
+        w = encBitfieldMul(mn, mc, ops, pc);    if (_hit) return w;
+        w = encMemory(mn, mc, ops, pc);         if (_hit) return w;
+        w = encBranches(mn, mc, ops, pc);       if (_hit) return w;
 
         String* m = String.withCString("unhandled mnemonic: ");
         m.append(mn);
@@ -806,16 +946,16 @@ class Arm64Asm
     // `b`/`h` can both end a mnemonic, and only that order is unambiguous.
     // Everything here is LOCAL: an earlier cut kept the pieces in ivars and the
     // assembler faulted on ordinary code long before it reached an atomic.
-    static u32 lseOpcFor(String* b)
+    static u32 lseOpcFor(u16 mc)
     {
-        if (b.equals(String.withCString("add")))  return (u32)0;
-        if (b.equals(String.withCString("clr")))  return (u32)1;
-        if (b.equals(String.withCString("eor")))  return (u32)2;
-        if (b.equals(String.withCString("set")))  return (u32)3;
-        if (b.equals(String.withCString("smax"))) return (u32)4;
-        if (b.equals(String.withCString("smin"))) return (u32)5;
-        if (b.equals(String.withCString("umax"))) return (u32)6;
-        if (b.equals(String.withCString("umin"))) return (u32)7;
+        if (mc == a64Add)  return 0;
+        if (mc == a64Clr)  return 1;
+        if (mc == a64Eor)  return 2;
+        if (mc == a64Set)  return 3;
+        if (mc == a64Smax) return 4;
+        if (mc == a64Smin) return 5;
+        if (mc == a64Umax) return 6;
+        if (mc == a64Umin) return 7;
         return (u32)$FFFF_FFFF;
     }
 
@@ -832,7 +972,7 @@ class Arm64Asm
         return o;
     }
 
-    u32 encAtomics(String* mn, Array* ops, u32 pc)
+    u32 encAtomics(String* mn, u16 mc, Array* ops, u32 pc)
     {
         // ── load/store EXCLUSIVE ──────────────────────────────────────────
         //   size 001000 o2 L o1 Rs o0 Rt2 Rn Rt
@@ -873,7 +1013,7 @@ class Arm64Asm
             }
         }
         // clrex — drop the exclusive monitor on such a loop's failure path.
-        if (mn.equals(String.withCString("clrex"))) { _hit = true; return (u32)$D5033F5F; }
+        if (mc == a64Clrex) { _hit = true; return $D5033F5F; }
 
         // ldar{b|h} / stlr{b|h}  Rt, [Xn]
         if (ops.count() == (u32)2 && mn.byteLength() >= (u32)4
@@ -920,7 +1060,7 @@ class Arm64Asm
                 } else if (t.byteLength() >= (u32)1 && t.hasSuffix(String.withCString("l"))) {
                     R = (u32)1; t = t.substringBytes((u32)0, t.byteLength() - (u32)1);
                 }
-                u32 opc = (isSwp || isCas) ? (u32)0 : lseOpcFor(t);
+                u32 opc = (isSwp || isCas) ? 0 : lseOpcFor(Arm64Mn.find(t));
                 bool shaped = (isSwp || isCas) ? t.byteLength() == (u32)0
                                                : opc != (u32)$FFFF_FFFF;
                 if (shaped) {
@@ -944,7 +1084,7 @@ class Arm64Asm
         }
 
         // dmb/dsb <option>, isb
-        if ((mn.equals(String.withCString("dmb")) || mn.equals(String.withCString("dsb")))
+        if ((mc == a64Dmb || mc == a64Dsb)
             && ops.count() == (u32)1) {
             String* o = opAt(ops, (u32)0);
             u32 opt = (u32)$FFFF_FFFF;
@@ -961,12 +1101,12 @@ class Arm64Asm
             else if (o.equals(String.withCString("st")))    opt = (u32)14;
             else if (o.equals(String.withCString("sy")))    opt = (u32)15;
             if (opt != (u32)$FFFF_FFFF) {
-                u32 opc2 = mn.equals(String.withCString("dmb")) ? (u32)5 : (u32)4;
+                u32 opc2 = mc == a64Dmb ? 5 : 4;
                 _hit = true;
                 return (u32)$D503309F | (opt << (u32)8) | (opc2 << (u32)5);
             }
         }
-        if (mn.equals(String.withCString("isb"))) { _hit = true; return (u32)$D5033FDF; }
+        if (mc == a64Isb) { _hit = true; return $D5033FDF; }
         return (u32)0;
     }
 
@@ -975,12 +1115,12 @@ class Arm64Asm
     // Dispatched FIRST, because it shares mnemonics with the scalar handlers
     // (add, mul, the f-ops) and is told apart only by the operands being
     // vector registers. Fields OR'd in: Q<<30, size<<22, Rm<<16, Rn<<5, Rd.
-    u32 encNeon(String* mn, Array* ops, u32 pc)
+    u32 encNeon(String* mn, u16 mc, Array* ops, u32 pc)
     {
         VRegRef* d = ops.count() >= (u32)1 ? parseVReg(opAt(ops, (u32)0)) : VRegRef.no();
 
         // dup Vd.T, Rn — splat a GP register across the lanes.
-        if (d.ok() && mn.equals(String.withCString("dup")) && ops.count() == (u32)2
+        if (d.ok() && mc == a64Dup && ops.count() == 2
             && !opAt(ops, (u32)1).hasPrefix(String.withCString("v"))) {
             RegRef* n = parseReg(opAt(ops, (u32)1));
             if (!n.ok()) { fail(String.withCString("bad dup source")); return (u32)0; }
@@ -993,31 +1133,31 @@ class Arm64Asm
             VRegRef* n = parseVReg(opAt(ops, (u32)1));
             VRegRef* m = parseVReg(opAt(ops, (u32)2));
             if (n.ok() && m.ok()) {
-                u32 b = neonInt3(mn);
+                u32 b = neonInt3(mc);
                 if (b != (u32)0) {
                     _hit = true;
                     return b | (d.q() << (u32)30) | (d.size() << (u32)22)
                          | (m.num() << (u32)16) | (n.num() << (u32)5) | d.num();
                 }
-                b = neonLogic3(mn);       // no size field: 8b/16b arrangements only
+                b = neonLogic3(mc);       // no size field: 8b/16b arrangements only
                 if (b != (u32)0) {
                     _hit = true;
                     return b | (d.q() << (u32)30) | (m.num() << (u32)16)
                          | (n.num() << (u32)5) | d.num();
                 }
-                b = neonFloat3(mn);       // one sz bit at 22: 0 for .2s/.4s, 1 for .2d
+                b = neonFloat3(mc);       // one sz bit at 22: 0 for .2s/.4s, 1 for .2d
                 if (b != (u32)0) {
                     _hit = true;
                     return b | (d.q() << (u32)30) | ((d.size() == (u32)3 ? (u32)1 : (u32)0) << (u32)22)
                          | (m.num() << (u32)16) | (n.num() << (u32)5) | d.num();
                 }
-                b = neonPerm(mn);
+                b = neonPerm(mc);
                 if (b != (u32)0) {
                     _hit = true;
                     return b | (d.q() << (u32)30) | (d.size() << (u32)22)
                          | (m.num() << (u32)16) | (n.num() << (u32)5) | d.num();
                 }
-                b = neonWiden3(mn);
+                b = neonWiden3(mc);
                 if (b != (u32)0) {
                     if (n.size() != m.size() || n.q() != m.q()) {
                         fail(String.withCString("widening multiply sources disagree"));
@@ -1043,7 +1183,7 @@ class Arm64Asm
         // ushr/sshr Vd.T, Vn.T, #shift
         if (d.ok() && ops.count() == (u32)3
             && opAt(ops, (u32)2).hasPrefix(String.withCString("#"))) {
-            u32 bs = neonShrImm(mn);
+            u32 bs = neonShrImm(mc);
             if (bs != (u32)0) {
                 VRegRef* n = parseVReg(opAt(ops, (u32)1));
                 if (!n.ok() || n.size() != d.size() || n.q() != d.q()) {
@@ -1065,7 +1205,7 @@ class Arm64Asm
             // Shift left by immediate: immh:immb holds (esize + shift), shift
             // 0 .. esize - 1. sli (shift left and insert, keeping Vd's low
             // bits) has the same field with U set.
-            if (mn.equals(String.withCString("shl")) || mn.equals(String.withCString("sli"))) {
+            if (mc == a64Shl || mc == a64Sli) {
                 VRegRef* n = parseVReg(opAt(ops, (u32)1));
                 if (!n.ok() || n.size() != d.size() || n.q() != d.q()) {
                     fail(String.withCString("shift-left arrangements disagree"));
@@ -1080,7 +1220,7 @@ class Arm64Asm
                     return (u32)0;
                 }
                 _hit = true;
-                u32 base = mn.equals(String.withCString("sli")) ? (u32)$2F005400 : (u32)$0F005400;
+                u32 base = mc == a64Sli ? $2F005400 : $0F005400;
                 return base | (d.q() << (u32)30) | ((esize + amt) << (u32)16)
                      | (n.num() << (u32)5) | d.num();
             }
@@ -1088,24 +1228,24 @@ class Arm64Asm
         if (d.ok() && ops.count() == (u32)2) {
             VRegRef* n = parseVReg(opAt(ops, (u32)1));
             // mov Vd.T, Vn.T: the alias of orr Vd.T, Vn.T, Vn.T.
-            if (n.ok() && mn.equals(String.withCString("mov")) && n.q() == d.q()) {
+            if (n.ok() && mc == a64Mov && n.q() == d.q()) {
                 _hit = true;
                 return (u32)$0EA01C00 | (d.q() << (u32)30) | (n.num() << (u32)16) | (n.num() << (u32)5) | d.num();
             }
             if (n.ok()) {
-                u32 bp = neonPairLong(mn);
+                u32 bp = neonPairLong(mc);
                 if (bp != (u32)0) {
                     _hit = true;
                     return bp | (n.q() << (u32)30) | (n.size() << (u32)22)
                          | (n.num() << (u32)5) | d.num();
                 }
-                u32 b = neonMisc2i(mn);
+                u32 b = neonMisc2i(mc);
                 if (b != (u32)0) {
                     _hit = true;
                     return b | (d.q() << (u32)30) | (d.size() << (u32)22)
                          | (n.num() << (u32)5) | d.num();
                 }
-                b = neonMisc2f(mn);
+                b = neonMisc2f(mc);
                 if (b != (u32)0) {
                     _hit = true;
                     return b | (d.q() << (u32)30) | ((d.size() == (u32)3 ? (u32)1 : (u32)0) << (u32)22)
@@ -1114,7 +1254,7 @@ class Arm64Asm
             }
         }
         // ext Vd.16b, Vn.16b, Vm.16b, #imm4 — a byte extract across two regs.
-        if (d.ok() && mn.equals(String.withCString("ext")) && ops.count() == (u32)4) {
+        if (d.ok() && mc == a64Ext && ops.count() == 4) {
             VRegRef* n = parseVReg(opAt(ops, (u32)1));
             VRegRef* m = parseVReg(opAt(ops, (u32)2));
             if (n.ok() && m.ok()) {
@@ -1126,7 +1266,7 @@ class Arm64Asm
         }
         // Across-lanes reduction: the destination is a SCALAR, the source a vector.
         if (!d.ok() && ops.count() == (u32)2) {
-            u32 b = neonReduce(mn);
+            u32 b = neonReduce(mc);
             VRegRef* n = parseVReg(opAt(ops, (u32)1));
             if (b != (u32)0 && n.ok()) {
                 FRegRef* rd = parseFReg(opAt(ops, (u32)0));
@@ -1140,7 +1280,7 @@ class Arm64Asm
         // index is L(21):H(11), for .d just H(11) — and Vm is four bits plus
         // M(20), so only v0-v15 can be the indexed operand.
         if (d.ok() && ops.count() == (u32)3) {
-            u32 b = neonElem(mn);
+            u32 b = neonElem(mc);
             VRegRef* n = parseVReg(opAt(ops, (u32)1));
             VRegRef* e = parseVElem(opAt(ops, (u32)2));
             if (b != (u32)0 && n.ok() && e.ok()) {
@@ -1155,7 +1295,7 @@ class Arm64Asm
             }
         }
         // dup Vd.T, Vn.Ts[i] — splat one lane across all of them.
-        if (d.ok() && mn.equals(String.withCString("dup")) && ops.count() == (u32)2) {
+        if (d.ok() && mc == a64Dup && ops.count() == 2) {
             VRegRef* e = parseVElem(opAt(ops, (u32)1));
             if (e.ok()) {
                 u32 imm5 = (e.idx() << (e.size() + (u32)1)) | ((u32)1 << e.size());
@@ -1167,7 +1307,7 @@ class Arm64Asm
         // ld1/st1 { Vt.T }, [Xn] — the single-register, no-offset form. The
         // brace list arrives as ONE operand, because splitOperands does not
         // break on the inner comma of a single-register list.
-        if ((mn.equals(String.withCString("ld1")) || mn.equals(String.withCString("st1")))
+        if ((mc == a64Ld1 || mc == a64St1)
             && ops.count() == (u32)2 && opAt(ops, (u32)0).hasPrefix(String.withCString("{"))) {
             String* inner = stripBraces(opAt(ops, (u32)0));
             VRegRef* t = parseVReg(inner);
@@ -1176,7 +1316,7 @@ class Arm64Asm
                 && mem.hasSuffix(String.withCString("]"))) {
                 RegRef* bn = parseReg(mem.substringBytes((u32)1, mem.byteLength() - (u32)2).trimmed());
                 if (!bn.ok()) { fail(String.withCString("bad ld1/st1 base")); return (u32)0; }
-                u32 base = mn.equals(String.withCString("ld1")) ? (u32)$0C407000 : (u32)$0C007000;
+                u32 base = mc == a64Ld1 ? $0C407000 : $0C007000;
                 _hit = true;
                 return base | (t.q() << (u32)30) | (t.size() << (u32)10)
                      | (bn.num() << (u32)5) | t.num();
@@ -1355,10 +1495,10 @@ class Arm64Asm
         return (u32)0;
     }
 
-    u32 encSme(String* mn, Array* ops)
+    u32 encSme(String* mn, u16 mc, Array* ops)
     {
-        bool start = mn.equals(String.withCString("smstart"));
-        if (start || mn.equals(String.withCString("smstop"))) {
+        bool start = mc == a64Smstart;
+        if (start || mc == a64Smstop) {
             u32 mask = (u32)3;
             if (ops.count() == (u32)1) {
                 String* o = opAt(ops, (u32)0).lowercased();
@@ -1369,14 +1509,14 @@ class Arm64Asm
             _hit = true;
             return (u32)$D503407F | (((mask << (u32)1) | (start ? (u32)1 : (u32)0)) << (u32)8);
         }
-        if (mn.equals(String.withCString("ptrue"))) {
+        if (mc == a64Ptrue) {
             SmeRef* p = ops.count() == (u32)1 ? smePReg(opAt(ops, (u32)0)) : SmeRef.no();
             if (!p.ok() || p.b() == (u32)$FFFF_FFFF) return smeBad(mn, String.withCString("bad operands"));
             _hit = true;
             return (u32)$2518E3E0 | (p.b() << (u32)22) | p.a();
         }
-        bool lo = mn.equals(String.withCString("whilelo"));
-        if (lo || mn.equals(String.withCString("whilelt"))) {
+        bool lo = mc == a64Whilelo;
+        if (lo || mc == a64Whilelt) {
             if (ops.count() != (u32)3) return smeBad(mn, String.withCString("bad operands"));
             SmeRef* p = smePReg(opAt(ops, (u32)0));
             RegRef* n = parseReg(opAt(ops, (u32)1));
@@ -1388,17 +1528,17 @@ class Arm64Asm
                  | ((n.is64() ? (u32)1 : (u32)0) << (u32)12) | (n.num() << (u32)5) | p.a();
         }
         u32 csz = (u32)$FFFF_FFFF;
-        if (mn.equals(String.withCString("cntb"))) csz = (u32)0;
-        else if (mn.equals(String.withCString("cnth"))) csz = (u32)1;
-        else if (mn.equals(String.withCString("cntw"))) csz = (u32)2;
-        else if (mn.equals(String.withCString("cntd"))) csz = (u32)3;
+        if (mc == a64Cntb) csz = 0;
+        else if (mc == a64Cnth) csz = 1;
+        else if (mc == a64Cntw) csz = 2;
+        else if (mc == a64Cntd) csz = 3;
         if (csz != (u32)$FFFF_FFFF) {
             RegRef* d = ops.count() == (u32)1 ? parseReg(opAt(ops, (u32)0)) : RegRef.no();
             if (!d.ok() || !d.is64() || d.isSP()) return smeBad(mn, String.withCString("bad operand"));
             _hit = true;
             return (u32)$0420E3E0 | (csz << (u32)22) | d.num();
         }
-        if (mn.equals(String.withCString("zero"))) {
+        if (mc == a64Zero) {
             String* all = new String();
             for (u32 i = (u32)0; i < ops.count(); i = i + (u32)1) {
                 if (i > (u32)0) all.append(String.withCString(","));
@@ -1425,8 +1565,8 @@ class Arm64Asm
             _hit = true;
             return (u32)$C0080000 | mask;
         }
-        bool isLd = mn.equals(String.withCString("ld1w")) || mn.equals(String.withCString("ld1d"));
-        bool isSt = mn.equals(String.withCString("st1w")) || mn.equals(String.withCString("st1d"));
+        bool isLd = mc == a64Ld1w || mc == a64Ld1d;
+        bool isSt = mc == a64St1w || mc == a64St1d;
         if (isLd || isSt) {
             bool dw = mn.hasSuffix(String.withCString("d"));
             if (ops.count() != (u32)3) return smeBad(mn, String.withCString("bad operands"));
@@ -1460,7 +1600,7 @@ class Arm64Asm
             _hit = true;
             return base | (pg.a() << (u32)10) | (mem.a() << (u32)5) | zt.a();
         }
-        if ((mn.equals(String.withCString("mov")) || mn.equals(String.withCString("mova"))) && ops.count() == (u32)3
+        if ((mc == a64Mov || mc == a64Mova) && ops.count() == 3
             && opAt(ops, (u32)2).lowercased().hasPrefix(String.withCString("za"))) {
             SmeRef* zd = smeZReg(opAt(ops, (u32)0));
             SmeRef* pg = smePReg(opAt(ops, (u32)1));
@@ -1473,7 +1613,7 @@ class Arm64Asm
             return (u32)$C0020000 | (za.c() << (u32)22) | (za.b() << (u32)15) | (za.d() << (u32)13)
                  | (pg.a() << (u32)10) | (zf << (u32)5) | zd.a();
         }
-        if (mn.equals(String.withCString("fcmuo"))) {
+        if (mc == a64Fcmuo) {
             if (ops.count() != (u32)4) return smeBad(mn, String.withCString("bad operands"));
             SmeRef* pd = smePReg(opAt(ops, (u32)0));
             SmeRef* pg = smePReg(opAt(ops, (u32)1));
@@ -1491,9 +1631,9 @@ class Arm64Asm
         // is a Z register (the scalar and NEON and/mov/umax are untouched).
         SmeRef* z0 = ops.count() >= (u32)2 ? smeZReg(opAt(ops, (u32)0)) : SmeRef.no();
         bool firstZ = z0.ok() && !opAt(ops, (u32)0).lowercased().hasPrefix(String.withCString("za"));
-        bool isAnd = mn.equals(String.withCString("and")) && firstZ && ops.count() == (u32)3
+        bool isAnd = mc == a64And && firstZ && ops.count() == 3
                   && opAt(ops, (u32)2).hasPrefix(String.withCString("#"));
-        bool isMovI = (mn.equals(String.withCString("mov")) || mn.equals(String.withCString("dupm"))) && firstZ
+        bool isMovI = (mc == a64Mov || mc == a64Dupm) && firstZ
                    && ops.count() == (u32)2 && opAt(ops, (u32)1).hasPrefix(String.withCString("#"));
         if (isAnd || isMovI) {
             U64* v = parseImm(opAt(ops, isAnd ? (u32)2 : (u32)1));
@@ -1506,7 +1646,7 @@ class Arm64Asm
             }
             bool small = (v.hi() == (u32)0 && v.lo() <= (u32)127)
                       || (v.hi() == (u32)$FFFFFFFF && v.lo() >= (u32)$FFFFFF80);
-            if (isMovI && mn.equals(String.withCString("mov")) && small) {
+            if (isMovI && mc == a64Mov && small) {
                 _hit = true;
                 return (u32)$2538C000 | (z0.b() << (u32)22) | ((v.lo() & (u32)$FF) << (u32)5) | z0.a();
             }
@@ -1522,7 +1662,7 @@ class Arm64Asm
             _hit = true;
             return (isAnd ? (u32)$05800000 : (u32)$05C00000) | (bm << (u32)5) | z0.a();
         }
-        if (mn.equals(String.withCString("umax")) && firstZ && ops.count() == (u32)4) {
+        if (mc == a64Umax && firstZ && ops.count() == 4) {
             SmeRef* pg = smePReg(opAt(ops, (u32)1));
             SmeRef* zn = smeZReg(opAt(ops, (u32)2));
             SmeRef* zm = smeZReg(opAt(ops, (u32)3));
@@ -1538,8 +1678,8 @@ class Arm64Asm
             // smopa/umopa/usmopa/sumopa ZAda.s, Pn/m, Pm/m, Zn.b, Zm.b (four to a
             // word); smopa/umopa ZAda.s, …, Zn.h, Zm.h (SME2, two to a word);
             // smopa/umopa ZAda.d, …, Zn.h, Zm.h (I16I64)
-            u32 kind = mn.equals(String.withCString("smopa")) ? (u32)0 : mn.equals(String.withCString("umopa")) ? (u32)1
-                     : mn.equals(String.withCString("usmopa")) ? (u32)2 : mn.equals(String.withCString("sumopa")) ? (u32)3 : (u32)4;
+            u32 kind = mc == a64Smopa ? 0 : mc == a64Umopa ? 1
+                     : mc == a64Usmopa ? 2 : mc == a64Sumopa ? 3 : 4;
             if (kind < (u32)4) {
                 if (ops.count() != (u32)5) return smeBad(mn, String.withCString("needs 5 operands"));
                 String* t = opAt(ops, (u32)0).lowercased();
@@ -1569,8 +1709,8 @@ class Arm64Asm
                 return base | (zm.a() << (u32)16) | (pm.a() << (u32)13) | (pn.a() << (u32)10) | (zn.a() << (u32)5) | tile;
             }
             // uzp1/uzp2/zip1/zip2 Zd.T, Zn.T, Zm.T (the SVE forms; NEON's name v registers)
-            u32 perm = mn.equals(String.withCString("uzp1")) ? (u32)$05206800 : mn.equals(String.withCString("uzp2")) ? (u32)$05206C00
-                     : mn.equals(String.withCString("zip1")) ? (u32)$05206000 : mn.equals(String.withCString("zip2")) ? (u32)$05206400 : (u32)0;
+            u32 perm = mc == a64Uzp1 ? $05206800 : mc == a64Uzp2 ? $05206C00
+                     : mc == a64Zip1 ? $05206000 : mc == a64Zip2 ? $05206400 : 0;
             if (perm != (u32)0 && firstZ && ops.count() == (u32)3) {
                 SmeRef* zn = smeZReg(opAt(ops, (u32)1));
                 SmeRef* zm = smeZReg(opAt(ops, (u32)2));
@@ -1579,7 +1719,7 @@ class Arm64Asm
                 return perm | (z0.b() << (u32)22) | (zm.a() << (u32)16) | (zn.a() << (u32)5) | z0.a();
             }
             // orr Zd.d, Zn.d, Zm.d (unpredicated, bitwise)
-            if (mn.equals(String.withCString("orr")) && firstZ && ops.count() == (u32)3) {
+            if (mc == a64Orr && firstZ && ops.count() == 3) {
                 SmeRef* zn = smeZReg(opAt(ops, (u32)1));
                 SmeRef* zm = smeZReg(opAt(ops, (u32)2));
                 if (!zn.ok() || !zm.ok() || z0.b() != (u32)3 || zn.b() != (u32)3 || zm.b() != (u32)3)
@@ -1588,7 +1728,7 @@ class Arm64Asm
                 return (u32)$04603000 | (zm.a() << (u32)16) | (zn.a() << (u32)5) | z0.a();
             }
             // lsl Zd.T, Zn.T, #shift (unpredicated)
-            if (mn.equals(String.withCString("lsl")) && firstZ && ops.count() == (u32)3 && opAt(ops, (u32)2).hasPrefix(String.withCString("#"))) {
+            if (mc == a64Lsl && firstZ && ops.count() == 3 && opAt(ops, 2).hasPrefix(String.withCString("#"))) {
                 SmeRef* zn = smeZReg(opAt(ops, (u32)1));
                 U64* v = parseImm(opAt(ops, (u32)2));
                 if (!zn.ok() || zn.b() != z0.b() || !_immOk || v.hi() != (u32)0 || v.lo() >= ((u32)8 << z0.b()))
@@ -1599,8 +1739,8 @@ class Arm64Asm
                      | (zn.a() << (u32)5) | z0.a();
             }
             // smax/smin Zdn.T, Pg/m, Zdn.T, Zm.T (umax is above, with the NaN scan's forms)
-            bool isSmax = mn.equals(String.withCString("smax"));
-            if ((isSmax || mn.equals(String.withCString("smin"))) && firstZ && ops.count() == (u32)4) {
+            bool isSmax = mc == a64Smax;
+            if ((isSmax || mc == a64Smin) && firstZ && ops.count() == 4) {
                 SmeRef* pg = smePReg(opAt(ops, (u32)1));
                 SmeRef* zn = smeZReg(opAt(ops, (u32)2));
                 SmeRef* zm = smeZReg(opAt(ops, (u32)3));
@@ -1611,8 +1751,8 @@ class Arm64Asm
                 return (isSmax ? (u32)$04080000 : (u32)$040A0000) | (z0.b() << (u32)22) | (pg.a() << (u32)10) | (zm.a() << (u32)5) | z0.a();
             }
             // umaxv/smaxv/sminv Vd, Pg, Zn.T: the reduction to a scalar
-            u32 redv = mn.equals(String.withCString("umaxv")) ? (u32)$04092000 : mn.equals(String.withCString("smaxv")) ? (u32)$04082000
-                     : mn.equals(String.withCString("sminv")) ? (u32)$040A2000 : (u32)0;
+            u32 redv = mc == a64Umaxv ? $04092000 : mc == a64Smaxv ? $04082000
+                     : mc == a64Sminv ? $040A2000 : 0;
             if (redv != (u32)0 && ops.count() == (u32)3) {
                 String* vd = opAt(ops, (u32)0).lowercased();
                 u8 c0 = vd.byteLength() > (u32)1 ? vd.byteAt((u32)0) : (u8)0;
@@ -1627,14 +1767,14 @@ class Arm64Asm
                 return redv | (zn.b() << (u32)22) | (pg.a() << (u32)10) | (zn.a() << (u32)5) | rd;
             }
             // dup Zd.T, Wn|Xn (a scalar broadcast)
-            if (mn.equals(String.withCString("dup")) && firstZ && ops.count() == (u32)2 && !opAt(ops, (u32)1).hasPrefix(String.withCString("#"))) {
+            if (mc == a64Dup && firstZ && ops.count() == 2 && !opAt(ops, 1).hasPrefix(String.withCString("#"))) {
                 RegRef* rn = parseReg(opAt(ops, (u32)1));
                 if (!rn.ok() || rn.isSP()) return smeBad(mn, String.withCString("bad scalar operand"));
                 _hit = true;
                 return (u32)$05203800 | (z0.b() << (u32)22) | (rn.num() << (u32)5) | z0.a();
             }
             // mov|mova ZA<t><h|v>.T[Ws, off], Pg/m, Zn.T  (vector to tile slice)
-            if ((mn.equals(String.withCString("mov")) || mn.equals(String.withCString("mova"))) && ops.count() == (u32)3
+            if ((mc == a64Mov || mc == a64Mova) && ops.count() == 3
                 && opAt(ops, (u32)0).lowercased().hasPrefix(String.withCString("za"))) {
                 SmeRef* za = smeZASlice(opAt(ops, (u32)0));
                 SmeRef* pg = smePReg(opAt(ops, (u32)1));
@@ -1648,7 +1788,7 @@ class Arm64Asm
                      | (zn.a() << (u32)5) | zf;
             }
         }
-        if (mn.equals(String.withCString("cmphi"))) {
+        if (mc == a64Cmphi) {
             if (ops.count() != (u32)4) return smeBad(mn, String.withCString("bad operands"));
             SmeRef* pd = smePReg(opAt(ops, (u32)0));
             SmeRef* pg = smePReg(opAt(ops, (u32)1));
@@ -1662,7 +1802,7 @@ class Arm64Asm
             return (u32)$24001010 | (pd.b() << (u32)22) | (zm.a() << (u32)16) | (pg.a() << (u32)10)
                  | (zn.a() << (u32)5) | pd.a();
         }
-        if (mn.equals(String.withCString("rdsvl"))) {
+        if (mc == a64Rdsvl) {
             RegRef* d = ops.count() == (u32)2 ? parseReg(opAt(ops, (u32)0)) : RegRef.no();
             String* im = opAt(ops, (u32)1);
             if (!d.ok() || !d.is64() || d.isSP() || !im.hasPrefix(String.withCString("#")))
@@ -1676,7 +1816,7 @@ class Arm64Asm
             _hit = true;
             return (u32)$04BF5800 | (field << (u32)5) | d.num();
         }
-        if (mn.equals(String.withCString("pfalse"))) {
+        if (mc == a64Pfalse) {
             SmeRef* pd = ops.count() == (u32)1 ? smePReg(opAt(ops, (u32)0)) : SmeRef.no();
             if (!pd.ok() || pd.b() != (u32)0)
                 return smeBad(mn, String.withCString("bad operand"));
@@ -1684,7 +1824,7 @@ class Arm64Asm
             return (u32)$2518E400 | pd.a();
         }
         // The predicate form of orr; the scalar and NEON forms never name a p register.
-        if (mn.equals(String.withCString("orr")) && ops.count() == (u32)4
+        if (mc == a64Orr && ops.count() == 4
             && opAt(ops, (u32)0).lowercased().hasPrefix(String.withCString("p"))) {
             SmeRef* pd = smePReg(opAt(ops, (u32)0));
             SmeRef* pg = smePReg(opAt(ops, (u32)1));
@@ -1696,7 +1836,7 @@ class Arm64Asm
             _hit = true;
             return (u32)$25804000 | (pm.a() << (u32)16) | (pg.a() << (u32)10) | (pn.a() << (u32)5) | pd.a();
         }
-        if (mn.equals(String.withCString("ptest"))) {
+        if (mc == a64Ptest) {
             if (ops.count() != (u32)2) return smeBad(mn, String.withCString("bad operands"));
             SmeRef* pg = smePReg(opAt(ops, (u32)0));
             SmeRef* pn = smePReg(opAt(ops, (u32)1));
@@ -1707,7 +1847,7 @@ class Arm64Asm
             _hit = true;
             return (u32)$2550C000 | (pg.a() << (u32)10) | (pn.a() << (u32)5);
         }
-        if (mn.equals(String.withCString("fmopa"))) {
+        if (mc == a64Fmopa) {
             if (ops.count() != (u32)5) return smeBad(mn, String.withCString("needs 5 operands"));
             String* t = opAt(ops, (u32)0).lowercased();
             u32 dot = t.byteIndexOf(String.withCString("."));
@@ -1742,102 +1882,102 @@ class Arm64Asm
     }
 
     // Zero means "not in this table" — none of the real base opcodes is zero.
-    static u32 neonInt3(String* m)
+    static u32 neonInt3(u16 mc)
     {
-        if (m.equals(String.withCString("add")))  return (u32)$0E208400;
-        if (m.equals(String.withCString("sub")))  return (u32)$2E208400;
-        if (m.equals(String.withCString("mul")))  return (u32)$0E209C00;
-        if (m.equals(String.withCString("mla")))  return (u32)$0E209400;
-        if (m.equals(String.withCString("mls")))  return (u32)$2E209400;
-        if (m.equals(String.withCString("smax"))) return (u32)$0E206400;
-        if (m.equals(String.withCString("smin"))) return (u32)$0E206C00;
-        if (m.equals(String.withCString("umax"))) return (u32)$2E206400;
-        if (m.equals(String.withCString("umin"))) return (u32)$2E206C00;
-        if (m.equals(String.withCString("cmeq"))) return (u32)$2E208C00;
-        if (m.equals(String.withCString("cmgt"))) return (u32)$0E203400;
-        if (m.equals(String.withCString("cmge"))) return (u32)$0E203C00;
-        if (m.equals(String.withCString("cmhi"))) return (u32)$2E203400;
-        if (m.equals(String.withCString("cmhs"))) return (u32)$2E203C00;
-        if (m.equals(String.withCString("sshl"))) return (u32)$0E204400;
-        if (m.equals(String.withCString("ushl"))) return (u32)$2E204400;
-        if (m.equals(String.withCString("saba"))) return (u32)$0E207C00;
-        if (m.equals(String.withCString("uaba"))) return (u32)$2E207C00;
-        if (m.equals(String.withCString("sabd"))) return (u32)$0E207400;
-        if (m.equals(String.withCString("uabd"))) return (u32)$2E207400;
+        if (mc == a64Add)  return $0E208400;
+        if (mc == a64Sub)  return $2E208400;
+        if (mc == a64Mul)  return $0E209C00;
+        if (mc == a64Mla)  return $0E209400;
+        if (mc == a64Mls)  return $2E209400;
+        if (mc == a64Smax) return $0E206400;
+        if (mc == a64Smin) return $0E206C00;
+        if (mc == a64Umax) return $2E206400;
+        if (mc == a64Umin) return $2E206C00;
+        if (mc == a64Cmeq) return $2E208C00;
+        if (mc == a64Cmgt) return $0E203400;
+        if (mc == a64Cmge) return $0E203C00;
+        if (mc == a64Cmhi) return $2E203400;
+        if (mc == a64Cmhs) return $2E203C00;
+        if (mc == a64Sshl) return $0E204400;
+        if (mc == a64Ushl) return $2E204400;
+        if (mc == a64Saba) return $0E207C00;
+        if (mc == a64Uaba) return $2E207C00;
+        if (mc == a64Sabd) return $0E207400;
+        if (mc == a64Uabd) return $2E207400;
         return (u32)0;
     }
 
-    static u32 neonLogic3(String* m)
+    static u32 neonLogic3(u16 mc)
     {
-        if (m.equals(String.withCString("and"))) return (u32)$0E201C00;
-        if (m.equals(String.withCString("bic"))) return (u32)$0E601C00;
-        if (m.equals(String.withCString("orr"))) return (u32)$0EA01C00;
-        if (m.equals(String.withCString("orn"))) return (u32)$0EE01C00;
-        if (m.equals(String.withCString("eor"))) return (u32)$2E201C00;
+        if (mc == a64And) return $0E201C00;
+        if (mc == a64Bic) return $0E601C00;
+        if (mc == a64Orr) return $0EA01C00;
+        if (mc == a64Orn) return $0EE01C00;
+        if (mc == a64Eor) return $2E201C00;
         // Bitwise select: bsl takes the mask in Vd, bit/bif in Vm (insert
         // Vn's bits where the mask is set / clear).
-        if (m.equals(String.withCString("bsl"))) return (u32)$2E601C00;
-        if (m.equals(String.withCString("bit"))) return (u32)$2EA01C00;
-        if (m.equals(String.withCString("bif"))) return (u32)$2EE01C00;
+        if (mc == a64Bsl) return $2E601C00;
+        if (mc == a64Bit) return $2EA01C00;
+        if (mc == a64Bif) return $2EE01C00;
         return (u32)0;
     }
 
-    static u32 neonFloat3(String* m)
+    static u32 neonFloat3(u16 mc)
     {
-        if (m.equals(String.withCString("fadd")))  return (u32)$0E20D400;
-        if (m.equals(String.withCString("fsub")))  return (u32)$0EA0D400;
-        if (m.equals(String.withCString("fmul")))  return (u32)$2E20DC00;
-        if (m.equals(String.withCString("fdiv")))  return (u32)$2E20FC00;
-        if (m.equals(String.withCString("fmla")))  return (u32)$0E20CC00;
-        if (m.equals(String.withCString("fmls")))  return (u32)$0EA0CC00;
-        if (m.equals(String.withCString("fmax")))  return (u32)$0E20F400;
-        if (m.equals(String.withCString("fmin")))  return (u32)$0EA0F400;
-        if (m.equals(String.withCString("fcmeq"))) return (u32)$0E20E400;
-        if (m.equals(String.withCString("fcmgt"))) return (u32)$2EA0E400;
-        if (m.equals(String.withCString("fcmge"))) return (u32)$2E20E400;
+        if (mc == a64Fadd)  return $0E20D400;
+        if (mc == a64Fsub)  return $0EA0D400;
+        if (mc == a64Fmul)  return $2E20DC00;
+        if (mc == a64Fdiv)  return $2E20FC00;
+        if (mc == a64Fmla)  return $0E20CC00;
+        if (mc == a64Fmls)  return $0EA0CC00;
+        if (mc == a64Fmax)  return $0E20F400;
+        if (mc == a64Fmin)  return $0EA0F400;
+        if (mc == a64Fcmeq) return $0E20E400;
+        if (mc == a64Fcmgt) return $2EA0E400;
+        if (mc == a64Fcmge) return $2E20E400;
         // FADDP (vector): the P form is the base with bit 29 set, so .4s is
         // 0x6E20D400 (verified against the host assembler). The float
         // horizontal reduction uses it.
-        if (m.equals(String.withCString("faddp"))) return (u32)$2E20D400;
+        if (mc == a64Faddp) return $2E20D400;
         return (u32)0;
     }
 
-    static u32 neonMisc2i(String* m)
+    static u32 neonMisc2i(u16 mc)
     {
-        if (m.equals(String.withCString("neg")))   return (u32)$2E20B800;
-        if (m.equals(String.withCString("abs")))   return (u32)$0E20B800;
-        if (m.equals(String.withCString("not")))   return (u32)$2E205800;
-        if (m.equals(String.withCString("mvn")))   return (u32)$2E205800;
-        if (m.equals(String.withCString("cnt")))   return (u32)$0E205800;
-        if (m.equals(String.withCString("rev64"))) return (u32)$0E200800;
-        if (m.equals(String.withCString("rev16"))) return (u32)$0E201800;
-        if (m.equals(String.withCString("rev32"))) return (u32)$2E200800;
+        if (mc == a64Neg)   return $2E20B800;
+        if (mc == a64Abs)   return $0E20B800;
+        if (mc == a64Not)   return $2E205800;
+        if (mc == a64Mvn)   return $2E205800;
+        if (mc == a64Cnt)   return $0E205800;
+        if (mc == a64Rev64) return $0E200800;
+        if (mc == a64Rev16) return $0E201800;
+        if (mc == a64Rev32) return $2E200800;
         return (u32)0;
     }
 
-    static u32 neonMisc2f(String* m)
+    static u32 neonMisc2f(u16 mc)
     {
-        if (m.equals(String.withCString("fneg")))   return (u32)$2EA0F800;
-        if (m.equals(String.withCString("fabs")))   return (u32)$0EA0F800;
-        if (m.equals(String.withCString("scvtf")))  return (u32)$0E21D800;
-        if (m.equals(String.withCString("ucvtf")))  return (u32)$2E21D800;
-        if (m.equals(String.withCString("fcvtzs"))) return (u32)$0EA1B800;
-        if (m.equals(String.withCString("fcvtzu"))) return (u32)$2EA1B800;
-        if (m.equals(String.withCString("frintz"))) return (u32)$0EA19800;
+        if (mc == a64Fneg)   return $2EA0F800;
+        if (mc == a64Fabs)   return $0EA0F800;
+        if (mc == a64Scvtf)  return $0E21D800;
+        if (mc == a64Ucvtf)  return $2E21D800;
+        if (mc == a64Fcvtzs) return $0EA1B800;
+        if (mc == a64Fcvtzu) return $2EA1B800;
+        if (mc == a64Frintz) return $0EA19800;
         // FSQRT (vector): the P form, .4s = 0x6EA1F800.
-        if (m.equals(String.withCString("fsqrt")))  return (u32)$2EA1F800;
+        if (mc == a64Fsqrt)  return $2EA1F800;
         return (u32)0;
     }
 
-    static u32 neonReduce(String* m)
+    static u32 neonReduce(u16 mc)
     {
-        if (m.equals(String.withCString("addv")))   return (u32)$0E31B800;
-        if (m.equals(String.withCString("saddlv"))) return (u32)$0E303800;
-        if (m.equals(String.withCString("uaddlv"))) return (u32)$2E303800;
-        if (m.equals(String.withCString("smaxv")))  return (u32)$0E30A800;
-        if (m.equals(String.withCString("sminv")))  return (u32)$0E31A800;
-        if (m.equals(String.withCString("umaxv")))  return (u32)$2E30A800;
-        if (m.equals(String.withCString("uminv")))  return (u32)$2E31A800;
+        if (mc == a64Addv)   return $0E31B800;
+        if (mc == a64Saddlv) return $0E303800;
+        if (mc == a64Uaddlv) return $2E303800;
+        if (mc == a64Smaxv)  return $0E30A800;
+        if (mc == a64Sminv)  return $0E31A800;
+        if (mc == a64Umaxv)  return $2E30A800;
+        if (mc == a64Uminv)  return $2E31A800;
         return (u32)0;
     }
 
@@ -1846,10 +1986,10 @@ class Arm64Asm
     // (`uaddlp v0.4s, v1.8h`). Both Q and size come from the SOURCE, unlike
     // every other 2-register form here — which is why it gets its own case.
     // The vectoriser's widening-sum reduction emits it (bug 028).
-    static u32 neonPairLong(String* m)
+    static u32 neonPairLong(u16 mc)
     {
-        if (m.equals(String.withCString("saddlp"))) return (u32)$0E202800;
-        if (m.equals(String.withCString("uaddlp"))) return (u32)$2E202800;
+        if (mc == a64Saddlp) return $0E202800;
+        if (mc == a64Uaddlp) return $2E202800;
         return (u32)0;
     }
 
@@ -1859,53 +1999,53 @@ class Arm64Asm
     // reading the HIGH half of its sources, which is what Q selects — so Q and
     // size both come from the SOURCE, as they do for neonPairLong.
     // The vectoriser's VMulHi emits the pair to build a 32x32 high half.
-    static u32 neonWiden3(String* m)
+    static u32 neonWiden3(u16 mc)
     {
-        if (m.equals(String.withCString("smull")))  return (u32)$0E20C000;
-        if (m.equals(String.withCString("umull")))  return (u32)$2E20C000;
-        if (m.equals(String.withCString("smull2"))) return (u32)$0E20C000;
-        if (m.equals(String.withCString("umull2"))) return (u32)$2E20C000;
+        if (mc == a64Smull)  return $0E20C000;
+        if (mc == a64Umull)  return $2E20C000;
+        if (mc == a64Smull2) return $0E20C000;
+        if (mc == a64Umull2) return $2E20C000;
         return (u32)0;
     }
 
     // Shift right by immediate. immh:immb holds (2*esize - shift), so the
     // encoded field GROWS as the shift shrinks and a shift of 0 is not
     // encodable at all — callers emit a move instead.
-    static u32 neonShrImm(String* m)
+    static u32 neonShrImm(u16 mc)
     {
-        if (m.equals(String.withCString("ushr"))) return (u32)$2F000400;
-        if (m.equals(String.withCString("sshr"))) return (u32)$0F000400;
+        if (mc == a64Ushr) return $2F000400;
+        if (mc == a64Sshr) return $0F000400;
         // Shift right and accumulate into Vd (a rotate's second half).
-        if (m.equals(String.withCString("usra"))) return (u32)$2F001400;
+        if (mc == a64Usra) return $2F001400;
         return (u32)0;
     }
 
-    static u32 neonPerm(String* m)
+    static u32 neonPerm(u16 mc)
     {
-        if (m.equals(String.withCString("zip1"))) return (u32)$0E003800;
-        if (m.equals(String.withCString("zip2"))) return (u32)$0E007800;
-        if (m.equals(String.withCString("uzp1"))) return (u32)$0E001800;
-        if (m.equals(String.withCString("uzp2"))) return (u32)$0E005800;
-        if (m.equals(String.withCString("trn1"))) return (u32)$0E002800;
-        if (m.equals(String.withCString("trn2"))) return (u32)$0E006800;
+        if (mc == a64Zip1) return $0E003800;
+        if (mc == a64Zip2) return $0E007800;
+        if (mc == a64Uzp1) return $0E001800;
+        if (mc == a64Uzp2) return $0E005800;
+        if (mc == a64Trn1) return $0E002800;
+        if (mc == a64Trn2) return $0E006800;
         return (u32)0;
     }
 
-    static u32 neonElem(String* m)
+    static u32 neonElem(u16 mc)
     {
-        if (m.equals(String.withCString("fmla"))) return (u32)$0F801000;
-        if (m.equals(String.withCString("fmls"))) return (u32)$0F805000;
-        if (m.equals(String.withCString("fmul"))) return (u32)$0F809000;
-        if (m.equals(String.withCString("mul")))  return (u32)$0F808000;
-        if (m.equals(String.withCString("mla")))  return (u32)$2F800000;
-        if (m.equals(String.withCString("mls")))  return (u32)$6F804000;
+        if (mc == a64Fmla) return $0F801000;
+        if (mc == a64Fmls) return $0F805000;
+        if (mc == a64Fmul) return $0F809000;
+        if (mc == a64Mul)  return $0F808000;
+        if (mc == a64Mla)  return $2F800000;
+        if (mc == a64Mls)  return $6F804000;
         return (u32)0;
     }
 
     // ── mov / movz / movk / movn ─────────────────────────────────────────
-    u32 encMoves(String* mn, Array* ops, u32 pc)
+    u32 encMoves(String* mn, u16 mc, Array* ops, u32 pc)
     {
-        if (mn.equals(String.withCString("mov"))) {
+        if (mc == a64Mov) {
             if (ops.count() < (u32)2) { fail(String.withCString("mov needs 2 operands")); return (u32)0; }
             RegRef* d = parseReg(opAt(ops, (u32)0));
             if (!d.ok()) { fail(String.withCString("bad mov destination")); return (u32)0; }
@@ -1924,8 +2064,8 @@ class Arm64Asm
                 return (d.is64() ? (u32)$91000000 : (u32)$11000000) | (m.num() << (u32)5) | d.num();
             return (d.is64() ? (u32)$AA0003E0 : (u32)$2A0003E0) | (m.num() << (u32)16) | d.num();
         }
-        if (mn.equals(String.withCString("movz")) || mn.equals(String.withCString("movk"))
-         || mn.equals(String.withCString("movn"))) {
+        if (mc == a64Movz || mc == a64Movk
+         || mc == a64Movn) {
             if (ops.count() < (u32)2) { fail(String.withCString("movz/movk needs 2 operands")); return (u32)0; }
             RegRef* d = parseReg(opAt(ops, (u32)0));
             if (!d.ok()) { fail(String.withCString("bad movz destination")); return (u32)0; }
@@ -1954,8 +2094,8 @@ class Arm64Asm
                     }
                 }
             }
-            u32 base = mn.equals(String.withCString("movk")) ? (d.is64() ? (u32)$F2800000 : (u32)$72800000)
-                     : mn.equals(String.withCString("movn")) ? (d.is64() ? (u32)$92800000 : (u32)$12800000)
+            u32 base = mc == a64Movk ? (d.is64() ? $F2800000 : $72800000)
+                     : mc == a64Movn ? (d.is64() ? $92800000 : $12800000)
                                                              : (d.is64() ? (u32)$D2800000 : (u32)$52800000);
             _hit = true;
             return base | (hw << (u32)21) | ((imm.lo() & (u32)$FFFF) << (u32)5) | d.num();
@@ -1996,33 +2136,33 @@ class Arm64Asm
     // ── Scalar floating point ────────────────────────────────────────────
     //
     // Bit 22 ("ty") selects single from double throughout.
-    u32 encFloat(String* mn, Array* ops, u32 pc)
+    u32 encFloat(String* mn, u16 mc, Array* ops, u32 pc)
     {
         bool fLike = mn.hasPrefix(String.withCString("f"))
-                  || mn.equals(String.withCString("scvtf"))
-                  || mn.equals(String.withCString("ucvtf"));
+                  || mc == a64Scvtf
+                  || mc == a64Ucvtf;
         if (!fLike) return (u32)0;
 
         FRegRef* d = parseFReg(opAt(ops, (u32)0));
 
         // The four 3-source FP ops share one encoding group; o1 (bit 21) and
         // o0 (bit 15) select which: fmadd 00, fmsub 01, fnmadd 10, fnmsub 11.
-        if ((mn.equals(String.withCString("fmadd")) || mn.equals(String.withCString("fmsub"))
-             || mn.equals(String.withCString("fnmadd")) || mn.equals(String.withCString("fnmsub")))
+        if ((mc == a64Fmadd || mc == a64Fmsub
+             || mc == a64Fnmadd || mc == a64Fnmsub)
             && ops.count() == (u32)4 && d.ok()) {
             FRegRef* n = parseFReg(opAt(ops, (u32)1));
             FRegRef* m = parseFReg(opAt(ops, (u32)2));
             FRegRef* a = parseFReg(opAt(ops, (u32)3));
             u32 ty = d.sz() == (u32)3 ? (u32)$00400000 : (u32)0;
             u32 base = (u32)$1F000000;
-            if (mn.equals(String.withCString("fmsub")))  base = (u32)$1F008000;
-            if (mn.equals(String.withCString("fnmadd"))) base = (u32)$1F200000;
-            if (mn.equals(String.withCString("fnmsub"))) base = (u32)$1F208000;
+            if (mc == a64Fmsub)  base = $1F008000;
+            if (mc == a64Fnmadd) base = $1F200000;
+            if (mc == a64Fnmsub) base = $1F208000;
             _hit = true;
             return base | ty | (m.num() << (u32)16) | (a.num() << (u32)10)
                  | (n.num() << (u32)5) | d.num();
         }
-        u32 f3 = fpArith3(mn);
+        u32 f3 = fpArith3(mc);
         if (f3 != (u32)0 && ops.count() == (u32)3 && d.ok()) {
             FRegRef* n = parseFReg(opAt(ops, (u32)1));
             FRegRef* m = parseFReg(opAt(ops, (u32)2));
@@ -2033,7 +2173,7 @@ class Arm64Asm
         // fcsel — the FP conditional select. The integer csel cannot take an FP
         // destination, so a float `?:` or an if-converted `if (x < 0) x = -x`
         // needs this one.
-        if (mn.equals(String.withCString("fcsel")) && ops.count() == (u32)4 && d.ok()) {
+        if (mc == a64Fcsel && ops.count() == 4 && d.ok()) {
             FRegRef* n = parseFReg(opAt(ops, (u32)1));
             FRegRef* m = parseFReg(opAt(ops, (u32)2));
             i32 cc = condCode(opAt(ops, (u32)3));
@@ -2043,21 +2183,21 @@ class Arm64Asm
             return (u32)$1E200C00 | ty | (m.num() << (u32)16) | ((u32)cc << (u32)12)
                  | (n.num() << (u32)5) | d.num();
         }
-        if (mn.equals(String.withCString("fneg")) || mn.equals(String.withCString("fsqrt"))) {
+        if (mc == a64Fneg || mc == a64Fsqrt) {
             FRegRef* n = parseFReg(opAt(ops, (u32)1));
             u32 ty = d.sz() == (u32)3 ? (u32)$00400000 : (u32)0;
-            u32 base = mn.equals(String.withCString("fneg")) ? (u32)$1E214000 : (u32)$1E21C000;
+            u32 base = mc == a64Fneg ? $1E214000 : $1E21C000;
             _hit = true;
             return base | ty | (n.num() << (u32)5) | d.num();
         }
-        if (mn.equals(String.withCString("fcmp"))) {
+        if (mc == a64Fcmp) {
             FRegRef* n = parseFReg(opAt(ops, (u32)0));
             FRegRef* m = parseFReg(opAt(ops, (u32)1));
             u32 ty = n.sz() == (u32)3 ? (u32)$00400000 : (u32)0;
             _hit = true;
             return (u32)$1E202000 | ty | (m.num() << (u32)16) | (n.num() << (u32)5);
         }
-        if (mn.equals(String.withCString("fcvt"))) {
+        if (mc == a64Fcvt) {
             FRegRef* n = parseFReg(opAt(ops, (u32)1));
             u32 base = (u32)0;
             if (n.sz() == (u32)2 && d.sz() == (u32)3) base = (u32)$1E22C000;
@@ -2066,14 +2206,14 @@ class Arm64Asm
             _hit = true;
             return base | (n.num() << (u32)5) | d.num();
         }
-        if (mn.equals(String.withCString("fmov"))) return encFmov(ops);
+        if (mc == a64Fmov) return encFmov(ops);
 
         // The SIMD-scalar round-trip forms keep an integer in an FP register:
         // scvtf/ucvtf take one as their SOURCE, fcvtzs/fcvtzu produce one as
         // their DESTINATION, and that operand being d/s rather than a GPR is
         // what selects this encoding over the GPR one below.
-        bool toFP = mn.equals(String.withCString("scvtf")) || mn.equals(String.withCString("ucvtf"));
-        bool isFcvtz = mn.equals(String.withCString("fcvtzs")) || mn.equals(String.withCString("fcvtzu"));
+        bool toFP = mc == a64Scvtf || mc == a64Ucvtf;
+        bool isFcvtz = mc == a64Fcvtzs || mc == a64Fcvtzu;
         if (toFP || isFcvtz) {
             String* discr = toFP ? opAt(ops, (u32)1) : opAt(ops, (u32)0);
             bool discrIsFP = discr.byteLength() > (u32)0
@@ -2082,9 +2222,9 @@ class Arm64Asm
                 FRegRef* n = parseFReg(opAt(ops, (u32)1));
                 u32 dbl = d.sz() == (u32)3 ? (u32)$00400000 : (u32)0;
                 u32 base;
-                if (mn.equals(String.withCString("scvtf")))       base = (u32)$5E21D800 | dbl;
-                else if (mn.equals(String.withCString("ucvtf")))  base = (u32)$7E21D800 | dbl;
-                else if (mn.equals(String.withCString("fcvtzs"))) base = (u32)$5EA1B800 | dbl;
+                if (mc == a64Scvtf)       base = $5E21D800 | dbl;
+                else if (mc == a64Ucvtf)  base = $7E21D800 | dbl;
+                else if (mc == a64Fcvtzs) base = $5EA1B800 | dbl;
                 else                                              base = (u32)$7EA1B800 | dbl;
                 _hit = true;
                 return base | (n.num() << (u32)5) | d.num();
@@ -2094,14 +2234,14 @@ class Arm64Asm
             RegRef* n = parseReg(opAt(ops, (u32)1));
             if (ops.count() >= (u32)3 && opAt(ops, (u32)2).hasPrefix(String.withCString("#"))) {
                 U64* fb = parseImm(opAt(ops, (u32)2));
-                u32 base = mn.equals(String.withCString("scvtf")) ? (u32)$1E020000 : (u32)$1E030000;
+                u32 base = mc == a64Scvtf ? $1E020000 : $1E030000;
                 u32 sf = n.is64() ? (u32)$80000000 : (u32)0;
                 u32 ty = d.sz() == (u32)3 ? (u32)$00400000 : (u32)0;
                 u32 scale = (u32)64 - fb.lo();
                 _hit = true;
                 return base | sf | ty | (scale << (u32)10) | (n.num() << (u32)5) | d.num();
             }
-            u32 base = mn.equals(String.withCString("scvtf"))
+            u32 base = mc == a64Scvtf
                      ? (d.sz() == (u32)3 ? (u32)$1E620000 : (u32)$1E220000)
                      : (d.sz() == (u32)3 ? (u32)$1E630000 : (u32)$1E230000);
             u32 sf = n.is64() ? (u32)$80000000 : (u32)0;
@@ -2111,7 +2251,7 @@ class Arm64Asm
         if (isFcvtz) {
             RegRef* rd = parseReg(opAt(ops, (u32)0));
             FRegRef* n = parseFReg(opAt(ops, (u32)1));
-            u32 base = mn.equals(String.withCString("fcvtzs"))
+            u32 base = mc == a64Fcvtzs
                      ? (n.sz() == (u32)3 ? (u32)$1E780000 : (u32)$1E380000)
                      : (n.sz() == (u32)3 ? (u32)$1E790000 : (u32)$1E390000);
             u32 sf = rd.is64() ? (u32)$80000000 : (u32)0;
@@ -2121,12 +2261,12 @@ class Arm64Asm
         return (u32)0;
     }
 
-    static u32 fpArith3(String* m)
+    static u32 fpArith3(u16 mc)
     {
-        if (m.equals(String.withCString("fadd"))) return (u32)$1E202800;
-        if (m.equals(String.withCString("fsub"))) return (u32)$1E203800;
-        if (m.equals(String.withCString("fmul"))) return (u32)$1E200800;
-        if (m.equals(String.withCString("fdiv"))) return (u32)$1E201800;
+        if (mc == a64Fadd) return $1E202800;
+        if (mc == a64Fsub) return $1E203800;
+        if (mc == a64Fmul) return $1E200800;
+        if (mc == a64Fdiv) return $1E201800;
         return (u32)0;
     }
 
@@ -2244,11 +2384,11 @@ class Arm64Asm
     }
 
     // ── add / sub / cmp / neg, and the logical group ─────────────────────
-    u32 encAddSubLogic(String* mn, Array* ops, u32 pc)
+    u32 encAddSubLogic(String* mn, u16 mc, Array* ops, u32 pc)
     {
         // add Xd, Xn, sym@PAGEOFF — the second half of an adrp pair. The imm12
         // is left at zero and the linker fills it in.
-        if (mn.equals(String.withCString("add")) && ops.count() >= (u32)3
+        if (mc == a64Add && ops.count() >= 3
             && opAt(ops, (u32)2).byteIndexOf(String.withCString("@")) != (u32)$FFFF_FFFF) {
             RegRef* d = parseReg(opAt(ops, (u32)0));
             RegRef* n = parseReg(opAt(ops, (u32)1));
@@ -2258,13 +2398,12 @@ class Arm64Asm
             _hit = true;
             return (d.is64() ? (u32)$91000000 : (u32)$11000000) | (n.num() << (u32)5) | d.num();
         }
-        u32 immBase = addSubImmBase(mn);
-        bool isCmp = mn.equals(String.withCString("cmp")) || mn.equals(String.withCString("cmn"));
-        bool isNeg = mn.equals(String.withCString("neg"));
+        u32 immBase = addSubImmBase(mc);
+        bool isCmp = mc == a64Cmp || mc == a64Cmn;
+        bool isNeg = mc == a64Neg;
         if (immBase != (u32)0 || isCmp || isNeg) {
-            String* key = isCmp ? (mn.equals(String.withCString("cmp")) ? String.withCString("subs")
-                                                                       : String.withCString("adds"))
-                        : isNeg ? String.withCString("sub") : mn;
+            u16 key = isCmp ? (mc == a64Cmp ? a64Subs : a64Adds)
+                        : isNeg ? a64Sub : mc;
             // Normalise to an explicit destination: cmp becomes subs to the
             // zero register, neg becomes sub FROM it.
             Array* o = new Array();
@@ -2298,9 +2437,9 @@ class Arm64Asm
         // of that is the kind that drifts. Normalised into LOCALS rather than
         // by reassigning the parameters — same shape as the cmp/neg rewrite
         // above, and reassigning a borrowed parameter here segfaulted.
-        String* lmn = mn;
+        u16 lmc = mc;
         Array* lops = ops;
-        if (mn.equals(String.withCString("tst")) && ops.count() >= (u32)2) {
+        if (mc == a64Tst && ops.count() >= 2) {
             bool wide = opAt(ops, (u32)0).hasPrefix(String.withCString("x"))
                      || opAt(ops, (u32)0).hasPrefix(String.withCString("X"));
             Array* a2 = new Array();
@@ -2308,10 +2447,10 @@ class Arm64Asm
             if (wide) zr = String.withCString("xzr");
             a2.add((Object*)zr);
             for (u32 i = (u32)0; i < ops.count(); i = i + (u32)1) a2.add(ops.get(i));
-            lmn = String.withCString("ands");
+            lmc = a64Ands;
             lops = a2;
         }
-        u32 logBase = logRegBase(lmn);
+        u32 logBase = logRegBase(lmc);
         if (logBase != (u32)0) {
             if (lops.count() < (u32)3) { fail(String.withCString("logical op needs 3 operands")); return (u32)0; }
             RegRef* d = parseReg(opAt(lops, (u32)0));
@@ -2324,7 +2463,7 @@ class Arm64Asm
                 u32 bm = encodeLogImm(v, d.is64() ? (u32)64 : (u32)32);
                 if (bm == (u32)$FFFF_FFFF) { fail(String.withCString("value is not a valid bitmask immediate")); return (u32)0; }
                 _hit = true;
-                return logImmBase(lmn) | sf | (bm << (u32)10) | (n.num() << (u32)5) | d.num();
+                return logImmBase(lmc) | sf | (bm << 10) | (n.num() << 5) | d.num();
             }
             RegRef* m = parseReg(opAt(lops, (u32)2));
             if (!m.ok()) { fail(String.withCString("bad logical register")); return (u32)0; }
@@ -2349,7 +2488,7 @@ class Arm64Asm
             return logBase | sf | (shTy << (u32)22) | (m.num() << (u32)16)
                  | (shAmt << (u32)10) | (n.num() << (u32)5) | d.num();
         }
-        if (mn.equals(String.withCString("mvn"))) {          // orn Rd, ZR, Rm
+        if (mc == a64Mvn) {          // orn Rd, ZR, Rm
             RegRef* d = parseReg(opAt(ops, (u32)0));
             RegRef* m = parseReg(opAt(ops, (u32)1));
             u32 sf = d.is64() ? (u32)$80000000 : (u32)0;
@@ -2359,46 +2498,46 @@ class Arm64Asm
         return (u32)0;
     }
 
-    static u32 addSubImmBase(String* m)
+    static u32 addSubImmBase(u16 mc)
     {
-        if (m.equals(String.withCString("add")))  return (u32)$11000000;
-        if (m.equals(String.withCString("sub")))  return (u32)$51000000;
-        if (m.equals(String.withCString("adds"))) return (u32)$31000000;
-        if (m.equals(String.withCString("subs"))) return (u32)$71000000;
+        if (mc == a64Add)  return $11000000;
+        if (mc == a64Sub)  return $51000000;
+        if (mc == a64Adds) return $31000000;
+        if (mc == a64Subs) return $71000000;
         return (u32)0;
     }
 
-    static u32 addSubRegBase(String* m)
+    static u32 addSubRegBase(u16 mc)
     {
-        if (m.equals(String.withCString("add")))  return (u32)$0B000000;
-        if (m.equals(String.withCString("sub")))  return (u32)$4B000000;
-        if (m.equals(String.withCString("adds"))) return (u32)$2B000000;
-        if (m.equals(String.withCString("subs"))) return (u32)$6B000000;
+        if (mc == a64Add)  return $0B000000;
+        if (mc == a64Sub)  return $4B000000;
+        if (mc == a64Adds) return $2B000000;
+        if (mc == a64Subs) return $6B000000;
         return (u32)0;
     }
 
     // The N-bit forms — "op with the inverted second operand" — sit at
     // +0x200000 from their plain siblings. clang emits `bic Wd,Wn,Wm,asr #31`
     // for a signed-max idiom, which is how they reach this assembler.
-    static u32 logRegBase(String* m)
+    static u32 logRegBase(u16 mc)
     {
-        if (m.equals(String.withCString("and")))  return (u32)$0A000000;
-        if (m.equals(String.withCString("orr")))  return (u32)$2A000000;
-        if (m.equals(String.withCString("eor")))  return (u32)$4A000000;
-        if (m.equals(String.withCString("ands"))) return (u32)$6A000000;
-        if (m.equals(String.withCString("bic")))  return (u32)$0A200000;
-        if (m.equals(String.withCString("orn")))  return (u32)$2A200000;
-        if (m.equals(String.withCString("eon")))  return (u32)$4A200000;
-        if (m.equals(String.withCString("bics"))) return (u32)$6A200000;
+        if (mc == a64And)  return $0A000000;
+        if (mc == a64Orr)  return $2A000000;
+        if (mc == a64Eor)  return $4A000000;
+        if (mc == a64Ands) return $6A000000;
+        if (mc == a64Bic)  return $0A200000;
+        if (mc == a64Orn)  return $2A200000;
+        if (mc == a64Eon)  return $4A200000;
+        if (mc == a64Bics) return $6A200000;
         return (u32)0;
     }
 
-    static u32 logImmBase(String* m)
+    static u32 logImmBase(u16 mc)
     {
-        if (m.equals(String.withCString("and")))  return (u32)$12000000;
-        if (m.equals(String.withCString("orr")))  return (u32)$32000000;
-        if (m.equals(String.withCString("eor")))  return (u32)$52000000;
-        if (m.equals(String.withCString("ands"))) return (u32)$72000000;
+        if (mc == a64And)  return $12000000;
+        if (mc == a64Orr)  return $32000000;
+        if (mc == a64Eor)  return $52000000;
+        if (mc == a64Ands) return $72000000;
         return (u32)0;
     }
 
@@ -2535,18 +2674,18 @@ class Arm64Asm
     }
 
     // ── bitfield, shifts, multiply, conditional select ───────────────────
-    u32 encBitfieldMul(String* mn, Array* ops, u32 pc)
+    u32 encBitfieldMul(String* mn, u16 mc, Array* ops, u32 pc)
     {
-        u32 w = encBitfieldShift(mn, ops, pc);  if (_hit || _failed) return w;
-        w = encMulDiv(mn, ops, pc);             if (_hit || _failed) return w;
-        return encCondSelect(mn, ops, pc);
+        u32 w = encBitfieldShift(mn, mc, ops, pc);  if (_hit || _failed) return w;
+        w = encMulDiv(mn, mc, ops, pc);             if (_hit || _failed) return w;
+        return encCondSelect(mn, mc, ops, pc);
     }
 
-    u32 encBitfieldShift(String* mn, Array* ops, u32 pc)
+    u32 encBitfieldShift(String* mn, u16 mc, Array* ops, u32 pc)
     {
-        if (mn.equals(String.withCString("uxtb")) || mn.equals(String.withCString("uxth"))
-         || mn.equals(String.withCString("uxtw")) || mn.equals(String.withCString("sxtb"))
-         || mn.equals(String.withCString("sxth")) || mn.equals(String.withCString("sxtw"))) {
+        if (mc == a64Uxtb || mc == a64Uxth
+         || mc == a64Uxtw || mc == a64Sxtb
+         || mc == a64Sxth || mc == a64Sxtw) {
             RegRef* d = parseReg(opAt(ops, (u32)0));
             RegRef* n = parseReg(opAt(ops, (u32)1));
             bool sign = mn.hasPrefix(String.withCString("s"));
@@ -2557,8 +2696,8 @@ class Arm64Asm
             _hit = true;
             return base | (imms << (u32)10) | (n.num() << (u32)5) | d.num();
         }
-        if (mn.equals(String.withCString("lsl")) || mn.equals(String.withCString("lsr"))
-         || mn.equals(String.withCString("asr")) || mn.equals(String.withCString("ror"))) {
+        if (mc == a64Lsl || mc == a64Lsr
+         || mc == a64Asr || mc == a64Ror) {
             if (ops.count() < (u32)3) { fail(String.withCString("shift needs 3 operands")); return (u32)0; }
             RegRef* d = parseReg(opAt(ops, (u32)0));
             RegRef* n = parseReg(opAt(ops, (u32)1));
@@ -2566,9 +2705,9 @@ class Arm64Asm
             if (!opAt(ops, (u32)2).hasPrefix(String.withCString("#"))) {
                 RegRef* m = parseReg(opAt(ops, (u32)2));
                 if (!m.ok()) { fail(String.withCString("bad shift register")); return (u32)0; }
-                u32 base = mn.equals(String.withCString("lsl")) ? (u32)$1AC02000
-                         : mn.equals(String.withCString("lsr")) ? (u32)$1AC02400
-                         : mn.equals(String.withCString("asr")) ? (u32)$1AC02800 : (u32)$1AC02C00;
+                u32 base = mc == a64Lsl ? $1AC02000
+                         : mc == a64Lsr ? $1AC02400
+                         : mc == a64Asr ? $1AC02800 : $1AC02C00;
                 _hit = true;
                 return base | sf | (m.num() << (u32)16) | (n.num() << (u32)5) | d.num();
             }
@@ -2577,13 +2716,13 @@ class Arm64Asm
             u32 sAmt = sv.lo();
             u32 W = d.is64() ? (u32)64 : (u32)32;
             _hit = true;
-            if (mn.equals(String.withCString("lsl"))) {
+            if (mc == a64Lsl) {
                 u32 immr = (W - sAmt) % W;
                 u32 imms = W - (u32)1 - sAmt;
                 u32 base = d.is64() ? (u32)$D3400000 : (u32)$53000000;
                 return base | (immr << (u32)16) | (imms << (u32)10) | (n.num() << (u32)5) | d.num();
             }
-            if (mn.equals(String.withCString("lsr"))) {
+            if (mc == a64Lsr) {
                 u32 base = d.is64() ? (u32)$D3400000 : (u32)$53000000;
                 return base | (sAmt << (u32)16) | ((W - (u32)1) << (u32)10) | (n.num() << (u32)5) | d.num();
             }
@@ -2593,69 +2732,69 @@ class Arm64Asm
         return (u32)0;
     }
 
-    u32 encMulDiv(String* mn, Array* ops, u32 pc)
+    u32 encMulDiv(String* mn, u16 mc, Array* ops, u32 pc)
     {
-        if (mn.equals(String.withCString("mul"))) {
+        if (mc == a64Mul) {
             RegRef* d = parseReg(opAt(ops, (u32)0));
             RegRef* n = parseReg(opAt(ops, (u32)1));
             RegRef* m = parseReg(opAt(ops, (u32)2));
             _hit = true;
             return encMul3(d.is64() ? (u32)$9B000000 : (u32)$1B000000, d.num(), n.num(), m.num(), (u32)31);
         }
-        if (mn.equals(String.withCString("madd")) || mn.equals(String.withCString("msub"))) {
+        if (mc == a64Madd || mc == a64Msub) {
             RegRef* d = parseReg(opAt(ops, (u32)0));
             RegRef* n = parseReg(opAt(ops, (u32)1));
             RegRef* m = parseReg(opAt(ops, (u32)2));
             RegRef* a = parseReg(opAt(ops, (u32)3));
-            u32 base = mn.equals(String.withCString("msub"))
+            u32 base = mc == a64Msub
                      ? (d.is64() ? (u32)$9B008000 : (u32)$1B008000)
                      : (d.is64() ? (u32)$9B000000 : (u32)$1B000000);
             _hit = true;
             return encMul3(base, d.num(), n.num(), m.num(), a.num());
         }
-        if (mn.equals(String.withCString("umull")) || mn.equals(String.withCString("smull"))) {
+        if (mc == a64Umull || mc == a64Smull) {
             RegRef* d = parseReg(opAt(ops, (u32)0));
             RegRef* n = parseReg(opAt(ops, (u32)1));
             RegRef* m = parseReg(opAt(ops, (u32)2));
             _hit = true;
-            return encMul3(mn.equals(String.withCString("umull")) ? (u32)$9BA00000 : (u32)$9B200000,
+            return encMul3(mc == a64Umull ? $9BA00000 : $9B200000,
                            d.num(), n.num(), m.num(), (u32)31);
         }
         // The high 64 bits of a 64x64 product (#309: 64-bit division by a
         // constant). Ra is 31.
-        if (mn.equals(String.withCString("umulh")) || mn.equals(String.withCString("smulh"))) {
+        if (mc == a64Umulh || mc == a64Smulh) {
             RegRef* d = parseReg(opAt(ops, (u32)0));
             RegRef* n = parseReg(opAt(ops, (u32)1));
             RegRef* m = parseReg(opAt(ops, (u32)2));
             _hit = true;
-            return encMul3(mn.equals(String.withCString("umulh")) ? (u32)$9BC00000 : (u32)$9B400000,
+            return encMul3(mc == a64Umulh ? $9BC00000 : $9B400000,
                            d.num(), n.num(), m.num(), (u32)31);
         }
-        if (mn.equals(String.withCString("umaddl")) || mn.equals(String.withCString("smaddl"))
-         || mn.equals(String.withCString("msubl"))) {
+        if (mc == a64Umaddl || mc == a64Smaddl
+         || mc == a64Msubl) {
             RegRef* d = parseReg(opAt(ops, (u32)0));
             RegRef* n = parseReg(opAt(ops, (u32)1));
             RegRef* m = parseReg(opAt(ops, (u32)2));
             RegRef* a = parseReg(opAt(ops, (u32)3));
             _hit = true;
-            return encMul3(mn.equals(String.withCString("smaddl")) ? (u32)$9B200000 : (u32)$9BA00000,
+            return encMul3(mc == a64Smaddl ? $9B200000 : $9BA00000,
                            d.num(), n.num(), m.num(), a.num());
         }
-        if (mn.equals(String.withCString("sdiv")) || mn.equals(String.withCString("udiv"))) {
+        if (mc == a64Sdiv || mc == a64Udiv) {
             RegRef* d = parseReg(opAt(ops, (u32)0));
             RegRef* n = parseReg(opAt(ops, (u32)1));
             RegRef* m = parseReg(opAt(ops, (u32)2));
             u32 sf = d.is64() ? (u32)$80000000 : (u32)0;
-            u32 base = mn.equals(String.withCString("sdiv")) ? (u32)$1AC00C00 : (u32)$1AC00800;
+            u32 base = mc == a64Sdiv ? $1AC00C00 : $1AC00800;
             _hit = true;
             return base | sf | (m.num() << (u32)16) | (n.num() << (u32)5) | d.num();
         }
         return (u32)0;
     }
 
-    u32 encCondSelect(String* mn, Array* ops, u32 pc)
+    u32 encCondSelect(String* mn, u16 mc, Array* ops, u32 pc)
     {
-        if (mn.equals(String.withCString("cset"))) {
+        if (mc == a64Cset) {
             RegRef* d = parseReg(opAt(ops, (u32)0));
             i32 cc = condCode(opAt(ops, (u32)1));
             if (cc < (i32)0) { fail(String.withCString("bad cset condition")); return (u32)0; }
@@ -2664,7 +2803,7 @@ class Arm64Asm
             return (u32)$1A800400 | sf | ((u32)31 << (u32)16) | (((u32)cc ^ (u32)1) << (u32)12)
                  | ((u32)31 << (u32)5) | d.num();
         }
-        if (mn.equals(String.withCString("csetm"))) {
+        if (mc == a64Csetm) {
             RegRef* d = parseReg(opAt(ops, (u32)0));
             i32 cc = condCode(opAt(ops, (u32)1));
             if (cc < (i32)0) { fail(String.withCString("bad csetm condition")); return (u32)0; }
@@ -2677,7 +2816,7 @@ class Arm64Asm
         // holds, otherwise just plant #nzcv in the flags. clang emits it for a
         // short-circuit comparison, so the self-hosted runtime met it as soon
         // as a host C file with a compound condition was assembled here.
-        if (mn.equals(String.withCString("ccmp")) || mn.equals(String.withCString("ccmn"))) {
+        if (mc == a64Ccmp || mc == a64Ccmn) {
             RegRef* n = parseReg(opAt(ops, (u32)0));
             i32 cc = condCode(opAt(ops, (u32)3));
             if (cc < (i32)0) { fail(String.withCString("bad ccmp condition")); return (u32)0; }
@@ -2686,7 +2825,7 @@ class Arm64Asm
                 fail(String.withCString("bad ccmp nzcv")); return (u32)0;
             }
             u32 sf = n.is64() ? (u32)$80000000 : (u32)0;
-            u32 opbit = mn.equals(String.withCString("ccmp")) ? (u32)$40000000 : (u32)0;
+            u32 opbit = mc == a64Ccmp ? $40000000 : 0;
             u32 base = (u32)$3A400000 | opbit | sf | ((u32)cc << (u32)12)
                      | (n.num() << (u32)5) | nz.lo();
             _hit = true;
@@ -2704,32 +2843,32 @@ class Arm64Asm
         // 11:10 (increment).
         // cinc/cinv/cneg Rd, Rn, cond == csinc/csinv/csneg Rd, Rn, Rn, invert(cond)
         // — the two-operand aliases clang emits (found by the iOS shim, stage 4).
-        if (mn.equals(String.withCString("cinc")) || mn.equals(String.withCString("cinv"))
-         || mn.equals(String.withCString("cneg"))) {
+        if (mc == a64Cinc || mc == a64Cinv
+         || mc == a64Cneg) {
             RegRef* d = parseReg(opAt(ops, (u32)0));
             RegRef* n = parseReg(opAt(ops, (u32)1));
             i32 cc = condCode(opAt(ops, (u32)2));
             if (cc < (i32)0) { fail(String.withCString("bad cinc condition")); return (u32)0; }
             u32 sf = d.is64() ? (u32)$80000000 : (u32)0;
-            u32 inv = (mn.equals(String.withCString("cinv")) || mn.equals(String.withCString("cneg")))
+            u32 inv = (mc == a64Cinv || mc == a64Cneg)
                     ? (u32)$40000000 : (u32)0;
-            u32 op2 = (mn.equals(String.withCString("cinc")) || mn.equals(String.withCString("cneg")))
+            u32 op2 = (mc == a64Cinc || mc == a64Cneg)
                     ? (u32)$400 : (u32)0;
             _hit = true;
             return (u32)$1A800000 | inv | op2 | sf | (n.num() << (u32)16)
                  | (((u32)cc ^ (u32)1) << (u32)12) | (n.num() << (u32)5) | d.num();
         }
-        if (mn.equals(String.withCString("csel")) || mn.equals(String.withCString("csinc"))
-         || mn.equals(String.withCString("csinv")) || mn.equals(String.withCString("csneg"))) {
+        if (mc == a64Csel || mc == a64Csinc
+         || mc == a64Csinv || mc == a64Csneg) {
             RegRef* d = parseReg(opAt(ops, (u32)0));
             RegRef* n = parseReg(opAt(ops, (u32)1));
             RegRef* m = parseReg(opAt(ops, (u32)2));
             i32 cc = condCode(opAt(ops, (u32)3));
             if (cc < (i32)0) { fail(String.withCString("bad csel condition")); return (u32)0; }
             u32 sf = d.is64() ? (u32)$80000000 : (u32)0;
-            u32 inv = (mn.equals(String.withCString("csinv")) || mn.equals(String.withCString("csneg")))
+            u32 inv = (mc == a64Csinv || mc == a64Csneg)
                     ? (u32)$40000000 : (u32)0;
-            u32 op2 = (mn.equals(String.withCString("csinc")) || mn.equals(String.withCString("csneg")))
+            u32 op2 = (mc == a64Csinc || mc == a64Csneg)
                     ? (u32)$400 : (u32)0;
             _hit = true;
             return (u32)$1A800000 | inv | op2 | sf | (m.num() << (u32)16)
@@ -2799,24 +2938,24 @@ class Arm64Asm
         return true;
     }
 
-    u32 encMemory(String* mn, Array* ops, u32 pc)
+    u32 encMemory(String* mn, u16 mc, Array* ops, u32 pc)
     {
         // An FP load/store is told from a GP one by its destination register.
-        if ((mn.equals(String.withCString("ldr")) || mn.equals(String.withCString("str")))
+        if ((mc == a64Ldr || mc == a64Str)
             && ops.count() >= (u32)2) {
             FRegRef* t = parseFReg(opAt(ops, (u32)0));
-            if (t.ok()) return encFpLoadStore(mn, ops, pc, t);
+            if (t.ok()) return encFpLoadStore(mn, mc, ops, pc, t);
         }
-        u32 uoff = ldstUoff(mn);
-        u32 unsc = ldstUnsc(mn);
-        i32 scale = ldstScale(mn);
-        bool forceUnscaled = isUnscaledOnly(mn);
-        if (scale < (i32)0) return encPairOrAddr(mn, ops, pc);
+        u32 uoff = ldstUoff(mc);
+        u32 unsc = ldstUnsc(mc);
+        i32 scale = ldstScale(mc);
+        bool forceUnscaled = isUnscaledOnly(mc);
+        if (scale < 0) return encPairOrAddr(mn, mc, ops, pc);
 
         RegRef* t = parseReg(opAt(ops, (u32)0));
         if (!t.ok()) { fail(String.withCString("bad load/store register")); return (u32)0; }
-        bool sizedByReg = mn.equals(String.withCString("ldr")) || mn.equals(String.withCString("str"))
-                       || mn.equals(String.withCString("ldur")) || mn.equals(String.withCString("stur"));
+        bool sizedByReg = mc == a64Ldr || mc == a64Str
+                       || mc == a64Ldur || mc == a64Stur;
         u32 sc = (u32)scale;
         if (sizedByReg) {
             u32 sizeBits = t.is64() ? (u32)$C0000000 : (u32)$80000000;
@@ -2896,9 +3035,9 @@ class Arm64Asm
         return unsc | (imm9 << (u32)12) | idx | (_memRn << (u32)5) | t.num();
     }
 
-    u32 encFpLoadStore(String* mn, Array* ops, u32 pc, FRegRef* t)
+    u32 encFpLoadStore(String* mn, u16 mc, Array* ops, u32 pc, FRegRef* t)
     {
-        bool isL = mn.equals(String.withCString("ldr"));
+        bool isL = mc == a64Ldr;
         u32 fscale = t.sz();
         u32 fbase = t.sz() == (u32)4 ? (isL ? (u32)$3DC00000 : (u32)$3D800000)
                   : t.sz() == (u32)3 ? (isL ? (u32)$FD400000 : (u32)$FD000000)
@@ -2973,63 +3112,63 @@ class Arm64Asm
         return extendKind(m);
     }
 
-    static bool isUnscaledOnly(String* m)
+    static bool isUnscaledOnly(u16 mc)
     {
-        return m.equals(String.withCString("stur")) || m.equals(String.withCString("ldur"))
-            || m.equals(String.withCString("sturb")) || m.equals(String.withCString("ldurb"))
-            || m.equals(String.withCString("sturh")) || m.equals(String.withCString("ldurh"))
-            || m.equals(String.withCString("ldursb")) || m.equals(String.withCString("ldursh"))
-            || m.equals(String.withCString("ldursw"));
+        return mc == a64Stur || mc == a64Ldur
+            || mc == a64Sturb || mc == a64Ldurb
+            || mc == a64Sturh || mc == a64Ldurh
+            || mc == a64Ldursb || mc == a64Ldursh
+            || mc == a64Ldursw;
     }
 
-    static u32 ldstUoff(String* m)
+    static u32 ldstUoff(u16 mc)
     {
-        if (m.equals(String.withCString("str")))   return (u32)$B9000000;
-        if (m.equals(String.withCString("ldr")))   return (u32)$B9400000;
-        if (m.equals(String.withCString("strb")))  return (u32)$39000000;
-        if (m.equals(String.withCString("ldrb")))  return (u32)$39400000;
-        if (m.equals(String.withCString("strh")))  return (u32)$79000000;
-        if (m.equals(String.withCString("ldrh")))  return (u32)$79400000;
-        if (m.equals(String.withCString("ldrsb"))) return (u32)$39C00000;
-        if (m.equals(String.withCString("ldrsh"))) return (u32)$79C00000;
-        if (m.equals(String.withCString("ldrsw"))) return (u32)$B9800000;
-        if (m.equals(String.withCString("stur")))   return (u32)$B8000000;
-        if (m.equals(String.withCString("ldur")))   return (u32)$B8400000;
-        if (m.equals(String.withCString("sturb")))  return (u32)$38000000;
-        if (m.equals(String.withCString("ldurb")))  return (u32)$38400000;
-        if (m.equals(String.withCString("sturh")))  return (u32)$78000000;
-        if (m.equals(String.withCString("ldurh")))  return (u32)$78400000;
-        if (m.equals(String.withCString("ldursb"))) return (u32)$38C00000;
-        if (m.equals(String.withCString("ldursh"))) return (u32)$78C00000;
-        if (m.equals(String.withCString("ldursw"))) return (u32)$B8800000;
+        if (mc == a64Str)   return $B9000000;
+        if (mc == a64Ldr)   return $B9400000;
+        if (mc == a64Strb)  return $39000000;
+        if (mc == a64Ldrb)  return $39400000;
+        if (mc == a64Strh)  return $79000000;
+        if (mc == a64Ldrh)  return $79400000;
+        if (mc == a64Ldrsb) return $39C00000;
+        if (mc == a64Ldrsh) return $79C00000;
+        if (mc == a64Ldrsw) return $B9800000;
+        if (mc == a64Stur)   return $B8000000;
+        if (mc == a64Ldur)   return $B8400000;
+        if (mc == a64Sturb)  return $38000000;
+        if (mc == a64Ldurb)  return $38400000;
+        if (mc == a64Sturh)  return $78000000;
+        if (mc == a64Ldurh)  return $78400000;
+        if (mc == a64Ldursb) return $38C00000;
+        if (mc == a64Ldursh) return $78C00000;
+        if (mc == a64Ldursw) return $B8800000;
         return (u32)0;
     }
 
-    static u32 ldstUnsc(String* m)
+    static u32 ldstUnsc(u16 mc)
     {
-        if (m.equals(String.withCString("str")))   return (u32)$B8000000;
-        if (m.equals(String.withCString("ldr")))   return (u32)$B8400000;
-        if (m.equals(String.withCString("strb")))  return (u32)$38000000;
-        if (m.equals(String.withCString("ldrb")))  return (u32)$38400000;
-        if (m.equals(String.withCString("strh")))  return (u32)$78000000;
-        if (m.equals(String.withCString("ldrh")))  return (u32)$78400000;
-        if (m.equals(String.withCString("ldrsb"))) return (u32)$38C00000;
-        if (m.equals(String.withCString("ldrsh"))) return (u32)$78C00000;
-        if (m.equals(String.withCString("ldrsw"))) return (u32)$B8800000;
-        return ldstUoff(m);
+        if (mc == a64Str)   return $B8000000;
+        if (mc == a64Ldr)   return $B8400000;
+        if (mc == a64Strb)  return $38000000;
+        if (mc == a64Ldrb)  return $38400000;
+        if (mc == a64Strh)  return $78000000;
+        if (mc == a64Ldrh)  return $78400000;
+        if (mc == a64Ldrsb) return $38C00000;
+        if (mc == a64Ldrsh) return $78C00000;
+        if (mc == a64Ldrsw) return $B8800000;
+        return ldstUoff(mc);
     }
 
-    static i32 ldstScale(String* m)
+    static i32 ldstScale(u16 mc)
     {
-        if (m.equals(String.withCString("str")) || m.equals(String.withCString("ldr"))
-         || m.equals(String.withCString("ldrsw")) || m.equals(String.withCString("stur"))
-         || m.equals(String.withCString("ldur")) || m.equals(String.withCString("ldursw"))) return (i32)2;
-        if (m.equals(String.withCString("strb")) || m.equals(String.withCString("ldrb"))
-         || m.equals(String.withCString("ldrsb")) || m.equals(String.withCString("sturb"))
-         || m.equals(String.withCString("ldurb")) || m.equals(String.withCString("ldursb"))) return (i32)0;
-        if (m.equals(String.withCString("strh")) || m.equals(String.withCString("ldrh"))
-         || m.equals(String.withCString("ldrsh")) || m.equals(String.withCString("sturh"))
-         || m.equals(String.withCString("ldurh")) || m.equals(String.withCString("ldursh"))) return (i32)1;
+        if (mc == a64Str || mc == a64Ldr
+         || mc == a64Ldrsw || mc == a64Stur
+         || mc == a64Ldur || mc == a64Ldursw) return 2;
+        if (mc == a64Strb || mc == a64Ldrb
+         || mc == a64Ldrsb || mc == a64Sturb
+         || mc == a64Ldurb || mc == a64Ldursb) return 0;
+        if (mc == a64Strh || mc == a64Ldrh
+         || mc == a64Ldrsh || mc == a64Sturh
+         || mc == a64Ldurh || mc == a64Ldursh) return 1;
         return (i32)-1;
     }
 
@@ -3053,10 +3192,10 @@ class Arm64Asm
         return true;
     }
 
-    u32 encPairOrAddr(String* mn, Array* ops, u32 pc)
+    u32 encPairOrAddr(String* mn, u16 mc, Array* ops, u32 pc)
     {
-        if (mn.equals(String.withCString("stp")) || mn.equals(String.withCString("ldp"))) {
-            bool L = mn.equals(String.withCString("ldp"));
+        if (mc == a64Stp || mc == a64Ldp) {
+            bool L = mc == a64Ldp;
             FRegRef* ft = parseFReg(opAt(ops, (u32)0));
             FRegRef* ft2 = parseFReg(opAt(ops, (u32)1));
             if (ft.ok() && ft2.ok()) {
@@ -3089,7 +3228,7 @@ class Arm64Asm
             return base32 | (imm7 << (u32)15) | (t2.num() << (u32)10)
                  | (_memRn << (u32)5) | t.num();
         }
-        if (mn.equals(String.withCString("adrp")) || mn.equals(String.withCString("adr"))) {
+        if (mc == a64Adrp || mc == a64Adr) {
             RegRef* d = parseReg(opAt(ops, (u32)0));
             String* sym = opAt(ops, (u32)1);
             String* bare = sym;
@@ -3104,12 +3243,12 @@ class Arm64Asm
             // address to take.
             bool isGot = at != (u32)$FFFF_FFFF
                       && sym.substringFromByte(at).hasPrefix(String.withCString("@GOTPAGE"));
-            u32 kind = mn.equals(String.withCString("adrp"))
+            u32 kind = mc == a64Adrp
                      ? (isGot ? (u32)FIXUP_GOTPAGE21 : (u32)FIXUP_PAGE21)
                      : (isGot ? (u32)FIXUP_GOTPAGEOFF12 : (u32)FIXUP_PAGEOFF12);
             addFixup(pc, kind, bare, (u32)0);
             _hit = true;
-            return (mn.equals(String.withCString("adrp")) ? (u32)$90000000 : (u32)$10000000) | d.num();
+            return (mc == a64Adrp ? $90000000 : $10000000) | d.num();
         }
         return (u32)0;
     }
@@ -3123,12 +3262,12 @@ class Arm64Asm
     // the middle of nothing. So each is CHECKED. The check is not theoretical:
     // it fired on a self-hosted link of a program with Foundation plus the
     // self-hosted preprocessor, whose crash was a truncated branch.
-    u32 encBranches(String* mn, Array* ops, u32 pc)
+    u32 encBranches(String* mn, u16 mc, Array* ops, u32 pc)
     {
-        if (mn.equals(String.withCString("b")) || mn.equals(String.withCString("bl"))) {
+        if (mc == a64B || mc == a64Bl) {
             String* tgt = opAt(ops, (u32)0);
             u32 addr = resolveTarget(tgt);
-            u32 base = mn.equals(String.withCString("bl")) ? (u32)$94000000 : (u32)$14000000;
+            u32 base = mc == a64Bl ? $94000000 : $14000000;
             _hit = true;
             if (_lastWasLocal) {
                 i32 rel = ((i32)addr - (i32)pc) >> (i32)2;
@@ -3153,7 +3292,7 @@ class Arm64Asm
             _hit = true;
             return (u32)$54000000 | (((u32)rel & (u32)$7FFFF) << (u32)5) | (u32)cc;
         }
-        if (mn.equals(String.withCString("cbz")) || mn.equals(String.withCString("cbnz"))) {
+        if (mc == a64Cbz || mc == a64Cbnz) {
             RegRef* d = parseReg(opAt(ops, (u32)0));
             u32 addr = resolveTarget(opAt(ops, (u32)1));
             i32 rel = _lastWasLocal ? (((i32)addr - (i32)pc) >> (i32)2) : (i32)0;
@@ -3161,12 +3300,12 @@ class Arm64Asm
                 fail(String.withCString("cbz/cbnz out of range (reaches +/-1MB)"));
                 return (u32)0;
             }
-            u32 base = mn.equals(String.withCString("cbnz")) ? (u32)$35000000 : (u32)$34000000;
+            u32 base = mc == a64Cbnz ? $35000000 : $34000000;
             if (d.is64()) base = base | (u32)$80000000;
             _hit = true;
             return base | (((u32)rel & (u32)$7FFFF) << (u32)5) | d.num();
         }
-        if (mn.equals(String.withCString("tbz")) || mn.equals(String.withCString("tbnz"))) {
+        if (mc == a64Tbz || mc == a64Tbnz) {
             RegRef* d = parseReg(opAt(ops, (u32)0));
             U64* bit = parseImm(opAt(ops, (u32)1));
             if (!_immOk) { fail(String.withCString("bad test-bit index")); return (u32)0; }
@@ -3176,32 +3315,32 @@ class Arm64Asm
                 fail(String.withCString("tbz/tbnz out of range (reaches +/-32KB)"));
                 return (u32)0;
             }
-            u32 op = mn.equals(String.withCString("tbnz")) ? (u32)1 : (u32)0;
+            u32 op = mc == a64Tbnz ? 1 : 0;
             _hit = true;
             return (u32)$36000000 | (((bit.lo() >> (u32)5) & (u32)1) << (u32)31) | (op << (u32)24)
                  | ((bit.lo() & (u32)$1F) << (u32)19) | (((u32)rel & (u32)$3FFF) << (u32)5) | d.num();
         }
-        if (mn.equals(String.withCString("ret"))) {
+        if (mc == a64Ret) {
             u32 r = (u32)30;
             if (ops.count() > (u32)0) { RegRef* x = parseReg(opAt(ops, (u32)0)); if (x.ok()) r = x.num(); }
             _hit = true;
             return (u32)$D65F0000 | (r << (u32)5);
         }
-        if ((mn.equals(String.withCString("svc")) || mn.equals(String.withCString("brk"))
-          || mn.equals(String.withCString("hlt"))) && ops.count() == (u32)1) {
+        if ((mc == a64Svc || mc == a64Brk
+          || mc == a64Hlt) && ops.count() == 1) {
             U64* imm = parseImm(opAt(ops, (u32)0));
-            u32 base = mn.equals(String.withCString("svc")) ? (u32)$D4000001
-                     : mn.equals(String.withCString("brk")) ? (u32)$D4200000 : (u32)$D4400000;
+            u32 base = mc == a64Svc ? $D4000001
+                     : mc == a64Brk ? $D4200000 : $D4400000;
             _hit = true;
             return base | ((imm.lo() & (u32)$FFFF) << (u32)5);
         }
-        if (mn.equals(String.withCString("blr")) || mn.equals(String.withCString("br"))) {
+        if (mc == a64Blr || mc == a64Br) {
             RegRef* n = parseReg(opAt(ops, (u32)0));
             _hit = true;
-            return (mn.equals(String.withCString("blr")) ? (u32)$D63F0000 : (u32)$D61F0000)
+            return (mc == a64Blr ? $D63F0000 : $D61F0000)
                  | (n.num() << (u32)5);
         }
-        if (mn.equals(String.withCString("nop"))) { _hit = true; return (u32)$D503201F; }
+        if (mc == a64Nop) { _hit = true; return $D503201F; }
         return (u32)0;
     }
 

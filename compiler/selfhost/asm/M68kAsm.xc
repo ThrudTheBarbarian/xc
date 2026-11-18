@@ -109,6 +109,106 @@ class MOp
         }
     }
 
+// Mnemonics as numbers. encode looks the mnemonic (its size suffix already
+// split off) up once, and the encoders and their tables compare the number
+// instead of the String, each comparison of which built and freed a String.
+// Every mnemonic an encoder tests is here; anything else is m68Unknown and
+// still reaches the "unsupported mnemonic" error. The numbering is private
+// to the process.
+enum M68kMnemonic = {
+    m68Unknown = 0,
+    m68DcL, m68DcW, m68Add, m68Adda, m68Addq, m68Addx,
+    m68And, m68Asl, m68Asr, m68Bcc, m68Bcs, m68Beq,
+    m68Bge, m68Bgt, m68Bhi, m68Bhs, m68Ble, m68Blo,
+    m68Bls, m68Blt, m68Bmi, m68Bne, m68Bpl, m68Bra,
+    m68Bsr, m68Bvc, m68Bvs, m68Clr, m68Cmp, m68Cmpa,
+    m68Divs, m68Divu, m68Eor, m68Exg, m68Ext, m68Fabs,
+    m68Facos, m68Fadd, m68Fasin, m68Fatan, m68Fbeq, m68Fbge,
+    m68Fbgt, m68Fble, m68Fblt, m68Fbne, m68Fcmp, m68Fcos,
+    m68Fcosh, m68Fdiv, m68Fetox, m68Fint, m68Fintrz, m68Flog10,
+    m68Flog2, m68Flogn, m68Fmove, m68Fmul, m68Fneg, m68Fseq,
+    m68Fsge, m68Fsgt, m68Fsin, m68Fsinh, m68Fsle, m68Fslt,
+    m68Fsne, m68Fsqrt, m68Fsub, m68Ftan, m68Ftanh, m68Ftentox,
+    m68Ftst, m68Ftwotox, m68Illegal, m68Jmp, m68Jsr, m68Lea,
+    m68Link, m68Lsl, m68Lsr, m68Move, m68Movea, m68Moveq,
+    m68Muls, m68Mulu, m68Neg, m68Negx, m68Nop, m68Not,
+    m68Or, m68Pea, m68Rol, m68Ror, m68Roxl, m68Roxr,
+    m68Rte, m68Rtr, m68Rts, m68Scc, m68Scs, m68Seq,
+    m68Sf, m68Sge, m68Sgt, m68Shi, m68Shs, m68Sle,
+    m68Slo, m68Sls, m68Slt, m68Smi, m68Sne, m68Spl,
+    m68St, m68Sub, m68Suba, m68Subq, m68Subx, m68Svc,
+    m68Svs, m68Swap, m68Trap, m68Tst, m68Unlk
+};
+
+class M68kMn
+    {
+    static Map* _byName;   // mnemonic -> its number (Number@)
+    u8 _unused;            // no instances: every entry point is static
+
+    static void def(u16 mc, string name)
+        {
+        _byName.set((Hashable*)String.withCString(name), (Object*)Number.with(mc));
+        }
+
+    static void build(void)
+        {
+        _byName = new Map();
+        M68kMn.def(m68DcL, ".dc.l"); M68kMn.def(m68DcW, ".dc.w"); M68kMn.def(m68Add, "add");
+        M68kMn.def(m68Adda, "adda"); M68kMn.def(m68Addq, "addq"); M68kMn.def(m68Addx, "addx");
+        M68kMn.def(m68And, "and"); M68kMn.def(m68Asl, "asl"); M68kMn.def(m68Asr, "asr");
+        M68kMn.def(m68Bcc, "bcc"); M68kMn.def(m68Bcs, "bcs"); M68kMn.def(m68Beq, "beq");
+        M68kMn.def(m68Bge, "bge"); M68kMn.def(m68Bgt, "bgt"); M68kMn.def(m68Bhi, "bhi");
+        M68kMn.def(m68Bhs, "bhs"); M68kMn.def(m68Ble, "ble"); M68kMn.def(m68Blo, "blo");
+        M68kMn.def(m68Bls, "bls"); M68kMn.def(m68Blt, "blt"); M68kMn.def(m68Bmi, "bmi");
+        M68kMn.def(m68Bne, "bne"); M68kMn.def(m68Bpl, "bpl"); M68kMn.def(m68Bra, "bra");
+        M68kMn.def(m68Bsr, "bsr"); M68kMn.def(m68Bvc, "bvc"); M68kMn.def(m68Bvs, "bvs");
+        M68kMn.def(m68Clr, "clr"); M68kMn.def(m68Cmp, "cmp"); M68kMn.def(m68Cmpa, "cmpa");
+        M68kMn.def(m68Divs, "divs"); M68kMn.def(m68Divu, "divu"); M68kMn.def(m68Eor, "eor");
+        M68kMn.def(m68Exg, "exg"); M68kMn.def(m68Ext, "ext"); M68kMn.def(m68Fabs, "fabs");
+        M68kMn.def(m68Facos, "facos"); M68kMn.def(m68Fadd, "fadd"); M68kMn.def(m68Fasin, "fasin");
+        M68kMn.def(m68Fatan, "fatan"); M68kMn.def(m68Fbeq, "fbeq"); M68kMn.def(m68Fbge, "fbge");
+        M68kMn.def(m68Fbgt, "fbgt"); M68kMn.def(m68Fble, "fble"); M68kMn.def(m68Fblt, "fblt");
+        M68kMn.def(m68Fbne, "fbne"); M68kMn.def(m68Fcmp, "fcmp"); M68kMn.def(m68Fcos, "fcos");
+        M68kMn.def(m68Fcosh, "fcosh"); M68kMn.def(m68Fdiv, "fdiv"); M68kMn.def(m68Fetox, "fetox");
+        M68kMn.def(m68Fint, "fint"); M68kMn.def(m68Fintrz, "fintrz"); M68kMn.def(m68Flog10, "flog10");
+        M68kMn.def(m68Flog2, "flog2"); M68kMn.def(m68Flogn, "flogn"); M68kMn.def(m68Fmove, "fmove");
+        M68kMn.def(m68Fmul, "fmul"); M68kMn.def(m68Fneg, "fneg"); M68kMn.def(m68Fseq, "fseq");
+        M68kMn.def(m68Fsge, "fsge"); M68kMn.def(m68Fsgt, "fsgt"); M68kMn.def(m68Fsin, "fsin");
+        M68kMn.def(m68Fsinh, "fsinh"); M68kMn.def(m68Fsle, "fsle"); M68kMn.def(m68Fslt, "fslt");
+        M68kMn.def(m68Fsne, "fsne"); M68kMn.def(m68Fsqrt, "fsqrt"); M68kMn.def(m68Fsub, "fsub");
+        M68kMn.def(m68Ftan, "ftan"); M68kMn.def(m68Ftanh, "ftanh"); M68kMn.def(m68Ftentox, "ftentox");
+        M68kMn.def(m68Ftst, "ftst"); M68kMn.def(m68Ftwotox, "ftwotox"); M68kMn.def(m68Illegal, "illegal");
+        M68kMn.def(m68Jmp, "jmp"); M68kMn.def(m68Jsr, "jsr"); M68kMn.def(m68Lea, "lea");
+        M68kMn.def(m68Link, "link"); M68kMn.def(m68Lsl, "lsl"); M68kMn.def(m68Lsr, "lsr");
+        M68kMn.def(m68Move, "move"); M68kMn.def(m68Movea, "movea"); M68kMn.def(m68Moveq, "moveq");
+        M68kMn.def(m68Muls, "muls"); M68kMn.def(m68Mulu, "mulu"); M68kMn.def(m68Neg, "neg");
+        M68kMn.def(m68Negx, "negx"); M68kMn.def(m68Nop, "nop"); M68kMn.def(m68Not, "not");
+        M68kMn.def(m68Or, "or"); M68kMn.def(m68Pea, "pea"); M68kMn.def(m68Rol, "rol");
+        M68kMn.def(m68Ror, "ror"); M68kMn.def(m68Roxl, "roxl"); M68kMn.def(m68Roxr, "roxr");
+        M68kMn.def(m68Rte, "rte"); M68kMn.def(m68Rtr, "rtr"); M68kMn.def(m68Rts, "rts");
+        M68kMn.def(m68Scc, "scc"); M68kMn.def(m68Scs, "scs"); M68kMn.def(m68Seq, "seq");
+        M68kMn.def(m68Sf, "sf"); M68kMn.def(m68Sge, "sge"); M68kMn.def(m68Sgt, "sgt");
+        M68kMn.def(m68Shi, "shi"); M68kMn.def(m68Shs, "shs"); M68kMn.def(m68Sle, "sle");
+        M68kMn.def(m68Slo, "slo"); M68kMn.def(m68Sls, "sls"); M68kMn.def(m68Slt, "slt");
+        M68kMn.def(m68Smi, "smi"); M68kMn.def(m68Sne, "sne"); M68kMn.def(m68Spl, "spl");
+        M68kMn.def(m68St, "st"); M68kMn.def(m68Sub, "sub"); M68kMn.def(m68Suba, "suba");
+        M68kMn.def(m68Subq, "subq"); M68kMn.def(m68Subx, "subx"); M68kMn.def(m68Svc, "svc");
+        M68kMn.def(m68Svs, "svs"); M68kMn.def(m68Swap, "swap"); M68kMn.def(m68Trap, "trap");
+        M68kMn.def(m68Tst, "tst"); M68kMn.def(m68Unlk, "unlk");
+        }
+
+    // The number of a mnemonic, or m68Unknown for one no encoder tests.
+    static u16 find(String* mnemonic)
+        {
+        if (_byName == (Map*)0)
+            M68kMn.build();
+        Number* mc = (Number*)_byName.get((Hashable*)mnemonic);
+        if (mc == (Number*)0)
+            return m68Unknown;
+        return mc.asU16();
+        }
+    }
+
     class M68kAsm
     {
     u32 _cpu;  // 68000 by default; 68020+ gets 32-bit PC-relative
@@ -527,76 +627,76 @@ class MOp
             }
         }
 
-    static i32 branchCC(String* m)
+    static i32 branchCC(u16 mc)
         {
-        if (m.equals(String.withCString("bra")))
+        if (mc == m68Bra)
             return (i32)0;
-        if (m.equals(String.withCString("bsr")))
+        if (mc == m68Bsr)
             return (i32)1;
-        if (m.equals(String.withCString("bhi")))
+        if (mc == m68Bhi)
             return (i32)2;
-        if (m.equals(String.withCString("bls")))
+        if (mc == m68Bls)
             return (i32)3;
-        if (m.equals(String.withCString("bcc")) || m.equals(String.withCString("bhs")))
+        if (mc == m68Bcc || mc == m68Bhs)
             return (i32)4;
-        if (m.equals(String.withCString("bcs")) || m.equals(String.withCString("blo")))
+        if (mc == m68Bcs || mc == m68Blo)
             return (i32)5;
-        if (m.equals(String.withCString("bne")))
+        if (mc == m68Bne)
             return (i32)6;
-        if (m.equals(String.withCString("beq")))
+        if (mc == m68Beq)
             return (i32)7;
-        if (m.equals(String.withCString("bvc")))
+        if (mc == m68Bvc)
             return (i32)8;
-        if (m.equals(String.withCString("bvs")))
+        if (mc == m68Bvs)
             return (i32)9;
-        if (m.equals(String.withCString("bpl")))
+        if (mc == m68Bpl)
             return (i32)10;
-        if (m.equals(String.withCString("bmi")))
+        if (mc == m68Bmi)
             return (i32)11;
-        if (m.equals(String.withCString("bge")))
+        if (mc == m68Bge)
             return (i32)12;
-        if (m.equals(String.withCString("blt")))
+        if (mc == m68Blt)
             return (i32)13;
-        if (m.equals(String.withCString("bgt")))
+        if (mc == m68Bgt)
             return (i32)14;
-        if (m.equals(String.withCString("ble")))
+        if (mc == m68Ble)
             return (i32)15;
         return (i32)-1;
         }
 
-    static i32 sccCC(String* m)
+    static i32 sccCC(u16 mc)
         {
-        if (m.equals(String.withCString("st")))
+        if (mc == m68St)
             return (i32)0;
-        if (m.equals(String.withCString("sf")))
+        if (mc == m68Sf)
             return (i32)1;
-        if (m.equals(String.withCString("shi")))
+        if (mc == m68Shi)
             return (i32)2;
-        if (m.equals(String.withCString("sls")))
+        if (mc == m68Sls)
             return (i32)3;
-        if (m.equals(String.withCString("scc")) || m.equals(String.withCString("shs")))
+        if (mc == m68Scc || mc == m68Shs)
             return (i32)4;
-        if (m.equals(String.withCString("scs")) || m.equals(String.withCString("slo")))
+        if (mc == m68Scs || mc == m68Slo)
             return (i32)5;
-        if (m.equals(String.withCString("sne")))
+        if (mc == m68Sne)
             return (i32)6;
-        if (m.equals(String.withCString("seq")))
+        if (mc == m68Seq)
             return (i32)7;
-        if (m.equals(String.withCString("svc")))
+        if (mc == m68Svc)
             return (i32)8;
-        if (m.equals(String.withCString("svs")))
+        if (mc == m68Svs)
             return (i32)9;
-        if (m.equals(String.withCString("spl")))
+        if (mc == m68Spl)
             return (i32)10;
-        if (m.equals(String.withCString("smi")))
+        if (mc == m68Smi)
             return (i32)11;
-        if (m.equals(String.withCString("sge")))
+        if (mc == m68Sge)
             return (i32)12;
-        if (m.equals(String.withCString("slt")))
+        if (mc == m68Slt)
             return (i32)13;
-        if (m.equals(String.withCString("sgt")))
+        if (mc == m68Sgt)
             return (i32)14;
-        if (m.equals(String.withCString("sle")))
+        if (mc == m68Sle)
             return (i32)15;
         return (i32)-1;
         }
@@ -624,9 +724,11 @@ class MOp
         _d = new Data();
         _rr = rr;
         _hit = false;
+        // The encoders test this number, not the String (#330).
+        u16 mc = M68kMn.find(mnem);
 
-        if (mnem.equals(String.withCString(".dc.l")) || mnem.equals(String.withCString(".dc.w")))
-            return encodeDc(mnem, ops, syms);
+        if (mc == m68DcL || mc == m68DcW)
+            return encodeDc(mnem, mc, ops, syms);
 
         MOp* o0 = ops.count() > (u32)0 ? parseOperand((String*)ops.get((u32)0)) : new MOp();
         MOp* o1 = ops.count() > (u32)1 ? parseOperand((String*)ops.get((u32)1)) : new MOp();
@@ -636,28 +738,28 @@ class MOp
         u32 sb = size == (u32)1 ? (u32)0 : size == (u32)2 ? (u32)1
                                                           : (u32)2;
 
-        encFpuBranch(mnem, o0, syms, curOff);
+        encFpuBranch(mnem, mc, o0, syms, curOff);
         if (_hit)
             return _d;
-        encBranch(mnem, o0, syms, curOff);
+        encBranch(mnem, mc, o0, syms, curOff);
         if (_hit)
             return _d;
-        encMoves(mnem, size, sb, o0, o1, syms);
+        encMoves(mnem, mc, size, sb, o0, o1, syms);
         if (_hit || _failed)
             return _failed ? (Data*)0 : _d;
-        encAlu(mnem, size, sb, o0, o1, syms);
+        encAlu(mnem, mc, size, sb, o0, o1, syms);
         if (_hit || _failed)
             return _failed ? (Data*)0 : _d;
-        encUnary(mnem, size, sb, o0, o1, syms);
+        encUnary(mnem, mc, size, sb, o0, o1, syms);
         if (_hit || _failed)
             return _failed ? (Data*)0 : _d;
-        encMulDiv(mnem, size, o0, o1, syms);
+        encMulDiv(mnem, mc, size, o0, o1, syms);
         if (_hit)
             return _d;
-        encFpu(mnem, size, o0, o1, syms);
+        encFpu(mnem, mc, size, o0, o1, syms);
         if (_hit)
             return _d;
-        encControl(mnem, size, o0, o1, syms, curOff);
+        encControl(mnem, mc, size, o0, o1, syms, curOff);
         if (_hit || _failed)
             return _failed ? (Data*)0 : _d;
 
@@ -670,9 +772,9 @@ class MOp
 
     // `.dc.l` of a symbol emits a relocated four-byte pointer; `symA-symB` is a
     // relocation-free difference (a PIC vtable slot holding method - base).
-    Data* encodeDc(String* mnem, Array* ops, Map* syms)
+    Data* encodeDc(String* mnem, u16 mc, Array* ops, Map* syms)
         {
-        bool isLong = mnem.equals(String.withCString(".dc.l"));
+        bool isLong = mc == m68DcL;
         for (u32 i = (u32)0; i < ops.count(); i = i + (u32)1)
             {
             String* t = (String*)ops.get(i);
@@ -705,9 +807,9 @@ class MOp
         }
 
     // FBcc — the FPU conditional branch, a word displacement.
-    void encFpuBranch(String* mnem, MOp* o0, Map* syms, u32 curOff)
+    void encFpuBranch(String* mnem, u16 mc, MOp* o0, Map* syms, u32 curOff)
         {
-        i32 p = fbCode(mnem);
+        i32 p = fbCode(mc);
         if (p < (i32)0)
             return;
         i32 target = symVal(syms, o0);
@@ -718,27 +820,27 @@ class MOp
         _hit = true;
         }
 
-    static i32 fbCode(String* m)
+    static i32 fbCode(u16 mc)
         {
-        if (m.equals(String.withCString("fbeq")))
+        if (mc == m68Fbeq)
             return (i32)$01;
-        if (m.equals(String.withCString("fbne")))
+        if (mc == m68Fbne)
             return (i32)$0E;
-        if (m.equals(String.withCString("fbgt")))
+        if (mc == m68Fbgt)
             return (i32)$12;
-        if (m.equals(String.withCString("fbge")))
+        if (mc == m68Fbge)
             return (i32)$13;
-        if (m.equals(String.withCString("fblt")))
+        if (mc == m68Fblt)
             return (i32)$14;
-        if (m.equals(String.withCString("fble")))
+        if (mc == m68Fble)
             return (i32)$15;
         return (i32)-1;
         }
 
     // Always the word form, so pass 1 and pass 2 size it the same.
-    void encBranch(String* mnem, MOp* o0, Map* syms, u32 curOff)
+    void encBranch(String* mnem, u16 mc, MOp* o0, Map* syms, u32 curOff)
         {
-        i32 cc = branchCC(mnem);
+        i32 cc = branchCC(mc);
         if (cc < (i32)0)
             return;
         i32 target = symVal(syms, o0);
@@ -750,9 +852,9 @@ class MOp
         _hit = true;
         }
 
-    void encMoves(String* mnem, u32 size, u32 sb, MOp* o0, MOp* o1, Map* syms)
+    void encMoves(String* mnem, u16 mc, u32 size, u32 sb, MOp* o0, MOp* o1, Map* syms)
         {
-        if (mnem.equals(String.withCString("move")) || mnem.equals(String.withCString("movea")))
+        if (mc == m68Move || mc == m68Movea)
             {
             u32 top = size == (u32)1 ? (u32)$1000 : size == (u32)2 ? (u32)$3000
                                                                    : (u32)$2000;
@@ -764,7 +866,7 @@ class MOp
             _hit = true;
             return;
             }
-        if (mnem.equals(String.withCString("moveq")))
+        if (mc == m68Moveq)
             {
             // The byte is sign-extended to 32 bits; a signed byte or the
             // unsigned bit pattern is fine, anything wider is not.
@@ -780,26 +882,26 @@ class MOp
         }
 
     // ── The binary ALU group ─────────────────────────────────────────────
-    void encAlu(String* mnem, u32 size, u32 sb, MOp* o0, MOp* o1, Map* syms)
+    void encAlu(String* mnem, u16 mc, u32 size, u32 sb, MOp* o0, MOp* o1, Map* syms)
         {
         // adda/suba/cmpa are the add/sub/cmp forms with an address register
         // destination, which the code generator now names (#289).
-        if (mnem.equals(String.withCString("adda")))
-            mnem = String.withCString("add");
-        else if (mnem.equals(String.withCString("suba")))
-            mnem = String.withCString("sub");
-        else if (mnem.equals(String.withCString("cmpa")))
-            mnem = String.withCString("cmp");
-        i32 base = aluBase(mnem);
+        if (mc == m68Adda)
+            mc = m68Add;
+        else if (mc == m68Suba)
+            mc = m68Sub;
+        else if (mc == m68Cmpa)
+            mc = m68Cmp;
+        i32 base = aluBase(mc);
         if (base < (i32)0)
             return;
-        bool isEor = mnem.equals(String.withCString("eor"));
-        bool isCmp = mnem.equals(String.withCString("cmp"));
+        bool isEor = mc == m68Eor;
+        bool isCmp = mc == m68Cmp;
         // the xxxI forms; an address register takes an immediate only through
         // ADDA/SUBA/CMPA #imm,An (ADDI to An does not exist), below
         if (o0.kind() == (u32)MOP_IMM && o1.kind() != (u32)MOP_AREG)
             {
-            i32 ik = aluImmKind(mnem);
+            i32 ik = aluImmKind(mc);
             a16(((u32)ik << (u32)9) | (sb << (u32)6) | eaField(o1));
             appendExt(o0, size, syms); // the immediate
             appendExt(o1, size, syms); // the destination
@@ -842,44 +944,44 @@ class MOp
         _hit = true;
         }
 
-    static i32 aluBase(String* m)
+    static i32 aluBase(u16 mc)
         {
-        if (m.equals(String.withCString("add")))
+        if (mc == m68Add)
             return (i32)$D000;
-        if (m.equals(String.withCString("sub")))
+        if (mc == m68Sub)
             return (i32)$9000;
-        if (m.equals(String.withCString("and")))
+        if (mc == m68And)
             return (i32)$C000;
-        if (m.equals(String.withCString("or")))
+        if (mc == m68Or)
             return (i32)$8000;
-        if (m.equals(String.withCString("cmp")))
+        if (mc == m68Cmp)
             return (i32)$B000;
-        if (m.equals(String.withCString("eor")))
+        if (mc == m68Eor)
             return (i32)$B000;
         return (i32)-1;
         }
 
-    static i32 aluImmKind(String* m)
+    static i32 aluImmKind(u16 mc)
         {
-        if (m.equals(String.withCString("or")))
+        if (mc == m68Or)
             return (i32)0;
-        if (m.equals(String.withCString("and")))
+        if (mc == m68And)
             return (i32)1;
-        if (m.equals(String.withCString("sub")))
+        if (mc == m68Sub)
             return (i32)2;
-        if (m.equals(String.withCString("add")))
+        if (mc == m68Add)
             return (i32)3;
-        if (m.equals(String.withCString("eor")))
+        if (mc == m68Eor)
             return (i32)5;
-        if (m.equals(String.withCString("cmp")))
+        if (mc == m68Cmp)
             return (i32)6;
         return (i32)0;
         }
 
     // ── Shifts, quick arithmetic, Scc, the single-EA unaries ─────────────
-    void encUnary(String* mnem, u32 size, u32 sb, MOp* o0, MOp* o1, Map* syms)
+    void encUnary(String* mnem, u16 mc, u32 size, u32 sb, MOp* o0, MOp* o1, Map* syms)
         {
-        i32 sh = shiftType(mnem);
+        i32 sh = shiftType(mc);
         if (sh >= (i32)0)
             {
             u32 dir = mnem.hasSuffix(String.withCString("l")) ? (u32)1 : (u32)0;
@@ -899,8 +1001,8 @@ class MOp
             _hit = true;
             return;
             }
-        bool isAddq = mnem.equals(String.withCString("addq"));
-        if (isAddq || mnem.equals(String.withCString("subq")))
+        bool isAddq = mc == m68Addq;
+        if (isAddq || mc == m68Subq)
             {
             if (o0.kind() != (u32)MOP_IMM || o0.value() < (i32)1 || o0.value() > (i32)8)
                 {
@@ -913,7 +1015,7 @@ class MOp
             _hit = true;
             return;
             }
-        i32 sc = sccCC(mnem);
+        i32 sc = sccCC(mc);
         if (sc >= (i32)0)
             {
             a16((u32)$50C0 | ((u32)sc << (u32)8) | eaField(o0));
@@ -921,7 +1023,7 @@ class MOp
             _hit = true;
             return;
             }
-        i32 un = unaryBase(mnem);
+        i32 un = unaryBase(mc);
         if (un >= (i32)0)
             {
             a16((u32)un | (sb << (u32)6) | eaField(o0));
@@ -929,26 +1031,26 @@ class MOp
             _hit = true;
             return;
             }
-        if (mnem.equals(String.withCString("ext")))
+        if (mc == m68Ext)
             {
             a16((size == (u32)4 ? (u32)$48C0 : (u32)$4880) | o0.reg());
             _hit = true;
             return;
             }
-        if (mnem.equals(String.withCString("swap")))
+        if (mc == m68Swap)
             {
             a16((u32)$4840 | o0.reg());
             _hit = true;
             return;
             }
-        bool isAddx = mnem.equals(String.withCString("addx"));
-        if (isAddx || mnem.equals(String.withCString("subx")))
+        bool isAddx = mc == m68Addx;
+        if (isAddx || mc == m68Subx)
             {
             a16((isAddx ? (u32)$D100 : (u32)$9100) | (o1.reg() << (u32)9) | (sb << (u32)6) | o0.reg());
             _hit = true;
             return;
             }
-        if (mnem.equals(String.withCString("exg")))
+        if (mc == m68Exg)
             {
             if (o0.kind() == (u32)MOP_DREG && o1.kind() == (u32)MOP_DREG)
                 a16((u32)$C140 | (o0.reg() << (u32)9) | o1.reg());
@@ -966,39 +1068,39 @@ class MOp
             }
         }
 
-    static i32 shiftType(String* m)
+    static i32 shiftType(u16 mc)
         {
-        if (m.equals(String.withCString("asl")) || m.equals(String.withCString("asr")))
+        if (mc == m68Asl || mc == m68Asr)
             return (i32)0;
-        if (m.equals(String.withCString("lsl")) || m.equals(String.withCString("lsr")))
+        if (mc == m68Lsl || mc == m68Lsr)
             return (i32)1;
-        if (m.equals(String.withCString("roxl")) || m.equals(String.withCString("roxr")))
+        if (mc == m68Roxl || mc == m68Roxr)
             return (i32)2;
-        if (m.equals(String.withCString("rol")) || m.equals(String.withCString("ror")))
+        if (mc == m68Rol || mc == m68Ror)
             return (i32)3;
         return (i32)-1;
         }
 
-    static i32 unaryBase(String* m)
+    static i32 unaryBase(u16 mc)
         {
-        if (m.equals(String.withCString("negx")))
+        if (mc == m68Negx)
             return (i32)$4000;
-        if (m.equals(String.withCString("clr")))
+        if (mc == m68Clr)
             return (i32)$4200;
-        if (m.equals(String.withCString("neg")))
+        if (mc == m68Neg)
             return (i32)$4400;
-        if (m.equals(String.withCString("not")))
+        if (mc == m68Not)
             return (i32)$4600;
-        if (m.equals(String.withCString("tst")))
+        if (mc == m68Tst)
             return (i32)$4A00;
         return (i32)-1;
         }
 
     // ── Multiply and divide ──────────────────────────────────────────────
-    void encMulDiv(String* mnem, u32 size, MOp* o0, MOp* o1, Map* syms)
+    void encMulDiv(String* mnem, u16 mc, u32 size, MOp* o0, MOp* o1, Map* syms)
         {
-        bool isMuls = mnem.equals(String.withCString("muls"));
-        if (isMuls || mnem.equals(String.withCString("mulu")))
+        bool isMuls = mc == m68Muls;
+        if (isMuls || mc == m68Mulu)
             {
             // the 68000 16x16 form
             if (size == (u32)2)
@@ -1014,8 +1116,8 @@ class MOp
             _hit = true;
             return;
             }
-        bool isDivs = mnem.equals(String.withCString("divs"));
-        if (isDivs || mnem.equals(String.withCString("divu")))
+        bool isDivs = mc == m68Divs;
+        if (isDivs || mc == m68Divu)
             {
             a16((u32)$4C40 | eaField(o0));
             a16((o1.reg() << (u32)12) | (isDivs ? (u32)$0800 : (u32)0) | o1.reg());
@@ -1026,9 +1128,9 @@ class MOp
         }
 
     // ── 68881/68882 FPU (line F, coprocessor id 1) ───────────────────────
-    void encFpu(String* mnem, u32 size, MOp* o0, MOp* o1, Map* syms)
+    void encFpu(String* mnem, u16 mc, u32 size, MOp* o0, MOp* o1, Map* syms)
         {
-        i32 opm = fpuOpmode(mnem);
+        i32 opm = fpuOpmode(mc);
         if (opm >= (i32)0)
             {
             // The FPU source specifier: .l (long int) 0, .s 1, .w 4, .d 5, .b 6.
@@ -1039,7 +1141,7 @@ class MOp
                                             : size == (u32)1   ? (u32)6
                                                                : (u32)1;
             u32 eabytes = size == (u32)8 ? (u32)8 : (u32)4;
-            if (mnem.equals(String.withCString("fmove")) && o0.kind() == (u32)MOP_FREG && o1.kind() != (u32)MOP_FREG)
+            if (mc == m68Fmove && o0.kind() == MOP_FREG && o1.kind() != MOP_FREG)
                 {
                 a16((u32)$F200 | eaField(o1)); // store fpN to <ea>
                 a16((u32)$6000 | (fmt << (u32)10) | (o0.reg() << (u32)7));
@@ -1062,7 +1164,7 @@ class MOp
             _hit = true;
             return;
             }
-        i32 fc = fsccCode(mnem);
+        i32 fc = fsccCode(mc);
         if (fc >= (i32)0)
             {
             a16((u32)$F240 | eaField(o0));
@@ -1073,78 +1175,78 @@ class MOp
             }
         }
 
-    static i32 fpuOpmode(String* m)
+    static i32 fpuOpmode(u16 mc)
         {
-        if (m.equals(String.withCString("fmove")))
+        if (mc == m68Fmove)
             return (i32)$00;
-        if (m.equals(String.withCString("fadd")))
+        if (mc == m68Fadd)
             return (i32)$22;
-        if (m.equals(String.withCString("fsub")))
+        if (mc == m68Fsub)
             return (i32)$28;
-        if (m.equals(String.withCString("fmul")))
+        if (mc == m68Fmul)
             return (i32)$23;
-        if (m.equals(String.withCString("fdiv")))
+        if (mc == m68Fdiv)
             return (i32)$20;
-        if (m.equals(String.withCString("fneg")))
+        if (mc == m68Fneg)
             return (i32)$1A;
-        if (m.equals(String.withCString("fabs")))
+        if (mc == m68Fabs)
             return (i32)$18;
-        if (m.equals(String.withCString("fcmp")))
+        if (mc == m68Fcmp)
             return (i32)$38;
-        if (m.equals(String.withCString("fsqrt")))
+        if (mc == m68Fsqrt)
             return (i32)$04;
-        if (m.equals(String.withCString("fintrz")))
+        if (mc == m68Fintrz)
             return (i32)$03;
-        if (m.equals(String.withCString("fint")))
+        if (mc == m68Fint)
             return (i32)$01;
-        if (m.equals(String.withCString("ftst")))
+        if (mc == m68Ftst)
             return (i32)$3A;
-        if (m.equals(String.withCString("fsin")))
+        if (mc == m68Fsin)
             return (i32)$0E;
-        if (m.equals(String.withCString("fcos")))
+        if (mc == m68Fcos)
             return (i32)$1D;
-        if (m.equals(String.withCString("ftan")))
+        if (mc == m68Ftan)
             return (i32)$0F;
-        if (m.equals(String.withCString("fasin")))
+        if (mc == m68Fasin)
             return (i32)$0C;
-        if (m.equals(String.withCString("facos")))
+        if (mc == m68Facos)
             return (i32)$1C;
-        if (m.equals(String.withCString("fatan")))
+        if (mc == m68Fatan)
             return (i32)$0A;
-        if (m.equals(String.withCString("fetox")))
+        if (mc == m68Fetox)
             return (i32)$10;
-        if (m.equals(String.withCString("flogn")))
+        if (mc == m68Flogn)
             return (i32)$14;
-        if (m.equals(String.withCString("flog10")))
+        if (mc == m68Flog10)
             return (i32)$15;
-        if (m.equals(String.withCString("flog2")))
+        if (mc == m68Flog2)
             return (i32)$16;
-        if (m.equals(String.withCString("ftwotox")))
+        if (mc == m68Ftwotox)
             return (i32)$11;
-        if (m.equals(String.withCString("ftentox")))
+        if (mc == m68Ftentox)
             return (i32)$12;
-        if (m.equals(String.withCString("fsinh")))
+        if (mc == m68Fsinh)
             return (i32)$02;
-        if (m.equals(String.withCString("fcosh")))
+        if (mc == m68Fcosh)
             return (i32)$19;
-        if (m.equals(String.withCString("ftanh")))
+        if (mc == m68Ftanh)
             return (i32)$09;
         return (i32)-1;
         }
 
-    static i32 fsccCode(String* m)
+    static i32 fsccCode(u16 mc)
         {
-        if (m.equals(String.withCString("fseq")))
+        if (mc == m68Fseq)
             return (i32)$01;
-        if (m.equals(String.withCString("fsne")))
+        if (mc == m68Fsne)
             return (i32)$0E;
-        if (m.equals(String.withCString("fsgt")))
+        if (mc == m68Fsgt)
             return (i32)$12;
-        if (m.equals(String.withCString("fsge")))
+        if (mc == m68Fsge)
             return (i32)$13;
-        if (m.equals(String.withCString("fslt")))
+        if (mc == m68Fslt)
             return (i32)$14;
-        if (m.equals(String.withCString("fsle")))
+        if (mc == m68Fsle)
             return (i32)$15;
         return (i32)-1;
         }
@@ -1156,13 +1258,13 @@ class MOp
     // bsr.w relaxed on overflow. Both passes then size it the same, and the
     // call reaches anywhere — bsr.w simply fails the build once a program's
     // code span passes 32 KB, which is not a large program.
-    void encControl(String* mnem, u32 size, MOp* o0, MOp* o1, Map* syms, u32 curOff)
+    void encControl(String* mnem, u16 mc, u32 size, MOp* o0, MOp* o1, Map* syms, u32 curOff)
         {
         bool picSym = o0.kind() == (u32)MOP_ABS && o0.isSym();
         bool wide = _cpu >= (u32)68020;
         bool got = _gotMode && picSym && !symIsDiff(o0);
 
-        if (mnem.equals(String.withCString("jsr")))
+        if (mc == m68Jsr)
             {
             // move.l sym@GOT(a5),a1 ; jsr (a1)
             if (got)
@@ -1205,7 +1307,7 @@ class MOp
             _hit = true;
             return;
             }
-        if (mnem.equals(String.withCString("jmp")))
+        if (mc == m68Jmp)
             {
             if (got)
                 {
@@ -1247,7 +1349,7 @@ class MOp
             _hit = true;
             return;
             }
-        if (mnem.equals(String.withCString("pea")))
+        if (mc == m68Pea)
             {
             // move.l sym@GOT(a5),-(sp)
             if (got)
@@ -1290,7 +1392,7 @@ class MOp
             _hit = true;
             return;
             }
-        if (mnem.equals(String.withCString("lea")))
+        if (mc == m68Lea)
             {
             // move.l sym@GOT(a5),An
             if (got)
@@ -1333,38 +1435,38 @@ class MOp
             _hit = true;
             return;
             }
-        if (mnem.equals(String.withCString("link")))
+        if (mc == m68Link)
             {
             a16((u32)$4E50 | o0.reg());
             a16((u32)o1.value() & (u32)$FFFF);
             _hit = true;
             return;
             }
-        if (mnem.equals(String.withCString("unlk")))
+        if (mc == m68Unlk)
             {
             a16((u32)$4E58 | o0.reg());
             _hit = true;
             return;
             }
-        if (mnem.equals(String.withCString("rts")))
+        if (mc == m68Rts)
             {
             a16((u32)$4E75);
             _hit = true;
             return;
             }
-        if (mnem.equals(String.withCString("rte")))
+        if (mc == m68Rte)
             {
             a16((u32)$4E73);
             _hit = true;
             return;
             }
-        if (mnem.equals(String.withCString("rtr")))
+        if (mc == m68Rtr)
             {
             a16((u32)$4E77);
             _hit = true;
             return;
             }
-        if (mnem.equals(String.withCString("nop")))
+        if (mc == m68Nop)
             {
             a16((u32)$4E71);
             _hit = true;
@@ -1374,13 +1476,13 @@ class MOp
         // which is how the back end lowers `Unreachable` (a failed checked
         // downcast). A mnemonic the code generator emits and the assembler does
         // not know is exactly the gap the no-fallback rule exists to expose.
-        if (mnem.equals(String.withCString("illegal")))
+        if (mc == m68Illegal)
             {
             a16((u32)$4AFC);
             _hit = true;
             return;
             }
-        if (mnem.equals(String.withCString("trap")))
+        if (mc == m68Trap)
             {
             if (o0.kind() != (u32)MOP_IMM || o0.value() < (i32)0 || o0.value() > (i32)15)
                 {

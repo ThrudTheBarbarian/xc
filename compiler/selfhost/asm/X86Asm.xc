@@ -225,6 +225,168 @@ class X86Fixup
         }
     }
 
+// Mnemonics as numbers. encodeInsn looks the mnemonic up once, and the
+// encoders and their tables compare the number instead of the String, each
+// comparison of which built and freed a String. encVex128 looks up the
+// mnemonic without its `v` the same way. Every mnemonic an encoder tests is
+// here; anything else is x86Unknown and still reaches the "unhandled
+// mnemonic" error. The numbering is private to the process.
+enum X86Mnemonic = {
+    x86Unknown = 0,
+    x86Adc, x86Add, x86Addpd, x86Addps, x86Addsd, x86Addss,
+    x86And, x86Andnpd, x86Andnps, x86Andpd, x86Andps, x86Bt,
+    x86Btc, x86Btr, x86Bts, x86Call, x86Cdq, x86Cdqe,
+    x86Cmp, x86Cmppd, x86Cmpps, x86Cmpxchg, x86Comisd, x86Comiss,
+    x86Cpuid, x86Cqo, x86Cvtdq2pd, x86Cvtdq2ps, x86Cvtpd2ps, x86Cvtps2pd,
+    x86Cvtsd2si, x86Cvtsd2ss, x86Cvtsi2sd, x86Cvtsi2ss, x86Cvtss2sd, x86Cvtss2si,
+    x86Cvttpd2dq, x86Cvttps2dq, x86Cvttsd2si, x86Cvttss2si, x86Cwd, x86Dec,
+    x86Div, x86Divpd, x86Divps, x86Divsd, x86Divss, x86Fmadd213pd,
+    x86Fmadd213ps, x86Fmadd213sd, x86Fmadd213ss, x86Fmadd231pd, x86Fmadd231ps, x86Fmadd231sd,
+    x86Fmadd231ss, x86Fmsub213pd, x86Fmsub213ps, x86Fmsub213sd, x86Fmsub213ss, x86Fmsub231pd,
+    x86Fmsub231ps, x86Fmsub231sd, x86Fmsub231ss, x86Fnmadd213pd, x86Fnmadd213ps, x86Fnmadd213sd,
+    x86Fnmadd213ss, x86Fnmadd231pd, x86Fnmadd231ps, x86Fnmadd231sd, x86Fnmadd231ss, x86Hlt,
+    x86Idiv, x86Imul, x86Inc, x86Jmp, x86Lea, x86Leave,
+    x86Lfence, x86Lock, x86Maxpd, x86Maxps, x86Maxsd, x86Maxss,
+    x86Mfence, x86Minpd, x86Minps, x86Minsd, x86Minss, x86Mov,
+    x86Movabs, x86Movapd, x86Movaps, x86Movd, x86Movdqa, x86Movdqu,
+    x86Movq, x86Movsd, x86Movss, x86Movsx, x86Movsxd, x86Movupd,
+    x86Movups, x86Movzx, x86Mul, x86Mulpd, x86Mulps, x86Mulsd,
+    x86Mulss, x86Neg, x86Nop, x86Not, x86Or, x86Orpd,
+    x86Orps, x86Pabsb, x86Pabsd, x86Pabsw, x86Paddb, x86Paddd,
+    x86Paddq, x86Paddw, x86Pand, x86Pandn, x86Pause, x86Pcmpeqb,
+    x86Pcmpeqd, x86Pcmpeqw, x86Pcmpgtb, x86Pcmpgtd, x86Pcmpgtw, x86Phaddd,
+    x86Phaddw, x86Pmaddubsw, x86Pmaddwd, x86Pmaxsb, x86Pmaxsd, x86Pmaxsw,
+    x86Pmaxub, x86Pmaxud, x86Pmaxuw, x86Pminsb, x86Pminsd, x86Pminsw,
+    x86Pminub, x86Pminud, x86Pminuw, x86Pmulld, x86Pmullw, x86Pmuludq,
+    x86Pop, x86Por, x86Pshufd, x86Pshufhw, x86Pshuflw, x86Pslld,
+    x86Psllq, x86Psllw, x86Psrad, x86Psraw, x86Psrld, x86Psrlq,
+    x86Psrlw, x86Psubd, x86Psubw, x86Punpcklbw, x86Punpckldq, x86Punpcklqdq,
+    x86Push, x86Pxor, x86Rdtsc, x86Ret, x86Rex64, x86Rol,
+    x86Ror, x86Sal, x86Sar, x86Sbb, x86Sfence, x86Shl,
+    x86Shr, x86Shufpd, x86Shufps, x86Sqrtpd, x86Sqrtps, x86Sqrtsd,
+    x86Sqrtss, x86Sub, x86Subpd, x86Subps, x86Subsd, x86Subss,
+    x86Syscall, x86Test, x86Ucomisd, x86Ucomiss, x86Ud2, x86Unpckhpd,
+    x86Unpckhps, x86Unpcklpd, x86Unpcklps, x86Vbroadcastsd, x86Vbroadcastss, x86Vcomisd,
+    x86Vcomiss, x86Vcvtdq2ps, x86Vcvttps2dq, x86Vcvttsd2si, x86Vcvttss2si, x86Vextractf128,
+    x86Vextracti128, x86Vmovaps, x86Vmovd, x86Vmovdqa, x86Vmovdqu, x86Vmovq,
+    x86Vmovsd, x86Vmovss, x86Vmovups, x86Vpabsb, x86Vpabsd, x86Vpabsw,
+    x86Vpblendd, x86Vpbroadcastb, x86Vpbroadcastd, x86Vpbroadcastq, x86Vpbroadcastw, x86Vpshufd,
+    x86Vpslld, x86Vpsllq, x86Vpsllw, x86Vpsrad, x86Vpsraw, x86Vpsrld,
+    x86Vpsrlq, x86Vpsrlw, x86Vshufps, x86Vsqrtpd, x86Vsqrtps, x86Vucomisd,
+    x86Vucomiss, x86Vzeroupper, x86Xadd, x86Xchg, x86Xgetbv, x86Xor,
+    x86Xorpd, x86Xorps
+};
+
+class X86Mn
+    {
+    static Map* _byName;   // mnemonic -> its number (Number@)
+    u8 _unused;            // no instances: every entry point is static
+
+    static void def(u16 mc, string name)
+        {
+        _byName.set((Hashable*)String.withCString(name), (Object*)Number.with(mc));
+        }
+
+    static void build(void)
+        {
+        _byName = new Map();
+        X86Mn.def(x86Adc, "adc"); X86Mn.def(x86Add, "add"); X86Mn.def(x86Addpd, "addpd");
+        X86Mn.def(x86Addps, "addps"); X86Mn.def(x86Addsd, "addsd"); X86Mn.def(x86Addss, "addss");
+        X86Mn.def(x86And, "and"); X86Mn.def(x86Andnpd, "andnpd"); X86Mn.def(x86Andnps, "andnps");
+        X86Mn.def(x86Andpd, "andpd"); X86Mn.def(x86Andps, "andps"); X86Mn.def(x86Bt, "bt");
+        X86Mn.def(x86Btc, "btc"); X86Mn.def(x86Btr, "btr"); X86Mn.def(x86Bts, "bts");
+        X86Mn.def(x86Call, "call"); X86Mn.def(x86Cdq, "cdq"); X86Mn.def(x86Cdqe, "cdqe");
+        X86Mn.def(x86Cmp, "cmp"); X86Mn.def(x86Cmppd, "cmppd"); X86Mn.def(x86Cmpps, "cmpps");
+        X86Mn.def(x86Cmpxchg, "cmpxchg"); X86Mn.def(x86Comisd, "comisd"); X86Mn.def(x86Comiss, "comiss");
+        X86Mn.def(x86Cpuid, "cpuid"); X86Mn.def(x86Cqo, "cqo"); X86Mn.def(x86Cvtdq2pd, "cvtdq2pd");
+        X86Mn.def(x86Cvtdq2ps, "cvtdq2ps"); X86Mn.def(x86Cvtpd2ps, "cvtpd2ps"); X86Mn.def(x86Cvtps2pd, "cvtps2pd");
+        X86Mn.def(x86Cvtsd2si, "cvtsd2si"); X86Mn.def(x86Cvtsd2ss, "cvtsd2ss"); X86Mn.def(x86Cvtsi2sd, "cvtsi2sd");
+        X86Mn.def(x86Cvtsi2ss, "cvtsi2ss"); X86Mn.def(x86Cvtss2sd, "cvtss2sd"); X86Mn.def(x86Cvtss2si, "cvtss2si");
+        X86Mn.def(x86Cvttpd2dq, "cvttpd2dq"); X86Mn.def(x86Cvttps2dq, "cvttps2dq"); X86Mn.def(x86Cvttsd2si, "cvttsd2si");
+        X86Mn.def(x86Cvttss2si, "cvttss2si"); X86Mn.def(x86Cwd, "cwd"); X86Mn.def(x86Dec, "dec");
+        X86Mn.def(x86Div, "div"); X86Mn.def(x86Divpd, "divpd"); X86Mn.def(x86Divps, "divps");
+        X86Mn.def(x86Divsd, "divsd"); X86Mn.def(x86Divss, "divss"); X86Mn.def(x86Fmadd213pd, "fmadd213pd");
+        X86Mn.def(x86Fmadd213ps, "fmadd213ps"); X86Mn.def(x86Fmadd213sd, "fmadd213sd"); X86Mn.def(x86Fmadd213ss, "fmadd213ss");
+        X86Mn.def(x86Fmadd231pd, "fmadd231pd"); X86Mn.def(x86Fmadd231ps, "fmadd231ps"); X86Mn.def(x86Fmadd231sd, "fmadd231sd");
+        X86Mn.def(x86Fmadd231ss, "fmadd231ss"); X86Mn.def(x86Fmsub213pd, "fmsub213pd"); X86Mn.def(x86Fmsub213ps, "fmsub213ps");
+        X86Mn.def(x86Fmsub213sd, "fmsub213sd"); X86Mn.def(x86Fmsub213ss, "fmsub213ss"); X86Mn.def(x86Fmsub231pd, "fmsub231pd");
+        X86Mn.def(x86Fmsub231ps, "fmsub231ps"); X86Mn.def(x86Fmsub231sd, "fmsub231sd"); X86Mn.def(x86Fmsub231ss, "fmsub231ss");
+        X86Mn.def(x86Fnmadd213pd, "fnmadd213pd"); X86Mn.def(x86Fnmadd213ps, "fnmadd213ps"); X86Mn.def(x86Fnmadd213sd, "fnmadd213sd");
+        X86Mn.def(x86Fnmadd213ss, "fnmadd213ss"); X86Mn.def(x86Fnmadd231pd, "fnmadd231pd"); X86Mn.def(x86Fnmadd231ps, "fnmadd231ps");
+        X86Mn.def(x86Fnmadd231sd, "fnmadd231sd"); X86Mn.def(x86Fnmadd231ss, "fnmadd231ss"); X86Mn.def(x86Hlt, "hlt");
+        X86Mn.def(x86Idiv, "idiv"); X86Mn.def(x86Imul, "imul"); X86Mn.def(x86Inc, "inc");
+        X86Mn.def(x86Jmp, "jmp"); X86Mn.def(x86Lea, "lea"); X86Mn.def(x86Leave, "leave");
+        X86Mn.def(x86Lfence, "lfence"); X86Mn.def(x86Lock, "lock"); X86Mn.def(x86Maxpd, "maxpd");
+        X86Mn.def(x86Maxps, "maxps"); X86Mn.def(x86Maxsd, "maxsd"); X86Mn.def(x86Maxss, "maxss");
+        X86Mn.def(x86Mfence, "mfence"); X86Mn.def(x86Minpd, "minpd"); X86Mn.def(x86Minps, "minps");
+        X86Mn.def(x86Minsd, "minsd"); X86Mn.def(x86Minss, "minss"); X86Mn.def(x86Mov, "mov");
+        X86Mn.def(x86Movabs, "movabs"); X86Mn.def(x86Movapd, "movapd"); X86Mn.def(x86Movaps, "movaps");
+        X86Mn.def(x86Movd, "movd"); X86Mn.def(x86Movdqa, "movdqa"); X86Mn.def(x86Movdqu, "movdqu");
+        X86Mn.def(x86Movq, "movq"); X86Mn.def(x86Movsd, "movsd"); X86Mn.def(x86Movss, "movss");
+        X86Mn.def(x86Movsx, "movsx"); X86Mn.def(x86Movsxd, "movsxd"); X86Mn.def(x86Movupd, "movupd");
+        X86Mn.def(x86Movups, "movups"); X86Mn.def(x86Movzx, "movzx"); X86Mn.def(x86Mul, "mul");
+        X86Mn.def(x86Mulpd, "mulpd"); X86Mn.def(x86Mulps, "mulps"); X86Mn.def(x86Mulsd, "mulsd");
+        X86Mn.def(x86Mulss, "mulss"); X86Mn.def(x86Neg, "neg"); X86Mn.def(x86Nop, "nop");
+        X86Mn.def(x86Not, "not"); X86Mn.def(x86Or, "or"); X86Mn.def(x86Orpd, "orpd");
+        X86Mn.def(x86Orps, "orps"); X86Mn.def(x86Pabsb, "pabsb"); X86Mn.def(x86Pabsd, "pabsd");
+        X86Mn.def(x86Pabsw, "pabsw"); X86Mn.def(x86Paddb, "paddb"); X86Mn.def(x86Paddd, "paddd");
+        X86Mn.def(x86Paddq, "paddq"); X86Mn.def(x86Paddw, "paddw"); X86Mn.def(x86Pand, "pand");
+        X86Mn.def(x86Pandn, "pandn"); X86Mn.def(x86Pause, "pause"); X86Mn.def(x86Pcmpeqb, "pcmpeqb");
+        X86Mn.def(x86Pcmpeqd, "pcmpeqd"); X86Mn.def(x86Pcmpeqw, "pcmpeqw"); X86Mn.def(x86Pcmpgtb, "pcmpgtb");
+        X86Mn.def(x86Pcmpgtd, "pcmpgtd"); X86Mn.def(x86Pcmpgtw, "pcmpgtw"); X86Mn.def(x86Phaddd, "phaddd");
+        X86Mn.def(x86Phaddw, "phaddw"); X86Mn.def(x86Pmaddubsw, "pmaddubsw"); X86Mn.def(x86Pmaddwd, "pmaddwd");
+        X86Mn.def(x86Pmaxsb, "pmaxsb"); X86Mn.def(x86Pmaxsd, "pmaxsd"); X86Mn.def(x86Pmaxsw, "pmaxsw");
+        X86Mn.def(x86Pmaxub, "pmaxub"); X86Mn.def(x86Pmaxud, "pmaxud"); X86Mn.def(x86Pmaxuw, "pmaxuw");
+        X86Mn.def(x86Pminsb, "pminsb"); X86Mn.def(x86Pminsd, "pminsd"); X86Mn.def(x86Pminsw, "pminsw");
+        X86Mn.def(x86Pminub, "pminub"); X86Mn.def(x86Pminud, "pminud"); X86Mn.def(x86Pminuw, "pminuw");
+        X86Mn.def(x86Pmulld, "pmulld"); X86Mn.def(x86Pmullw, "pmullw"); X86Mn.def(x86Pmuludq, "pmuludq");
+        X86Mn.def(x86Pop, "pop"); X86Mn.def(x86Por, "por"); X86Mn.def(x86Pshufd, "pshufd");
+        X86Mn.def(x86Pshufhw, "pshufhw"); X86Mn.def(x86Pshuflw, "pshuflw"); X86Mn.def(x86Pslld, "pslld");
+        X86Mn.def(x86Psllq, "psllq"); X86Mn.def(x86Psllw, "psllw"); X86Mn.def(x86Psrad, "psrad");
+        X86Mn.def(x86Psraw, "psraw"); X86Mn.def(x86Psrld, "psrld"); X86Mn.def(x86Psrlq, "psrlq");
+        X86Mn.def(x86Psrlw, "psrlw"); X86Mn.def(x86Psubd, "psubd"); X86Mn.def(x86Psubw, "psubw");
+        X86Mn.def(x86Punpcklbw, "punpcklbw"); X86Mn.def(x86Punpckldq, "punpckldq"); X86Mn.def(x86Punpcklqdq, "punpcklqdq");
+        X86Mn.def(x86Push, "push"); X86Mn.def(x86Pxor, "pxor"); X86Mn.def(x86Rdtsc, "rdtsc");
+        X86Mn.def(x86Ret, "ret"); X86Mn.def(x86Rex64, "rex64"); X86Mn.def(x86Rol, "rol");
+        X86Mn.def(x86Ror, "ror"); X86Mn.def(x86Sal, "sal"); X86Mn.def(x86Sar, "sar");
+        X86Mn.def(x86Sbb, "sbb"); X86Mn.def(x86Sfence, "sfence"); X86Mn.def(x86Shl, "shl");
+        X86Mn.def(x86Shr, "shr"); X86Mn.def(x86Shufpd, "shufpd"); X86Mn.def(x86Shufps, "shufps");
+        X86Mn.def(x86Sqrtpd, "sqrtpd"); X86Mn.def(x86Sqrtps, "sqrtps"); X86Mn.def(x86Sqrtsd, "sqrtsd");
+        X86Mn.def(x86Sqrtss, "sqrtss"); X86Mn.def(x86Sub, "sub"); X86Mn.def(x86Subpd, "subpd");
+        X86Mn.def(x86Subps, "subps"); X86Mn.def(x86Subsd, "subsd"); X86Mn.def(x86Subss, "subss");
+        X86Mn.def(x86Syscall, "syscall"); X86Mn.def(x86Test, "test"); X86Mn.def(x86Ucomisd, "ucomisd");
+        X86Mn.def(x86Ucomiss, "ucomiss"); X86Mn.def(x86Ud2, "ud2"); X86Mn.def(x86Unpckhpd, "unpckhpd");
+        X86Mn.def(x86Unpckhps, "unpckhps"); X86Mn.def(x86Unpcklpd, "unpcklpd"); X86Mn.def(x86Unpcklps, "unpcklps");
+        X86Mn.def(x86Vbroadcastsd, "vbroadcastsd"); X86Mn.def(x86Vbroadcastss, "vbroadcastss"); X86Mn.def(x86Vcomisd, "vcomisd");
+        X86Mn.def(x86Vcomiss, "vcomiss"); X86Mn.def(x86Vcvtdq2ps, "vcvtdq2ps"); X86Mn.def(x86Vcvttps2dq, "vcvttps2dq");
+        X86Mn.def(x86Vcvttsd2si, "vcvttsd2si"); X86Mn.def(x86Vcvttss2si, "vcvttss2si"); X86Mn.def(x86Vextractf128, "vextractf128");
+        X86Mn.def(x86Vextracti128, "vextracti128"); X86Mn.def(x86Vmovaps, "vmovaps"); X86Mn.def(x86Vmovd, "vmovd");
+        X86Mn.def(x86Vmovdqa, "vmovdqa"); X86Mn.def(x86Vmovdqu, "vmovdqu"); X86Mn.def(x86Vmovq, "vmovq");
+        X86Mn.def(x86Vmovsd, "vmovsd"); X86Mn.def(x86Vmovss, "vmovss"); X86Mn.def(x86Vmovups, "vmovups");
+        X86Mn.def(x86Vpabsb, "vpabsb"); X86Mn.def(x86Vpabsd, "vpabsd"); X86Mn.def(x86Vpabsw, "vpabsw");
+        X86Mn.def(x86Vpblendd, "vpblendd"); X86Mn.def(x86Vpbroadcastb, "vpbroadcastb"); X86Mn.def(x86Vpbroadcastd, "vpbroadcastd");
+        X86Mn.def(x86Vpbroadcastq, "vpbroadcastq"); X86Mn.def(x86Vpbroadcastw, "vpbroadcastw"); X86Mn.def(x86Vpshufd, "vpshufd");
+        X86Mn.def(x86Vpslld, "vpslld"); X86Mn.def(x86Vpsllq, "vpsllq"); X86Mn.def(x86Vpsllw, "vpsllw");
+        X86Mn.def(x86Vpsrad, "vpsrad"); X86Mn.def(x86Vpsraw, "vpsraw"); X86Mn.def(x86Vpsrld, "vpsrld");
+        X86Mn.def(x86Vpsrlq, "vpsrlq"); X86Mn.def(x86Vpsrlw, "vpsrlw"); X86Mn.def(x86Vshufps, "vshufps");
+        X86Mn.def(x86Vsqrtpd, "vsqrtpd"); X86Mn.def(x86Vsqrtps, "vsqrtps"); X86Mn.def(x86Vucomisd, "vucomisd");
+        X86Mn.def(x86Vucomiss, "vucomiss"); X86Mn.def(x86Vzeroupper, "vzeroupper"); X86Mn.def(x86Xadd, "xadd");
+        X86Mn.def(x86Xchg, "xchg"); X86Mn.def(x86Xgetbv, "xgetbv"); X86Mn.def(x86Xor, "xor");
+        X86Mn.def(x86Xorpd, "xorpd"); X86Mn.def(x86Xorps, "xorps");
+        }
+
+    // The number of a mnemonic, or x86Unknown for one no encoder tests.
+    static u16 find(String* mnemonic)
+        {
+        if (_byName == (Map*)0)
+            X86Mn.build();
+        Number* mc = (Number*)_byName.get((Hashable*)mnemonic);
+        if (mc == (Number*)0)
+            return x86Unknown;
+        return mc.asU16();
+        }
+    }
+
     class X86Asm
     {
     SectionBytes* _text;
@@ -1129,12 +1291,14 @@ class X86Fixup
         u32 sp = firstSpace(s);
         String* mn = (sp == (u32)$FFFF_FFFF ? s : s.substringBytes((u32)0, sp)).lowercased();
         String* rest = sp == (u32)$FFFF_FFFF ? String.withCString("") : s.substringFromByte(sp);
+        // The encoders test this number, not the String (#330).
+        u16 mc = X86Mn.find(mn);
 
         // `lock` is a PREFIX, not an instruction: encode what follows it, then
         // put 0xF0 in front — AFTER any 0x66 operand-size prefix, because that
         // is the order clang writes and this assembler is held byte-identical
         // to clang.
-        if (mn.equals(String.withCString("lock")))
+        if (mc == x86Lock)
             {
             Array* inner = encodeInsn(rest.trimmed());
             if (inner == (Array*)0)
@@ -1161,7 +1325,7 @@ class X86Fixup
         // identical to. If the inner encoding already carries a REX byte, set W
         // in THAT one: two REX bytes would decode the first as a no-op prefix
         // and change the instruction.
-        if (mn.equals(String.withCString("rex64")))
+        if (mc == x86Rex64)
             {
             Array* inner = encodeInsn(rest.trimmed());
             if (inner == (Array*)0)
@@ -1271,16 +1435,16 @@ class X86Fixup
             eModRM(a.reg(), b);
             return _out;
             }
-        encGroupA(mn, a, b);
+        encGroupA(mn, mc, a, b);
         if (_hit || _failed)
             return _failed ? (Array*)0 : _out;
-        encGroupB(mn, a, b);
+        encGroupB(mn, mc, a, b);
         if (_hit || _failed)
             return _failed ? (Array*)0 : _out;
-        encGroupC(mn, a, b);
+        encGroupC(mn, mc, a, b);
         if (_hit || _failed)
             return _failed ? (Array*)0 : _out;
-        encGroupD(mn, a, b);
+        encGroupD(mn, mc, a, b);
         if (_hit || _failed)
             return _failed ? (Array*)0 : _out;
 
@@ -1325,67 +1489,67 @@ class X86Fixup
         }
 
     // ── Group A: the zero-operand forms, push/pop, the ALU group and mov ──
-    void encGroupA(String* mn, XOperand* a, XOperand* b)
+    void encGroupA(String* mn, u16 mc, XOperand* a, XOperand* b)
         {
-        if (mn.equals(String.withCString("ret")))
+        if (mc == x86Ret)
             {
             e8((u32)$C3);
             _hit = true;
             return;
             }
-        if (mn.equals(String.withCString("leave")))
+        if (mc == x86Leave)
             {
             e8((u32)$C9);
             _hit = true;
             return;
             }
-        if (mn.equals(String.withCString("nop")))
+        if (mc == x86Nop)
             {
             e8((u32)$90);
             _hit = true;
             return;
             }
-        if (mn.equals(String.withCString("cdq")))
+        if (mc == x86Cdq)
             {
             e8((u32)$99);
             _hit = true;
             return;
             }
-        if (mn.equals(String.withCString("cqo")))
+        if (mc == x86Cqo)
             {
             e8((u32)$48);
             e8((u32)$99);
             _hit = true;
             return;
             }
-        if (mn.equals(String.withCString("syscall")))
+        if (mc == x86Syscall)
             {
             e8((u32)$0F);
             e8((u32)$05);
             _hit = true;
             return;
             }
-        if (mn.equals(String.withCString("hlt")))
+        if (mc == x86Hlt)
             {
             e8((u32)$F4);
             _hit = true;
             return;
             }
-        if (mn.equals(String.withCString("ud2")))
+        if (mc == x86Ud2)
             {
             e8((u32)$0F);
             e8((u32)$0B);
             _hit = true;
             return;
             }
-        if (mn.equals(String.withCString("cwd")))
+        if (mc == x86Cwd)
             {
             e8((u32)$66);
             e8((u32)$99);
             _hit = true;
             return;
             }
-        if (mn.equals(String.withCString("cdqe")))
+        if (mc == x86Cdqe)
             {
             e8((u32)$48);
             e8((u32)$98);
@@ -1394,7 +1558,7 @@ class X86Fixup
             }
 
         // ── atomics, fences and the bit-test group (private:docs/Design/threading.md) ──
-        if (mn.equals(String.withCString("mfence")))
+        if (mc == x86Mfence)
             {
             e8((u32)$0F);
             e8((u32)$AE);
@@ -1402,7 +1566,7 @@ class X86Fixup
             _hit = true;
             return;
             }
-        if (mn.equals(String.withCString("lfence")))
+        if (mc == x86Lfence)
             {
             e8((u32)$0F);
             e8((u32)$AE);
@@ -1410,7 +1574,7 @@ class X86Fixup
             _hit = true;
             return;
             }
-        if (mn.equals(String.withCString("sfence")))
+        if (mc == x86Sfence)
             {
             e8((u32)$0F);
             e8((u32)$AE);
@@ -1418,7 +1582,7 @@ class X86Fixup
             _hit = true;
             return;
             }
-        if (mn.equals(String.withCString("pause")))
+        if (mc == x86Pause)
             {
             e8((u32)$F3);
             e8((u32)$90);
@@ -1427,21 +1591,21 @@ class X86Fixup
             }
         // The CPU-feature reads behind runtime SIMD dispatch (_xt_simd_select).
         // The cycle counter (the runtime's stack-guard seed).
-        if (mn.equals(String.withCString("rdtsc")))
+        if (mc == x86Rdtsc)
             {
             e8((u32)$0F);
             e8((u32)$31);
             _hit = true;
             return;
             }
-        if (mn.equals(String.withCString("cpuid")))
+        if (mc == x86Cpuid)
             {
             e8((u32)$0F);
             e8((u32)$A2);
             _hit = true;
             return;
             }
-        if (mn.equals(String.withCString("xgetbv")))
+        if (mc == x86Xgetbv)
             {
             e8((u32)$0F);
             e8((u32)$01);
@@ -1455,25 +1619,25 @@ class X86Fixup
             u32 btOp = (u32)0;
             u32 btExt = (u32)0;
             bool isBt = false;
-            if (mn.equals(String.withCString("bt")))
+            if (mc == x86Bt)
                 {
                 btOp = (u32)$A3;
                 btExt = (u32)4;
                 isBt = true;
                 }
-            if (mn.equals(String.withCString("bts")))
+            if (mc == x86Bts)
                 {
                 btOp = (u32)$AB;
                 btExt = (u32)5;
                 isBt = true;
                 }
-            if (mn.equals(String.withCString("btr")))
+            if (mc == x86Btr)
                 {
                 btOp = (u32)$B3;
                 btExt = (u32)6;
                 isBt = true;
                 }
-            if (mn.equals(String.withCString("btc")))
+            if (mc == x86Btc)
                 {
                 btOp = (u32)$BB;
                 btExt = (u32)7;
@@ -1505,18 +1669,18 @@ class X86Fixup
                 }
             }
         // xadd / cmpxchg / xchg — r/m is the destination, the register is `b`.
-        if ((mn.equals(String.withCString("xadd")) || mn.equals(String.withCString("cmpxchg")) || mn.equals(String.withCString("xchg"))) && a != (XOperand*)0 && b != (XOperand*)0 && b.kind() == (u32)OP_REG)
+        if ((mc == x86Xadd || mc == x86Cmpxchg || mc == x86Xchg) && a != (XOperand*)0 && b != (XOperand*)0 && b.kind() == OP_REG)
             {
             eRex(_w, (i32)b.reg(), a.index(),
                  a.kind() == (u32)OP_REG ? (i32)a.reg() : a.base(), _force8);
-            if (mn.equals(String.withCString("xchg")))
+            if (mc == x86Xchg)
                 {
                 e8(_osz == (u32)1 ? (u32)$86 : (u32)$87);
                 }
             else
                 {
                 e8((u32)$0F);
-                u32 op = mn.equals(String.withCString("xadd")) ? (u32)$C1 : (u32)$B1;
+                u32 op = mc == x86Xadd ? $C1 : $B1;
                 e8(_osz == (u32)1 ? op - (u32)1 : op);
                 }
             eModRM(b.reg(), a);
@@ -1524,8 +1688,8 @@ class X86Fixup
             return;
             }
 
-        bool isPush = mn.equals(String.withCString("push"));
-        if ((isPush || mn.equals(String.withCString("pop"))) && a != (XOperand*)0 && a.kind() == (u32)OP_REG)
+        bool isPush = mc == x86Push;
+        if ((isPush || mc == x86Pop) && a != (XOperand*)0 && a.kind() == OP_REG)
             {
             if ((a.reg() & (u32)8) != (u32)0)
                 e8((u32)$41);
@@ -1534,7 +1698,7 @@ class X86Fixup
             return;
             }
 
-        i32 ext = aluExt(mn);
+        i32 ext = aluExt(mc);
         if (ext >= (i32)0 && a != (XOperand*)0 && b != (XOperand*)0)
             {
             if (b.kind() == (u32)OP_IMM && b.symbol() == (String*)0)
@@ -1601,7 +1765,7 @@ class X86Fixup
                 }
             }
 
-        if (mn.equals(String.withCString("mov")) && a != (XOperand*)0 && b != (XOperand*)0)
+        if (mc == x86Mov && a != (XOperand*)0 && b != (XOperand*)0)
             {
             if (b.kind() == (u32)OP_IMM && b.symbol() == (String*)0)
                 {
@@ -1675,7 +1839,7 @@ class X86Fixup
                 }
             }
 
-        if (mn.equals(String.withCString("lea")) && a != (XOperand*)0 && b != (XOperand*)0 && a.kind() == (u32)OP_REG && b.kind() == (u32)OP_MEM)
+        if (mc == x86Lea && a != (XOperand*)0 && b != (XOperand*)0 && a.kind() == OP_REG && b.kind() == OP_MEM)
             {
             eRex(a.size() == (u32)8, (i32)a.reg(), b.index(), b.base(), _force8);
             e8((u32)$8D);
@@ -1693,31 +1857,31 @@ class X86Fixup
         return o.immHi() == (negative ? (u32)$FFFF_FFFF : (u32)0);
         }
 
-    static i32 aluExt(String* m)
+    static i32 aluExt(u16 mc)
         {
-        if (m.equals(String.withCString("add")))
+        if (mc == x86Add)
             return (i32)0;
-        if (m.equals(String.withCString("or")))
+        if (mc == x86Or)
             return (i32)1;
-        if (m.equals(String.withCString("adc")))
+        if (mc == x86Adc)
             return (i32)2;
-        if (m.equals(String.withCString("sbb")))
+        if (mc == x86Sbb)
             return (i32)3;
-        if (m.equals(String.withCString("and")))
+        if (mc == x86And)
             return (i32)4;
-        if (m.equals(String.withCString("sub")))
+        if (mc == x86Sub)
             return (i32)5;
-        if (m.equals(String.withCString("xor")))
+        if (mc == x86Xor)
             return (i32)6;
-        if (m.equals(String.withCString("cmp")))
+        if (mc == x86Cmp)
             return (i32)7;
         return (i32)-1;
         }
 
     // ── Group B: extends, the unary group, inc/dec, test, setcc, shifts ──
-    void encGroupB(String* mn, XOperand* a, XOperand* b)
+    void encGroupB(String* mn, u16 mc, XOperand* a, XOperand* b)
         {
-        if (mn.equals(String.withCString("movsxd")) && a != (XOperand*)0 && b != (XOperand*)0)
+        if (mc == x86Movsxd && a != (XOperand*)0 && b != (XOperand*)0)
             {
             eRex(true, (i32)a.reg(), b.index(), b.rmReg(), false);
             e8((u32)$63);
@@ -1725,8 +1889,8 @@ class X86Fixup
             _hit = true;
             return;
             }
-        bool zx = mn.equals(String.withCString("movzx"));
-        if ((zx || mn.equals(String.withCString("movsx"))) && a != (XOperand*)0 && b != (XOperand*)0)
+        bool zx = mc == x86Movzx;
+        if ((zx || mc == x86Movsx) && a != (XOperand*)0 && b != (XOperand*)0)
             {
             u32 srcSize = b.kind() == (u32)OP_REG ? b.size()
                                                   : (b.size() != (u32)0 ? b.size() : (u32)1);
@@ -1747,7 +1911,7 @@ class X86Fixup
             _hit = true;
             return;
             }
-        i32 un = unaryExt(mn);
+        i32 un = unaryExt(mc);
         if (un >= (i32)0 && a != (XOperand*)0 && _ops.count() == (u32)1)
             {
             eRex(_w, (i32)0, a.index(), a.rmReg(), _force8);
@@ -1756,8 +1920,8 @@ class X86Fixup
             _hit = true;
             return;
             }
-        bool isInc = mn.equals(String.withCString("inc"));
-        if ((isInc || mn.equals(String.withCString("dec"))) && a != (XOperand*)0 && _ops.count() == (u32)1)
+        bool isInc = mc == x86Inc;
+        if ((isInc || mc == x86Dec) && a != (XOperand*)0 && _ops.count() == 1)
             {
             eRex(_w, (i32)0, a.index(), a.rmReg(), _force8);
             e8(_osz == (u32)1 ? (u32)$FE : (u32)$FF);
@@ -1765,7 +1929,7 @@ class X86Fixup
             _hit = true;
             return;
             }
-        if (mn.equals(String.withCString("test")) && a != (XOperand*)0 && b != (XOperand*)0 && b.kind() == (u32)OP_IMM && b.symbol() == (String*)0)
+        if (mc == x86Test && a != (XOperand*)0 && b != (XOperand*)0 && b.kind() == OP_IMM && b.symbol() == (String*)0)
             {
             // As for the ALU forms: the immediate is a sign-extended imm32,
             // and `test rcx, 0x100000000` became `test rcx, 0`.
@@ -1792,7 +1956,7 @@ class X86Fixup
             _hit = true;
             return;
             }
-        if (mn.equals(String.withCString("test")) && a != (XOperand*)0 && b != (XOperand*)0 && b.kind() == (u32)OP_REG)
+        if (mc == x86Test && a != (XOperand*)0 && b != (XOperand*)0 && b.kind() == OP_REG)
             {
             eRex(_w, (i32)b.reg(), a.index(), a.rmReg(), _force8);
             e8(_osz == (u32)1 ? (u32)$84 : (u32)$85);
@@ -1813,7 +1977,7 @@ class X86Fixup
                 return;
                 }
             }
-        i32 sh = shiftExt(mn);
+        i32 sh = shiftExt(mc);
         if (sh >= (i32)0 && a != (XOperand*)0)
             {
             eRex(_w, (i32)0, a.index(), a.rmReg(), _force8);
@@ -1846,42 +2010,42 @@ class X86Fixup
             }
         }
 
-    static i32 unaryExt(String* m)
+    static i32 unaryExt(u16 mc)
         {
-        if (m.equals(String.withCString("not")))
+        if (mc == x86Not)
             return (i32)2;
-        if (m.equals(String.withCString("neg")))
+        if (mc == x86Neg)
             return (i32)3;
-        if (m.equals(String.withCString("mul")))
+        if (mc == x86Mul)
             return (i32)4;
-        if (m.equals(String.withCString("imul")))
+        if (mc == x86Imul)
             return (i32)5;
-        if (m.equals(String.withCString("div")))
+        if (mc == x86Div)
             return (i32)6;
-        if (m.equals(String.withCString("idiv")))
+        if (mc == x86Idiv)
             return (i32)7;
         return (i32)-1;
         }
 
-    static i32 shiftExt(String* m)
+    static i32 shiftExt(u16 mc)
         {
-        if (m.equals(String.withCString("rol")))
+        if (mc == x86Rol)
             return (i32)0;
-        if (m.equals(String.withCString("ror")))
+        if (mc == x86Ror)
             return (i32)1;
-        if (m.equals(String.withCString("shl")) || m.equals(String.withCString("sal")))
+        if (mc == x86Shl || mc == x86Sal)
             return (i32)4;
-        if (m.equals(String.withCString("shr")))
+        if (mc == x86Shr)
             return (i32)5;
-        if (m.equals(String.withCString("sar")))
+        if (mc == x86Sar)
             return (i32)7;
         return (i32)-1;
         }
 
     // ── Group C: imul forms, movabs, branches, cmovcc ────────────────────
-    void encGroupC(String* mn, XOperand* a, XOperand* b)
+    void encGroupC(String* mn, u16 mc, XOperand* a, XOperand* b)
         {
-        if (mn.equals(String.withCString("imul")) && a != (XOperand*)0 && b != (XOperand*)0 && _ops.count() == (u32)2 && a.kind() == (u32)OP_REG)
+        if (mc == x86Imul && a != (XOperand*)0 && b != (XOperand*)0 && _ops.count() == 2 && a.kind() == OP_REG)
             {
             eRex(_w, (i32)a.reg(), b.index(), b.rmReg(), _force8);
             e8((u32)$0F);
@@ -1890,7 +2054,7 @@ class X86Fixup
             _hit = true;
             return;
             }
-        if (mn.equals(String.withCString("imul")) && _ops.count() == (u32)3 && a != (XOperand*)0 && b != (XOperand*)0)
+        if (mc == x86Imul && _ops.count() == 3 && a != (XOperand*)0 && b != (XOperand*)0)
             {
             i32 iv = ((XOperand*)_ops.get((u32)2)).imm();
             bool imm8 = iv >= (i32)-128 && iv <= (i32)127;
@@ -1904,7 +2068,7 @@ class X86Fixup
             _hit = true;
             return;
             }
-        if (mn.equals(String.withCString("movabs")) && a != (XOperand*)0 && b != (XOperand*)0 && a.kind() == (u32)OP_REG)
+        if (mc == x86Movabs && a != (XOperand*)0 && b != (XOperand*)0 && a.kind() == OP_REG)
             {
             eRex(true, (i32)0, (i32)0, (i32)a.reg(), false);
             e8((u32)$B8 + (a.reg() & (u32)7));
@@ -1912,8 +2076,8 @@ class X86Fixup
             _hit = true;
             return;
             }
-        bool isCall = mn.equals(String.withCString("call"));
-        if ((isCall || mn.equals(String.withCString("jmp"))) && a != (XOperand*)0)
+        bool isCall = mc == x86Call;
+        if ((isCall || mc == x86Jmp) && a != (XOperand*)0)
             {
             // indirect
             if (a.kind() == (u32)OP_REG || a.kind() == (u32)OP_MEM)
@@ -1982,26 +2146,27 @@ class X86Fixup
         if (a == (XOperand*)0)
             return false;
         String* base = mn.substringFromByte((u32)1);
+        u16 bc = X86Mn.find(base);
         // vcmpps/vcmppd carry the predicate as a fourth, immediate operand.
-        bool cmp = base.equals(String.withCString("cmpps")) || base.equals(String.withCString("cmppd"));
+        bool cmp = bc == x86Cmpps || bc == x86Cmppd;
         bool imm4 = cmp && _ops.count() == (u32)4 && opAt((u32)3) != (XOperand*)0 && opAt((u32)3).kind() == (u32)OP_IMM;
         if (_ops.count() != (u32)3 && !imm4)
             return false;
-        u32 rr = cmp ? (base.equals(String.withCString("cmppd")) ? (u32)$66C2 : (u32)$C2) : sseRR(base);
+        u32 rr = cmp ? (bc == x86Cmppd ? $66C2 : $C2) : sseRR(bc);
         // Three-operand scalar forms not in sseRR (their legacy encodings
         // differ): vmovss/vmovsd reg, reg, reg merge the low element, and
         // vcvtsi2ss/sd take a GPR or memory source, W1 for 64 bits. As the
         // reference.
         bool cvtsi = false;
-        if (rr == (u32)$FFFF_FFFF && base.equals(String.withCString("movss"))) rr = (u32)$F310;
-        if (rr == (u32)$FFFF_FFFF && base.equals(String.withCString("movsd"))) rr = (u32)$F210;
-        if (rr == (u32)$FFFF_FFFF && base.equals(String.withCString("cvtsi2ss"))) { rr = (u32)$F32A; cvtsi = true; }
-        if (rr == (u32)$FFFF_FFFF && base.equals(String.withCString("cvtsi2sd"))) { rr = (u32)$F22A; cvtsi = true; }
+        if (rr == $FFFF_FFFF && bc == x86Movss) rr = $F310;
+        if (rr == $FFFF_FFFF && bc == x86Movsd) rr = $F210;
+        if (rr == $FFFF_FFFF && bc == x86Cvtsi2ss) { rr = $F32A; cvtsi = true; }
+        if (rr == $FFFF_FFFF && bc == x86Cvtsi2sd) { rr = $F22A; cvtsi = true; }
         u32 map = (u32)1;
         // The 0F38 map: the SSE4.1 lane min/max and the 32-bit multiply.
         if (rr == (u32)$FFFF_FFFF)
             {
-            rr = vex38(base);
+            rr = vex38(bc);
             map = (u32)2;
             }
         if (rr == (u32)$FFFF_FFFF)
@@ -2018,7 +2183,7 @@ class X86Fixup
         // matching it is required for byte-identity. NOT for sub or div, and
         // NOT for min/max — `minps a, b` returns b when either is NaN, so
         // swapping changes the answer.
-        if (vexCommutes(base) && s2.kind() == (u32)OP_REG
+        if (vexCommutes(bc) && s2.kind() == OP_REG
             && (s2.reg() & (u32)8) != (u32)0 && (s1.reg() & (u32)8) == (u32)0)
             {
             XOperand* t = s1; s1 = s2; s2 = t;
@@ -2063,35 +2228,35 @@ class X86Fixup
         }
 
     // The 0F38-map VEX forms, as (prefix << 8) | opcode like sseRR.
-    static u32 vex38(String* m)
+    static u32 vex38(u16 mc)
         {
-        if (m.equals(String.withCString("pmaxsd"))) return (u32)$663D;
-        if (m.equals(String.withCString("pminsd"))) return (u32)$6639;
-        if (m.equals(String.withCString("pmaxud"))) return (u32)$663F;
-        if (m.equals(String.withCString("pminud"))) return (u32)$663B;
-        if (m.equals(String.withCString("pmaxsb"))) return (u32)$663C;
-        if (m.equals(String.withCString("pminsb"))) return (u32)$6638;
-        if (m.equals(String.withCString("pmaxuw"))) return (u32)$663E;
-        if (m.equals(String.withCString("pminuw"))) return (u32)$663A;
-        if (m.equals(String.withCString("pmulld"))) return (u32)$6640;
+        if (mc == x86Pmaxsd) return $663D;
+        if (mc == x86Pminsd) return $6639;
+        if (mc == x86Pmaxud) return $663F;
+        if (mc == x86Pminud) return $663B;
+        if (mc == x86Pmaxsb) return $663C;
+        if (mc == x86Pminsb) return $6638;
+        if (mc == x86Pmaxuw) return $663E;
+        if (mc == x86Pminuw) return $663A;
+        if (mc == x86Pmulld) return $6640;
         // The u8 pair sum the 256-bit widening reductions use (bug 644).
-        if (m.equals(String.withCString("pmaddubsw"))) return (u32)$6604;
+        if (mc == x86Pmaddubsw) return $6604;
         // Scalar FMA (:goal(speed) code's fused multiply-adds), VEX.W1 for the
         // double forms.
-        if (m.equals(String.withCString("fmadd231ss")) || m.equals(String.withCString("fmadd231sd"))) return (u32)$66B9;
-        if (m.equals(String.withCString("fmsub231ss")) || m.equals(String.withCString("fmsub231sd"))) return (u32)$66BB;
-        if (m.equals(String.withCString("fnmadd231ss")) || m.equals(String.withCString("fnmadd231sd"))) return (u32)$66BD;
-        if (m.equals(String.withCString("fmadd213ss")) || m.equals(String.withCString("fmadd213sd"))) return (u32)$66A9;
-        if (m.equals(String.withCString("fmsub213ss")) || m.equals(String.withCString("fmsub213sd"))) return (u32)$66AB;
-        if (m.equals(String.withCString("fnmadd213ss")) || m.equals(String.withCString("fnmadd213sd"))) return (u32)$66AD;
+        if (mc == x86Fmadd231ss || mc == x86Fmadd231sd) return $66B9;
+        if (mc == x86Fmsub231ss || mc == x86Fmsub231sd) return $66BB;
+        if (mc == x86Fnmadd231ss || mc == x86Fnmadd231sd) return $66BD;
+        if (mc == x86Fmadd213ss || mc == x86Fmadd213sd) return $66A9;
+        if (mc == x86Fmsub213ss || mc == x86Fmsub213sd) return $66AB;
+        if (mc == x86Fnmadd213ss || mc == x86Fnmadd213sd) return $66AD;
         // Packed FMA (vector code's fused multiply-adds), VEX.W1 for the double
         // forms.
-        if (m.equals(String.withCString("fmadd231ps")) || m.equals(String.withCString("fmadd231pd"))) return (u32)$66B8;
-        if (m.equals(String.withCString("fmsub231ps")) || m.equals(String.withCString("fmsub231pd"))) return (u32)$66BA;
-        if (m.equals(String.withCString("fnmadd231ps")) || m.equals(String.withCString("fnmadd231pd"))) return (u32)$66BC;
-        if (m.equals(String.withCString("fmadd213ps")) || m.equals(String.withCString("fmadd213pd"))) return (u32)$66A8;
-        if (m.equals(String.withCString("fmsub213ps")) || m.equals(String.withCString("fmsub213pd"))) return (u32)$66AA;
-        if (m.equals(String.withCString("fnmadd213ps")) || m.equals(String.withCString("fnmadd213pd"))) return (u32)$66AC;
+        if (mc == x86Fmadd231ps || mc == x86Fmadd231pd) return $66B8;
+        if (mc == x86Fmsub231ps || mc == x86Fmsub231pd) return $66BA;
+        if (mc == x86Fnmadd231ps || mc == x86Fnmadd231pd) return $66BC;
+        if (mc == x86Fmadd213ps || mc == x86Fmadd213pd) return $66A8;
+        if (mc == x86Fmsub213ps || mc == x86Fmsub213pd) return $66AA;
+        if (mc == x86Fnmadd213ps || mc == x86Fnmadd213pd) return $66AC;
         return (u32)$FFFF_FFFF;
         }
 
@@ -2563,11 +2728,11 @@ class X86Fixup
     // vzeroupper; two-operand moves and broadcasts; vextract{i,f}128 (the
     // source in reg, the destination in r/m); the immediate shifts (the
     // DESTINATION in vvvv, the source in r/m). As the reference encodes them.
-    bool encAvx(String* mn, XOperand* a, XOperand* b)
+    bool encAvx(String* mn, u16 mc, XOperand* a, XOperand* b)
         {
         if (mn.byteLength() < (u32)2 || mn.byteAt((u32)0) != (u8)'v')
             return false;
-        if (mn.equals(String.withCString("vzeroupper")) && _ops.count() == (u32)0)
+        if (mc == x86Vzeroupper && _ops.count() == 0)
             {
             e8((u32)$C5); e8((u32)$F8); e8((u32)$77);
             _hit = true;
@@ -2578,8 +2743,8 @@ class X86Fixup
         // function uses these, never the legacy forms: a legacy write to an
         // xmm whose upper ymm half is live made the AVX2 md5 22x slower than
         // its SSE build on a Zen 3.
-        bool isVmovd = mn.equals(String.withCString("vmovd"));
-        if ((isVmovd || mn.equals(String.withCString("vmovq"))) && _ops.count() == (u32)2 && a != (XOperand*)0 && b != (XOperand*)0
+        bool isVmovd = mc == x86Vmovd;
+        if ((isVmovd || mc == x86Vmovq) && _ops.count() == 2 && a != (XOperand*)0 && b != (XOperand*)0
             && (a.size() == (u32)16) != (b.size() == (u32)16))
             {
             bool toXmm = a.size() == (u32)16;
@@ -2607,40 +2772,40 @@ class X86Fixup
         // pp, map, load opcode, store opcode (0 = none)
         u32 pp = (u32)0; u32 map = (u32)0; u32 ld = (u32)0; u32 st = (u32)0;
         bool bcast = false;
-        if (mn.equals(String.withCString("vmovdqu")))      { pp = (u32)2; map = (u32)1; ld = (u32)$6F; st = (u32)$7F; }
-        else if (mn.equals(String.withCString("vmovdqa"))) { pp = (u32)1; map = (u32)1; ld = (u32)$6F; st = (u32)$7F; }
-        else if (mn.equals(String.withCString("vmovups"))) { pp = (u32)0; map = (u32)1; ld = (u32)$10; st = (u32)$11; }
-        else if (mn.equals(String.withCString("vmovaps"))) { pp = (u32)0; map = (u32)1; ld = (u32)$28; st = (u32)$29; }
-        else if (mn.equals(String.withCString("vpbroadcastb"))) { pp = (u32)1; map = (u32)2; ld = (u32)$78; bcast = true; }
-        else if (mn.equals(String.withCString("vpbroadcastw"))) { pp = (u32)1; map = (u32)2; ld = (u32)$79; bcast = true; }
-        else if (mn.equals(String.withCString("vpbroadcastd"))) { pp = (u32)1; map = (u32)2; ld = (u32)$58; bcast = true; }
-        else if (mn.equals(String.withCString("vpbroadcastq"))) { pp = (u32)1; map = (u32)2; ld = (u32)$59; bcast = true; }
-        else if (mn.equals(String.withCString("vbroadcastss"))) { pp = (u32)1; map = (u32)2; ld = (u32)$18; bcast = true; }
-        else if (mn.equals(String.withCString("vbroadcastsd"))) { pp = (u32)1; map = (u32)2; ld = (u32)$19; bcast = true; }
-        else if (mn.equals(String.withCString("vpabsb"))) { pp = (u32)1; map = (u32)2; ld = (u32)$1C; }
-        else if (mn.equals(String.withCString("vpabsw"))) { pp = (u32)1; map = (u32)2; ld = (u32)$1D; }
-        else if (mn.equals(String.withCString("vpabsd"))) { pp = (u32)1; map = (u32)2; ld = (u32)$1E; }
+        if (mc == x86Vmovdqu)      { pp = 2; map = 1; ld = $6F; st = $7F; }
+        else if (mc == x86Vmovdqa) { pp = 1; map = 1; ld = $6F; st = $7F; }
+        else if (mc == x86Vmovups) { pp = 0; map = 1; ld = $10; st = $11; }
+        else if (mc == x86Vmovaps) { pp = 0; map = 1; ld = $28; st = $29; }
+        else if (mc == x86Vpbroadcastb) { pp = 1; map = 2; ld = $78; bcast = true; }
+        else if (mc == x86Vpbroadcastw) { pp = 1; map = 2; ld = $79; bcast = true; }
+        else if (mc == x86Vpbroadcastd) { pp = 1; map = 2; ld = $58; bcast = true; }
+        else if (mc == x86Vpbroadcastq) { pp = 1; map = 2; ld = $59; bcast = true; }
+        else if (mc == x86Vbroadcastss) { pp = 1; map = 2; ld = $18; bcast = true; }
+        else if (mc == x86Vbroadcastsd) { pp = 1; map = 2; ld = $19; bcast = true; }
+        else if (mc == x86Vpabsb) { pp = 1; map = 2; ld = $1C; }
+        else if (mc == x86Vpabsw) { pp = 1; map = 2; ld = $1D; }
+        else if (mc == x86Vpabsd) { pp = 1; map = 2; ld = $1E; }
         // 2-operand VEX arithmetic (vvvv = 1111): the float square root.
-        else if (mn.equals(String.withCString("vsqrtps"))) { pp = (u32)0; map = (u32)1; ld = (u32)$51; }
-        else if (mn.equals(String.withCString("vsqrtpd"))) { pp = (u32)1; map = (u32)1; ld = (u32)$51; }
+        else if (mc == x86Vsqrtps) { pp = 0; map = 1; ld = $51; }
+        else if (mc == x86Vsqrtpd) { pp = 1; map = 1; ld = $51; }
         // and the lane conversions, int to float and float to int (#27).
-        else if (mn.equals(String.withCString("vcvtdq2ps"))) { pp = (u32)0; map = (u32)1; ld = (u32)$5B; }
-        else if (mn.equals(String.withCString("vcvttps2dq"))) { pp = (u32)2; map = (u32)1; ld = (u32)$5B; }
+        else if (mc == x86Vcvtdq2ps) { pp = 0; map = 1; ld = $5B; }
+        else if (mc == x86Vcvttps2dq) { pp = 2; map = 1; ld = $5B; }
         // The scalar compares, and the scalar moves to or from memory (a
         // register-to-register vmovss takes three operands, encVex128): what an
         // AVX function's scalar float code uses. As the reference.
-        else if (mn.equals(String.withCString("vucomiss"))) { pp = (u32)0; map = (u32)1; ld = (u32)$2E; }
-        else if (mn.equals(String.withCString("vucomisd"))) { pp = (u32)1; map = (u32)1; ld = (u32)$2E; }
-        else if (mn.equals(String.withCString("vcomiss"))) { pp = (u32)0; map = (u32)1; ld = (u32)$2F; }
-        else if (mn.equals(String.withCString("vcomisd"))) { pp = (u32)1; map = (u32)1; ld = (u32)$2F; }
-        else if (mn.equals(String.withCString("vmovss"))) { pp = (u32)2; map = (u32)1; ld = (u32)$10; st = (u32)$11; }
-        else if (mn.equals(String.withCString("vmovsd"))) { pp = (u32)3; map = (u32)1; ld = (u32)$10; st = (u32)$11; }
+        else if (mc == x86Vucomiss) { pp = 0; map = 1; ld = $2E; }
+        else if (mc == x86Vucomisd) { pp = 1; map = 1; ld = $2E; }
+        else if (mc == x86Vcomiss) { pp = 0; map = 1; ld = $2F; }
+        else if (mc == x86Vcomisd) { pp = 1; map = 1; ld = $2F; }
+        else if (mc == x86Vmovss) { pp = 2; map = 1; ld = $10; st = $11; }
+        else if (mc == x86Vmovsd) { pp = 3; map = 1; ld = $10; st = $11; }
         // vcvttss2si / vcvttsd2si r, xmm/m: VEX.LIG.F3/F2.0F.W 2C /r, W1 for a
         // 64-bit destination; reg = the GPR, r/m = the source.
-        if ((mn.equals(String.withCString("vcvttss2si")) || mn.equals(String.withCString("vcvttsd2si")))
+        if ((mc == x86Vcvttss2si || mc == x86Vcvttsd2si)
             && _ops.count() == (u32)2 && a != (XOperand*)0 && b != (XOperand*)0 && a.kind() == (u32)OP_REG)
             {
-            u32 tpp = mn.equals(String.withCString("vcvttss2si")) ? (u32)2 : (u32)3;
+            u32 tpp = mc == x86Vcvttss2si ? 2 : 3;
             u32 W = a.size() == (u32)8 ? (u32)1 : (u32)0;
             i32 bb = b.kind() == (u32)OP_REG ? (i32)b.reg() : b.rmReg();
             i32 xx = b.kind() == (u32)OP_REG ? (i32)0 : b.index();
@@ -2687,8 +2852,8 @@ class X86Fixup
             _hit = true;
             return true;
             }
-        bool exti = mn.equals(String.withCString("vextracti128"));
-        bool extf = mn.equals(String.withCString("vextractf128"));
+        bool exti = mc == x86Vextracti128;
+        bool extf = mc == x86Vextractf128;
         if ((exti || extf) && _ops.count() == (u32)3 && a != (XOperand*)0 && b != (XOperand*)0)
             {
             XOperand* im = (XOperand*)_ops.get((u32)2);
@@ -2706,7 +2871,7 @@ class X86Fixup
                 return true;
                 }
             }
-        if (mn.equals(String.withCString("vpshufd")) && _ops.count() == (u32)3 && a != (XOperand*)0 && b != (XOperand*)0)
+        if (mc == x86Vpshufd && _ops.count() == 3 && a != (XOperand*)0 && b != (XOperand*)0)
             {
             XOperand* im = (XOperand*)_ops.get((u32)2);
             if (im.kind() == (u32)OP_IMM)
@@ -2724,7 +2889,7 @@ class X86Fixup
                 return true;
                 }
             }
-        if (mn.equals(String.withCString("vshufps")) && _ops.count() == (u32)4 && a != (XOperand*)0 && b != (XOperand*)0)
+        if (mc == x86Vshufps && _ops.count() == 4 && a != (XOperand*)0 && b != (XOperand*)0)
             {
             XOperand* s2 = (XOperand*)_ops.get((u32)2);
             XOperand* im = (XOperand*)_ops.get((u32)3);
@@ -2745,7 +2910,7 @@ class X86Fixup
             }
         // vpblendd dst, src1, src2/m, imm8: VEX.66.0F3A.W0 02 (AVX2), the
         // same operand shape as vshufps. VMulHi's AVX2 merge.
-        if (mn.equals(String.withCString("vpblendd")) && _ops.count() == (u32)4 && a != (XOperand*)0 && b != (XOperand*)0)
+        if (mc == x86Vpblendd && _ops.count() == 4 && a != (XOperand*)0 && b != (XOperand*)0)
             {
             XOperand* s2 = (XOperand*)_ops.get((u32)2);
             XOperand* im = (XOperand*)_ops.get((u32)3);
@@ -2766,14 +2931,14 @@ class X86Fixup
             }
         // vpsrl/vpsra/vpsll by an immediate: opcode and /ext
         u32 sop = (u32)0; u32 sext = (u32)0;
-        if (mn.equals(String.withCString("vpsrlw"))) { sop = (u32)$71; sext = (u32)2; }
-        else if (mn.equals(String.withCString("vpsraw"))) { sop = (u32)$71; sext = (u32)4; }
-        else if (mn.equals(String.withCString("vpsllw"))) { sop = (u32)$71; sext = (u32)6; }
-        else if (mn.equals(String.withCString("vpsrld"))) { sop = (u32)$72; sext = (u32)2; }
-        else if (mn.equals(String.withCString("vpsrad"))) { sop = (u32)$72; sext = (u32)4; }
-        else if (mn.equals(String.withCString("vpslld"))) { sop = (u32)$72; sext = (u32)6; }
-        else if (mn.equals(String.withCString("vpsrlq"))) { sop = (u32)$73; sext = (u32)2; }
-        else if (mn.equals(String.withCString("vpsllq"))) { sop = (u32)$73; sext = (u32)6; }
+        if (mc == x86Vpsrlw) { sop = $71; sext = 2; }
+        else if (mc == x86Vpsraw) { sop = $71; sext = 4; }
+        else if (mc == x86Vpsllw) { sop = $71; sext = 6; }
+        else if (mc == x86Vpsrld) { sop = $72; sext = 2; }
+        else if (mc == x86Vpsrad) { sop = $72; sext = 4; }
+        else if (mc == x86Vpslld) { sop = $72; sext = 6; }
+        else if (mc == x86Vpsrlq) { sop = $73; sext = 2; }
+        else if (mc == x86Vpsllq) { sop = $73; sext = 6; }
         if (sop != (u32)0 && _ops.count() == (u32)3 && a != (XOperand*)0 && b != (XOperand*)0
             && b.kind() == (u32)OP_REG)
             {
@@ -2792,39 +2957,39 @@ class X86Fixup
         return false;
         }
 
-    static bool vexCommutes(String* m)
+    static bool vexCommutes(u16 mc)
         {
-        return m.equals(String.withCString("addps")) || m.equals(String.withCString("addpd"))
-            || m.equals(String.withCString("addss")) || m.equals(String.withCString("addsd"))
-            || m.equals(String.withCString("mulps")) || m.equals(String.withCString("mulpd"))
-            || m.equals(String.withCString("mulss")) || m.equals(String.withCString("mulsd"))
-            || m.equals(String.withCString("andps")) || m.equals(String.withCString("andpd"))
-            || m.equals(String.withCString("orps"))  || m.equals(String.withCString("orpd"))
-            || m.equals(String.withCString("xorps")) || m.equals(String.withCString("xorpd"))
-            || m.equals(String.withCString("pand"))  || m.equals(String.withCString("por"))
-            || m.equals(String.withCString("pxor"))  || m.equals(String.withCString("paddb"))
-            || m.equals(String.withCString("paddw")) || m.equals(String.withCString("paddd"))
-            || m.equals(String.withCString("paddq"))
-            || m.equals(String.withCString("pmuludq"))
-            || m.equals(String.withCString("pmullw"))
-            || m.equals(String.withCString("pcmpeqb"))
-            || m.equals(String.withCString("pcmpeqw"))
-            || m.equals(String.withCString("pcmpeqd"))
-            || m.equals(String.withCString("pmaxsw"))
-            || m.equals(String.withCString("pminsw"))
-            || m.equals(String.withCString("pmaxub"))
-            || m.equals(String.withCString("pminub"));
+        return mc == x86Addps || mc == x86Addpd
+            || mc == x86Addss || mc == x86Addsd
+            || mc == x86Mulps || mc == x86Mulpd
+            || mc == x86Mulss || mc == x86Mulsd
+            || mc == x86Andps || mc == x86Andpd
+            || mc == x86Orps  || mc == x86Orpd
+            || mc == x86Xorps || mc == x86Xorpd
+            || mc == x86Pand  || mc == x86Por
+            || mc == x86Pxor  || mc == x86Paddb
+            || mc == x86Paddw || mc == x86Paddd
+            || mc == x86Paddq
+            || mc == x86Pmuludq
+            || mc == x86Pmullw
+            || mc == x86Pcmpeqb
+            || mc == x86Pcmpeqw
+            || mc == x86Pcmpeqd
+            || mc == x86Pmaxsw
+            || mc == x86Pminsw
+            || mc == x86Pmaxub
+            || mc == x86Pminub;
         }
 
-    void encGroupD(String* mn, XOperand* a, XOperand* b)
+    void encGroupD(String* mn, u16 mc, XOperand* a, XOperand* b)
         {
         if (encEvex(mn, a, b))
             return;
-        if (encAvx(mn, a, b))
+        if (encAvx(mn, mc, a, b))
             return;
         if (encVex128(mn, a))
             return;
-        u32 rr = sseRR(mn);
+        u32 rr = sseRR(mc);
         // b must NOT be an immediate. Four of these mnemonics (psrlw/psrld/
         // psrlq and psllq) ALSO have a shift-by-immediate form, handled below
         // out of its own table because the operands sit in the opposite ModRM
@@ -2844,7 +3009,7 @@ class X86Fixup
             _hit = true;
             return;
             }
-        u32 t3 = sse38(mn);
+        u32 t3 = sse38(mc);
         if (t3 != (u32)$FFFF_FFFF && a != (XOperand*)0 && b != (XOperand*)0 && b.kind() != (u32)OP_IMM)
             {
             e8(t3 >> (u32)8);
@@ -2856,7 +3021,7 @@ class X86Fixup
             _hit = true;
             return;
             }
-        u32 si = sseShiftI(mn);
+        u32 si = sseShiftI(mc);
         if (si != (u32)$FFFF_FFFF && a != (XOperand*)0 && b != (XOperand*)0 && a.kind() == (u32)OP_REG && b.kind() == (u32)OP_IMM)
             {
             e8((u32)$66);
@@ -2869,9 +3034,9 @@ class X86Fixup
             return;
             }
         // shufps/shufpd xmm, xmm/m, imm8 — reg/rm plus a trailing selector.
-        if ((mn.equals(String.withCString("shufps")) || mn.equals(String.withCString("shufpd"))) && a != (XOperand*)0 && b != (XOperand*)0 && opAt((u32)2) != (XOperand*)0 && opAt((u32)2).kind() == (u32)OP_IMM)
+        if ((mc == x86Shufps || mc == x86Shufpd) && a != (XOperand*)0 && b != (XOperand*)0 && opAt(2) != (XOperand*)0 && opAt(2).kind() == OP_IMM)
             {
-            if (mn.equals(String.withCString("shufpd")))
+            if (mc == x86Shufpd)
                 e8((u32)$66);
             eRex(false, (i32)a.reg(), b.index(), b.rmReg(), false);
             e8((u32)$0F);
@@ -2883,9 +3048,9 @@ class X86Fixup
             }
         // cmpps/cmppd xmm, xmm/m, imm8 — the same shape, opcode C2; the imm8 is
         // the predicate (3 = unordered: a lane holding a NaN).
-        if ((mn.equals(String.withCString("cmpps")) || mn.equals(String.withCString("cmppd"))) && a != (XOperand*)0 && b != (XOperand*)0 && opAt((u32)2) != (XOperand*)0 && opAt((u32)2).kind() == (u32)OP_IMM)
+        if ((mc == x86Cmpps || mc == x86Cmppd) && a != (XOperand*)0 && b != (XOperand*)0 && opAt(2) != (XOperand*)0 && opAt(2).kind() == OP_IMM)
             {
-            if (mn.equals(String.withCString("cmppd")))
+            if (mc == x86Cmppd)
                 e8((u32)$66);
             eRex(false, (i32)a.reg(), b.index(), b.rmReg(), false);
             e8((u32)$0F);
@@ -2896,7 +3061,7 @@ class X86Fixup
             return;
             }
         // movss/movsd/movdqu/movdqa — the direction picks load or store.
-        u32 mv = sseMov(mn);
+        u32 mv = sseMov(mc);
         if (mv != (u32)$FFFF_FFFF && a != (XOperand*)0 && b != (XOperand*)0)
             {
             u32 pfx = (mv >> (u32)16) & (u32)$FF;
@@ -2914,7 +3079,7 @@ class X86Fixup
             }
         // cvtsi2ss/sd (xmm from GP) and cvttss2si/cvttsd2si (GP from xmm):
         // REX.W follows the GP operand's width and sits AFTER the prefix.
-        u32 cv = sseCvt(mn);
+        u32 cv = sseCvt(mc);
         if (cv != (u32)$FFFF_FFFF && a != (XOperand*)0 && b != (XOperand*)0)
             {
             bool gpIsSrc = ((cv >> (u32)16) & (u32)1) != (u32)0;
@@ -2927,7 +3092,7 @@ class X86Fixup
             _hit = true;
             return;
             }
-        u32 shp = sseShuf(mn);
+        u32 shp = sseShuf(mc);
         if (shp != (u32)$FFFF_FFFF && a != (XOperand*)0 && b != (XOperand*)0 && _ops.count() == (u32)3)
             {
             e8(shp);
@@ -2940,7 +3105,7 @@ class X86Fixup
             return;
             }
         // pmulld — a three-byte opcode.
-        if (mn.equals(String.withCString("pmulld")) && a != (XOperand*)0 && b != (XOperand*)0)
+        if (mc == x86Pmulld && a != (XOperand*)0 && b != (XOperand*)0)
             {
             e8((u32)$66);
             eRex(false, (i32)a.reg(), b.index(), b.rmReg(), false);
@@ -2952,8 +3117,8 @@ class X86Fixup
             return;
             }
         // movd/movq between an xmm and a GP register or memory.
-        bool isMovd = mn.equals(String.withCString("movd"));
-        if ((isMovd || mn.equals(String.withCString("movq"))) && a != (XOperand*)0 && b != (XOperand*)0 && (a.size() == (u32)16 || b.size() == (u32)16))
+        bool isMovd = mc == x86Movd;
+        if ((isMovd || mc == x86Movq) && a != (XOperand*)0 && b != (XOperand*)0 && (a.size() == 16 || b.size() == 16))
             {
             bool toXmm = a.size() == (u32)16;
             XOperand* xmm = toXmm ? a : b;
@@ -2992,210 +3157,210 @@ class X86Fixup
         }
 
     // Packed as (prefix << 8) | opcode; $FFFF_FFFF means "not in this table".
-    static u32 sseRR(String* m)
+    static u32 sseRR(u16 mc)
         {
-        if (m.equals(String.withCString("addss")))
+        if (mc == x86Addss)
             return (u32)$F358;
-        if (m.equals(String.withCString("addsd")))
+        if (mc == x86Addsd)
             return (u32)$F258;
-        if (m.equals(String.withCString("subss")))
+        if (mc == x86Subss)
             return (u32)$F35C;
-        if (m.equals(String.withCString("subsd")))
+        if (mc == x86Subsd)
             return (u32)$F25C;
-        if (m.equals(String.withCString("subpd")))
+        if (mc == x86Subpd)
             return (u32)$665C;
-        if (m.equals(String.withCString("subps")))
+        if (mc == x86Subps)
             return (u32)$005C;
-        if (m.equals(String.withCString("addpd")))
+        if (mc == x86Addpd)
             return (u32)$6658;
-        if (m.equals(String.withCString("addps")))
+        if (mc == x86Addps)
             return (u32)$0058;
-        if (m.equals(String.withCString("mulpd")))
+        if (mc == x86Mulpd)
             return (u32)$6659;
-        if (m.equals(String.withCString("mulps")))
+        if (mc == x86Mulps)
             return (u32)$0059;
-        if (m.equals(String.withCString("divpd")))
+        if (mc == x86Divpd)
             return (u32)$665E;
-        if (m.equals(String.withCString("divps")))
+        if (mc == x86Divps)
             return (u32)$005E;
-        if (m.equals(String.withCString("mulss")))
+        if (mc == x86Mulss)
             return (u32)$F359;
-        if (m.equals(String.withCString("mulsd")))
+        if (mc == x86Mulsd)
             return (u32)$F259;
-        if (m.equals(String.withCString("divss")))
+        if (mc == x86Divss)
             return (u32)$F35E;
-        if (m.equals(String.withCString("divsd")))
+        if (mc == x86Divsd)
             return (u32)$F25E;
-        if (m.equals(String.withCString("sqrtss")))
+        if (mc == x86Sqrtss)
             return (u32)$F351;
-        if (m.equals(String.withCString("sqrtsd")))
+        if (mc == x86Sqrtsd)
             return (u32)$F251;
-        if (m.equals(String.withCString("sqrtps")))
+        if (mc == x86Sqrtps)
             return (u32)$0051;
-        if (m.equals(String.withCString("sqrtpd")))
+        if (mc == x86Sqrtpd)
             return (u32)$6651;
-        if (m.equals(String.withCString("ucomiss")))
+        if (mc == x86Ucomiss)
             return (u32)$002E;
-        if (m.equals(String.withCString("ucomisd")))
+        if (mc == x86Ucomisd)
             return (u32)$662E;
-        if (m.equals(String.withCString("comiss")))
+        if (mc == x86Comiss)
             return (u32)$002F;
-        if (m.equals(String.withCString("comisd")))
+        if (mc == x86Comisd)
             return (u32)$662F;
-        if (m.equals(String.withCString("cvtss2sd")))
+        if (mc == x86Cvtss2sd)
             return (u32)$F35A;
-        if (m.equals(String.withCString("cvtsd2ss")))
+        if (mc == x86Cvtsd2ss)
             return (u32)$F25A;
-        if (m.equals(String.withCString("xorps")))
+        if (mc == x86Xorps)
             return (u32)$0057;
-        if (m.equals(String.withCString("xorpd")))
+        if (mc == x86Xorpd)
             return (u32)$6657;
-        if (m.equals(String.withCString("andps")))
+        if (mc == x86Andps)
             return (u32)$0054;
-        if (m.equals(String.withCString("andpd")))
+        if (mc == x86Andpd)
             return (u32)$6654;
-        if (m.equals(String.withCString("andnps")))
+        if (mc == x86Andnps)
             return (u32)$0055;
-        if (m.equals(String.withCString("andnpd")))
+        if (mc == x86Andnpd)
             return (u32)$6655;
-        if (m.equals(String.withCString("orps")))
+        if (mc == x86Orps)
             return (u32)$0056;
-        if (m.equals(String.withCString("orpd")))
+        if (mc == x86Orpd)
             return (u32)$6656;
-        if (m.equals(String.withCString("unpcklpd")))
+        if (mc == x86Unpcklpd)
             return (u32)$6614;
-        if (m.equals(String.withCString("unpcklps")))
+        if (mc == x86Unpcklps)
             return (u32)$0014;
-        if (m.equals(String.withCString("unpckhpd")))
+        if (mc == x86Unpckhpd)
             return (u32)$6615;
-        if (m.equals(String.withCString("unpckhps")))
+        if (mc == x86Unpckhps)
             return (u32)$0015;
-        if (m.equals(String.withCString("paddd")))
+        if (mc == x86Paddd)
             return (u32)$66FE;
-        if (m.equals(String.withCString("paddw")))
+        if (mc == x86Paddw)
             return (u32)$66FD;
-        if (m.equals(String.withCString("paddb")))
+        if (mc == x86Paddb)
             return (u32)$66FC;
-        if (m.equals(String.withCString("paddq")))
+        if (mc == x86Paddq)
             return (u32)$66D4;
-        if (m.equals(String.withCString("psubd")))
+        if (mc == x86Psubd)
             return (u32)$66FA;
-        if (m.equals(String.withCString("psubw")))
+        if (mc == x86Psubw)
             return (u32)$66F9;
-        if (m.equals(String.withCString("maxsd")))
+        if (mc == x86Maxsd)
             return (u32)$F25F;
-        if (m.equals(String.withCString("maxss")))
+        if (mc == x86Maxss)
             return (u32)$F35F;
-        if (m.equals(String.withCString("minsd")))
+        if (mc == x86Minsd)
             return (u32)$F25D;
-        if (m.equals(String.withCString("minss")))
+        if (mc == x86Minss)
             return (u32)$F35D;
-        if (m.equals(String.withCString("maxpd")))
+        if (mc == x86Maxpd)
             return (u32)$665F;
-        if (m.equals(String.withCString("maxps")))
+        if (mc == x86Maxps)
             return (u32)$005F;
-        if (m.equals(String.withCString("minpd")))
+        if (mc == x86Minpd)
             return (u32)$665D;
-        if (m.equals(String.withCString("minps")))
+        if (mc == x86Minps)
             return (u32)$005D;
-        if (m.equals(String.withCString("cvttpd2dq")))
+        if (mc == x86Cvttpd2dq)
             return (u32)$66E6;
-        if (m.equals(String.withCString("cvtdq2pd")))
+        if (mc == x86Cvtdq2pd)
             return (u32)$F3E6;
-        if (m.equals(String.withCString("cvttps2dq")))
+        if (mc == x86Cvttps2dq)
             return (u32)$F35B;
-        if (m.equals(String.withCString("cvtdq2ps")))
+        if (mc == x86Cvtdq2ps)
             return (u32)$005B;
-        if (m.equals(String.withCString("cvtps2pd")))
+        if (mc == x86Cvtps2pd)
             return (u32)$005A;
-        if (m.equals(String.withCString("cvtpd2ps")))
+        if (mc == x86Cvtpd2ps)
             return (u32)$665A;
-        if (m.equals(String.withCString("punpckldq")))
+        if (mc == x86Punpckldq)
             return (u32)$6662;
-        if (m.equals(String.withCString("punpcklqdq")))
+        if (mc == x86Punpcklqdq)
             return (u32)$666C;
-        if (m.equals(String.withCString("pand")))
+        if (mc == x86Pand)
             return (u32)$66DB;
         // VBsl's select below 64 bytes: ~mask & b (#27).
-        if (m.equals(String.withCString("pandn")))
+        if (mc == x86Pandn)
             return (u32)$66DF;
-        if (m.equals(String.withCString("por")))
+        if (mc == x86Por)
             return (u32)$66EB;
-        if (m.equals(String.withCString("pxor")))
+        if (mc == x86Pxor)
             return (u32)$66EF;
-        if (m.equals(String.withCString("psrld")))
+        if (mc == x86Psrld)
             return (u32)$66D2;
-        if (m.equals(String.withCString("pslld")))
+        if (mc == x86Pslld)
             return (u32)$66F2;
-        if (m.equals(String.withCString("psrlq")))
+        if (mc == x86Psrlq)
             return (u32)$66D3;
-        if (m.equals(String.withCString("psllq")))
+        if (mc == x86Psllq)
             return (u32)$66F3;
         // The vectoriser's widening-sum / dot-product reductions reach these;
         // absent until bug 029.
-        if (m.equals(String.withCString("pcmpeqd")))
+        if (mc == x86Pcmpeqd)
             return (u32)$6676;
-        if (m.equals(String.withCString("pcmpgtd")))
+        if (mc == x86Pcmpgtd)
             return (u32)$6666;
         // The BYTE and WORD lane widths of the same two compares. Only the
         // dword forms existed, so the back end emitted a dword compare for
         // byte lanes and string_scan counted zero matches instead of 64
         // (bug 223).
-        if (m.equals(String.withCString("pcmpeqb")))
+        if (mc == x86Pcmpeqb)
             return (u32)$6674;
-        if (m.equals(String.withCString("pcmpgtb")))
+        if (mc == x86Pcmpgtb)
             return (u32)$6664;
-        if (m.equals(String.withCString("pcmpeqw")))
+        if (mc == x86Pcmpeqw)
             return (u32)$6675;
-        if (m.equals(String.withCString("pcmpgtw")))
+        if (mc == x86Pcmpgtw)
             return (u32)$6665;
-        if (m.equals(String.withCString("pmaddwd")))
+        if (mc == x86Pmaddwd)
             return (u32)$66F5;
-        if (m.equals(String.withCString("punpcklbw")))
+        if (mc == x86Punpcklbw)
             return (u32)$6660;
         // The i16 multiply a widening product lowers to (vectorize_dot,
         // vectorize_widen_tail).
-        if (m.equals(String.withCString("pmullw")))
+        if (mc == x86Pmullw)
             return (u32)$66D5;
         // The SSE2 word / byte lane min and max (16-bit signed, 8-bit
         // unsigned); the other widths and signs are SSE4.1, in VEX's 0F38 map.
-        if (m.equals(String.withCString("pmaxsw")))
+        if (mc == x86Pmaxsw)
             return (u32)$66EE;
-        if (m.equals(String.withCString("pminsw")))
+        if (mc == x86Pminsw)
             return (u32)$66EA;
-        if (m.equals(String.withCString("pmaxub")))
+        if (mc == x86Pmaxub)
             return (u32)$66DE;
-        if (m.equals(String.withCString("pminub")))
+        if (mc == x86Pminub)
             return (u32)$66DA;
         // The unsigned 32x32 -> 64 lane product over lanes 0 and 2. SSE2 has no
         // other widening integer multiply, and it is what the VMulHi sequence
         // is built from.
-        if (m.equals(String.withCString("pmuludq")))
+        if (mc == x86Pmuludq)
             return (u32)$66F4;
         return (u32)$FFFF_FFFF;
         }
 
     // SSSE3 three-byte opcodes: [66][REX][0F][38][op][ModRM]. Same operand
     // shape as sseRR with one more opcode byte.
-    static u32 sse38(String* m)
+    static u32 sse38(u16 mc)
         {
-        if (m.equals(String.withCString("pabsb")))
+        if (mc == x86Pabsb)
             return (u32)$661C;
-        if (m.equals(String.withCString("pabsw")))
+        if (mc == x86Pabsw)
             return (u32)$661D;
-        if (m.equals(String.withCString("pabsd")))
+        if (mc == x86Pabsd)
             return (u32)$661E;
-        if (m.equals(String.withCString("phaddw")))
+        if (mc == x86Phaddw)
             return (u32)$6601;
-        if (m.equals(String.withCString("phaddd")))
+        if (mc == x86Phaddd)
             return (u32)$6602;
-        if (m.equals(String.withCString("pmaddubsw")))
+        if (mc == x86Pmaddubsw)
             return (u32)$6604;
         // SSE4.1: the signed i32 lane max/min, which is what a `max` reduction
         // over i32 lowers to (vectorize_maxmin).
-        if (m.equals(String.withCString("pmaxsd")))
+        if (mc == x86Pmaxsd)
             return (u32)$663D;
-        if (m.equals(String.withCString("pminsd")))
+        if (mc == x86Pminsd)
             return (u32)$6639;
         return (u32)$FFFF_FFFF;
         }
@@ -3204,13 +3369,13 @@ class X86Fixup
     // shifted register goes in r/m and the opcode extension in reg — the
     // reverse of every other form here, so it cannot share their table.
     // Packed as (opcode << 8) | ext.
-    static u32 sseShiftI(String* m)
+    static u32 sseShiftI(u16 mc)
         {
-        if (m.equals(String.withCString("psrlw")))
+        if (mc == x86Psrlw)
             return (u32)$7102;
-        if (m.equals(String.withCString("psraw")))
+        if (mc == x86Psraw)
             return (u32)$7104;
-        if (m.equals(String.withCString("psllw")))
+        if (mc == x86Psllw)
             return (u32)$7106;
         // These four were MISSING and the fifth was spelled `psrldi`, which is
         // not an instruction. Nothing emitted a lane shift by an immediate on
@@ -3218,66 +3383,66 @@ class X86Fixup
         // the reference assembler had all eight and this one had three and a
         // typo. asx86-diff compares assembled BYTES for the fixtures that
         // exist, so a mnemonic nobody emits is untested on BOTH sides.
-        if (m.equals(String.withCString("psrld")))
+        if (mc == x86Psrld)
             return (u32)$7202;
-        if (m.equals(String.withCString("psrad")))
+        if (mc == x86Psrad)
             return (u32)$7204;
-        if (m.equals(String.withCString("pslld")))
+        if (mc == x86Pslld)
             return (u32)$7206;
-        if (m.equals(String.withCString("psrlq")))
+        if (mc == x86Psrlq)
             return (u32)$7302;
-        if (m.equals(String.withCString("psllq")))
+        if (mc == x86Psllq)
             return (u32)$7306;
         return (u32)$FFFF_FFFF;
         }
 
     // Packed as (prefix << 16) | (loadOp << 8) | storeOp.
-    static u32 sseMov(String* m)
+    static u32 sseMov(u16 mc)
         {
-        if (m.equals(String.withCString("movss")))
+        if (mc == x86Movss)
             return (u32)$F31011;
-        if (m.equals(String.withCString("movsd")))
+        if (mc == x86Movsd)
             return (u32)$F21011;
-        if (m.equals(String.withCString("movups")))
+        if (mc == x86Movups)
             return (u32)$001011;
-        if (m.equals(String.withCString("movaps")))
+        if (mc == x86Movaps)
             return (u32)$002829;
-        if (m.equals(String.withCString("movdqu")))
+        if (mc == x86Movdqu)
             return (u32)$F36F7F;
-        if (m.equals(String.withCString("movdqa")))
+        if (mc == x86Movdqa)
             return (u32)$666F7F;
-        if (m.equals(String.withCString("movupd")))
+        if (mc == x86Movupd)
             return (u32)$661011;
-        if (m.equals(String.withCString("movapd")))
+        if (mc == x86Movapd)
             return (u32)$662829;
         return (u32)$FFFF_FFFF;
         }
 
     // Packed as (gpIsSrc << 16) | (prefix << 8) | opcode.
-    static u32 sseCvt(String* m)
+    static u32 sseCvt(u16 mc)
         {
-        if (m.equals(String.withCString("cvtsi2ss")))
+        if (mc == x86Cvtsi2ss)
             return (u32)$01F32A;
-        if (m.equals(String.withCString("cvtsi2sd")))
+        if (mc == x86Cvtsi2sd)
             return (u32)$01F22A;
-        if (m.equals(String.withCString("cvttss2si")))
+        if (mc == x86Cvttss2si)
             return (u32)$00F32C;
-        if (m.equals(String.withCString("cvttsd2si")))
+        if (mc == x86Cvttsd2si)
             return (u32)$00F22C;
-        if (m.equals(String.withCString("cvtss2si")))
+        if (mc == x86Cvtss2si)
             return (u32)$00F32D;
-        if (m.equals(String.withCString("cvtsd2si")))
+        if (mc == x86Cvtsd2si)
             return (u32)$00F22D;
         return (u32)$FFFF_FFFF;
         }
 
-    static u32 sseShuf(String* m)
+    static u32 sseShuf(u16 mc)
         {
-        if (m.equals(String.withCString("pshufd")))
+        if (mc == x86Pshufd)
             return (u32)$66;
-        if (m.equals(String.withCString("pshuflw")))
+        if (mc == x86Pshuflw)
             return (u32)$F2;
-        if (m.equals(String.withCString("pshufhw")))
+        if (mc == x86Pshufhw)
             return (u32)$F3;
         return (u32)$FFFF_FFFF;
         }
