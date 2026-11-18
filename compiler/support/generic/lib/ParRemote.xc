@@ -2082,6 +2082,20 @@ class ParRemoteChunk : ParChunk
         }
 
     static Array* _sources;  // every kernel source the daemon has seen, kept
+    static Mutex* _sourcesLock;
+    // The lock over _sources and _sourceHashes: each program's connection
+    // has a thread of its own, and two reading blocks at once grew and read
+    // the lists together (a daemon serving two programs died of it). Made by
+    // ParRemoteServe.setup, before the daemon takes a connection.
+    static void setup(void)
+        {
+        if (_sourcesLock == (Mutex*)0)
+            {
+            _sourcesLock = new Mutex();
+            _sources = new Array();
+            _sourceHashes = new Array();
+            }
+        }
 
     // The kernel source as one copy per distinct text, never freed: the
     // workers remember a compiled kernel by its source's ADDRESS (a program's
@@ -2093,38 +2107,41 @@ class ParRemoteChunk : ParChunk
     // keeps a few spare zero bytes.
     static Data* internSource(u8* s, u32 n)
         {
-        if (_sources == (Array*)0)
-            {
-            _sources = new Array();
-            _sourceHashes = new Array();
-            }
+        ParRemoteChunk.setup();
         // Found by hash, then compared: the byte compare against every
         // source kept was a quarter of a millisecond a run on a big one.
         u64 h = ParWire.hash64(s, n);
+        _sourcesLock.lock();
         for (u32 i = (u32)0; i < _sources.count(); i = i + (u32)1)
             {
             if (((Number*)_sourceHashes.get(i)).asU64() != h)
                 continue;
             Data* d = (Data*)_sources.get(i);
             if (d.length() == n + (u32)8 && memcmp((pointer)d.bytes(), (pointer)s, (u64)n) == (i32)0)
+                {
+                _sourcesLock.unlock();
                 return d;
+                }
             }
         Data* d = Data.withLength(n + (u32)8);
         memcpy((pointer)d.bytes(), (pointer)s, (u64)n);
         _sources.add((Object*)d);
         _sourceHashes.add((Object*)Number.with(h));
+        _sourcesLock.unlock();
         return d;
         }
     static Array* _sourceHashes;  // hash64 of each kept source, by index
     // A kept source by its hash64, or 0.
     static Data* sourceByHash(u64 h)
         {
-        if (_sources == (Array*)0)
-            return (Data*)0;
-        for (u32 i = (u32)0; i < _sources.count(); i = i + (u32)1)
+        ParRemoteChunk.setup();
+        Data* found = (Data*)0;
+        _sourcesLock.lock();
+        for (u32 i = (u32)0; i < _sources.count() && found == (Data*)0; i = i + (u32)1)
             if (((Number*)_sourceHashes.get(i)).asU64() == h)
-                return (Data*)_sources.get(i);
-        return (Data*)0;
+                found = (Data*)_sources.get(i);
+        _sourcesLock.unlock();
+        return found;
         }
     u8* objBytes(void)
         {
@@ -2646,6 +2663,7 @@ class ParRemoteServe
     static i64 _nextConn;
     static void setup(void)
         {
+        ParRemoteChunk.setup();
         _gpus = new Mutex();
         _state = new Mutex();
         _holder = (i64)0;
@@ -3114,8 +3132,16 @@ class ParRemoteServe
                         watching = watch != (ParTileWatch*)0 && w.waits();
                         }
                     }
+                if (busyRun)
+                    Log.info("xcd: %s: busy, another program has the GPUs", chunk.parName());
                 if (w == (ParWorker*)0)
+                    {
+                    // The block goes while the GPUs are still this
+                    // connection's (see the end of the loop).
+                    chunk = (ParRemoteChunk*)0;
+                    l = (ParLayout*)0;
                     ParRemoteServe.releaseGpus(me);
+                    }
                 Data* a = new Data();
                 // TAKEN 3: no worker has the device memory for it now.
                 ParWire.fieldU8(a, "TAKEN", w != (ParWorker*)0 ? (u8)1 : busyRun ? (u8)2 : noRoom ? (u8)3 : (u8)0);
@@ -3125,8 +3151,6 @@ class ParRemoteServe
                     ParWire.fieldI64(a, "FREEMB", freeMb);
                     }
                 ParWire.send(s, "ANSWER", a);
-                if (busyRun)
-                    Log.info("xcd: %s: busy, another program has the GPUs", chunk.parName());
                 pending = new Array();
                 inFlight = (u32)0;
                 }
@@ -3215,6 +3239,8 @@ class ParRemoteServe
                     }
                 w = (ParWorker*)0;
                 watching = false;
+                chunk = (ParRemoteChunk*)0;
+                l = (ParLayout*)0;
                 ParRemoteServe.releaseGpus(me);
                 }
             }
@@ -3230,6 +3256,14 @@ class ParRemoteServe
             w.drain();
             w.finish();
             }
+        // The block's arrays are freed here, before the GPUs go to another
+        // connection. A worker that imported them in place (Vulkan on an
+        // integrated GPU) drops the import when they are freed, on the
+        // freeing thread: done after the release, it freed buffers and
+        // waited on fences of the worker while another program's run was
+        // using it, and the daemon died in the driver or the allocator.
+        chunk = (ParRemoteChunk*)0;
+        l = (ParLayout*)0;
         ParRemoteServe.releaseGpus(me);
         ParRemoteServe.endSession(session);
         Log.info("xcd: the program went away");
