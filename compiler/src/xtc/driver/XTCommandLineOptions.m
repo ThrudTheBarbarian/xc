@@ -66,6 +66,7 @@
 @property(nonatomic, readwrite) BOOL dynamicGlibc;
 @property(nonatomic, readwrite) BOOL dynamicExplicit;
 @property(nonatomic, readwrite) BOOL staticLink;
+@property(nonatomic) BOOL rowStatic;   // the last -A named the musl row (merged after parsing)
 @property(nonatomic, readwrite) BOOL allocatorExplicit;
 @property(nonatomic, readwrite) BOOL dceTrace;
 @property(nonatomic, readwrite) NSInteger threadSafeARC;
@@ -779,9 +780,11 @@ static NSString* sExecutablePath = nil;
                 opts.targetRowHanded = NO;
                 if (row)
                     a = row.legacy;
-                // The musl row is -A x86_64 -static.
-                if ([row.name isEqualToString:@"x86_64-linux-musl"])
-                    opts.staticLink = YES;
+                // The musl row is -A x86_64 -static. Kept apart from -static
+                // and merged after parsing, so a later -A replaces it: it used
+                // to stick, and `-A x86_64-linux-musl -A arm64` was refused
+                // for a -static nobody wrote.
+                opts.rowStatic = [row.name isEqualToString:@"x86_64-linux-musl"];
                 if ([a isEqualToString:@"arm64"])
                     {
                     opts.useArm64Backend = YES;
@@ -1614,6 +1617,8 @@ static NSString* sExecutablePath = nil;
         return nil;
         }
 
+    if (opts.rowStatic)
+        opts.staticLink = YES;
     // -dynamic and -static are x86-64 Linux link modes; anywhere else they
     // would be ignored. From 0.72 an x86-64 executable links
     // dynamically against glibc unless -static asks for the static musl link,

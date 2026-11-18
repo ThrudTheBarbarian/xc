@@ -136,6 +136,7 @@ class CapOptions
     bool _dynamic;         // an x86-64 executable linked against glibc: the default
     bool _dynamicExplicit; // -dynamic given
     bool _staticLink;      // -static: the static musl link instead
+    bool _rowStatic;       // the last -A named the musl row (merged after parsing)
     bool _noMatmul;           // -fno-matmul: no SME matrix kernels (arm64 macOS)
 
     void init(void)
@@ -159,6 +160,7 @@ class CapOptions
         _dynamic = false;
         _dynamicExplicit = false;
         _staticLink = false;
+        _rowStatic = false;
         _noMatmul = false;
     }
 
@@ -183,6 +185,8 @@ class CapOptions
     bool dynamicExplicit(void) { return _dynamicExplicit; }
     bool staticLink(void)   { return _staticLink; }
     void setStatic(void)    { _staticLink = true; }
+    bool rowStatic(void)    { return _rowStatic; }
+    void setRowStatic(bool b) { _rowStatic = b; }
     // From 0.73 a library follows the executable's rule (glibc unless -static).
     void resolveDynamic(bool x86) { _dynamic = x86 && !_staticLink; }
     bool noMatmul(void)        { return _noMatmul; }
@@ -7991,9 +7995,11 @@ DriverOptions* parseDriverArgs(void)
             d.setArch(row != (TargetRow*)0 ? row.legacy() : tok);
             if (row != (TargetRow*)0 && row.cpuVariant() != (u32)0)
                 d.caps().setM68kCpu(row.cpuVariant());
-            // The musl row is -A x86_64 -static.
-            if (row != (TargetRow*)0 && row.name().equals(String.withCString("x86_64-linux-musl")))
-                d.caps().setStatic();
+            // The musl row is -A x86_64 -static. Kept apart from -static and
+            // merged after parsing, so a later -A replaces it: it used to
+            // stick, and `-A x86_64-linux-musl -A arm64` was refused for a
+            // -static nobody wrote.
+            d.caps().setRowStatic(row != (TargetRow*)0 && row.name().equals(String.withCString("x86_64-linux-musl")));
             d.setSawArch(true);
             i = i + (u32)2; continue;
         }
@@ -8582,6 +8588,8 @@ DriverOptions* parseDriverArgs(void)
     // The dynamic glibc link is the x86-64 default (-static: musl); settled
     // here, before the front end is told, as the reference settles it while
     // reading the options. checkCapabilities refuses the bad combinations.
+    if (d.caps().rowStatic())
+        d.caps().setStatic();
     d.caps().resolveDynamic(isX86_64(d));
 #if !OS_darwin
     // An Apple target from another host: the par runtime it would import

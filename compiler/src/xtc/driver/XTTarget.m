@@ -125,11 +125,11 @@ static XTTarget* row(NSString* name, NSString* cpu, NSInteger variant, NSString*
                 @"arm9 armv7 armv7-a cortex-a9"),
             row(@"wasm32-web", @"wasm32", 0, @"web", @"", @"none", @"wasm32", @"wasm32", @"wasm32", @"wasm32", @"", @"wasm", NO, @"", @"wgsl", @"", @"wasm", @"", @"", @"", @"", @"wasm32", @"wasm", @"", @"", NO,
                 @"wasm32 wasm wasm32-unknown-unknown"),
-            row(@"m68k-tos", @"m68k", 68000, @"tos", @"", @"none", @"m68k", @"atarist", @"68k", @"atarist", @"", @"m68k", NO, @"", @"", @"", @"prg", @"", @"", @"", @"", @"macos-arm64", @"so dylib", @"", @"", NO,
+            row(@"m68k-tos", @"m68k", 68000, @"tos", @"", @"none", @"m68k", @"atarist", @"68k", @"atarist", @"", @"m68k", NO, @"", @"", @"", @"prg", @"", @"", @"", @"", @"tos-m68k", @"so dylib", @"", @"", NO,
                 @"m68k 68000 atarist m68k-atari-tos"),
-            row(@"m68030-tos", @"m68k", 68030, @"tos", @"", @"none", @"m68k", @"atarist", @"68k", @"atarist", @"", @"m68k", NO, @"", @"", @"", @"prg", @"", @"", @"", @"", @"macos-arm64", @"so dylib", @"", @"", NO,
+            row(@"m68030-tos", @"m68k", 68030, @"tos", @"", @"none", @"m68k", @"atarist", @"68k", @"atarist", @"", @"m68k", NO, @"", @"", @"", @"prg", @"", @"", @"", @"", @"tos-m68k", @"so dylib", @"", @"", NO,
                 @"68030"),
-            row(@"6502-xt", @"6502", 0, @"xt", @"", @"none", @"xt6502", @"xt6502", @"6502", @"", @"", @"xt6502", NO, @"", @"", @"", @"xex", @"", @"", @"", @"", @"macos-arm64", @"so dylib", @"", @"", NO,
+            row(@"6502-xt", @"6502", 0, @"xt", @"", @"none", @"xt6502", @"xt6502", @"6502", @"", @"", @"xt6502", NO, @"", @"", @"", @"xex", @"", @"", @"", @"", @"xt-6502", @"so dylib", @"", @"", NO,
                 @"6502 xt6502 xt"),
         ];
     });

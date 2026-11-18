@@ -256,11 +256,17 @@ class TargetRow
         }
     }
 
+// The table, built once (as the reference's dispatch_once): rows() is asked
+// at every target decision, and used to rebuild all thirteen rows each time.
+Array* gTargetRows;
+
 class Targets
     {
     // The rows, in this order in both compilers.
     static Array* rows(void)
         {
+        if (gTargetRows != (Array*)0)
+            return gTargetRows;
         Array* t = new Array();
         t.add((Object*)TargetRow.make("arm64-macos", "arm64", (u32)0, "macos", "", "darwin", "arm64", "arm64", "arm64", "arm64", "", "darwin64", true, "macosx", "metal", "sme", "macho", "crt-macos.s", "rt-macos.s", "", "", "macos-arm64", "dylib so", "rt-checked-macos.s", "", true,
                                       "arm64 aarch64-apple-darwin arm64-apple-macos arm64-apple-darwin").withLoopAlign((u32)5));
@@ -282,12 +288,13 @@ class Targets
                                       "arm9 armv7 armv7-a cortex-a9"));
         t.add((Object*)TargetRow.make("wasm32-web", "wasm32", (u32)0, "web", "", "none", "wasm32", "wasm32", "wasm32", "wasm32", "", "wasm", false, "", "wgsl", "", "wasm", "", "", "", "", "wasm32", "wasm", "", "", false,
                                       "wasm32 wasm wasm32-unknown-unknown"));
-        t.add((Object*)TargetRow.make("m68k-tos", "m68k", (u32)68000, "tos", "", "none", "m68k", "atarist", "68k", "atarist", "", "m68k", false, "", "", "", "prg", "", "", "", "", "macos-arm64", "so dylib", "", "", false,
+        t.add((Object*)TargetRow.make("m68k-tos", "m68k", (u32)68000, "tos", "", "none", "m68k", "atarist", "68k", "atarist", "", "m68k", false, "", "", "", "prg", "", "", "", "", "tos-m68k", "so dylib", "", "", false,
                                       "m68k 68000 atarist m68k-atari-tos"));
-        t.add((Object*)TargetRow.make("m68030-tos", "m68k", (u32)68030, "tos", "", "none", "m68k", "atarist", "68k", "atarist", "", "m68k", false, "", "", "", "prg", "", "", "", "", "macos-arm64", "so dylib", "", "", false,
+        t.add((Object*)TargetRow.make("m68030-tos", "m68k", (u32)68030, "tos", "", "none", "m68k", "atarist", "68k", "atarist", "", "m68k", false, "", "", "", "prg", "", "", "", "", "tos-m68k", "so dylib", "", "", false,
                                       "68030"));
-        t.add((Object*)TargetRow.make("6502-xt", "6502", (u32)0, "xt", "", "none", "xt6502", "xt6502", "6502", "", "", "xt6502", false, "", "", "", "xex", "", "", "", "", "macos-arm64", "so dylib", "", "", false,
+        t.add((Object*)TargetRow.make("6502-xt", "6502", (u32)0, "xt", "", "none", "xt6502", "xt6502", "6502", "", "", "xt6502", false, "", "", "", "xex", "", "", "", "", "xt-6502", "so dylib", "", "", false,
                                       "6502 xt6502 xt"));
+        gTargetRows = t;
         return t;
         }
 
