@@ -9558,6 +9558,17 @@ class ClassInfo
             // clean throughout.
             lowerVarDecl(t);
             _localTypes.set((Hashable*)t.name(), (Object*)t.op());
+            // The pre-scan gave the name a frame slot (it is `&`-taken, or
+            // another declaration of the name needs one): the value goes into
+            // the slot this declaration selected, as a plain declaration's
+            // initialiser would. Binding the SSA name instead left every read
+            // going to the slot, which could be a sibling block's array.
+            IRPinned* dp = pinOf(t.name());
+            if (dp != 0)
+                {
+                storeThrough(pinAddrNamed(dp, t.name()), fv);
+                return;
+                }
             _locals.set((Hashable*)t.name(), (Object*)fv);
             return;
             }
@@ -15097,6 +15108,14 @@ class ClassInfo
                 }
             return;
             }
+        // A tuple's declared targets, as the reference's
+        // collectVarDeclTypeListsIn: walks them.
+        if (k == (u16)nkTupleAssign)
+            {
+            for (u32 i = (u32)0; i + (u32)1 < n.kidCount(); i = i + (u32)1)
+                collectDbgDeclTypes(n.kid(i), names, out);
+            return;
+            }
         if (k == (u16)nkBlock || k == (u16)nkIf || k == (u16)nkWhile || k == (u16)nkForCStyle || k == (u16)nkMarkerInit)
             {
             for (u32 i = (u32)0; i < n.kidCount(); i = i + (u32)1)
@@ -15361,6 +15380,13 @@ class ClassInfo
                 if (!seen)
                     all.add((Object*)n.op());
                 }
+            return;
+            }
+        // `(T a, U b) = f();` declares its targets as locals of the block.
+        if (k == (u16)nkTupleAssign)
+            {
+            for (u32 i = (u32)0; i + (u32)1 < n.kidCount(); i = i + (u32)1)
+                collectVarDeclTypes(n.kid(i), names, out);
             return;
             }
         if (k == (u16)nkBlock || k == (u16)nkIf || k == (u16)nkWhile || k == (u16)nkForCStyle || k == (u16)nkMarkerInit

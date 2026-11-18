@@ -6121,6 +6121,13 @@ class Parser
         expect((u16)tokAssign);
         n.add(parseExpression());
         expect((u16)tokSemicolon);
+        // A declared target is a local of the enclosing block from here on, as
+        // a plain declaration is once its initialiser has been parsed: a block
+        // or `par` body that reads it captures it, which needs the binding.
+        for (u32 i = (u32)0; i + (u32)1 < n.kidCount(); i = i + (u32)1) {
+            Node* t = n.kid(i);
+            if (t != (Node*)0 && t.kind() == (u16)nkVariableDecl) blkBind(t.name(), t.op(), (Array*)0);
+        }
         return n;
     }
 

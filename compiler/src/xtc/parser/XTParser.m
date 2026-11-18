@@ -6112,6 +6112,12 @@ static NSString* scCombine(NSString* op, NSString* r, NSString* v)
     [self expect:XTTokenAssign];
     XTASTNode* source = [self parseExpression];
     [self expect:XTTokenSemicolon];
+    // A declared target is a local of the enclosing block from here on, as a
+    // plain declaration is once its initialiser has been parsed: a block or
+    // `par` body that reads it captures it, which needs the binding.
+    for (XTASTNode* t in targets)
+        if ([t isKindOfClass:[XTVariableDeclNode class]])
+            [self blkBind:((XTVariableDeclNode*)t).varName type:((XTVariableDeclNode*)t).declaredType];
     return [[XTTupleAssignNode alloc] initWithTargets:targets sourceExpr:source location:loc];
     }
 

@@ -1,0 +1,5 @@
+inner x=8 y=14
+outer x=100
+inner v=4.500000 w=8
+outer v=51 via p=51
+acc=66 arr=1,2,3

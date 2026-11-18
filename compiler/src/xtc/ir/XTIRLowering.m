@@ -10606,6 +10606,20 @@ static const NSUInteger kVarargSlotBytes = 8;
             // Declare the variable (no initialiser — we have the value).
             vd.initialiser = nil;
             [self lowerVarDecl:vd];
+            // The pre-scan gave the name a frame slot (it is `&`-taken, or
+            // another declaration of the name needs one): the value goes into
+            // the slot this declaration selected, as a plain declaration's
+            // initialiser would. Binding the SSA name instead left every read
+            // going to the slot, which could be a sibling block's array.
+            XTIRPinnedLocal* pl = self.pinnedLocals[vd.varName];
+            if (pl)
+                {
+                XTIRType* pptrTy = nil;
+                XTIRValue* addr = [self pinnedAddr:pl name:vd.varName outType:&pptrTy];
+                if (addr)
+                    [self emitStore:addr value:fieldVal];
+                continue;
+                }
             self.locals[vd.varName] = fieldVal;
             }
         else if (target.nodeKind == XTASTNodeKindIdentifier)
@@ -14569,12 +14583,17 @@ typedef NS_ENUM(NSInteger, XTStructARCMode) {
     // members of stack garbage. The same stores as an empty `= {}`, first,
     // before the link words and owned fields below are set up. Not a callback,
     // though one is a struct here (`$bound_`, the receiver and code words).
+    // The slot is THIS declaration's: a name declared at several types has
+    // one per type, and the name's current binding may be another's (an
+    // `i32 n` in an earlier block had its slot zeroed in place of `Pt n`'s).
+    XTIRPinnedLocal* zeroPin = self.pinnedLocalsByType[node.varName][node.declaredType.displayName ?: @""]
+                                   ?: self.pinnedLocals[node.varName];
     if (!node.initialiser && node.declaredType && [node.declaredType isKindOfClass:[XTStructType class]]
         && ![node.declaredType.displayName hasPrefix:@"$bound_"] && ![node.declaredType.displayName hasPrefix:@"$wbound_"]
-        && self.pinnedLocals[node.varName] && !self.valueClassLocals[node.varName])
+        && zeroPin && !self.valueClassLocals[node.varName])
         {
         [self lowerAggregateByteListInit:[[XTBlockNode alloc] initWithStatements:@[] location:node.location]
-                                  pinned:self.pinnedLocals[node.varName]
+                                  pinned:zeroPin
                                 declType:node.declaredType
                                 location:node.location];
         }
@@ -17464,6 +17483,11 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
         [self collectVarDeclTypesIn:f.body forNames:names into:out];
         break;
         }
+    case XTASTNodeKindTupleAssign:
+        // `(T a, U b) = f();` declares its targets as locals of the block.
+        for (XTASTNode* t in ((XTTupleAssignNode*)node).targets)
+            [self collectVarDeclTypesIn:t forNames:names into:out];
+        break;
     case XTASTNodeKindVariableDecl:
         {
         XTVariableDeclNode* vd = (XTVariableDeclNode*)node;
@@ -17522,6 +17546,11 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
         [self collectVarDeclTypeListsIn:f.body forNames:names into:out];
         break;
         }
+    case XTASTNodeKindTupleAssign:
+        // `(T a, U b) = f();` declares its targets as locals of the block.
+        for (XTASTNode* t in ((XTTupleAssignNode*)node).targets)
+            [self collectVarDeclTypeListsIn:t forNames:names into:out];
+        break;
     case XTASTNodeKindVariableDecl:
         {
         XTVariableDeclNode* vd = (XTVariableDeclNode*)node;
