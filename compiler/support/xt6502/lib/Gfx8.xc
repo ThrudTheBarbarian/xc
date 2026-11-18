@@ -267,27 +267,39 @@ class Gfx8 : Gfx
         }
 
         asm
-            {
-            ;
-            Point ANTIC + OS shadow at the $8000 DL.LDA #$00 STA $0230
-                              STA $D402
-                                  LDA #$80 STA $0231
-                                      STA $D403;
-            SAVMSC = textBase.Stdio reads this on first use;
-            to find the text screen base;
-            pointing it at our;
-            mode - 2 region routes printf into our text rows.LDA textBaseLo
-                       STA $58
-                           LDA textBaseHi
-                               STA $59;
-            DINDEX = 0(Stdio treats this as 40 - col text; and walks 40 - byte rows from SAVMSC).LDA #$00 STA $57;
-            BOTSCR = textRows(1 - based row count, matching; the Atari OS convention).Stdio reads this on;
-            init to size its scroll region so it walks only;
-            the active text strip and not the GR.8 region above.LDA botLin
-                                              STA $02BF;
-            CHACTL = $02(default character control).LDA #$02 STA $D401;
-            Re - enable display.LDA #$22 STA $D400 CLI
-            }
+        {
+            ; Point ANTIC + OS shadow at the $8000 DL.
+            LDA #$00
+            STA $0230
+            STA $D402
+            LDA #$80
+            STA $0231
+            STA $D403
+            ; SAVMSC = textBase. Stdio reads this on first use
+            ; to find the text screen base; pointing it at our
+            ; mode-2 region routes printf into our text rows.
+            LDA textBaseLo
+            STA $58
+            LDA textBaseHi
+            STA $59
+            ; DINDEX = 0 (Stdio treats this as 40-col text
+            ; and walks 40-byte rows from SAVMSC).
+            LDA #$00
+            STA $57
+            ; BOTSCR = textRows (1-based row count, matching
+            ; the Atari OS convention). Stdio reads this on
+            ; init to size its scroll region so it walks only
+            ; the active text strip and not the GR.8 region above.
+            LDA botLin
+            STA $02BF
+            ; CHACTL = $02 (default character control).
+            LDA #$02
+            STA $D401
+            ; Re-enable display.
+            LDA #$22
+            STA $D400
+            CLI
+        }
         return;
         }
 
