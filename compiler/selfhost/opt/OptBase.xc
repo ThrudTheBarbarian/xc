@@ -2328,7 +2328,7 @@ class BeFact : Object
     IRBlock* _rotB;   // the body's entry (becomes the loop header)
     IRBlock* _rotL;   // the latch: the one body block that branches back to H
     Array* _rotR;     // the body: everything reachable from B without passing H
-    Map* _rotRSet;    // _rotR's blocks, for membership
+    Set* _rotRSet;    // _rotR's blocks, for membership
     IRBlock* _rotE;
     IRValue* _rotCond;
     bool _rotEntryTrue;   // the guard holds on the entry values: no zero-trip path

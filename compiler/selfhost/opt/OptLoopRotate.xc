@@ -48,7 +48,7 @@
 
     final bool rotInRegion(IRBlock* b)
         {
-        return _rotRSet != (Map*)0 && _rotRSet.get((Hashable*)b) != (Object*)0;
+        return _rotRSet != (Set*)0 && _rotRSet.contains((Hashable*)b);
         }
 
     final bool rotOne(IRFunc* fn)
@@ -98,7 +98,7 @@
         _rotB = (IRBlock*)0;
         _rotL = (IRBlock*)0;
         _rotR = (Array*)0;
-        _rotRSet = (Map*)0;
+        _rotRSet = (Set*)0;
         _rotE = (IRBlock*)0;
         _rotCond = (IRValue*)0;
         _rotEntryTrue = false;
@@ -145,7 +145,7 @@
         IRBlock* E = (IRBlock*)0;
         IRBlock* L = (IRBlock*)0;
         Array* R = (Array*)0;
-        Map* Rset = (Map*)0;
+        Set* Rset = (Set*)0;
         for (u32 side = (u32)0; side < (u32)2 && B == (IRBlock*)0; side = side + (u32)1)
             {
             IRBlock* b = side == (u32)0 ? t0 : t1;
@@ -269,7 +269,7 @@
                 if (op.kind() != (u8)OPK_USE)
                     continue;
                 Object* db = defBlk.get((Hashable*)op.val());
-                if (db != (Object*)0 && Rset.get((Hashable*)db) != (Object*)0)
+                if (db != (Object*)0 && Rset.contains((Hashable*)db))
                     return false;
                 }
             if (n.res() != (IRValue*)0 && rotUsedOutside(fn, n.res(), H, H))
@@ -848,7 +848,7 @@
         _rotB = (IRBlock*)0;
         _rotL = (IRBlock*)0;
         _rotR = (Array*)0;
-        _rotRSet = (Map*)0;
+        _rotRSet = (Set*)0;
         _rotE = (IRBlock*)0;
         if (H1.phis().count() == (u32)0 || !rcTest(H1))
             return false;
@@ -890,8 +890,8 @@
         // The body region, as the one-block case finds it.
         Array* R = new Array();
         R.add((Object*)B);
-        Map* Rset = new Map();
-        Rset.set((Hashable*)B, (Object*)B);
+        Set* Rset = new Set();
+        Rset.add((Hashable*)B);
         Array* work = new Array();
         work.add((Object*)B);
         IRBlock* L = (IRBlock*)0;
@@ -917,10 +917,10 @@
                     }
                 if (sb == E || self.hasBlock(chain, sb))
                     return false;
-                if (Rset.get((Hashable*)sb) == (Object*)0)
+                if (!Rset.contains((Hashable*)sb))
                     {
                     R.add((Object*)sb);
-                    Rset.set((Hashable*)sb, (Object*)sb);
+                    Rset.add((Hashable*)sb);
                     work.add((Object*)sb);
                     }
                 }
@@ -934,7 +934,7 @@
             for (u32 q = (u32)0; q < rp.count(); q = q + (u32)1)
                 {
                 IRBlock* pb = (IRBlock*)rp.get(q);
-                if (Rset.get((Hashable*)pb) == (Object*)0 && !(rb == B && pb == (IRBlock*)chain.get(chain.count() - (u32)1)))
+                if (!Rset.contains((Hashable*)pb) && !(rb == B && pb == (IRBlock*)chain.get(chain.count() - (u32)1)))
                     return false;
                 }
             }
@@ -966,7 +966,7 @@
                     if (o.kind() != (u8)OPK_USE)
                         continue;
                     Object* db = defBlk.get((Hashable*)o.val());
-                    if (db != (Object*)0 && Rset.get((Hashable*)db) != (Object*)0)
+                    if (db != (Object*)0 && Rset.contains((Hashable*)db))
                         return false;
                     }
                 if (n.res() != (IRValue*)0)
@@ -976,7 +976,7 @@
         for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
             {
             IRBlock* bb = (IRBlock*)fn.blocks().get(b);
-            if (hasBlock(chain, bb) || Rset.get((Hashable*)bb) != (Object*)0)
+            if (hasBlock(chain, bb) || Rset.contains((Hashable*)bb))
                 continue;
             if (rcBlockUses(bb, chainVals))
                 return false;
