@@ -10,6 +10,7 @@
 #import "Foundation.xc"
 #import "Stdio.xc"
 #import "Process.xc"
+#import <External>
 #import <Node>
 #import "NodeDefs.xc"
 #import <Lexer>
@@ -126,7 +127,7 @@ void synthesizeDesignable(Node* program)
                      "must import the UI framework — it auto-conforms to the "
                      "UXDesignable protocol declared there\n",
                      at.file() != 0 ? at.file().cString() : "?", at.line(), at.col());
-        Process.exit((i32)1);
+        driverExit((i32)1);
         return;
         }
     // wireAction's parameter type. Falling back to Object keeps a class with
@@ -173,7 +174,7 @@ void synthesizeDesignable(Node* program)
         }
     if (bad)
         {
-        Process.exit((i32)1);
+        driverExit((i32)1);
         return;
         }
 

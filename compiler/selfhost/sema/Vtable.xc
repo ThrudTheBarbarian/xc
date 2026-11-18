@@ -357,6 +357,12 @@ class Vtable
     // Pass 1 — the override roots, as a sorted array of labels.
     void collectRoots(Map* classes, Array* outLabels)
         {
+        // The labels so far, as a set (#335): addUnique scanned the list once
+        // per method of every class. The list is sorted at the end, so only
+        // membership matters here.
+        Map* seen = new Map();
+        for (u32 i = (u32)0; i < outLabels.count(); i = i + (u32)1)
+            seen.set((Hashable*)outLabels.get(i), outLabels.get(i));
         Array* names = classes.allKeys();
         // LIBRARY build: the program is not whole. The overrides live in a
         // client that does not exist yet, so "nothing overrides this method"
@@ -384,7 +390,7 @@ class Vtable
                         continue;
                     if (m.hasFlag((u32)NF_FINAL))
                         continue;
-                    Vtable.addUnique(outLabels, Vtable.label(cls.name(), m));
+                    Vtable.addOnce(outLabels, seen, Vtable.label(cls.name(), m));
                     }
                 }
             }
@@ -415,12 +421,14 @@ class Vtable
                 // one slot, not two.
                 Node* a = parentRespectingCycles(classes, cls);
                 u32 guard = (u32)0;
-                while (a != 0 && guard < (u32)64)
+                // parentRespectingCycles severs a loop, so the class count
+                // bounds the chain (#334; it was a cap of 64).
+                while (a != 0 && guard <= classes.count())
                     {
                     Node* match = Vtable.matching(a, child);
                     if (match != 0)
                         {
-                        Vtable.addUnique(outLabels, Vtable.label(a.name(), match));
+                        Vtable.addOnce(outLabels, seen, Vtable.label(a.name(), match));
                         a = (Node*)0;
                         }
                     else
@@ -469,7 +477,7 @@ class Vtable
             bool ovr = false;
             Node* a = p;
             u32 g = (u32)0;
-            while (a != 0 && g < (u32)64)
+            while (a != 0 && g <= classes.count())
                 {
                 if (Vtable.matching(a, m) != 0)
                     {
@@ -697,6 +705,14 @@ class Vtable
         a.add((Object*)s);
         }
 
+    static void addOnce(Array* a, Map* seen, String* s)
+        {
+        if (seen.get((Hashable*)s) != 0)
+            return;
+        seen.set((Hashable*)s, (Object*)s);
+        a.add((Object*)s);
+        }
+
     static bool _is(String* s, string lit)
         {
         if (s == 0)
@@ -706,18 +722,11 @@ class Vtable
 
     // Insertion sort: a few dozen entries at most, and the ORDER is the
     // contract — not the speed of getting there.
+    // O(n log n) by String.compare, as Elf64.sortStrings (#335; was an
+    // insertion sort). Equal strings are byte-identical, so the order among
+    // them cannot show.
     static void sortStrings(Array* a)
         {
-        for (u32 i = (u32)1; i < a.count(); i = i + (u32)1)
-            {
-            String* key = (String*)a.get(i);
-            u32 j = i;
-            while (j > (u32)0 && ((String*)a.get(j - (u32)1)).compare(key) > (i8)0)
-                {
-                a.set(j, a.get(j - (u32)1));
-                j = j - (u32)1;
-                }
-            a.set(j, (Object*)key);
-            }
+        a.sort();
         }
     }

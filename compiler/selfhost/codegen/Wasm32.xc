@@ -15,6 +15,7 @@
 
 #import "Foundation.xc"
 #import <Ir>
+#import <CgCommon>
 #import "IrDefs.xc"
 
 
@@ -729,12 +730,12 @@ class Wasm32
         // x86-64, a wasm library (no main) needs none, as threads do not
         // combine with wasm libraries (refused below), so no threaded host
         // can share its objects (#303).
-        bool safeArc = _arcOverride >= (i32)0 ? _arcOverride != (i32)0 : spawnsThreads(mod);
+        bool safeArc = _arcOverride >= (i32)0 ? _arcOverride != (i32)0 : CgCommon.spawnsThreads(mod);
         _threaded = safeArc && !_emitLib && !_linkLibs;
         // A module that starts threads and is, or links, a library would
         // spawn into nothing (each thread is an instance of one module); as
         // the reference, refused.
-        if ((_emitLib || _linkLibs) && spawnsThreads(mod)) {
+        if ((_emitLib || _linkLibs) && CgCommon.spawnsThreads(mod)) {
             Stdio.printf("xcc-cg-wasm32: error: this module starts threads and %s; on wasm32 threads do not "
                          "combine with wasm libraries yet (each thread is an instance of one module on shared memory, "
                          "and a library is a module of its own). Build it as one program.\n",
@@ -1236,7 +1237,14 @@ class Wasm32
                                     _fixupAddrs.add((Object*)Number.with(vbase + k * (u32)4));
                                     _fixupNames.add((Object*)e);
                                 }
-                            } else w = (u32)0;        // unresolved: TODO note only
+                            } else {
+                                // A word that names neither a function nor
+                                // data would be a null method slot: refused.
+                                Stdio.printf("xcc-cg-wasm32: error: vtable entry '%s' resolves to neither function nor data\n",
+                                             e.cString());
+                                _fatalImport = true;
+                                w = (u32)0;
+                            }
                         }
                     }
                 }
@@ -2065,7 +2073,7 @@ class Wasm32
             String* pred = insn.pred() == 0 ? String.withCString("EQ") : insn.pred();
             pushOperand((IROperand*)ops.get((u32)0), out);
             pushOperand((IROperand*)ops.get((u32)1), out);
-            out.appendFormat("    %s.%s\n", shape.cString(), Wasm32.icmpMn(pred).cString());
+            out.appendFormat("    %s.%s\n", shape.cString(), cmpMn(Wasm32.icmpMn(pred), pred).cString());
             setResult(res, false, out);
             return true;
         }
@@ -2144,6 +2152,17 @@ class Wasm32
         if (p.equals(String.withCString("UGT"))) return String.withCString("gt_u");
         if (p.equals(String.withCString("ULE"))) return String.withCString("le_u");
         if (p.equals(String.withCString("UGE"))) return String.withCString("ge_u");
+        return (String*)0;
+    }
+
+    // A predicate with no wasm mnemonic (LLVM's unordered and ordered/
+    // unordered tests, say) is refused rather than compared as `eq`.
+    String* cmpMn(String* mn, String* pred)
+    {
+        if (mn != (String*)0) return mn;
+        Stdio.printf("xcc-cg-wasm32: error: compare predicate %s has no wasm lowering\n",
+                     pred == (String*)0 ? "(none)" : pred.cString());
+        _fatalImport = true;
         return String.withCString("eq");
     }
 
@@ -2161,7 +2180,7 @@ class Wasm32
         if (p.equals(String.withCString("OGT"))) return String.withCString("gt");
         if (p.equals(String.withCString("OLE"))) return String.withCString("le");
         if (p.equals(String.withCString("OGE"))) return String.withCString("ge");
-        return String.withCString("eq");
+        return (String*)0;
     }
 
     bool emitCore(IRInsn* insn, String* op, String* out)
@@ -2325,7 +2344,7 @@ class Wasm32
             if (unsignedPred && narrowSigned) out.append(mask);
             pushOperand((IROperand*)ops.get((u32)1), out);
             if (unsignedPred && narrowSigned) out.append(mask);
-            out.appendFormat("    %s.%s\n", p.cString(), Wasm32.icmpMn(pred).cString());
+            out.appendFormat("    %s.%s\n", p.cString(), cmpMn(Wasm32.icmpMn(pred), pred).cString());
             setResult(res, false, out);
             return true;
         }
@@ -2337,7 +2356,7 @@ class Wasm32
             pushOperand((IROperand*)ops.get((u32)1), out);
             out.appendFormat("    %s.%s\n",
                              (at != 0 && at.equals(String.withCString("F32"))) ? "f32" : "f64",
-                             Wasm32.fcmpMn(pred).cString());
+                             cmpMn(Wasm32.fcmpMn(pred), pred).cString());
             setResult(res, false, out);
             return true;
         }
@@ -3274,39 +3293,6 @@ class Wasm32
         String* s = String.withCString("");
         if (_linkLibs) s.appendFormat(" (export \"%s\")", n.cString());
         return s;
-    }
-
-    // Whether the module spawns a thread (calls _xt_thread_create), as the
-    // reference's referencesSymbolNamed.
-    bool spawnsThreads(IRModule* m)
-    {
-        String* want = String.withCString("_xt_thread_create");
-        for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1) {
-            IRFunc* fn = (IRFunc*)m.funcs().get(f);
-            for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1) {
-                IRBlock* bb = (IRBlock*)fn.blocks().get(b);
-                if (listNames(bb.phis(), want) || listNames(bb.insns(), want)) return true;
-                if (bb.term() != (IRInsn*)0 && insnNames(bb.term(), want)) return true;
-            }
-        }
-        return false;
-    }
-
-    bool listNames(Array* list, String* want)
-    {
-        for (u32 i = (u32)0; i < list.count(); i = i + (u32)1)
-            if (insnNames((IRInsn*)list.get(i), want)) return true;
-        return false;
-    }
-
-    bool insnNames(IRInsn* n, String* want)
-    {
-        for (u32 i = (u32)0; i < n.ops().count(); i = i + (u32)1) {
-            IROperand* o = (IROperand*)n.ops().get(i);
-            if (o.kind() != (u8)OPK_SYM) continue;
-            if (o.name() != (String*)0 && o.name().equals(want)) return true;
-        }
-        return false;
     }
 
     // `  (data (i32.const A) "…") ;; c` as a passive segment, its address and

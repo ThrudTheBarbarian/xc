@@ -1424,7 +1424,7 @@ class Sema
                         // Object.hash() while a store writes the ivar.
                         bool clash = false;
                         u32 hops = (u32)0;
-                        for (Node* c = parentOf(d); c != 0 && c != d && !clash && hops < (u32)64; c = parentOf(c))
+                        for (Node* c = parentOf(d); c != 0 && c != d && !clash && hops <= _classes.count(); c = parentOf(c))
                             {
                             hops = hops + (u32)1;
                             for (u32 q = (u32)0; q < c.kidCount() && !clash; q = q + (u32)1)

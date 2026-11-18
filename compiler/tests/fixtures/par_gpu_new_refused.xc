@@ -1,3 +1,4 @@
+//xtc-na: xt6502 — no par runtime on this target (no ParDevice)
 //xtc-flags: expect=sema-error
 // A `par` body may not allocate: a GPU has no heap. (par-blocks.md §2)
 #import "Par.xc"

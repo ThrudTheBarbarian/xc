@@ -2,6 +2,7 @@
 |* XAM68kAssembler.m — see header. Minimal two-pass 68k assembler → $601A.
 \****************************************************************************/
 #import "XAM68kAssembler.h"
+#import "XAGasString.h"
 
 // ── Operand model ───────────────────────────────────────────────────────
 typedef enum
@@ -381,6 +382,9 @@ static long symVal(NSDictionary* syms, const Op* o)
 // Append the extension words for one EA operand; record a relocation
 // (relative byte offset within `d`) for abs.l SINGLE-symbol references (a
 // symbol DIFFERENCE is a constant and needs no relocation).
+// An extension word that does not fit (#289), found in pass 2 (when
+// `relRelocs` is non-nil); the pass-2 loop reports it. As the port's fail().
+static NSString* sExtErr = nil;
 static void appendExt(NSMutableData* d, const Op* o, int size,
                       NSDictionary* syms, NSMutableArray* relRelocs)
     {
@@ -388,6 +392,10 @@ static void appendExt(NSMutableData* d, const Op* o, int size,
         {
     case OP_INDDISP:
     case OP_PCDISP:
+        // A d16 past -32768..32767 was masked, so a field 40000 bytes in was
+        // stored 25 KB below the object (#289); it is refused.
+        if (relRelocs && !sExtErr && (o->value < -32768 || o->value > 32767))
+            sExtErr = [NSString stringWithFormat:@"displacement %ld does not fit 16 bits", (long)o->value];
         app16(d, (uint16_t)(o->value & 0xFFFF));
         break;
     // brief extension word (disp8 = 0)
@@ -410,7 +418,13 @@ static void appendExt(NSMutableData* d, const Op* o, int size,
             app32(d, (uint32_t)symVal(syms, o));
             }
         else
-            app16(d, (uint16_t)(symVal(syms, o) & 0xFFFF));
+            {
+            // A word immediate, signed or unsigned (#289).
+            long iv = symVal(syms, o);
+            if (relRelocs && !sExtErr && (iv < -32768 || iv > 65535))
+                sExtErr = [NSString stringWithFormat:@"immediate %ld does not fit 16 bits", iv];
+            app16(d, (uint16_t)(iv & 0xFFFF));
+            }
         break;
     default:
         break;
@@ -522,7 +536,14 @@ static int branchCC(NSString* m)
             {
             long target = symVal(syms, &o[0]);
             app16(d, 0xF280 | p.intValue);
-            app16(d, (uint16_t)((target - (long)(curOff + 2)) & 0xFFFF));
+            long fd = target - (long)(curOff + 2);
+            if (rr && (fd < -32768 || fd > 32767))
+                {
+                if (err)
+                    *err = [NSString stringWithFormat:@"%@: branch out of the 16-bit range", mnem];
+                return nil;
+                }
+            app16(d, (uint16_t)(fd & 0xFFFF));
             return d;
             }
         }
@@ -537,6 +558,12 @@ static int branchCC(NSString* m)
         long target = symVal(syms, &o[0]);
         long disp = target - (long)(curOff + 2); // always word form
         app16(d, 0x6000 | (cc << 8));
+        if (rr && (disp < -32768 || disp > 32767))
+            {
+            if (err)
+                *err = [NSString stringWithFormat:@"%@: branch out of the 16-bit range", mnem];
+            return nil;
+            }
         app16(d, (uint16_t)(disp & 0xFFFF));
         return d;
         }
@@ -572,11 +599,17 @@ static int branchCC(NSString* m)
 
     // ── binary ALU (add/sub/and/or/cmp/eor) ─────────────────────────────
     NSDictionary* aluBase = @{@"add" : @0xD000, @"sub" : @0x9000, @"and" : @0xC000, @"or" : @0x8000, @"cmp" : @0xB000, @"eor" : @0xB000};
+    // adda/suba/cmpa are the add/sub/cmp forms with an address register
+    // destination, which the code generator now names (#289).
+    NSDictionary* aliasA = @{@"adda" : @"add", @"suba" : @"sub", @"cmpa" : @"cmp"};
+    if (aliasA[mnem])
+        mnem = aliasA[mnem];
     if (aluBase[mnem])
         {
         int base = [aluBase[mnem] intValue];
-        // immediate form (xxxI)
-        if (o[0].kind == OP_IMM)
+        // immediate form (xxxI); an address register takes an immediate only
+        // through ADDA/SUBA/CMPA #imm,An (ADDI to An does not exist), below
+        if (o[0].kind == OP_IMM && o[1].kind != OP_AREG)
             {
             NSDictionary* ik = @{@"or" : @0, @"and" : @1, @"sub" : @2, @"add" : @3, @"eor" : @5, @"cmp" : @6};
             int word = 0x0000 | ([ik[mnem] intValue] << 9) | (sb << 6) | eaField(&o[1]);
@@ -1223,6 +1256,9 @@ static NSArray<NSString*>* splitOperands(NSString* s)
         }
 
     // ── data-directive bytes (for both passes) ──────────────────────────
+    // A malformed string directive is recorded here and reported after the
+    // directive (the block itself has no error path).
+    __block NSString* dirError = nil;
     NSData* (^dataForDir)(NSString*, NSString*, uint32_t) =
         ^NSData*(NSString* dir, NSString* args, uint32_t curOff) {
           NSMutableData* d = [NSMutableData data];
@@ -1236,22 +1272,14 @@ static NSArray<NSString*>* splitOperands(NSString* s)
               }
           else if ([dir isEqualToString:@".ascii"] || [dir isEqualToString:@".asciz"])
               {
-              NSRange q1 = [args rangeOfString:@"\""];
-              NSRange q2 = [args rangeOfString:@"\"" options:NSBackwardsSearch];
-              if (q1.location != NSNotFound && q2.location > q1.location)
+              NSData* sd = XAGasStringDecode(args, [dir isEqualToString:@".asciz"]);
+              if (!sd)
                   {
-                  NSString* str = [args substringWithRange:
-                                            NSMakeRange(q1.location + 1, q2.location - q1.location - 1)];
-                  str = [str stringByReplacingOccurrencesOfString:@"\\n" withString:@"\n"];
-                  str = [str stringByReplacingOccurrencesOfString:@"\\r" withString:@"\r"];
-                  str = [str stringByReplacingOccurrencesOfString:@"\\0" withString:@"\0"];
-                  [d appendData:[str dataUsingEncoding:NSISOLatin1StringEncoding]];
+                  if (!dirError)
+                      dirError = @"bad string directive";
                   }
-              if ([dir isEqualToString:@".asciz"])
-                  {
-                  uint8_t z = 0;
-                  [d appendBytes:&z length:1];
-                  }
+              else
+                  [d appendData:sd];
               }
           else if ([dir isEqualToString:@".space"] || [dir isEqualToString:@".ds.b"])
               {
@@ -1320,6 +1348,11 @@ static NSArray<NSString*>* splitOperands(NSString* s)
             if ([dir isEqualToString:@".text"] || [dir isEqualToString:@".globl"])
                 continue;
             off += dataForDir(dir, it[@"args"], off).length;
+            if (dirError)
+                {
+                *error = dirError;
+                return nil;
+                }
             continue;
             }
         NSString* e = nil;
@@ -1385,6 +1418,7 @@ static NSArray<NSString*>* splitOperands(NSString* s)
         NSString* e = nil;
         uint32_t base = (uint32_t)text.length;
         sMissingSym = nil;
+        sExtErr = nil;
         NSData* enc = [self encode:it[@"mnem"]
                               size:[it[@"size"] intValue]
                                ops:it[@"ops"]
@@ -1395,6 +1429,11 @@ static NSArray<NSString*>* splitOperands(NSString* s)
         if (!enc)
             {
             *error = e ?: @"encode error (pass2)";
+            return nil;
+            }
+        if (sExtErr)
+            {
+            *error = sExtErr;
             return nil;
             }
         if (sMissingSym)

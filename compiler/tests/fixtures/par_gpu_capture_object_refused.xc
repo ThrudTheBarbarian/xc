@@ -1,3 +1,4 @@
+//xtc-na: xt6502 — no par runtime on this target (no ParDevice)
 //xtc-flags: expect=sema-error
 // A `par` body may not capture a class instance (or a String, Array, Map or
 // block): those are ARC'd heap objects, which a GPU cannot reach.

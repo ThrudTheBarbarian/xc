@@ -1,3 +1,4 @@
+//xtc-na: xt6502 — no par runtime on this target (no ParDevice)
 // par_tiles.xc — a block big enough for the GPU runtime to cut into tiles
 // (par-tiles-and-devices.md step 2): a map, a stencil, a stride and a
 // reduction over a million items, with the outputs summed on the host so a

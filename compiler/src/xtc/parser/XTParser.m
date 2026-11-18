@@ -1186,8 +1186,8 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
     // needs the explicit `.invoke(…)` spelling). Ivar names are also
     // remembered for the v1 capture restriction's error message.
     [self blkPushScope];
-    NSUInteger blkIvarMark = [self blkIvarNames].count;
-    (void)blkIvarMark;
+    NSString* blkSavedClass = [self blkState][@"curClass"];
+    [self blkEnterClass:nameTok.value parent:parentName];
 
     NSMutableArray<XTVariableDeclNode*>* ivars = [NSMutableArray array];
     NSMutableArray<XTMethodDeclNode*>* methods = [NSMutableArray array];
@@ -1262,7 +1262,7 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
                 {
                 ((XTVariableDeclNode*)decl).isStatic = isStaticMethod;
                 [ivars addObject:(XTVariableDeclNode*)decl];
-                [[self blkIvarNames] addObject:((XTVariableDeclNode*)decl).varName];
+                [self blkAddIvarName:((XTVariableDeclNode*)decl).varName];
                 [self blkMarkIvar:((XTVariableDeclNode*)decl).varName]; // parSelfIvar
                 }
             else if ([decl isKindOfClass:[XTBlockNode class]] &&
@@ -1279,7 +1279,7 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
                         {
                         ((XTVariableDeclNode*)inner).isStatic = isStaticMethod;
                         [ivars addObject:(XTVariableDeclNode*)inner];
-                        [[self blkIvarNames] addObject:((XTVariableDeclNode*)inner).varName];
+                        [self blkAddIvarName:((XTVariableDeclNode*)inner).varName];
                         [self blkMarkIvar:((XTVariableDeclNode*)inner).varName]; // parSelfIvar
                         }
                     }
@@ -1288,6 +1288,7 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
         }
 
     [self blkPopScope]; // task #26
+    [self blkLeaveClass:blkSavedClass];
     [self expectBlockClose];
 
     NSString* className = nameTok ? nameTok.value : @"<anonymous>";
@@ -4596,7 +4597,7 @@ static int64_t parAutoConst(XTASTNode* e)
     [[self blkFrames] removeLastObject];
     if (!loop || _diagnostics.errorCount > errMark)
         {
-        [_diagnostics truncateToCount:diagMark];
+        [self parAutoTakeBack:diagMark at:loc];
         _pos = plainEnd;
         return plain;
         }
@@ -4625,11 +4626,29 @@ static int64_t parAutoConst(XTASTNode* e)
     XTASTNode* out = [self parDesugarBody:body frame:frame name:name reductions:reds at:loc];
     if (!out || _diagnostics.errorCount > errMark)
         {
-        [_diagnostics truncateToCount:diagMark];
+        [self parAutoTakeBack:diagMark at:loc];
         _pos = plainEnd;
         return plain;
         }
     return out;
+    }
+
+// The block form of a loop failed: its diagnostics go, and -Wpar-auto says
+// why the loop stays a loop, with the first error the block form reported.
+// As the port (parAutoRefused).
+- (void)parAutoTakeBack:(NSUInteger)diagMark at:(XTSourceLocation*)loc
+    {
+    NSString* why = nil;
+    NSArray<XTDiagnostic*>* all = _diagnostics.diagnostics;
+    for (NSUInteger k = diagMark; k < all.count && !why; k++)
+        if (all[k].level == XTDiagnosticLevelError)
+            why = all[k].message;
+    [_diagnostics truncateToCount:diagMark];
+    if (why)
+        [_diagnostics emitWarning:[NSString stringWithFormat:@"this loop runs serially, not as a 'par' block (--par-style): "
+                                                             @"its block form is refused: %@", why]
+                         category:XTWarnParAuto
+                               at:loc];
     }
 
 /****************************************************************************\

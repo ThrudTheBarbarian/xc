@@ -1,3 +1,4 @@
+//xtc-na: xt6502 — no par runtime on this target (no ParDevice)
 // par_gpu_accuracy.xc — float division and square root in a `par` block whose
 // goal is accuracy. Vulkan and WebGPU allow their own division 2.5 ulp and
 // their square root more, so there they are done in integer arithmetic

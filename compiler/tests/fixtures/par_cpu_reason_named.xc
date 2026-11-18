@@ -1,3 +1,4 @@
+//xtc-na: xt6502 — no par runtime on this target (no ParDevice)
 //xtc-warn: because it uses an operation its GPU version cannot express yet (IR op Bitcast)
 // The CPU-only warning names what its GPU version could not express
 // (astronomancy, 2026-10-24): "it uses an operation its GPU version cannot

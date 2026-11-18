@@ -74,10 +74,34 @@ bool optOutlineFloatSum(void) { return gOptOutlineFloatSum; }
 bool optPromoteScalars(void) { return gOptPromoteScalars; }
 ParKernelHook* optParKernelHook(void) { return gParKernelHook; }
 u8* optGetenv(u8* name) { return _xt_getenv(name); }
+// A run-until-nothing-changes loop that stopped at its round cap rather than
+// converging (#334): the two look the same from outside, so XC_OPT_CAPS=1
+// says which pass, in which function. Output is unchanged either way.
+void optRoundCap(u8* pass, u32 cap, IRFunc* fn)
+{
+    // Set and non-empty, as ppEnvSet reads a switch: the runtime gives an
+    // empty string, not 0, for a variable that is not set.
+    u8* e = _xt_getenv("XC_OPT_CAPS");
+    if (e == (u8*)0 || e[0] == (u8)0)
+        return;
+    Stdio.error(String.withFormat("xcc: note: %s stopped at its round cap (%u) in '%s'\n", pass, cap,
+                                  fn != (IRFunc*)0 && fn.name() != (String*)0 ? fn.name().cString() : "?"));
+}
 void optSetOutline(bool b) { gOptOutline = b; }
 void optSetOutlineFloatSum(bool b) { gOptOutlineFloatSum = b; }
 void optSetPromoteScalars(bool b) { gOptPromoteScalars = b; }
 void optSetParKernelHook(ParKernelHook* h) { gParKernelHook = h; }
+// A whole program (not -c, not -S): when the outliner lifts no loop, the
+// stub module's runtime is removed (Opt.dropBase, #278). An object keeps it,
+// for another object of the program may need the runtime or its heap.
+bool gOptDropBase;
+void optSetDropBase(bool b) { gOptDropBase = b; }
+bool optDropBase(void) { return gOptDropBase; }
+// …keeping the class-name root (_xtc_class_new), for an object the command
+// line joins to the program.
+bool gOptDropBaseClassRoot;
+void optSetDropBaseClassRoot(bool b) { gOptDropBaseClassRoot = b; }
+bool optDropBaseClassRoot(void) { return gOptDropBaseClassRoot; }
 
 // A sentinel count from lrcCountLiveOut: a value OTHER than the accumulator
 // escapes the outer loop, so the collapse is unsafe. Distinct from 0, which
@@ -1875,11 +1899,6 @@ class BeFact : Object
     // one, and a Load of a pointer already loaded in this block hands back the
     // value already read. Anything that may write memory — or a bank-state op,
     // which repoints what a pointer addresses — clears the load cache.
-    //
-    // The port has no value ids, so a value's key is a number handed out on
-    // first sight; the keys only have to be stable within one function.
-    Map* _cseIds;
-    u32 _cseNext;
 
     // Defining instruction per value, so the alias test can look through a
     // pointer to the FieldAddr that produced it.
@@ -1887,6 +1906,12 @@ class BeFact : Object
 
     bool _cseCrossBlock;
     bool _cseLate;
+
+    // ── inline ───────────────────────────────────────────────────────────
+    //
+    // The instructions of the caller being inlined into that use each value,
+    // so forwarding a spliced call's result does not scan the whole caller.
+    Map* _ilUses;
 
     // ── par-propose (report) ─────────────────────────────────────────────
     //
@@ -2303,7 +2328,7 @@ class BeFact : Object
     IRBlock* _rotB;   // the body's entry (becomes the loop header)
     IRBlock* _rotL;   // the latch: the one body block that branches back to H
     Array* _rotR;     // the body: everything reachable from B without passing H
-    Map* _rotRSet;    // _rotR's blocks, for membership
+    Set* _rotRSet;    // _rotR's blocks, for membership
     IRBlock* _rotE;
     IRValue* _rotCond;
     bool _rotEntryTrue;   // the guard holds on the entry values: no zero-trip path

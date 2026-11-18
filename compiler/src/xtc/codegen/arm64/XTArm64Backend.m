@@ -148,7 +148,14 @@ static NSUInteger sArm64LoopAlign = 0;
 @property (nonatomic) NSSet<NSNumber *> *vSpillOf;
 @property (nonatomic) NSMutableDictionary<NSNumber *, NSNumber *> *vSpill;   // value -> frame offset
 @property (nonatomic) NSMutableArray<NSNumber *> *vSpillOrder;
+// A spilled phi class's other members (the values coalesced onto the phi):
+// member -> the phi, whose slot they share as they would share its register.
+@property (nonatomic) NSMutableDictionary<NSNumber *, NSNumber *> *vSpillAlias;
 @property (nonatomic) NSUInteger vScratch;
+// The lowest spill scratch register: v29 (v29-v31), or v27 once a phi class
+// may be given up (#307): a phi member's multiply-add can read its slot, a
+// splat and a constant and write its slot through a fourth.
+@property (nonatomic) NSUInteger vScratchLo;
 // Lane groups: four broadcasts of adjacent 32-bit loads (a[k..k+3]) become one
 // `ldr q` and by-lane multiplies. Each member broadcast → its lane and its
 // group's leader (the first in the block); each leader → @[base operand,
@@ -1121,6 +1128,8 @@ static unsigned xtArm64GlobalP2Align(uint32_t size) {
             ctx.vSpill[v] = @(cur);
             cur += 16;
         }
+        for (NSNumber *m in ctx.vSpillAlias)
+            ctx.vSpill[m] = ctx.vSpill[ctx.vSpillAlias[m]];
     }
     // The aggregates last (#35), just under the canary: a write that runs off
     // the end of a local array meets the guard before it meets another value, a
@@ -2484,6 +2493,8 @@ static BOOL a64InsnReads(XTIRInsn *n, XTIRValueId x) {
             }
         NSMutableSet<NSString *> *bad = [NSMutableSet set];
         if (ctx.vRemat.count > 0 || ctx.vSpill.count > 0) [bad addObjectsFromArray:@[@"d29", @"d30", @"d31"]];
+        if ((ctx.vRemat.count > 0 || ctx.vSpill.count > 0) && ctx.vScratchLo < 29)
+            [bad addObjectsFromArray:@[@"d27", @"d28"]];
         for (NSNumber *v in ctx.vecReg) {
             NSString *g = ctx.vecReg[v];
             if (g.length < 2) continue;
@@ -5413,7 +5424,9 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
         inBlock:(XTIRBlock *)block
             ctx:(XTArm64FnCtx *)ctx
 {
-    if (ctx.vRemat.count == 0 && ctx.vSpill.count == 0) {
+    // A phi moves nothing here: its edges do (and a spilled phi class's edges
+    // move nothing at all, its members sharing one slot).
+    if ((ctx.vRemat.count == 0 && ctx.vSpill.count == 0) || insn.opcode == XTIROpPhi) {
         [self emitInsn1:insn inBlock:block ctx:ctx];
         return;
     }
@@ -5438,7 +5451,7 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
         BOOL rm = ctx.vRemat[@(o.valueId)] != nil;
         BOOL sp = !rm && ctx.vSpill[@(o.valueId)] != nil;
         if (!rm && !sp) continue;
-        if (scratch < 29) {
+        if (scratch < ctx.vScratchLo) {
             fprintf(stderr, "xcc-cg-arm64: error: vector register pressure exceeded "
                             "the 14-register pool (v18-v31) in '%s'\n", ctx.fn.name.UTF8String);
             exit(1);
@@ -5472,7 +5485,7 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
     // A spilled result: written in the next scratch, then stored to its slot.
     NSNumber *sv = insn.result && ctx.vSpill[@(insn.result.valueId)] ? @(insn.result.valueId) : nil;
     if (sv) {
-        if (scratch < 29) {
+        if (scratch < ctx.vScratchLo) {
             fprintf(stderr, "xcc-cg-arm64: error: vector register pressure exceeded "
                             "the 14-register pool (v18-v31) in '%s'\n", ctx.fn.name.UTF8String);
             exit(1);
@@ -7545,6 +7558,16 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
                 for (NSTextCheckingResult *m in [ms reverseObjectEnumerator]) {
                     XTIRValueId vid = (XTIRValueId)[[text substringWithRange:[m rangeAtIndex:1]] integerValue];
                     NSUInteger off = [self slotOffsetForValue:vid ctx:ctx];
+                    // A marker naming no value, or one with no slot (offset 0
+                    // is never a local's), would come out as `sp, #0`: the
+                    // saved frame pointer and link register, under the user's
+                    // asm. Only pinned locals and __self make markers, so this
+                    // guards against a compiler bug.
+                    if (!ctx.fn.values[@(vid)] || off == 0) {
+                        fprintf(stderr, "xcc-cg-arm64: error: unsupported: inline asm local "
+                                        "with no slot in '%s'\n", ctx.fn.name.UTF8String);
+                        exit(1);
+                    }
                     NSString *repl = [NSString stringWithFormat:@"sp, #%lu",
                                        (unsigned long)off];
                     [resolved replaceCharactersInRange:m.range withString:repl];
@@ -7557,6 +7580,7 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
                 if (line.length == 0) continue;
                 [ctx.out appendFormat:@"    %@\n", line];
             }
+            [ctx.out appendString:@"    // end inline asm\n"];
             break;
         }
 
@@ -8488,6 +8512,12 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
             && [t rangeOfString:@"x29, x30"].location == NSNotFound) {
             clean = NO;
         }
+        // An inline-asm body may read any slot in its own spelling
+        // (`ldr x9,[ sp, #16 ]`), which the load count does not see: a store
+        // it reads was deleted as never loaded (#305). Mirrored in the port.
+        if ([t isEqualToString:@"// inline asm"]) {
+            clean = NO;
+        }
         if ([self parseSpLine:ln mnem:&m reg:&r off:&o]
             && ([m hasPrefix:@"ldr"])) {
             [loads addObject:o];
@@ -8854,6 +8884,69 @@ static NSUInteger simdUse(NSArray *ops, NSString *m, NSInteger r) {
 // A compare the flags already hold: `cmp w2, #0` again, after only
 // instructions that leave the flags and both its registers alone (the fcsels
 // of one condition, each re-testing it: #22, perlin's grad).
+// ── Inline asm is the user's ──────────────────────────────────────────
+//
+// emitInsn brackets an asm body with `// inline asm` and `// end inline asm`.
+// The rewriting peepholes never see the body (#306): XTArm64HideAsm takes each
+// body out into `bodies`, leaving the two markers side by side, and
+// XTArm64RestoreAsm puts them back. Every peephole treats a comment line as a
+// barrier, so the pair drops what each knows about registers, slots and flags;
+// peepholeSpills keeps every store in a function with a body (#305). The slot
+// passes after the chain (expandStagedSlots, elideLeafFrame, tbzInRange) see
+// the restored text. Mirrored in the port (hideAsm/restoreAsm).
+static NSString *XTArm64HideAsm(NSString *text, NSMutableArray<NSArray<NSString *> *> *bodies) {
+    NSMutableArray<NSString *> *out = [NSMutableArray array];
+    NSMutableArray<NSString *> *body = nil;
+    NSCharacterSet *ws = [NSCharacterSet whitespaceCharacterSet];
+    for (NSString *ln in [text componentsSeparatedByString:@"\n"]) {
+        NSString *t = [ln stringByTrimmingCharactersInSet:ws];
+        if (body) {
+            if (![t isEqualToString:@"// end inline asm"]) { [body addObject:ln]; continue; }
+            [bodies addObject:body];
+            body = nil;
+        } else if ([t isEqualToString:@"// inline asm"]) {
+            body = [NSMutableArray array];
+        }
+        [out addObject:ln];
+    }
+    if (body) [bodies addObject:body];      // unterminated: to the end
+    return [out componentsJoinedByString:@"\n"];
+}
+
+// The peepholed text with each body back after its opening marker; the text
+// as emitted (`orig`) when a marker went missing on the way.
+static NSString *XTArm64RestoreAsm(NSString *text, NSArray<NSArray<NSString *> *> *bodies, NSString *orig) {
+    NSMutableArray<NSString *> *out = [NSMutableArray array];
+    NSUInteger k = 0;
+    NSCharacterSet *ws = [NSCharacterSet whitespaceCharacterSet];
+    for (NSString *ln in [text componentsSeparatedByString:@"\n"]) {
+        [out addObject:ln];
+        if ([[ln stringByTrimmingCharactersInSet:ws] isEqualToString:@"// inline asm"]) {
+            if (k >= bodies.count) return orig;
+            [out addObjectsFromArray:bodies[k]];
+            k++;
+        }
+    }
+    if (k != bodies.count) return orig;
+    return [out componentsJoinedByString:@"\n"];
+}
+
+// The base register a writeback address writes: `[xN, #i]!` (pre-index) and
+// `[xN], #i` / `[xN], xM` (post-index). nil for any other line.
+static NSString *XTArm64WritebackBase(NSString *line) {
+    NSCharacterSet *ws = [NSCharacterSet whitespaceCharacterSet];
+    NSString *t = [line stringByTrimmingCharactersInSet:ws];
+    NSRange lb = [t rangeOfString:@"["];
+    if (lb.location == NSNotFound) return nil;
+    NSRange rb = [t rangeOfString:@"]"];
+    if (rb.location == NSNotFound || rb.location < lb.location) return nil;
+    NSString *after = [[t substringFromIndex:rb.location + 1] stringByTrimmingCharactersInSet:ws];
+    if (![after hasPrefix:@"!"] && ![after hasPrefix:@","]) return nil;
+    NSString *inner = [t substringWithRange:NSMakeRange(lb.location + 1, rb.location - lb.location - 1)];
+    NSRange c = [inner rangeOfString:@","];
+    return [(c.location == NSNotFound ? inner : [inner substringToIndex:c.location]) stringByTrimmingCharactersInSet:ws];
+}
+
 + (NSString *)peepholeRedundantCmp:(NSString *)text {
     static NSSet<NSString *> *neutral = nil;
     if (!neutral)
@@ -8892,6 +8985,10 @@ static NSUInteger simdUse(NSArray *ops, NSString *m, NSInteger r) {
                 if (sameArm64Reg(w, ra) || sameArm64Reg(w, rb))
                     last = nil;
             }
+            // A writeback address writes its base too (#306).
+            NSString *wb = XTArm64WritebackBase(ln);
+            if (last && wb && (sameArm64Reg(wb, ra) || sameArm64Reg(wb, rb)))
+                last = nil;
         }
         [out addObject:ln];
     }
@@ -8965,6 +9062,11 @@ static NSUInteger simdUse(NSArray *ops, NSString *m, NSInteger r) {
             for (NSString *k in held.allKeys)
                 if (sameArm64Reg(held[k], w)) [held removeObjectForKey:k];
         }
+        // A writeback address writes its base too (#306).
+        NSString *wb = XTArm64WritebackBase(ln);
+        if (wb)
+            for (NSString *k in held.allKeys)
+                if (sameArm64Reg(held[k], wb)) [held removeObjectForKey:k];
         [out addObject:ln];
     }
     return [out componentsJoinedByString:@"\n"];
@@ -9504,25 +9606,36 @@ static BOOL vecPhiInLive(XTIRFunction* fn, XTIRInsn* p, NSUInteger h, XTIRValueI
     }
     // Out of registers: again with v29-v31 held back as scratch, and the
     // constant splat that ends last given up whenever the pool is empty (made
-    // again at each read; the port's vecScan).
+    // again at each read; the port's vecScan). Still out: a third time with
+    // the phi classes that may live in a slot among the candidates (#307), so
+    // a function that fitted before is allocated as before.
     ctx.vRemat = [NSMutableDictionary dictionary];
     ctx.vSpill = [NSMutableDictionary dictionary];
     ctx.vSpillOrder = [NSMutableArray array];
+    ctx.vSpillAlias = [NSMutableDictionary dictionary];
     ctx.vSpillOf = [NSSet set];
     NSMutableDictionary<NSNumber *, XTIROperand *> *rematOf = [NSMutableDictionary dictionary];
+    NSSet<NSNumber *> *phiSpillOf = [NSSet set];
     NSMutableDictionary<NSNumber *, NSNumber *> *regOfClass = nil;
-    for (int attempt = 0; attempt < 2 && !regOfClass; attempt++) {
-        BOOL remat = attempt == 1;
+    ctx.vScratchLo = 29;
+    for (int attempt = 0; attempt < 3 && !regOfClass; attempt++) {
+        BOOL remat = attempt >= 1;
         if (remat) {
             rematOf = [self vecRematCandidates:fn vecVals:vecVals canon:canon vecPhis:vecPhis ctx:ctx];
+            ctx.vRemat = [NSMutableDictionary dictionary];
             ctx.vSpill = [NSMutableDictionary dictionary];
             ctx.vSpillOrder = [NSMutableArray array];
+            ctx.vSpillAlias = [NSMutableDictionary dictionary];
             ctx.vSpillOf = [self vecSpillCandidates:fn canon:canon vecPhis:vecPhis rematOf:rematOf ctx:ctx];
+        }
+        if (attempt == 2) {
+            phiSpillOf = [self vecPhiSpillCandidates:fn canon:canon vecPhis:vecPhis ctx:ctx];
+            ctx.vScratchLo = 27;
         }
         NSMutableArray<NSNumber *> *freePool = [NSMutableArray array];
         if (fpFree)
             for (int r = 8; r <= 15; r++) [freePool addObject:@(r)];
-        for (int r = 18; r <= (remat ? 28 : 31); r++) [freePool addObject:@(r)];
+        for (int r = 18; r <= (remat ? (int)ctx.vScratchLo - 1 : 31); r++) [freePool addObject:@(r)];
         ctx.vecCalleeUsed = [NSMutableSet set];
         NSMutableArray<NSNumber *> *active = [NSMutableArray array];   // class ids, by ascending end
         NSMutableDictionary<NSNumber *, NSNumber *> *roc = [NSMutableDictionary dictionary];
@@ -9532,6 +9645,9 @@ static BOOL vecPhiInLive(XTIRFunction* fn, XTIRInsn* p, NSUInteger h, XTIRValueI
         // reduction): the register is the phi class's, so their expiry does not
         // free it.
         NSMutableSet<NSNumber *> *borrowed = [NSMutableSet set];
+        // The phi classes that lent their register so: never given up, since
+        // the borrowers keep running in it.
+        NSMutableSet<NSNumber *> *lent = [NSMutableSet set];
         BOOL failed = NO;
         for (NSNumber *cls in classes) {
             NSInteger start = lo[cls].integerValue;
@@ -9553,20 +9669,30 @@ static BOOL vecPhiInLive(XTIRFunction* fn, XTIRInsn* p, NSUInteger h, XTIRValueI
                 // and this one; the port's vecScan.
                 NSNumber *victim = nil;
                 NSInteger far = -1, farLo = -1;
-                if (rematOf[cls] || [ctx.vSpillOf containsObject:cls]) { victim = cls; far = hi[cls].integerValue; farLo = lo[cls].integerValue; }
+                if (rematOf[cls] || [ctx.vSpillOf containsObject:cls] || [phiSpillOf containsObject:cls]) { victim = cls; far = hi[cls].integerValue; farLo = lo[cls].integerValue; }
                 for (NSNumber *av in active) {
-                    if ((!rematOf[av] && ![ctx.vSpillOf containsObject:av]) || [borrowed containsObject:av]) continue;
+                    if ((!rematOf[av] && ![ctx.vSpillOf containsObject:av] && ![phiSpillOf containsObject:av])
+                        || [borrowed containsObject:av] || [lent containsObject:av]) continue;
                     NSInteger h = hi[av].integerValue, l = lo[av].integerValue;
                     if (h > far || (h == far && l > farLo)) { far = h; farLo = l; victim = av; }
                 }
                 if (!victim) { failed = YES; break; }
                 // A constant is made again where it is read; anything else lives
                 // in a frame slot of its own (the port's vecScan).
+                // A phi class's members share its slot: each is stored where it
+                // is defined, and the edges, which move nothing between members
+                // of one class, need no copy.
                 if (rematOf[victim])
                     ctx.vRemat[victim] = rematOf[victim];
                 else {
                     ctx.vSpill[victim] = @0;
                     [ctx.vSpillOrder addObject:victim];
+                    if ([phiSpillOf containsObject:victim])
+                        for (NSNumber *m in canon)
+                            if ([canon[m] isEqual:victim]) {
+                                ctx.vSpill[m] = @0;
+                                ctx.vSpillAlias[m] = victim;
+                            }
                 }
                 if ([victim isEqual:cls]) continue;
                 [freePool addObject:roc[victim]];
@@ -9599,6 +9725,7 @@ static BOOL vecPhiInLive(XTIRFunction* fn, XTIRInsn* p, NSUInteger h, XTIRValueI
                                 hi[cls].integerValue <= backDef[ocls].integerValue) {
                                 reg = roc[ocls];
                                 [borrowed addObject:cls];
+                                [lent addObject:ocls];
                                 break;
                             }
                             continue;
@@ -9665,6 +9792,55 @@ static BOOL vecPhiInLive(XTIRFunction* fn, XTIRInsn* p, NSUInteger h, XTIRValueI
             if (canon[v] || [members containsObject:v] || [vecPhis containsObject:v] || rematOf[v]
                 || [barred containsObject:v] || ctx.laneAddr[v] || ctx.laneLeader[v]) continue;
             [r addObject:v];
+        }
+    return r;
+}
+
+// The phi classes that may live in a frame slot (#307): those whose edges move
+// nothing between registers, so that with the whole class in one slot no edge
+// needs a copy. The phi heads its own class, every value it takes is a member,
+// every member is an instruction's result (not a phi, not in a lane group),
+// and neither the phi nor a member is read by another phi or a terminator. As
+// the port's vecPhiSpillCandidates.
++ (NSSet<NSNumber *> *)vecPhiSpillCandidates:(XTIRFunction *)fn
+                                       canon:(NSDictionary<NSNumber *, NSNumber *> *)canon
+                                     vecPhis:(NSSet<NSNumber *> *)vecPhis
+                                         ctx:(XTArm64FnCtx *)ctx {
+    NSMutableSet<NSNumber *> *r = [NSMutableSet set];
+    NSMutableSet<NSNumber *> *defined = [NSMutableSet set];
+    NSMutableSet<NSNumber *> *termRead = [NSMutableSet set];
+    for (XTIRBlock *bb in fn.blocks) {
+        for (XTIRInsn *n in bb.instructions)
+            if (n.result) [defined addObject:@(n.result.valueId)];
+        for (XTIROperand *o in bb.terminator.operands)
+            if (o.kind == XTIROperandKindUse) [termRead addObject:@(o.valueId)];
+    }
+    for (XTIRBlock *pb in fn.blocks)
+        for (XTIRInsn *p in pb.phiNodes) {
+            if (!p.result || p.result.type.kind != XTIRTypeKindVec) continue;
+            NSNumber *c = @(p.result.valueId);
+            if (canon[c] || [termRead containsObject:c] || ctx.laneAddr[c] || ctx.laneLeader[c]) continue;
+            BOOL ok = YES;
+            for (XTIROperand *o in p.operands) {
+                if (o.kind == XTIROperandKindBlock) continue;
+                if (o.kind != XTIROperandKindUse || ![canon[@(o.valueId)] isEqual:c]) { ok = NO; break; }
+            }
+            for (NSNumber *m in canon) {
+                if (!ok) break;
+                if (![canon[m] isEqual:c]) continue;
+                if (![defined containsObject:m] || [vecPhis containsObject:m] || [termRead containsObject:m]
+                    || ctx.laneAddr[m] || ctx.laneLeader[m]) ok = NO;
+            }
+            for (XTIRBlock *qb in fn.blocks) {
+                if (!ok) break;
+                for (XTIRInsn *q in qb.phiNodes) {
+                    if (q == p) continue;
+                    for (XTIROperand *o in q.operands)
+                        if (o.kind == XTIROperandKindUse
+                            && (o.valueId == p.result.valueId || [canon[@(o.valueId)] isEqual:c])) ok = NO;
+                }
+            }
+            if (ok) [r addObject:c];
         }
     return r;
 }
@@ -10001,13 +10177,19 @@ static BOOL vecPhiInLive(XTIRFunction* fn, XTIRInsn* p, NSUInteger h, XTIRValueI
     [out appendString:@"\n"];
     NSUInteger aliasLo = 0, aliasHi = NSUIntegerMax;
     [self aliasableRangeForCtx:ctx lo:&aliasLo hi:&aliasHi];
-    [moduleOut appendString:[self tbzInRange:
-        [self elideLeafFrame:[self expandStagedSlots:
+    // An inline-asm body is the user's: out of the peepholes' sight (#306),
+    // canonicaliseStagedSlots among them, as the port (which has no such pass).
+    NSMutableArray<NSArray<NSString *> *> *asmBodies = [NSMutableArray array];
+    BOOL hasAsm = [body rangeOfString:@"    // inline asm\n"].location != NSNotFound;
+    NSString *pp =
             [self peepholeFallthrough:[self peepholeUsra:[self peepholeRedundantCmp:[self peepholeAndsFold:[self peepholeCopyProp:
              [self peepholeRedundantReloads:
-              [self peepholeSpills:[self canonicaliseStagedSlots:body]
+              [self peepholeSpills:[self canonicaliseStagedSlots:hasAsm ? XTArm64HideAsm(body, asmBodies) : body]
                                   aliasLo:aliasLo aliasHi:aliasHi
-                                  argArea:ctx.maxOutStack]]]]]]]
+                                  argArea:ctx.maxOutStack]]]]]]];
+    if (hasAsm) pp = XTArm64RestoreAsm(pp, asmBodies, body);
+    [moduleOut appendString:[self tbzInRange:
+        [self elideLeafFrame:[self expandStagedSlots:pp
                        frameBase:ctx.frameBase
                     saveAreaFrom:ctx.saveAreaOffset
                               to:ctx.saveAreaOffset + 8 * ctx.savedRegs.count]] ctx:ctx]];

@@ -1,3 +1,4 @@
+//xtc-na: xt6502 — no par runtime on this target (no ParDevice)
 //xtc-flags: expect=sema-error
 // `return` ends a `par :grid` work item, but inside a loop of the body's own it
 // would only end that loop's iteration: refused, with a way round.

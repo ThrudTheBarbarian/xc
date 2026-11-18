@@ -27,6 +27,7 @@
 #import "Foundation.xc"
 #import "Stdio.xc"
 #import <Ir>
+#import <CgCommon>
 #import "IrDefs.xc"
 #import <Homing>
 
@@ -113,11 +114,6 @@ class M68k
     static bool isVecTy(String* t)
         {
         return t != (String*)0 && t.hasPrefix(String.withCString("Vec("));
-        }
-
-    static bool isFloatTy(String* t)
-        {
-        return t != (String*)0 && (t.equals(String.withCString("F32")) || t.equals(String.withCString("F64")));
         }
 
     static bool isIntegerTy(String* t)
@@ -520,6 +516,7 @@ class M68k
     void emitFunction(IRFunc* fn)
         {
         _fn = fn;
+        u32 fnStart = _out.byteLength();
         assignSlots(fn);
         computeFusedCmps(fn); // all three feed the allocator's exclusion set
         computeFolds(fn);
@@ -569,6 +566,30 @@ class M68k
         seedHomedParams(fn);
         for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
             emitBlock(fn, (IRBlock*)fn.blocks().get(b));
+        // A value with no frame slot comes out as offset 0, and nothing a
+        // function addresses lives at 0..7(a6): that is the saved frame pointer
+        // and the return address (locals are below a6, parameters from 8(a6)).
+        if (M68k.addressesFrameLink(_out, fnStart))
+            unsupported(String.withCString("slot:missing"));
+        }
+
+    // True when the text from `from` on has an operand 0(a6)..7(a6).
+    static bool addressesFrameLink(String* text, u32 from)
+        {
+        u32 n = text.byteLength();
+        for (u32 i = from + (u32)1; i + (u32)4 <= n; i = i + (u32)1)
+            {
+            u8 c = text.byteAt(i);
+            if (c < (u8)'0' || c > (u8)'7')
+                continue;
+            if (text.byteAt(i + (u32)1) != (u8)'(' || text.byteAt(i + (u32)2) != (u8)'a'
+                || text.byteAt(i + (u32)3) != (u8)'6')
+                continue;
+            u8 p = text.byteAt(i - (u32)1);
+            if (p != (u8)'-' && (p < (u8)'0' || p > (u8)'9'))
+                return true;
+            }
+        return false;
         }
 
     void seedHomedParams(IRFunc* fn)
@@ -2141,7 +2162,7 @@ class M68k
             String* sf = String.withCString(dbl ? "d" : "s");
             _out.appendFormat("\tfmove.%s\t%ld(a6),fp0\n", sf.cString(), o0);
             _out.appendFormat("\tfcmp.%s\t%ld(a6),fp0\n", sf.cString(), o1);
-            _out.appendFormat("\t%s\td2\n\tand.l\t#1,d2\n", fpuCond(n.pred()).cString());
+            _out.appendFormat("\t%s\td2\n\tand.l\t#1,d2\n", m68kCond(fpuCond(n.pred()), n.pred(), "fseq").cString());
             }
         else
             {
@@ -2168,9 +2189,22 @@ class M68k
                 _out.appendFormat("\tmove.l\t%ld(a6),d0\n\tmove.l\t%ld(a6),d1\n\tjsr\t__cmpsf2\n", o0, o1);
                 }
             _out.appendFormat("\tmoveq\t#0,d2\n\ttst.l\td0\n\ts%s\td2\n\tand.l\t#1,d2\n",
-                              softFCond(n.pred()).cString());
+                              m68kCond(softFCond(n.pred()), n.pred(), "eq").cString());
             }
         storeReg(String.withCString("d2"), n.res());
+        }
+
+    // A predicate a condition table does not know (LLVM's unordered tests,
+    // say) is refused rather than tested as `eq`. `dflt` keeps the emitted
+    // text well formed up to the refusal.
+    String* m68kCond(String* cc, String* pred, u8* dflt)
+        {
+        if (cc != (String*)0)
+            return cc;
+        String* what = String.withCString("predicate ");
+        what.append(pred == (String*)0 ? String.withCString("(none)") : pred);
+        unsupported(what);
+        return String.withCString(dflt);
         }
 
     // The predicate order is the IR's own: OEQ, ONE, OLT, OGT, OLE, OGE.
@@ -2190,7 +2224,7 @@ class M68k
             return String.withCString("fsle");
         if (p.equals(String.withCString("OGE")))
             return String.withCString("fsge");
-        return String.withCString("fseq");
+        return (String*)0;
         }
 
     static String* softFCond(String* p)
@@ -2209,7 +2243,7 @@ class M68k
             return String.withCString("le");
         if (p.equals(String.withCString("OGE")))
             return String.withCString("le"); // operands swapped
-        return String.withCString("eq");
+        return (String*)0;
         }
 
     // ── Compare-and-branch fusion ────────────────────────────────────────
@@ -2375,7 +2409,7 @@ class M68k
             _out.appendFormat("\tjsr\t%s\n\tlea\t16(sp),sp\n",
                               sgn ? "__cmpdi2" : "__ucmpdi2");
             _out.appendCString("\tmoveq\t#0,d2\n\ttst.l\td0\n");
-            _out.appendFormat("\ts%s\td2\n", condForSignOf(n.pred()).cString());
+            _out.appendFormat("\ts%s\td2\n", m68kCond(condForSignOf(n.pred()), n.pred(), "eq").cString());
             _out.appendCString("\tand.l\t#1,d2\n");
             storeReg(String.withCString("d2"), n.res());
             return;
@@ -2396,7 +2430,7 @@ class M68k
             }
         _out.appendCString("\tmoveq\t#0,d2\n"); // pre-clear; cmp sets the flags below
         _out.appendFormat("\tcmp.%s\td1,d0\n", sz.cString());
-        _out.appendFormat("\ts%s\td2\n", condFor(n.pred()).cString());
+        _out.appendFormat("\ts%s\td2\n", m68kCond(condFor(n.pred()), n.pred(), "eq").cString());
         _out.appendCString("\tand.l\t#1,d2\n");
         storeReg(String.withCString("d2"), n.res());
         }
@@ -2438,7 +2472,7 @@ class M68k
             {
             // The ICmp already emitted its `cmp` and the flags are still set:
             // branch to the FALSE edge on the negated predicate.
-            _out.appendFormat("\tb%s\t.Lcbf%lu\n", condForNegated(fcmp.pred()).cString(), lbl);
+            _out.appendFormat("\tb%s\t.Lcbf%lu\n", m68kCond(condForNegated(fcmp.pred()), fcmp.pred(), "ne").cString(), lbl);
             }
         else
             {
@@ -2478,12 +2512,12 @@ class M68k
         // dest (`v0 <- lc4` beside `lc4 <- lc4+1` after the inner loop unrolls),
         // writing lc4's slot first hands v0 the post-increment value. Both live
         // in slots, so a register-only check misses it.
+        // Aggregates and eight-byte scalars count too: they live in slots, and
+        // a swap of two of them is as much a cycle as a swap of two longs.
         bool safe = true;
         for (u32 i = (u32)0; i < dests.count() && safe; i = i + (u32)1)
             {
             IRValue* d = (IRValue*)dests.get(i);
-            if (isAggTy(d.ty()))
-                continue; // aggregates take the byte-copy path
             String* rd = locOf(d);
             if (rd == (String*)0)
                 continue;
@@ -2505,46 +2539,138 @@ class M68k
                 emitOnePhiCopy((IRValue*)dests.get(i), (IROperand*)srcs.get(i));
             return;
             }
-        // A cycle: read EVERY source (push) before writing ANY dest (pop in
-        // reverse). Aggregates are excluded — they have their own slot and
-        // cannot ride the 4-byte scalar shuffle.
-        Array* cd = new Array();
-        Array* cs = new Array();
+        // Not safe: read EVERY source (push) before writing ANY dest (pop in
+        // reverse). Slots are a6-relative, so moving sp leaves them
+        // addressable. An eight-byte scalar is pushed as its two longs and an
+        // aggregate as a block of its size rounded up to a long, so a cycle
+        // of either is handled like a cycle of longs. A walking pointer whose
+        // source is its own address register is already in place.
+        Array* skip = new Array();
         for (u32 i = (u32)0; i < dests.count(); i = i + (u32)1)
             {
             IRValue* d = (IRValue*)dests.get(i);
             IROperand* sv = (IROperand*)srcs.get(i);
-            // Address-register and aggregate destinations are handled directly:
-            // neither can ride the 4-byte scalar stack shuffle.
-            if (ptrRegOf(d) != (String*)0)
+            String* dA = ptrRegOf(d);
+            String* sA = sv.kind() == (u8)OPK_USE ? ptrRegOf(sv.val()) : (String*)0;
+            // (An aggregate with no slot of its own has nowhere to go.)
+            bool inPlace = (dA != (String*)0 && sA != (String*)0 && dA.equals(sA))
+                           || (isAggTy(d.ty()) && sv.kind() == (u8)OPK_USE && !hasSlot(d));
+            skip.add((Object*)Number.with(inPlace ? (u32)1 : (u32)0));
+            if (inPlace)
+                continue;
+            if (isAggPhiCopy(d, sv))
+                pushAggPhiSource(d, sv);
+            else if (!pushWidePhiSource(d, sv))
                 {
-                emitOnePhiCopy(d, sv);
+                loadOperand(sv, String.withCString("d0"));
+                _out.appendCString("\tmove.l\td0,-(sp)\n");
+                }
+            }
+        for (u32 i = dests.count(); i > (u32)0; i = i - (u32)1)
+            {
+            if (((Number*)skip.get(i - (u32)1)).asU32() != (u32)0)
+                continue;
+            IRValue* d = (IRValue*)dests.get(i - (u32)1);
+            IROperand* sv = (IROperand*)srcs.get(i - (u32)1);
+            if (isAggPhiCopy(d, sv))
+                {
+                popAggPhiDest(d);
                 continue;
                 }
-            if (isAggTy(d.ty()) && sv.kind() == (u8)OPK_USE)
+            if (isWidePhiSource(d, sv))
                 {
-                emitAggPhiCopy(d, sv);
+                _out.appendFormat("\tmove.l\t(sp)+,%ld(a6)\n", slotOf(d));
+                _out.appendFormat("\tmove.l\t(sp)+,%ld(a6)\n", slotOf(d) + (i32)4);
                 continue;
                 }
-            // Eight-byte scalar: copied in place, exactly as an aggregate is.
-            // Both step outside the read-all-then-write-all discipline, so a
-            // cycle whose members are 64-bit would still be wrong — no such
-            // cycle exists today, and it would need a wide shuffle.
-            if (emitWidePhiCopy(d, sv))
+            String* dA = ptrRegOf(d);
+            if (dA != (String*)0)
+                {
+                _out.appendFormat("\tmove.l\t(sp)+,%s\n", dA.cString());
                 continue;
-            cd.add((Object*)d);
-            cs.add((Object*)sv);
-            }
-        for (u32 i = (u32)0; i < cs.count(); i = i + (u32)1)
-            {
-            loadOperand((IROperand*)cs.get(i), String.withCString("d0"));
-            _out.appendCString("\tmove.l\td0,-(sp)\n");
-            }
-        for (u32 i = cd.count(); i > (u32)0; i = i - (u32)1)
-            {
+                }
             _out.appendCString("\tmove.l\t(sp)+,d0\n");
-            storeReg(String.withCString("d0"), (IRValue*)cd.get(i - (u32)1));
+            storeReg(String.withCString("d0"), d);
             }
+        }
+
+    // True when emitWidePhiCopy would take this copy: an i64 or double from
+    // an immediate or a slot.
+    bool isWidePhiSource(IRValue* d, IROperand* src)
+        {
+        if ((!isI64(d.ty()) && !isF64(d.ty())) || !hasSlot(d))
+            return false;
+        if (src.kind() == (u8)OPK_IMMI || src.kind() == (u8)OPK_IMMF)
+            return true;
+        return src.kind() == (u8)OPK_USE && src.val() != (IRValue*)0 && hasSlot(src.val());
+        }
+
+    // True when an aggregate copy goes slot to slot.
+    bool isAggPhiCopy(IRValue* d, IROperand* src)
+        {
+        return isAggTy(d.ty()) && src.kind() == (u8)OPK_USE && hasSlot(d);
+        }
+
+    // Push an eight-byte source low long first, so the high long is on top
+    // and pops first into the slot base (big-endian: high at slot, low at
+    // slot+4).
+    bool pushWidePhiSource(IRValue* d, IROperand* src)
+        {
+        if (!isWidePhiSource(d, src))
+            return false;
+        if (src.kind() == (u8)OPK_IMMI)
+            {
+            i64 v = src.imm();
+            _out.appendFormat("\tmove.l\t#%lu,-(sp)\n", (u32)v);
+            _out.appendFormat("\tmove.l\t#%lu,-(sp)\n", (u32)(v >> (i64)32));
+            return true;
+            }
+        if (src.kind() == (u8)OPK_IMMF)
+            {
+            String* hx = src.fpHex();
+            _out.appendFormat("\tmove.l\t#$%s,-(sp)\n",
+                              upperHex(hx.substringBytes((u32)8, (u32)8)).cString());
+            _out.appendFormat("\tmove.l\t#$%s,-(sp)\n",
+                              upperHex(hx.substringBytes((u32)0, (u32)8)).cString());
+            return true;
+            }
+        i32 ss = slotOf(src.val());
+        _out.appendFormat("\tmove.l\t%ld(a6),-(sp)\n", ss + (i32)4);
+        _out.appendFormat("\tmove.l\t%ld(a6),-(sp)\n", ss);
+        return true;
+        }
+
+    // An aggregate source goes onto the stack as a block of its size rounded
+    // up to a long, byte by byte as emitAggPhiCopy copies; popAggPhiDest
+    // copies it back out and releases it.
+    void pushAggPhiSource(IRValue* d, IROperand* src)
+        {
+        u32 wide = aggSize(layoutOf(d.ty()));
+        _out.appendFormat("\tsub.l\t#%lu,sp\n", (wide + (u32)3) & ~(u32)3);
+        _out.appendCString("\tmove.l\tsp,a0\n");
+        _out.appendFormat("\tlea\t%ld(a6),a1\n", slotOf(src.val()));
+        emitPhiByteLoop(wide);
+        }
+
+    void popAggPhiDest(IRValue* d)
+        {
+        u32 wide = aggSize(layoutOf(d.ty()));
+        _out.appendFormat("\tlea\t%ld(a6),a0\n", slotOf(d));
+        _out.appendCString("\tmove.l\tsp,a1\n");
+        emitPhiByteLoop(wide);
+        _out.appendFormat("\tadd.l\t#%lu,sp\n", (wide + (u32)3) & ~(u32)3);
+        }
+
+    // Copy `wide` bytes from (a1) to (a0). The loop runs at least once, so
+    // an empty aggregate copies nothing rather than 2^32 bytes.
+    void emitPhiByteLoop(u32 wide)
+        {
+        if (wide == (u32)0)
+            return;
+        u32 nlbl = _labelSeq;
+        _labelSeq = _labelSeq + (u32)1;
+        _out.appendFormat("\tmove.l\t#%lu,d0\n.Lphicpy%lu:\n\tmove.b\t(a1)+,(a0)+\n", wide, nlbl);
+        _out.appendFormat("\tsubq.l\t#1,d0\n\tbne.s\t.Lphicpy%lu\n", nlbl);
         }
 
     void emitOnePhiCopy(IRValue* d, IROperand* src)
@@ -2636,10 +2762,7 @@ class M68k
         u32 wide = aggSize(layoutOf(d.ty()));
         _out.appendFormat("\tlea\t%ld(a6),a0\n", slotOf(d));
         _out.appendFormat("\tlea\t%ld(a6),a1\n", slotOf(src.val()));
-        u32 nlbl = _labelSeq;
-        _labelSeq = _labelSeq + (u32)1;
-        _out.appendFormat("\tmove.l\t#%lu,d0\n.Lphicpy%lu:\n\tmove.b\t(a1)+,(a0)+\n", wide, nlbl);
-        _out.appendFormat("\tsubq.l\t#1,d0\n\tbne.s\t.Lphicpy%lu\n", nlbl);
+        emitPhiByteLoop(wide);
         }
 
     // Where a value lives — its home register, or its frame slot.
@@ -2808,6 +2931,14 @@ class M68k
             u32 off = fieldByteOffset(ea);
             if (off == (u32)0)
                 return String.withCString("(a0)");
+            // A d16 reaches 32767 bytes: a field further in goes through a0
+            // moved to it first (#289), where `40000(a0)` was assembled as
+            // -25536(a0), 25 KB below the object.
+            if (off > (u32)32767)
+                {
+                _out.appendFormat("\tadda.l\t#%lu,a0\n", off);
+                return String.withCString("(a0)");
+                }
             String* o = String.withCString("");
             o.appendFormat("%lu(a0)", off);
             return o;
@@ -3595,7 +3726,7 @@ class M68k
             return String.withCString("ls");
         if (p.equals(String.withCString("UGE")))
             return String.withCString("cc");
-        return String.withCString("eq");
+        return (String*)0;
         }
 
     // The predicate applied to a -1/0/1 helper RESULT, which is always tested
@@ -3604,6 +3735,8 @@ class M68k
     static String* condForSignOf(String* p)
         {
         if (p == (String*)0)
+            return String.withCString("eq");
+        if (p.equals(String.withCString("EQ")))
             return String.withCString("eq");
         if (p.equals(String.withCString("NE")))
             return String.withCString("ne");
@@ -3615,7 +3748,7 @@ class M68k
             return String.withCString("le");
         if (p.equals(String.withCString("SGE")) || p.equals(String.withCString("UGE")))
             return String.withCString("ge");
-        return String.withCString("eq");
+        return (String*)0;
         }
 
     static String* condForNegated(String* p)
@@ -3642,7 +3775,7 @@ class M68k
             return String.withCString("hi");
         if (p.equals(String.withCString("UGE")))
             return String.withCString("cs");
-        return String.withCString("ne");
+        return (String*)0;
         }
 
     // The addressing a phi-edge copy reads its source through: an immediate,
@@ -3674,20 +3807,68 @@ class M68k
     // needed is decided by SCANNING THE ALREADY-EMITTED CODE — the stubs are
     // appended after it, so their own labels are not present yet and cannot
     // make a helper look used by defining it.
+    //
+    // The names `jsr`ed so far, read off _out as it grows (#335): each query
+    // used to search the whole output, about 120 times per module. Each call
+    // first reads the complete lines appended since the last, so a stub that
+    // calls a helper makes it used for the queries after it, as before.
+    Map* _jsrSeen;
+    u32 _jsrScanned;
+    String* _jsrFor;   // the _out the set was read from
     bool usesHelper(String* name)
         {
-        String* needle = String.withCString("\tjsr\t");
-        needle.append(name);
-        needle.appendCString("\n");
-        return _out.byteIndexOf(needle) != (u32)$FFFF_FFFF;
+        if (_jsrSeen == (Map*)0 || _jsrFor != _out || _jsrScanned > _out.byteLength())
+            {
+            _jsrSeen = new Map();
+            _jsrScanned = (u32)0;
+            _jsrFor = _out;
+            }
+        u32 n = _out.byteLength();
+        u32 i = _jsrScanned;
+        while (i < n)
+            {
+            u32 e = i;
+            while (e < n && _out.byteAt(e) != (u8)10)
+                e = e + (u32)1;
+            if (e >= n)
+                break;   // a line not finished yet: read it next time
+            // "\tjsr\t<name>" as the whole line: the old needle was
+            // "\tjsr\t<name>\n", found anywhere, so the line may carry text
+            // before the tab.
+            u32 t = i;
+            while (t + (u32)5 <= e)
+                {
+                if (_out.byteAt(t) == (u8)9 && _out.byteAt(t + (u32)1) == (u8)'j' && _out.byteAt(t + (u32)2) == (u8)'s'
+                    && _out.byteAt(t + (u32)3) == (u8)'r' && _out.byteAt(t + (u32)4) == (u8)9)
+                    {
+                    String* nm = _out.substringBytes(t + (u32)5, e - t - (u32)5);
+                    _jsrSeen.set((Hashable*)nm, (Object*)nm);
+                    }
+                t = t + (u32)1;
+                }
+            i = e + (u32)1;
+            }
+        _jsrScanned = i;
+        return _jsrSeen.get((Hashable*)name) != (Object*)0;
         }
 
+    // The module's function names, as a set built on first use (#335): the
+    // module does not change while its stubs are written.
+    Map* _definedFns;
+    IRModule* _definedFor;
     bool moduleDefines(IRModule* m, String* name)
         {
-        for (u32 i = (u32)0; i < m.funcs().count(); i = i + (u32)1)
-            if (((IRFunc*)m.funcs().get(i)).name().equals(name))
-                return true;
-        return false;
+        if (_definedFns == (Map*)0 || _definedFor != m)
+            {
+            _definedFns = new Map();
+            _definedFor = m;
+            for (u32 i = (u32)0; i < m.funcs().count(); i = i + (u32)1)
+                {
+                String* fnm = ((IRFunc*)m.funcs().get(i)).name();
+                _definedFns.set((Hashable*)fnm, (Object*)fnm);
+                }
+            }
+        return _definedFns.get((Hashable*)name) != (Object*)0;
         }
 
     void emitRuntimeStubs(IRModule* m)

@@ -77,6 +77,9 @@ static NSDictionary<NSNumber*, NSString*>* sVec = nil;
 // its frame slot; both read through xmm15..xmm13 and written through xmm12.
 static NSMutableDictionary<NSNumber*, XTIROperand*>* sVRemat = nil;
 static NSMutableSet<NSNumber*>* sVSpill = nil;
+// A spilled phi class's other members (the values coalesced onto the phi):
+// member -> the phi, whose slot they share as they would share its register.
+static NSMutableDictionary<NSNumber*, NSNumber*>* sVSpillAlias = nil;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // x86-64 System V AMD64 backend. Intel syntax (`.intel_syntax noprefix`), so the
@@ -2760,9 +2763,83 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
                 k = o;
             else if (o.kind == XTIROperandKindUse && consts[@(o.valueId)])
                 k = consts[@(o.valueId)].operands[0];
+            // A float constant other than +0.0 is not made again: the splat
+            // reads a float through loadF, which has only a value's slot or
+            // home to read, and made every such constant 0.0 (#307). Such a
+            // splat is spilled instead. As the port.
+            if (k && k.kind == XTIROperandKindImmF && k.floatRawBytes != 0)
+                k = nil;
             if (k)
                 rematOf[v] = k;
             }
+    }
+
+// The phi classes that may live in a frame slot (#307): those whose edges move
+// nothing between registers, so that with the whole class in one slot no edge
+// needs a copy. The phi heads its own class, every value it takes is a member,
+// every member is an instruction's result (not a phi, not folded into its
+// reader), and neither the phi nor a member is read by another phi or a
+// terminator. As the port's vecPhiSpillCandidates.
++ (NSSet<NSNumber*>*)vecPhiSpillCandidates:(XTIRFunction*)fn canon:(NSDictionary<NSNumber*, NSNumber*>*)canon
+    {
+    NSMutableSet<NSNumber*>* r = [NSMutableSet set];
+    NSMutableSet<NSNumber*>* defined = [NSMutableSet set];
+    NSMutableSet<NSNumber*>* termRead = [NSMutableSet set];
+    for (XTIRBlock* bb in fn.blocks)
+        {
+        for (XTIRInsn* n in bb.instructions)
+            if (n.result)
+                [defined addObject:@(n.result.valueId)];
+        for (XTIROperand* o in bb.terminator.operands)
+            if (o.kind == XTIROperandKindUse)
+                [termRead addObject:@(o.valueId)];
+        }
+    for (XTIRBlock* pb in fn.blocks)
+        for (XTIRInsn* p in pb.phiNodes)
+            {
+            if (!p.result || p.result.type.kind != XTIRTypeKindVec)
+                continue;
+            NSNumber* c = @(p.result.valueId);
+            if (canon[c] || [termRead containsObject:c] || sFold[c])
+                continue;
+            BOOL ok = YES;
+            for (XTIROperand* o in p.operands)
+                {
+                if (o.kind == XTIROperandKindBlock)
+                    continue;
+                if (o.kind != XTIROperandKindUse || ![canon[@(o.valueId)] isEqual:c])
+                    {
+                    ok = NO;
+                    break;
+                    }
+                }
+            for (NSNumber* m in canon)
+                {
+                if (!ok)
+                    break;
+                if (![canon[m] isEqual:c])
+                    continue;
+                if (![defined containsObject:m] || [termRead containsObject:m] || sFold[m])
+                    ok = NO;
+                }
+            for (XTIRBlock* qb in fn.blocks)
+                {
+                if (!ok)
+                    break;
+                for (XTIRInsn* q in qb.phiNodes)
+                    {
+                    if (q == p)
+                        continue;
+                    for (XTIROperand* o in q.operands)
+                        if (o.kind == XTIROperandKindUse
+                            && (o.valueId == p.result.valueId || [canon[@(o.valueId)] isEqual:c]))
+                            ok = NO;
+                    }
+                }
+            if (ok)
+                [r addObject:c];
+            }
+    return r;
     }
 
 // Whether a vector phi's incoming value must keep its own register (#220): it
@@ -2817,7 +2894,8 @@ static NSString* vecScratchName(XTIRFunction* fn, XTIRValueId vid, unsigned r)
 static void vecSlotMove(XTIRFunction* fn, XTIRValueId vid, NSString* reg, BOOL load,
                         NSDictionary<NSNumber*, NSNumber*>* slot, NSMutableString* out)
     {
-    unsigned long off = slot[@(vid)].unsignedLongValue;
+    NSNumber* home = sVSpillAlias[@(vid)] ?: @(vid);
+    unsigned long off = slot[home].unsignedLongValue;
     XTIRValue* vv = fn.values[@(vid)];
     NSUInteger w = vv ? vv.type.byteWidth : 16;
     if (w == 64)
@@ -2863,6 +2941,17 @@ static void vecSlotMove(XTIRFunction* fn, XTIRValueId vid, NSString* reg, BOOL l
         BOOL re = sVRemat[@(o.valueId)] != nil;
         if (!re && !([sVSpill containsObject:@(o.valueId)] && !sFold[@(o.valueId)]))
             continue;
+        // Three operands at most, in xmm15-xmm13: below that the scratch would
+        // meet the spilled result's xmm12 and then the allocator's own pool.
+        // No vector instruction reads more than three vectors (VBsl).
+        if (scratch < 13)
+            {
+            fprintf(stderr, "xcc-cg-x86_64: error: vector register pressure exceeded "
+                            "the %d-register SSE pool in '%s'\n",
+                    14,
+                    fn.name.UTF8String);
+            exit(1);
+            }
         NSString* name = vecScratchName(fn, o.valueId, scratch);
         scratch--;
         vec[@(o.valueId)] = name;
@@ -3024,11 +3113,15 @@ static void vecSlotMove(XTIRFunction* fn, XTIRValueId vid, NSString* reg, BOOL l
 
     // Out of registers: again with xmm12-xmm15 held back as scratch, and
     // whenever the pool is empty the class that ends last given up (the port's
-    // vecScanX): never a phi class, whose edges copy registers.
+    // vecScanX): no phi class, whose edges copy registers. Still out: a third
+    // time with the phi classes whose edges copy nothing among the candidates
+    // (#307), so a function that fitted before is allocated as before.
     sVRemat = [NSMutableDictionary dictionary];
     sVSpill = [NSMutableSet set];
+    sVSpillAlias = [NSMutableDictionary dictionary];
     NSMutableDictionary<NSNumber*, XTIROperand*>* rematOf = [NSMutableDictionary dictionary];
     NSMutableSet<NSNumber*>* spillable = [NSMutableSet set];
+    NSSet<NSNumber*>* phiSpillable = [NSSet set];
     // The classes whose every value is a 64-byte vector, which alone may take
     // zmm16-31; none at all outside an AVX-512 function.
     NSMutableSet<NSNumber*>* zmmOnly = [NSMutableSet set];
@@ -3052,16 +3145,21 @@ static void vecSlotMove(XTIRFunction* fn, XTIRValueId vid, NSString* reg, BOOL l
                 [zmmOnly removeObject:@(classOf(in.operands[0].valueId))];
     BOOL has512 = zmmOnly.count > 0;
     NSMutableDictionary<NSNumber*, NSNumber*>* regOfClassFinal = nil;
-    for (int attempt = 0; attempt < 2 && !regOfClassFinal; attempt++)
+    for (int attempt = 0; attempt < 3 && !regOfClassFinal; attempt++)
         {
-        BOOL remat = attempt == 1;
+        BOOL remat = attempt >= 1;
         if (remat)
             {
             sVRemat = [NSMutableDictionary dictionary];
             sVSpill = [NSMutableSet set];
+            sVSpillAlias = [NSMutableDictionary dictionary];
+            rematOf = [NSMutableDictionary dictionary];
+            spillable = [NSMutableSet set];
             [self vecRematCandidates:fn vecVals:vecVals classOf:classOf phiClass:phiClass rematOf:rematOf
                            spillable:spillable];
             }
+        if (attempt == 2)
+            phiSpillable = [self vecPhiSpillCandidates:fn canon:canon];
         NSMutableArray<NSNumber*>* freePool = [NSMutableArray array];
         for (NSNumber* r in @[ @6, @7, @2, @3, @4, @5, @8, @9, @10, @11 ])
             [freePool addObject:r];
@@ -3106,7 +3204,7 @@ static void vecSlotMove(XTIRFunction* fn, XTIRValueId vid, NSString* reg, BOOL l
                 // and this one; a constant made again where read, else spilled.
                 NSNumber* victim = nil;
                 NSInteger far = -1, farLo = -1;
-                if ([spillable containsObject:cls])
+                if ([spillable containsObject:cls] || [phiSpillable containsObject:cls])
                     {
                     victim = cls;
                     far = hi[cls].integerValue;
@@ -3114,7 +3212,7 @@ static void vecSlotMove(XTIRFunction* fn, XTIRValueId vid, NSString* reg, BOOL l
                     }
                 for (NSNumber* av in active)
                     {
-                    if (![spillable containsObject:av])
+                    if (![spillable containsObject:av] && ![phiSpillable containsObject:av])
                         continue;
                     NSInteger h = hi[av].integerValue, l = lo[av].integerValue;
                     if (h > far || (h == far && l > farLo))
@@ -3129,10 +3227,22 @@ static void vecSlotMove(XTIRFunction* fn, XTIRValueId vid, NSString* reg, BOOL l
                     failed = YES;
                     break;
                     }
+                // A phi class's members share its slot: each is stored where
+                // it is defined, and the edges, which move nothing between
+                // members of one class, need no copy.
                 if (rematOf[victim])
                     sVRemat[victim] = rematOf[victim];
                 else
+                    {
                     [sVSpill addObject:victim];
+                    if ([phiSpillable containsObject:victim])
+                        for (NSNumber* m in canon)
+                            if ([canon[m] isEqual:victim])
+                                {
+                                [sVSpill addObject:m];
+                                sVSpillAlias[m] = victim;
+                                }
+                    }
                 if ([victim isEqual:cls])
                     continue;
                 release(regOfClass[victim]);
@@ -3616,6 +3726,7 @@ static void vecSlotMove(XTIRFunction* fn, XTIRValueId vid, NSString* reg, BOOL l
     // constructor). The port's allocator starts each function empty.
     sVRemat = nil;
     sVSpill = nil;
+    sVSpillAlias = nil;
     sVec = hasAsm ? nil : [self assignVectorRegsFor:fn]; // SSE regs for Vec values
 
     // Register homing (GP callee-saved rbx/r12-r15). Folded addresses excluded.
@@ -4026,12 +4137,23 @@ static void vecSlotMove(XTIRFunction* fn, XTIRValueId vid, NSString* reg, BOOL l
                         }
                     }
                 }
-            else if ([self isFloatVal:pv])
+            else if ([self isFloatVal:pv] && freg < 8)
                 {
-                if (s && freg < 8)
+                if (s)
                     [out appendFormat:@"\tmov%@\t[rbp-%@], xmm%lu\n",
                                       pv.type.kind == XTIRTypeKindF64 ? @"sd" : @"ss", s, (unsigned long)freg];
                 freg++;
+                }
+            else if ([self isFloatVal:pv])
+                {
+                // Past xmm7 the caller passed it on the stack, in the next slot
+                // in parameter order, as an integer past r9 (#313).
+                if (s)
+                    {
+                    [out appendFormat:@"\tmov\trax, [rbp+%lu]\n", (unsigned long)(16 + 8 * sidx)];
+                    [out appendFormat:@"\tmov\t[rbp-%@], rax\n", s];
+                    }
+                sidx++;
                 }
             else
                 {
@@ -5181,8 +5303,8 @@ static BOOL xtConstThrough(XTIRValueId v, XTIRInsn* (^defOf)(XTIRValueId), int d
             {
             // Pre-pass: System V passes integer/pointer args past r9 on the stack.
             // Size that outgoing area so a single `sub rsp` reserves it (kept
-            // 16-aligned). Struct/float overflow past their register files is
-            // unsupported (rare), so only integer stack args are counted.
+            // 16-aligned): integers past r9, floats past xmm7 and structs past
+            // the registers.
             // A >16-byte aggregate RESULT is MEMORY class: rdi carries a hidden
             // pointer to the result slot, shifting the GP args right by one.
             BOOL memRet = (res && [self isSysVMemRet:res.type]);
@@ -5199,9 +5321,14 @@ static BOOL xtConstThrough(XTIRValueId v, XTIRInsn* (^defOf)(XTIRValueId), int d
                     else
                         nstack += nr; // whole, on the stack (#301)
                     }
-                else if (v && [self isFloatVal:v] && cFreg < 8)
+                else if (v && [self isFloatVal:v])
                     {
-                    cFreg++;
+                    // A float past xmm7 takes the next stack slot, as an integer
+                    // past r9 does (#313).
+                    if (cFreg < 8)
+                        cFreg++;
+                    else
+                        nstack++;
                     }
                 else if (cIreg < 6)
                     {
@@ -5259,14 +5386,25 @@ static BOOL xtConstThrough(XTIRValueId v, XTIRInsn* (^defOf)(XTIRValueId), int d
                         }
                     }
                 // float arg → xmm
-                else if (v && [self isFloatVal:v] && freg < 8)
+                else if (v && [self isFloatVal:v])
                     {
-                    [self loadF:a
-                           into:[NSString stringWithFormat:@"xmm%lu", (unsigned long)freg]
-                             fn:fn
-                           slot:slot
-                            out:out];
-                    freg++;
+                    if (freg < 8)
+                        {
+                        [self loadF:a
+                               into:[NSString stringWithFormat:@"xmm%lu", (unsigned long)freg]
+                                 fn:fn
+                               slot:slot
+                                out:out];
+                        freg++;
+                        }
+                    else
+                        {
+                        // Past xmm7 its bits go through rax, which is not an argument
+                        // register, to the next outgoing stack slot in source order (#313).
+                        [self loadZX:a into:'a' fn:fn slot:slot out:out];
+                        [out appendFormat:@"\tmov\t[rsp+%lu], rax\n", (unsigned long)(8 * sidx)];
+                        sidx++;
+                        }
                     }
                 // int/pointer arg
                 else if (ireg < 6)
@@ -5382,9 +5520,14 @@ static BOOL xtConstThrough(XTIRValueId v, XTIRInsn* (^defOf)(XTIRValueId), int d
                     else
                         nstack += nr; // whole, on the stack (#301)
                     }
-                else if (v && [self isFloatVal:v] && cFreg < 8)
+                else if (v && [self isFloatVal:v])
                     {
-                    cFreg++;
+                    // A float past xmm7 takes the next stack slot, as an integer
+                    // past r9 does (#313).
+                    if (cFreg < 8)
+                        cFreg++;
+                    else
+                        nstack++;
                     }
                 else if (cIreg < 6)
                     {
@@ -5443,14 +5586,25 @@ static BOOL xtConstThrough(XTIRValueId v, XTIRInsn* (^defOf)(XTIRValueId), int d
                             }
                         }
                     }
-                else if (v && [self isFloatVal:v] && freg < 8)
+                else if (v && [self isFloatVal:v])
                     {
-                    [self loadF:a
-                           into:[NSString stringWithFormat:@"xmm%lu", (unsigned long)freg]
-                             fn:fn
-                           slot:slot
-                            out:out];
-                    freg++;
+                    if (freg < 8)
+                        {
+                        [self loadF:a
+                               into:[NSString stringWithFormat:@"xmm%lu", (unsigned long)freg]
+                                 fn:fn
+                               slot:slot
+                                out:out];
+                        freg++;
+                        }
+                    else
+                        {
+                        // Past xmm7 its bits go through rax, which is not an argument
+                        // register, to the next outgoing stack slot in source order (#313).
+                        [self loadZX:a into:'a' fn:fn slot:slot out:out];
+                        [out appendFormat:@"\tmov\t[rsp+%lu], rax\n", (unsigned long)(8 * sidx)];
+                        sidx++;
+                        }
                     }
                 else if (ireg < 6)
                     {
@@ -5592,9 +5746,14 @@ static BOOL xtConstThrough(XTIRValueId v, XTIRInsn* (^defOf)(XTIRValueId), int d
                 else
                     nstack += nr; // whole, on the stack (#301)
                 }
-            else if (v && [self isFloatVal:v] && cFreg < 8)
+            else if (v && [self isFloatVal:v])
                 {
-                cFreg++;
+                // A float past xmm7 takes the next stack slot, as an integer
+                // past r9 does (#313).
+                if (cFreg < 8)
+                    cFreg++;
+                else
+                    nstack++;
                 }
             else if (cIreg < 6)
                 {
@@ -5642,14 +5801,25 @@ static BOOL xtConstThrough(XTIRValueId v, XTIRInsn* (^defOf)(XTIRValueId), int d
                         }
                     }
                 }
-            else if (v && [self isFloatVal:v] && freg < 8)
+            else if (v && [self isFloatVal:v])
                 {
-                [self loadF:a
-                       into:[NSString stringWithFormat:@"xmm%lu", (unsigned long)freg]
-                         fn:fn
-                       slot:slot
-                        out:out];
-                freg++;
+                if (freg < 8)
+                    {
+                    [self loadF:a
+                           into:[NSString stringWithFormat:@"xmm%lu", (unsigned long)freg]
+                             fn:fn
+                           slot:slot
+                            out:out];
+                    freg++;
+                    }
+                else
+                    {
+                    // Past xmm7 its bits go through rax, which is not an argument
+                    // register, to the next outgoing stack slot in source order (#313).
+                    [self loadZX:a into:'a' fn:fn slot:slot out:out];
+                    [out appendFormat:@"\tmov\t[rsp+%lu], rax\n", (unsigned long)(8 * sidx)];
+                    sidx++;
+                    }
                 }
             else if (ireg < 6)
                 {
@@ -7133,7 +7303,11 @@ static BOOL xtConstThrough(XTIRValueId v, XTIRInsn* (^defOf)(XTIRValueId), int d
             swap = YES;
             break;
         default:
-            return;
+            // No vcmpps predicate is wired for it (ONE needs an ordered test as
+            // well). It emitted nothing, leaving the mask unwritten.
+            fprintf(stderr, "xcc-cg-x86_64: error: unsupported: VFCmp predicate %d\n",
+                    (int)in.predicate);
+            exit(1);
             }
         NSString *lhs = swap ? b : a, *rhs = swap ? a : b;
         if ([d hasPrefix:@"zmm"])
@@ -7437,6 +7611,15 @@ static BOOL xtConstThrough(XTIRValueId v, XTIRInsn* (^defOf)(XTIRValueId), int d
                 {
                 XTIRValueId vid = (XTIRValueId)[[text substringWithRange:[m rangeAtIndex:1]] integerValue];
                 NSNumber* s = slot[@(vid)];
+                // A bare `rbp` would put the user's asm on the saved frame
+                // pointer. Only pinned locals and __self make markers, so this
+                // guards against a compiler bug.
+                if (!s)
+                    {
+                    fprintf(stderr, "xcc-cg-x86_64: error: unsupported: inline asm local with "
+                                    "no slot in '%s'\n", fn.name.UTF8String);
+                    exit(1);
+                    }
                 [resolved replaceCharactersInRange:m.range
                                         withString:s ? [NSString stringWithFormat:@"rbp-%ld",
                                                                                   (long)s.integerValue]

@@ -1,3 +1,4 @@
+//xtc-na: xt6502 — no par runtime on this target (no ParDevice)
 //xtc-flags: target=arm64
 // par_gpu_helpers.xc — a `par` body that calls helper functions: nested, with
 // a branch, and feeding a reduction. On Apple silicon with XC_PAR=gpu the

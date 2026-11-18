@@ -154,7 +154,8 @@ NS_ASSUME_NONNULL_BEGIN
         st[@"classes"] = [NSMutableArray array];         // synthesised XTClassDeclNode, emit order
         st[@"bases"] = [NSMutableDictionary dictionary]; // mangled → @[ret, params(XTParamNode)]
         st[@"counter"] = @(0);
-        st[@"ivars"] = [NSMutableSet set]; // current class's ivar names
+        st[@"classIvars"] = [NSMutableDictionary dictionary];  // class → its own ivar names
+        st[@"classParents"] = [NSMutableDictionary dictionary]; // class → parent class
         objc_setAssociatedObject(self, kBlkStateKey, st,
                                  OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         }
@@ -177,9 +178,55 @@ NS_ASSUME_NONNULL_BEGIN
     {
     return self.blkState[@"bases"];
     }
-- (NSMutableSet*)blkIvarNames
+/****************************************************************************\
+|* The ivar names a block in the class being parsed cannot capture: that
+|* class's own and its parents' (as far as this parse has seen them). A
+|* class's names stay with the class, so a global or a local in code outside
+|* it (`u32 key[n];` in main, after a library class with a `key` ivar) is
+|* captured like any other name. Mirrored in the port (blkIsIvar).
+\****************************************************************************/
+- (void)blkEnterClass:(nullable NSString*)name parent:(nullable NSString*)parent
     {
-    return self.blkState[@"ivars"];
+    if (name && parent)
+        self.blkState[@"classParents"][name] = parent;
+    if (name)
+        self.blkState[@"curClass"] = name;
+    else
+        [self.blkState removeObjectForKey:@"curClass"];
+    }
+
+- (void)blkLeaveClass:(nullable NSString*)saved
+    {
+    if (saved)
+        self.blkState[@"curClass"] = saved;
+    else
+        [self.blkState removeObjectForKey:@"curClass"];
+    }
+
+- (void)blkAddIvarName:(NSString*)name
+    {
+    NSString* cls = self.blkState[@"curClass"];
+    if (!cls)
+        return;
+    NSMutableDictionary* all = self.blkState[@"classIvars"];
+    NSMutableSet* own = all[cls];
+    if (!own)
+        all[cls] = own = [NSMutableSet set];
+    [own addObject:name];
+    }
+
+- (BOOL)blkIsIvar:(NSString*)name
+    {
+    NSDictionary* all = self.blkState[@"classIvars"];
+    NSDictionary* parents = self.blkState[@"classParents"];
+    NSString* cls = self.blkState[@"curClass"];
+    for (NSUInteger hop = 0; cls && hop < 64; hop++)
+        {
+        if ([all[cls] containsObject:name])
+            return YES;
+        cls = parents[cls];
+        }
+    return NO;
     }
 
 - (void)blkPushScope
@@ -362,7 +409,7 @@ NS_ASSUME_NONNULL_BEGIN
         // Not a visible local. `self` (and the enclosing class's ivars)
         // are the v1 restriction — say so rather than letting sema emit
         // "Undefined identifier" from inside a class the user never wrote.
-        if ([name isEqualToString:@"self"] || [[self blkIvarNames] containsObject:name])
+        if ([name isEqualToString:@"self"] || [self blkIsIvar:name])
             {
             [self.diagnostics emitError:[NSString stringWithFormat:
                                                       @"a block cannot capture '%@' (v1 captures locals and "
@@ -1637,6 +1684,21 @@ static NSString* parRootName(XTASTNode* n)
                                      at:loc];
             return nil;
             }
+    // A global the body names is reached by that name from the block's run(),
+    // where the block's range fields lo and hi, and its __par_ names, are
+    // found first: `lo[i]` in the body indexed the range start. As the port.
+    for (NSString* gn in frame[@"outer"])
+        if (self.blkState[@"topVars"][gn] && !redByVar[gn] &&
+            ([gn isEqualToString:@"lo"] || [gn isEqualToString:@"hi"] || [gn hasPrefix:@"__par_"]))
+            {
+            [self.diagnostics emitError:[NSString stringWithFormat:@"a '%@' block cannot capture '%@': the name is one "
+                                                                     "of the block's own (%@). Rename "
+                                                                     "the variable",
+                                                                   label, gn, [gn hasPrefix:@"__par_"] ? @"names beginning __par_"
+                                                                     : @"lo, hi, for a global"]
+                                     at:loc];
+            return nil;
+            }
 
     // ── the class ──
     NSUInteger counter = [self.blkState[@"parCounter"] unsignedIntegerValue];
@@ -1910,7 +1972,7 @@ static NSString* parRootName(XTASTNode* n)
                 {
                 XTASTNode* test = [[XTBinaryExprNode alloc]
                     initWithOp:XTBinaryOpEq
-                          left:ident(@"k")
+                          left:ident(@"__par_k")
                          right:cast(i32T, [[XTLiteralIntNode alloc] initWithValue:(int64_t)j location:loc])
                       location:loc];
                 XTBlockNode* then = [[XTBlockNode alloc]
@@ -1926,7 +1988,7 @@ static NSString* parRootName(XTASTNode* n)
                  right:cast(i64T, [[XTLiteralIntNode alloc] initWithValue:1 location:loc])
               location:loc];
         [st addObject:[[XTReturnNode alloc] initWithValues:@[ none ] location:loc]];
-        XTParamNode* p = [[XTParamNode alloc] initWithType:i32T name:@"k" location:loc];
+        XTParamNode* p = [[XTParamNode alloc] initWithType:i32T name:@"__par_k" location:loc];
         [methods addObject:[[XTMethodDeclNode alloc] initWithName:@"gpuLength" returnTypes:@[ i64T ]
                                                        parameters:@[ p ] isStatic:NO isVarArgs:NO
                                                              body:[[XTBlockNode alloc] initWithStatements:st location:loc]
@@ -1943,7 +2005,7 @@ static NSString* parRootName(XTASTNode* n)
                 {
                 XTASTNode* test = [[XTBinaryExprNode alloc]
                     initWithOp:XTBinaryOpEq
-                          left:ident(@"k")
+                          left:ident(@"__par_k")
                          right:cast(i32T, [[XTLiteralIntNode alloc] initWithValue:(int64_t)j location:loc])
                       location:loc];
                 XTBlockNode* then = [[XTBlockNode alloc]
@@ -1960,7 +2022,7 @@ static NSString* parRootName(XTASTNode* n)
             [ro addObject:[[XTReturnNode alloc]
                               initWithValues:@[ [[XTLiteralBoolNode alloc] initWithBool:NO location:loc] ]
                                     location:loc]];
-            XTParamNode* pr = [[XTParamNode alloc] initWithType:i32T name:@"k" location:loc];
+            XTParamNode* pr = [[XTParamNode alloc] initWithType:i32T name:@"__par_k" location:loc];
             [methods addObject:[[XTMethodDeclNode alloc] initWithName:@"gpuReadsOnly"
                                                           returnTypes:@[ [self.typeTable typeForName:@"bool"] ]
                                                            parameters:@[ pr ] isStatic:NO isVarArgs:NO
@@ -2003,7 +2065,7 @@ static NSString* parRootName(XTASTNode* n)
                 {
                 XTASTNode* test = [[XTBinaryExprNode alloc]
                     initWithOp:XTBinaryOpEq
-                          left:ident(@"k")
+                          left:ident(@"__par_k")
                          right:cast(i32T, [[XTLiteralIntNode alloc] initWithValue:(int64_t)j location:loc])
                       location:loc];
                 XTBlockNode* then = [[XTBlockNode alloc]
@@ -2020,7 +2082,7 @@ static NSString* parRootName(XTASTNode* n)
             [wo addObject:[[XTReturnNode alloc]
                               initWithValues:@[ [[XTLiteralBoolNode alloc] initWithBool:NO location:loc] ]
                                     location:loc]];
-            XTParamNode* pw = [[XTParamNode alloc] initWithType:i32T name:@"k" location:loc];
+            XTParamNode* pw = [[XTParamNode alloc] initWithType:i32T name:@"__par_k" location:loc];
             [methods addObject:[[XTMethodDeclNode alloc] initWithName:@"gpuWritesAllOwn"
                                                           returnTypes:@[ [self.typeTable typeForName:@"bool"] ]
                                                            parameters:@[ pw ] isStatic:NO isVarArgs:NO
@@ -2058,7 +2120,7 @@ static NSString* parRootName(XTASTNode* n)
             {
             XTASTNode* (^isName)(void) = ^XTASTNode*(void) {
                 return [[XTCallExprNode alloc] initWithCallee:@"parSameName"
-                                                    arguments:@[ ident(@"name"),
+                                                    arguments:@[ ident(@"__par_name"),
                                                                  [[XTLiteralStringNode alloc] initWithString:g location:loc] ]
                                                      location:loc];
             };
@@ -2138,12 +2200,12 @@ static NSString* parRootName(XTASTNode* n)
                                                         right:cast(i64T, [[XTLiteralIntNode alloc] initWithValue:1 location:loc])
                                                      location:loc] ]
                                     location:loc]];
-        XTParamNode* pa = [[XTParamNode alloc] initWithType:u8p name:@"name" location:loc];
+        XTParamNode* pa = [[XTParamNode alloc] initWithType:u8p name:@"__par_name" location:loc];
         [methods addObject:[[XTMethodDeclNode alloc] initWithName:@"gpuGlobal" returnTypes:@[ ptrT ]
                                                        parameters:@[ pa ] isStatic:NO isVarArgs:NO
                                                              body:[[XTBlockNode alloc] initWithStatements:addrSt location:loc]
                                                          location:loc]];
-        XTParamNode* pb = [[XTParamNode alloc] initWithType:u8p name:@"name" location:loc];
+        XTParamNode* pb = [[XTParamNode alloc] initWithType:u8p name:@"__par_name" location:loc];
         [methods addObject:[[XTMethodDeclNode alloc] initWithName:@"gpuGlobalBytes" returnTypes:@[ i64T ]
                                                        parameters:@[ pb ] isStatic:NO isVarArgs:NO
                                                              body:[[XTBlockNode alloc] initWithStatements:sizeSt location:loc]
@@ -2153,7 +2215,7 @@ static NSString* parRootName(XTASTNode* n)
             [roSt addObject:[[XTReturnNode alloc]
                                 initWithValues:@[ [[XTLiteralBoolNode alloc] initWithBool:NO location:loc] ]
                                       location:loc]];
-            XTParamNode* pg = [[XTParamNode alloc] initWithType:u8p name:@"name" location:loc];
+            XTParamNode* pg = [[XTParamNode alloc] initWithType:u8p name:@"__par_name" location:loc];
             [methods addObject:[[XTMethodDeclNode alloc] initWithName:@"gpuReadsOnlyGlobal"
                                                           returnTypes:@[ [self.typeTable typeForName:@"bool"] ]
                                                            parameters:@[ pg ] isStatic:NO isVarArgs:NO
@@ -2165,7 +2227,7 @@ static NSString* parRootName(XTASTNode* n)
             [wallSt addObject:[[XTReturnNode alloc]
                                   initWithValues:@[ [[XTLiteralBoolNode alloc] initWithBool:NO location:loc] ]
                                         location:loc]];
-            XTParamNode* pw = [[XTParamNode alloc] initWithType:u8p name:@"name" location:loc];
+            XTParamNode* pw = [[XTParamNode alloc] initWithType:u8p name:@"__par_name" location:loc];
             [methods addObject:[[XTMethodDeclNode alloc] initWithName:@"gpuWritesAll"
                                                           returnTypes:@[ [self.typeTable typeForName:@"bool"] ]
                                                            parameters:@[ pw ] isStatic:NO isVarArgs:NO
@@ -2277,8 +2339,8 @@ static NSString* parRootName(XTASTNode* n)
         // The downcast only when there is something to fold: an unused `o`
         // reads as a never-used local to the analyser (-Wanalyze).
         if (reductions.count)
-            [st addObject:[[XTVariableDeclNode alloc] initWithName:@"o" type:implPtr
-                                                       initialiser:cast(implPtr, ident(@"other"))
+            [st addObject:[[XTVariableDeclNode alloc] initWithName:@"__par_o" type:implPtr
+                                                       initialiser:cast(implPtr, ident(@"__par_other"))
                                                           location:loc]];
         for (NSArray<NSString*>* r in reductions)
             {
@@ -2290,16 +2352,16 @@ static NSString* parRootName(XTASTNode* n)
                 XTASTNode* call = [[XTMethodCallExprNode alloc]
                     initWithReceiver:ident(@"ParFnChunk")
                           methodName:@"arrMerge"
-                           arguments:@[ cast(u8p, member(@"self", fieldOf(r[1]))), cast(u8p, member(@"o", fieldOf(r[1]))),
+                           arguments:@[ cast(u8p, member(@"self", fieldOf(r[1]))), cast(u8p, member(@"__par_o", fieldOf(r[1]))),
                                         cast(i64T, [[XTLiteralIntNode alloc] initWithValue:parArrCode(redTypes[r[1]], r[0])
                                                                                    location:loc]) ]
                             location:loc];
                 [st addObject:stmt(call)];
                 continue;
                 }
-            [st addObject:fold(r[0], fieldRef(r[1]), fieldRef(r[1]), member(@"o", fieldOf(r[1])))];
+            [st addObject:fold(r[0], fieldRef(r[1]), fieldRef(r[1]), member(@"__par_o", fieldOf(r[1])))];
             }
-        XTParamNode* p = [[XTParamNode alloc] initWithType:chunkPtr name:@"other" location:loc];
+        XTParamNode* p = [[XTParamNode alloc] initWithType:chunkPtr name:@"__par_other" location:loc];
         [methods addObject:[[XTMethodDeclNode alloc] initWithName:@"merge" returnTypes:@[ [XTType voidType] ]
                                                        parameters:@[ p ] isStatic:NO isVarArgs:NO
                                                              body:[[XTBlockNode alloc] initWithStatements:st location:loc]

@@ -585,6 +585,10 @@
             self.parProposeOutline(m);
             _ppOutlined = true;
             self.libFallback(m, true);
+            // No block made: the runtime the C path lowered for the blocks
+            // goes, so the program compiles its own code alone (#278).
+            if (_ppMade.count() == (u32)0 && optDropBase() && m.baseNames() != (Map*)0)
+                self.dropBase(m);
             if (_ppMade.count() > (u32)0 && optParKernelHook() != (ParKernelHook*)0)
                 optParKernelHook().print(m, _ppMade);
             // XC_PAR_OUTLINE_TRACE=ir: the functions the outliner made or cut.
@@ -1085,5 +1089,122 @@
             return;
         for (u32 k = (u32)0; k < s.slots().count(); k = k + (u32)1)
             self.seed(m, reachable, work, (String*)s.slots().get(k));
+        }
+
+    // ── drop-base (#278) ─────────────────────────────────────────────────
+    //
+    // A C or C++ file under --par-style=auto is read into a module lowered
+    // from a stub that imports the par runtime (CPath), so the outliner's
+    // blocks have it to call. When the outliner made no block, the runtime
+    // and the Foundation classes it uses are not the program's: their
+    // vtables and load-time initialisers would keep them alive past
+    // dead-function elimination, and every C file compiled them. Everything
+    // the stub brought (IRModule.markBase) that the program's own functions
+    // and initialisers do not reach is removed: function bodies, vtables,
+    // data, strings and initialisers. Runtime helper declarations and
+    // imports stay; they emit nothing.
+    final void dropBase(IRModule* m)
+        {
+        Map* base = m.baseNames();
+        Map* fns = Map.withCapacity(m.funcs().count() + (u32)1);
+        for (u32 i = (u32)0; i < m.funcs().count(); i = i + (u32)1)
+            {
+            IRFunc* f = (IRFunc*)m.funcs().get(i);
+            if (f.name() != (String*)0 && fns.get((Hashable*)f.name()) == (Object*)0)
+                fns.set((Hashable*)f.name(), (Object*)f);
+            }
+        Map* reach = Map.withCapacity((u32)64);
+        Array* work = new Array();
+        // The roots: the program's functions (main among them) and
+        // initialisers, and the class-name root for an object the command
+        // line joins (the C++ library's archive is not one).
+        for (u32 i = (u32)0; i < m.funcs().count(); i = i + (u32)1)
+            {
+            String* n = ((IRFunc*)m.funcs().get(i)).name();
+            if (n != (String*)0 && base.get((Hashable*)n) == (Object*)0)
+                dropBaseMark(m, reach, work, n);
+            }
+        for (u32 i = (u32)0; i < m.modinits().count(); i = i + (u32)1)
+            {
+            String* n = (String*)m.modinits().get(i);
+            if (base.get((Hashable*)n) == (Object*)0)
+                dropBaseMark(m, reach, work, n);
+            }
+        if (optDropBaseClassRoot())
+            dropBaseMark(m, reach, work, String.withCString("_xtc_class_new"));
+        while (work.count() > (u32)0)
+            {
+            String* name = (String*)work.get(work.count() - (u32)1);
+            work.removeAt(work.count() - (u32)1);
+            IRFunc* fn = (IRFunc*)fns.get((Hashable*)name);
+            if (fn == (IRFunc*)0)
+                continue;
+            for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+                {
+                IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+                for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                    dropBaseInsn(m, reach, work, (IRInsn*)bb.insns().get(i));
+                if (bb.term() != (IRInsn*)0)
+                    dropBaseInsn(m, reach, work, bb.term());
+                }
+            }
+        u32 before = m.funcs().count();
+        Array* keptFns = new Array();
+        for (u32 i = (u32)0; i < m.funcs().count(); i = i + (u32)1)
+            {
+            IRFunc* f = (IRFunc*)m.funcs().get(i);
+            if (f.name() == (String*)0 || base.get((Hashable*)f.name()) == (Object*)0
+                || reach.get((Hashable*)f.name()) != (Object*)0)
+                keptFns.add((Object*)f);
+            }
+        m.setFuncs(keptFns);
+        Array* keptSyms = new Array();
+        for (u32 i = (u32)0; i < m.syms().count(); i = i + (u32)1)
+            {
+            IRSymbol* s = (IRSymbol*)m.syms().get(i);
+            if (s.name() == (String*)0 || base.get((Hashable*)s.name()) == (Object*)0
+                || reach.get((Hashable*)s.name()) != (Object*)0
+                || s.kind() == (u8)SYM_RUNTIME || s.isExtern())
+                keptSyms.add((Object*)s);
+            }
+        u32 symsBefore = m.syms().count();
+        m.setSyms(keptSyms);
+        Array* keptInits = new Array();
+        for (u32 i = (u32)0; i < m.modinits().count(); i = i + (u32)1)
+            {
+            String* n = (String*)m.modinits().get(i);
+            if (base.get((Hashable*)n) == (Object*)0 || reach.get((Hashable*)n) != (Object*)0)
+                keptInits.add((Object*)n);
+            }
+        u32 initsBefore = m.modinits().count();
+        m.modinits().removeAll();
+        m.modinits().addAll(keptInits);
+        if (ppEnvSet("XC_PAR_OUTLINE_TRACE"))
+            Stdio.error(String.withFormat("xcc: par outline: no block made; the runtime dropped: %u of %u functions, %u of %u symbols, %u of %u initialisers kept\n",
+                                          m.funcs().count(), before, m.syms().count(), symsBefore,
+                                          m.modinits().count(), initsBefore));
+        }
+
+    // A name the program reaches: a function to walk, a vtable's slots too.
+    final void dropBaseMark(IRModule* m, Map* reach, Array* work, String* n)
+        {
+        if (n == (String*)0 || reach.get((Hashable*)n) != (Object*)0)
+            return;
+        reach.set((Hashable*)n, (Object*)Number.with((u32)1));
+        work.add((Object*)n);
+        IRSymbol* s = m.symNamed(n);
+        if (s != (IRSymbol*)0 && s.kind() == (u8)SYM_VTABLE && s.slots() != (Array*)0)
+            for (u32 k = (u32)0; k < s.slots().count(); k = k + (u32)1)
+                dropBaseMark(m, reach, work, (String*)s.slots().get(k));
+        }
+
+    final void dropBaseInsn(IRModule* m, Map* reach, Array* work, IRInsn* n)
+        {
+        for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
+            {
+            IROperand* o = (IROperand*)n.ops().get(k);
+            if (o.kind() == (u8)OPK_SYM && o.name() != (String*)0)
+                dropBaseMark(m, reach, work, o.name());
+            }
         }
     }

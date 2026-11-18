@@ -1,3 +1,4 @@
+//xtc-na: xt6502 — the 64-bit divisions and their checks exceed the 6502 frame budget
 // 64-bit division and remainder by constants (#309): magic-number
 // multiplies (umulh/smulh on arm64, mul/imul on x86-64), checked against the
 // same divisions by a value the compiler cannot see. Divisors: small, large,

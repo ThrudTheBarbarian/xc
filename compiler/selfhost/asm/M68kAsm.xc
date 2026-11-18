@@ -18,6 +18,7 @@
 // overflow.
 
 #import "Foundation.xc"
+#import <GasString>
 
 #import "M68kAsmDefs.xc"
 
@@ -486,6 +487,10 @@ class MOp
         u32 k = o.kind();
         if (k == (u32)MOP_INDDISP || k == (u32)MOP_PCDISP)
             {
+            // A d16 past -32768..32767 was masked, so a field 40000 bytes in
+            // was stored 25 KB below the object (#289); it is refused.
+            if (!pcDisp16Ok(o.value()))
+                fail(String.withFormat("displacement %ld does not fit 16 bits", o.value()));
             a16((u32)o.value() & (u32)$FFFF);
             return;
             }
@@ -513,7 +518,11 @@ class MOp
                 }
             else
                 {
-                a16((u32)symVal(syms, o) & (u32)$FFFF);
+                // A word immediate, signed or unsigned (#289).
+                i32 iv = symVal(syms, o);
+                if (_rr != (Array*)0 && (iv < (i32)-32768 || iv > (i32)65535))
+                    fail(String.withFormat("immediate %ld does not fit 16 bits", iv));
+                a16((u32)iv & (u32)$FFFF);
                 }
             }
         }
@@ -703,6 +712,8 @@ class MOp
             return;
         i32 target = symVal(syms, o0);
         a16((u32)$F280 | (u32)p);
+        if (!pcDisp16Ok(target - (i32)(curOff + (u32)2)))
+            fail(String.withFormat("%s: branch out of the 16-bit range", mnem.cString()));
         a16((u32)(target - (i32)(curOff + (u32)2)) & (u32)$FFFF);
         _hit = true;
         }
@@ -733,6 +744,8 @@ class MOp
         i32 target = symVal(syms, o0);
         i32 disp = target - (i32)(curOff + (u32)2);
         a16((u32)$6000 | ((u32)cc << (u32)8));
+        if (!pcDisp16Ok(disp))
+            fail(String.withFormat("%s: branch out of the 16-bit range", mnem.cString()));
         a16((u32)disp & (u32)$FFFF);
         _hit = true;
         }
@@ -769,13 +782,22 @@ class MOp
     // ── The binary ALU group ─────────────────────────────────────────────
     void encAlu(String* mnem, u32 size, u32 sb, MOp* o0, MOp* o1, Map* syms)
         {
+        // adda/suba/cmpa are the add/sub/cmp forms with an address register
+        // destination, which the code generator now names (#289).
+        if (mnem.equals(String.withCString("adda")))
+            mnem = String.withCString("add");
+        else if (mnem.equals(String.withCString("suba")))
+            mnem = String.withCString("sub");
+        else if (mnem.equals(String.withCString("cmpa")))
+            mnem = String.withCString("cmp");
         i32 base = aluBase(mnem);
         if (base < (i32)0)
             return;
         bool isEor = mnem.equals(String.withCString("eor"));
         bool isCmp = mnem.equals(String.withCString("cmp"));
-        // the xxxI forms
-        if (o0.kind() == (u32)MOP_IMM)
+        // the xxxI forms; an address register takes an immediate only through
+        // ADDA/SUBA/CMPA #imm,An (ADDI to An does not exist), below
+        if (o0.kind() == (u32)MOP_IMM && o1.kind() != (u32)MOP_AREG)
             {
             i32 ik = aluImmKind(mnem);
             a16(((u32)ik << (u32)9) | (sb << (u32)6) | eaField(o1));
@@ -1538,44 +1560,13 @@ class MOp
             }
         if (dir.equals(String.withCString(".ascii")) || dir.equals(String.withCString(".asciz")))
             {
-            u32 q1 = args.byteIndexOf(String.withCString("\""));
-            u32 q2 = lastQuote(args);
-            if (q1 != (u32)$FFFF_FFFF && q2 > q1)
+            Data* bytes = GasString.decode(args, dir.equals(String.withCString(".asciz")));
+            if (bytes == (Data*)0)
                 {
-                String* str = args.substringBytes(q1 + (u32)1, q2 - q1 - (u32)1);
-                u32 i = (u32)0;
-                while (i < str.byteLength())
-                    {
-                    u8 c = str.byteAt(i);
-                    if (c == (u8)'\\' && i + (u32)1 < str.byteLength())
-                        {
-                        u8 n = str.byteAt(i + (u32)1);
-                        if (n == (u8)'n')
-                            {
-                            d.appendByte((u8)10);
-                            i = i + (u32)2;
-                            continue;
-                            }
-                        if (n == (u8)'r')
-                            {
-                            d.appendByte((u8)13);
-                            i = i + (u32)2;
-                            continue;
-                            }
-                        if (n == (u8)'0')
-                            {
-                            d.appendByte((u8)0);
-                            i = i + (u32)2;
-                            continue;
-                            }
-                        }
-                    d.appendByte((u8)((u32)c));
-                    i = i + (u32)1;
-                    }
+                fail(String.withCString("bad string directive"));
+                return d;
                 }
-            if (dir.equals(String.withCString(".asciz")))
-                d.appendByte((u8)0);
-            return d;
+            return bytes;
             }
         if (dir.equals(String.withCString(".space")) || dir.equals(String.withCString(".ds.b")))
             {
@@ -1597,15 +1588,6 @@ class MOp
             return d;
             }
         return d;
-        }
-
-    static u32 lastQuote(String* s)
-        {
-        u32 f = (u32)$FFFF_FFFF;
-        for (u32 i = (u32)0; i < s.byteLength(); i = i + (u32)1)
-            if (s.byteAt(i) == (u8)'"')
-                f = i;
-        return f;
         }
 
     // ── The two passes, and the $601A image ──────────────────────────────

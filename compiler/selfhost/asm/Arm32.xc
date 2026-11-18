@@ -26,6 +26,7 @@
 //   push/pop          cond 100 P U S W L Rn register_list
 
 #import "Foundation.xc"
+#import <GasString>
 
 // One entry in the object's symbol table.
 class AsmSymbol
@@ -394,7 +395,17 @@ class AsmSymbol
             w = w | ((u32)1 << 22);
         if (load)
             w = w | ((u32)1 << 20);
+        rangeCheck(mag, (u32)4095, "load/store offset out of range (offset12 reaches +/-4095)");
         word(w | (rn << 16) | (rt << 12) | (mag & (u32)$FFF));
+        }
+
+    // A field the encoding cannot hold is refused rather than masked: a
+    // masked offset or displacement is a different, valid-looking address.
+    // Checked in pass 2 only, where labels and pools are final.
+    void rangeCheck(u32 mag, u32 limit, u8* what)
+        {
+        if (_pass == (u32)2 && mag > limit)
+            giveUp(String.withCString(what));
         }
 
     // The halfword and signed forms are a different encoding entirely: the
@@ -412,6 +423,7 @@ class AsmSymbol
             sh = sh | ((u32)1 << 6); // S bit
         if (signedOp && !halfword)
             sh = ((u32)1 << 6); // ldrsb: S set, H clear
+        rangeCheck(mag, (u32)255, "halfword load/store offset out of range (offset8 reaches +/-255)");
         word(w | (rn << 16) | (rt << 12) | (((mag >> 4) & (u32)$F) << 8) | (u32)$90 | sh | (mag & (u32)$F));
         }
 
@@ -432,6 +444,8 @@ class AsmSymbol
     void branch(i32 cond, bool link, i32 targetOffset, u32 at)
         {
         i32 delta = (targetOffset - (i32)at - (i32)8) >> 2;
+        if (delta < (i32)-8388608 || delta >= (i32)8388608)
+            rangeCheck((u32)1, (u32)0, "branch out of range (reaches +/-32MB)");
         u32 w = ((u32)cond << 28) | ((u32)5 << 25) | ((u32)delta & (u32)$FFFFFF);
         if (link)
             w = w | ((u32)1 << 24);
@@ -865,9 +879,34 @@ class AsmSymbol
             emitWord(rest);
             return;
             }
-        if (d.equals(String.withCString(".p2align")))
+        // Strings. These used to fall through to the no-payload case below,
+        // so the runtime's messages were missing from every arm9 binary.
+        if (d.equals(String.withCString(".ascii")) || d.equals(String.withCString(".asciz"))
+            || d.equals(String.withCString(".string")))
+            {
+            Data* bytes = GasString.decode(rest, !d.equals(String.withCString(".ascii")));
+            if (bytes == (Data*)0)
+                {
+                giveUp(String.withCString("bad string directive"));
+                return;
+                }
+            for (u32 i = (u32)0; i < bytes.length(); i = i + (u32)1)
+                putByte((u32)bytes.byteAt(i));
+            return;
+            }
+        // `.align N` is a power of two on ARM, as `.p2align` is. It used to
+        // fall through to the no-payload case below, which went unnoticed
+        // while the runtime's data section was empty (its strings were
+        // dropped too); with them present, every word after a string was
+        // misaligned and the first exclusive load faulted.
+        if (d.equals(String.withCString(".p2align")) || d.equals(String.withCString(".align")))
             {
             align(rest);
+            return;
+            }
+        if (d.equals(String.withCString(".balign")))
+            {
+            alignBytes(Arm32.decimalValue(rest));
             return;
             }
         if (d.equals(String.withCString(".set")) || d.equals(String.withCString(".equ")))
@@ -1014,6 +1053,11 @@ class AsmSymbol
         for (u32 i = (u32)0; i < l.byteLength(); i = i + (u32)1)
             {
             u8 c = l.byteAt(i);
+            if (inStr && c == (u8)'\\')
+                {
+                i = i + (u32)1; // \" stays inside the string
+                continue;
+                }
             if (c == (u8)'"')
                 {
                 inStr = !inStr;
@@ -1073,8 +1117,15 @@ class AsmSymbol
 
     void align(String* rest)
         {
-        u32 p = Arm32.decimalValue(rest);
-        u32 mask = ((u32)1 << p) - (u32)1;
+        alignBytes((u32)1 << Arm32.decimalValue(rest));
+        }
+
+    // Pad the current section to a multiple of `n` bytes (a power of two).
+    void alignBytes(u32 n)
+        {
+        if (n == (u32)0)
+            return;
+        u32 mask = n - (u32)1;
         while ((cursor() & mask) != (u32)0)
             putByte((u32)0);
         }
@@ -1114,6 +1165,7 @@ class AsmSymbol
                 {
                 // Patch the ldr's 12-bit offset: pool word minus (site + 8).
                 u32 disp = wordAt - (site + (u32)8);
+                rangeCheck(disp, (u32)4095, "literal pool out of reach (an ldr reaches 4 KB; add .ltorg)");
                 u32 idx = site;
                 u32 w = (u32)_bytes.byteAt(idx) | ((u32)_bytes.byteAt(idx + (u32)1) << 8) | ((u32)_bytes.byteAt(idx + (u32)2) << 16) | ((u32)_bytes.byteAt(idx + (u32)3) << 24);
                 w = (w & ~(u32)$FFF) | (disp & (u32)$FFF);
@@ -1987,6 +2039,7 @@ class AsmSymbol
                 w = w | ((u32)1 << (u32)22);
             if (load)
                 w = w | ((u32)1 << (u32)20);
+            rangeCheck(mag, (u32)4095, "load/store offset out of range (offset12 reaches +/-4095)");
             word(w | ((u32)rn << (u32)16) | ((u32)rt << (u32)12) | (mag & (u32)$FFF));
             return;
             }
@@ -2302,7 +2355,11 @@ class AsmSymbol
             off = (i32)Arm32.immediateValue(o);
             }
         u32 up = off >= (i32)0 ? (u32)1 : (u32)0;
-        u32 mag = (off >= (i32)0 ? (u32)off : (u32)(-off)) >> 2;
+        u32 bytes = off >= (i32)0 ? (u32)off : (u32)(-off);
+        if ((bytes & (u32)3) != (u32)0)
+            rangeCheck((u32)1, (u32)0, "vldr/vstr offset is not a multiple of 4");
+        rangeCheck(bytes >> 2, (u32)255, "vldr/vstr offset out of range (reaches +/-1020)");
+        u32 mag = bytes >> 2;
         u32 d = single ? ((u32)vd & (u32)1) : (((u32)vd >> 4) & (u32)1);
         u32 vdField = single ? ((u32)vd >> 1) : ((u32)vd & (u32)$F);
         u32 w = (u32)$E << 28 | ((u32)$D << 24) | (up << 23) | (d << 22) | ((load ? (u32)1 : (u32)0) << 20) | ((u32)rn << 16) | (vdField << 12) | ((single ? (u32)$A : (u32)$B) << 8) | (mag & (u32)$FF);

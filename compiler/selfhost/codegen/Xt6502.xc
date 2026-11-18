@@ -29,6 +29,7 @@
 #import "Foundation.xc"
 #import "Stdio.xc"
 #import <Ir>
+#import <CgCommon>
 #import "IrDefs.xc"
 #import <Layout>
 
@@ -98,12 +99,6 @@ class Xt6502
 
     static bool isMemTy(String* t)
     { return t != (String*)0 && t.equals(String.withCString("Mem")); }
-
-    static bool isFloatTy(String* t)
-    {
-        return t != (String*)0 && (t.equals(String.withCString("F32"))
-                                || t.equals(String.withCString("F64")));
-    }
 
     static bool isSignedTy(String* t)
     {
@@ -207,8 +202,8 @@ class Xt6502
                 _nextZp = ((LayoutRange*)_zpRanges.get(_zpRangeIndex)).lo();
         }
         // Every range is full. The budget check upstream catches the realistic
-        // cases; here the flag is raised and emission continues so the failure
-        // is reported once, in one place, rather than as garbage assembly.
+        // cases; here the flag is raised and emission continues, and
+        // emitFunction reports it once, at the end.
         _zpOverflow = true;
         return _nextZp;
     }
@@ -440,10 +435,7 @@ class Xt6502
                 connectDef(interf, n.memRes(), live);
                 if (n.res() != (IRValue*)0) removeVal(live, n.res());
                 if (n.memRes() != (IRValue*)0) removeVal(live, n.memRes());
-                for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1) {
-                    IROperand* o = (IROperand*)n.ops().get(k);
-                    if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0) addVal(live, o.val());
-                }
+                addUses(live, n);
                 interfereAll(interf, live);
             }
         }
@@ -635,11 +627,14 @@ class Xt6502
             Array* seq = allInsns(bb);
             for (u32 i = (u32)0; i < seq.count(); i = i + (u32)1) {
                 IRInsn* n = (IRInsn*)seq.get(i);
-                for (u32 q = (u32)0; q < n.ops().count(); q = q + (u32)1) {
-                    IROperand* o = (IROperand*)n.ops().get(q);
-                    if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0) continue;
-                    if (!hasVal(k, o.val())) addVal(g, o.val());
-                }
+                // A phi's operands are read by the edge copies at the END of
+                // each predecessor, so they are uses there (below), not here.
+                if (!isPhi(n))
+                    for (u32 q = (u32)0; q < n.ops().count(); q = q + (u32)1) {
+                        IROperand* o = (IROperand*)n.ops().get(q);
+                        if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0) continue;
+                        if (!hasVal(k, o.val())) addVal(g, o.val());
+                    }
                 if (n.res() != (IRValue*)0) addVal(k, n.res());
                 if (n.memRes() != (IRValue*)0) addVal(k, n.memRes());
             }
@@ -662,6 +657,7 @@ class Xt6502
                         i32 si = blockIndexOf(fn, o.blk());
                         if (si < (i32)0) continue;
                         unionVals(out, (Array*)liveIn.get((u32)si));
+                        addPhiUsesFrom(out, bb, o.blk());
                     }
                 Array* inn = copyVals((Array*)gen.get(b));
                 Array* outMinusKill = minusVals(out, (Array*)kill.get(b));
@@ -673,6 +669,39 @@ class Xt6502
                     changed = true;
                 }
             }
+        }
+    }
+
+    static bool isPhi(IRInsn* n)
+    { return n.op().equals(String.withCString("Phi")); }
+
+    // The values succ's phis take on the edge from pred: live at the end of
+    // pred, where the edge copies read them. Counting them as uses inside the
+    // phi's own block instead let a phi that feeds a sibling phi (a rotation:
+    // d takes a's old value) die at the top of the loop, and the loop body
+    // reused its slot before the back edge copied it.
+    static void addPhiUsesFrom(Array* live, IRBlock* pred, IRBlock* succ)
+    {
+        for (u32 i = (u32)0; i < succ.phis().count(); i = i + (u32)1) {
+            IRInsn* phi = (IRInsn*)succ.phis().get(i);
+            for (u32 k = (u32)0; k + (u32)1 < phi.ops().count(); k = k + (u32)2) {
+                IROperand* b = (IROperand*)phi.ops().get(k);
+                IROperand* v = (IROperand*)phi.ops().get(k + (u32)1);
+                if (b.kind() == (u8)OPK_BLOCK && b.blk() == pred
+                 && v.kind() == (u8)OPK_USE && v.val() != (IRValue*)0)
+                    addVal(live, v.val());
+            }
+        }
+    }
+
+    // A backward walk's step over n's operands: a phi's are edge uses (see
+    // addPhiUsesFrom), already in the predecessor's live-out.
+    static void addUses(Array* live, IRInsn* n)
+    {
+        if (isPhi(n)) return;
+        for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1) {
+            IROperand* o = (IROperand*)n.ops().get(k);
+            if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0) addVal(live, o.val());
         }
     }
 
@@ -1271,7 +1300,7 @@ class Xt6502
             // here. Copying the eight bytes through would write a double where
             // the loads read a single.
             if (bytes != (Array*)0 && bytes.count() > (u32)0
-                && isFloatTy(s.globalTy()) && bytes.count() != size)
+                && CgCommon.isFloatTy(s.globalTy()) && bytes.count() != size)
                 bytes = encodeFloatHex(hexOfBytes(bytes), size);
             if (bytes != (Array*)0 && bytes.count() > (u32)0) {
                 String* vals = new String();
@@ -1429,6 +1458,12 @@ class Xt6502
         // assembler; it is the budget's refusal instead.
         if (_maxSpOffset > (i32)127) {
             unsupported(String.withCString("frame:budget"));
+            return;
+        }
+        // allocateSlots ran past the last zero-page range and handed out
+        // addresses beyond it, over whatever lives there.
+        if (_zpOverflow) {
+            unsupported(String.withCString("zeropage:full"));
             return;
         }
         _out.appendCString("\n");
@@ -2141,7 +2176,7 @@ class Xt6502
         if (n.ops().count() < (u32)1 || n.res() == (IRValue*)0) { unsupported(n.op()); return; }
         IROperand* op = (IROperand*)n.ops().get((u32)0);
         String* ty = n.res().ty();
-        if (isFloatTy(ty)) {
+        if (CgCommon.isFloatTy(ty)) {
             // The IR carries the abstract value as raw IEEE double bits; the
             // BACK END owns the byte layout, so it encodes here and splats.
             Array* enc = encodeFloatHex(op.kind() == (u8)OPK_IMMF
@@ -2334,7 +2369,7 @@ class Xt6502
         if (n.res() != (IRValue*)0) {
             u32 rW = byteWidth(n.res().ty());
             String* rt = n.res().ty();
-            if (isFloatTy(rt) || isAggTy(rt) || rW > (u32)4) {
+            if (CgCommon.isFloatTy(rt) || isAggTy(rt) || rW > (u32)4) {
                 for (u32 b = (u32)0; b < rW && b < (u32)16; b = b + (u32)1) {
                     _out.appendFormat("    LDA $%s\n", hex2((u32)$B0 + b).cString());
                     storeAToValue(n.res(), b);
@@ -2902,7 +2937,7 @@ class Xt6502
             u32 rW = byteWidth(n.res().ty());
             // A 64-bit scalar rides the mailbox too: A/X/Y plus $89 carry four
             // bytes and no more, and $B0.. already moves eight for a double.
-            bool viaMailbox = isFloatTy(n.res().ty()) || isAggTy(n.res().ty())
+            bool viaMailbox = CgCommon.isFloatTy(n.res().ty()) || isAggTy(n.res().ty())
                            || byteWidth(n.res().ty()) > (u32)4;
             if (viaMailbox) {
                 if (rW > (u32)16) { unsupported(String.withCString("Call:aggwidth")); return; }
@@ -3005,10 +3040,7 @@ class Xt6502
                 }
                 if (n.res() != (IRValue*)0) removeVal(live, n.res());
                 if (n.memRes() != (IRValue*)0) removeVal(live, n.memRes());
-                for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1) {
-                    IROperand* o = (IROperand*)n.ops().get(k);
-                    if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0) addVal(live, o.val());
-                }
+                addUses(live, n);
             }
         }
     }
@@ -3587,7 +3619,7 @@ class Xt6502
         // Nothing in the tree took the address of a 64-bit GLOBAL until
         // tests/fixtures/int64_unary.xc, so the two stayed silently out of step
         // and the port emitted a dead `LDA #<_sym` triple the reference elides.
-        return isFloatTy(t) || t.equals(String.withCString("Bool"))
+        return CgCommon.isFloatTy(t) || t.equals(String.withCString("Bool"))
             || t.equals(String.withCString("I8"))  || t.equals(String.withCString("U8"))
             || t.equals(String.withCString("I16")) || t.equals(String.withCString("U16"))
             || t.equals(String.withCString("I32")) || t.equals(String.withCString("U32"))
@@ -3660,9 +3692,24 @@ class Xt6502
         IROperand* cond = (IROperand*)n.ops().get((u32)0);
         IROperand* t = (IROperand*)n.ops().get((u32)1);
         IROperand* f = (IROperand*)n.ops().get((u32)2);
+        // Each edge's phi copies run on that edge only, after the test. Run
+        // before the branch, one edge's copies could overwrite a value the
+        // other edge's copies still read (a loop's exit taking a variable the
+        // back edge had just rotated).
+        if (hasPhiCopies(bb, t.blk()) || hasPhiCopies(bb, f.blk())) {
+            loadCondTest(cond);
+            u32 el = _labelCounter; _labelCounter = _labelCounter + (u32)1;
+            _out.appendFormat("    BNE .Lcbt_%lu\n", el);
+            _out.appendFormat("    JMP .Lcbsk_%lu\n", el);
+            _out.appendFormat(".Lcbt_%lu:\n", el);
+            emitPhiCopies(bb, t.blk());
+            _out.appendFormat("    JMP %s\n", blockLabel(_fn, t.blk()).cString());
+            _out.appendFormat(".Lcbsk_%lu:\n", el);
+            emitPhiCopies(bb, f.blk());
+            _out.appendFormat("    JMP %s\n", blockLabel(_fn, f.blk()).cString());
+            return;
+        }
         loadOperandByte(cond, (u32)0);
-        emitPhiCopies(bb, t.blk());
-        emitPhiCopies(bb, f.blk());
         loadCondTest(cond);
         // BEQ has the same ±127 reach as BRA, but here it spans only the
         // 3-byte JMP-true, which is always in range; the JMPs carry the
@@ -3674,12 +3721,29 @@ class Xt6502
         _out.appendFormat("    JMP %s\n", blockLabel(_fn, f.blk()).cString());
     }
 
+    // True when the edge pred -> succ carries a phi copy.
+    static bool hasPhiCopies(IRBlock* pred, IRBlock* succ)
+    {
+        for (u32 i = (u32)0; i < succ.phis().count(); i = i + (u32)1) {
+            IRInsn* phi = (IRInsn*)succ.phis().get(i);
+            if (phi.res() == (IRValue*)0) continue;
+            for (u32 k = (u32)0; k + (u32)1 < phi.ops().count(); k = k + (u32)2) {
+                IROperand* bop = (IROperand*)phi.ops().get(k);
+                if (bop.kind() == (u8)OPK_BLOCK && bop.blk() == pred) return true;
+            }
+        }
+        return false;
+    }
+
     // Phi copies are a PARALLEL assignment: a loop's `v <- c` and `c <- c+1`
     // must both read the OLD c, so a naive in-order copy is off by one. Emit in
     // dependency order — a copy whose destination nothing pending still reads
-    // is safe now — and break a residual cycle by stashing one destination in
-    // the $B0.. scratch (free at a branch) and redirecting reads to it. The
-    // hardware stack is not an option: SP-relative slots would shift under it.
+    // is safe now. When only cycles are left (each destination read by exactly
+    // one pending copy), break one byte by byte: save the first destination's
+    // byte in $B0 (free at a branch), run the chain, and store the saved byte
+    // into the last destination. One scratch byte serves any cycle length and
+    // width. The hardware stack is not an option: SP-relative slots would
+    // shift under it.
     void emitPhiCopies(IRBlock* pred, IRBlock* succ)
     {
         Array* dests = new Array();
@@ -3699,8 +3763,6 @@ class Xt6502
         if (n == (u32)0) return;
         Array* pending = new Array();
         for (u32 i = (u32)0; i < n; i = i + (u32)1) pending.add((Object*)Number.withU32(i));
-        Map* redir = new Map();
-        u32 scratch = (u32)$B0;
         while (pending.count() > (u32)0) {
             i32 pick = (i32)-1;
             for (u32 pi = (u32)0; pi < pending.count(); pi = pi + (u32)1) {
@@ -3715,34 +3777,53 @@ class Xt6502
                 }
                 if (!blocked) { pick = (i32)pi; break; }
             }
-            if (pick < (i32)0) {                     // cycle: stash one, redirect
-                pick = (i32)0;
-                u32 idx = ((Number*)pending.get((u32)0)).asU32();
+            if (pick >= (i32)0) {
+                u32 idx = ((Number*)pending.get((u32)pick)).asU32();
                 IRValue* d = (IRValue*)dests.get(idx);
+                IROperand* sv = (IROperand*)srcs.get(idx);
                 u32 w = byteWidth(d.ty());
                 for (u32 b = (u32)0; b < w; b = b + (u32)1) {
-                    String* o = operandFor(d, b);
-                    if (o == (String*)0) continue;
-                    _out.appendFormat("    LDA %s\n    STA $%s\n",
-                                      o.cString(), hex2(scratch + b).cString());
-                }
-                redir.set((Hashable*)d, (Object*)Number.withU32(scratch));
-                scratch = scratch + w;
-            }
-            u32 idx = ((Number*)pending.get((u32)pick)).asU32();
-            IRValue* d = (IRValue*)dests.get(idx);
-            IROperand* sv = (IROperand*)srcs.get(idx);
-            u32 w = byteWidth(d.ty());
-            for (u32 b = (u32)0; b < w; b = b + (u32)1) {
-                Object* rs = sv.kind() == (u8)OPK_USE ? redir.get((Hashable*)sv.val()) : (Object*)0;
-                if (rs != (Object*)0)
-                    _out.appendFormat("    LDA $%s\n",
-                                      hex2(((Number*)rs).asU32() + b).cString());
-                else
                     loadOperandByte(sv, b);
-                storeAToValue(d, b);
+                    storeAToValue(d, b);
+                }
+                pending.removeAt((u32)pick);
+                continue;
             }
-            pending.removeAt((u32)pick);
+            // A cycle c0 <- c1 <- ... <- ck-1 <- c0: copy c(i) reads the
+            // destination of c(i+1).
+            Array* cyc = new Array();
+            u32 first = ((Number*)pending.get((u32)0)).asU32();
+            u32 cur = first;
+            while (true) {
+                cyc.add((Object*)Number.withU32(cur));
+                IRValue* want = ((IROperand*)srcs.get(cur)).val();
+                u32 next = n;
+                for (u32 pi = (u32)0; pi < pending.count() && next == n; pi = pi + (u32)1) {
+                    u32 j = ((Number*)pending.get(pi)).asU32();
+                    if ((IRValue*)dests.get(j) == want) next = j;
+                }
+                if (next == n || next == first) break;
+                cur = next;
+            }
+            u32 k = cyc.count();
+            u32 last = ((Number*)cyc.get(k - (u32)1)).asU32();
+            u32 w = byteWidth(((IRValue*)dests.get(first)).ty());
+            for (u32 b = (u32)0; b < w; b = b + (u32)1) {
+                loadOperandByte((IROperand*)srcs.get(last), b);
+                _out.appendCString("    STA $B0\n");
+                for (u32 i = (u32)0; i + (u32)1 < k; i = i + (u32)1) {
+                    u32 c = ((Number*)cyc.get(i)).asU32();
+                    loadOperandByte((IROperand*)srcs.get(c), b);
+                    storeAToValue((IRValue*)dests.get(c), b);
+                }
+                _out.appendCString("    LDA $B0\n");
+                storeAToValue((IRValue*)dests.get(last), b);
+            }
+            for (u32 i = (u32)0; i < k; i = i + (u32)1) {
+                u32 c = ((Number*)cyc.get(i)).asU32();
+                for (u32 pi = (u32)0; pi < pending.count(); pi = pi + (u32)1)
+                    if (((Number*)pending.get(pi)).asU32() == c) { pending.removeAt(pi); pi = pending.count(); }
+            }
         }
     }
 
@@ -3759,7 +3840,7 @@ class Xt6502
         IROperand* v = hasValue ? (IROperand*)n.ops().get((u32)0) : (IROperand*)0;
         IRValue* rvv = hasValue && v.kind() == (u8)OPK_USE ? v.val() : (IRValue*)0;
         u32 rW = rvv != (IRValue*)0 ? byteWidth(rvv.ty()) : (u32)1;
-        bool isFloat = rvv != (IRValue*)0 && isFloatTy(rvv.ty());
+        bool isFloat = rvv != (IRValue*)0 && CgCommon.isFloatTy(rvv.ty());
         bool isAgg = rvv != (IRValue*)0 && isAggTy(rvv.ty());
         // A scalar wider than the A/X/Y/$89 quartet — i64/u64 — is LEFT in the
         // $B0.. mailbox for the caller to harvest, the same contract float,

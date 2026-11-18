@@ -20,9 +20,21 @@
 
 #import "Foundation.xc"
 #import "Files.xc"
+#import "Process.xc"
 
 i32 system(u8* cmd);
 i32 getpid(void);
+u8* mkdtemp(u8* tmpl);
+
+// Exit through here, not Process.exit: the run's scratch directory goes
+// first, unless -V (--verbose) asked to keep it (#337). Process.exit is _exit, so no
+// handler of ours would run after it.
+void driverExit(i32 code)
+{
+    if (!External.keepingScratch())
+        External.cleanup();
+    Process.exit(code);
+}
 
 class External
 {
@@ -33,10 +45,31 @@ class External
         _unused = (u8)0;
     }
 
-    // One argument, quoted for a POSIX shell: inside single quotes nothing is
-    // special except the quote itself, which becomes '\''.
+    // One argument, quoted for the shell system() runs: the one helper every
+    // command line uses (#337; CPath.quoted was a second, and on Windows it
+    // only wrapped the text in quotes). For a POSIX shell, inside single
+    // quotes nothing is special except the quote itself, which becomes '\''.
+    // For Windows, a C runtime's argument rules: in double quotes, a `"` is
+    // written \", and backslashes are doubled where they come before a quote
+    // or the closing quote, so "C:\dir\" stays a directory.
     static String* quote(String* s)
     {
+#if OS_windows
+        String* out = String.withCString("\"");
+        u32 slashes = (u32)0;
+        for (u32 i = (u32)0; i < s.byteLength(); i = i + (u32)1) {
+            u8 c = s.byteAt(i);
+            if (c == (u8)92) { slashes = slashes + (u32)1; out.appendByte(c); continue; }
+            if (c == (u8)34) {
+                for (u32 k = (u32)0; k < slashes + (u32)1; k = k + (u32)1) out.appendByte((u8)92);
+            }
+            slashes = (u32)0;
+            out.appendByte(c);
+        }
+        for (u32 k = (u32)0; k < slashes; k = k + (u32)1) out.appendByte((u8)92);
+        out.appendCString("\"");
+        return out;
+#else
         String* out = String.withCString("'");
         for (u32 i = (u32)0; i < s.byteLength(); i = i + (u32)1) {
             u8 c = s.byteAt(i);
@@ -45,6 +78,7 @@ class External
         }
         out.appendCString("'");
         return out;
+#endif
     }
 
     // Run argv[0] with the rest as its arguments, stdout and stderr passed
@@ -63,19 +97,65 @@ class External
         return (st >> (i32)8) & (i32)255;
     }
 
-    // This process's scratch directory, $TMPDIR (or /tmp)/xcc-<pid>, created on
-    // first use. The FILE names inside it are fixed: the vendor compiler
-    // records a C source's base name in the image's symbol table, so a stub
-    // named after the pid would make every build differ.
+    // This run's private scratch directory (#337), made on first use and
+    // removed when the run ends (driverExit, cleanup): under $TMPDIR (or /tmp)
+    // by mkdtemp, so the name cannot be guessed ahead and a directory that is
+    // already there is never reused; on Windows under %TEMP%. It was
+    // $TMPDIR/xcc-<pid>, adopted if it existed, and the C path used
+    // /tmp/xcc-c-<pid> beside it, ignoring $TMPDIR. The FILE names inside are
+    // fixed: the vendor compiler records a C source's base name in the
+    // image's symbol table, so a name that changed per run would make every
+    // build differ.
+    static String* _scratch;
+    static bool _keepScratch;
+    static void setKeepScratch(bool keep)
+    {
+        _keepScratch = keep;
+    }
+    static bool keepingScratch(void)
+    {
+        return _keepScratch;
+    }
     static String* tempDir()
     {
-        String* dir = Platform.env(String.withCString("TMPDIR"));
-        if (dir == (String*)0 || dir.byteLength() == (u32)0) dir = String.withCString("/tmp");
-        String* p = String.withString(dir);
-        if (!p.hasSuffix(String.withCString("/"))) p.appendByte((u8)'/');
-        p.appendFormat("xcc-%ld", getpid());
-        if (!Files.exists(p)) Files.createDirectory(p);
-        return p;
+        if (_scratch != (String*)0)
+            return String.withString(_scratch);
+#if OS_windows
+        String* base = Platform.env(String.withCString("TEMP"));
+        if (base == (String*)0 || base.byteLength() == (u32)0) base = String.withCString(".");
+        String* p = String.withFormat("%s\\xcc-%ld", base.cString(), getpid());
+        u32 k = (u32)0;
+        while (Files.exists(p))
+            {
+            k = k + (u32)1;
+            p = String.withFormat("%s\\xcc-%ld-%u", base.cString(), getpid(), k);
+            }
+        Files.createDirectory(p);
+        _scratch = p;
+#else
+        String* base = Platform.env(String.withCString("TMPDIR"));
+        if (base == (String*)0 || base.byteLength() == (u32)0) base = String.withCString("/tmp");
+        String* tmpl = String.withString(base);
+        while (tmpl.byteLength() > (u32)1 && tmpl.hasSuffix(String.withCString("/")))
+            tmpl = tmpl.substringBytes((u32)0, tmpl.byteLength() - (u32)1);
+        tmpl.appendCString("/xcc-XXXXXX");
+        u32 n = tmpl.byteLength();
+        u8* buf = new u8[n + (u32)1];
+        for (u32 i = (u32)0; i < n; i = i + (u32)1)
+            buf[i] = tmpl.byteAt(i);
+        buf[n] = (u8)0;
+        u8* got = mkdtemp(buf);
+        if (got == (u8*)0)
+            {
+            // No writable $TMPDIR: the old per-process name, made if missing.
+            String* p = String.withFormat("/tmp/xcc-%ld", getpid());
+            if (!Files.exists(p)) Files.createDirectory(p);
+            _scratch = p;
+            }
+        else
+            _scratch = String.withCString(got);
+#endif
+        return String.withString(_scratch);
     }
 
     static String* tempPath(string name)
@@ -86,14 +166,24 @@ class External
         return p;
     }
 
-    // Remove the scratch directory and everything in it.
+    // Remove the scratch directory and everything in it, if this run made
+    // one; a later use makes a new one.
     static void cleanup(void)
     {
+        if (_scratch == (String*)0)
+            return;
+#if OS_windows
+        // cmd.exe reads double quotes, not run()'s POSIX quoting.
+        String* rd = String.withFormat("rmdir /s /q \"%s\"", _scratch.cString());
+        system(rd.cString());
+#else
         Array* a = new Array();
         a.add((Object*)String.withCString("rm"));
         a.add((Object*)String.withCString("-rf"));
-        a.add((Object*)tempDir());
+        a.add((Object*)_scratch);
         run(a);
+#endif
+        _scratch = (String*)0;
     }
 
     // Everything a shell command prints on stdout, or "" (stderr discarded).

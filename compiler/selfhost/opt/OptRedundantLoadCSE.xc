@@ -10,6 +10,177 @@
 #import "OptDefs.xc"
 #import <OptBase>
 
+    // The key a pure instruction is value-numbered under. It compares as the
+    // string `op "|p" pred "|t" type ("|" operand)*` did, where an operand is
+    // "u" and its value (resolved through the replacements when the key is
+    // made), "s" and a symbol name, "b" and a block name, or "i", a type, ":"
+    // and the immediate's text. A missing string reads as an empty one.
+    // Nothing changes an instruction while CSE holds its key, so the key keeps
+    // the instruction and copies only the resolved values.
+    class CSEKey
+    {
+    IRInsn* _n;
+    IRValue* _u0;
+    IRValue* _u1;
+    IRValue* _u2;
+    Array* _uMore; // the fourth use onwards
+    u32 _nUses;
+    u32 _h;
+
+    void init(void)
+        {
+        _nUses = (u32)0;
+        _h = (u32)0;
+        }
+
+    IRInsn* insn(void)
+        {
+        return _n;
+        }
+    void setInsn(IRInsn* n)
+        {
+        _n = n;
+        }
+    void setHash(u32 h)
+        {
+        _h = h;
+        }
+
+    void addUse(IRValue* v)
+        {
+        if (_nUses == (u32)0)
+            _u0 = v;
+        else if (_nUses == (u32)1)
+            _u1 = v;
+        else if (_nUses == (u32)2)
+            _u2 = v;
+        else
+            {
+            if (_uMore == (Array*)0)
+                _uMore = new Array();
+            _uMore.add((Object*)v);
+            }
+        _nUses = _nUses + (u32)1;
+        }
+
+    IRValue* useAt(u32 i)
+        {
+        if (i == (u32)0)
+            return _u0;
+        if (i == (u32)1)
+            return _u1;
+        if (i == (u32)2)
+            return _u2;
+        return (IRValue*)_uMore.get(i - (u32)3);
+        }
+
+    // A string's hash, a missing one hashing as the empty string.
+    static u32 strHash(String* s)
+        {
+        if (s == (String*)0)
+            return (u32)2166136261;
+        return s.hash();
+        }
+
+    // String equality, a missing string equal to the empty one.
+    static bool strEq(String* a, String* b)
+        {
+        if (a == b)
+            return true;
+        if (a == (String*)0)
+            return b.byteLength() == (u32)0;
+        if (b == (String*)0)
+            return a.byteLength() == (u32)0;
+        return a.equals(b);
+        }
+
+    // A block operand's name, as the string spelled it.
+    static String* blockName(IROperand* o)
+        {
+        if (o.blk() == (IRBlock*)0)
+            return (String*)0;
+        return o.blk().name();
+        }
+
+    // The hash of an operand that is not a use.
+    static u32 operandHash(IROperand* o)
+        {
+        if (o.kind() == (u8)OPK_SYM)
+            return strHash(o.name()) ^ (u32)1;
+        if (o.kind() == (u8)OPK_BLOCK)
+            return strHash(blockName(o)) ^ (u32)2;
+        u32 h = strHash(o.ty());
+        if (o.kind() == (u8)OPK_IMMI)
+            return h ^ ((u32)o.imm() * (u32)2654435761) ^ (u32)(o.imm() >> 32);
+        if (o.kind() == (u8)OPK_IMMF)
+            return h ^ strHash(o.fpHex());
+        return h ^ (o.cid() * (u32)2654435761);
+        }
+
+    // Two operands that are not uses, compared as their strings were. An
+    // immediate's text is `#<n>:<ty>`, `#fp<hex>:<ty>` or `#cpool:<id>`; the
+    // three never coincide. A signed and an unsigned integer print alike only
+    // when the bits are not negative.
+    static bool operandEq(IROperand* a, IROperand* b)
+        {
+        u8 ka = a.kind();
+        u8 kb = b.kind();
+        if (ka == (u8)OPK_SYM || kb == (u8)OPK_SYM)
+            return ka == kb && strEq(a.name(), b.name());
+        if (ka == (u8)OPK_BLOCK || kb == (u8)OPK_BLOCK)
+            return ka == kb && strEq(blockName(a), blockName(b));
+        if (ka != kb || !strEq(a.ty(), b.ty()))
+            return false;
+        if (ka == (u8)OPK_IMMI)
+            return a.imm() == b.imm() && (a.imm() >= (i64)0 || a.uimm() == b.uimm());
+        if (ka == (u8)OPK_IMMF)
+            return strEq(a.fpHex(), b.fpHex());
+        return a.cid() == b.cid();
+        }
+
+    u32 hash(void)
+        {
+        return _h;
+        }
+
+    bool equals(Object* other)
+        {
+        CSEKey* o = (CSEKey* ?)other;
+        if (o == (CSEKey*)0)
+            return false;
+        if (o == self)
+            return true;
+        if (_h != o._h || _nUses != o._nUses)
+            return false;
+        IRInsn* a = _n;
+        IRInsn* b = o._n;
+        if (a.ops().count() != b.ops().count())
+            return false;
+        if (!strEq(a.op(), b.op()) || !strEq(a.pred(), b.pred())
+            || !strEq(a.res().ty(), b.res().ty()))
+            return false;
+        u32 u = (u32)0;
+        for (u32 k = (u32)0; k < a.ops().count(); k = k + (u32)1)
+            {
+            IROperand* x = (IROperand*)a.ops().get(k);
+            IROperand* y = (IROperand*)b.ops().get(k);
+            bool xu = x.kind() == (u8)OPK_USE;
+            bool yu = y.kind() == (u8)OPK_USE;
+            if (xu != yu)
+                return false;
+            if (xu)
+                {
+                if (useAt(u) != o.useAt(u))
+                    return false;
+                u = u + (u32)1;
+                }
+            else if (!operandEq(x, y))
+                return false;
+            }
+        return true;
+        }
+    }
+
     class Opt (RedundantLoadCSE)
     {
 
@@ -21,7 +192,6 @@
 
     final void cseInFunc(IRFunc* fn)
         {
-        _cseIds = new Map();
         _cseDefOf = new Map();
         for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
             {
@@ -33,7 +203,6 @@
                     _cseDefOf.set((Hashable*)n.res(), (Object*)n);
                 }
             }
-        _cseNext = (u32)0;
         Map* replace = new Map();  // value -> the value that wins
         Array* dead = new Array(); // IRInsn@ to drop
 
@@ -81,11 +250,12 @@
                         Array* ks = op.allKeys();
                         for (u32 k = (u32)0; k < ks.count(); k = k + (u32)1)
                             {
-                            String* key = (String*)ks.get(k);
-                            if (key.hasPrefix(String.withCString("AddrOf|"))
-                                || key.hasPrefix(String.withCString("ElementAddr|"))
-                                || key.hasPrefix(String.withCString("FieldAddr|"))
-                                || (_cseLate && !key.hasPrefix(String.withCString("Const|"))))
+                            CSEKey* key = (CSEKey*)ks.get(k);
+                            String* kop = key.insn().op();
+                            if (kop.equals(String.withCString("AddrOf"))
+                                || kop.equals(String.withCString("ElementAddr"))
+                                || kop.equals(String.withCString("FieldAddr"))
+                                || (_cseLate && !kop.equals(String.withCString("Const"))))
                                 availPure.set((Hashable*)key, op.get((Hashable*)key));
                             }
                         }
@@ -228,7 +398,7 @@
                 continue;
             if (n.res() != 0 && n.memRes() == 0 && isCSEable(n.op()))
                 {
-                String* key = pureKey(n, replace);
+                CSEKey* key = pureKey(n, replace);
                 Object* have = availPure.get((Hashable*)key);
                 if (have != 0)
                     {
@@ -351,65 +521,30 @@
     // The key an instruction is value-numbered under: its opcode, predicate,
     // result TYPE (so casts to different widths do not collapse together) and
     // its operands, with uses resolved through the replacements so far.
-    final String* pureKey(IRInsn* n, Map* replace)
+    final CSEKey* pureKey(IRInsn* n, Map* replace)
         {
-        String* key = String.withString(n.op());
-        key.appendCString("|p");
-        if (n.pred() != 0)
-            key.append(n.pred());
-        key.appendCString("|t");
-        key.append(n.res().ty());
+        CSEKey* key = new CSEKey();
+        key.setInsn(n);
+        u32 h = CSEKey.strHash(n.op());
+        h = (h ^ CSEKey.strHash(n.pred())) * (u32)16777619;
+        h = (h ^ CSEKey.strHash(n.res().ty())) * (u32)16777619;
         for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
             {
-            key.appendCString("|");
-            key.append(operandKey((IROperand*)n.ops().get(k), replace));
+            IROperand* o = (IROperand*)n.ops().get(k);
+            u32 oh = (u32)0;
+            if (o.kind() == (u8)OPK_USE)
+                {
+                IRValue* v = resolveReplace(replace, o.val());
+                key.addUse(v);
+                if (v != (IRValue*)0)
+                    oh = v.hash();
+                }
+            else
+                oh = CSEKey.operandHash(o);
+            h = (h ^ oh) * (u32)16777619;
             }
+        key.setHash(h);
         return key;
-        }
-
-    final String* operandKey(IROperand* o, Map* replace)
-        {
-        String* out = String.withCString("");
-        if (o.kind() == (u8)OPK_USE)
-            {
-            out.appendCString("u");
-            out.appendFormat("%ld", (i32)valueNumber(resolveReplace(replace, o.val())));
-            return out;
-            }
-        if (o.kind() == (u8)OPK_SYM)
-            {
-            out.appendCString("s");
-            if (o.name() != 0)
-                out.append(o.name());
-            return out;
-            }
-        if (o.kind() == (u8)OPK_BLOCK)
-            {
-            out.appendCString("b");
-            if (o.blk() != 0 && o.blk().name() != 0)
-                out.append(o.blk().name());
-            return out;
-            }
-        // An immediate keys on its TYPE and its bits — `#1:U8` and `#1:U16`
-        // are not the same value.
-        out.appendCString("i");
-        if (o.ty() != 0)
-            out.append(o.ty());
-        out.appendCString(":");
-        out.append(o.text());
-        return out;
-        }
-
-    final u32 valueNumber(IRValue* v)
-        {
-        if (v == 0)
-            return (u32)0;
-        Object* have = _cseIds.get((Hashable*)v);
-        if (have != 0)
-            return ((Number*)have).asU32();
-        _cseNext = _cseNext + (u32)1;
-        _cseIds.set((Hashable*)v, (Object*)Number.with(_cseNext));
-        return _cseNext;
         }
 
     final IRValue* resolveReplace(Map* replace, IRValue* v)

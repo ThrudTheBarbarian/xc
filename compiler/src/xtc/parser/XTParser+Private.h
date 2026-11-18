@@ -107,7 +107,9 @@ NS_ASSUME_NONNULL_BEGIN
 - (NSMutableArray*)blkScopes;
 - (void)blkBindAuto:(NSString*)name fromInit:(nullable XTASTNode*)init;
 - (NSMutableDictionary*)blkState;
-- (NSMutableSet*)blkIvarNames;
+- (void)blkEnterClass:(nullable NSString*)name parent:(nullable NSString*)parent;
+- (void)blkLeaveClass:(nullable NSString*)saved;
+- (void)blkAddIvarName:(NSString*)name;
 - (NSMutableDictionary*)blkBases;
 @end
 

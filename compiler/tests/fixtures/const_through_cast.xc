@@ -11,7 +11,7 @@ i32 n(i32 x) { i16 d = (i16)65530; return x % (i32)d; }
 u32 p(u32 x) { i8 d = (i8)250; return x / (u32)(u16)d; }
 i32 main(i32 argc, u8** argv)
     {
-    i32 x = 1000 + argc - 1;
+    i32 x = 1000 + (argc > 99 ? argc : 0);   // 1000, opaque; argc is 0 on some targets
     u8 arr[64];
     for (u32 i = (u32)0; i < (u32)64; i = i + (u32)1) arr[i] = (u8)i;
     u8 j = (u8)300;

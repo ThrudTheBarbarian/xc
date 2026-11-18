@@ -89,11 +89,14 @@ static BOOL pureHoistable(XTIRInsn* insn)
 
 - (void)runOnFunction:(XTIRFunction*)fn
     {
-    for (NSUInteger pass = 0; pass < 32; pass++)
+    NSUInteger pass = 0;
+    for (; pass < 32; pass++)
         {
         if (![self hoistOnce:fn])
             break;
         }
+    if (pass == 32)
+        XTIROptRoundCap("LICM", 32, fn.name);
     }
 
 - (BOOL)hoistOnce:(XTIRFunction*)fn
@@ -328,6 +331,13 @@ static BOOL pureHoistable(XTIRInsn* insn)
                     for (XTIRInsn* insn in bb.instructions)
                         {
                         if ([hoistSet containsObject:insn] || !isHoistable(insn))
+                            continue;
+                        // A load runs in the preheader only if its block runs
+                        // at every iteration (dominates the latch): one under
+                        // an `if` may be the guard's whole point (`if (p !=
+                        // null) s += p.x`), and hoisted it loads through null.
+                        // Mirrored in the port.
+                        if (insn.opcode == XTIROpLoad && ![dom[li] containsIndex:bn.unsignedIntegerValue])
                             continue;
                         if (keepSplats && insn.opcode == XTIROpVSplat)
                             continue;

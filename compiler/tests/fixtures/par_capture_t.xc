@@ -1,5 +1,5 @@
 //xtc-flags: target=arm64
-//xtc-na: xt6502 m68k arm9 — par needs threads
+//xtc-na: xt6502,m68k,arm9 — par needs threads
 // A par block may capture a variable called t. The block's copyChunk() made
 // its new chunk in a local `t`, which shadowed the capture: `t.t = t` stored
 // the chunk itself, so a float* capture failed to build ("a class reference

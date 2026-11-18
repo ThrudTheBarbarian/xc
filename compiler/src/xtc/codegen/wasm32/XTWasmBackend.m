@@ -224,6 +224,16 @@ static void wasmRejectVariadicImport(XTIRSymbol *sym) {
             "import.\n", sym.name.UTF8String);
     sFatalImportError = YES;
 }
+// A predicate past the table (LLVM's unordered and ordered/unordered tests,
+// say) has no wasm mnemonic. It was read past the end of the array; it is
+// refused instead.
+static NSString *wasmCmpMn(NSString *const *table, NSUInteger count, NSUInteger pred) {
+    if (pred < count) return table[pred];
+    fprintf(stderr, "xcc-cg-wasm32: error: compare predicate %lu has no wasm lowering\n",
+            (unsigned long)pred);
+    sFatalImportError = YES;
+    return table[0];
+}
 static NSMutableSet<NSString *> *sDefinedFns;
 static NSMutableSet<NSString *> *sTodoNotes;
 static XTIRModule *sMod;
@@ -885,8 +895,11 @@ static NSString *wasmExportNameOf(XTIRSymbol *sym, NSString *fallback) {
                 else [sAppFixups addObject:@[@(base + i * 4), e]];
                 continue;
             }
-            [self todo:[NSString stringWithFormat:
-                @"vtable entry '%@' resolves to neither function nor data", e]];
+            // A word that names neither a function nor data would be a null
+            // method slot: refused.
+            fprintf(stderr, "xcc-cg-wasm32: error: vtable entry '%s' resolves to neither "
+                    "function nor data\n", e.UTF8String);
+            sFatalImportError = YES;
             w[i] = 0;
         }
         if (sEmitLib) [self libPlace:words at:base];
@@ -1731,7 +1744,7 @@ static NSString *opPrefix(XTIRType *t) { return wasmValType(t); }
         if (unsignedPred && narrowSigned) [out appendString:mask];
         [self pushOperand:ops[1] fn:fn out:out];
         if (unsignedPred && narrowSigned) [out appendString:mask];
-        [out appendFormat:@"    %@.%@\n", p, preds[insn.predicate]];
+        [out appendFormat:@"    %@.%@\n", p, wasmCmpMn(preds, 10, insn.predicate)];
         [self setResult:res canon:NO out:out];    // eq/… produce 0/1 already
         return;
     }
@@ -1744,7 +1757,7 @@ static NSString *opPrefix(XTIRType *t) { return wasmValType(t); }
         [self pushOperand:ops[0] fn:fn out:out];
         [self pushOperand:ops[1] fn:fn out:out];
         [out appendFormat:@"    %@.%@\n",
-            (at && at.kind == XTIRTypeKindF32) ? @"f32" : @"f64", preds[insn.predicate]];
+            (at && at.kind == XTIRTypeKindF32) ? @"f32" : @"f64", wasmCmpMn(preds, 6, insn.predicate)];
         [self setResult:res canon:NO out:out];
         return;
     }
@@ -2205,7 +2218,7 @@ static NSString *opPrefix(XTIRType *t) { return wasmValType(t); }
                                             @"ge_s", @"lt_u", @"gt_u", @"le_u", @"ge_u" };
         [self pushOperand:ops[0] fn:fn out:out];
         [self pushOperand:ops[1] fn:fn out:out];
-        [out appendFormat:@"    %@.%@\n", shape, vpreds[insn.predicate]];
+        [out appendFormat:@"    %@.%@\n", shape, wasmCmpMn(vpreds, 10, insn.predicate)];
         [self setResult:res canon:NO out:out];
         return;
     }

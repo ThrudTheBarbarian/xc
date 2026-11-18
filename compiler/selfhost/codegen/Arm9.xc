@@ -18,9 +18,15 @@
 
 #import "Foundation.xc"
 #import <Ir>
+#import <CgCommon>
 #import "IrDefs.xc"
 #import <Homing>
 #import "Process.xc"
+
+// How a phi copy moves (Arm9.phiCopyKind).
+#define ARM9_PHI_WORD 0
+#define ARM9_PHI_WIDE 1
+#define ARM9_PHI_AGG 2
 
 class Arm9
     {
@@ -362,7 +368,7 @@ class Arm9
     String* assembly(IRModule* mod)
         {
         _m = mod;
-        _atomicArc = _arcOverride >= (i32)0 ? _arcOverride != (i32)0 : arcAtomic(mod);
+        _atomicArc = _arcOverride >= (i32)0 ? _arcOverride != (i32)0 : CgCommon.arcAtomic(mod, false);
         _out = String.withCString("");
         // A `.file` naming the MODULE, not the temp `.s`: without one gas falls
         // back to whatever temporary object name it was handed, which is random
@@ -1495,6 +1501,7 @@ class Arm9
             }
         _out.appendFormat("\tmov\t%s, #0\t\t@ TODO operand kind %ld\n",
                           reg.cString(), (i32)op.kind());
+        giveUp(String.withCString("operand kind"));
         }
 
     // A homed value stays live in its register AND is written to its slot: a
@@ -2200,6 +2207,8 @@ class Arm9
             {
             _out.appendFormat("\tbl\t%s\n",
                               callee == 0 ? "0 @ TODO unknown callee" : callee.cString());
+            if (callee == 0)
+                giveUp(String.withCString("call with no callee"));
             }
         if (!sret)
             storeCallResult(res);
@@ -2427,6 +2436,7 @@ class Arm9
             return true;
             }
         _out.appendFormat("\t@ TODO vfpLoad operand kind %ld\n", (i32)op.kind());
+        giveUp(String.withCString("float operand kind"));
         }
 
     void vfpStore(String* reg, IRValue* v)
@@ -2515,6 +2525,8 @@ class Arm9
         _out.appendFormat("\tvcmp.%s\t%s, %s\n\tvmrs\tAPSR_nzcv, fpscr\n",
                           d ? "f64" : "f32", ra.cString(), rb.cString());
         String* cc = Arm9.condForFCmp(insn.pred());
+        if (cc == 0)
+            giveUp(predicateName(insn.pred()));
         _out.appendCString("\tmov\tr0, #0\n");
         if (cc != 0)
             _out.appendFormat("\tmov%s\tr0, #1\n", cc.cString());
@@ -2786,6 +2798,11 @@ class Arm9
                 while (j < text.byteLength() && text.byteAt(j) == (u8)'}')
                     j = j + (u32)1;
                 Object* so = _slot.get((Hashable*)Number.with(vid));
+                // A local with no slot would come out as `sp, #0`, under the
+                // user's asm. Only pinned locals and __self make markers, so
+                // this guards against a compiler bug.
+                if (so == 0)
+                    giveUp(String.withCString("inline asm local with no slot"));
                 out.appendFormat("sp, #%ld", (i32)(so == 0 ? (u32)0 : ((Number*)so).asU32()));
                 i = j;
                 continue;
@@ -3039,6 +3056,8 @@ class Arm9
         if (res == 0 || ops.count() < (u32)2)
             return;
         String* cc = Arm9.condForICmp(insn.pred());
+        if (cc == 0)
+            giveUp(predicateName(insn.pred()));
         // A 64-bit compare is not one `cmp`: the single-word path below reads
         // the LOW word of each operand and ignores the rest, so `7 == 0` came
         // out true. Done inline rather than through libgcc's __cmpdi2 — that
@@ -3245,6 +3264,7 @@ class Arm9
             {
             _out.appendFormat("\tmov\tr0, #0\t\t@ TODO AddrOf operand kind %ld\n",
                               (i32)o.kind());
+            giveUp(String.withCString("AddrOf operand kind"));
             }
         storeResult(res, String.withCString("r0"));
         }
@@ -3312,71 +3332,6 @@ class Arm9
         // multiply-accumulate.
         emitMovImm((i32)es, String.withCString("r2"));
         _out.appendCString("\tmla\tr0, r1, r2, r0\n");
-        }
-
-    // ARC: the refcount is a halfword just below the object. A pointer below
-    // 0x10000 is a non-heap object (a static instance, or null) and is left
-    // alone — the same test both the runtime and every other backend uses.
-    // Does anything in this module call the runtime's thread-create primitive?
-    // The instruction stream is the question, not the symbol table.
-    bool spawnsThreads(IRModule* m)
-        {
-        return referencesSymbol(m, String.withCString("_xt_thread_create"));
-        }
-
-    // Atomic reference counts, as x86-64's arcAtomic (the security review,
-    // #303): on when the module spawns a thread, has no main (a library or a
-    // plugin, whose caller may have threads of its own), or loads a plugin.
-    bool arcAtomic(IRModule* m)
-        {
-        if (spawnsThreads(m))
-            return true;
-        bool hasMain = false;
-        for (u32 f = (u32)0; f < m.funcs().count() && !hasMain; f = f + (u32)1)
-            hasMain = ((IRFunc*)m.funcs().get(f)).name().equals(String.withCString("main"));
-        if (!hasMain)
-            return true;
-        return referencesSymbol(m, String.withCString("Plugin$load"));
-        }
-
-    bool referencesSymbol(IRModule* m, String* want)
-        {
-        for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
-            {
-            IRFunc* fn = (IRFunc*)m.funcs().get(f);
-            for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
-                {
-                IRBlock* bb = (IRBlock*)fn.blocks().get(b);
-                if (insnsName(bb.phis(), want))
-                    return true;
-                if (insnsName(bb.insns(), want))
-                    return true;
-                if (bb.term() != (IRInsn*)0 && insnNames(bb.term(), want))
-                    return true;
-                }
-            }
-        return false;
-        }
-
-    bool insnsName(Array* list, String* want)
-        {
-        for (u32 i = (u32)0; i < list.count(); i = i + (u32)1)
-            if (insnNames((IRInsn*)list.get(i), want))
-                return true;
-        return false;
-        }
-
-    bool insnNames(IRInsn* n, String* want)
-        {
-        for (u32 i = (u32)0; i < n.ops().count(); i = i + (u32)1)
-            {
-            IROperand* o = (IROperand*)n.ops().get(i);
-            if (o.kind() != (u8)OPK_SYM)
-                continue;
-            if (o.name() != (String*)0 && o.name().equals(want))
-                return true;
-            }
-        return false;
         }
 
     void emitRetain(Array* ops)
@@ -3520,10 +3475,11 @@ class Arm9
             _out.appendCString("\tudf\t#0\n");
             return;
             }
-        // Anything else gets the original's placeholder, verbatim — including
-        // its opcode NUMBER, which is the one place this port has to know the
-        // enum rather than the spelling.
+        // Anything else is refused. The placeholder text stays, with the
+        // original's opcode NUMBER, so the output matches the reference's up to
+        // the refusal.
         _out.appendFormat("\t@ TODO terminator %ld\n", (i32)Arm9.opcodeNumber(op));
+        giveUp(op);
         emitFrameReturn();
         }
 
@@ -3654,15 +3610,15 @@ class Arm9
     // These are a PARALLEL assignment. Emitting them in order is wrong when one
     // copy's source is a sibling's destination — after an inner loop unrolls,
     // `v0 <- lc4` sits next to `lc4 <- lc4+1`, and doing lc4 first hands v0 the
-    // post-increment value. So a copy goes only when no pending copy still
-    // reads its destination; a residual true cycle (a swap) is rare and is
-    // broken by taking the first pending one.
+    // post-increment value. Every copy, one word or wide or aggregate, goes
+    // through emitParallelCopies, which orders them and breaks cycles.
     void emitPhiEdge(IRBlock* from, IRBlock* to)
         {
         if (to == 0)
             return;
         Array* dests = new Array();
         Array* srcs = new Array();
+        Array* kinds = new Array();
         for (u32 i = (u32)0; i < to.phis().count(); i = i + (u32)1)
             {
             IRInsn* phi = (IRInsn*)to.phis().get(i);
@@ -3679,22 +3635,33 @@ class Arm9
                     k = phi.ops().count();
                     continue;
                     }
-                if (widePhiCopy(phi.res(), vo))
-                    {
-                    k = phi.ops().count();
-                    continue;
-                    }
-                if (aggregatePhiCopy(phi.res(), vo))
-                    {
-                    k = phi.ops().count();
-                    continue;
-                    }
                 dests.add((Object*)phi.res());
                 srcs.add((Object*)vo);
+                kinds.add((Object*)Number.with(phiCopyKind(phi.res(), vo)));
                 k = phi.ops().count();
                 }
             }
-        emitParallelCopies(dests, srcs);
+        emitParallelCopies(dests, srcs, kinds);
+        }
+
+    // How one phi copy moves: ARM9_PHI_WORD through r0, ARM9_PHI_WIDE as the
+    // two words of an i64/double slot, ARM9_PHI_AGG as a block copy between
+    // slots.
+    u32 phiCopyKind(IRValue* dst, IROperand* vo)
+        {
+        if (Arm9.isI64(dst.ty()) || Arm9.isF64(dst.ty()))
+            {
+            if (slotOf(dst) < (i32)0)
+                return (u32)ARM9_PHI_WORD;
+            if (vo.kind() == (u8)OPK_IMMI || vo.kind() == (u8)OPK_IMMF)
+                return (u32)ARM9_PHI_WIDE;
+            if (vo.kind() == (u8)OPK_USE && slotOf(vo.val()) >= (i32)0)
+                return (u32)ARM9_PHI_WIDE;
+            return (u32)ARM9_PHI_WORD;
+            }
+        if (Arm9.isAggTy(dst.ty()) && vo.kind() == (u8)OPK_USE && slotOf(dst) >= (i32)0)
+            return (u32)ARM9_PHI_AGG;
+        return (u32)ARM9_PHI_WORD;
         }
 
     // A VECTOR phi lives in a q-register, not a slot — never route it through
@@ -3786,7 +3753,17 @@ class Arm9
         return true;
         }
 
-    void emitParallelCopies(Array* dests, Array* srcs)
+    // Order a parallel assignment. A copy goes when no pending copy still
+    // reads its destination; wide and aggregate copies are taken before
+    // one-word ones, as they were when they were emitted inline. When every
+    // pending copy is blocked, what is left is one or more disjoint cycles
+    // (each destination is read by exactly one pending copy), and one is
+    // broken: its first destination is saved in r3, the chain runs, and the
+    // saved value goes into the last destination. r3 is never a home (homes
+    // are r4-r11), and loadOperand, storeResult and emitSpAccess use only the
+    // register they are given and r12, so any cycle length and any width
+    // works with the one scratch.
+    void emitParallelCopies(Array* dests, Array* srcs, Array* kinds)
         {
         u32 n = dests.count();
         if (n == (u32)0)
@@ -3798,71 +3775,121 @@ class Arm9
         while (remaining > (u32)0)
             {
             i32 pick = (i32)-1;
-            for (u32 i = (u32)0; i < n && pick < (i32)0; i = i + (u32)1)
-                {
-                if (((Number*)done.get(i)).asU32() != (u32)0)
-                    continue;
-                IRValue* d = (IRValue*)dests.get(i);
-                bool blocked = false;
-                for (u32 o = (u32)0; o < n && !blocked; o = o + (u32)1)
+            for (u32 pass = (u32)0; pass < (u32)2 && pick < (i32)0; pass = pass + (u32)1)
+                for (u32 i = (u32)0; i < n && pick < (i32)0; i = i + (u32)1)
                     {
-                    if (o == i || ((Number*)done.get(o)).asU32() != (u32)0)
+                    if (((Number*)done.get(i)).asU32() != (u32)0)
                         continue;
-                    IROperand* so = (IROperand*)srcs.get(o);
-                    if (so.kind() == (u8)OPK_USE && so.val() == d)
-                        blocked = true;
+                    bool word = ((Number*)kinds.get(i)).asU32() == (u32)ARM9_PHI_WORD;
+                    if (word != (pass == (u32)1))
+                        continue;
+                    if (!phiCopyBlocked(dests, srcs, done, i))
+                        pick = (i32)i;
                     }
-                if (!blocked)
-                    pick = (i32)i;
-                }
             if (pick >= (i32)0)
                 {
-                loadOperand((IROperand*)srcs.get((u32)pick), String.withCString("r0"));
-                storeResult((IRValue*)dests.get((u32)pick), String.withCString("r0"));
+                emitOnePhiCopy((IRValue*)dests.get((u32)pick), (IROperand*)srcs.get((u32)pick),
+                               ((Number*)kinds.get((u32)pick)).asU32());
                 done.set((u32)pick, (Object*)Number.with((u32)1));
                 remaining = remaining - (u32)1;
                 continue;
                 }
-            // Residual cycle: every pending copy's DEST is another copy's SOURCE,
-            // so no single-step order is safe — a swap `%a<-%b, %b<-%a` copied in
-            // place loses one value (bug 199: loop-swapped class-pointer locals
-            // came back unchanged). arm9 slots are sp-relative so a stack shuffle
-            // would shift every [sp,#off]; instead read EVERY source into its own
-            // scratch register (r0/r2/r3 — never home registers, homes are
-            // r4-r11), then write every dest. Only 32-bit scalars reach here
-            // (wide/agg/vector phis are copied inline), so one GP register per
-            // member suffices. A cycle wider than the 3-register pool falls back
-            // to the in-place single step, no worse than pre-fix.
-            if (remaining > (u32)3)
-                {
-                u32 fb = (u32)$FFFF_FFFF;
-                for (u32 i = (u32)0; i < n && fb == (u32)$FFFF_FFFF; i = i + (u32)1)
-                    if (((Number*)done.get(i)).asU32() == (u32)0)
-                        fb = i;
-                loadOperand((IROperand*)srcs.get(fb), String.withCString("r0"));
-                storeResult((IRValue*)dests.get(fb), String.withCString("r0"));
-                done.set(fb, (Object*)Number.with((u32)1));
-                remaining = remaining - (u32)1;
-                continue;
-                }
-            Array* pool = new Array();
-            pool.add((Object*)String.withCString("r0"));
-            pool.add((Object*)String.withCString("r2"));
-            pool.add((Object*)String.withCString("r3"));
+            // A cycle: c0 <- c1 <- ... <- ck-1 <- c0, where copy c(i) reads
+            // the destination of c(i+1).
             Array* cyc = new Array();
-            for (u32 i = (u32)0; i < n; i = i + (u32)1)
-                if (((Number*)done.get(i)).asU32() == (u32)0)
-                    cyc.add((Object*)Number.with(i));
-            for (u32 k = (u32)0; k < cyc.count(); k = k + (u32)1)
-                loadOperand((IROperand*)srcs.get(((Number*)cyc.get(k)).asU32()),
-                            (String*)pool.get(k));
+            u32 first = (u32)0;
+            while (((Number*)done.get(first)).asU32() != (u32)0)
+                first = first + (u32)1;
+            u32 cur = first;
+            while (true)
+                {
+                cyc.add((Object*)Number.with(cur));
+                IRValue* want = ((IROperand*)srcs.get(cur)).val();
+                u32 next = n;
+                for (u32 j = (u32)0; j < n && next == n; j = j + (u32)1)
+                    if (((Number*)done.get(j)).asU32() == (u32)0 && (IRValue*)dests.get(j) == want)
+                        next = j;
+                if (next == n || next == first)
+                    break;
+                cur = next;
+                }
+            emitPhiCycle(dests, srcs, cyc, ((Number*)kinds.get(first)).asU32());
             for (u32 k = (u32)0; k < cyc.count(); k = k + (u32)1)
                 {
-                u32 idx = ((Number*)cyc.get(k)).asU32();
-                storeResult((IRValue*)dests.get(idx), (String*)pool.get(k));
-                done.set(idx, (Object*)Number.with((u32)1));
+                done.set(((Number*)cyc.get(k)).asU32(), (Object*)Number.with((u32)1));
                 remaining = remaining - (u32)1;
                 }
+            }
+        }
+
+    // True when a pending copy other than i reads copy i's destination.
+    static bool phiCopyBlocked(Array* dests, Array* srcs, Array* done, u32 i)
+        {
+        IRValue* d = (IRValue*)dests.get(i);
+        for (u32 o = (u32)0; o < dests.count(); o = o + (u32)1)
+            {
+            if (o == i || ((Number*)done.get(o)).asU32() != (u32)0)
+                continue;
+            IROperand* so = (IROperand*)srcs.get(o);
+            if (so.kind() == (u8)OPK_USE && so.val() == d)
+                return true;
+            }
+        return false;
+        }
+
+    void emitOnePhiCopy(IRValue* dst, IROperand* src, u32 kind)
+        {
+        if (kind == (u32)ARM9_PHI_WIDE)
+            widePhiCopy(dst, src);
+        else if (kind == (u32)ARM9_PHI_AGG)
+            aggregatePhiCopy(dst, src);
+        else
+            {
+            loadOperand(src, String.withCString("r0"));
+            storeResult(dst, String.withCString("r0"));
+            }
+        }
+
+    // One cycle, in the order emitParallelCopies found it. Every member has
+    // the same type, since each reads another's destination. A one-word cycle
+    // moves values (a member may be homed in a register); a wide or aggregate
+    // one lives in slots and goes word by word, then byte by byte for an
+    // aggregate's tail, each word or byte a cycle of its own through r3.
+    void emitPhiCycle(Array* dests, Array* srcs, Array* cyc, u32 kind)
+        {
+        u32 k = cyc.count();
+        u32 last = ((Number*)cyc.get(k - (u32)1)).asU32();
+        if (kind == (u32)ARM9_PHI_WORD)
+            {
+            loadOperand((IROperand*)srcs.get(last), String.withCString("r3"));
+            for (u32 i = (u32)0; i + (u32)1 < k; i = i + (u32)1)
+                {
+                u32 c = ((Number*)cyc.get(i)).asU32();
+                loadOperand((IROperand*)srcs.get(c), String.withCString("r0"));
+                storeResult((IRValue*)dests.get(c), String.withCString("r0"));
+                }
+            storeResult((IRValue*)dests.get(last), String.withCString("r3"));
+            return;
+            }
+        IRValue* d0 = (IRValue*)dests.get(((Number*)cyc.get((u32)0)).asU32());
+        u32 size = kind == (u32)ARM9_PHI_WIDE ? (u32)8 : aggSize(Arm9.aggIndex(d0.ty()));
+        u32 off = (u32)0;
+        while (off < size)
+            {
+            bool whole = off + (u32)4 <= size;
+            String* ld = String.withCString(whole ? "ldr" : "ldrb");
+            String* st = String.withCString(whole ? "str" : "strb");
+            emitSpAccess(ld, String.withCString("r3"),
+                         (u32)slotOf(((IROperand*)srcs.get(last)).val()) + off);
+            for (u32 i = (u32)0; i + (u32)1 < k; i = i + (u32)1)
+                {
+                u32 c = ((Number*)cyc.get(i)).asU32();
+                emitSpAccess(ld, String.withCString("r0"),
+                             (u32)slotOf(((IROperand*)srcs.get(c)).val()) + off);
+                emitSpAccess(st, String.withCString("r0"), (u32)slotOf((IRValue*)dests.get(c)) + off);
+                }
+            emitSpAccess(st, String.withCString("r3"), (u32)slotOf((IRValue*)dests.get(last)) + off);
+            off = off + (whole ? (u32)4 : (u32)1);
             }
         }
 
@@ -4611,6 +4638,15 @@ class Arm9
             if ((IRInsn*)blk.insns().get(i) == n)
                 return true;
         return false;
+        }
+
+    // A compare predicate with no ARM condition (LLVM's unordered tests, say)
+    // made the result a constant false; it is refused instead.
+    static String* predicateName(String* p)
+        {
+        String* w = String.withCString("predicate ");
+        w.append(p == (String*)0 ? String.withCString("(none)") : p);
+        return w;
         }
 
     // A shape this slice does not emit yet. Loud, and named — a backend that

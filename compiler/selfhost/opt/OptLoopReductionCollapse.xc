@@ -42,6 +42,8 @@
             u32 round = (u32)0;
             while (round < (u32)16 && lrcAnalyze(fn))
                 round = round + (u32)1;
+            if (round == (u32)16)
+                optRoundCap("loop reduction collapse", (u32)16, fn);
             }
         }
 

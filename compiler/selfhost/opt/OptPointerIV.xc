@@ -36,6 +36,8 @@
             u32 iter = (u32)0;
             while (iter < (u32)64 && pivOnce(fn))
                 iter = iter + (u32)1;
+            if (iter == (u32)64)
+                optRoundCap("pointer IVs", (u32)64, fn);
             }
         }
 

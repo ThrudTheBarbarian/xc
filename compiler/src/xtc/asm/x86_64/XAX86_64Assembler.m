@@ -1,4 +1,5 @@
 #import "XAX86_64Assembler.h"
+#import "XAGasString.h"
 #import "XTDwarfWriter.h"
 #include <stdlib.h>
 #include <errno.h>
@@ -727,7 +728,15 @@ static BOOL namesHighZmm(NSString *s) {
                 emitImmOsz(out, osz, b->imm); CLEANUP(); return out;
             }
             // r64 falls through to C7 /0 with a sign-extended imm32 — B8+rd under
-            // REX.W is `movabs` and would demand eight immediate bytes.
+            // REX.W is `movabs` and would demand eight immediate bytes. A memory
+            // destination has no movabs form, so a value that is not a
+            // sign-extended imm32 is refused: masked, it stored
+            // `mov qword ptr [rax], 0x100000000` as 0.
+            if (osz == 8 && (b->imm > INT32_MAX || b->imm < INT32_MIN)) {
+                if (error) *error = xerr(@"64-bit immediate does not fit an imm32 "
+                                         @"field — load it into a register first ('%@')", mn);
+                CLEANUP(); return nil;
+            }
             emitRex(out, w, 0, a->index, a->kind==OpReg?a->reg:a->base, force8);
             emit8(out, osz==1 ? 0xC6 : 0xC7);
             emitModRM(out, 0, a);
@@ -799,6 +808,13 @@ static BOOL namesHighZmm(NSString *s) {
 
     // ── test r/m, imm  (A8/A9 for the accumulator, else F6/F7 /0) ──
     if ([mn isEqualToString:@"test"] && a && b && b->kind == OpImm && !b->symbol) {
+        // As for the ALU forms: the immediate is a sign-extended imm32, and
+        // `test rcx, 0x100000000` became `test rcx, 0`.
+        if (osz == 8 && (b->imm > INT32_MAX || b->imm < INT32_MIN)) {
+            if (error) *error = xerr(@"64-bit immediate does not fit an imm32 "
+                                     @"field — load it into a register first ('%@')", mn);
+            CLEANUP(); return nil;
+        }
         if (a->kind == OpReg && a->reg == 0 && !force8) {
             emitRex(out, w, 0, 0, 0, NO);
             emit8(out, osz==1 ? 0xA8 : 0xA9);
@@ -1679,6 +1695,7 @@ static NSString *stripAsmComment(NSString *l) {
     BOOL inq = NO;
     for (NSUInteger i = 0; i < l.length; i++) {
         unichar c = [l characterAtIndex:i];
+        if (inq && c == '\\') { i++; continue; }   // \" stays inside the string
         if (c == '"') { inq = !inq; continue; }
         if (inq) continue;
         if (c == '#') return [l substringToIndex:i];
@@ -1896,17 +1913,10 @@ static BOOL isPlainIntLiteral(NSString *s) {
             else if ([d isEqualToString:@".quad"] || [d isEqualToString:@".8byte"]) width = 8;
             else if ([d isEqualToString:@".ascii"] || [d isEqualToString:@".asciz"] ||
                      [d isEqualToString:@".string"]) {
-                NSRange q1 = [rest rangeOfString:@"\""], q2 = [rest rangeOfString:@"\"" options:NSBackwardsSearch];
-                if (q1.location == NSNotFound || q2.location <= q1.location) {
-                    if (error) *error = xerr(@"bad string in '%@'", l); return nil; }
-                NSString *s = [rest substringWithRange:NSMakeRange(q1.location+1, q2.location-q1.location-1)];
-                for (NSUInteger i = 0; i < s.length; i++) {
-                    unichar c = [s characterAtIndex:i];
-                    if (c == '\\' && i+1 < s.length) { unichar n = [s characterAtIndex:++i];
-                        c = n=='n'?'\n': n=='t'?'\t': n=='r'?'\r': n=='0'?0: n; }
-                    emit8(sec, (uint8_t)c);
-                }
-                if (![d isEqualToString:@".ascii"]) emit8(sec, 0);
+                NSData *sd = XAGasStringDecode(rest, ![d isEqualToString:@".ascii"]);
+                if (!sd) { if (error) *error = xerr(@"bad string in '%@'", l); return nil; }
+                const uint8_t *sb = (const uint8_t *)sd.bytes;
+                for (NSUInteger i = 0; i < sd.length; i++) emit8(sec, sb[i]);
                 continue;
             }
             if (!width) continue;                       // unknown directive: no bytes

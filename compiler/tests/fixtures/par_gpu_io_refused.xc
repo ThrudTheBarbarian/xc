@@ -1,3 +1,4 @@
+//xtc-na: xt6502 — no par runtime on this target (no ParDevice)
 //xtc-flags: expect=sema-error
 // A `par` body may not do I/O: printf reaches code a GPU cannot run.
 #import "Stdio.xc"

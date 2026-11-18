@@ -45,6 +45,8 @@
         NSUInteger guard = 0;
         while (guard < 64 && [self one])
             guard++;
+        if (guard == 64)
+            XTIROptRoundCap("devirtualisation", 64, fn.name);
         }
     return YES;
     }

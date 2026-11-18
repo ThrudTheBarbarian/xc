@@ -1,3 +1,4 @@
+//xtc-na: xt6502 — no par runtime on this target (no ParDevice)
 // par_footprint.xc — the footprint each buffer gets on the kernel's header
 // line (fp= / gfp=, par-tiles-and-devices.md step 1): a map (a[i]), a
 // stencil (b[i - 1], b[i + 1]), a stride (c[2 * i + 1]), a table read from

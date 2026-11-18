@@ -22,6 +22,7 @@
 #import <U64>
 #import <DwarfWriter>
 #import <SectionBytes>
+#import <GasString>
 
 #import "Arm64AsmDefs.xc"
 
@@ -583,6 +584,7 @@ class Arm64Asm
         bool inStr = false;
         for (u32 i = (u32)0; i < l.byteLength(); i = i + (u32)1) {
             u8 c = l.byteAt(i);
+            if (inStr && c == (u8)'\\') { i = i + (u32)1; continue; }   // \" stays inside
             if (c == (u8)'"') { inStr = !inStr; continue; }
             if (inStr) continue;
             if (c == (u8)';') return l.substringBytes((u32)0, i);
@@ -1929,13 +1931,27 @@ class Arm64Asm
             if (!d.ok()) { fail(String.withCString("bad movz destination")); return (u32)0; }
             U64* imm = parseImm(opAt(ops, (u32)1));
             if (!_immOk) { fail(String.withCString("bad movz immediate")); return (u32)0; }
+            // The immediate is 16 bits and the shift a multiple of 16 that
+            // stays inside the register; both used to be masked, so
+            // `movz x0, #0x12345` became #0x2345 and `lsl #8` shift 0.
+            if (imm.hi() != (u32)0 || imm.lo() > (u32)$FFFF) {
+                fail(String.withCString("movz/movk/movn immediate is wider than 16 bits"));
+                return (u32)0;
+            }
             u32 hw = (u32)0;
             if (ops.count() >= (u32)3) {
                 String* sh = opAt(ops, (u32)2);
                 u32 h = sh.byteIndexOf(String.withCString("#"));
                 if (h != (u32)$FFFF_FFFF) {
                     U64* sv = parseImm(sh.substringFromByte(h));
-                    if (_immOk) hw = sv.lo() / (u32)16;
+                    if (_immOk) {
+                        if (sv.hi() != (u32)0 || (sv.lo() % (u32)16) != (u32)0
+                            || sv.lo() / (u32)16 > (d.is64() ? (u32)3 : (u32)1)) {
+                            fail(String.withCString("movz/movk/movn shift must be lsl #0, 16, 32 or 48 (0 or 16 for a W register)"));
+                            return (u32)0;
+                        }
+                        hw = sv.lo() / (u32)16;
+                    }
                 }
             }
             u32 base = mn.equals(String.withCString("movk")) ? (d.is64() ? (u32)$F2800000 : (u32)$72800000)
@@ -2868,6 +2884,13 @@ class Arm64Asm
             && ((u32)_memImm % ((u32)1 << sc)) == (u32)0
             && ((u32)_memImm >> sc) <= (u32)$FFF)
             return uoff | (((u32)_memImm >> sc) << (u32)10) | (_memRn << (u32)5) | t.num();
+        // The unscaled, pre- and post-index forms carry a signed 9-bit byte
+        // offset. Masking a wider one gave a different address in silence
+        // (`ldr x0, [x1, #-300]` came out as #-44).
+        if (_memImm < (i32)-256 || _memImm > (i32)255) {
+            fail(String.withCString("load/store offset out of range (the unscaled and indexed forms reach -256..255)"));
+            return (u32)0;
+        }
         u32 imm9 = (u32)_memImm & (u32)$1FF;
         u32 idx = _memMode == (u32)1 ? (u32)$C00 : _memMode == (u32)2 ? (u32)$400 : (u32)0;
         return unsc | (imm9 << (u32)12) | idx | (_memRn << (u32)5) | t.num();
@@ -2932,6 +2955,10 @@ class Arm64Asm
             && ((u32)_memImm % ((u32)1 << fscale)) == (u32)0
             && ((u32)_memImm >> fscale) <= (u32)$FFF)
             return fbase | (((u32)_memImm >> fscale) << (u32)10) | (_memRn << (u32)5) | t.num();
+        if (_memImm < (i32)-256 || _memImm > (i32)255) {
+            fail(String.withCString("load/store offset out of range (the unscaled and indexed forms reach -256..255)"));
+            return (u32)0;
+        }
         u32 imm9 = (u32)_memImm & (u32)$1FF;
         u32 unscBase = (fbase & (u32)$3FFFFFFF)
                      | (t.sz() == (u32)3 ? (u32)$C0000000 : (u32)$80000000);
@@ -3007,6 +3034,25 @@ class Arm64Asm
     }
 
     // ── Load/store pair, adrp/adr ────────────────────────────────────────
+    // A pair's offset is a signed 7-bit count of access-sized units, so it
+    // must be a multiple of the access size and within -64..63 of them.
+    // Masking it wrapped `stp x29, x30, [sp, #-528]!` round to a small
+    // positive offset.
+    bool pairOffsetOk(u32 scale)
+    {
+        i32 unit = (i32)1 << (i32)scale;
+        if ((_memImm & (unit - (i32)1)) != (i32)0) {
+            fail(String.withCString("ldp/stp offset is not a multiple of the access size"));
+            return false;
+        }
+        i32 n = _memImm >> (i32)scale;
+        if (n < (i32)-64 || n > (i32)63) {
+            fail(String.withCString("ldp/stp offset out of range (reaches -64..63 times the access size)"));
+            return false;
+        }
+        return true;
+    }
+
     u32 encPairOrAddr(String* mn, Array* ops, u32 pc)
     {
         if (mn.equals(String.withCString("stp")) || mn.equals(String.withCString("ldp"))) {
@@ -3016,6 +3062,7 @@ class Arm64Asm
             if (ft.ok() && ft2.ok()) {
                 if (!parseMem(ops, (u32)2)) return (u32)0;
                 u32 scale = ft.sz();
+                if (!pairOffsetOk(scale)) return (u32)0;
                 u32 imm7 = ((u32)(_memImm >> (i32)scale)) & (u32)$7F;
                 u32 fb = ft.sz() == (u32)4
                        ? (_memMode == (u32)1 ? (u32)$AD800000 : _memMode == (u32)2 ? (u32)$AC800000 : (u32)$AD000000)
@@ -3032,6 +3079,7 @@ class Arm64Asm
             if (!t.ok() || !t2.ok()) { fail(String.withCString("bad pair register")); return (u32)0; }
             if (!parseMem(ops, (u32)2)) return (u32)0;
             u32 scale = t.is64() ? (u32)3 : (u32)2;
+            if (!pairOffsetOk(scale)) return (u32)0;
             u32 imm7 = ((u32)(_memImm >> (i32)scale)) & (u32)$7F;
             u32 base32 = _memMode == (u32)0 ? (t.is64() ? (u32)$A9000000 : (u32)$29000000)
                        : _memMode == (u32)1 ? (t.is64() ? (u32)$A9800000 : (u32)$29800000)
@@ -3084,6 +3132,10 @@ class Arm64Asm
             _hit = true;
             if (_lastWasLocal) {
                 i32 rel = ((i32)addr - (i32)pc) >> (i32)2;
+                if (rel < (i32)-33554432 || rel >= (i32)33554432) {
+                    fail(String.withCString("b/bl out of range (reaches +/-128MB)"));
+                    return (u32)0;
+                }
                 return base | ((u32)rel & (u32)$03FFFFFF);
             }
             addFixup(pc, (u32)FIXUP_BRANCH26, tgt, (u32)0);
@@ -3178,26 +3230,9 @@ class Arm64Asm
             width = (u32)8;
         else if (mn.equals(String.withCString(".ascii")) || mn.equals(String.withCString(".asciz"))
               || mn.equals(String.withCString(".string"))) {
-            u32 q1 = rest.byteIndexOf(String.withCString("\""));
-            u32 q2 = lastIndexOfQuote(rest);
-            if (q1 == (u32)$FFFF_FFFF || q2 <= q1) { fail(String.withCString("bad string directive")); return true; }
-            String* str = rest.substringBytes(q1 + (u32)1, q2 - q1 - (u32)1);
-            u32 i = (u32)0;
-            while (i < str.byteLength()) {
-                u8 c = str.byteAt(i);
-                if (c == (u8)'\\' && i + (u32)1 < str.byteLength()) {
-                    i = i + (u32)1;
-                    u8 n = str.byteAt(i);
-                    if (n == (u8)'n') c = (u8)10;
-                    else if (n == (u8)'t') c = (u8)9;
-                    else if (n == (u8)'r') c = (u8)13;
-                    else if (n == (u8)'0') c = (u8)0;
-                    else c = n;
-                }
-                into.appendByte(c);
-                i = i + (u32)1;
-            }
-            if (!mn.equals(String.withCString(".ascii"))) into.appendByte((u8)0);
+            Data* bytes = GasString.decode(rest, !mn.equals(String.withCString(".ascii")));
+            if (bytes == (Data*)0) { fail(String.withCString("bad string directive")); return true; }
+            into.appendData(bytes);
             _wasDirective = true;
             return true;
         }
@@ -3225,14 +3260,6 @@ class Arm64Asm
         }
         _wasDirective = true;
         return true;
-    }
-
-    static u32 lastIndexOfQuote(String* s)
-    {
-        u32 found = (u32)$FFFF_FFFF;
-        for (u32 i = (u32)0; i < s.byteLength(); i = i + (u32)1)
-            if (s.byteAt(i) == (u8)'"') found = i;
-        return found;
     }
 
     // `.quad <symbol>` — a symbol-valued pointer (a vtable slot, say), which

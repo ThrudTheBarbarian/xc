@@ -23,6 +23,7 @@
         {
         for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
             inlineInto(m, (IRFunc*)m.funcs().get(f));
+        _ilUses = (Map*)0;
         }
 
     // A single-block callee splices in place; a multi-block one SPLITS the
@@ -162,6 +163,7 @@
 
     final void inlineInto(IRModule* m, IRFunc* caller)
         {
+        _ilUses = (Map*)0; // built at the first forwarding into this caller
         bool again = true;
         u32 guard = (u32)0;
         while (again && guard < (u32)8192)
@@ -342,13 +344,20 @@
         clones.add((Object*)cont);
         u32 pos = self.blockIndex(caller, bb) + (u32)1;
         caller.blocks().insertAll(pos, clones);
+        // The continuation holds the block's own suffix, already indexed.
+        if (_ilUses != (Map*)0)
+            {
+            ilIndexUses(into);
+            for (u32 b = (u32)0; b + (u32)1 < clones.count(); b = b + (u32)1)
+                ilIndexBlock((IRBlock*)clones.get(b));
+            }
 
         // Forwarding comes LAST: the suffix now living in `cont` still refers to
         // the call's result, and it has to be in the block list to be rewritten.
         if (call.res() != 0 && retVal != 0)
-            self.rewriteUsesTo(caller, call.res(), retVal);
+            ilRewriteUses(caller, call.res(), retVal);
         if (call.memRes() != 0 && retMem != 0)
-            self.rewriteUsesTo(caller, call.memRes(), retMem);
+            ilRewriteUses(caller, call.memRes(), retMem);
         }
 
     // Re-point every phi in `t`'s successors from `from` to `to`.
@@ -559,10 +568,84 @@
             retVal = substOperand(remap, (IROperand*)ret.ops().get((u32)0));
             }
         if (call.res() != 0 && retVal != 0)
-            self.rewriteUsesTo(caller, call.res(), retVal);
+            ilRewriteUses(caller, call.res(), retVal);
         if (call.memRes() != 0 && retMem != 0)
-            self.rewriteUsesTo(caller, call.memRes(), retMem);
+            ilRewriteUses(caller, call.memRes(), retMem);
+        // The splice joins the caller after the forwarding, as it did when
+        // the forwarding scanned the caller.
+        if (_ilUses != (Map*)0)
+            for (u32 i = (u32)0; i < spliced.count(); i = i + (u32)1)
+                ilIndexUses((IRInsn*)spliced.get(i));
         return spliced;
+        }
+
+    // Every use of `old` in the caller becomes `to`, as rewriteUsesTo, but
+    // through `_ilUses`: the instructions of the caller that use each value
+    // (phis, bodies and terminators). It is built from the whole caller at
+    // the first forwarding, and kept up to date after: a splice indexes what
+    // it adds, and a forwarding to a use of another value moves its
+    // instructions to that value. An instruction left in a list after it has
+    // left the caller (a spliced call) is no longer reachable, so rewriting it
+    // changes nothing.
+    final void ilRewriteUses(IRFunc* caller, IRValue* old, IROperand* to)
+        {
+        if (_ilUses == (Map*)0)
+            {
+            _ilUses = new Map();
+            for (u32 b = (u32)0; b < caller.blocks().count(); b = b + (u32)1)
+                ilIndexBlock((IRBlock*)caller.blocks().get(b));
+            }
+        Array* l = (Array*)_ilUses.get((Hashable*)old);
+        if (l == (Array*)0)
+            return;
+        for (u32 i = (u32)0; i < l.count(); i = i + (u32)1)
+            self.replaceUse((IRInsn*)l.get(i), old, to);
+        if (to.kind() != (u8)OPK_USE || to.val() == (IRValue*)0)
+            {
+            _ilUses.remove((Hashable*)old);
+            return;
+            }
+        IRValue* nv = to.val();
+        if (nv == old)
+            return;
+        _ilUses.remove((Hashable*)old);
+        for (u32 i = (u32)0; i < l.count(); i = i + (u32)1)
+            ilNoteUse(nv, (IRInsn*)l.get(i));
+        }
+
+    final void ilIndexBlock(IRBlock* bb)
+        {
+        for (u32 i = (u32)0; i < bb.phis().count(); i = i + (u32)1)
+            ilIndexUses((IRInsn*)bb.phis().get(i));
+        for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+            ilIndexUses((IRInsn*)bb.insns().get(i));
+        if (bb.term() != 0)
+            ilIndexUses(bb.term());
+        }
+
+    final void ilIndexUses(IRInsn* n)
+        {
+        for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
+            {
+            IROperand* o = (IROperand*)n.ops().get(k);
+            if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0)
+                ilNoteUse(o.val(), n);
+            }
+        }
+
+    // Record that `n` uses `v`. A repeat of the last entry is dropped; any
+    // other repeat is harmless, as a second rewrite finds nothing to change.
+    final void ilNoteUse(IRValue* v, IRInsn* n)
+        {
+        Array* l = (Array*)_ilUses.get((Hashable*)v);
+        if (l == (Array*)0)
+            {
+            l = new Array();
+            _ilUses.set((Hashable*)v, (Object*)l);
+            }
+        else if ((IRInsn*)l.get(l.count() - (u32)1) == n)
+            return;
+        l.add((Object*)n);
         }
 
     final IROperand* substOperand(Map* remap, IROperand* o)

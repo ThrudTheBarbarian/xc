@@ -43,9 +43,14 @@ typedef NS_ENUM(NSInteger, XTOVRole) {
         return YES;
     self.mod = mod;
     for (XTIRFunction* fn in mod.functions)
-        for (int guard = 0; guard < 16; guard++)
+        {
+        int guard = 0;
+        for (; guard < 16; guard++)
             if (![self vectorizeOneIn:fn])
                 break;
+        if (guard == 16)
+            XTIROptRoundCap("the outer-loop vectoriser", 16, fn.name);
+        }
     return YES;
     }
 

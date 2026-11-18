@@ -149,6 +149,8 @@
             u32 guard = (u32)0;
             while (guard < (u32)16 && ovOnce(fn))
                 guard = guard + (u32)1;
+            if (guard == (u32)16)
+                optRoundCap("the outer-loop vectoriser", (u32)16, fn);
             }
         _vecFnBytes = (u32)0;
         }

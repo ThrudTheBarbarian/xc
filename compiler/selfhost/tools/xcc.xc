@@ -705,7 +705,7 @@ void resolveRuntimeLib(DriverOptions* d)
         String* text = Files.readText(lp);
         if (text == (String*)0) {
             Stdio.printf("xcc: error: --emit-runtime: no %s\n", lp.cString());
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
         }
         Array* names = new Array();
         Array* lines = text.splitOnByte((u8)'\n');
@@ -878,7 +878,7 @@ String* crtArm64WithXcArgs(DriverOptions* d, String* crt, String* crtName)
         crtName.equals(String.withCString("crt-macos.s")) ? "xcargs-macos.s" : "xcargs-elf.s"));
     if (xa == 0) {
         Stdio.printf("xcc: error: cannot read the --xc-* options' runtime from the support tree\n");
-        Process.exit((i32)1); return crt;
+        driverExit((i32)1); return crt;
     }
     String* t = crtWithXcArgs(crt);
     t.appendByte((u8)'\n');
@@ -1010,7 +1010,7 @@ String* resolveLinkInput(DriverOptions* d, String* arg)
     if (!arg.hasPrefix(String.withCString("-l"))) {
         if (Files.exists(arg)) return arg;
         Stdio.printf("xcc: error: -Xlinker '%s': no such file\n", arg.cString());
-        Process.exit((i32)1);
+        driverExit((i32)1);
         return (String*)0;
     }
     String* stem = arg.substringFromByte((u32)2);
@@ -1051,7 +1051,7 @@ String* resolveLinkInput(DriverOptions* d, String* arg)
         }
         Stdio.printf("xcc: error: -l%s: no %s on the -L path or in the system library directories\n",
                      stem.cString(), fname.cString());
-        Process.exit((i32)1);
+        driverExit((i32)1);
         return (String*)0;
     }
     String* arch = d.arch();
@@ -1138,8 +1138,12 @@ String* appleSdkRoot(DriverOptions* d)
 // (#350): the writer refuses it rather than leave the address zero.
 void checkPageImports(MachO* m)
 {
+    // Fixups that do not fit their instruction (#285).
+    Array* le = m.linkErrors();
+    for (u32 i = (u32)0; i < le.count(); i = i + (u32)1)
+        Stdio.printf("xcc: error: %s\n", ((String*)le.get(i)).cString());
     Array* bad = m.unreachableImports();
-    if (bad.count() == (u32)0) return;
+    if (bad.count() == (u32)0 && le.count() == (u32)0) return;
     for (u32 i = (u32)0; i < bad.count(); i = i + (u32)1) {
         Array* pair = (Array*)bad.get(i);
         String* s = (String*)pair.get((u32)0);
@@ -1155,7 +1159,7 @@ void checkPageImports(MachO* m)
                      "library defines it, and such a reference cannot reach another image: it has to "
                      "go through the GOT\n", shown.cString(), where.cString());
     }
-    Process.exit((i32)1);
+    driverExit((i32)1);
 }
 
 void checkSystemImports(DriverOptions* d, MachO* m)
@@ -1186,7 +1190,7 @@ void checkSystemImports(DriverOptions* d, MachO* m)
                      "libSystem does not have it. If it lives in a framework, #import <Framework> "
                      "or pass -framework <Framework>\n", shown.cString());
     }
-    Process.exit((i32)1);
+    driverExit((i32)1);
 }
 
 MachODep* depForPath(DriverOptions* d, String* lp)
@@ -1521,7 +1525,7 @@ Map* arm64KnownImports(DriverOptions* d)
     String* map = readRuntimeIn(d.fe(), "arm64", String.withCString("glibc-imports.map"));
     if (map == 0) {
         Stdio.printf("xcc: error: cannot read arm64/glibc-imports.map from the support tree\n");
-        Process.exit((i32)1);
+        driverExit((i32)1);
         return (Map*)0;
     }
     Map* m = new Map();
@@ -1539,7 +1543,7 @@ Map* arm64KnownImports(DriverOptions* d)
         ElfSharedInfo* info = Elf64.sharedInfo(lp);
         if (info == (ElfSharedInfo*)0) {
             Stdio.printf("xcc: error: '%s' is not a readable ELF64 shared object\n", lp.cString());
-            Process.exit((i32)1);
+            driverExit((i32)1);
             return (Map*)0;
         }
         for (u32 k = (u32)0; k < info.exported().count(); k = k + (u32)1)
@@ -1605,7 +1609,7 @@ void emitApkPackage(DriverOptions* d, String* prog)
     String* glue = readRuntime(o, String.withCString("glue-android.s"));
     if (rt == (String*)0 || glue == (String*)0) {
         Stdio.printf("xcc: error: the android runtime/glue is missing from the support tree\n");
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     String* renamed = renameMain(prog);
     String* combined = String.withString(glue);
@@ -1624,7 +1628,7 @@ void emitApkPackage(DriverOptions* d, String* prog)
     a.demoteCommonsToLocalData();
     if (a.failed()) {
         Stdio.printf("xcc: apk: assembly failed: %s\n", a.why().cString());
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     // With the libraries the program `#import`s, as the --emit-lib image names
     // them: an app built against an installed library recorded no DT_NEEDED for
@@ -1642,7 +1646,7 @@ void emitApkPackage(DriverOptions* d, String* prog)
         Data* sb = Files.readData(so);
         if (sb == (Data*)0) {
             Stdio.printf("xcc: apk: cannot read the payload the NDK linked\n");
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
         }
         packageApk(d, name, soname, sb);
         if (!d.fe().verbose()) External.cleanup();
@@ -1659,7 +1663,7 @@ void emitApkPackage(DriverOptions* d, String* prog)
             exports, apkFix, soname, needed, (String*)0, apkMi);
     if (w.failed()) {
         Stdio.printf("xcc: apk: link failed: %s\n", w.why().cString());
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     packageApk(d, name, soname, w.bytes());
 }
@@ -1679,7 +1683,7 @@ void packageApk(DriverOptions* d, String* name, String* soname, Data* soBytes)
         String* home = Platform.home();
         if (home.byteLength() == (u32)0) {
             Stdio.printf("xcc: error: no $HOME, so --sign-key must name the key\n");
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
         }
         keyPath = String.withString(home);
         keyPath.appendCString("/.xcc/android-debug.key.raw");
@@ -1688,7 +1692,7 @@ void packageApk(DriverOptions* d, String* name, String* soname, Data* soBytes)
         Stdio.printf("xcc: generating a debug signing key (once) -> %s\n", keyPath.cString());
         if (!writeDebugKey(keyPath)) {
             Stdio.printf("xcc: error: cannot create a signing key\n");
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
         }
     }
     // An optional committed classes.dex rides at the archive root, and the
@@ -1700,7 +1704,7 @@ void packageApk(DriverOptions* d, String* name, String* soname, Data* soBytes)
         dex = Files.readData(c.withDex());
         if (dex == (Data*)0) {
             Stdio.printf("xcc: error: cannot read --with-dex '%s'\n", c.withDex().cString());
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
         }
     }
     // An extra prebuilt .so beside the payload (a shim whose onCreate runs
@@ -1716,20 +1720,20 @@ void packageApk(DriverOptions* d, String* name, String* soname, Data* soBytes)
         Data* extraLib = Files.readData(withLib);
         if (extraLib == (Data*)0) {
             Stdio.printf("xcc: error: cannot read --with-lib '%s'\n", withLib.cString());
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
         }
         String* bn = androidSonameOf(withLib);
         if (!bn.hasPrefix(String.withCString("lib")) || !bn.hasSuffix(String.withCString(".so"))) {
             Stdio.printf("xcc: error: --with-lib '%s' must be named lib<name>.so "
                          "— Android resolves it from lib/arm64-v8a/ by that name\n", bn.cString());
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
         }
         String* extraEntry = String.withCString("lib/arm64-v8a/");
         extraEntry.append(bn);
         for (u32 k = (u32)0; k < extras.count(); k = k + (u32)1)
             if (((ApkEntry*)extras.get(k)).name.equals(extraEntry)) {
                 Stdio.printf("xcc: error: --with-lib names %s twice\n", bn.cString());
-                Process.exit((i32)1); return;
+                driverExit((i32)1); return;
             }
         extras.add((Object*)ApkEntry.with(extraEntry, extraLib));
     }
@@ -1742,7 +1746,7 @@ void packageApk(DriverOptions* d, String* name, String* soname, Data* soBytes)
         String* err = ApkXml.manifestAttrError((String*)c.manifestAttrs().get(k));
         if (err != (String*)0) {
             Stdio.printf("xcc: error: %s\n", err.cString());
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
         }
     }
     Data* manifest = ApkXml.manifest(pkg, manifestLib, name, (u32)24, (u32)35, dex != (Data*)0, c.manifestAttrs());
@@ -1759,7 +1763,7 @@ void packageApk(DriverOptions* d, String* name, String* soname, Data* soBytes)
     Data* kd = Files.readData(keyPath);
     if (kd == (Data*)0 || kd.length() < (u32)5) {
         Stdio.printf("xcc: error: cannot read the signing key '%s'\n", keyPath.cString());
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     u32 at = (u32)5;                                 // past "XKEY1"
     Data* kn = apkKeyField(kd, &at);
@@ -1769,11 +1773,11 @@ void packageApk(DriverOptions* d, String* name, String* soname, Data* soBytes)
     Data* signedApk = ApkSign.sign(zip, kc, kn, ke, kdd);
     if (signedApk.length() == (u32)0) {
         Stdio.printf("xcc: error: apk signing failed\n");
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     if (!Files.writeData(out, signedApk)) {
         Stdio.printf("xcc: error: cannot write '%s'\n", out.cString());
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     Stdio.printf("xcc: android APK -> '%s'  (adb install -r %s)\n",
                  out.cString(), out.cString());
@@ -1974,13 +1978,13 @@ void emitWasm(DriverOptions* d, IRModule* mod)
     // generic failure — a module that imports something the host will not
     // supply cannot be instantiated, so it is refused here rather than
     // written and failing at load.
-    if (be.fatalImport()) { Process.exit((i32)1); return; }
+    if (be.fatalImport()) { driverExit((i32)1); return; }
 
     String* out = d.fe().output();
     if (d.keepAsm() || out.hasSuffix(String.withCString(".wat"))) {
         if (!Files.writeText(out, wat)) {
             Stdio.printf("xcc: error: cannot write '%s'\n", out.cString());
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
         }
         return;
     }
@@ -2004,7 +2008,7 @@ void emitWasm(DriverOptions* d, IRModule* mod)
         if (lmod == (Data*)0) {
             Stdio.printf("xcc: wasm write failed: %s\n",
                          lw.why() == 0 ? "(no detail)" : lw.why().cString());
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
         }
         String* iface = d.fe().ifaceJson();
         if (iface != (String*)0 && iface.byteLength() > (u32)0)
@@ -2012,12 +2016,12 @@ void emitWasm(DriverOptions* d, IRModule* mod)
         String* wpath = String.withString(lbase); wpath.appendCString(".wasm");
         if (!Files.writeData(wpath, lmod)) {
             Stdio.printf("xcc: error: cannot write '%s'\n", wpath.cString());
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
         }
         String* jpath = String.withString(lbase); jpath.appendCString(".json");
         if (!Files.writeText(jpath, wasmLibSidecar(wat, wasmDepNames(d.fe())))) {
             Stdio.printf("xcc: error: cannot write '%s'\n", jpath.cString());
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
         }
         if (!d.quiet())
             Stdio.printf("xcc: wasm32 library -> '%s' + '%s'\n",
@@ -2037,7 +2041,7 @@ void emitWasm(DriverOptions* d, IRModule* mod)
     if (tmpl == 0) {
         Stdio.printf("xcc: error: cannot read wasm32/runtime/loader.js.in "
                      "from the support tree\n");
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     String* base = out;
     if (base.hasSuffix(String.withCString(".wasm")))
@@ -2053,7 +2057,7 @@ void emitWasm(DriverOptions* d, IRModule* mod)
     jsPath.appendCString(".js");
     if (!Files.writeText(jsPath, js)) {
         Stdio.printf("xcc: error: cannot write '%s'\n", jsPath.cString());
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
 
     WasmWriter* w = new WasmWriter();
@@ -2061,13 +2065,13 @@ void emitWasm(DriverOptions* d, IRModule* mod)
     if (module == (Data*)0) {
         Stdio.printf("xcc: wasm write failed: %s\n",
                      w.why() == 0 ? "(no detail)" : w.why().cString());
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     String* wasmPath = String.withString(base);
     wasmPath.appendCString(".wasm");
     if (!Files.writeData(wasmPath, module)) {
         Stdio.printf("xcc: error: cannot write '%s'\n", wasmPath.cString());
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     // A starter page beside them, so the module runs in a browser as well as
     // under node. Written only when there is none: the page is the user's to
@@ -2362,12 +2366,12 @@ void emitWin64(DriverOptions* d, IRModule* mod)
             list.append((String*)be.missing().get(k));
         }
         Stdio.printf("xcc: %s: unsupported: %s\n", d.fe().input().cString(), list.cString());
-        Process.exit((i32)3); return;
+        driverExit((i32)3); return;
     }
     if (d.keepAsm()) {
         if (!writeAsmOut(d, prog)) {
             Stdio.printf("xcc: error: cannot write '%s'\n", d.fe().output().cString());
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
         }
         return;
     }
@@ -2385,7 +2389,7 @@ void emitWin64(DriverOptions* d, IRModule* mod)
         oa.assemble(one);
         if (oa.failed()) {
             Stdio.printf("xcc: assembly failed: %s\n", oa.why().cString());
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
         }
         Pe* pw = new Pe();
         pw.setDirectives(objectDepLibs(d));
@@ -2394,11 +2398,11 @@ void emitWin64(DriverOptions* d, IRModule* mod)
                                      oa.globalSyms(), oa.fixups());
         if (pw.failed() || od == (Data*)0) {
             Stdio.printf("xcc: %s\n", pw.failed() ? pw.why().cString() : "object write failed");
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
         }
         if (!Files.writeData(d.fe().output(), od)) {
             Stdio.printf("xcc: error: cannot write '%s'\n", d.fe().output().cString());
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
         }
         writeObjectSidecars(d);
         if (gCSplitOut != (String*)0) {
@@ -2481,7 +2485,7 @@ void linkWin64(DriverOptions* d, String* prog)
         if (t == 0) {
             Stdio.printf("xcc: error: cannot read %s from the support tree\n",
                          ((String*)rtNames.get(k)).cString());
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
         }
         if (xcArgs && k == (u32)0) t = crtWithXcArgs(t);
         srcs.add((Object*)t);
@@ -2503,7 +2507,7 @@ void linkWin64(DriverOptions* d, String* prog)
     a.assemble(src);
     if (a.failed()) {
         Stdio.printf("xcc: assembly failed: %s\n", a.why().cString());
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
 
     // Bug 141: objects named as inputs or via -Xlinker/-Wl, archives from
@@ -2524,7 +2528,7 @@ void linkWin64(DriverOptions* d, String* prog)
         else {
             Stdio.printf("xcc: error: '%s': a win64 link takes .o objects and .a archives — "
                          "it has no external linker to hand anything else to\n", lp.cString());
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
         }
     }
     Array* pool = win64Pool(d);
@@ -2534,7 +2538,7 @@ void linkWin64(DriverOptions* d, String* prog)
         pl.merge(objs, ars, a.text(), a.data(), a.symbols(), a.dataSyms(), a.fixups());
         if (pl.rc() != (u32)0) {
             Stdio.printf("xcc: error: win64 link: %s\n", pl.why() == 0 ? "?" : pl.why().cString());
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
         }
     }
 
@@ -2565,7 +2569,7 @@ void linkWin64(DriverOptions* d, String* prog)
             if (ex == (Array*)0) {
                 Stdio.printf("xcc: error: '%s' is not a DLL with an export directory\n",
                              lp.cString());
-                Process.exit((i32)1); return;
+                driverExit((i32)1); return;
             }
             String* dn = lp.lastPathComponent();
             i32 at = (i32)-1;
@@ -2647,12 +2651,12 @@ void linkWin64(DriverOptions* d, String* prog)
     if (pe.failed()) {
         noteUndefinedCall(d, pe.why());
         Stdio.printf("xcc: %s\n", pe.why().cString());
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     Data* out = pe.bytes();
     if (!Files.writeData(d.fe().output(), out)) {
         Stdio.printf("xcc: error: cannot write '%s'\n", d.fe().output().cString());
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     Files.setExecutable(d.fe().output());
 }
@@ -2707,7 +2711,7 @@ void writeObjectSidecars(DriverOptions* d)
     String* np = String.withString(base); np.appendCString(".xtc.needs");
     if (!Files.writeText(np, needs)) {
         Stdio.error(String.withFormat("xcc: error: cannot write '%s'\n", np.cString()));
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     writeSidecar(base, ".xtc.ir", d.irText());
 }
@@ -2720,13 +2724,13 @@ void writeSidecar(String* base, string ext, String* text)
     if (text != (String*)0 && text.byteLength() > (u32)0) {
         if (!Files.writeText(p, text)) {
             Stdio.error(String.withFormat("xcc: error: cannot write '%s'\n", p.cString()));
-            Process.exit((i32)1);
+            driverExit((i32)1);
         }
         return;
     }
     if (Files.exists(p) && !Directory._unlink(p)) {
         Stdio.error(String.withFormat("xcc: error: cannot remove the stale '%s'\n", p.cString()));
-        Process.exit((i32)1);
+        driverExit((i32)1);
     }
 }
 
@@ -2744,7 +2748,7 @@ void writeCObjectSidecars(String* xo, String* out)
     String* np = String.withString(base); np.appendCString(".xtc.needs");
     if (!Files.writeText(np, needs)) {
         Stdio.error(String.withFormat("xcc: error: cannot write '%s'\n", np.cString()));
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     writeSidecar(base, ".xtc.iface", (String*)0);
     writeSidecar(base, ".xtc.ir", (String*)0);
@@ -2793,12 +2797,12 @@ void emitX86_64(DriverOptions* d, IRModule* mod)
             list.append((String*)be.missing().get(k));
         }
         Stdio.printf("xcc: %s: unsupported: %s\n", d.fe().input().cString(), list.cString());
-        Process.exit((i32)3); return;
+        driverExit((i32)3); return;
     }
     if (d.keepAsm()) {
         if (!writeAsmOut(d, prog)) {
             Stdio.printf("xcc: error: cannot write '%s'\n", d.fe().output().cString());
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
         }
         return;
     }
@@ -2819,7 +2823,7 @@ void emitX86_64(DriverOptions* d, IRModule* mod)
         as.assemble(one);
         if (as.failed()) {
             Stdio.printf("xcc: %s\n", as.why().cString());
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
         }
         Elf64* w = new Elf64();
         w.setDepLibs(objectDepLibs(d));
@@ -2827,11 +2831,11 @@ void emitX86_64(DriverOptions* d, IRModule* mod)
                                       as.dataSyms(), as.globalSyms(), as.commonSyms(), as.fixups());
         if (w.failed() || img == (Data*)0) {
             Stdio.printf("xcc: %s\n", w.failed() ? w.why().cString() : "object write failed");
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
         }
         if (!Files.writeData(d.fe().output(), img)) {
             Stdio.printf("xcc: error: cannot write '%s'\n", d.fe().output().cString());
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
         }
         writeObjectSidecars(d);
         if (gCSplitOut != (String*)0) {
@@ -2978,7 +2982,7 @@ void linkX86_64Glibc(DriverOptions* d, String* prog)
         if (t == 0) {
             Stdio.printf("xcc: error: -dynamic: cannot read %s from the support tree\n",
                          ((String*)rtNames.get(k)).cString());
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
         }
         // libRuntime exports the runtime it carries (not the crt or glue).
         String* rn = (String*)rtNames.get(k);
@@ -2996,7 +3000,7 @@ void linkX86_64Glibc(DriverOptions* d, String* prog)
     String* mapText = readRuntimeIn(d.fe(), "x86_64", String.withCString("glibc-imports.map"));
     if (mapText == 0) {
         Stdio.printf("xcc: error: -dynamic: cannot read x86_64/glibc-imports.map from the support tree\n");
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
 
     Array* objs = new Array();
@@ -3039,7 +3043,7 @@ void linkX86_64Glibc(DriverOptions* d, String* prog)
                 if (found == (String*)0) {
                     Stdio.printf("xcc: error: -l%s: no %s on the -L path or in the system library directories\n",
                                  base.cString(), fname.cString());
-                    Process.exit((i32)1); return;
+                    driverExit((i32)1); return;
                 }
                 if (found.contains(String.withCString(".so"))) sos.add((Object*)found);
                 else ars.add((Object*)found);
@@ -3058,7 +3062,7 @@ void linkX86_64Glibc(DriverOptions* d, String* prog)
                              "or in the system library directories (cross-linking: "
                              "-L a copy of the libraries)\n",
                              base.cString(), base.cString(), base.cString());
-                Process.exit((i32)1); return;
+                driverExit((i32)1); return;
             }
             if (found.hasSuffix(String.withCString(".so"))) sos.add((Object*)found);
             else ars.add((Object*)found);
@@ -3066,7 +3070,7 @@ void linkX86_64Glibc(DriverOptions* d, String* prog)
         }
         if (!Files.exists(t)) {
             Stdio.printf("xcc: error: '%s': no such file\n", t.cString());
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
         }
         if (t.hasSuffix(String.withCString(".so"))) sos.add((Object*)t);
         else if (t.hasSuffix(String.withCString(".a"))) ars.add((Object*)t);
@@ -3074,7 +3078,7 @@ void linkX86_64Glibc(DriverOptions* d, String* prog)
         else {
             Stdio.printf("xcc: error: -dynamic: linker input '%s': this driver links "
                          "in-house and takes -l, -L, .o, .a and .so only\n", t.cString());
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
         }
     }
     // libgcc LAST, as a pool: the helpers C compiled by gcc or clang calls
@@ -3131,11 +3135,11 @@ void linkX86_64Glibc(DriverOptions* d, String* prog)
     if (ln.failed()) {
         noteUndefinedCall(d, ln.why());
         Stdio.printf("xcc: %s\n", ln.why().cString());
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     if (!Files.writeData(d.fe().output(), img)) {
         Stdio.printf("xcc: error: cannot write '%s'\n", d.fe().output().cString());
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     Files.setExecutable(d.fe().output());
 }
@@ -3147,7 +3151,7 @@ void linkX86_64(DriverOptions* d, String* prog)
         Stdio.printf("xcc: error: the x86-64 static link needs musl's libc.a and no copy was found.\n"
                      "  looked in $XTC_MUSL_ROOT/lib, /opt/clang/linux/x86_64-linux-musl/lib,\n"
                      "  and <support>/x86_64-sysroot\n");
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
 
     // The runtime pieces, each its OWN input for the label-namespacing reason
@@ -3174,7 +3178,7 @@ void linkX86_64(DriverOptions* d, String* prog)
         if (t == 0) {
             Stdio.printf("xcc: error: cannot read %s from the support tree\n",
                          ((String*)rtNames.get(k)).cString());
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
         }
         if (xcArgs && k == (u32)0) t = crtWithXcArgs(t);
         srcs.add((Object*)t);
@@ -3202,7 +3206,7 @@ void linkX86_64(DriverOptions* d, String* prog)
         if (mi == (String*)0 || !Files.exists(mi)) {
             Stdio.printf("xcc: error: -fmalloc=mimalloc needs x86_64/runtime/mimalloc.o "
                          "in the support tree, and it is not there\n");
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
         }
         objs.add((Object*)mi);
     }
@@ -3254,7 +3258,7 @@ void linkX86_64(DriverOptions* d, String* prog)
                     else
                         Stdio.printf("xcc: error: -l%s: no lib%s.a on the -L path\n",
                                      base.cString(), base.cString());
-                    Process.exit((i32)1); return;
+                    driverExit((i32)1); return;
                 }
                 ars.add((Object*)found);
                 continue;
@@ -3268,13 +3272,13 @@ void linkX86_64(DriverOptions* d, String* prog)
                          "in-house and takes .a archives, .o objects and .so "
                          "libraries — it has no external linker to hand anything "
                          "else to\n", lp.cString());
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
         }
     }
     if (d.frameworks().count() > (u32)0) {
         Stdio.printf("xcc: error: -framework is a macOS concept and this is an "
                      "x86-64 ELF link\n");
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     if (!d.emitLib()) {
         String* libc = String.withString(libdir); libc.appendCString("/libc.a");
@@ -3347,11 +3351,11 @@ void linkX86_64(DriverOptions* d, String* prog)
     if (ln.failed()) {
         noteUndefinedCall(d, ln.why());
         Stdio.printf("xcc: %s\n", ln.why().cString());
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     if (!Files.writeData(d.fe().output(), img)) {
         Stdio.printf("xcc: error: cannot write '%s'\n", d.fe().output().cString());
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     Files.setExecutable(d.fe().output());
 }
@@ -3486,7 +3490,7 @@ void emitArm9(DriverOptions* d, IRModule* mod)
             list.append((String*)be.missing().get(k));
         }
         Stdio.printf("xcc: %s: unsupported: %s\n", d.fe().input().cString(), list.cString());
-        Process.exit((i32)3); return;
+        driverExit((i32)3); return;
     }
     // The xtc entry gives up the name `main` to the runtime, unless this is a
     // library, which has no entry to give up. An object gives it up too, but
@@ -3495,7 +3499,7 @@ void emitArm9(DriverOptions* d, IRModule* mod)
     if (d.keepAsm()) {
         if (!writeAsmOut(d, prog)) {
             Stdio.printf("xcc: error: cannot write '%s'\n", d.fe().output().cString());
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
         }
         return;
     }
@@ -3518,18 +3522,18 @@ void emitArm9(DriverOptions* d, IRModule* mod)
         Data* otext = oas.assemble(one);
         if (oas.failed()) {
             Stdio.printf("xcc: %s\n", oas.why().cString());
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
         }
         Elf32* ow = new Elf32();
         ow.setCtorTable(oas.ctorTable());
         Data* img = ow.write(otext, oas.data(), oas.symbols(), oas.relocations());
         if (img == (Data*)0) {
             Stdio.printf("xcc: error: arm9 object write failed\n");
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
         }
         if (!Files.writeData(d.fe().output(), img)) {
             Stdio.printf("xcc: error: cannot write '%s'\n", d.fe().output().cString());
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
         }
         writeObjectSidecars(d);
         if (gCSplitOut != (String*)0) {
@@ -3553,7 +3557,7 @@ void emitArm9(DriverOptions* d, IRModule* mod)
         if (t == 0) {
             Stdio.printf("xcc: error: cannot read %s from the support tree\n",
                          ((String*)rtNames.get(k)).cString());
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
         }
         srcs.add((Object*)t);
     }
@@ -3569,7 +3573,7 @@ void emitArm9(DriverOptions* d, IRModule* mod)
     Data* text = as.assemble(all);
     if (as.failed()) {
         Stdio.printf("xcc: %s\n", as.why().cString());
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
 
     // DT_NEEDED. The loader resolves an import by NAME across the libraries it
@@ -3616,11 +3620,11 @@ void emitArm9(DriverOptions* d, IRModule* mod)
                                 iface);
     if (w.failed() || img == (Data*)0) {
         Stdio.printf("xcc: %s\n", w.failed() ? w.why().cString() : "arm9 link failed");
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     if (!Files.writeData(d.fe().output(), img)) {
         Stdio.printf("xcc: error: cannot write '%s'\n", d.fe().output().cString());
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     Files.setExecutable(d.fe().output());
 }
@@ -3666,7 +3670,7 @@ void linkObjectsArm9(DriverOptions* d)
         if (t == 0) {
             Stdio.printf("xcc: error: cannot read %s from the support tree\n",
                          ((String*)rtNames.get(k)).cString());
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
         }
         src.append(X86Link.namespaceLocals(t, k));
         src.appendCString("\n");
@@ -3675,7 +3679,7 @@ void linkObjectsArm9(DriverOptions* d)
     Data* text = as.assemble(src);
     if (as.failed()) {
         Stdio.printf("xcc: %s\n", as.why().cString());
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     Data* mdata = Data.withData(as.data());
     Array* msyms = new Array();
@@ -3700,10 +3704,10 @@ void linkObjectsArm9(DriverOptions* d)
             if (o == (Elf32Object*)0) {
                 Stdio.printf("xcc: error: '%s' is not a readable ARM ELF32 object (or carries "
                              "a relocation this linker does not emit)\n", op.cString());
-                Process.exit((i32)1); return;
+                driverExit((i32)1); return;
             }
             if (!mergeArm9Object(o, text, mdata, mctors, msyms, mrels, defined, seq)) {
-                Process.exit((i32)1); return;
+                driverExit((i32)1); return;
             }
             seq = seq + (u32)1;
         }
@@ -3718,7 +3722,7 @@ void linkObjectsArm9(DriverOptions* d)
         Array* ms = ArArchive.membersOfFile(ap);
         if (ms == (Array*)0) {
             Stdio.printf("xcc: error: '%s' is not a static archive\n", ap.cString());
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
         }
         for (u32 k = (u32)0; k < ms.count(); k = k + (u32)1) {
             Elf32Object* o = Elf32Object.read(((ArMember*)ms.get(k)).data());
@@ -3750,7 +3754,7 @@ void linkObjectsArm9(DriverOptions* d)
             taken.set((Hashable*)key, (Object*)Number.withU32((u32)1));
             progress = true;
             if (!mergeArm9Object(o, text, mdata, mctors, msyms, mrels, defined, seq)) {
-                Process.exit((i32)1); return;
+                driverExit((i32)1); return;
             }
             seq = seq + (u32)1;
         }
@@ -3772,12 +3776,12 @@ void linkObjectsArm9(DriverOptions* d)
     Data* img = w.sharedObject(text, mdata, msyms, mrels, needed, (String*)0, new Data());
     if (w.failed() || img == (Data*)0) {
         Stdio.printf("xcc: %s\n", w.failed() ? w.why().cString() : "arm9 link failed");
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     Data* out = img;
     if (!Files.writeData(d.fe().output(), out)) {
         Stdio.printf("xcc: error: cannot write '%s'\n", d.fe().output().cString());
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     Files.setExecutable(d.fe().output());
 }
@@ -3898,14 +3902,14 @@ void emitM68k(DriverOptions* d, IRModule* mod)
         }
         Stdio.printf("xcc: %s: unsupported: %s\n", d.fe().input().cString(),
                      list.cString());
-        Process.exit((i32)3); return;
+        driverExit((i32)3); return;
     }
 
     // `-o x.s` stops here, as it does on every other target.
     if (d.keepAsm()) {
         if (!writeAsmOut(d, prog)) {
             Stdio.printf("xcc: error: cannot write '%s'\n", d.fe().output().cString());
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
         }
         return;
     }
@@ -3927,11 +3931,11 @@ void emitM68k(DriverOptions* d, IRModule* mod)
     if (as.failed()) {
         noteUndefinedCall(d, as.why());
         Stdio.printf("xcc: assembly failed: %s\n", as.why().cString());
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     if (!Files.writeData(d.fe().output(), as.image())) {
         Stdio.printf("xcc: error: cannot write '%s'\n", d.fe().output().cString());
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
 }
 
@@ -3968,7 +3972,7 @@ void emitXt6502(DriverOptions* d, IRModule* mod)
     String* root = supportRoot(d.fe());
     if (root == (String*)0) {
         Stdio.printf("xcc: error: cannot find the support tree (-H)\n");
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     // The layout -m named, or the xt map.
     String* lnk = d.layoutPath();
@@ -3981,7 +3985,7 @@ void emitXt6502(DriverOptions* d, IRModule* mod)
     Layout* layout = Layout.read(lnk);
     if (layout.failed()) {
         Stdio.printf("xcc: %s: %s\n", lnk.cString(), layout.why().cString());
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     // A layout line the back end's reader did not use is a feature this
     // compiler does not have — split code/data banking, a region-C window, a
@@ -4001,7 +4005,7 @@ void emitXt6502(DriverOptions* d, IRModule* mod)
         Stdio.printf("  %s\n", u.cString());
         unused = unused + (u32)1;
     }
-    if (unused > (u32)0) { Process.exit((i32)1); return; }
+    if (unused > (u32)0) { driverExit((i32)1); return; }
     // The model's NAME is its layout file's stem; the emitted header carries it.
     layout.setName(lname);
 
@@ -4013,7 +4017,7 @@ void emitXt6502(DriverOptions* d, IRModule* mod)
     if (opt.failed()) {
         Stdio.printf("xcc: %s: opt unsupported: %s\n", d.fe().input().cString(),
                      opt.why() == 0 ? "?" : opt.why().cString());
-        Process.exit((i32)3); return;
+        driverExit((i32)3); return;
     }
     // The lowering passes just made values with no id, and a back end keys its
     // frame slots off value ids.
@@ -4032,7 +4036,7 @@ void emitXt6502(DriverOptions* d, IRModule* mod)
             list.append((String*)be.missing().get(k));
         }
         Stdio.printf("xcc: %s: unsupported: %s\n", d.fe().input().cString(), list.cString());
-        Process.exit((i32)3); return;
+        driverExit((i32)3); return;
     }
     if (d.dumpPlacement()) Stdio.error(be.placementReport());
 
@@ -4056,7 +4060,7 @@ void emitXt6502(DriverOptions* d, IRModule* mod)
     if (d.keepAsm()) {
         if (!writeAsmOut(d, asmText)) {
             Stdio.printf("xcc: error: cannot write '%s'\n", d.fe().output().cString());
-            Process.exit((i32)1);
+            driverExit((i32)1);
         }
         if (!d.dumpUsage()) return;
     }
@@ -4089,7 +4093,7 @@ void emitXt6502(DriverOptions* d, IRModule* mod)
             noteUndefinedCall(d, (String*)a.errors().get(k));
             Stdio.printf("xcc: assembly failed: %s\n", ((String*)a.errors().get(k)).cString());
         }
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     if (d.dumpUsage()) Stdio.error(usageReport6502(a.segments(), layout));
     if (d.keepAsm()) return;
@@ -4099,11 +4103,11 @@ void emitXt6502(DriverOptions* d, IRModule* mod)
     Data* img = a.writeBankedXex(entry);
     if (img == (Data*)0) {
         Stdio.printf("xcc: error: cannot write '%s'\n", d.fe().output().cString());
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     if (!Files.writeData(d.fe().output(), img)) {
         Stdio.printf("xcc: error: cannot write '%s'\n", d.fe().output().cString());
-        Process.exit((i32)1);
+        driverExit((i32)1);
     }
 }
 
@@ -4385,7 +4389,7 @@ Array* mergeLinkObjects(DriverOptions* d, SectionBytes* mtext, SectionBytes* mda
         ml.merge(objs, ars, mtext, mdata, msyms, mdataSyms, mfix, mObjc);
         if (ml.rc() != (u32)0) {
             Stdio.printf("xcc: error: arm64 link: %s\n", ml.why() == 0 ? "?" : ml.why().cString());
-            Process.exit((i32)1); return (Array*)0;
+            driverExit((i32)1); return (Array*)0;
         }
         // The objects' load-time constructors after the program's own, in the
         // list the writer ends __data with (appendModInit).
@@ -4426,7 +4430,7 @@ void mergeElfLinkObjects(DriverOptions* d, SectionBytes* mtext, SectionBytes* md
     el.merge(objs, ars, mtext, mdata, msyms, mdataSyms, mfix);
     if (el.rc() != (u32)0) {
         Stdio.printf("xcc: error: %s link: %s\n", d.targetRow().name().cString(), el.why() == 0 ? "?" : el.why().cString());
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     // The objects' load-time constructors after the program's own, in the
     // list appendModInit ends the data with: xcc's own -c objects carry a
@@ -4482,7 +4486,7 @@ void linkObjectsArm64Elf(DriverOptions* d)
     String* rt  = readRuntime(d.fe(), lrow.runtime());
     if (crt == 0 || rt == 0) {
         Stdio.printf("xcc: error: cannot read the %s runtime from the support tree\n", lrow.name().cString());
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     String* combined = new String();
     if (xcArgsFor(d, (String*)0)) crt = crtArm64WithXcArgs(d, crt, lrow.crt());
@@ -4499,7 +4503,7 @@ void linkObjectsArm64Elf(DriverOptions* d)
     as.demoteCommonsToLocalData();
     if (as.failed()) {
         Stdio.printf("xcc: assembly failed: %s\n", as.why().cString());
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     // The libraries the objects imported (their .xtc.needs sidecars) are
     // needed as an #import <X> in one source would make them.
@@ -4535,12 +4539,12 @@ void linkObjectsArm64Elf(DriverOptions* d)
             androidNeededWithImports(d, baseNeeded.cString()), String.withCString("_start"), aMi);
     if (w.failed()) {
         Stdio.printf("xcc: %s link failed: %s\n", lrow.name().cString(), w.why().cString());
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     Data* od = w.bytes();
     if (!Files.writeData(d.fe().output(), od)) {
         Stdio.printf("xcc: error: cannot write '%s'\n", d.fe().output().cString());
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     Files.setExecutable(d.fe().output());
 }
@@ -4732,7 +4736,7 @@ void linkObjectsArm64(DriverOptions* d)
     String* rt  = readRuntime(d.fe(), String.withCString("rt-macos.s"));
     if (crt == 0 || rt == 0) {
         Stdio.printf("xcc: error: cannot read the arm64 runtime from the support tree\n");
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     String* combined = new String();
     if (xcArgsFor(d, (String*)0)) crt = crtArm64WithXcArgs(d, crt, String.withCString("crt-macos.s"));
@@ -4747,13 +4751,13 @@ void linkObjectsArm64(DriverOptions* d)
     Array* bssCommons = as.takeCommons(); // bug 642: __bss, not __data
     if (as.failed()) {
         Stdio.printf("xcc: assembly failed: %s\n", as.why().cString());
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     Object* entry = as.symbols().get((Hashable*)String.withCString("_xtc_start"));
     if (entry == (Object*)0) entry = as.symbols().get((Hashable*)String.withCString("_main"));
     if (entry == (Object*)0) {
         Stdio.printf("xcc: no entry symbol (_xtc_start / _main)\n");
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     SectionBytes* dataBytes = as.dataBytes();
     Array* fixups    = as.fixups();
@@ -4781,7 +4785,7 @@ void linkObjectsArm64(DriverOptions* d)
     Data* out = m.bytes();
     if (!Files.writeData(d.fe().output(), out)) {
         Stdio.printf("xcc: error: cannot write '%s'\n", d.fe().output().cString());
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     Files.setExecutable(d.fe().output());
     signIfRequested(d, d.fe().output());
@@ -4960,23 +4964,23 @@ void signIfRequested(DriverOptions* d, String* outPath)
 {
     if (d.signIdentity() == (String*)0) return;
     String* pem = Files.readText(d.signIdentity());
-    if (pem == (String*)0) { Stdio.printf("xcc: error: --sign: cannot read '%s'\n", d.signIdentity().cString()); Process.exit((i32)1); return; }
+    if (pem == (String*)0) { Stdio.printf("xcc: error: --sign: cannot read '%s'\n", d.signIdentity().cString()); driverExit((i32)1); return; }
     String* pass = Platform.env(String.withCString("XCC_SIGN_PASSPHRASE"));
     if (pass != 0 && pass.byteLength() == (u32)0) pass = (String*)0;
     Identity* id = Identity.fromPEM(pem, pass);
-    if (id.why() != (String*)0) { Stdio.printf("xcc: error: --sign: %s\n", id.why().cString()); Process.exit((i32)1); return; }
+    if (id.why() != (String*)0) { Stdio.printf("xcc: error: --sign: %s\n", id.why().cString()); driverExit((i32)1); return; }
     Data* md = Files.readData(outPath);
-    if (md == (Data*)0) { Stdio.printf("xcc: error: --sign: cannot read '%s'\n", outPath.cString()); Process.exit((i32)1); return; }
+    if (md == (Data*)0) { Stdio.printf("xcc: error: --sign: cannot read '%s'\n", outPath.cString()); driverExit((i32)1); return; }
     Data* ent = id.entitlements();
     if (d.signEntitlements() != (String*)0) {
         Data* ed = Files.readData(d.signEntitlements());
-        if (ed == (Data*)0) { Stdio.printf("xcc: error: --sign-entitlements: cannot read '%s'\n", d.signEntitlements().cString()); Process.exit((i32)1); return; }
+        if (ed == (Data*)0) { Stdio.printf("xcc: error: --sign-entitlements: cannot read '%s'\n", d.signEntitlements().cString()); driverExit((i32)1); return; }
         ent = Bytes.fromData(ed);
     }
     CodeSign* cs = new CodeSign();
     Data* img = cs.resign(md, outPath.lastPathComponent(), id, ent, (Data*)0, (Data*)0, String.withCString("20260101000000Z"));
-    if (img == (Data*)0) { Stdio.printf("xcc: error: --sign: %s\n", cs.why().cString()); Process.exit((i32)1); return; }
-    if (!Files.writeData(outPath, img)) { Stdio.printf("xcc: error: cannot write '%s'\n", outPath.cString()); Process.exit((i32)1); return; }
+    if (img == (Data*)0) { Stdio.printf("xcc: error: --sign: %s\n", cs.why().cString()); driverExit((i32)1); return; }
+    if (!Files.writeData(outPath, img)) { Stdio.printf("xcc: error: cannot write '%s'\n", outPath.cString()); driverExit((i32)1); return; }
     Files.setExecutable(outPath);
     if (!d.quiet()) Stdio.printf("xcc: developer-signed -> '%s'\n", outPath.cString());
 }
@@ -4991,7 +4995,7 @@ String* iosRuntimeSource(DriverOptions* d)
     String* t = readRuntimeIn(d.fe(), "ios/runtime", name);
     if (t == 0) {
         Stdio.printf("xcc: error: cannot read %s from the support tree\n", name.cString());
-        Process.exit((i32)1);
+        driverExit((i32)1);
     }
     return t;
 }
@@ -5138,7 +5142,7 @@ void cSplitLink(DriverOptions* d)
         Data* rd = Files.readData(cRestObject());
         if (xd == (Data*)0 || rd == (Data*)0 || !Files.writeData(out, xd) || !Files.writeData(rest, rd)) {
             Stdio.printf("xcc: error: cannot write '%s' and '%s'\n", out.cString(), rest.cString());
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
         }
         writeCObjectSidecars(xo, out);
         d.fe().setOutput(out);
@@ -5149,7 +5153,7 @@ void cSplitLink(DriverOptions* d)
         gCSplitOut = (String*)0;
         if (cPathRelocatable(xo, out) != (i32)0) {
             Stdio.printf("xcc: error: clang -r could not make '%s' from the two halves of the C file\n", out.cString());
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
         }
         writeCObjectSidecars(xo, out);
         d.fe().setOutput(out);
@@ -5200,7 +5204,7 @@ void addLanguageLibs(DriverOptions* d, LanguageRow* lang)
             if (sdk == (String*)0 || !Files.exists(tbd)) {
                 Stdio.printf("xcc: error: a %s program links lib%s, and no macOS SDK has it (install the Command Line Tools)\n",
                              lang.name().cString(), nm.cString());
-                Process.exit((i32)1); return;
+                driverExit((i32)1); return;
             }
             d.linkInputs().add((Object*)tbd);
         } else {
@@ -5219,15 +5223,15 @@ void linkObjects(DriverOptions* d)
     if (!anyObject) {
         Stdio.printf("xcc: error: a link of archives alone has nothing to seed the demand — "
                      "name at least one .o\n");
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     if (d.compileOnly() || d.emitLib()) {
         Stdio.printf("xcc: error: -c / --emit-lib take source, not objects\n");
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     if (d.fe().output() == (String*)0) {
         Stdio.printf("xcc: error: an object link needs -o <program>\n");
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     if (d.lto()) {
         // Link-time recompile: every object's carried IR (`<obj>.xtc.ir`,
@@ -5243,7 +5247,7 @@ void linkObjects(DriverOptions* d)
             if (t == (String*)0 || t.byteLength() == (u32)0) {
                 Stdio.printf("xcc: error: -flto needs '%s' (compile that module with -c so it "
                              "carries its IR)\n", side.cString());
-                Process.exit((i32)1); return;
+                driverExit((i32)1); return;
             }
             irs.add((Object*)t);
         }
@@ -5253,7 +5257,7 @@ void linkObjects(DriverOptions* d)
         if (mod == 0 || ip.failed()) {
             Stdio.printf("xcc: error: -flto: the merged IR did not parse: %s\n",
                          ip.why() == 0 ? "?" : ip.why().cString());
-            Process.exit((i32)3); return;
+            driverExit((i32)3); return;
         }
         d.setIrText(merged);
         // arm9 records the objects' `#import <Lib>` dependencies as DT_NEEDED
@@ -5303,14 +5307,14 @@ void linkObjects(DriverOptions* d)
             Stdio.printf("xcc: error: these objects import xtc libraries, but a win64 object link "
                          "cannot record a DLL dependency for them yet.\n  Link from source, or "
                          "compile the modules together.\n");
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
         }
         linkWin64(d, String.withCString(""));
         return;
     }
     Stdio.printf("xcc: error: linking objects for '%s' is not ported in this driver yet "
                  "(arm64, ios, ios-sim, x86_64, win64 and arm9 are)\n", d.arch().cString());
-    Process.exit((i32)1);
+    driverExit((i32)1);
 }
 
 #if OS_linux
@@ -5425,12 +5429,24 @@ i32 multiSourceBuild(DriverOptions* d)
     return rc == (i32)0 ? (i32)0 : (i32)1;
 }
 
+// The run, then its scratch directory removed (#337) whichever way the run
+// ended without exiting: xccMain returns from many places.
 void main(void)
+{
+    xccMain();
+    if (!External.keepingScratch())
+        External.cleanup();
+}
+
+void xccMain(void)
 {
     raiseStackLimit();
     DriverOptions* d = parseDriverArgs();
+    // -V (--verbose) keeps the run's scratch directory for a look; otherwise it goes on
+    // every way out (driverExit, #337).
+    External.setKeepScratch(d.fe().verbose());
     if (d != 0 && gExtraSources != (Array*)0 && gExtraSources.count() > (u32)0) {
-        Process.exit(multiSourceBuild(d));
+        driverExit(multiSourceBuild(d));
         return;
     }
     // --print-target: the row the command line names, and nothing else.
@@ -5438,10 +5454,10 @@ void main(void)
         TargetRow* r = d.targetRow();
         if (r == (TargetRow*)0) {
             Stdio.printf("xcc: error: --print-target: '%s' is not a target\n", d.arch().cString());
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
         }
         Stdio.printf("%s", r.describe().cString());
-        Process.exit((i32)0); return;
+        driverExit((i32)0); return;
     }
     // --print-3p-dir: the compiler's OWN third-party tree, <home>/3p (an
     // install's <prefix>/3p), the first it searches after $XCC_3P, whether or
@@ -5453,7 +5469,7 @@ void main(void)
             home = sup.hasSuffix(String.withCString("/lib/xc")) ? dirOf(dirOf(sup)) : dirOf(sup);
         if (home == (String*)0) {
             Stdio.printf("xcc: error: --print-3p-dir: no support tree found\n");
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
         }
         // Absolute, with `.` and `..` resolved, so a script can use it as is
         // (as the reference's URLByStandardizingPath).
@@ -5475,7 +5491,7 @@ void main(void)
         String* out = String.withCString("/");
         out.append(String.join(keep, String.withCString("/")));
         Stdio.printf("%s\n", out.cString());
-        Process.exit((i32)0); return;
+        driverExit((i32)0); return;
     }
     // --sign-bundle <dir>: sign, and compile nothing.
     if (d != 0 && d._signBundle != (String*)0) {
@@ -5486,7 +5502,7 @@ void main(void)
         Stdio.printf("usage: xcc [-A arm64|ios|ios-sim|android|x86_64|win64|arm9|m68k|wasm32|6502] "
                      "[-On] [-H home] [-I dir] [-D k=v] <file.xc> -o <out>\n"
                      "       xcc -h lists every option\n");
-        Process.exit((i32)2); return;
+        driverExit((i32)2); return;
     }
     // No -o: a program's assembly to standard output, as the reference does
     // (writeAsmOut). Without it the driver went on to link a program to no
@@ -5520,7 +5536,7 @@ void main(void)
                      "%s is loaded whole, so build the program instead\n",
                      d.arch().cString(),
                      isM68k(d) ? "a GEMDOS .prg" : "a banked 6502 .xex");
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     if (d.emitLib() && !isWasm(d) && !isX86_64(d) && !isArm9(d) && !isAndroid(d)
         && (d.targetRow() == (TargetRow*)0 || !d.targetRow().exeFormat().equals(String.withCString("elf-pie")))
@@ -5529,7 +5545,7 @@ void main(void)
         Stdio.printf("xcc: error: --emit-lib is not supported for '%s' "
                      "(it is for arm64, ios, android, x86_64, win64, arm9 and wasm32)\n",
                      d.arch().cString());
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     // A target is wired when the table has its row.
     if (d.targetRow() == (TargetRow*)0) {
@@ -5545,7 +5561,7 @@ void main(void)
                      "  built in: arm64, ios, ios-sim, android, xt6502, m68k, wasm32,\n"
                      "             x86_64, win64, arm9\n",
                      d.arch().cString(), why);
-        Process.exit((i32)2); return;
+        driverExit((i32)2); return;
     }
     // -c is x86_64 only for now: the other targets need their own object
     // writers ported (Mach-O for arm64/android, PE/COFF for win64, and the
@@ -5559,7 +5575,7 @@ void main(void)
         Stdio.printf("xcc: error: -c is implemented for arm64, ios, ios-sim, x86_64, win64 and arm9 "
                      "in this driver (task #63); '%s' needs its object writer "
                      "ported first.\n", d.arch().cString());
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     // macOS and iOS link the row's checked runtime (rt-checked: a backtrace
     // with arguments, from the parameter map the arm64 back end emits); every
@@ -5572,13 +5588,13 @@ void main(void)
         && !ccg.equals(String.withCString("win64"))) {
         Stdio.printf("xcc: error: -fbounds-check is implemented for arm64, x86_64 and win64 so far; "
                      "'%s' has no checked runtime\n", d.arch().cString());
-        Process.exit((i32)2); return;
+        driverExit((i32)2); return;
     }
     // --link-libs is a wasm32 app's mode; nothing else has one to switch on.
     if (d.linkLibs() && !isWasm(d)) {
         Stdio.printf("xcc: error: --link-libs applies to -A wasm32 (an app that links .wasm "
                      "libraries); '%s' has no such mode\n", d.arch().cString());
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     d.fe().setTarget(backendTargetOf(d));
     if (isIos(d)) d.fe().setLibPlatform(d.arch());
@@ -5594,12 +5610,12 @@ void main(void)
         Stdio.printf("xcc: error: '-o %s' without -c would LINK an executable and name it "
                      "'.o'. Use `-c` to compile to an object, or choose another output name\n",
                      d.fe().output().cString());
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     if (d.objectInputs().count() > (u32)0) {
         Stdio.printf("xcc: error: a source file and object files cannot be mixed on one line — "
                      "compile the source with -c first, then link the objects\n");
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
 
     // A C or C++ file (a row of the language table): clang compiles it to
@@ -5610,7 +5626,7 @@ void main(void)
     if (lang == (LanguageRow*)0 && cPathStd() != (String*)0)
         {
         Stdio.printf("xcc: error: -std= is for a C or C++ file, not '%s'\n", d.fe().input().cString());
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
         }
     if (lang != (LanguageRow*)0)
         {
@@ -5643,7 +5659,7 @@ void main(void)
                 {
                 Stdio.printf("xcc: error: -c of a C file is not done for %s: build the program in one step\n",
                              crow != (TargetRow*)0 ? crow.name().cString() : d.arch().cString());
-                Process.exit((i32)1); return;
+                driverExit((i32)1); return;
                 }
             gCSplitRelocatable = true;
             }
@@ -5656,6 +5672,13 @@ void main(void)
         // A whole program (not -c, not -S): xcc may take an ODR copy, the
         // program's one definition of it then.
         Languages.setWholeProgram(!gCSplitRelocatable && !d.keepAsm() && !d.compileOnly());
+        // …and with no loop lifted, the par runtime the C path lowered goes
+        // (#278): the program keeps libc's allocator and none of the runtime.
+        optSetDropBase(!gCSplitRelocatable && !d.keepAsm() && !d.compileOnly());
+        // The class-name root stays for an object or archive the command line
+        // joins (bug 605), not for the language's own libraries (libc++'s
+        // archive), which addLanguageLibs adds below.
+        optSetDropBaseClassRoot(linkJoinsObjects(d));
         cPathSetElf(crow != (TargetRow*)0 && crow.exeFormat().hasPrefix(String.withCString("elf")));
         // xcc's half carries the heap of the program's large blocks
         // (CAlloc.xc, #235) where the link can turn it on: macOS, and x86-64
@@ -5689,7 +5712,7 @@ void main(void)
         String* tgt = cPathTargetFlags(d, lang.name().equals(String.withCString("c++")));
         if (tgt == (String*)0)
             {
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
             }
         // C++ for win64 from another host: the mingw root's libc++ (its
         // headers here, its static libraries in the link: libc++, libc++abi
@@ -5743,7 +5766,7 @@ void main(void)
             d.fe().setOutput(xo);
             d.setCompileOnly(true);
             }
-        if (mod == 0) { Process.exit((i32)1); return; }
+        if (mod == 0) { driverExit((i32)1); return; }
         if (!gCSplitRelocatable && !d.keepAsm() && gLangLinker == (String*)0)
             addLanguageLibs(d, lang);
         }
@@ -5756,7 +5779,7 @@ void main(void)
         if (text == (String*)0)
             {
             Stdio.printf("xcc: error: cannot read '%s'\n", d.fe().input().cString());
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
             }
         IrParser* ip = new IrParser();
         mod = ip.run(text);
@@ -5764,12 +5787,12 @@ void main(void)
             {
             Stdio.printf("xcc: %s: not IR this xcc reads: %s\n", d.fe().input().cString(),
                          ip.why() == 0 ? "?" : ip.why().cString());
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
             }
         }
     else
         mod = Frontend.lower(d.fe());
-    if (mod == 0) { Process.exit((i32)3); return; }
+    if (mod == 0) { driverExit((i32)3); return; }
     // --emit-ir: the module as lowering left it, before any optimisation.
     if (d.emitIR()) Stdio.error(mod.text());
 
@@ -5780,13 +5803,13 @@ void main(void)
         if (ij == (String*)0 || ij.byteLength() == (u32)0) {
             Stdio.error(String.withCString(
                 "xcc: --emit-iface: no public declarations to describe\n"));
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
         }
         String* out = d.fe().output();
         if (out != (String*)0 && !out.equals(String.withCString("-"))) {
             if (!Files.writeText(out, ij)) {
                 Stdio.printf("xcc: error: cannot write '%s'\n", out.cString());
-                Process.exit((i32)1); return;
+                driverExit((i32)1); return;
             }
         } else {
             Stdio.printf("%s", ij.cString());
@@ -5810,8 +5833,10 @@ void main(void)
     if (parsed == 0 || irrt.failed()) {
         Stdio.printf("xcc: internal: the IR did not round-trip: %s\n",
                      irrt.why() == 0 ? "?" : irrt.why().cString());
-        Process.exit((i32)3); return;
+        driverExit((i32)3); return;
     }
+    // What a C file's stub module brought (CPath) is not in the text.
+    parsed.setBaseNames(mod.baseNames());
     mod = parsed;
     // Stashed for `-c`, which keeps the module's IR beside the object so a
     // later link can re-run the inliner across module boundaries — the thing
@@ -5849,7 +5874,7 @@ void makeBundle(DriverOptions* d)
     String* out = d.fe().output();
     if (out == (String*)0) {
         Stdio.printf("xcc: error: --bundle needs -o <library>: the file that goes into the bundle\n");
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     String* name = d._bundleName;
     if (name == (String*)0) {
@@ -5907,7 +5932,7 @@ void makeBundle(DriverOptions* d)
         if (!shipped) {
             Stdio.printf("xcc: error: --bundle: %s needs %s, which is not a system library: ship it in the bundle "
                          "with --bundle-lib <file>, or build it into the plugin\n", out.cString(), dep.cString());
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
         }
     }
     Data* previous = (Data*)0;
@@ -5925,7 +5950,7 @@ void makeBundle(DriverOptions* d)
                                       String.withCString(XCC_VERSION));
     if (err != (String*)0) {
         Stdio.printf("xcc: error: --bundle: %s\n", err.cString());
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     if (d._noSign) {
         Stdio.printf("xcc: %s/ laid out UNSIGNED: nothing loads it until it is signed, with "
@@ -5954,13 +5979,13 @@ Data* publisherSeed(String* spec, bool create, String** where, bool* made)
             Stdio.printf("xcc: error: the publisher key in %s: %s; use a key file instead (--bundle-key <file>, "
                          "or the default ~/.xcc/bundle-key)\n", w.cString(),
                          KeyStore.lastError() != (String*)0 ? KeyStore.lastError().cString() : "there is none");
-            Process.exit((i32)1);
+            driverExit((i32)1);
         }
         k = SecureRandom.bytes((u32)32);
         if (k == (Data*)0 || !KeyStore.save(String.withCString("bundle-key"), k)) {
             Stdio.printf("xcc: error: the publisher key could not be kept in %s: %s; use a key file instead\n",
                          w.cString(), KeyStore.lastError() != (String*)0 ? KeyStore.lastError().cString() : "no random source");
-            Process.exit((i32)1);
+            driverExit((i32)1);
         }
         *made = true;
         return k;
@@ -5977,12 +6002,12 @@ Data* publisherSeed(String* spec, bool create, String** where, bool* made)
     bool existed = Files.exists(path);
     if (!existed && !create) {
         Stdio.printf("xcc: error: no key at %s\n", path.cString());
-        Process.exit((i32)1);
+        driverExit((i32)1);
     }
     Data* seed = BundleSign.publisherKey(path);
     if (seed == (Data*)0) {
         Stdio.printf("xcc: error: cannot read or make the publisher key at %s\n", path.cString());
-        Process.exit((i32)1);
+        driverExit((i32)1);
     }
     *made = !existed;
     return seed;
@@ -6006,7 +6031,7 @@ void signedLine(String* dir, Data* seed, String* where, bool made, String* spec)
         ph.appendByte((u8)10);
         if (!Files.writeText(pubPath, ph)) {
             Stdio.printf("xcc: error: cannot write the public key '%s'\n", pubPath.cString());
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
         }
     }
     Stdio.printf("xcc: %s/ signed by key %s (%s%s); keep it: losing it means an update needs a key rotation\n",
@@ -6031,7 +6056,7 @@ void signBundle(DriverOptions* d)
     String* err = BundleSign.sign(d._signBundle, seed, d._publisher, d._publisherDomain, previous);
     if (err != (String*)0) {
         Stdio.printf("xcc: error: --sign-bundle %s: %s\n", d._signBundle.cString(), err.cString());
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     signedLine(d._signBundle, seed, where, made, d._bundleKey);
 }
@@ -6057,7 +6082,7 @@ void emitModule(DriverOptions* d, IRModule* mod)
         Stdio.printf("xcc: error: -Xlinker/-l/-framework is not wired for '%s' in "
                      "this driver — the link would silently omit it.\n",
                      d.arch().cString());
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     if (isXt6502(d)) { emitXt6502(d, mod); return; }
     if (isX86_64(d)) { emitX86_64(d, mod); return; }
@@ -6093,13 +6118,13 @@ void emitModule(DriverOptions* d, IRModule* mod)
     if (be.failed()) {
         Stdio.printf("xcc: %s: unsupported: %s\n", d.fe().input().cString(),
                      be.why() == 0 ? "?" : be.why().cString());
-        Process.exit((i32)3); return;
+        driverExit((i32)3); return;
     }
 
     if (d.keepAsm()) {
         if (!writeAsmOut(d, prog)) {
             Stdio.printf("xcc: error: cannot write '%s'\n", d.fe().output().cString());
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
         }
         return;
     }
@@ -6129,7 +6154,7 @@ void emitModule(DriverOptions* d, IRModule* mod)
         Arm64Asm.setLsdaElf(false);
         if (oas.failed()) {
             Stdio.printf("xcc: assembly failed: %s\n", oas.why().cString());
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
         }
         ElfArm64* eo = new ElfArm64();
         eo.setDepLibs(objectDepLibs(d));
@@ -6140,11 +6165,11 @@ void emitModule(DriverOptions* d, IRModule* mod)
         if (od == (Data*)0 || eo.failed()) {
             Stdio.printf("xcc: error: %s object write failed: %s\n", d.targetRow().name().cString(),
                          eo.why() == (String*)0 ? "?" : eo.why().cString());
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
         }
         if (!Files.writeData(d.fe().output(), od)) {
             Stdio.printf("xcc: error: cannot write '%s'\n", d.fe().output().cString());
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
         }
         writeObjectSidecars(d);
         if (gCSplitOut != (String*)0) {
@@ -6167,7 +6192,7 @@ void emitModule(DriverOptions* d, IRModule* mod)
         oas.assemble(Arm64Asm.machoDialectFromElf(one));
         if (oas.failed()) {
             Stdio.printf("xcc: assembly failed: %s\n", oas.why().cString());
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
         }
         MachO* mo = new MachO();
         // The platform stamp — the reference passes `-platform` to its object
@@ -6183,11 +6208,11 @@ void emitModule(DriverOptions* d, IRModule* mod)
                                      oas.dataSyms(), oas.fixups(), oas.globals(), oas.commonSyms());
         if (od == (Data*)0) {
             Stdio.printf("xcc: error: arm64 object write failed\n");
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
         }
         if (!Files.writeData(d.fe().output(), od)) {
             Stdio.printf("xcc: error: cannot write '%s'\n", d.fe().output().cString());
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
         }
         writeObjectSidecars(d);
         if (gCSplitOut != (String*)0) {
@@ -6210,7 +6235,7 @@ void emitModule(DriverOptions* d, IRModule* mod)
     String* rt  = readRuntime(d.fe(), lrow.runtime());
     if (crt == 0 || rt == 0) {
         Stdio.printf("xcc: error: cannot read the arm64 runtime from the support tree\n");
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     // The checked runtime is a SEPARATE translation unit — it walks from its
     // own frame and is built with different flags — so it is concatenated only
@@ -6220,7 +6245,7 @@ void emitModule(DriverOptions* d, IRModule* mod)
         checked = readRuntime(d.fe(), d.targetRow().checkedRuntime());
         if (checked == 0) {
             Stdio.printf("xcc: error: -fbounds-check needs %s in the support tree\n", d.targetRow().checkedRuntime().cString());
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
         }
     }
     String* stubs = classAllocStubs(prog);
@@ -6263,7 +6288,7 @@ void emitModule(DriverOptions* d, IRModule* mod)
     if (android) as.demoteCommonsToLocalData();
     if (as.failed()) {
         Stdio.printf("xcc: assembly failed: %s\n", as.why().cString());
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
 
     // --emit-apk: the program is packaged as a NativeActivity payload, which is
@@ -6302,7 +6327,7 @@ void emitModule(DriverOptions* d, IRModule* mod)
                     && !stem.equals(String.withCString("dl")) && !stem.equals(String.withCString("pthread"))
                     && !stem.equals(String.withCString("rt"))) {
                     Stdio.printf("xcc: error: %s: no lib%s.so on the -L path\n", arg.cString(), stem.cString());
-                    Process.exit((i32)1); return;
+                    driverExit((i32)1); return;
                 }
                 continue;
             }
@@ -6359,7 +6384,7 @@ void emitModule(DriverOptions* d, IRModule* mod)
         }
         if (w.failed()) {
             Stdio.printf("xcc: %s link failed: %s\n", lrow.name().cString(), w.why().cString());
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
         }
         image = w.bytes();
     } else {
@@ -6370,7 +6395,7 @@ void emitModule(DriverOptions* d, IRModule* mod)
         // check belongs to the executable path alone.
         if (entry == (Object*)0 && !d.emitLib()) {
             Stdio.printf("xcc: no entry symbol (_xtc_start / _main)\n");
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
         }
         // Bug 138: `-Xlinker x.o` / `-Xlinker lib.a` are OBJECTS to merge (a
         // platform shell compiled by clang, a static archive), not libraries
@@ -6472,7 +6497,7 @@ void emitModule(DriverOptions* d, IRModule* mod)
 
     if (!Files.writeData(d.fe().output(), image)) {
         Stdio.printf("xcc: error: cannot write '%s'\n", d.fe().output().cString());
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     Files.setExecutable(d.fe().output());
     if (!d.emitLib()) signIfRequested(d, d.fe().output());   // --sign (144): the Mach-O executable
@@ -6501,7 +6526,7 @@ void writeTempOrDie(String* path, String* text)
 {
     if (!Files.writeText(path, text)) {
         Stdio.printf("xcc: error: cannot write '%s'\n", path.cString());
-        Process.exit((i32)1);
+        driverExit((i32)1);
     }
 }
 
@@ -6588,7 +6613,7 @@ void runOrDie(Array* argv, bool keep)
         if (rc < (i32)0)
             Stdio.printf("xcc: error: cannot run '%s'\n", ((String*)argv.get((u32)0)).cString());
         if (!keep) External.cleanup();
-        Process.exit(rc < (i32)0 ? (i32)1 : rc);
+        driverExit(rc < (i32)0 ? (i32)1 : rc);
     }
 }
 
@@ -6631,7 +6656,7 @@ void ndkLink(DriverOptions* d, Arm64Asm* as, String* out, String* soname)
     if (cc == (String*)0) {
         Stdio.printf("xcc: error: --no-self-host -A android needs the NDK: set $ANDROID_NDK_HOME, "
                      "or $ANDROID_HOME to an SDK with one\n");
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     ElfArm64* eo = new ElfArm64();
     Data* od = eo.objectFromText(as.textBytes(), as.dataBytes(), as.symbols(), as.dataSyms(),
@@ -6640,12 +6665,12 @@ void ndkLink(DriverOptions* d, Arm64Asm* as, String* out, String* soname)
     if (od == (Data*)0 || eo.failed()) {
         Stdio.printf("xcc: error: android object write failed: %s\n",
                      eo.why() == (String*)0 ? "?" : eo.why().cString());
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     String* obj = External.tempPath("xtc-android.o");
     if (!Files.writeData(obj, od)) {
         Stdio.printf("xcc: error: cannot write '%s'\n", obj.cString());
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     bool keep = d.fe().verbose();
     Array* a = new Array();
@@ -6733,7 +6758,7 @@ bool externalArm64(DriverOptions* d, String* prog)
         if (f == (String*)0 || !Files.exists(f)) {
             Stdio.printf("xcc: error: the arm64 runtime piece %s is missing\n",
                          f == (String*)0 ? "(no support tree)" : f.cString());
-            Process.exit((i32)1); return true;
+            driverExit((i32)1); return true;
         }
     }
     // The --xc-* options (#148): the crt with the call, and the filter.
@@ -6746,7 +6771,7 @@ bool externalArm64(DriverOptions* d, String* prog)
             row.crt().equals(String.withCString("crt-macos.s")) ? "xcargs-macos.s" : "xcargs-elf.s"));
         if (xa == (String*)0 || !Files.exists(xa)) {
             Stdio.printf("xcc: error: the arm64 runtime piece for the --xc-* options is missing\n");
-            Process.exit((i32)1); return true;
+            driverExit((i32)1); return true;
         }
         files.add((Object*)xa);
     }
@@ -6847,7 +6872,7 @@ void externalArm9(DriverOptions* d, String* prog)
     if (libxtPic == (String*)0 || !Files.exists(libxtPic)) {
         Stdio.printf("xcc: error: arm9 PIC runtime not found at '%s'\n",
                      libxtPic == (String*)0 ? "(no support tree)" : libxtPic.cString());
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     bool keep = d.fe().verbose();
     String* out = d.fe().output();
@@ -7113,13 +7138,68 @@ void usage(void)
     Stdio.printf("    parent  >  the current directory  >  ~/xcc  >  ~/xtc  >  /opt/xcc/<version>\n");
     Stdio.printf("    >  /opt/xcc  >  /usr/local/xcc  >  /usr/local/xtc  >  /opt/xtc\n");
     Stdio.printf("\n");
-    Stdio.printf("Environment:\n");
-    Stdio.printf("  XCC_HOME                   A support root, ahead of the built-in search\n");
-    Stdio.printf("  XTC_HOME                   The older spelling of XCC_HOME\n");
-    Stdio.printf("  XTC_LDFLAGS                More linker arguments, read as if each were\n");
-    Stdio.printf("                             given with -Xlinker after the command line's own\n");
-    Stdio.printf("\n");
+    envUsage();
     Stdio.printf("An unrecognised option is an error, never ignored.\n");
+}
+
+// Every environment variable the compiler reads, in one place (#337): the
+// settings first, then the switches for diagnosing the compiler itself.
+// tests/driver/env-registry.sh checks that each variable the sources read is
+// listed here.
+void envUsage(void)
+{
+    Array* settings = new Array();
+    settings.add((Object*)String.withCString("XCC_HOME|A support root, ahead of the built-in search"));
+    settings.add((Object*)String.withCString("XTC_HOME|The older spelling of XCC_HOME"));
+    settings.add((Object*)String.withCString("XCC_3P|A third-party library root, ahead of /opt/xcc/3p"));
+    settings.add((Object*)String.withCString("XTC_LDFLAGS|More linker arguments, as if each were given with -Xlinker"));
+    settings.add((Object*)String.withCString("SDKROOT|The Apple SDK whose frameworks' exports a link checks"));
+    settings.add((Object*)String.withCString("XTC_MUSL_ROOT|The musl pool a static x86-64 Linux link takes libc from"));
+    settings.add((Object*)String.withCString("XTC_WIN64_TOOLCHAIN|The mingw root win64 -l archives come from"));
+    settings.add((Object*)String.withCString("XCC_DEBUG_DIR|Roots for separate debug files (colon-separated; /usr/lib/debug)"));
+    settings.add((Object*)String.withCString("XCC_NO_RUNTIME_LIB|=1: as --no-runtime-lib"));
+    settings.add((Object*)String.withCString("XC_PAR_REMOTE|A remote GPU worker: programs carry every GPU kernel form"));
+    settings.add((Object*)String.withCString("XC_LANGUAGES|A language table file, replacing the built-in rows"));
+    settings.add((Object*)String.withCString("XCC_SIGN_PASSPHRASE|The passphrase of the --sign key"));
+    settings.add((Object*)String.withCString("XCC_SIGN_CA_FILE|The CA bundle --sign's HTTPS requests trust"));
+    settings.add((Object*)String.withCString("TMPDIR|Where each run's private scratch directory is made"));
+    Array* diag = new Array();
+    diag.add((Object*)String.withCString("XC_C_KEEP|=<prefix>: keep a C build's IR and objects as <prefix>.*"));
+    diag.add((Object*)String.withCString("XC_C_TRACE|Name the C functions left to clang, and why"));
+    diag.add((Object*)String.withCString("XC_C_LL|=<file>: read this file as clang's IR"));
+    diag.add((Object*)String.withCString("XC_C_HANDLERS|=1: read C++ exception handlers on any target"));
+    diag.add((Object*)String.withCString("XC_C_CABI|Give every C function read the C calling convention"));
+    diag.add((Object*)String.withCString("XC_PAR_PROPOSE|=report|outline: report or outline the loops par would take"));
+    diag.add((Object*)String.withCString("XC_PAR_OUTLINE_TRACE|Why a block has no GPU form (=ir: the outliner's functions)"));
+    diag.add((Object*)String.withCString("XC_PAR_OUTLINE_DUMP|=<path>: the module after outlining"));
+    diag.add((Object*)String.withCString("XTIR_OPT_STOP_AFTER|=<pass>: stop the optimiser after that pass"));
+    diag.add((Object*)String.withCString("XC_OPT_CAPS|Say when a capped run-until-settled loop stopped at its cap"));
+    diag.add((Object*)String.withCString("XTIC_OFF|No if-conversion after bounds checks are removed"));
+    diag.add((Object*)String.withCString("XTGPU_ESC_TRIPS|=<n>: the escape-loop GPU variant's trip count"));
+    diag.add((Object*)String.withCString("XCC_GC_STATS|Print what the ELF link's section GC kept"));
+    diag.add((Object*)String.withCString("XCC_SIGN_HTTPS_CONNECT|=<host:port>: where --sign's HTTPS requests connect"));
+    Stdio.printf("Environment:\n");
+    envRows(settings);
+    Stdio.printf("\nDiagnostics (for working on the compiler):\n");
+    envRows(diag);
+    Stdio.printf("\n");
+}
+
+void envRows(Array* rows)
+{
+    for (u32 i = (u32)0; i < rows.count(); i = i + (u32)1)
+        {
+        String* r = (String*)rows.get(i);
+        u32 bar = r.indexOfByte((u8)'|');
+        String* name = r.substringBytes((u32)0, bar);
+        String* line = String.withCString("  ");
+        line.append(name);
+        while (line.byteLength() < (u32)29)
+            line.appendByte((u8)' ');
+        line.appendByte((u8)' ');
+        line.append(r.substringFromByte(bar + (u32)1));
+        Stdio.printf("%s\n", line.cString());
+        }
 }
 
 // The -Wno- categories, one indented line each.
@@ -7591,7 +7671,7 @@ bool parseCapabilityFlag(DriverOptions* d, u32* ip, u32 argc)
         String* v = a.substringFromByte((u32)8).lowercased();
         if (!v.equals(String.withCString("bump")) && !v.equals(String.withCString("heap"))) {
             Stdio.printf("xcc: -falloc= expects 'bump' or 'heap', got '%s'\n", v.cString());
-            Process.exit((i32)1); return true;
+            driverExit((i32)1); return true;
         }
         c.setAlloc(v);
         *ip = i + (u32)1; return true;
@@ -7600,7 +7680,7 @@ bool parseCapabilityFlag(DriverOptions* d, u32* ip, u32 argc)
         String* v = a.substringFromByte((u32)9).lowercased();
         if (!v.equals(String.withCString("system")) && !v.equals(String.withCString("mimalloc"))) {
             Stdio.printf("xcc: -fmalloc= expects 'system' or 'mimalloc', got '%s'\n", v.cString());
-            Process.exit((i32)1); return true;
+            driverExit((i32)1); return true;
         }
         c.setHostMalloc(v);
         *ip = i + (u32)1; return true;
@@ -7636,7 +7716,7 @@ bool parseCapabilityFlag(DriverOptions* d, u32* ip, u32 argc)
         if (!v.equals(String.withCString("base")) && !v.equals(String.withCString("avx2"))
             && !v.equals(String.withCString("avx512")) && !v.equals(String.withCString("auto"))) {
             Stdio.printf("xcc: -msimd= expects 'base', 'avx2', 'avx512' or 'auto', got '%s'\n", v.cString());
-            Process.exit((i32)1); return true;
+            driverExit((i32)1); return true;
         }
         c.setSimd(v, a);
         *ip = i + (u32)1; return true;
@@ -7646,7 +7726,7 @@ bool parseCapabilityFlag(DriverOptions* d, u32* ip, u32 argc)
         if (lvl == (String*)0) {
             Stdio.printf("xcc: -mnative: this machine is not x86-64, so it has no vector "
                          "level to read; name one (-mavx2, -msimd=base)\n");
-            Process.exit((i32)1); return true;
+            driverExit((i32)1); return true;
         }
         c.setSimd(lvl, a);
         *ip = i + (u32)1; return true;
@@ -7675,7 +7755,7 @@ bool parseCapabilityFlag(DriverOptions* d, u32* ip, u32 argc)
         else if (v.equals(String.withCString("cpu"))) { d.fe().setParAuto(false); d.fe().setParDeviceDefault((u32)0); }
         else {
             Stdio.printf("xcc: --par-style= expects auto, threads, gpu or cpu, got '%s'\n", v.cString());
-            Process.exit((i32)1);
+            driverExit((i32)1);
             return false;
         }
         *ip = i + (u32)1; return true;
@@ -7684,7 +7764,7 @@ bool parseCapabilityFlag(DriverOptions* d, u32* ip, u32 argc)
         String* v = a.substringFromByte((u32)7).lowercased();
         if (!v.equals(String.withCString("speed")) && !v.equals(String.withCString("accuracy"))) {
             Stdio.printf("xcc: -fgoal= expects 'speed' or 'accuracy', got '%s'\n", v.cString());
-            Process.exit((i32)1);
+            driverExit((i32)1);
             return false;
         }
         d.fe().setGoalDefault(v.equals(String.withCString("speed")) ? (u32)1 : (u32)2);
@@ -7749,36 +7829,36 @@ void checkCapabilities(DriverOptions* d)
     if (c.simdFlag() != (String*)0 && !isX86_64(d) && !arch.equals(String.withCString("win64"))) {
         Stdio.printf("xcc: %s: the vector level applies to -A x86_64 and -A win64 only\n",
                      c.simdFlag().cString());
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     // From 0.72 an x86-64 executable links dynamically
     // against glibc unless -static asks for the static musl link, as a C
     // compiler on Linux does; -dynamic names the default. As the reference.
     if (c.dynamicExplicit() && c.staticLink()) {
         Stdio.printf("xcc: -dynamic and -static: choose one\n");
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     if ((c.dynamicExplicit() || c.staticLink()) && !isX86_64(d)) {
         Stdio.printf("xcc: %s: the dynamic (glibc) and static (musl) links are "
                      "for -A x86_64 only\n", c.staticLink() ? "-static" : "-dynamic");
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     c.resolveDynamic(isX86_64(d));
     if (c.dynamic() && c.hostMalloc().equals(String.withCString("mimalloc"))) {
         Stdio.printf("xcc: -fmalloc=mimalloc: link with -static (the dynamic glibc "
                      "link uses glibc's malloc)\n");
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     if (c.threadFlag() && (isM68k(d) || isXt6502(d))) {
         Stdio.printf("xcc: error: -f[no-]thread-safe-arc: '%s' has no threads, so there "
                      "is no atomic reference count to choose\n", arch.cString());
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     if (c.hostMalloc().equals(String.withCString("mimalloc")) && !isX86_64(d)) {
         Stdio.printf("xcc: -fmalloc=mimalloc is only supported on -A x86_64.\n"
                      "  mimalloc ships as an x86-64 ELF object linked ahead of libc;\n"
                      "  '%s' has no build of it to link.\n", arch.cString());
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     // The allocator is chosen by the program's LINK. A library uses whatever
     // malloc the process that loads it already has, and an object is not a
@@ -7786,7 +7866,7 @@ void checkCapabilities(DriverOptions* d)
     if (c.hostMalloc().equals(String.withCString("mimalloc")) && (d.emitLib() || d.compileOnly())) {
         Stdio.printf("xcc: error: -fmalloc=mimalloc applies to an executable's link; "
                      "a library or object uses the allocator of the program it ends up in\n");
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     // Every live target has a free-capable heap, so `heap` is what they all
     // build with and `bump` changes nothing. Said, rather than dropped.
@@ -7818,31 +7898,56 @@ void checkCapabilities(DriverOptions* d)
         } else if (isX86_64(d) || arch.equals(String.withCString("win64"))) {
             Stdio.printf("xcc: error: --no-self-host: '%s' has no vendor-toolchain "
                          "link; its runtime is linked in-house only\n", arch.cString());
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
         } else if (isIos(d)) {
             Stdio.printf("xcc: error: --no-self-host: '%s' links in-house only\n", arch.cString());
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
         } else if (d.emitLib() && !isAndroid(d) && !isArm9(d)) {
             Stdio.printf("xcc: error: --no-self-host: an arm64 library links in-house only\n");
-            Process.exit((i32)1); return;
+            driverExit((i32)1); return;
         }
 #if OS_windows
         Stdio.printf("xcc: error: --no-self-host runs a POSIX shell toolchain and is not "
                      "available on a Windows host\n");
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
 #endif
     }
     if (c.needed().count() > (u32)0 && !isAndroid(d)) {
         Stdio.printf("xcc: error: --needed names an Android DT_NEEDED entry and needs -A android\n");
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
     if ((c.withLibs().count() > (u32)0 || c.libName() != (String*)0 || c.withDex() != (String*)0
          || c.manifestAttrs().count() > (u32)0)
         && !(isAndroid(d) && d.emitApk())) {
         Stdio.printf("xcc: error: --with-lib, --lib-name, --with-dex and --manifest-attr package an APK "
                      "and need -A android --emit-apk\n");
-        Process.exit((i32)1); return;
+        driverExit((i32)1); return;
     }
+}
+
+// The flags that take their value as the next argument (the ones the
+// parse loop below reads with `i + 1 < argc`), each with the name its
+// message gives it: the first spelling in its test, as the reference driver
+// names `--output` as -o. 0 for a flag that takes none.
+String* valueFlagName(String* a)
+{
+    Array* ws = String.withCString("--arch=-A --bundle=--bundle --bundle-key=--bundle-key --bundle-lib=--bundle-lib --bundle-name=--bundle-name --bundle-version=--bundle-version --fn-leaf-inline=-Fli --fn-loop-unroll=-Flu --fn-min-banked=-Fmb --include=-I --library-path=-L --memory-model=-m --output=-o --preprocessed=-E --property=--property --publisher=--publisher --publisher-domain=--publisher-domain --quit-style=-Q --resources=--resources --rotate-from=--rotate-from --setting=--property --sign=--sign --sign-bundle=--sign-bundle --sign-entitlements=--sign-entitlements --sign-key=--sign-key --trust=--trust --xcc-home=-H --xtc-home=-H -A=-A -D=-D -E=-E -Fli=-Fli -Flu=-Flu -Fmb=-Fmb -H=-H -I=-I -L=-L -Q=-Q -Xlinker=-Xlinker -framework=-Xlinker -m=-m -o=-o").splitOnByte((u8)' ');
+    for (u32 k = (u32)0; k < ws.count(); k = k + (u32)1)
+        {
+        String* w = (String*)ws.get(k);
+        u32 eq = w.indexOfByte((u8)'=');
+        if (a.equals(w.substringBytes((u32)0, eq)))
+            return w.substringFromByte(eq + (u32)1);
+        }
+    return (String*)0;
+}
+
+// Flags that do nothing now, still accepted so command lines keep building,
+// each with one warning that it will be removed (#337); they go in a later
+// release, once announced.
+void inertFlag(String* a)
+{
+    Stdio.error(String.withFormat("xcc: warning: %s has no effect and will be removed\n", a.cString()));
 }
 
 DriverOptions* parseDriverArgs(void)
@@ -7984,7 +8089,7 @@ DriverOptions* parseDriverArgs(void)
                 u8 c = v.byteAt(k);
                 if (!((c >= (u8)'a' && c <= (u8)'z') || (c >= (u8)'0' && c <= (u8)'9') || c == (u8)'+' || c == (u8)':')) {
                     Stdio.printf("xcc: error: -std= takes a language standard such as c11 or c++17\n");
-                    Process.exit((i32)1);
+                    driverExit((i32)1);
                 }
             }
             cPathSetStd(v); i = i + (u32)1; continue;
@@ -7996,7 +8101,7 @@ DriverOptions* parseDriverArgs(void)
             String* v = a.substringFromByte((u32)14);
             if (!v.equals(String.withCString("fast")) && !v.equals(String.withCString("on")) && !v.equals(String.withCString("off"))) {
                 Stdio.printf("xcc: error: -ffp-contract= takes fast, on or off\n");
-                Process.exit((i32)1);
+                driverExit((i32)1);
             }
             cPathSetFpContract(v); i = i + (u32)1; continue;
         }
@@ -8027,7 +8132,7 @@ DriverOptions* parseDriverArgs(void)
                 // is the failure that policy exists to prevent.
                 Stdio.printf("xcc: error: -Flu takes a decimal trip count, got '%s'\n",
                              Process.argument(i + (u32)1).cString());
-                Process.exit((i32)1);
+                driverExit((i32)1);
                 return (DriverOptions*)0;
             }
             d.setUnroll(lu);
@@ -8035,7 +8140,7 @@ DriverOptions* parseDriverArgs(void)
         }
         if (a.equals(String.withCString("-h")) || a.equals(String.withCString("--help"))) {
             usage();
-            Process.exit((i32)0);
+            driverExit((i32)0);
             return (DriverOptions*)0;
         }
         if (a.equals(String.withCString("--print-target"))) {
@@ -8056,7 +8161,7 @@ DriverOptions* parseDriverArgs(void)
 #define XCC_VERSION "unversioned"
 #endif
             Stdio.printf("xcc %s (xc, self-hosted)\n", XCC_VERSION);
-            Process.exit((i32)0);
+            driverExit((i32)0);
             return (DriverOptions*)0;
         }
         // `-m <layout>` picks a memory layout, and with it the 6502 target. A
@@ -8096,7 +8201,7 @@ DriverOptions* parseDriverArgs(void)
                 d.setOpt((u32)(a.byteAt((u32)2) - (u8)'0')); i = i + (u32)1; continue;
             }
             Stdio.error(String.withFormat("xcc: error: unsupported optimisation level '%s' (use -O0, -O1, -O2 or -O3)\n", a.cString()));
-            Process.exit((i32)1);
+            driverExit((i32)1);
             return (DriverOptions*)0;
         }
         // -Wanalyze: the static analyser. Off by default — an unknown
@@ -8135,7 +8240,7 @@ DriverOptions* parseDriverArgs(void)
             u32 eq = kv.indexOfByte((u8)'=');
             if (eq == String.notFound() || eq == (u32)0) {
                 Stdio.printf("xcc: error: %s wants key=value, not '%s'\n", a.cString(), kv.cString());
-                Process.exit((i32)1);
+                driverExit((i32)1);
             }
             bool ro = a.equals(String.withCString("--property"));
             if (ro && d._bundleReadonly == (Map*)0) d._bundleReadonly = new Map();
@@ -8167,7 +8272,7 @@ DriverOptions* parseDriverArgs(void)
             if (pk == (Data*)0) {
                 Stdio.printf("xcc: error: --trust %s: not a publisher's public key (64 hex digits, as xcc --bundle writes beside its key)\n",
                              f.cString());
-                Process.exit((i32)1);
+                driverExit((i32)1);
             }
             if (d._trusted == (String*)0) d._trusted = new String();
             else d._trusted.appendByte((u8)' ');
@@ -8271,6 +8376,8 @@ DriverOptions* parseDriverArgs(void)
         // from when the IR pipeline ran beside another code generator.
         if (a.equals(String.withCString("-a")) || a.equals(String.withCString("--assemble-only"))
             || a.equals(String.withCString("--emit-asm-from-ir"))) {
+            if (a.equals(String.withCString("--emit-asm-from-ir")))
+                Stdio.error(String.withCString("xcc: warning: --emit-asm-from-ir will be removed; it is -S\n"));
             d.setKeepAsm(true); i = i + (u32)1; continue;
         }
         if (a.equals(String.withCString("-dl")) || a.equals(String.withCString("--dump-layout"))) {
@@ -8285,7 +8392,7 @@ DriverOptions* parseDriverArgs(void)
             if (li < (i32)0) {
                 Stdio.printf("xcc: error: -Fli takes a decimal instruction count, got '%s'\n",
                              Process.argument(i + (u32)1).cString());
-                Process.exit((i32)1);
+                driverExit((i32)1);
                 return (DriverOptions*)0;
             }
             d.setInlineMax(li);
@@ -8299,19 +8406,19 @@ DriverOptions* parseDriverArgs(void)
             String* xarch = parts.count() > (u32)0 ? (String*)parts.get((u32)0) : String.withCString("");
             if (parts.count() < (u32)2 || xarch.byteLength() == (u32)0) {
                 Stdio.printf("xcc: error: '%s' — expected -x-<arch>,<option>[,<option>...]\n", a.cString());
-                Process.exit((i32)1);
+                driverExit((i32)1);
                 return (DriverOptions*)0;
             }
             if (!xarch.equals(String.withCString("wasm32"))) {
                 Stdio.printf("xcc: error: no target-specific options exist for arch '%s'\n", xarch.cString());
-                Process.exit((i32)1);
+                driverExit((i32)1);
                 return (DriverOptions*)0;
             }
             for (u32 k = (u32)1; k < parts.count(); k = k + (u32)1) {
                 String* xo = (String*)parts.get(k);
                 if (!xo.equals(String.withCString("return-call"))) {
                     Stdio.printf("xcc: error: unknown wasm32 option '%s' — known: return-call\n", xo.cString());
-                    Process.exit((i32)1);
+                    driverExit((i32)1);
                     return (DriverOptions*)0;
                 }
                 d.setTailCalls(true);
@@ -8327,10 +8434,7 @@ DriverOptions* parseDriverArgs(void)
         // command lines build, and said out loud, because a silently ignored
         // flag is what made "verified with ARC off" mean nothing.
         if (a.equals(String.withCString("-farc")) || a.hasPrefix(String.withCString("-farc="))) {
-            Stdio.error(String.withFormat("xcc: warning: %s is retired and does nothing — ARC is always "
-                         "on. `delete` on a struct or primitive array is still allowed "
-                         "(ARC never managed those); on a class instance it is not.\n",
-                         a.cString()));
+            inertFlag(a);   // ARC is always on
             i = i + (u32)1; continue;
         }
         // -fauto-cloak=never|auto|always: the value is checked, and the flag is
@@ -8341,9 +8445,10 @@ DriverOptions* parseDriverArgs(void)
             if (!v.equals(String.withCString("never")) && !v.equals(String.withCString("auto"))
                 && !v.equals(String.withCString("always"))) {
                 Stdio.printf("xcc: -fauto-cloak= expects 'never|auto|always', got '%s'\n", v.cString());
-                Process.exit((i32)1);
+                driverExit((i32)1);
                 return (DriverOptions*)0;
             }
+            inertFlag(String.withCString("-fauto-cloak="));
             i = i + (u32)1; continue;
         }
         // -ss / --stack-size <n>, also joined with `=`: checked, and without
@@ -8360,27 +8465,31 @@ DriverOptions* parseDriverArgs(void)
                 i = i + (u32)2;
             } else {
                 Stdio.printf("xcc: error: %s requires an argument\n", a.cString());
-                Process.exit((i32)1);
+                driverExit((i32)1);
                 return (DriverOptions*)0;
             }
             i32 n = parseStackSize(v);
             if (n <= (i32)0 || n > (i32)65535) {
                 Stdio.printf("xcc: --stack-size expects a positive integer up to 65535, got '%s'\n",
                              v.cString());
-                Process.exit((i32)1);
+                driverExit((i32)1);
                 return (DriverOptions*)0;
             }
+            inertFlag(eq != String.notFound() ? a.substringBytes((u32)0, eq) : a);
             continue;
         }
         // Accepted, and already what happens: every build links in-house, and
         // the IR pipeline is the only code generator.
-        if (a.equals(String.withCString("--self-host")) || a.equals(String.withCString("-fnew-ir"))
-            || a.equals(String.withCString("--with-ir"))) {
+        if (a.equals(String.withCString("--self-host"))) {
+            i = i + (u32)1; continue;
+        }
+        if (a.equals(String.withCString("-fnew-ir")) || a.equals(String.withCString("--with-ir"))) {
+            inertFlag(a);
             i = i + (u32)1; continue;
         }
         // A bare -W: every warning category is on unless -Wno- turns it off,
         // so there is nothing more to enable.
-        if (a.equals(String.withCString("-W"))) { i = i + (u32)1; continue; }
+        if (a.equals(String.withCString("-W"))) { inertFlag(a); i = i + (u32)1; continue; }
         // The xt6502 options. Each is the 6502 back end's or its startup's
         // business; on another target they change nothing.
         if ((a.equals(String.withCString("-Q")) || a.equals(String.withCString("--quit-style")))
@@ -8388,7 +8497,7 @@ DriverOptions* parseDriverArgs(void)
             String* v = Process.argument(i + (u32)1).lowercased();
             if (!v.equals(String.withCString("rts")) && !v.equals(String.withCString("loop"))) {
                 Stdio.printf("xcc: -Q expects 'rts' or 'loop', got '%s'\n", v.cString());
-                Process.exit((i32)1);
+                driverExit((i32)1);
                 return (DriverOptions*)0;
             }
             d.setQuitLoop(v.equals(String.withCString("loop")));
@@ -8404,7 +8513,7 @@ DriverOptions* parseDriverArgs(void)
             if (mb < (i32)0 || mb > (i32)65535) {
                 Stdio.printf("xcc: error: -Fmb takes a decimal instruction count, got '%s'\n",
                              Process.argument(i + (u32)1).cString());
-                Process.exit((i32)1);
+                driverExit((i32)1);
                 return (DriverOptions*)0;
             }
             d.setFnMinBanked((u32)mb);
@@ -8425,10 +8534,22 @@ DriverOptions* parseDriverArgs(void)
         // An unrecognised flag is an ERROR, not something to skip. A driver that
         // quietly drops an option it does not know builds something other than
         // what it was asked for and says it succeeded.
+        // A flag that takes a value, given none (it was the last argument):
+        // said as that, as the reference driver says it, not as unrecognised
+        // (#337).
+        if (i + (u32)1 >= argc && valueFlagName(a) != (String*)0) {
+            String* fl = valueFlagName(a);
+            if (fl.equals(String.withCString("-A")))
+                Stdio.printf("xcc: error: %s requires an argument (6502 | arm64 | arm9 | m68k | x86_64 | win64 | wasm32)\n", fl.cString());
+            else
+                Stdio.printf("xcc: error: %s requires an argument\n", fl.cString());
+            Process.exit((i32)1);
+            return (DriverOptions*)0;
+        }
         if (a.hasPrefix(String.withCString("-"))) {
             Stdio.printf("xcc: error: unrecognised option '%s'\n", a.cString());
             Stdio.printf("       (note: the optimisation level is joined — -O0, not -O 0)\n");
-            Process.exit((i32)1);
+            driverExit((i32)1);
             return (DriverOptions*)0;
         }
         // `xcc a.o b.o -o prog` / `xcc a.o lib.a -o prog`: objects and archives
@@ -8483,7 +8604,7 @@ void finishDriverArgs(DriverOptions* d)
     addLdFlagsFromEnvironment(d);
     if (d.listLayouts()) {
         listLayouts(o);
-        Process.exit((i32)0);
+        driverExit((i32)0);
         return;
     }
     String* spec = d.layoutSpec();
@@ -8502,7 +8623,7 @@ void finishDriverArgs(DriverOptions* d)
                              "<platform>/layouts/%s.lnk under the support root). The layout is "
                              "the single source of truth; there is no built-in fallback.\n",
                              spec.cString(), spec.cString());
-            Process.exit((i32)1);
+            driverExit((i32)1);
             return;
         }
         d.setLayoutPath(lp);
@@ -8516,14 +8637,14 @@ void finishDriverArgs(DriverOptions* d)
             if (!isXt6502(d)) {
                 Stdio.error(String.withCString("xcc: error: --dump-layout draws a 6502 memory layout: "
                                                "name one with -m <layout>, or -A 6502 for the default\n"));
-                Process.exit((i32)1);
+                driverExit((i32)1);
                 return;
             }
             lp = resolveLayoutFile(o, String.withCString("xt6502/xt"));
             if (lp == (String*)0) {
                 Stdio.printf("xcc: error: cannot find the default layout xt6502/xt under the "
                              "support root (-H)\n");
-                Process.exit((i32)1);
+                driverExit((i32)1);
                 return;
             }
         }
@@ -8532,11 +8653,11 @@ void finishDriverArgs(DriverOptions* d)
             Stdio.error(String.withFormat("xcc: warning: %s\n", ((String*)m.warnings().get(i)).cString()));
         if (m.failed()) {
             Stdio.printf("xcc: error: %s\n", m.why().cString());
-            Process.exit((i32)1);
+            driverExit((i32)1);
             return;
         }
         Stdio.printf("%s", m.diagram().cString());
-        Process.exit((i32)0);
+        driverExit((i32)0);
         return;
     }
 }

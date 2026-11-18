@@ -19,6 +19,7 @@
 #import <LlvmRead>
 #import <Frontend>
 #import <Language>
+#import <External>
 
 // clang's object for the part of the C program xcc does not compile (the
 // globals, and any function the reader did not read); the link adds it.
@@ -143,42 +144,23 @@ class CPath
     {
     u8 _unused;
 
-    // `'a'` for the shell, a `'` inside written `'\''`. On Windows system()
-    // runs cmd.exe, which knows only double quotes: `"a"`, with no `"` inside
-    // a path to escape.
+    // One argument quoted for the shell system() runs (External.quote).
     static String* quoted(String* a)
         {
-#if OS_windows
-        String* w = String.withCString("\"");
-        w.append(a);
-        w.appendCString("\"");
-        return w;
-#else
-        String* q = String.withCString("'");
-        for (u32 i = (u32)0; i < a.byteLength(); i = i + (u32)1)
-            {
-            u8 c = a.byteAt(i);
-            if (c == (u8)'\'')
-                q.appendCString("'\\''");
-            else
-                q.appendByte(c);
-            }
-        q.appendCString("'");
-        return q;
-#endif
+        return External.quote(a);   // the one quoting rule (#337)
         }
 
-    // A scratch path for clang's output, this process's own.
+    // A scratch path for clang's output: `c` in the run's private scratch
+    // directory (External.tempDir, #337), which goes when the run ends. It
+    // was /tmp/xcc-c-<pid>, beside it and ignoring $TMPDIR.
     static String* scratch(void)
         {
 #if OS_windows
-        // %TEMP%, as every Windows program's scratch: there is no /tmp.
-        String* t = Platform.env(String.withCString("TEMP"));
-        if (t.byteLength() == (u32)0)
-            t = String.withCString(".");
-        return String.withFormat("%s\\xcc-c-%ld", t.cString(), getpid());
+        String* p = External.tempDir();
+        p.appendCString("\\c");
+        return p;
 #else
-        return String.withFormat("/tmp/xcc-c-%ld", getpid());
+        return External.tempPath("c");
 #endif
         }
 
@@ -394,13 +376,14 @@ class CPath
         cmd.append(lang.irFlags());
         if (gCPathStd != (String*)0)
             {
-            cmd.appendCString(" -std=");
-            cmd.append(gCPathStd);
+            // The user's value, quoted like any other argument (#337).
+            cmd.appendCString(" ");
+            cmd.append(CPath.quoted(String.withFormat("-std=%s", gCPathStd.cString())));
             }
         if (gCPathFpContract != (String*)0)
             {
-            cmd.appendCString(" -ffp-contract=");
-            cmd.append(gCPathFpContract);
+            cmd.appendCString(" ");
+            cmd.append(CPath.quoted(String.withFormat("-ffp-contract=%s", gCPathFpContract.cString())));
             }
         for (u32 i = (u32)0; i < incs.count(); i = i + (u32)1)
             {
@@ -573,6 +556,9 @@ class CPath
                     IRDbg.setPath(IRDbg.canonicalPath(input), k);
                     break;
                     }
+            // What the stub brought, for the optimiser to remove when no
+            // loop is lifted (Opt.dropBase).
+            base.markBase();
             m = r.readInto(readText, base);
             }
         else

@@ -56,6 +56,8 @@
             u32 round = (u32)0;
             while (round < (u32)16 && aggExpandOnce(m, fn))
                 round = round + (u32)1;
+            if (round == (u32)16)
+                optRoundCap("aggregate expansion", (u32)16, fn);
             }
         }
 

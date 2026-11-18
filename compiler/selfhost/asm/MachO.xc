@@ -1544,6 +1544,54 @@ class MachOSha256
         return _badPage == (Array*)0 ? new Array() : _badPage;
         }
 
+    // Fixups that do not fit the instruction they patch (#285): a branch out
+    // of range or unaligned, a page offset not aligned to the access. They
+    // were written masked, which loads the wrong bytes or jumps elsewhere;
+    // the driver now refuses the link with these messages.
+    Array* _linkErrors;
+    Array* linkErrors(void)
+        {
+        return _linkErrors == (Array*)0 ? new Array() : _linkErrors;
+        }
+    void linkError(String* what, String* sym)
+        {
+        if (_linkErrors == (Array*)0)
+            _linkErrors = new Array();
+        String* m = String.withString(what);
+        m.appendCString(" '");
+        m.append(sym != (String*)0 && sym.hasPrefix(String.withCString("_")) ? sym.substringFromByte((u32)1) : sym);
+        m.appendCString("'");
+        _linkErrors.add((Object*)m);
+        }
+
+    // A b/bl displacement in bytes: 4-aligned, within the 26-bit word range.
+    bool branchFits(i32 delta, String* sym)
+        {
+        if ((delta & (i32)3) != (i32)0)
+            {
+            linkError(String.withCString("unaligned branch to"), sym);
+            return false;
+            }
+        i32 imm = delta >> (i32)2;
+        if (imm < (i32)-33554432 || imm >= (i32)33554432)
+            {
+            linkError(String.withCString("branch out of the +-128 MB range to"), sym);
+            return false;
+            }
+        return true;
+        }
+
+    // A load or store's page offset must be a multiple of its access size
+    // (2^scale), or the scaled imm12 drops the low bits.
+    bool lo12Aligned(u32 target, u32 scale, String* sym)
+        {
+        if (scale == (u32)0 || ((target & (u32)$FFF) & (((u32)1 << scale) - (u32)1)) == (u32)0)
+            return true;
+        String* w = String.withFormat("a load or store of %u bytes through @PAGEOFF is not aligned to", (u32)1 << scale);
+        linkError(w, sym);
+        return false;
+        }
+
     // `add Xd, Xn, #imm` (64-bit, unshifted): the address form of PAGEOFF.
     static bool isAddImm64(u32 w)
         {
@@ -1867,13 +1915,15 @@ class MachOSha256
                 u32 idx = ((Number*)_importIndex.get((Hashable*)f.symbol())).asU32();
                 u32 stub = stubsOffset + idx * (u32)STUB_SZ;
                 i32 rel = ((i32)stub - (i32)site) >> (i32)2;
-                wrw(txt, f.offset(), (rdw(txt, f.offset()) & (u32)$FC000000) | ((u32)rel & (u32)$03FFFFFF));
+                if (branchFits((i32)stub - (i32)site, f.symbol()))
+                    wrw(txt, f.offset(), (rdw(txt, f.offset()) & (u32)$FC000000) | ((u32)rel & (u32)$03FFFFFF));
                 }
             else if (f.kind() == (u32)FIXUP_BRANCH26)
                 {
                 u32 s = symOffset(symbols, dataSyms, f.symbol(), textOffset, dataProgOffset);
                 i32 rel = (((i32)s + f.addend()) - (i32)site) >> (i32)2;
-                wrw(txt, f.offset(), (rdw(txt, f.offset()) & (u32)$FC000000) | ((u32)rel & (u32)$03FFFFFF));
+                if (branchFits(((i32)s + f.addend()) - (i32)site, f.symbol()))
+                    wrw(txt, f.offset(), (rdw(txt, f.offset()) & (u32)$FC000000) | ((u32)rel & (u32)$03FFFFFF));
                 }
             else if (f.kind() == (u32)FIXUP_PAGE21 && defined)
                 {
@@ -1884,7 +1934,8 @@ class MachOSha256
                 {
                 u32 s = symOffset(symbols, dataSyms, f.symbol(), textOffset, dataProgOffset) + (u32)f.addend();
                 u32 imm12 = (s & (u32)$FFF) >> f.scale();
-                wrw(txt, f.offset(), (rdw(txt, f.offset()) & ~((u32)$FFF << (u32)10)) | (imm12 << (u32)10));
+                if (lo12Aligned(s, f.scale(), f.symbol()))
+                    wrw(txt, f.offset(), (rdw(txt, f.offset()) & ~((u32)$FFF << (u32)10)) | (imm12 << (u32)10));
                 }
             else if (f.kind() == (u32)FIXUP_PAGE21 && pageImport(f))
                 {
@@ -2142,13 +2193,15 @@ class MachOSha256
                 u32 idx = ((Number*)_importIndex.get((Hashable*)f.symbol())).asU32();
                 u32 stub = stubsOffset + idx * (u32)STUB_SZ;
                 i32 rel = ((i32)stub - (i32)site) >> (i32)2;
-                wrw(txt, f.offset(), (rdw(txt, f.offset()) & (u32)$FC000000) | ((u32)rel & (u32)$03FFFFFF));
+                if (branchFits((i32)stub - (i32)site, f.symbol()))
+                    wrw(txt, f.offset(), (rdw(txt, f.offset()) & (u32)$FC000000) | ((u32)rel & (u32)$03FFFFFF));
                 }
             else if (f.kind() == (u32)FIXUP_BRANCH26)
                 {
                 u32 s = symOffset(symbols, dataSyms, f.symbol(), textOffset, dataProgOffset);
                 i32 rel = (((i32)s + f.addend()) - (i32)site) >> (i32)2;
-                wrw(txt, f.offset(), (rdw(txt, f.offset()) & (u32)$FC000000) | ((u32)rel & (u32)$03FFFFFF));
+                if (branchFits(((i32)s + f.addend()) - (i32)site, f.symbol()))
+                    wrw(txt, f.offset(), (rdw(txt, f.offset()) & (u32)$FC000000) | ((u32)rel & (u32)$03FFFFFF));
                 }
             else if (f.kind() == (u32)FIXUP_PAGE21 && defined)
                 {
@@ -2159,7 +2212,8 @@ class MachOSha256
                 {
                 u32 s = symOffset(symbols, dataSyms, f.symbol(), textOffset, dataProgOffset) + (u32)f.addend();
                 u32 imm12 = (s & (u32)$FFF) >> f.scale();
-                wrw(txt, f.offset(), (rdw(txt, f.offset()) & ~((u32)$FFF << (u32)10)) | (imm12 << (u32)10));
+                if (lo12Aligned(s, f.scale(), f.symbol()))
+                    wrw(txt, f.offset(), (rdw(txt, f.offset()) & ~((u32)$FFF << (u32)10)) | (imm12 << (u32)10));
                 }
             else if (f.kind() == (u32)FIXUP_PAGE21 && pageImport(f))
                 {
