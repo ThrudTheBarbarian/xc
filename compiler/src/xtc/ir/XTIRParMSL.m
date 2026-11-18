@@ -891,23 +891,45 @@ static NSString* arrFn(unichar c)
             }
         }
     self.fwdPreds = fwdPreds;
-    // Each loop leaves to exactly one block.
+    // Each loop leaves to one block. A loop that leaves to more than one
+    // fits when each of the others only passes control on to that block
+    // (one way in, an unconditional branch out), as the edge a `break`
+    // takes does: those blocks join the loop, and their branch out is
+    // printed as its `break`.
     for (NSNumber* h in [self.loopOf.allKeys sortedArrayUsingSelector:@selector(compare:)])
         {
-        NSIndexSet* body = self.loopOf[h];
-        __block NSInteger exitTo = -1;
-        __block BOOL bad = NO;
+        NSMutableIndexSet* body = self.loopOf[h];
+        NSMutableArray<NSNumber*>* outs = [NSMutableArray array];
         [body enumerateIndexesUsingBlock:^(NSUInteger w, BOOL* stop) {
             for (NSNumber* q in succ[w])
-                if (![body containsIndex:q.unsignedIntegerValue])
-                    {
-                    if (exitTo >= 0 && exitTo != (NSInteger)q.unsignedIntegerValue)
-                        bad = YES;
-                    exitTo = (NSInteger)q.unsignedIntegerValue;
-                    }
+                if (![body containsIndex:q.unsignedIntegerValue] && ![outs containsObject:q])
+                    [outs addObject:q];
         }];
-        if (bad || exitTo < 0)
+        if (outs.count == 0)
             return NO;
+        NSInteger exitTo = -1;
+        if (outs.count == 1)
+            exitTo = outs[0].integerValue;
+        else
+            {
+            NSMutableIndexSet* pass = [NSMutableIndexSet indexSet];
+            for (NSNumber* t in outs)
+                {
+                NSUInteger x = t.unsignedIntegerValue;
+                for (NSUInteger guard = 0; guard < n; guard++)
+                    {
+                    if (self.loopOf[@(x)] || [fwdPreds[x] unsignedIntegerValue] != 1
+                        || [body containsIndex:x] || succ[x].count != 1)
+                        break;
+                    [pass addIndex:x];
+                    x = succ[x][0].unsignedIntegerValue;
+                    }
+                if (exitTo >= 0 && exitTo != (NSInteger)x)
+                    return NO;
+                exitTo = (NSInteger)x;
+                }
+            [body addIndexes:pass];
+            }
         self.loopExit[h] = @(exitTo);
         }
     // Immediate post-dominators over the CFG, to a virtual exit after every

@@ -646,11 +646,16 @@
                     }
                 }
             }
-        // Each loop leaves to exactly one block.
+        // Each loop leaves to one block. A loop that leaves to more than one
+        // fits when each of the others only passes control on to that block
+        // (one way in, an unconditional branch out), as the edge a `break`
+        // takes does: those blocks join the loop, and their branch out is
+        // printed as its `break`.
         for (u32 h = (u32)0; h < n; h = h + (u32)1)
             {
             if (!sIsHeader(h)) continue;
-            i64 exitTo = (i64)-1;
+            Map* body = (Map*)_sLoop.get((Hashable*)sKey(h));
+            Array* outs = new Array();
             for (u32 w = (u32)0; w < n; w = w + (u32)1)
                 {
                 if (!sInLoop((i64)h, w)) continue;
@@ -659,11 +664,40 @@
                     {
                     u32 v = ((Number*)sw.get(q)).asU32();
                     if (sInLoop((i64)h, v)) continue;
-                    if (exitTo >= (i64)0 && exitTo != (i64)v) return false;
-                    exitTo = (i64)v;
+                    bool seen = false;
+                    for (u32 k = (u32)0; k < outs.count(); k = k + (u32)1)
+                        if (((Number*)outs.get(k)).asU32() == v) seen = true;
+                    if (!seen) outs.add((Object*)Number.with(v));
                     }
                 }
-            if (exitTo < (i64)0) return false;
+            if (outs.count() == (u32)0) return false;
+            i64 exitTo = (i64)-1;
+            if (outs.count() == (u32)1)
+                exitTo = (i64)((Number*)outs.get((u32)0)).asU32();
+            else
+                {
+                Array* pass = new Array();
+                for (u32 k = (u32)0; k < outs.count(); k = k + (u32)1)
+                    {
+                    u32 x = ((Number*)outs.get(k)).asU32();
+                    for (u32 g = (u32)0; g < n; g = g + (u32)1)
+                        {
+                        Array* sx = (Array*)_sSucc.get(x);
+                        if (sIsHeader(x) || ((Number*)_sFwd.get(x)).asU32() != (u32)1
+                            || sInLoop((i64)h, x) || sx.count() != (u32)1)
+                            break;
+                        pass.add((Object*)Number.with(x));
+                        x = ((Number*)sx.get((u32)0)).asU32();
+                        }
+                    if (exitTo >= (i64)0 && exitTo != (i64)x) return false;
+                    exitTo = (i64)x;
+                    }
+                for (u32 k = (u32)0; k < pass.count(); k = k + (u32)1)
+                    {
+                    String* pk = sKey(((Number*)pass.get(k)).asU32());
+                    body.set((Hashable*)pk, (Object*)pk);
+                    }
+                }
             _sExit.set((Hashable*)sKey(h), (Object*)Number.with(exitTo));
             }
         // Immediate post-dominators, to a virtual exit (n) after every Return.
