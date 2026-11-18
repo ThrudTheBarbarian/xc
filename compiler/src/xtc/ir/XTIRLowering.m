@@ -11431,10 +11431,13 @@ static const NSUInteger kVarargSlotBytes = 8;
         // body's baseAddr comes from lowerExpression(collection) (the
         // pointer value), not from decayArrayBaseToPtr (which would
         // give the slot's address).
+        // Of the count type, as the counter and the _xtc_count path below are:
+        // a U16 bound against a U32 counter on the 32/64-bit targets (#412).
         NSNumber* nN = self.heapArrayLengthByLocal[((XTIdentifierNode*)collection).identName];
+        XTIRType* nTy = [self countIRType];
         countVal = [self emitInsnOpcode:XTIROpConst
-                                 result:[XTIRType u16Type]
-                               operands:@[ [XTIROperand immIWithType:[XTIRType u16Type]
+                                 result:nTy
+                               operands:@[ [XTIROperand immIWithType:nTy
                                                                value:nN.longLongValue] ]];
         isHeapPtrBase = YES;
         baseForAddr = collection;
