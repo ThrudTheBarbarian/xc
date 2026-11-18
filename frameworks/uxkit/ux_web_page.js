@@ -15,6 +15,12 @@
 // THE POPUP LIST (UXPopUpButton): see popup() below; a pick is ring type 10.
 //
 // THE MODAL ALERT (UXAlert): see alert() below; the answer is ring type 7, the 1-based button.
+//
+// INPUT DETAIL the loader's own listeners leave out: the modifier keys, as ring type 20 (a = the
+// toolkit's UX_MOD_* bits, b = 1 when the browser runs on Apple's platforms, where Command is the
+// command key) whenever they change, before the press, move, wheel or key they apply to; and each
+// key as ring type 21 (a = the toolkit's key code, b = 1 pressed / 0 released), which the driver
+// takes in place of the loader's raw keyCodes.
 (() => {
   const css = `
 .ux-menubar { display: flex; gap: 2px; padding: 2px 4px; font: 13px system-ui, sans-serif;
@@ -66,6 +72,30 @@
 
   // A shortcut: Command on a Mac, Control elsewhere, as the platform's own menus spell it.
   const isMac = /Mac|iPhone|iPad/.test((globalThis.navigator && navigator.platform) || '');
+
+  // The modifier keys and the keys themselves, for the driver (ring 20 and 21; see the top).  The
+  // modifier listeners capture on the window, so they run before the loader's own on the canvas.
+  // The key listeners do not: they are on the window too, registered before the loader's, so they
+  // run first, and a key the page keeps (an open alert's, a menu's Escape) stops before either.
+  const ring = (...a) => { if (globalThis.xccPushEvent) globalThis.xccPushEvent(...a); };
+  const modsOf = (e) => (e.shiftKey ? 0x03 : 0) | (e.ctrlKey ? 0x04 : 0) | (e.altKey ? 0x08 : 0) | (e.metaKey ? 0x10 : 0);
+  let modsSent = -1;
+  const sendMods = (e) => {
+    const m = modsOf(e);
+    if (m !== modsSent) { modsSent = m; ring(20, m, isMac ? 1 : 0); }
+  };
+  // the keys with no character, as GEM's scan codes (UX_KEY_* in UXEvent.xc)
+  const named = { ArrowUp: 0x4800, ArrowDown: 0x5000, ArrowLeft: 0x4B00, ArrowRight: 0x4D00,
+                  Home: 0x4700, End: 0x4F00, PageUp: 0x4900, PageDown: 0x5100,
+                  Backspace: 0x0E08, Delete: 0x537F, Escape: 0x011B, Enter: 0x0D, Tab: 0x09 };
+  const keyOf = (e) => {
+    if (named[e.key] !== undefined) return named[e.key];
+    if (e.key && e.key.length === 1) { const c = e.key.charCodeAt(0); return c < 256 ? c : 0; }
+    return 0;
+  };
+  for (const t of ['mousedown', 'mouseup', 'mousemove', 'wheel']) globalThis.addEventListener(t, sendMods, { capture: true });
+  globalThis.addEventListener('keydown', (e) => { sendMods(e); ring(21, keyOf(e), 1); });
+  globalThis.addEventListener('keyup', (e) => { sendMods(e); ring(21, keyOf(e), 0); });
   const keyLabel = (it) => isMac ? (it.shift ? '\u21e7' : '') + '\u2318' + it.key
                                  : 'Ctrl+' + (it.shift ? 'Shift+' : '') + it.key;
   document.addEventListener('keydown', (e) => {

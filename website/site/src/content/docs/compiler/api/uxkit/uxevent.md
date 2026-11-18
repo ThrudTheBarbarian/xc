@@ -50,9 +50,23 @@ keeping other objects alive. The one exception is
 | `UXEventWheel` | the wheel, at `x, y`: `b` is the DOM's `deltaY` in pixels (positive scrolls down, 100 a notch), `a` the whole notches (positive scrolls up) |
 | `UXEventMouseMoved` | the pointer moved with no button held, at `x, y` (hover) |
 | `UXEventRightMouseDown` | a press of the secondary button, at `x, y` |
+| `UXEventOtherMouseDown` | a press of the middle button, at `x, y` |
+| `UXEventKeyUp` | a key's release, in [`key`](#keys-and-modifiers) |
 
 Every backend delivers the wheel, hover and the secondary button in this form,
-whatever its native sign or message.
+whatever its native sign or message. The middle button and key releases come
+from macOS, Windows, Linux and the web; GEM has neither.
+
+A press carries its button in `buttons`:
+
+```c
+#define UX_BUTTON_LEFT    $01
+#define UX_BUTTON_RIGHT   $02
+#define UX_BUTTON_MIDDLE  $04
+```
+
+A press with the right or middle button can be followed as a drag with
+`UXView.trackMouse`, as a left press can.
 
 ### From the window system
 
@@ -97,6 +111,7 @@ on every backend:
 
 ```c
 #define UX_KEY_ASCII   $00FF      // mask for the character
+#define UX_KEY_SCAN    $FF00      // mask for the scancode
 #define UX_KEY_TAB     $09
 #define UX_KEY_RETURN  $0D
 ```
@@ -106,15 +121,58 @@ u16 ch = e.key & UX_KEY_ASCII;    // the character
 u16 sc = e.key >> 8;              // the scancode, for keys with no character
 ```
 
-Modifiers follow `evnt_multi`'s `kstate`:
+The keys that type no character, and the two editing keys, have the same code
+on every backend: GEM's scancode, with the character where there is one.
+
+```c
+#define UX_KEY_UP        $4800
+#define UX_KEY_DOWN      $5000
+#define UX_KEY_LEFT      $4B00
+#define UX_KEY_RIGHT     $4D00
+#define UX_KEY_HOME      $4700
+#define UX_KEY_END       $4F00
+#define UX_KEY_PAGEUP    $4900
+#define UX_KEY_PAGEDOWN  $5100
+#define UX_KEY_BACKSPACE $0E08
+#define UX_KEY_DELETE    $537F    // forward delete
+#define UX_KEY_ESCAPE    $011B
+```
+
+```c
+if (e.key == UX_KEY_LEFT) { /* move left */ }
+```
+
+Modifiers follow `evnt_multi`'s `kstate`, with Command added:
 
 ```c
 #define UX_MOD_SHIFT   $03        // either shift
 #define UX_MOD_CTRL    $04
+#define UX_MOD_ALT     $08        // Alt, or Option on a Mac
+#define UX_MOD_CMD     $10        // Command on a Mac, the Windows or Super key elsewhere
 ```
 
 ```c
 if ((e.modifiers & UX_MOD_CTRL) != 0) { /* ctrl was held */ }
+```
+
+Presses, moves, the wheel and keys all carry them. During a drag, the modifiers
+held at each step are in `gUXModifiers`, so a drag can change when Shift or
+Option is pressed partway through.
+
+### The command key
+
+```c
+u16 gUXCommandModifier
+```
+
+The modifier that makes a key a command: `UX_MOD_CMD` on macOS, iOS and the web
+in a browser on Apple's platforms, `UX_MOD_CTRL` everywhere else. The driver
+sets it when it starts. Menu shortcuts, adding to a selection, and the text
+view's editing keys all test this, so ⌘Z undoes on a Mac and Ctrl+Z undoes on
+Windows without any code that checks the platform.
+
+```c
+if ((e.modifiers & gUXCommandModifier) != 0) { /* a command */ }
 ```
 
 ## Carrying more than two integers

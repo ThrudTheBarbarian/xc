@@ -50,6 +50,18 @@ class UXApplication : UXResponder
     bool driverCallsTurn;           // true: the driver's own source calls turnFn, the loop does not
     i32 busyCount;                  // beginBusy calls not yet ended
 
+    // The running application (set when run() starts) and the driver.  A program built against the
+    // installed library (#use <UXKit>) reaches them here: the globals the toolkit keeps them in are
+    // the library's own.
+    static UXApplication* shared(void)
+        {
+        return gApp;
+        }
+    static UXViewDriver* currentDriver(void)
+        {
+        return gDriver;
+        }
+
     void init(void)
         {
         super.init();
@@ -537,6 +549,22 @@ class UXApplication : UXResponder
                 w.dispatchRightMouse(ev);
                 }
             }
+        else if (k == (u8)UXEventOtherMouseDown)
+            {
+            UXWindow* w = ev.handle != (i32)0 ? self.windowWithHandle(ev.handle) : self.windowAt((i32)ev.x, (i32)ev.y);
+            if (w != (UXWindow*)0)
+                {
+                keyWindow = w;
+                w.dispatchOtherMouse(ev);
+                }
+            }
+        else if (k == (u8)UXEventKeyUp)
+            {
+            if (keyWindow != (UXWindow*)0)
+                {
+                keyWindow.dispatchKeyUp(ev);
+                }
+            }
         else if (k == (u8)UXEventKeyDown)
             {
             // A menu shortcut first, then the KEY WINDOW routes it — not "the first window", which is
@@ -649,6 +677,8 @@ void uxTrackMouse(pointer vp, pointer ep)
     i32 y = press != (UXEvent*)0 ? (i32)press.y : (i32)0;
     UXEvent* e = new UXEvent();
     e.handle = press != (UXEvent*)0 ? press.handle : (i32)0;
+    e.buttons = press != (UXEvent*)0 ? press.buttons : (u16)UX_BUTTON_LEFT; // which button is held
+    e.modifiers = press != (UXEvent*)0 ? press.modifiers : (u16)0;
     e.kind = (u8)UXEventMouseDragged;
     i32 nx = x;
     i32 ny = y;
@@ -658,6 +688,7 @@ void uxTrackMouse(pointer vp, pointer ep)
         y = ny;
         e.x = (i16)x;
         e.y = (i16)y;
+        e.modifiers = gUXModifiers; // as held now: a drag may start plain and turn into a shift-drag
         v.mouseDragged(e);
         if (gApp != (UXApplication*)0)
             {
@@ -667,6 +698,7 @@ void uxTrackMouse(pointer vp, pointer ep)
     e.kind = (u8)UXEventMouseUp; // where the pointer last was: not every platform reports the release's point
     e.x = (i16)x;
     e.y = (i16)y;
+    e.modifiers = gUXModifiers;
     v.mouseUp(e);
     }
 

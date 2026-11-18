@@ -213,7 +213,7 @@ class UXCollectionItem : Object
         i32 idx = self.itemAtPoint(lx, ly);
         if (idx >= (i32)0)
             {
-            if ((e.modifiers & (u16)UX_MOD_SHIFT) != (u16)0)
+            if ((e.modifiers & ((u16)UX_MOD_SHIFT | gUXCommandModifier)) != (u16)0)
                 {
                 self.toggleSelection(idx);
                 }

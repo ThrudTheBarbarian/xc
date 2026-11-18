@@ -74,10 +74,10 @@ void mouseDown(UXEvent* e) {
     UXDragSession* s = UXDragSession.begin((Object*)self, pb, UX_DRAG_COPY);
 
     i32 x = e.x; i32 y = e.y;
-    while (gDriver.trackDragStep(&x, &y) != 0) {
+    while (UXApplication.currentDriver().trackDragStep(&x, &y) != 0) {
         well.hot = self.over(well, x, y) && (s.enter(well) != UX_DRAG_NONE);
         self.setNeedsDisplay();
-        if (gApp != (UXApplication*)0) { gApp.displayIfNeeded(); }
+        if (UXApplication.shared() != (UXApplication*)0) { UXApplication.shared().displayIfNeeded(); }
     }
     if (self.over(well, x, y) && s.canDrop()) { s.deliver(well); }
 }

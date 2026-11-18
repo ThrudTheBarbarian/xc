@@ -68,6 +68,7 @@ and the repaint has happened. Implement it only if you lay out views by hand.
 
 ## Topics
 
+**The running application** · [shared](#shared--currentdriver) · [currentDriver](#shared--currentdriver)
 **Configuring** · [setDriver](#setdriver) · [setHeadless](#setheadless) · [setDelegate](#setdelegate) · [setMenuBar](#setmenubar) · [setIcon](#seticon--seticonpixels) · [setIconPixels](#seticon--seticonpixels)
 **The loop** · [run](#run) · [stop](#stop) · [isRunning](#isrunning) · [pump](#pump)
 **Windows** · [addWindow](#addwindow) · [closeWindow](#closewindow) · [closeWindowLater](#closewindowlater)
@@ -86,6 +87,17 @@ needs it only to choose a backend other than its target's (a test of one
 driver, say), because `new UXApplication()` installs the target's driver when
 [`UXPlatform`](/compiler/api/uxkit/uxplatform/) is in the build. Windows are
 shown unless [`setHeadless`](#setheadless) asks otherwise.
+
+### shared / currentDriver
+
+```c
+static UXApplication* shared(void)
+static UXViewDriver* currentDriver(void)
+```
+
+The running application (from the moment [`run`](#run) starts) and the driver
+it uses. A program built against the installed library (`#use <UXKit>`)
+reaches them here; the `gApp` and `gDriver` globals belong to the library.
 
 ### setHeadless
 

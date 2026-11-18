@@ -537,6 +537,7 @@ class UXIosDriver : Object<UXViewDriver>
     // ---- boot / windows ------------------------------------------------------
     bool boot(i32* screenW, i32* screenH)
         {
+        gUXCommandModifier = (u16)UX_MOD_CMD; // an iPad keyboard's command key is Command
         if (gIosGfx == (UXIosGraphics*)0)
             {
             gIosGfx = new UXIosGraphics();

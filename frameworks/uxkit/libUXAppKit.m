@@ -114,10 +114,62 @@ static NSPoint ak_tree_point(NSView* content, NSEvent* ev, int handle)
     (void)handle;
     return [content convertPoint:[ev locationInWindow] fromView:nil];
     }
+/* The modifier keys of the event being handled, as the toolkit's UX_MOD_* (UXEvent.xc): shift $03, control $04,
+ * option $08, command $10.  The driver stamps them on every event it hands the toolkit, the press
+ * and each step of a drag alike. */
+static int g_evMods; /* the modifiers of the event being handled (or of the latest drag step) */
+static int ak_mods_of(NSEvent* ev)
+    {
+    NSEventModifierFlags f = ev ? [ev modifierFlags] : [NSEvent modifierFlags];
+    int m = 0;
+    if (f & NSEventModifierFlagShift)
+        m |= 0x03;
+    if (f & NSEventModifierFlagControl)
+        m |= 0x04;
+    if (f & NSEventModifierFlagOption)
+        m |= 0x08;
+    if (f & NSEventModifierFlagCommand)
+        m |= 0x10;
+    return m;
+    }
+int ux_ak_modifiers(void)
+    {
+    return g_evMods;
+    }
+/* A key as the toolkit has it on every backend: GEM's (scancode << 8) | ascii.  AppKit hands the
+ * keys with no character as private-use function-key characters (NSUpArrowFunctionKey...), which
+ * become GEM's scan codes here (UX_KEY_* in UXEvent.xc). */
+static int ak_key_code(NSEvent* ev)
+    {
+    NSString* ch = [ev charactersIgnoringModifiers];
+    NSString* typed = [ev characters];
+    int c = [ch length] > 0 ? (int)[ch characterAtIndex:0] : 0;
+    switch (c)
+        {
+        case NSUpArrowFunctionKey: return 0x4800;
+        case NSDownArrowFunctionKey: return 0x5000;
+        case NSLeftArrowFunctionKey: return 0x4B00;
+        case NSRightArrowFunctionKey: return 0x4D00;
+        case NSHomeFunctionKey: return 0x4700;
+        case NSEndFunctionKey: return 0x4F00;
+        case NSPageUpFunctionKey: return 0x4900;
+        case NSPageDownFunctionKey: return 0x5100;
+        case NSDeleteFunctionKey: return 0x537F;   /* forward delete */
+        case 0x7F: return 0x0E08;                  /* the delete key above return: backspace */
+        case 0x1B: return 0x011B;                  /* escape */
+        case 0x03: return 0x0D;                    /* enter on the keypad */
+        default: break;
+        }
+    /* a typed character: what the keys produce (option-e is a dead key, so characters may be
+     * empty); with Control held, the letter itself, as Control-letter is matched by letter */
+    int t = [typed length] > 0 ? (int)[typed characterAtIndex:0] : c;
+    return t < 0xF700 ? t : 0;
+    }
 static void ak_mouseDown(__unsafe_unretained id self, SEL _cmd, __unsafe_unretained id ev)
     {
     if (!g_dispatch)
         return;
+    g_evMods = ak_mods_of((NSEvent*)ev);
     int h = 0;
     for (int i = 1; i < UX_MAXW; i++)
         {
@@ -137,8 +189,15 @@ static void ak_keyDown(__unsafe_unretained id self, SEL _cmd, __unsafe_unretaine
     {
     if (!g_dispatch)
         return;
-    NSString* ch = [(NSEvent*)ev characters];
-    g_dispatch(4, 0, 0, [ch length] > 0 ? (int)[ch characterAtIndex:0] : 0);
+    g_evMods = ak_mods_of((NSEvent*)ev);
+    g_dispatch(4, 0, 0, ak_key_code((NSEvent*)ev));
+    }
+static void ak_keyUp(__unsafe_unretained id self, SEL _cmd, __unsafe_unretained id ev)
+    {
+    if (!g_dispatch)
+        return;
+    g_evMods = ak_mods_of((NSEvent*)ev);
+    g_dispatch(17, 0, 0, ak_key_code((NSEvent*)ev)); // 17 = UXEventKeyUp
     }
 /* The window a view belongs to, or 0 — the dispatch tags the event with it so the toolkit routes
  * to the window that got it rather than always to #1. */
@@ -163,6 +222,7 @@ static void ak_mouseMoved(__unsafe_unretained id self, SEL _cmd, __unsafe_unreta
     {
     if (!g_dispatch)
         return;
+    g_evMods = ak_mods_of((NSEvent*)ev);
     NSPoint p = ak_tree_point((NSView*)self, (NSEvent*)ev, ak_win_of((NSView*)self));
     g_dispatch(15, (int)p.x, (int)p.y, ak_win_of((NSView*)self)); // 15 = UXEventMouseMoved
     }
@@ -170,13 +230,25 @@ static void ak_rightMouseDown(__unsafe_unretained id self, SEL _cmd, __unsafe_un
     {
     if (!g_dispatch)
         return;
+    g_evMods = ak_mods_of((NSEvent*)ev);
     NSPoint p = ak_tree_point((NSView*)self, (NSEvent*)ev, ak_win_of((NSView*)self));
     g_dispatch(16, (int)p.x, (int)p.y, ak_win_of((NSView*)self)); // 16 = UXEventRightMouseDown
+    }
+/* The middle button (AppKit's buttonNumber 2, or any past it), as its own kind like the right one:
+ * a 3-D view orbits on it.  Its drag is followed by ux_ak_drag_next, as any button's is. */
+static void ak_otherMouseDown(__unsafe_unretained id self, SEL _cmd, __unsafe_unretained id ev)
+    {
+    if (!g_dispatch)
+        return;
+    g_evMods = ak_mods_of((NSEvent*)ev);
+    NSPoint p = ak_tree_point((NSView*)self, (NSEvent*)ev, ak_win_of((NSView*)self));
+    g_dispatch(18, (int)p.x, (int)p.y, ak_win_of((NSView*)self)); // 18 = UXEventOtherMouseDown
     }
 static void ak_scrollWheel(__unsafe_unretained id self, SEL _cmd, __unsafe_unretained id ev)
     {
     if (!g_dispatch)
         return;
+    g_evMods = ak_mods_of((NSEvent*)ev);
     NSPoint p = [(NSView*)self convertPoint:[(NSEvent*)ev locationInWindow] fromView:nil];
     /* PIXELS, the browser's contract.  A precise device (trackpad / Magic Mouse) reports pixels
      * already; a line-based wheel reports LINES, and one line steps 100px the way WebKit and Chrome
@@ -290,8 +362,10 @@ static Class ak_view_class(void)
     class_addMethod(c, sel_registerName("acceptsFirstResponder"), (IMP)ak_acceptsFirstResponder, "B@:");
     class_addMethod(c, sel_registerName("mouseDown:"), (IMP)ak_mouseDown, "v@:@");
     class_addMethod(c, sel_registerName("keyDown:"), (IMP)ak_keyDown, "v@:@");
+    class_addMethod(c, sel_registerName("keyUp:"), (IMP)ak_keyUp, "v@:@");
     class_addMethod(c, sel_registerName("mouseMoved:"), (IMP)ak_mouseMoved, "v@:@");
     class_addMethod(c, sel_registerName("rightMouseDown:"), (IMP)ak_rightMouseDown, "v@:@");
+    class_addMethod(c, sel_registerName("otherMouseDown:"), (IMP)ak_otherMouseDown, "v@:@");
     class_addMethod(c, sel_registerName("scrollWheel:"), (IMP)ak_scrollWheel, "v@:@");
     class_addMethod(c, sel_registerName("updateTrackingAreas"), (IMP)ak_updateTrackingAreas, "v@:");
     class_addMethod(c, sel_registerName("draggingEntered:"), (IMP)ak_draggingEntered, "Q@:@");
@@ -323,6 +397,7 @@ static void ak_shieldMouseDown(__unsafe_unretained id self, SEL _cmd, __unsafe_u
     {
     if (!g_dispatch)
         return;
+    g_evMods = ak_mods_of((NSEvent*)ev);
     int h = 0;
     for (int i = 1; i < UX_MAXW; i++)
         {
@@ -467,6 +542,7 @@ static void ak_glMouseDown(__unsafe_unretained id self, SEL _cmd, __unsafe_unret
     {
     if (!g_dispatch)
         return;
+    g_evMods = ak_mods_of((NSEvent*)ev);
     int h = ak_gl_win_of((NSView*)self);
     if (!h || !g_view[h])
         return;
@@ -479,6 +555,7 @@ static void ak_glMouseMoved(__unsafe_unretained id self, SEL _cmd, __unsafe_unre
     {
     if (!g_dispatch)
         return;
+    g_evMods = ak_mods_of((NSEvent*)ev);
     int h = ak_gl_win_of((NSView*)self);
     if (!h || !g_view[h])
         return;
@@ -489,16 +566,29 @@ static void ak_glRightMouseDown(__unsafe_unretained id self, SEL _cmd, __unsafe_
     {
     if (!g_dispatch)
         return;
+    g_evMods = ak_mods_of((NSEvent*)ev);
     int h = ak_gl_win_of((NSView*)self);
     if (!h || !g_view[h])
         return;
     NSPoint p = [g_view[h] convertPoint:[(NSEvent*)ev locationInWindow] fromView:nil];
     g_dispatch(16, (int)p.x, (int)p.y, h);
     }
+static void ak_glOtherMouseDown(__unsafe_unretained id self, SEL _cmd, __unsafe_unretained id ev)
+    {
+    if (!g_dispatch)
+        return;
+    g_evMods = ak_mods_of((NSEvent*)ev);
+    int h = ak_gl_win_of((NSView*)self);
+    if (!h || !g_view[h])
+        return;
+    NSPoint p = [g_view[h] convertPoint:[(NSEvent*)ev locationInWindow] fromView:nil];
+    g_dispatch(18, (int)p.x, (int)p.y, h);
+    }
 static void ak_glScrollWheel(__unsafe_unretained id self, SEL _cmd, __unsafe_unretained id ev)
     {
     if (!g_dispatch)
         return;
+    g_evMods = ak_mods_of((NSEvent*)ev);
     int h = ak_gl_win_of((NSView*)self);
     if (!h || !g_view[h])
         return;
@@ -518,6 +608,7 @@ static Class ak_gl_class(void)
     class_addMethod(c, sel_registerName("mouseDown:"), (IMP)ak_glMouseDown, "v@:@");
     class_addMethod(c, sel_registerName("mouseMoved:"), (IMP)ak_glMouseMoved, "v@:@");
     class_addMethod(c, sel_registerName("rightMouseDown:"), (IMP)ak_glRightMouseDown, "v@:@");
+    class_addMethod(c, sel_registerName("otherMouseDown:"), (IMP)ak_glOtherMouseDown, "v@:@");
     class_addMethod(c, sel_registerName("scrollWheel:"), (IMP)ak_glScrollWheel, "v@:@");
     class_addMethod(c, sel_registerName("updateTrackingAreas"), (IMP)ak_updateTrackingAreas, "v@:");
     objc_registerClassPair(c);
@@ -2793,6 +2884,43 @@ int ux_ak_test_drop_file(int handle, const char* path, int x, int y)
     NSURL* u = [NSURL fileURLWithPath:ak_ns(path)];
     return ak_deliver_files(g_view[handle], @[ u ], NSMakePoint(x, y));
     }
+/* For tests: an input event built as AppKit builds one and handed to window handle's content view,
+ * as AppKit would hand it.  kind is the toolkit's (1 press, 16 right press, 18 middle press, 11 wheel
+ * with ch the pixel delta, 4 key down, 17 key up with ch the character or an NS*FunctionKey); mods
+ * are UX_MOD_* bits.  1 if the view took it. */
+int ux_ak_test_input(int handle, int kind, int x, int y, int mods, int ch)
+    {
+    if (handle <= 0 || handle >= UX_MAXW || !g_view[handle])
+        return 0;
+    NSView* v = g_view[handle];
+    NSEventModifierFlags f = ((mods & 0x03) ? NSEventModifierFlagShift : 0) | ((mods & 0x04) ? NSEventModifierFlagControl : 0) |
+                             ((mods & 0x08) ? NSEventModifierFlagOption : 0) | ((mods & 0x10) ? NSEventModifierFlagCommand : 0);
+    NSPoint w = [v convertPoint:NSMakePoint(x, y) toView:nil];
+    NSInteger wn = [[v window] windowNumber];
+    if (kind == 4 || kind == 17)
+        {
+        unichar c = (unichar)ch;
+        NSString* str = [NSString stringWithCharacters:&c length:1];
+        NSEvent* e = [NSEvent keyEventWithType:(kind == 4 ? NSEventTypeKeyDown : NSEventTypeKeyUp) location:NSZeroPoint
+                                 modifierFlags:f timestamp:0 windowNumber:wn context:nil characters:str
+                   charactersIgnoringModifiers:str isARepeat:NO keyCode:0];
+        if (kind == 4)
+            [v keyDown:e];
+        else
+            [v keyUp:e];
+        return 1;
+        }
+    NSEventType t = kind == 16 ? NSEventTypeRightMouseDown : kind == 18 ? NSEventTypeOtherMouseDown : NSEventTypeLeftMouseDown;
+    NSEvent* e = [NSEvent mouseEventWithType:t location:w modifierFlags:f timestamp:0 windowNumber:wn
+                                     context:nil eventNumber:0 clickCount:1 pressure:1];
+    if (kind == 16)
+        [v rightMouseDown:e];
+    else if (kind == 18)
+        [v otherMouseDown:e];
+    else
+        [v mouseDown:e];
+    return 1;
+    }
 /* For tests: a key press offered to the main menu the way AppKit offers one before keyDown:
  * (performKeyEquivalent:).  1 if a menu item took it. */
 int ux_ak_test_menu_press(int key, int cmd, int shift)
@@ -4553,6 +4681,8 @@ int ux_ak_drag_next(int* x, int* y)
                                     untilDate:[NSDate distantFuture]
                                        inMode:NSEventTrackingRunLoopMode
                                       dequeue:YES];
+    if (e)
+        g_evMods = ak_mods_of(e);
     if (!e || [e type] == NSEventTypeLeftMouseUp || [e type] == NSEventTypeRightMouseUp || [e type] == NSEventTypeOtherMouseUp)
         return 0;
     NSWindow* w = [e window];

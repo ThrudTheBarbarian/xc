@@ -20,6 +20,15 @@ class Pad : UXView
     i32 right;
     i32 wheels;
     i32 wheelPx;
+    i32 middle;
+    i32 downs;
+    i32 ups;
+    u16 lastKey;
+    u16 lastMods;
+    bool acceptsFirstResponder(void) { return true; }
+    void otherMouseDown(UXEvent* e) { middle = middle + (i32)1; lastMods = e.modifiers; }
+    void keyDown(UXEvent* e) { downs = downs + (i32)1; lastKey = e.key; lastMods = e.modifiers; }
+    void keyUp(UXEvent* e) { ups = ups + (i32)1; lastKey = e.key; lastMods = e.modifiers; }
     void mouseMoved(UXEvent* e) { moved = moved + (i32)1; }
     void mouseDragged(UXEvent* e) { dragged = dragged + (i32)1; }
     void rightMouseDown(UXEvent* e) { right = right + (i32)1; }
@@ -92,9 +101,29 @@ void main(void)
     ck(e.a == (i32)1, "...and its notches the other way round (-120 px is one notch UP)");
     ck(pad.wheels == (i32)1 && pad.wheelPx == (i32)-120, "...and reaches the view's scrollWheel");
 
+    // the page script's records: the modifier keys (20) and normalised keys (21)
+    e = slot((i32)20, (i32)(UX_MOD_SHIFT | UX_MOD_CMD), (i32)1, (i32)0);
+    ck(e.kind == (u8)UXEventNone, "the modifier keys are not an event of their own");
+    ck((i32)gUXCommandModifier == (i32)UX_MOD_CMD, "...and on Apple's platforms Command is the command key");
+    e = slot((i32)1, (i32)130, (i32)120, (i32)1); // middle down
+    ck(e.kind == (u8)UXEventOtherMouseDown && e.buttons == (u16)UX_BUTTON_MIDDLE, "the middle button decodes as otherMouseDown");
+    ck(pad.middle == (i32)1 && pad.lastMods == (u16)(UX_MOD_SHIFT | UX_MOD_CMD), "...and reaches the view with the modifiers held");
+    slot((i32)2, (i32)130, (i32)120, (i32)1);
+    slot((i32)20, (i32)0, (i32)1, (i32)0);
+    slot((i32)1, (i32)130, (i32)120, (i32)0); // a click focuses the pad
+    slot((i32)2, (i32)130, (i32)120, (i32)0);
+    e = slot((i32)21, (i32)UX_KEY_LEFT, (i32)1, (i32)0);
+    ck(e.kind == (u8)UXEventKeyDown && e.key == (u16)UX_KEY_LEFT, "a normalised key decodes with the toolkit's code");
+    e = slot((i32)4, (i32)37, (i32)0, (i32)0);
+    ck(e.kind == (u8)UXEventNone, "...and the loader's raw keyCode for it is dropped");
+    e = slot((i32)21, (i32)UX_KEY_LEFT, (i32)0, (i32)0);
+    ck(e.kind == (u8)UXEventKeyUp, "its release is a key up");
+    ck(pad.downs == (i32)1 && pad.ups == (i32)1 && pad.lastKey == (u16)UX_KEY_LEFT, "...and both reach the focused view");
+    gUXCommandModifier = (u16)UX_MOD_CTRL;
+
     if (gFails == (i32)0)
         {
-        Stdio.printf("PASS: web input -- hover, drag, the secondary button and the wheel decode and route\n");
+        Stdio.printf("PASS: web input -- hover, drag, the buttons, the wheel, modifiers and keys decode and route\n");
         }
     else
         {

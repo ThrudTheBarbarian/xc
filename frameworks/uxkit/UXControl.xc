@@ -34,6 +34,9 @@ class UXControl : UXView
     {
     callback action void(UXControl* sender);
     u8* title;
+    // The control's own copy of the title it was given (setTitle copies, so a title made from a
+    // temporary string stays readable), freed when the title changes.
+    u8* ownTitle;
     // How the text sits in the control's box: UX_ALIGN_LEFT / CENTER / RIGHT.
     //
     // It lives on the CONTROL rather than in the shadow tree because the
@@ -53,6 +56,7 @@ class UXControl : UXView
         super.init();
         action = (callback void(UXControl * sender))0;
         title = "";
+        ownTitle = (u8*)0;
         align = (i32)UX_ALIGN_LEFT;
         }
 
@@ -75,18 +79,32 @@ class UXControl : UXView
         {
         action = a;
         }
+    // The title is copied: the caller's string may be a temporary (a String's cString).
     void setTitle(u8* s)
         {
-        title = s;
+        u8* old = self.keepTitle(s);
         // A button's, label's, check box's or radio button's content is its title: the drivers
         // read it from the node, so a title changed after attach reaches the screen.
         UXKind k = self.kind();
         if (owner != (UXViewTree*)0 &&
             (k == UXKindButton || k == UXKindLabel || k == UXKindCheckbox || k == UXKindRadio))
             {
-            owner.setSpecOf(index, (pointer)s);
+            owner.setSpecOf(index, (pointer)title);
             self.setNeedsDisplay();
             }
+        if (old != (u8*)0)
+            {
+            free((pointer)old);
+            }
+        }
+    // Take a copy of s as the title; returns the previous copy, for the caller to free once the
+    // node no longer points at it.
+    u8* keepTitle(u8* s)
+        {
+        u8* old = ownTitle;
+        ownTitle = s != (u8*)0 ? UXStr.dup(s) : (u8*)0;
+        title = ownTitle != (u8*)0 ? ownTitle : s;
+        return old;
         }
 
     void fire(void)
@@ -147,13 +165,18 @@ class UXControl : UXView
         // silently stay left.
         t.setPeerOf(index, (pointer)self);
         }
+    // The text is copied, as setTitle's is.
     void setText(u8* s)
         {
-        title = s;
+        u8* old = self.keepTitle(s);
         if (owner != (UXViewTree*)0)
             {
-            owner.setSpecOf(index, (pointer)s);
+            owner.setSpecOf(index, (pointer)title);
             self.setNeedsDisplay();
+            }
+        if (old != (u8*)0)
+            {
+            free((pointer)old);
             }
         }
     u8* text(void)

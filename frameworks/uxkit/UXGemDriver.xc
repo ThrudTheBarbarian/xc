@@ -1408,6 +1408,7 @@ class UXGemDriver : Object<UXViewDriver>
             ev.x = (i16)mx;
             ev.y = (i16)my;
             ev.buttons = (u16)mb;
+            gUXModifiers = (u16)ks;
             ev.modifiers = (u16)ks; // shift/ctrl on a click — a table reads it for multi-select
             if (ev.kind == (u8)UXEventRightMouseDown)
                 {
@@ -1432,6 +1433,7 @@ class UXGemDriver : Object<UXViewDriver>
             {
             ev.kind = (u8)UXEventKeyDown;
             ev.key = (u16)key;
+            gUXModifiers = (u16)ks;
             ev.modifiers = (u16)ks;
             return;
             }
@@ -1497,6 +1499,7 @@ class UXGemDriver : Object<UXViewDriver>
                            (pointer)&ks, (pointer)&key, (pointer)&nc);
         x[0] = mx;
         y[0] = my;
+        gUXModifiers = (u16)ks; // as held at this step
         return (r & (i32)MU_BUTTON) != (i32)0 ? (i32)0 : (i32)1;
 #endif
         }

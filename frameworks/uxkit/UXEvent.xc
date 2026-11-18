@@ -33,15 +33,52 @@ enum UXEventKind = {
     UXEventMouseMoved = 15,
     // The secondary (right) button (x,y = point, handle = window).  Its own kind and not mouseDown
     // with a flag: a view that opens a context menu and a view that selects must tell them apart.
-    UXEventRightMouseDown = 16};
+    UXEventRightMouseDown = 16,
+    // A key released (key as for UXEventKeyDown).  A view that holds a key down to do something
+    // (a modifier-free pan, a game) needs to hear the release.
+    UXEventKeyUp = 17,
+    // The middle button, or any button past the second (x,y = point, handle = window, buttons =
+    // UX_BUTTON_MIDDLE).  Like the right button it has its own kind: a 3-D view orbits on it.
+    UXEventOtherMouseDown = 18};
 
-// GEM hands us key = (scancode << 8) | ascii, so mask the low byte for the character.
+// The button a press came from, in ev.buttons.
+#define UX_BUTTON_LEFT $01
+#define UX_BUTTON_RIGHT $02
+#define UX_BUTTON_MIDDLE $04
+
+// A key is GEM's (scancode << 8) | ascii on every backend: the low byte is the character, the high
+// byte the key for those that have no character.  Every driver maps its platform's keys to these.
 #define UX_KEY_ASCII $00FF
+#define UX_KEY_SCAN $FF00
 #define UX_KEY_TAB $09
 #define UX_KEY_RETURN $0D
-// evnt_multi's kstate, in ev.modifiers: right-shift | left-shift | ctrl | alt.
+#define UX_KEY_ESCAPE $011B
+#define UX_KEY_BACKSPACE $0E08
+#define UX_KEY_DELETE $537F
+#define UX_KEY_UP $4800
+#define UX_KEY_DOWN $5000
+#define UX_KEY_LEFT $4B00
+#define UX_KEY_RIGHT $4D00
+#define UX_KEY_HOME $4700
+#define UX_KEY_END $4F00
+#define UX_KEY_PAGEUP $4900
+#define UX_KEY_PAGEDOWN $5100
+// The modifier keys held at the event, in ev.modifiers, on every backend for presses, drags, the
+// wheel and keys.  The first four are GEM's kstate (right-shift | left-shift | ctrl | alt); Command
+// (Apple's) is the toolkit's own.  On macOS a Control-click arrives as the right button.
 #define UX_MOD_SHIFT $03
 #define UX_MOD_CTRL $04
+#define UX_MOD_ALT $08
+#define UX_MOD_CMD $10
+
+// The platform's command key: Command on Apple's platforms, Control elsewhere.  A menu shortcut is
+// matched on it, and a click with it held adds an item to a selection or takes it away.  The driver
+// sets it at boot.
+u16 gUXCommandModifier = (u16)UX_MOD_CTRL;
+
+// The modifier keys held at the latest event the driver decoded, so a drag followed by trackMouse
+// carries them on each step (a shift-drag that pans).  The drivers keep it current.
+u16 gUXModifiers;
 
 // A tee on the event stream, set by UXApplication.setEventTap.  It lives HERE, not on the
 // application, because the backends whose controls are NATIVE (Win32 BN_CLICKED, AppKit's action

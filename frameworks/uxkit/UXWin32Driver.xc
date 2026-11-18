@@ -2975,6 +2975,53 @@ void w32_app_icon_apply(pointer hwnd)
         }
     }
 
+// The modifier keys held now, as the toolkit's UX_MOD_* (UXEvent.xc).
+u16 w32Mods(void)
+    {
+    u16 m = (u16)0;
+    if ((i32)GetKeyState((i32)$10) < (i32)0) // VK_SHIFT
+        {
+        m = m | (u16)UX_MOD_SHIFT;
+        }
+    if ((i32)GetKeyState((i32)$11) < (i32)0) // VK_CONTROL
+        {
+        m = m | (u16)UX_MOD_CTRL;
+        }
+    if ((i32)GetKeyState((i32)$12) < (i32)0) // VK_MENU (Alt)
+        {
+        m = m | (u16)UX_MOD_ALT;
+        }
+    return m;
+    }
+u32 MapVirtualKeyA(u32 code, u32 mapType);
+// A virtual key as the toolkit has it (GEM's (scancode << 8) | ascii): the keys with no character
+// as GEM's scan codes, the others as their character (for a release, which has no WM_CHAR).
+u16 w32Key(u32 vk)
+    {
+    if (vk == (u32)$26) { return (u16)UX_KEY_UP; }
+    if (vk == (u32)$28) { return (u16)UX_KEY_DOWN; }
+    if (vk == (u32)$25) { return (u16)UX_KEY_LEFT; }
+    if (vk == (u32)$27) { return (u16)UX_KEY_RIGHT; }
+    if (vk == (u32)$24) { return (u16)UX_KEY_HOME; }
+    if (vk == (u32)$23) { return (u16)UX_KEY_END; }
+    if (vk == (u32)$21) { return (u16)UX_KEY_PAGEUP; }
+    if (vk == (u32)$22) { return (u16)UX_KEY_PAGEDOWN; }
+    if (vk == (u32)$2E) { return (u16)UX_KEY_DELETE; }
+    if (vk == (u32)$08) { return (u16)UX_KEY_BACKSPACE; }
+    if (vk == (u32)$1B) { return (u16)UX_KEY_ESCAPE; }
+    u32 c = MapVirtualKeyA(vk, (u32)2) & (u32)$FFFF; // MAPVK_VK_TO_CHAR: upper case for a letter
+    if (c >= (u32)'A' && c <= (u32)'Z' && (w32Mods() & (u16)UX_MOD_SHIFT) == (u16)0)
+        {
+        c = c + (u32)32;
+        }
+    return (u16)(c & (u32)$FF);
+    }
+// Whether vk is a key that types no character (it reaches the toolkit as WM_KEYDOWN, not WM_CHAR).
+bool w32NamedKey(u32 vk)
+    {
+    return (vk >= (u32)$21 && vk <= (u32)$28) || vk == (u32)$2E;
+    }
+
 class UXWin32Driver : Object<UXViewDriver>
     {
     void init(void)
@@ -4243,11 +4290,14 @@ class UXWin32Driver : Object<UXViewDriver>
             {
             return (i32)0;
             }
-        // released
-        if ((GetAsyncKeyState((i32)VK_LBUTTON) & (i32)$8000) == (i32)0)
+        // released: no button held (a drag may have begun with the right or the middle one)
+        if ((GetAsyncKeyState((i32)VK_LBUTTON) & (i32)$8000) == (i32)0 &&
+            (GetAsyncKeyState((i32)$02) & (i32)$8000) == (i32)0 && // VK_RBUTTON
+            (GetAsyncKeyState((i32)$04) & (i32)$8000) == (i32)0)   // VK_MBUTTON
             {
             return (i32)0;
             }
+        gUXModifiers = w32Mods(); // as held at this step
         POINT p;
         GetCursorPos((pointer)&p);
         ScreenToClient(GetActiveWindow(), (pointer)&p); // screen -> window-local (matches mouseDown)
@@ -6230,6 +6280,40 @@ class UXWin32Driver : Object<UXViewDriver>
             ev.x = (i16)lpw;
             ev.y = (i16)(lpw >> (u32)16);
             ev.handle = self.handleOf(msg.hwnd);
+            ev.buttons = (u16)UX_BUTTON_LEFT;
+            gUXModifiers = w32Mods();
+            ev.modifiers = gUXModifiers;
+            return;
+            }
+        // the middle button
+        if (msg.message == (u32)$0207 && onWindow != (i32)0) // WM_MBUTTONDOWN
+            {
+            u32 lpw = (u32)msg.lParam;
+            ev.kind = (u8)UXEventOtherMouseDown;
+            ev.x = (i16)lpw;
+            ev.y = (i16)(lpw >> (u32)16);
+            ev.handle = self.handleOf(msg.hwnd);
+            ev.buttons = (u16)UX_BUTTON_MIDDLE;
+            gUXModifiers = w32Mods();
+            ev.modifiers = gUXModifiers;
+            return;
+            }
+        // the keys that type no character (the arrows, Home, End, the page keys, Delete), which
+        // never become WM_CHAR, and every key's release
+        if (msg.message == (u32)WM_KEYDOWN && onWindow != (i32)0 && w32NamedKey((u32)msg.wParam))
+            {
+            ev.kind = (u8)UXEventKeyDown;
+            ev.key = w32Key((u32)msg.wParam);
+            gUXModifiers = w32Mods();
+            ev.modifiers = gUXModifiers;
+            return;
+            }
+        if (msg.message == (u32)$0101 && onWindow != (i32)0) // WM_KEYUP
+            {
+            ev.kind = (u8)UXEventKeyUp;
+            ev.key = w32Key((u32)msg.wParam);
+            gUXModifiers = w32Mods();
+            ev.modifiers = gUXModifiers;
             return;
             }
         // Pointer movement and the secondary button: client coords in lParam, tagged like the click.
@@ -6240,6 +6324,8 @@ class UXWin32Driver : Object<UXViewDriver>
             ev.x = (i16)lpw;
             ev.y = (i16)(lpw >> (u32)16);
             ev.handle = self.handleOf(msg.hwnd);
+            gUXModifiers = w32Mods();
+            ev.modifiers = gUXModifiers;
             return;
             }
         if (msg.message == (u32)WM_RBUTTONDOWN && onWindow != (i32)0)
@@ -6249,6 +6335,9 @@ class UXWin32Driver : Object<UXViewDriver>
             ev.x = (i16)lpw;
             ev.y = (i16)(lpw >> (u32)16);
             ev.handle = self.handleOf(msg.hwnd);
+            ev.buttons = (u16)UX_BUTTON_RIGHT;
+            gUXModifiers = w32Mods();
+            ev.modifiers = gUXModifiers;
             return;
             }
         if (msg.message == (u32)WM_MOUSEWHEEL && onWindow != (i32)0)
@@ -6266,23 +6355,25 @@ class UXWin32Driver : Object<UXViewDriver>
             ev.a = delta / (i32)WHEEL_DELTA;                       // notches, positive up
             ev.b = (i32)0 - (delta * (i32)100) / (i32)WHEEL_DELTA; // the DOM's deltaY: 100 a click, down +
             ev.handle = self.handleOf(msg.hwnd);
+            gUXModifiers = w32Mods();
+            ev.modifiers = gUXModifiers;
             return;
             }
         if (msg.message == (u32)WM_CHAR && onWindow != (i32)0)
             {
             ev.kind = (u8)UXEventKeyDown;
             ev.key = (u16)((u32)msg.wParam & (u32)$FF); // ASCII byte
-            // Control and Shift, as GEM's kstate has them, so a menu shortcut can be matched
-            u16 mods = (u16)0;
-            if ((i32)GetKeyState((i32)$11) < (i32)0) // VK_CONTROL
+            if (ev.key == (u16)$08) // Backspace and Escape with GEM's scan codes, as every backend has them
                 {
-                mods = mods | (u16)UX_MOD_CTRL;
+                ev.key = (u16)UX_KEY_BACKSPACE;
                 }
-            if ((i32)GetKeyState((i32)$10) < (i32)0) // VK_SHIFT
+            if (ev.key == (u16)$1B)
                 {
-                mods = mods | (u16)1;
+                ev.key = (u16)UX_KEY_ESCAPE;
                 }
-            ev.modifiers = mods;
+            // Control, Shift and Alt, as GEM's kstate has them, so a menu shortcut can be matched
+            gUXModifiers = w32Mods();
+            ev.modifiers = gUXModifiers;
             return;
             }
         // A text view's RichEdit: Control-Z, Shift-Control-Z and Control-Y are the view's undo (the

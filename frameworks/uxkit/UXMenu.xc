@@ -307,13 +307,14 @@ class UXMenuItem : Object
         }
 
     // A key press, offered to the menus before the key window gets it: true if it was an item's
-    // shortcut, which then fired.  The command key arrives as Control in ev.modifiers, or as a
-    // control code (Control-Z is $1A); Shift is in ev.modifiers.  A backend whose native menus
-    // handle their shortcuts (AppKit, GTK, the web page) consumes the key before it gets here.
+    // shortcut, which then fired.  The command key (gUXCommandModifier: Command on Apple's
+    // platforms, Control elsewhere) is in ev.modifiers, and the key may arrive as a control code
+    // (Control-Z is $1A); Shift is in ev.modifiers.  A backend whose native menus handle their
+    // shortcuts (AppKit, GTK, the web page) consumes the key before it gets here.
     bool performShortcut(UXEvent* ev)
         {
         u8 c = (u8)((i32)ev.key & (i32)UX_KEY_ASCII);
-        if (((i32)ev.modifiers & (i32)UX_MOD_CTRL) == (i32)0)
+        if ((ev.modifiers & gUXCommandModifier) == (u16)0)
             {
             return false;
             }

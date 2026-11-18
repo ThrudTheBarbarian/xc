@@ -674,7 +674,7 @@ class UXTextView : UXView
         i32 ascii = (i32)e.key & (i32)$FF;
         i32 scan = ((i32)e.key >> (i32)8) & (i32)$FF;
         bool shift = ((u16)e.modifiers & (u16)UX_MOD_SHIFT) != (u16)0;
-        bool ctrl = ((u16)e.modifiers & (u16)UX_MOD_CTRL) != (u16)0;
+        bool ctrl = ((u16)e.modifiers & gUXCommandModifier) != (u16)0; // the command key: Command on Apple, Control elsewhere
         // the editing keys with Control: a letter's code, or the letter itself
         i32 letter = ascii >= (i32)1 && ascii <= (i32)26 ? ascii + (i32)96 : (ascii >= (i32)65 && ascii <= (i32)90 ? ascii + (i32)32 : ascii);
         if (ctrl)

@@ -172,6 +172,7 @@ void ux_ak_layer_end();
 // clips with the scroll (ax,ay is the control's absolute origin; setFrame 0 leaves it to AppKit).
 void ux_ak_reparent_to_scroll(i32 handle, i32 node, i32 scrollNode, i32 ax, i32 ay, i32 aw, i32 ah, i32 setFrame);
 i32 ux_ak_drag_next(i32* x, i32* y);
+i32 ux_ak_modifiers(void); // the modifier keys held now, as UX_MOD_*
 // The input shield (UXKindShield): a real NSView above the controls, so a click on a
 // design surface reaches the toolkit instead of pressing the button under it.
 void ux_ak_make_shield(i32 handle, i32 x, i32 y, i32 w, i32 h, i32 hidden);
@@ -299,6 +300,27 @@ void xgAKDispatch(i32 kind, i32 x, i32 y, i32 key)
     gAKEvent.x = (i16)x;
     gAKEvent.y = (i16)y;
     gAKEvent.key = (u16)key;
+    // the modifier keys held, on every input event (a menu pick or a resize does not care)
+    if (kind == (i32)UXEventMouseDown || kind == (i32)UXEventRightMouseDown || kind == (i32)UXEventOtherMouseDown ||
+        kind == (i32)UXEventWheel || kind == (i32)UXEventMouseMoved || kind == (i32)UXEventKeyDown ||
+        kind == (i32)UXEventKeyUp)
+        {
+        gUXModifiers = (u16)ux_ak_modifiers();
+        gAKEvent.modifiers = gUXModifiers;
+        }
+    // which button a press came from
+    if (kind == (i32)UXEventMouseDown)
+        {
+        gAKEvent.buttons = (u16)UX_BUTTON_LEFT;
+        }
+    if (kind == (i32)UXEventRightMouseDown)
+        {
+        gAKEvent.buttons = (u16)UX_BUTTON_RIGHT;
+        }
+    if (kind == (i32)UXEventOtherMouseDown)
+        {
+        gAKEvent.buttons = (u16)UX_BUTTON_MIDDLE;
+        }
     // title+2 ordinal
     if (kind == (i32)UXEventMenuSelect)
         {
@@ -317,9 +339,14 @@ void xgAKDispatch(i32 kind, i32 x, i32 y, i32 key)
         }
     // Hover and the right-click tag the window that got the event, so the toolkit routes to THAT
     // window and not by guessing from the point.
-    if (kind == (i32)UXEventMouseMoved || kind == (i32)UXEventRightMouseDown)
+    if (kind == (i32)UXEventMouseMoved || kind == (i32)UXEventRightMouseDown || kind == (i32)UXEventOtherMouseDown)
         {
         gAKEvent.handle = key;
+        }
+    // a key's dispatch word is the key itself, and it goes to the key window
+    if (kind == (i32)UXEventKeyUp)
+        {
+        gAKEvent.key = (u16)key;
         }
     // The wheel packs (window, AppKit's delta in PIXELS) into the one dispatch word: window in the
     // high bits, the signed pixel delta in the low 16 (AK_WHEEL_PACK in libUXAppKit.m).  AppKit's
@@ -636,6 +663,7 @@ class UXAppKitDriver : Object<UXViewDriver>
     bool boot(i32* screenW, i32* screenH)
         {
         ux_ak_boot();
+        gUXCommandModifier = (u16)UX_MOD_CMD; // Command is the Mac's command key, not Control
         gAKGfx = new UXCocoaGraphics();
         ux_ak_set_table_hooks((pointer)&xgAKTableRows, (pointer)&xgAKTableCell, (pointer)&xgAKTableCols,
                               (pointer)&xgAKTableColTitle, (pointer)&xgAKTableColWidth,
@@ -970,6 +998,7 @@ class UXAppKitDriver : Object<UXViewDriver>
             return (i32)0;
             }
         i32 r = ux_ak_drag_next(x, y);
+        gUXModifiers = (u16)ux_ak_modifiers(); // as held at this step
         x[0] = x[0] + gUXDragDX; // in the press's terms: a drag that began on a scrolled document
         y[0] = y[0] + gUXDragDY;
         return r;

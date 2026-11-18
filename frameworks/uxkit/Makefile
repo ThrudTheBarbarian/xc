@@ -293,6 +293,9 @@ submit-native: ; XCC=$(XCC) sh run_submit_native.sh
 # ---- appkit-menu — headless smoke test for the NSMenu path -----------------------
 appkit-menu: ; XCC=$(XCC) sh run_appkit_menu.sh
 
+# ---- appkit-input — AppKit events as the toolkit hears them (modifiers, buttons, keys) ----
+appkit-input: ; XCC=$(XCC) sh run_appkit_input.sh
+
 # ---- appkit-interactive — automated test of the [NSApp run] dispatch path --------
 # The real interactive stack driven by one injected click at a Quit button; passes if the click
 # reaches the action and the app quits (no hang).  macOS-only.

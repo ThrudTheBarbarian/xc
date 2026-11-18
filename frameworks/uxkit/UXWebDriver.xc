@@ -95,6 +95,7 @@ i32 gWebWinY[UXWEB_MAXW]; // pointer point (canvas coords) has it subtracted bef
 pointer gWebContentFn[UXWEB_MAXW];
 pointer gWebContentUd[UXWEB_MAXW];
 bool gWebPressed;     // the primary button is down: a move is a drag, not a hover
+bool gWebKeys;        // the page script sends keys (ring 21), so the loader's raw keyCodes (4, 5) are not used
 bool gWebDragging;    // a modal drag is running (trackDragStep): paint invalidations at once, since
                       // the run loop is parked and no tick will arrive to present them
 i32 gWebFront;      // topmost window (single canvas z-order, JS composites)
@@ -1619,13 +1620,49 @@ class UXWebDriver : Object<UXViewDriver>
             ev.kind = (u8)UXEventRightMouseDown;
             ev.x = (i16)r[1];
             ev.y = (i16)r[2];
+            ev.buttons = (u16)UX_BUTTON_RIGHT;
+            }
+        else if (t == (i32)1 && r[3] == (i32)1)
+            {
+            // the middle button (the DOM's button 1)
+            ev.kind = (u8)UXEventOtherMouseDown;
+            ev.x = (i16)r[1];
+            ev.y = (i16)r[2];
+            ev.buttons = (u16)UX_BUTTON_MIDDLE;
+            }
+        else if (t == (i32)20)
+            {
+            // the page script (ux_web_page.js): the modifier keys held from here on (a = UX_MOD_*), and
+            // whether the browser runs on Apple's platforms (b = 1), where Command is the command key
+            gUXModifiers = (u16)r[1];
+            if (r[2] == (i32)1)
+                {
+                gUXCommandModifier = (u16)UX_MOD_CMD;
+                }
+            ev.kind = (u8)UXEventNone;
+            }
+        else if (t == (i32)21)
+            {
+            // the page script: a key, as the toolkit has it (a = UX_KEY_* / ASCII), b = 1 pressed, 0 released
+            gWebKeys = true;
+            ev.kind = r[1] == (i32)0 ? (u8)UXEventNone : (r[2] == (i32)1 ? (u8)UXEventKeyDown : (u8)UXEventKeyUp);
+            ev.key = (u16)r[1];
+            }
+        else if ((t == (i32)4 || t == (i32)5) && gWebKeys)
+            {
+            ev.kind = (u8)UXEventNone; // the same key, already sent normalised as ring 21
+            }
+        else if (t == (i32)5)
+            {
+            ev.kind = (u8)UXEventKeyUp;
+            ev.key = (u16)r[1];
             }
         else if (t == (i32)1)
             {
             ev.kind = (u8)UXEventMouseDown;
             ev.x = (i16)r[1];
             ev.y = (i16)r[2];
-            ev.buttons = (u16)1;
+            ev.buttons = (u16)UX_BUTTON_LEFT;
             gWebPressed = true;
             }
         else if (t == (i32)2)
@@ -1634,7 +1671,7 @@ class UXWebDriver : Object<UXViewDriver>
             ev.x = (i16)r[1];
             ev.y = (i16)r[2];
             ev.buttons = (u16)0;
-            if (r[3] != (i32)2)
+            if (r[3] == (i32)0) // the primary's release ends the drag; another button's does not
                 {
                 gWebPressed = false;
                 }
@@ -1738,11 +1775,17 @@ class UXWebDriver : Object<UXViewDriver>
         // adds the window origin, ox()/oy()).  Subtract it once here, so a window not at the canvas
         // corner hit-tests where it draws.
         if (ev.kind == (u8)UXEventMouseDown || ev.kind == (u8)UXEventRightMouseDown ||
+            ev.kind == (u8)UXEventOtherMouseDown ||
             ev.kind == (u8)UXEventMouseUp || ev.kind == (u8)UXEventMouseDragged ||
             ev.kind == (u8)UXEventMouseMoved || ev.kind == (u8)UXEventWheel)
             {
             ev.x = (i16)((i32)ev.x - gWebWinX[gWebFront]);
             ev.y = (i16)((i32)ev.y - gWebWinY[gWebFront]);
+            }
+        // the modifier keys held, as the page script last reported them (ring 20)
+        if (ev.kind != (u8)UXEventNone)
+            {
+            ev.modifiers = gUXModifiers;
             }
         ev.handle = gWebFront;
         }
@@ -1810,6 +1853,10 @@ class UXWebDriver : Object<UXViewDriver>
                 {
                 gWebDragging = false;
                 return (i32)0;
+                }
+            if (r[0] == (i32)20)
+                {
+                gUXModifiers = (u16)r[1]; // a modifier pressed or released mid-drag
                 }
             if (r[0] == (i32)3)
                 {

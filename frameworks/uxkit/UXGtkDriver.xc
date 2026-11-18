@@ -396,6 +396,7 @@ void uxGtkFireControl(i32 handle, i32 node)
 // same local point would be indistinguishable.
 UXEvent* gGtkMouseEvent;
 i32 gGtkMouseWin;
+i32 ux_gtk_modifiers(void); // the modifier keys at the latest event, as UX_MOD_*
 void uxGtkDispatch(i32 kind, i32 x, i32 y, i32 handle, i32 extra)
     {
     if (gApp == (UXApplication*)0)
@@ -411,6 +412,25 @@ void uxGtkDispatch(i32 kind, i32 x, i32 y, i32 handle, i32 extra)
     gGtkMouseEvent.x = (i16)x;
     gGtkMouseEvent.y = (i16)y;
     gGtkMouseEvent.handle = handle;
+    gUXModifiers = (u16)ux_gtk_modifiers();
+    gGtkMouseEvent.modifiers = gUXModifiers;
+    if (kind == (i32)UXEventMouseDown)
+        {
+        gGtkMouseEvent.buttons = (u16)UX_BUTTON_LEFT;
+        }
+    if (kind == (i32)UXEventRightMouseDown)
+        {
+        gGtkMouseEvent.buttons = (u16)UX_BUTTON_RIGHT;
+        }
+    if (kind == (i32)UXEventOtherMouseDown)
+        {
+        gGtkMouseEvent.buttons = (u16)UX_BUTTON_MIDDLE;
+        }
+    // a key's code rides in extra
+    if (kind == (i32)UXEventKeyDown || kind == (i32)UXEventKeyUp)
+        {
+        gGtkMouseEvent.key = (u16)extra;
+        }
     if (kind == (i32)UXEventMenuSelect)
         {
         gGtkMouseEvent.a = x + (i32)2; // the title's GEM object number, as handleSelection expects
@@ -2077,6 +2097,7 @@ class UXGtkDriver : Object<UXViewDriver>
             return (i32)0;
             }
         i32 r = ux_gtk_drag_next(x, y);
+        gUXModifiers = (u16)ux_gtk_modifiers(); // as held at this step
         x[0] = x[0] + gUXDragDX; // in the press's terms: a drag that began on a scrolled document
         y[0] = y[0] + gUXDragDY;
         return r;

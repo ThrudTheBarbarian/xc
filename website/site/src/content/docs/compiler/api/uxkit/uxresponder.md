@@ -56,7 +56,7 @@ tree.
 
 ## Topics
 
-[setNextResponder](#setnextresponder) · [mouseDown](#mousedown) · [mouseUp](#mouseup) · [mouseDragged](#mousedragged) · [scrollWheel](#scrollwheel) · [mouseMoved](#mousemoved) · [rightMouseDown](#rightmousedown) · [keyDown](#keydown) · [acceptsFirstResponder](#acceptsfirstresponder) · [becomeFirstResponder](#becomefirstresponder) · [resignFirstResponder](#resignfirstresponder)
+[setNextResponder](#setnextresponder) · [mouseDown](#mousedown) · [mouseUp](#mouseup) · [mouseDragged](#mousedragged) · [scrollWheel](#scrollwheel) · [mouseMoved](#mousemoved) · [rightMouseDown](#rightmousedown) · [otherMouseDown](#othermousedown) · [keyDown](#keydown) · [keyUp](#keyup) · [acceptsFirstResponder](#acceptsfirstresponder) · [becomeFirstResponder](#becomefirstresponder) · [resignFirstResponder](#resignfirstresponder)
 
 ### setNextResponder
 
@@ -143,6 +143,16 @@ A press of the secondary button, at `e.x, e.y`. It is separate from `mouseDown`,
 so a view that opens a context menu and a view that selects can tell them apart.
 Like a click, it gives the window the keyboard. An unhandled one climbs.
 
+### otherMouseDown
+
+```c
+void otherMouseDown(UXEvent* e)
+```
+
+A press of the middle button, at `e.x, e.y`, with `e.buttons` set to
+`UX_BUTTON_MIDDLE`. It gives the window the keyboard and climbs, like
+`rightMouseDown`. GEM has no middle button.
+
 ### keyDown
 
 ```c
@@ -151,6 +161,15 @@ void keyDown(UXEvent* e)
 
 A key, delivered to the **first responder** and climbing from there. See
 [`UXEvent`](/compiler/api/uxkit/uxevent/) for decoding `e.key` and `e.modifiers`.
+
+### keyUp
+
+```c
+void keyUp(UXEvent* e)
+```
+
+A key's release, delivered like `keyDown`, with the same `e.key`. A game or a
+view that acts while a key is held pairs the two. GEM reports no releases.
 
 ### acceptsFirstResponder
 

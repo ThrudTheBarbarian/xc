@@ -573,6 +573,15 @@ class UXWindow : UXResponder
             }
         self.keyDown(e);
         }
+    void dispatchKeyUp(UXEvent* e)
+        {
+        if (firstResponder != (UXResponder*)0)
+            {
+            firstResponder.keyUp(e);
+            return;
+            }
+        self.keyUp(e);
+        }
 
     // A click landed in this window: let the AES find what was hit, then send it
     // into the responder chain.
@@ -725,8 +734,20 @@ class UXWindow : UXResponder
         }
     // The secondary button: like a click, it gives the window the keyboard and acts on what is
     // under the pointer.
+    // The right and the middle button: the view under the point gets rightMouseDown / otherMouseDown,
+    // and may follow the drag with trackMouse, measured as a left press's is.
     void dispatchRightMouse(UXEvent* e)
         {
+        self.dispatchOtherPress(e, true);
+        }
+    void dispatchOtherMouse(UXEvent* e)
+        {
+        self.dispatchOtherPress(e, false);
+        }
+    void dispatchOtherPress(UXEvent* e, bool right)
+        {
+        i32 x0 = (i32)e.x;
+        i32 y0 = (i32)e.y;
         i32 hit = self.hitScrolled(e);
         if (hit < (i32)0)
             {
@@ -737,6 +758,19 @@ class UXWindow : UXResponder
             {
             return;
             }
-        v.rightMouseDown(e);
+        gUXDragDX = (i32)e.x - x0;
+        gUXDragDY = (i32)e.y - y0;
+        gUXPressLive = true;
+        if (right)
+            {
+            v.rightMouseDown(e);
+            }
+        else
+            {
+            v.otherMouseDown(e);
+            }
+        gUXPressLive = false;
+        gUXDragDX = (i32)0;
+        gUXDragDY = (i32)0;
         }
     }

@@ -112,6 +112,15 @@ void main(void)
     check("a disabled item does not fire", bar.performShortcut(key((u8)'v', (u16)UX_MOD_CTRL)) ? (i32)1 : (i32)0, (i32)0);
     check("an unbound key does not", bar.performShortcut(key((u8)'q', (u16)UX_MOD_CTRL)) ? (i32)1 : (i32)0, (i32)0);
 
+    Stdio.printf("-- where Command is the command key (Apple's platforms)\n");
+    gUXCommandModifier = (u16)UX_MOD_CMD;
+    check("Command+Z fires Undo", bar.performShortcut(key((u8)'z', (u16)UX_MOD_CMD)) ? (i32)1 : (i32)0, (i32)1);
+    check("  Undo", gUndo, (i32)3);
+    check("Control+Z is not a shortcut there", bar.performShortcut(key((u8)'z', (u16)UX_MOD_CTRL)) ? (i32)1 : (i32)0, (i32)0);
+    check("Command+Shift+Z fires Redo", bar.performShortcut(key((u8)'z', (u16)(UX_MOD_CMD | UX_MOD_SHIFT))) ? (i32)1 : (i32)0, (i32)1);
+    check("  Redo", gRedo, (i32)2);
+    gUXCommandModifier = (u16)UX_MOD_CTRL;
+
     if (gFails == (i32)0)
         {
         Stdio.printf("PASS: menu shortcuts -- encoding, reading, matching\n");

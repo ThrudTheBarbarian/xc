@@ -82,6 +82,15 @@ class UXResponder
             nextResponder.rightMouseDown(e);
             }
         }
+    // The middle button (or any past the second), like rightMouseDown: a view that orbits or pans on
+    // it overrides this.  Calling trackMouse(e) from here follows the drag, as from mouseDown.
+    void otherMouseDown(UXEvent* e)
+        {
+        if (nextResponder != (UXResponder*)0)
+            {
+            nextResponder.otherMouseDown(e);
+            }
+        }
     // ---- first responder ---------------------------------------------------
     // Can I take the keyboard?  A view says yes by overriding this (UXTextField does).
     bool acceptsFirstResponder(void)
@@ -105,6 +114,14 @@ class UXResponder
         if (nextResponder != (UXResponder*)0)
             {
             nextResponder.keyDown(e);
+            }
+        }
+    // A key released, to the first responder as keyDown is.
+    void keyUp(UXEvent* e)
+        {
+        if (nextResponder != (UXResponder*)0)
+            {
+            nextResponder.keyUp(e);
             }
         }
     }

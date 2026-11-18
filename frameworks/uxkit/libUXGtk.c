@@ -96,6 +96,20 @@ void ux_gtk_set_field_submit_hooks(void* fn)
 static ux_mouse_fn gMouse;
 static double gPtrX, gPtrY;
 static int gBtnDown, gPtrMoved;
+static int gPrimaryDown; /* the primary is held: a move is a drag, not a hover */
+static int gFollowing;   /* inside ux_gtk_drag_next: a move belongs to the drag being followed */
+/* The modifier keys at the latest event, as the toolkit's UX_MOD_* (UXEvent.xc): shift $03,
+ * control $04, alt $08, super/meta $10.  The driver stamps them on what it dispatches. */
+static int gMods;
+int ux_gtk_modifiers(void)
+    {
+    return gMods;
+    }
+static int mods_of(GdkModifierType m)
+    {
+    return ((m & GDK_SHIFT_MASK) ? 0x03 : 0) | ((m & GDK_CONTROL_MASK) ? 0x04 : 0) |
+           ((m & GDK_ALT_MASK) ? 0x08 : 0) | ((m & (GDK_SUPER_MASK | GDK_META_MASK)) ? 0x10 : 0);
+    }
 void ux_gtk_set_mouse(void* fn)
     {
     gMouse = (ux_mouse_fn)fn;
@@ -296,19 +310,15 @@ void ux_gtk_input(int handle, int what, int button, double x, double y, int px)
         }
     if (what == 1)
         {
-        /* The secondary button is the context menu, never a press that starts a drag. */
-        if (button == 3)
-            {
-            if (gMouse)
-                gMouse(16, (int)x, (int)y, handle, 0); /* 16 == UXEventRightMouseDown */
-            return;
-            }
+        /* Any button's press may be followed as a drag (trackMouse); the secondary one is also
+         * how a view opens its context menu, and the middle one is its own kind. */
         gPtrX = x;
         gPtrY = y;
         gBtnDown = 1;
+        gPrimaryDown = button != 3 && button != 2;
         gPtrMoved = 0;
         if (gMouse)
-            gMouse(1, (int)x, (int)y, handle, 0); /* 1 == UXEventMouseDown */
+            gMouse(button == 3 ? 16 : button == 2 ? 18 : 1, (int)x, (int)y, handle, 0); /* right, other, down */
         return;
         }
     if (what == 3)
@@ -318,15 +328,15 @@ void ux_gtk_input(int handle, int what, int button, double x, double y, int px)
             gPtrX = x;
             gPtrY = y;
             gPtrMoved = 1;
-            /* With no button down a move is a HOVER, delivered to the view under the pointer; with
-             * one down it belongs to the drag (ux_gtk_drag_next). */
-            if (!gBtnDown && gMouse)
+            /* With the primary up and no drag being followed, a move is a HOVER, delivered to the
+             * view under the pointer; otherwise it belongs to the drag (ux_gtk_drag_next). */
+            if (!gPrimaryDown && !gFollowing && gMouse)
                 gMouse(15, (int)x, (int)y, handle, 0); /* 15 == UXEventMouseMoved */
             }
         return;
         }
-    if (button != 3)
-        gBtnDown = 0; /* the primary came up */
+    gBtnDown = 0; /* the button came up */
+    gPrimaryDown = 0;
     }
 
 static gboolean event_cb(GtkEventControllerLegacy* c, GdkEvent* ev, gpointer ud)
@@ -337,6 +347,7 @@ static gboolean event_cb(GtkEventControllerLegacy* c, GdkEvent* ev, gpointer ud)
     if (t != GDK_BUTTON_PRESS && t != GDK_MOTION_NOTIFY && t != GDK_BUTTON_RELEASE && t != GDK_SCROLL)
         return FALSE;
     gdk_event_get_position(ev, &x, &y);
+    gMods = mods_of(gdk_event_get_modifier_state(ev));
     double wx = x, wy = y;
     gtk_to_area(handle, &x, &y);
     if (t == GDK_BUTTON_PRESS || t == GDK_BUTTON_RELEASE || t == GDK_MOTION_NOTIFY)
@@ -369,6 +380,47 @@ static gboolean event_cb(GtkEventControllerLegacy* c, GdkEvent* ev, gpointer ud)
     return FALSE; /* native widgets still get theirs */
     }
 
+/* A key as the toolkit has it on every backend: GEM's (scancode << 8) | ascii, the keys with no
+ * character as GEM's scan codes (UX_KEY_* in UXEvent.xc). */
+static int key_code(guint kv)
+    {
+    switch (kv)
+        {
+        case GDK_KEY_Up: return 0x4800;
+        case GDK_KEY_Down: return 0x5000;
+        case GDK_KEY_Left: return 0x4B00;
+        case GDK_KEY_Right: return 0x4D00;
+        case GDK_KEY_Home: return 0x4700;
+        case GDK_KEY_End: return 0x4F00;
+        case GDK_KEY_Page_Up: return 0x4900;
+        case GDK_KEY_Page_Down: return 0x5100;
+        case GDK_KEY_Delete: return 0x537F;
+        case GDK_KEY_BackSpace: return 0x0E08;
+        case GDK_KEY_Escape: return 0x011B;
+        /* Tab and Return stay GTK's: its own focus chain and default widget handle them, and the
+         * toolkit acting on them too would move the focus twice */
+        case GDK_KEY_Return: case GDK_KEY_KP_Enter: case GDK_KEY_Tab: case GDK_KEY_ISO_Left_Tab: return 0;
+        default: break;
+        }
+    guint32 c = gdk_keyval_to_unicode(kv);
+    return c > 0 && c < 256 ? (int)c : 0;
+    }
+static gboolean key_pressed_cb(GtkEventControllerKey* k, guint kv, guint code, GdkModifierType m, gpointer ud)
+    {
+    gMods = mods_of(m);
+    int c = key_code(kv);
+    if (c && gMouse)
+        gMouse(4, 0, 0, GPOINTER_TO_INT(ud), c); /* 4 == UXEventKeyDown */
+    return FALSE;
+    }
+static void key_released_cb(GtkEventControllerKey* k, guint kv, guint code, GdkModifierType m, gpointer ud)
+    {
+    gMods = mods_of(m);
+    int c = key_code(kv);
+    if (c && gMouse)
+        gMouse(17, 0, 0, GPOINTER_TO_INT(ud), c); /* 17 == UXEventKeyUp */
+    }
+
 /* One modal step of a toolkit-drawn drag: block until the pointer moves or the
  * button comes up.  BLOCKING, not polling -- a spin loop here would burn a core
  * for as long as the user holds the mouse down.  The release is itself an
@@ -382,8 +434,10 @@ int ux_gtk_drag_next(int* x, int* y)
      * motion that arrived while the caller was busy redrawing, so a drag falls
      * progressively further behind a fast pointer, and a caller that posts a
      * move and then steps blocks forever waiting for a second one. */
+    gFollowing = 1;
     while (gBtnDown && !gPtrMoved)
         g_main_context_iteration(NULL, TRUE);
+    gFollowing = 0;
     gPtrMoved = 0;
     if (!gBtnDown)
         return 0;
@@ -1428,6 +1482,11 @@ int ux_gtk_window_create(int x, int y, int w, int h)
     GtkEventController* ec = gtk_event_controller_legacy_new();
     g_signal_connect(ec, "event", G_CALLBACK(event_cb), GINT_TO_POINTER(hh));
     gtk_widget_add_controller(GTK_WIDGET(win), ec);
+    /* the keys a focused native widget does not take, for the toolkit's own views */
+    GtkEventController* kc = gtk_event_controller_key_new();
+    g_signal_connect(kc, "key-pressed", G_CALLBACK(key_pressed_cb), GINT_TO_POINTER(hh));
+    g_signal_connect(kc, "key-released", G_CALLBACK(key_released_cb), GINT_TO_POINTER(hh));
+    gtk_widget_add_controller(GTK_WIDGET(win), kc);
     gLive++;
     menu_attach(hh); /* a menu bar installed before this window opened */
     return hh;
