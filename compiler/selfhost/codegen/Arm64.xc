@@ -1426,9 +1426,9 @@ class Arm64
     {
         if (n.res() != (IRValue*)0 && _fuseKind.get((Hashable*)n.res()) != (Object*)0)
             { emitFused(n); return; }
-        // The dispatch is split across four routines purely for the frame
-        // budget: one chain of string comparisons builds too many temporaries
-        // for a single 16 KB frame.
+        // The dispatch is split across four routines by kind of instruction.
+        // (The split was first made for a 16 KB frame limit that is gone: a
+        // large frame is reached through x28.)
         String* op = n.op();
         if (dispatchCore(n, op)) return;
         if (dispatchMemory(n, op)) return;

@@ -2045,9 +2045,8 @@ class Arm9
         giveUp(op);
         }
 
-    // The second half of the dispatch. Split only because a single function
-    // that touches this many locals exceeds the arm64 backend's 16 KB frame
-    // budget — the diagnostic names it, and splitting is the fix.
+    // The second half of the dispatch. (Split for an arm64 frame limit that is
+    // gone; kept as two routines because one would be very long.)
     bool emitOtherB(IRInsn* insn, String* op, Array* ops, IRValue* res)
         {
         if (op.equals(String.withCString("AggBuild")))

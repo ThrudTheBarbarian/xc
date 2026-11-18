@@ -2264,7 +2264,7 @@
         if (!self.vecCountAcc(accPhi, acc, B, L, defOf, defBlk, uses))
             return (VecCand*)0;
 
-        IRInsn* ivNext = self.vecCountStep(L, iv, defOf);
+        IRInsn* ivNext = self.vecFindStep(L, iv, (IRInsn*)0, defOf);
         if (ivNext == (IRInsn*)0)
             return (VecCand*)0;
         IROperand* ivBack = ((IROperand*)ivPhi.ops().get((u32)0)).blk() == L

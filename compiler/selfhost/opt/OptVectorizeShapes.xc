@@ -1238,10 +1238,11 @@
     // defined outside the loop — which is the same in every lane and so safe to
     // broadcast.
     // A lane operand: a lane value, a constant, or loop-invariant — defined
-    // outside both the body B and the header H, as the reference's
-    // elemOperandOK (a header phi, the counter above all, changes every trip;
-    // splatting it gave every lane the first lane's i).
-    final bool vecOperandOK(IROperand* o, Array* elems, IRBlock* B, IRBlock* H, Map* defOf, Map* defBlk)
+    // outside the body B, the header H and the latch L when there is one, as
+    // the reference's elemOperandOK (a header phi, the counter above all,
+    // changes every trip; splatting it gave every lane the first lane's i).
+    final bool vecOperandOK(IROperand* o, Array* elems, IRBlock* B, IRBlock* H, Map* defOf, Map* defBlk,
+                            IRBlock* L)
         {
         if (o.kind() == (u8)OPK_IMMI)
             return true;
@@ -1253,7 +1254,7 @@
         if (vecConst(o, defOf, &k))
             return true;
         Object* db = defBlk.get((Hashable*)o.val());
-        return db != (Object*)0 && (IRBlock*)db != B && (IRBlock*)db != H;
+        return db != (Object*)0 && (IRBlock*)db != B && (IRBlock*)db != H && (IRBlock*)db != L;
         }
 
     // A map's operand: as vecOperandOK, and also a constant of any type (a
@@ -1270,7 +1271,7 @@
             if (cd == 0 && defBlk.get((Hashable*)o.val()) == 0)
                 return true;
             }
-        return vecOperandOK(o, elems, B, H, defOf, defBlk);
+        return vecOperandOK(o, elems, B, H, defOf, defBlk, (IRBlock*)0);
         }
 
     final bool vecReduxOperandOK(IROperand* o, Array* elems, IRBlock* B, IRBlock* H, Map* defOf, Map* defBlk)
@@ -1281,7 +1282,7 @@
             if (cd != 0 && ((IRInsn*)cd).isOp(opConst))
                 return true;
             }
-        return vecOperandOK(o, elems, B, H, defOf, defBlk);
+        return vecOperandOK(o, elems, B, H, defOf, defBlk, (IRBlock*)0);
         }
 
     // A compile-time constant: a literal, a Const, an extension of one, or
@@ -1297,42 +1298,6 @@
         return true;
         }
 
-    // EXTRACTED for the arm64 frame budget, like vecReduxEpilogue and
-    // vecWidenEpiSetup before it: vecWideningAt sits AT the 16 KB ceiling, so
-    // its body validation lives in its own frame. Pure checks -- the body must
-    // be EXACTLY address / narrow load / widen / the two adds / constants
-    // (anything else and the rewrite would drop work), the accumulator must not
-    // be read elsewhere, and the induction variable must not escape the loop.
-    final bool vecWideningBodyOK(IRFunc* fn, IRBlock* H, IRBlock* B, IRValue* iv,
-                           IRValue* acc, IRInsn* accNext, IRInsn* ivNext,
-                           IRInsn* zx, IRInsn* load)
-        {
-        for (u32 i = (u32)0; i < B.insns().count(); i = i + (u32)1)
-            {
-            IRInsn* nn = (IRInsn*)B.insns().get(i);
-            if (nn == accNext || nn == ivNext || nn == zx || nn == load)
-                continue;
-            u16 oc = nn.opc();
-            if (oc == opAddrOf || oc == opElementAddr || oc == opConst || oc == opZExt || oc == opSExt || oc == opTrunc)
-                continue;
-            return false;
-            }
-        if (vecAccReadElsewhere(H, accNext, acc))
-            return false;
-        if (vecAccReadElsewhere(B, accNext, acc))
-            return false;
-        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
-            {
-            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
-            if (bb == H || bb == B)
-                continue;
-            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
-                if (insnUsesValue((IRInsn*)bb.insns().get(i), iv))
-                    return false;
-            }
-        return true;
-        }
-
     final VecCand* vecWideningAt(IRFunc* fn, IRBlock* H, Map* defOf, Map* defBlk, Map* uses)
         {
         if (vecIsRemainder(H))
@@ -1340,47 +1305,21 @@
         _vrAllowRT = true; // widening-sum / dot accept one too (see vecReduxShape)
         if (!vecReduxShape(H, defOf, defBlk))
             return (VecCand*)0;
-        IRInsn* ivPhi = _vrIvPhi;
-        IRInsn* accPhi = _vrAccPhi;
-        IRBlock* B = _vrB;
-        IRBlock* E = _vrE;
-        IRValue* iv = _vrIv;
-        i64 n = _vrN;
-        IRValue* acc = accPhi.res();
+        IRValue* acc = _vrAccPhi.res();
         // The accumulator is unsigned 32-bit — that is what makes the widening
         // regrouping sound.
         if (!IRType.is(acc.ty(), tyU32))
             return (VecCand*)0;
-
-        IROperand* accBack = self.vecBackOp(accPhi, B);
-        if (accBack == (IROperand*)0 || accBack.kind() != (u8)OPK_USE)
+        IRInsn* zx = vecWidenElem(defOf, defBlk, uses);
+        if (zx == (IRInsn*)0)
             return (VecCand*)0;
-        Object* ao = defOf.get((Hashable*)accBack.val());
-        Object* ab = defBlk.get((Hashable*)accBack.val());
-        if (ao == (Object*)0 || ab == (Object*)0 || (IRBlock*)ab != B)
-            return (VecCand*)0;
-        IRInsn* accNext = (IRInsn*)ao;
-        if (!accNext.isOp(opAdd) || self.countOf(uses, accBack.val()) != 1 || accNext.ops().count() < 2)
-            return (VecCand*)0;
-        IROperand* x0 = (IROperand*)accNext.ops().get((u32)0);
-        IROperand* x1 = (IROperand*)accNext.ops().get((u32)1);
-        IROperand* elemOp = (IROperand*)0;
-        if (x0.kind() == (u8)OPK_USE && x0.val() == acc)
-            elemOp = x1;
-        else if (x1.kind() == (u8)OPK_USE && x1.val() == acc)
-            elemOp = x0;
-        if (elemOp == (IROperand*)0 || elemOp.kind() != (u8)OPK_USE)
-            return (VecCand*)0;
+        IRInsn* accNext = _vrAccNext;
+        IROperand* elemOp = _vrElemOp;
+        IRBlock* B = _vrB;
+        IRValue* iv = _vrIv;
 
         // The element is ZExt(load) — an unsigned widening of a narrow,
         // iv-indexed load that feeds nothing else.
-        Object* zo = defOf.get((Hashable*)elemOp.val());
-        Object* zb = defBlk.get((Hashable*)elemOp.val());
-        if (zo == (Object*)0 || zb == (Object*)0 || (IRBlock*)zb != B)
-            return (VecCand*)0;
-        IRInsn* zx = (IRInsn*)zo;
-        if (!zx.isOp(opZExt) || zx.ops().count() < 1)
-            return (VecCand*)0;
         IROperand* zs = (IROperand*)zx.ops().get((u32)0);
         if (zs.kind() != (u8)OPK_USE)
             return (VecCand*)0;
@@ -1399,32 +1338,97 @@
         if (countOf(uses, elemOp.val()) != (u32)1 || self.countOf(uses, load.res()) != (u32)1)
             return (VecCand*)0;
 
-        IRInsn* ivNext = vecFindStep(B, iv, accNext, defOf);
+        IRInsn* ivNext = vecReduxStep(accNext, defOf);
         if (ivNext == (IRInsn*)0)
             return (VecCand*)0;
-        IROperand* ivBack = self.vecBackOp(ivPhi, B);
+        Array* known = new Array();
+        known.add((Object*)accNext);
+        known.add((Object*)ivNext);
+        known.add((Object*)zx);
+        known.add((Object*)load);
+        if (!vecBodyClean(fn, H, B, known, acc, accNext, iv))
+            return (VecCand*)0;
+        // The preheader as vecDotAt finds it: the header's one outside
+        // predecessor, refused when there is not exactly one.
+        IRBlock* PH = self.vecHeaderPred(fn, H, B);
+        if (PH == (IRBlock*)0)
+            return (VecCand*)0;
+        return vecWidenCand(H, ivNext, accNext, elemOp, lt, load.res(), (IRValue*)0, false,
+                            PH, defBlk);
+        }
+
+    // The accumulator's add in the body, the element it adds, and the ZExt
+    // that defines that element — the part of a widening reduction the sum
+    // and the dot product share. Returns the ZExt (with at least one operand)
+    // and leaves the add and the element in _vrAccNext / _vrElemOp; 0 when
+    // the body is not that shape.
+    final IRInsn* vecWidenElem(Map* defOf, Map* defBlk, Map* uses)
+        {
+        IRInsn* accPhi = _vrAccPhi;
+        IRBlock* B = _vrB;
+        IRValue* acc = accPhi.res();
+        IROperand* accBack = self.vecBackOp(accPhi, B);
+        if (accBack == (IROperand*)0 || accBack.kind() != (u8)OPK_USE)
+            return (IRInsn*)0;
+        Object* ao = defOf.get((Hashable*)accBack.val());
+        Object* ab = defBlk.get((Hashable*)accBack.val());
+        if (ao == (Object*)0 || ab == (Object*)0 || (IRBlock*)ab != B)
+            return (IRInsn*)0;
+        IRInsn* accNext = (IRInsn*)ao;
+        if (!accNext.isOp(opAdd) || self.countOf(uses, accBack.val()) != (u32)1 || accNext.ops().count() < (u32)2)
+            return (IRInsn*)0;
+        IROperand* x0 = (IROperand*)accNext.ops().get((u32)0);
+        IROperand* x1 = (IROperand*)accNext.ops().get((u32)1);
+        IROperand* elemOp = (IROperand*)0;
+        if (x0.kind() == (u8)OPK_USE && x0.val() == acc)
+            elemOp = x1;
+        else if (x1.kind() == (u8)OPK_USE && x1.val() == acc)
+            elemOp = x0;
+        if (elemOp == (IROperand*)0 || elemOp.kind() != (u8)OPK_USE)
+            return (IRInsn*)0;
+        Object* zo = defOf.get((Hashable*)elemOp.val());
+        Object* zb = defBlk.get((Hashable*)elemOp.val());
+        if (zo == (Object*)0 || zb == (Object*)0 || (IRBlock*)zb != B)
+            return (IRInsn*)0;
+        IRInsn* zx = (IRInsn*)zo;
+        if (!zx.isOp(opZExt) || zx.ops().count() < (u32)1)
+            return (IRInsn*)0;
+        _vrAccNext = accNext;
+        _vrElemOp = elemOp;
+        return zx;
+        }
+
+    // `ivNext = Add(iv, 1)` in the body (not the accumulator's add), and the
+    // induction phi's back edge must carry it. 0 when not.
+    final IRInsn* vecReduxStep(IRInsn* accNext, Map* defOf)
+        {
+        IRInsn* ivNext = vecFindStep(_vrB, _vrIv, accNext, defOf);
+        if (ivNext == (IRInsn*)0)
+            return (IRInsn*)0;
+        IROperand* ivBack = self.vecBackOp(_vrIvPhi, _vrB);
         if (ivBack == (IROperand*)0 || ivBack.kind() != (u8)OPK_USE || ivBack.val() != ivNext.res())
-            return (VecCand*)0;
+            return (IRInsn*)0;
+        return ivNext;
+        }
 
-        if (!vecWideningBodyOK(fn, H, B, iv, acc, accNext, ivNext, zx, load))
-            return (VecCand*)0;
-
+    // The candidate for a widening reduction whose narrow lane type is `lt`
+    // (one load `a`, or two, `a` and `b`, multiplied for a dot product), once
+    // the trip is long enough and a runtime bound is usable. `PH` is the
+    // preheader (vecHeaderPred).
+    final VecCand* vecWidenCand(IRBlock* H, IRInsn* ivNext, IRInsn* accNext, IROperand* elemOp,
+                                String* lt, IRValue* a, IRValue* b, bool dot, IRBlock* PH, Map* defBlk)
+        {
+        IRBlock* B = _vrB;
+        i64 n = _vrN;
         u32 lw = self.irWidth(lt);
         if (lw == (u32)0)
             return (VecCand*)0;
         u32 wvb = self.vectorBytes(); // 16, or 32/64 on an x86-64 clone (bug 644)
         u32 vw = wvb / lw; // 16 per iteration for u8, 8 for u16
         // The trailing test is the non-zero-start refusal (see
-        // vecIvStartsAtZero); folded into this condition rather than written as
-        // its own statement, because a separate branch costs frame slots and
-        // vecWideningAt sits 80 bytes from the arm64 budget.
-        // The trip no longer has to be a whole number of vectors -- a CLONE
-        // finishes the tail -- but fewer than ONE full vector still has nothing
-        // to gain. That test is just `n < vw`: writing n = q*vw + r, the last
-        // whole boundary n - r is q*vw, which is >= vw exactly when q >= 1. So
-        // no subtraction and no second modulo, which matters because this
-        // function sits ~80 bytes from the arm64 frame ceiling. The bound is
-        // carried on the candidate for vecSetEpi to use.
+        // vecIvStartsAtZero). The trip need not be a whole number of vectors
+        // -- a CLONE finishes the tail -- but fewer than ONE full vector has
+        // nothing to gain.
         if (vw < (u32)2 || _vrIvStart < (i64)0)
             return (VecCand*)0;
         if (!_vrRuntime && _vrIvStart >= n)
@@ -1443,13 +1447,14 @@
             return (VecCand*)0;
 
         VecCand* c = new VecCand();
-        c.setLoop(H, B, E);
-        c.setIv(ivPhi, ivNext, _vrGuard, iv);
+        c.setLoop(H, B, _vrE);
+        c.setIv(_vrIvPhi, ivNext, _vrGuard, _vrIv);
         c.setLane(String.withCString("U32"), vw);
         c.setVecBytes(wvb);
-        c.setReduction(accPhi, accNext, acc, elemOp.val(),
-                       self.vecEntryOpOf(accPhi, B), self.vecEntryBlkOf(accPhi, B));
-        c.setWidening(lt, load.res(), (IRValue*)0, false);
+        c.setReduction(_vrAccPhi, accNext, _vrAccPhi.res(), elemOp.val(),
+                       self.vecEntryOpOf(_vrAccPhi, B),
+                       PH);
+        c.setWidening(lt, a, b, dot);
         c.setRuntime(_vrRuntime, _vrBoundOp);
         c.setIvStart(_vrIvStart);
         return c;
@@ -1462,44 +1467,18 @@
         _vrAllowRT = true; // widening-sum / dot accept one too (see vecReduxShape)
         if (!vecReduxShape(H, defOf, defBlk))
             return (VecCand*)0;
-        IRInsn* ivPhi = _vrIvPhi;
-        IRInsn* accPhi = _vrAccPhi;
-        IRBlock* B = _vrB;
-        IRBlock* E = _vrE;
-        IRValue* iv = _vrIv;
-        i64 n = _vrN;
-        IRValue* acc = accPhi.res();
+        IRValue* acc = _vrAccPhi.res();
         if (!self.vecRedux32(acc.ty()))
             return (VecCand*)0;
-
-        IROperand* accBack = self.vecBackOp(accPhi, B);
-        if (accBack == (IROperand*)0 || accBack.kind() != (u8)OPK_USE)
+        IRInsn* zx = vecWidenElem(defOf, defBlk, uses);
+        if (zx == (IRInsn*)0)
             return (VecCand*)0;
-        Object* ao = defOf.get((Hashable*)accBack.val());
-        Object* ab = defBlk.get((Hashable*)accBack.val());
-        if (ao == (Object*)0 || ab == (Object*)0 || (IRBlock*)ab != B)
-            return (VecCand*)0;
-        IRInsn* accNext = (IRInsn*)ao;
-        if (!accNext.isOp(opAdd) || self.countOf(uses, accBack.val()) != 1 || accNext.ops().count() < 2)
-            return (VecCand*)0;
-        IROperand* x0 = (IROperand*)accNext.ops().get((u32)0);
-        IROperand* x1 = (IROperand*)accNext.ops().get((u32)1);
-        IROperand* elemOp = (IROperand*)0;
-        if (x0.kind() == (u8)OPK_USE && x0.val() == acc)
-            elemOp = x1;
-        else if (x1.kind() == (u8)OPK_USE && x1.val() == acc)
-            elemOp = x0;
-        if (elemOp == (IROperand*)0 || elemOp.kind() != (u8)OPK_USE)
-            return (VecCand*)0;
+        IRInsn* accNext = _vrAccNext;
+        IROperand* elemOp = _vrElemOp;
+        IRBlock* B = _vrB;
+        IRValue* iv = _vrIv;
 
         // elem = ZExt(prod), prod = Mul(loadA, loadB) in the narrow lane.
-        Object* zo = defOf.get((Hashable*)elemOp.val());
-        Object* zb = defBlk.get((Hashable*)elemOp.val());
-        if (zo == (Object*)0 || zb == (Object*)0 || (IRBlock*)zb != B)
-            return (VecCand*)0;
-        IRInsn* zx = (IRInsn*)zo;
-        if (!zx.isOp(opZExt) || zx.ops().count() < 1)
-            return (VecCand*)0;
         if (countOf(uses, elemOp.val()) != (u32)1)
             return (VecCand*)0;
         IROperand* zs = (IROperand*)zx.ops().get((u32)0);
@@ -1525,13 +1504,9 @@
         if (!lt.equals(loadB.res().ty()))
             return (VecCand*)0;
 
-        IRInsn* ivNext = vecFindStep(B, iv, accNext, defOf);
+        IRInsn* ivNext = vecReduxStep(accNext, defOf);
         if (ivNext == (IRInsn*)0)
             return (VecCand*)0;
-        IROperand* ivBack = self.vecBackOp(ivPhi, B);
-        if (ivBack == (IROperand*)0 || ivBack.kind() != (u8)OPK_USE || ivBack.val() != ivNext.res())
-            return (VecCand*)0;
-
         Array* known = new Array();
         known.add((Object*)accNext);
         known.add((Object*)ivNext);
@@ -1539,52 +1514,20 @@
         known.add((Object*)mul);
         known.add((Object*)loadA);
         known.add((Object*)loadB);
-        if (!vecDotBodyClean(fn, H, B, known, acc, accNext, iv))
-            return (VecCand*)0;
-
-        u32 lw = self.irWidth(lt);
-        if (lw == (u32)0)
-            return (VecCand*)0;
-        u32 wvb = self.vectorBytes(); // 16, or 32/64 on an x86-64 clone (bug 644)
-        u32 vw = wvb / lw;
-        // The trailing test is the non-zero-start refusal (see
-        // vecIvStartsAtZero); folded into this condition rather than written as
-        // its own statement, because a separate branch costs frame slots and
-        // vecWideningAt sits 80 bytes from the arm64 budget.
-        // See vecWideningAt: `n < vw` is the fewer-than-one-vector refusal.
-        if (vw < (u32)2 || _vrIvStart < (i64)0)
-            return (VecCand*)0;
-        if (!_vrRuntime && _vrIvStart >= n)
-            return (VecCand*)0;
-        // Fewer than one whole vector: stay scalar. On the trip LENGTH, not
-        // the bound — see vecWideningAt for why gating on `n` re-vectorised
-        // the epilogue clone into an empty vector loop, forever.
-        if (!_vrRuntime && n - _vrIvStart < (i32)vw)
-            return (VecCand*)0;
-        // A runtime bound needs a strict `<` and must be loop-INVARIANT.
-        if (_vrRuntime && !self.vecMapRTOK(_vrGuard, defBlk, H, B))
+        if (!vecBodyClean(fn, H, B, known, acc, accNext, iv))
             return (VecCand*)0;
         IRBlock* PH = self.vecHeaderPred(fn, H, B);
         if (PH == (IRBlock*)0)
             return (VecCand*)0;
-
-        VecCand* c = new VecCand();
-        c.setLoop(H, B, E);
-        c.setIv(ivPhi, ivNext, _vrGuard, iv);
-        c.setLane(String.withCString("U32"), vw);
-        c.setVecBytes(wvb);
-        c.setReduction(accPhi, accNext, acc, elemOp.val(),
-                       self.vecEntryOpOf(accPhi, B), PH);
-        c.setWidening(lt, loadA.res(), loadB.res(), true);
-        c.setRuntime(_vrRuntime, _vrBoundOp);
-        c.setIvStart(_vrIvStart);
-        return c;
+        return vecWidenCand(H, ivNext, accNext, elemOp, lt, loadA.res(), loadB.res(), true, PH, defBlk);
         }
 
-    // The body is exactly the recognised shape — two addresses, two loads, the
-    // multiply, the widen, the two adds and constants — the accumulator is read
-    // only by its own add, and the induction variable does not escape.
-    final bool vecDotBodyClean(IRFunc* fn, IRBlock* H, IRBlock* B, Array* known,
+    // A recognised reduction body holds nothing but the instructions the
+    // recogniser matched (`known`) plus addresses, constants and width casts
+    // (anything else and the rewrite would drop work); the accumulator is read
+    // only by its own add, and the induction variable does not escape the
+    // loop. Shared by the widening sum and the dot product.
+    final bool vecBodyClean(IRFunc* fn, IRBlock* H, IRBlock* B, Array* known,
                          IRValue* acc, IRInsn* accNext, IRValue* iv)
         {
         for (u32 i = (u32)0; i < B.insns().count(); i = i + (u32)1)
@@ -1613,7 +1556,10 @@
         return true;
         }
 
-    // `ivNext = Add(iv, 1)` in the body, skipping the accumulator's own add.
+    // `ivNext = Add(iv, 1)` in the block, skipping `accNext` (the
+    // accumulator's own add) when there is one. The count recogniser looks for
+    // it in the latch BEFORE the body is classified, so the classifier can skip
+    // it: when the body is merged it shares a block with the count plumbing.
     final IRInsn* vecFindStep(IRBlock* B, IRValue* iv, IRInsn* accNext, Map* defOf)
         {
         for (u32 i = (u32)0; i < B.insns().count(); i = i + (u32)1)
@@ -1819,28 +1765,6 @@
         return true;
         }
 
-    // Is this operand usable as an elementwise input: a literal, a value already
-    // classified elementwise, a constant, or something defined OUTSIDE the loop
-    // (hence invariant)? Anything else varies per lane in a way the rewrite
-    // cannot reproduce.
-    final bool vecCountOperandOK(IROperand* o, Array* elemIds, Map* defOf, Map* defBlk,
-                           IRBlock* H, IRBlock* B, IRBlock* L)
-        {
-        if (o.kind() == (u8)OPK_IMMI)
-            return true;
-        if (o.kind() != (u8)OPK_USE)
-            return false;
-        if (hasValue(elemIds, o.val()))
-            return true;
-        i32 k = (i32)0;
-        if (vecConst(o, defOf, &k))
-            return true;
-        Object* db = defBlk.get((Hashable*)o.val());
-        if (db == (Object*)0)
-            return false;
-        return (IRBlock*)db != B && (IRBlock*)db != L && (IRBlock*)db != H;
-        }
-
     // The body must be exactly the elementwise computation feeding the compare,
     // plus the count plumbing (compare, increment, Select, iv step) which is
     // skipped. Sets _vcLaneTy and _vcElem.
@@ -1896,9 +1820,9 @@
                 {
                 if (n.res() == (IRValue*)0 || n.ops().count() < (u32)2)
                     return false;
-                if (!vecCountOperandOK((IROperand*)n.ops().get((u32)0), elemIds, defOf, defBlk, H, B, L))
+                if (!vecOperandOK((IROperand*)n.ops().get((u32)0), elemIds, B, H, defOf, defBlk, L))
                     return false;
-                if (!vecCountOperandOK((IROperand*)n.ops().get((u32)1), elemIds, defOf, defBlk, H, B, L))
+                if (!vecOperandOK((IROperand*)n.ops().get((u32)1), elemIds, B, H, defOf, defBlk, L))
                     return false;
                 if (!self.hasValue(elemIds, n.res()))
                     elemIds.add((Object*)n.res());
@@ -1933,34 +1857,6 @@
         return true;
         }
 
-    // ivNext = Add(iv, 1) in the latch, found BEFORE the body is classified so
-    // the classifier can skip it: when the body is merged it shares a block with
-    // the count plumbing.
-    final IRInsn* vecCountStep(IRBlock* L, IRValue* iv, Map* defOf)
-        {
-        for (u32 i = (u32)0; i < L.insns().count(); i = i + (u32)1)
-            {
-            IRInsn* n = (IRInsn*)L.insns().get(i);
-            if (!n.isOp(opAdd) || n.res() == (IRValue*)0)
-                continue;
-            if (n.ops().count() < (u32)2)
-                continue;
-            IROperand* a0 = (IROperand*)n.ops().get((u32)0);
-            IROperand* a1 = (IROperand*)n.ops().get((u32)1);
-            IROperand* so = (IROperand*)0;
-            if (a0.kind() == (u8)OPK_USE && a0.val() == iv)
-                so = a1;
-            else if (a1.kind() == (u8)OPK_USE && a1.val() == iv)
-                so = a0;
-            if (so == (IROperand*)0)
-                continue;
-            i32 one = (i32)0;
-            if (vecConst(so, defOf, &one) && one == (i32)1)
-                return n;
-            }
-        return (IRInsn*)0;
-        }
-
     // The compare must be elementwise-vs-invariant: exactly one side elementwise
     // and the other loop-invariant. Both sides elementwise would vary per lane on
     // the right too; neither would make the compare loop-invariant and the count
@@ -1979,7 +1875,7 @@
         if (e0 == e1)
             return false;
         IROperand* k = e0 ? o1 : o0;
-        if (!vecCountOperandOK(k, elemIds, defOf, defBlk, H, B, L))
+        if (!vecOperandOK(k, elemIds, B, H, defOf, defBlk, L))
             return false;
         if (k.kind() == (u8)OPK_USE && self.hasValue(elemIds, k.val()))
             return false;

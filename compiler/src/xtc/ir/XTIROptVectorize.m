@@ -2095,6 +2095,28 @@ static void xtvCloneLoop(XTIRFunction* fn, XTIRBlock* H, XTIRBlock* B,
 // on every path, so the remainder covers [M, n) and nothing else. The clamp
 // is a sign-mask (AShr/Not/And) rather than a Select so it stays in the
 // basic-ALU subset every vectorising back end already handles.
+// The preheader of the widening reductions: the header's one predecessor that
+// is not the latch, or nil when there is not exactly one. Fails closed: the
+// seed is read from a two-way phi, which a header entered from two outside
+// blocks does not have. As vecHeaderPred.
+static XTIRBlock* xtvHeaderPred(XTIRFunction* fn, XTIRBlock* H, XTIRBlock* B)
+{
+    XTIRBlock* found = nil;
+    for (XTIRBlock* bb in fn.blocks)
+        {
+        if (bb == B || !bb.terminator)
+            continue;
+        for (XTIROperand* o in bb.terminator.operands)
+            if (o.kind == XTIROperandKindBlock && o.blockRef == H)
+                {
+                if (found && found != bb)
+                    return nil;
+                found = bb;
+                }
+        }
+    return found;
+}
+
 static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
                                    XTIROperand* boundOp, int64_t ivStart,
                                    XTIROperand* startOp,
@@ -6126,16 +6148,8 @@ static BOOL vecInterleaveFits(XTIRFunction* fn, XTIRBlock* B, XTIRValueId vaccId
         if (!runtimeTrip && (epiM_ - ivStart) < (int64_t)vw)
             continue;
 
-        // Preheader (the header pred that is not the latch) and the accumulator seed.
-        XTIRBlock* PH = nil;
-        for (XTIRBlock* bb in fn.blocks)
-            if (bb != B && bb.terminator)
-                for (XTIROperand* o in bb.terminator.operands)
-                    if (o.kind == XTIROperandKindBlock && o.blockRef == H)
-                        {
-                        PH = bb;
-                        break;
-                        }
+        // Preheader (the header's one pred that is not the latch) and the accumulator seed.
+        XTIRBlock* PH = xtvHeaderPred(fn, H, B);
         if (!PH)
             continue;
         XTIROperand* seedOp = (accPhi.operands[0].blockRef == B) ? accPhi.operands[3] : accPhi.operands[1];
@@ -6414,6 +6428,11 @@ static BOOL vecInterleaveFits(XTIRFunction* fn, XTIRBlock* B, XTIRValueId vaccId
         if (!runtimeTrip && (epiM_ - ivStart) < (int64_t)vw)
             continue;
 
+        // The preheader as the dot product finds it: the header's one outside
+        // predecessor, refused when there is not exactly one.
+        XTIRBlock* whPH = xtvHeaderPred(fn, H, B);
+        if (!whPH)
+            continue;
         XTIROperand* seedOp = (accPhi.operands[0].blockRef == B) ? accPhi.operands[3] : accPhi.operands[1];
         XTVecCand* c = [XTVecCand new];
         c.H = H;
@@ -6430,7 +6449,7 @@ static BOOL vecInterleaveFits(XTIRFunction* fn, XTIRBlock* B, XTIRValueId vaccId
         c.accId = accId;
         c.accNext = accNext;
         c.seedOp = seedOp;
-        c.preheader = (accPhi.operands[0].blockRef == B) ? accPhi.operands[2].blockRef : accPhi.operands[0].blockRef;
+        c.preheader = whPH;
         c.isWideningSum = YES;
         c.loadLaneType = lt;
         c.loadId = load.result.valueId;

@@ -1093,53 +1093,12 @@
         return IRType.is(t, tyI8) || IRType.is(t, tyU8) || IRType.is(t, tyI16) || IRType.is(t, tyU16) || IRType.is(t, tyI32) || IRType.is(t, tyU32) || IRType.is(t, tyF32);
         }
 
-    // A compile-time integer through Const and the width casts.
-    // The 64-bit form, for a loop BOUND. The narrow one below truncates, and a
-    // u32 bound above 2^31 then reads as negative — which the `n <= 0` guards
-    // took for "not a constant loop" and refused. Everything else it is asked
-    // for (a step, a shift, a delta) is genuinely small and keeps the narrow
-    // form. The reference uses int64_t on this path throughout.
+    // A compile-time integer through Const and the width casts, in 64 bits:
+    // a u32 loop bound above 2^31 read through a 32-bit value came out
+    // negative, which the `n <= 0` guards took for "not a constant loop".
+    // vecFoldConst, for the genuinely small values (a step, a shift, a delta),
+    // narrows what this returns. The reference uses int64_t throughout.
     final bool vecConstWide(IROperand* op, Map* defOf, i64* out)
-        {
-        if (op.kind() == (u8)OPK_IMMI)
-            {
-            out[0] = op.imm();
-            return true;
-            }
-        if (op.kind() != (u8)OPK_USE)
-            return false;
-        IRValue* cur = op.val();
-        for (u32 d = (u32)0; d < (u32)16; d = d + (u32)1)
-            {
-            Object* o = defOf.get((Hashable*)cur);
-            if (o == (Object*)0)
-                return false;
-            IRInsn* def = (IRInsn*)o;
-            if (def.ops().count() < (u32)1)
-                return false;
-            IROperand* a = (IROperand*)def.ops().get((u32)0);
-            if (def.isOp(opConst))
-                {
-                if (a.kind() != (u8)OPK_IMMI)
-                    return false;
-                out[0] = a.imm();
-                return true;
-                }
-            if (!def.isOp(opZExt) && !def.isOp(opSExt) && !def.isOp(opTrunc))
-                return false;
-            if (a.kind() == (u8)OPK_IMMI)
-                {
-                out[0] = a.imm();
-                return true;
-                }
-            if (a.kind() != (u8)OPK_USE)
-                return false;
-            cur = a.val();
-            }
-        return false;
-        }
-
-    final bool vecConstExt(IROperand* op, Map* defOf, i32* out)
         {
         if (op.kind() == (u8)OPK_IMMI)
             {
@@ -1181,10 +1140,12 @@
 
     final bool vecFoldConst(IROperand* op, Map* defOf, u32 depth, i64* out)
         {
-        i32 k = (i32)0;
-        if (vecConstExt(op, defOf, &k))
+        // Through vecConstWide, narrowed to 32 bits and sign-extended back:
+        // this fold has always worked in 32-bit values.
+        i64 kw = (i64)0;
+        if (vecConstWide(op, defOf, &kw))
             {
-            out[0] = (i64)k;
+            out[0] = (i64)(i32)kw;
             return true;
             }
         if (depth > (u32)8 || op.kind() != (u8)OPK_USE)
@@ -1252,56 +1213,16 @@
     // Pinned by tests/fixtures/vectorize_map_tail.xc.
     final void vecMapEpilogue(IRFunc* fn, VecCand* c, IRBlock* H2, IRBlock* B2, Map* cmap)
         {
-        IRBlock* H = c.h();
-        IRBlock* E2 = c.e();
-        IRBlock* PH = c.pre();
-        IRBlock* VE = new IRBlock(hoistName2(H.name(), "_vexit"));
-        IRInsn* br = IRInsn.with(String.withCString("Branch"));
-        br.add(IROperand.block(H2));
-        VE.setTerm(br);
-
-        // The vector loop exits to VE instead of E.
-        IRInsn* t = H.term();
-        for (u32 k = (u32)0; k < t.ops().count(); k = k + (u32)1)
-            {
-            IROperand* o = (IROperand*)t.ops().get(k);
-            if (o.kind() == (u8)OPK_BLOCK && o.blk() == E2)
-                t.ops().set(k, (Object*)IROperand.block(VE));
-            }
-
-        // Seed the clone: its iv enters at M, on the edge from VE — which is
-        // where the clone's phis still name the ORIGINAL preheader.
-        Object* ivC = cmap.get((Hashable*)c.ivPhi().res());
-        for (u32 k = (u32)0; k < H2.phis().count(); k = k + (u32)1)
-            {
-            IRInsn* phi = (IRInsn*)H2.phis().get(k);
-            for (u32 q = (u32)0; q + (u32)1 < phi.ops().count(); q = q + (u32)2)
-                {
-                IROperand* bo = (IROperand*)phi.ops().get(q);
-                if (bo.kind() != (u8)OPK_BLOCK || bo.blk() != PH)
-                    continue;
-                phi.ops().set(q, (Object*)IROperand.block(VE));
-                if (ivC != (Object*)0 && phi.res() == (IRValue*)ivC)
-                    phi.ops().set(q + (u32)1, c.rtTrip()
-                                                  ? (Object*)IROperand.useVal(_vecMapRtM)
-                                                  : (Object*)IROperand.immI(c.epiM(), c.iv().ty()));
-                }
-            }
-
-        u32 at = (u32)0;
-        for (u32 k = (u32)0; k < fn.blocks().count(); k = k + (u32)1)
-            if ((IRBlock*)fn.blocks().get(k) == c.b())
-                at = k + (u32)1;
-        Array* three = new Array();
-        three.add((Object*)VE);
-        three.add((Object*)H2);
-        three.add((Object*)B2);
-        fn.blocks().insertAll(at, three);
+        self.vecSpliceRemainder(fn, c, new Array(), H2, B2, c.pre(), cmap, _vecMapRtM, (IRValue*)0);
         }
 
-    // The header's predecessor that is not the latch.
+    // The preheader: the header's one predecessor that is not the latch, or 0
+    // when there is not exactly one. Fails closed: the seed is read from a
+    // two-way phi, which a header entered from two outside blocks does not
+    // have. (The reference kept the last such block and this one the first.)
     final IRBlock* vecHeaderPred(IRFunc* fn, IRBlock* H, IRBlock* B)
         {
+        IRBlock* found = (IRBlock*)0;
         for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
             {
             IRBlock* bb = (IRBlock*)fn.blocks().get(b);
@@ -1311,10 +1232,14 @@
                 {
                 IROperand* o = (IROperand*)bb.term().ops().get(k);
                 if (o.kind() == (u8)OPK_BLOCK && o.blk() == H)
-                    return bb;
+                    {
+                    if (found != (IRBlock*)0 && found != bb)
+                        return (IRBlock*)0;
+                    found = bb;
+                    }
                 }
             }
-        return (IRBlock*)0;
+        return found;
         }
 
     // An iv-indexed narrow load feeding only the multiply. The lane must be u16
@@ -2355,24 +2280,27 @@
     // The horizontal reduce at the loop exit, plus the initial scalar added back
     // if the accumulator did not start at zero, and the rewiring of every
     // post-loop reader of the old scalar accumulator.
-    // Splice the remainder loop in between the vector loop and the exit.
-    //
-    // EXTRACTED from vecReduxExit purely for the arm64 frame budget: inlined, it
-    // needed 18096 bytes against a 16384 limit, because every IR value in a
-    // function gets its own frame slot whether or not its live range overlaps
-    // anything. Same wall, same workaround as the settings handler — and the
-    // reason stack-slot colouring is worth building.
+    // Splice the remainder loop in between the vector loop and the exit, the
+    // reduce landing in the vector-exit block (vecSpliceRemainder, shared
+    // with the map applier).
     final IRValue* vecReduxEpilogue(IRFunc* fn, VecCand* c, IRValue* outV, Array* head)
         {
-        IRValue* finalV = outV;
-        // Epilogue part 2: the reduction lands between the vector loop and
-        // the remainder, because the remainder's accumulator starts FROM it.
+        return self.vecSpliceRemainder(fn, c, head, _vecH2, _vecB2, _vecPH, _vecCmap, _vecRtM, outV);
+        }
+
+    // Splice the remainder clone (H2, B2) in after the vector loop, through a
+    // vector-exit block VE that holds `head` (a reduction's horizontal reduce;
+    // nothing for a map) and branches to H2. The vector loop exits to VE; the
+    // clone's phis take their entry values on the edge from VE: the induction
+    // variable at M (`rtM` when the trip is runtime), and, when `accSeed` is
+    // given, the accumulator at the reduced total. Returns the clone's
+    // accumulator, or `accSeed` when there is none.
+    final IRValue* vecSpliceRemainder(IRFunc* fn, VecCand* c, Array* head, IRBlock* H2, IRBlock* B2,
+                                      IRBlock* PH, Map* cmap, IRValue* rtM, IRValue* accSeed)
+        {
+        IRValue* finalV = accSeed;
         IRBlock* H = c.h();
         IRBlock* E2 = c.e();
-        IRBlock* H2 = _vecH2;
-        IRBlock* B2 = _vecB2;
-        IRBlock* PH = _vecPH;
-        Map* cmap = _vecCmap;
         IRBlock* VE = new IRBlock(hoistName2(H.name(), "_vexit"));
         for (u32 i = (u32)0; i < head.count(); i = i + (u32)1)
             VE.add((IRInsn*)head.get(i));
@@ -2389,9 +2317,10 @@
                 t.ops().set(k, (Object*)IROperand.block(VE));
             }
 
-        // Seed the clone: iv enters at M, accumulator at the reduced total.
+        // Seed the clone on the edge from VE, which is where its phis still
+        // name the ORIGINAL preheader.
         Object* ivC = cmap.get((Hashable*)c.ivPhi().res());
-        Object* accC = cmap.get((Hashable*)c.accPhi().res());
+        Object* accC = accSeed == (IRValue*)0 ? (Object*)0 : cmap.get((Hashable*)c.accPhi().res());
         for (u32 k = (u32)0; k < H2.phis().count(); k = k + (u32)1)
             {
             IRInsn* phi = (IRInsn*)H2.phis().get(k);
@@ -2402,10 +2331,10 @@
                     continue;
                 phi.ops().set(q, (Object*)IROperand.block(VE));
                 if (accC != (Object*)0 && phi.res() == (IRValue*)accC)
-                    phi.ops().set(q + (u32)1, (Object*)IROperand.useVal(outV));
+                    phi.ops().set(q + (u32)1, (Object*)IROperand.useVal(accSeed));
                 else if (ivC != (Object*)0 && phi.res() == (IRValue*)ivC)
                     phi.ops().set(q + (u32)1, c.rtTrip()
-                                                  ? (Object*)IROperand.useVal(_vecRtM)
+                                                  ? (Object*)IROperand.useVal(rtM)
                                                   : (Object*)IROperand.immI(c.epiM(), c.iv().ty()));
                 }
             }

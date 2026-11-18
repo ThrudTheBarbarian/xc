@@ -2264,6 +2264,8 @@ class BeFact : Object
     IRFunc* _vecFn;       // the function being rewritten (names that global)
     bool _vrAllowRT;       // one-shot: the NEXT vecReduxShape may accept one
     IROperand* _vrBoundOp; // that bound, when it is
+    IRInsn* _vrAccNext;    // vecWidenElem's: the accumulator's add ...
+    IROperand* _vrElemOp;  // ... and the element it adds
 
     // The vectorised body: loads become VLoad, stores VStore, elementwise
     // arithmetic its vector opcode, and the induction variable steps by the
