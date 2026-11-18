@@ -48,6 +48,7 @@
     NSArray<NSString*>* _stdlibDirs;   // the preprocessor's standard-library directories
     NSMutableSet<NSString*>* _noDebugInfoWarned;   // libraries already warned about, once across a --par-style=auto restart
     BOOL _classNamesUsed;              // sema found a call to Object.className()/newInstanceOfClass(): the class-name table is on
+    BOOL _atFmtUsed;                   // sema found a printf-family format holding `%@`: HAS_ATFMT is 1
     BOOL _arm9LibcWarned;              // the arm9 missing-libc warning, once across a restart
     }
 
@@ -1311,37 +1312,6 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
                           }];
     }
 
-// Gate the `%@` / Object dependency: every backend's Stdio pulls in the
-// Object root (and String) for `%@` -> description() dispatch ONLY when the
-// program actually uses `%@`, via `#if HAS_ATFMT`. Detect it by a throwaway
-// preprocess of the FULLY-EXPANDED source (the spec can live in an imported
-// library, and the preprocessor strips comments so Stdio's own `//  %@` doc
-// lines don't count), then define HAS_ATFMT on the real preprocessor before
-// it evaluates the guard.
-//
-// This is the ONE printf format-feature gate that's cross-target and worth
-// keeping — it fences off a heavy dependency, not just a code branch. The
-// xt6502-only width/float gates (HAS_DFMT/…/HAS_LFMT) were removed in
-// phase-559 because xt6502 banks the pruned code into abundant pages; the
-// parked flat-6502 Stdio in support/6502 still carries them.
-- (void)setupObjectFmtGateOnto:(XTPreprocessor*)pp
-                    fromSource:(NSString*)rawSource
-                      filename:(NSString*)filename
-                         arm64:(BOOL)arm64
-                  includePaths:(NSArray<NSString*>*)includePaths
-    {
-    XTPreprocessor* scanPP = [[XTPreprocessor alloc]
-        initWithDiagnostics:[[XTDiagnosticEngine alloc] init]];
-    scanPP.includePaths = includePaths;
-    [self setupPreprocessor:scanPP arm64:arm64];
-    NSString* expanded = nil;
-    expanded = [scanPP preprocessSource:rawSource filename:filename];
-    if (!expanded)
-        expanded = rawSource;
-    BOOL hasAt = [expanded rangeOfString:@"%@"].location != NSNotFound;
-    [pp defineMacro:@"HAS_ATFMT" value:hasAt ? @"1" : @"0"];
-    }
-
 // Run preprocess → lex → parse → sema → IR-lower → verify, returning the
 // verified IR module on success or nil on any frontend error. Both
 // compileFile: (in-process backend) and xtc-fe (writes IR text and exits)
@@ -1349,13 +1319,15 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
 - (nullable XTIRModule*)compileFrontendForFile:(NSString*)inputFile
     {
     _classNamesUsed = NO;
+    _atFmtUsed = NO;
     return [self frontendPassForFile:inputFile];
     }
 
 // One pass of the front end. It starts again from the top, with an option
 // turned on, when the program turns out to need what that option adds: the
-// par runtime (after the parse), and the class-name table (after sema). The
-// first pass's diagnostics are dropped by the restart. As the port's lowerUnit.
+// par runtime (after the parse), and the class-name table and Stdio's `%@`
+// support (after sema). The first pass's diagnostics are dropped by the
+// restart. As the port's lowerUnit.
 - (nullable XTIRModule*)frontendPassForFile:(NSString*)inputFile
     {
     BOOL arm64 = _options.useArm64Backend;
@@ -1494,11 +1466,13 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
         pp.runtimeOffer = [NSSet setWithArray:[pp providesOfLibrary:_options.runtimeLibFile]];
         }
     [self setupPreprocessor:pp arm64:arm64];
-    [self setupObjectFmtGateOnto:pp
-                      fromSource:rawSource
-                        filename:inputFile
-                           arm64:arm64
-                    includePaths:includePaths];
+    // The `%@` gate: every backend's Stdio pulls in the Object root (and
+    // String) for `%@` -> description() dispatch only when the program passes
+    // a format that holds one, in its own code or an imported file's. Sema
+    // finds that (usesAtFormat), so the first pass is built without it and
+    // the restart after sema turns it on. It fences off a heavy dependency on
+    // the small targets, not just a code branch.
+    [pp defineMacro:@"HAS_ATFMT" value:_atFmtUsed ? @"1" : @"0"];
 
     NSString* expanded = nil;
     expanded = [pp preprocessSource:rawSource filename:inputFile];
@@ -2255,12 +2229,16 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     sema.importedProtocolSlots = impProtoSlots.count ? impProtoSlots : nil;
     sema.importedMethodSlots = impMethodSlots.count ? impMethodSlots : nil;
     [sema analyzeProgram:ast];
-    // The class-name table is decided by the program: sema saw a call resolve
-    // to Object.className() or Object.newInstanceOfClass(). This pass was
-    // built without the table, so start again with it.
-    if (namesSwitch && sema.usesClassNames && !_classNamesUsed)
+    // The class-name table and HAS_ATFMT are decided by the program: sema saw
+    // a call resolve to Object.className() or Object.newInstanceOfClass(), or
+    // a format holding `%@`. This pass was built without them, so start again
+    // with them.
+    BOOL wantNames = namesSwitch && sema.usesClassNames && !_classNamesUsed;
+    BOOL wantAt = sema.usesAtFormat && !_atFmtUsed;
+    if (wantNames || wantAt)
         {
-        _classNamesUsed = YES;
+        _classNamesUsed = _classNamesUsed || wantNames;
+        _atFmtUsed = _atFmtUsed || wantAt;
         [_diagnostics truncateToCount:diagMark];
         return [self frontendPassForFile:inputFile];
         }

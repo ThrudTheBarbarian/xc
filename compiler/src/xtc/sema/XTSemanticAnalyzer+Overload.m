@@ -2262,6 +2262,8 @@ static BOOL XTIsErasedKeyType(XTType* t)
                             {
                             XTLiteralStringNode* lit =
                                 (XTLiteralStringNode*)node.arguments[fmtIdx];
+                            if ([lit.stringValue containsString:@"%@"])
+                                self.usesAtFormat = YES;
                             NSString* rewritten =
                                 [self typeDirectedFormatString:lit.stringValue
                                                      arguments:node.arguments
@@ -2962,6 +2964,9 @@ static NSInteger XTFmtWrapperIndex(BOOL isVarArgs, NSArray<XTParamNode*>* params
     if ([out[fmtIdx] isKindOfClass:[XTLiteralStringNode class]])
         {
         XTLiteralStringNode* lit = (XTLiteralStringNode*)out[fmtIdx];
+        // Before an enum's `%@` is respelled `%e` below.
+        if ([lit.stringValue containsString:@"%@"])
+            self.usesAtFormat = YES;
         [self checkPrintfFormat:lit.stringValue
                       arguments:out
                      firstVaIdx:fmtIdx + 1

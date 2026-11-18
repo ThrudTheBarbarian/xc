@@ -22,8 +22,11 @@ stores it. A newline moves to the start of the next row; running off the bottom
 of the text region [scrolls](#scroll). In a graphics mode with no text window,
 output does nothing.
 
-`%@` on an object is gated on the front-end `HAS_ATFMT` pre-scan: a program that
-never uses it pays no `Object` or `String` footprint. `%@` on a plain `struct`
+`%@` on an object is gated on `HAS_ATFMT`, which the front end sets when the
+program passes a format literal holding `%@` to a format function (`printf`,
+`printfAt`, `String.withFormat`, `appendFormat`, `Log`) or to a function that
+forwards its format to one. A program that does not pays no `Object` or
+`String` footprint. `%@` on a plain `struct`
 goes through [`printStruct`](#printstruct), which the other targets do not have.
 
 ## Topics
