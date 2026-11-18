@@ -112,6 +112,7 @@ class OverView : UXView
 UXWindow* gWin;
 MapView* gMap;
 UXButton* gButton;
+UXView* gOver;
 
 // the window's content, built and painted once (the GL frame cleared to the test's blue)
 void buildWindow(i32 x, i32 y)
@@ -125,7 +126,8 @@ void buildWindow(i32 x, i32 y)
         }
     gMap = new MapView();
     back.addSubview(gMap, UXGeom.make(d16((i32)20), d16((i32)20), d16((i32)200), d16((i32)120)));
-    back.addSubview(new OverView(), UXGeom.make(d16((i32)60), d16((i32)50), d16((i32)40), d16((i32)30))); // after the map: over it
+    gOver = new OverView();
+    back.addSubview(gOver, UXGeom.make(d16((i32)60), d16((i32)50), d16((i32)40), d16((i32)30))); // after the map: over it
     gButton = new UXButton();
     gButton.setTitle((u8*)"Record");
     back.addSubview(gButton, UXGeom.make(d16((i32)240), d16((i32)20), d16((i32)100), d16((i32)32)));
@@ -273,6 +275,14 @@ void snapChecks(void)
     ck((u8*)"a region off the edge is clipped to the content", corner != (UXImage*)0 && corner.w == (i32)20 && corner.h == (i32)20 && sameAs(all, corner, (i32)0, (i32)0));
     UXRect away = UXGeom.make((i16)(cw + (i32)10), (i16)0, (i16)30, (i16)30);
     ck((u8*)"a region wholly off it is null", gWin.snapshot(&away) == (UXImage*)0);
+#if SNAP_WEB
+    // one view's repaint paints its own box: the rest of the window keeps what it shows
+    gOver.setNeedsDisplay();
+    gWin.display(); // the damage to the driver, as the run loop's pass does
+    UXImage* after = gWin.snapshot((UXRect*)0);
+    ck((u8*)"a partial repaint leaves the views outside it", after != (UXImage*)0 && near(after, d((i32)10), d((i32)170), (i32)20, (i32)160, (i32)60) &&
+       near(after, d((i32)70), d((i32)60), (i32)230, (i32)20, (i32)20));
+#endif
 
     i32 t0 = gDriver.nowMs();
     for (i32 i = (i32)0; i < (i32)10; i = i + (i32)1)

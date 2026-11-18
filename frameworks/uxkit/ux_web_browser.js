@@ -209,14 +209,15 @@
       return 1;
     },
 
-    ux_gfx_target: (h) => {
-      target = h;
-      const s = wins.get(h);
-      // A window with a GL surface clears to TRANSPARENT, not white, so the map
-      // canvas below shows through and the toolkit's 2D composites over it.  A
-      // window without one paints the opaque white backdrop it always did.
-      if (s && s.hasGl) ctx.clearRect(s.x, s.y, s.w, s.h);
-      else if (s) { ctx.fillStyle = '#ffffff'; ctx.fillRect(s.x, s.y, s.w, s.h); }
+    ux_gfx_target: (h) => { target = h; },
+    // The backdrop under a repaint's damage (window-local), drawn after its clip so the rest of the
+    // window keeps what it shows.  A window with a GL surface clears to TRANSPARENT, not white, so
+    // the map canvas below shows through and the toolkit's 2D composites over it.  A window without
+    // one paints the opaque white backdrop.
+    ux_backdrop: (x, y, w, h) => {
+      const s = wins.get(target);
+      if (s && s.hasGl) ctx.clearRect(ox() + x, oy() + y, w, h);
+      else if (s) { ctx.fillStyle = '#ffffff'; ctx.fillRect(ox() + x, oy() + y, w, h); }
     },
     ux_clip: (x, y, w, h) => { ctx.save(); ctx.beginPath(); ctx.rect(ox() + x, oy() + y, w, h); ctx.clip(); },
     ux_clip_round: (x, y, w, h, r) => {

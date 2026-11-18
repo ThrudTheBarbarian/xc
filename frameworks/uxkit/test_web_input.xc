@@ -12,6 +12,7 @@
 #import "UXView.xc"
 #import "UXGeometry.xc"
 #import "UXEvent.xc"
+#import "UXOutlineView.xc"
 
 class Pad : UXView
     {
@@ -40,6 +41,15 @@ void ck(bool ok, u8* what)
     {
     if (ok) { Stdio.printf("  ok   %s\n", what); }
     else { Stdio.printf("  FAIL %s\n", what); gFails = gFails + (i32)1; }
+    }
+
+// Two top-level items, neither with children.
+class Flat : Object<UXOutlineDataSource>
+    {
+    i32 numberOfChildren(UXOutlineView* o, Object* item) { return item == (Object*)0 ? (i32)2 : (i32)0; }
+    Object* childOfItem(UXOutlineView* o, Object* item, i32 i) { return (Object*)self; }
+    bool isExpandable(UXOutlineView* o, Object* item) { return false; }
+    u8* valueForItem(UXOutlineView* o, Object* item, i32 col) { return (u8*)"row"; }
     }
 
 UXWebDriver@ gWd;
@@ -120,6 +130,13 @@ void main(void)
     ck(e.kind == (u8)UXEventKeyUp, "its release is a key up");
     ck(pad.downs == (i32)1 && pad.ups == (i32)1 && pad.lastKey == (u16)UX_KEY_LEFT, "...and both reach the focused view");
     gUXCommandModifier = (u16)UX_MOD_CTRL;
+
+    // an outline already in the window that is given its source shows its rows without a reloadData
+    UXOutlineView* ol = new UXOutlineView();
+    pad.addSubview(ol, UXGeom.make((i16)0, (i16)0, (i16)100, (i16)60));
+    ol.addColumn((u8*)"Name", (i16)100);
+    ol.setOutlineSource(new Flat());
+    ck(ol.nrows == (i32)2, "an outline given its source once shown has its rows");
 
     if (gFails == (i32)0)
         {

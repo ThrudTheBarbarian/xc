@@ -32,6 +32,7 @@ extern void ux_present(i32 h);
 // All drawing lands on the CURRENT target, selected once per paint pass —
 // mirrors the one-HDC-in-flight model the GDI driver uses (gW32CurHdc).
 extern void ux_gfx_target(i32 h);
+extern void ux_backdrop(i32 x, i32 y, i32 w, i32 h); // the window's backdrop under the damage (window-local)
 extern void ux_clip(i32 x, i32 y, i32 w, i32 h);
 extern void ux_clip_end(void);
 extern void ux_fill_rect(i32 x, i32 y, i32 w, i32 h, i32 r, i32 g, i32 b, i32 a);

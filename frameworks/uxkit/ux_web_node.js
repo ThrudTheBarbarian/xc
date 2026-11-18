@@ -114,6 +114,7 @@ globalThis.xccImports = { env: {
 
   // ── drawing ──
   ux_gfx_target: (h) => { target = h; },
+  ux_backdrop: (x, y, w, h) => {},
   // A STACK, as the page's save/clip/restore is: a view's clip nested inside a clipping subtree
   // intersects with it, and ending the inner one restores the outer.
   ux_clip:     (x, y, w, h) => {

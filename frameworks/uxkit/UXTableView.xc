@@ -152,7 +152,7 @@ class UXTableColumn : Object
             return;
             }
         // Modifier clicks are discrete (no drag): ctrl toggles this row, shift extends from the anchor.
-        if (table.allowsMultipleSelection() && (e.modifiers & (u16)UX_MOD_CTRL) != (u16)0)
+        if (table.allowsMultipleSelection() && (e.modifiers & gUXCommandModifier) != (u16)0)
             {
             table.toggleRow(row);
             return;
@@ -419,6 +419,20 @@ class UXTableColumn : Object
     void setDataSource(UXTableDataSource* d)
         {
         dataSource = d;
+        self.loadIfShown();
+        }
+    // A source set on a table already in a window, with its columns, shows its rows at once, as a
+    // native table that pulls them does: the drawn table builds its rows only in reloadData.
+    void loadIfShown(void)
+        {
+        if (scroll != (UXScrollView*)0 && columns.count() > (u16)0 && self.hasSource())
+            {
+            self.reloadData();
+            }
+        }
+    bool hasSource(void)
+        {
+        return dataSource != (UXTableDataSource*)0;
         }
     void setDelegate(UXTableDelegate* d)
         {

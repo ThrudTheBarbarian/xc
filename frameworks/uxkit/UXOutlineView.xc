@@ -157,6 +157,11 @@ class UXOutlineNode : Object
     void setOutlineSource(UXOutlineDataSource* d)
         {
         outlineSource = d;
+        self.loadIfShown();
+        }
+    bool hasSource(void)
+        {
+        return outlineSource != (UXOutlineDataSource*)0;
         }
 
     // Native tables (win32 SysListView32 / AppKit NSTableView) pull rows from these, not the subtree.

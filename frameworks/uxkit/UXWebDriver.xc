@@ -323,9 +323,12 @@ class UXWebDriver : Object<UXViewDriver>
             return;
             }
         i32 s = handle * (i32)4;
+        // the backdrop goes down under the damage alone: the rest of the window keeps what it shows
         ux_gfx_target(handle);
         ux_clip((i32)gWebDirtyR[s], (i32)gWebDirtyR[s + (i32)1],
                 (i32)gWebDirtyR[s + (i32)2], (i32)gWebDirtyR[s + (i32)3]);
+        ux_backdrop((i32)gWebDirtyR[s], (i32)gWebDirtyR[s + (i32)1],
+                    (i32)gWebDirtyR[s + (i32)2], (i32)gWebDirtyR[s + (i32)3]);
         UXWebContentFn* f = (UXWebContentFn*)gWebContentFn[handle];
         i32 w = (i32)0;
         i32 h = (i32)0;
