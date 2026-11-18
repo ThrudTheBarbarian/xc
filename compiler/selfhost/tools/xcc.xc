@@ -7178,6 +7178,7 @@ void envUsage(void)
     diag.add((Object*)String.withCString("XC_PAR_OUTLINE_DUMP|=<path>: the module after outlining"));
     diag.add((Object*)String.withCString("XTIR_OPT_STOP_AFTER|=<pass>: stop the optimiser after that pass"));
     diag.add((Object*)String.withCString("XC_OPT_CAPS|Say when a capped run-until-settled loop stopped at its cap"));
+    diag.add((Object*)String.withCString("XC_OPT_VERIFY|Check every cached optimiser analysis against a fresh build; stop on a difference"));
     diag.add((Object*)String.withCString("XTIC_OFF|No if-conversion after bounds checks are removed"));
     diag.add((Object*)String.withCString("XTGPU_ESC_TRIPS|=<n>: the escape-loop GPU variant's trip count"));
     diag.add((Object*)String.withCString("XCC_GC_STATS|Print what the ELF link's section GC kept"));
