@@ -185,8 +185,11 @@ i32 main(i32 argc, u8** argv)
     }
 XC
 for flag in "" -fbounds-check; do
-    "$XC" -q --par-style=cpu -O2 $flag -H . -o "$W/o" "$W/o.xc" > "$W/o.b" 2>&1 || { echo "FAIL bounds: the overflow program does not build ($flag)"; head -3 "$W/o.b"; fail=1; continue; }
-    "$W/o" < /dev/null > "$W/o.out" 2>&1; rc=$?
+    # Its own output name per flag: macOS can kill a Mach-O relinked over
+    # one that already ran at the same path (it caches the signature by path).
+    ob="$W/o${flag:+.checked}"
+    "$XC" -q --par-style=cpu -O2 $flag -H . -o "$ob" "$W/o.xc" > "$W/o.b" 2>&1 || { echo "FAIL bounds: the overflow program does not build ($flag)"; head -3 "$W/o.b"; fail=1; continue; }
+    "$ob" < /dev/null > "$W/o.out" 2>&1; rc=$?
     grep -q 'allocation.*overflows' "$W/o.out" && [ $rc = 134 ] \
         || { echo "FAIL bounds: a wrapping allocation size was not stopped ($flag: exit $rc)"; head -2 "$W/o.out"; fail=1; }
 done
