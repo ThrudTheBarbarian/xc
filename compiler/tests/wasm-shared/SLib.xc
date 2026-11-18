@@ -1,3 +1,11 @@
+struct SRect
+    {
+    i16 x;
+    i16 y;
+    i16 w;
+    i16 h;
+    }
+
 class SLib
     {
     // the APP's object
@@ -9,5 +17,15 @@ class SLib
         {
         String* t = String.withCString("xyz");
         return t.byteLength();
+        }
+    // an aggregate result: a hidden result pointer on both sides
+    static SRect make(i16 x, i16 y, i16 w, i16 h)
+        {
+        SRect r;
+        r.x = x;
+        r.y = y;
+        r.w = w;
+        r.h = h;
+        return r;
         }
     }

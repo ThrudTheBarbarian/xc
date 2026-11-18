@@ -31,3 +31,15 @@ out=$(node sapp.js 2>&1)
 echo "$out" | grep -q 'lenOwn 3' || { echo "091: FAIL — library's own object"; echo "$out"|head -3; exit 1; }
 echo "$out" | grep -q 'lenOf  6' || { echo "091: FAIL — APP's object across the boundary"; echo "$out"|head -3; exit 1; }
 echo "091: PASS (lenOwn 3, lenOf 6 — both vtable directions)"
+
+# A struct-returning library function: the app's import must carry the same
+# hidden result pointer the library's export takes, or the arguments arrive
+# shifted by one (make 0) and a call inside an `if` leaves two values on the
+# stack, which fails validation. Built at -O0 and -O2.
+for opt in -O0 -O2; do
+    "$XCC" -q -A wasm32 $opt -L . -H "$ROOT" -o sapp$opt sapp.xc >>build.log 2>&1 \
+        || { echo "sret: FAIL (app did not build at $opt)"; exit 1; }
+    out=$(node sapp$opt.js 2>&1)
+    echo "$out" | grep -q 'make   73' || { echo "sret: FAIL at $opt — struct result from the library"; echo "$out"|head -3; exit 1; }
+done
+echo "sret: PASS (make 73 at -O0 and -O2)"

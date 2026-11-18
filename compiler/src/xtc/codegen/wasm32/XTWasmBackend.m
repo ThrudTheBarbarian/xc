@@ -967,6 +967,10 @@ static NSString *wasmExportNameOf(XTIRSymbol *sym, NSString *fallback) {
 
 + (NSString *)signatureForCallTo:(XTIRSymbol *)sym insn:(XTIRInsn *)insn fn:(XTIRFunction *)fn {
     NSMutableString *sig = [NSMutableString string];
+    // An aggregate result: the call site pushes a leading sret pointer and
+    // takes no result, as the defining module's function is declared.
+    BOOL sret = insn.result && insn.result.type.kind == XTIRTypeKindAgg;
+    if (sret) [sig appendString:@"(param i32) "];
     for (NSUInteger i = 1; i < insn.operands.count; i++) {
         XTIROperand *op = insn.operands[i];
         XTIRType *t = (op.kind == XTIROperandKindUse)
@@ -974,7 +978,7 @@ static NSString *wasmExportNameOf(XTIRSymbol *sym, NSString *fallback) {
         if (isMemOrVoid(t)) continue;
         [sig appendFormat:@"(param %@) ", wasmValType(t)];
     }
-    if (insn.result && !isMemOrVoid(insn.result.type))
+    if (insn.result && !isMemOrVoid(insn.result.type) && !sret)
         [sig appendFormat:@"(result %@)", wasmValType(insn.result.type)];
     return [sig stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
 }

@@ -1511,13 +1511,17 @@ class Wasm32
     String* signatureForCall(IRInsn* insn)
     {
         String* sig = String.withCString("");
+        // An aggregate result: the call site pushes a leading sret pointer
+        // and takes no result, as the defining module's function is declared.
+        bool sret = insn.res() != 0 && Wasm32.isAggTy(insn.res().ty());
+        if (sret) sig.appendCString("(param i32) ");
         for (u32 i = (u32)1; i < insn.ops().count(); i = i + (u32)1) {
             IROperand* op = (IROperand*)insn.ops().get(i);
             String* t = Wasm32.tyOfOp(op);
             if (Wasm32.memOrVoid(t)) continue;
             sig.appendFormat("(param %s) ", Wasm32.valType(t).cString());
         }
-        if (insn.res() != 0 && !Wasm32.memOrVoid(insn.res().ty()))
+        if (insn.res() != 0 && !Wasm32.memOrVoid(insn.res().ty()) && !sret)
             sig.appendFormat("(result %s)", Wasm32.valType(insn.res().ty()).cString());
         return sig.trimmed();
     }
