@@ -64,6 +64,26 @@ class UXResponder
             nextResponder.scrollWheel(e);
             }
         }
+    // A long press: how long a press followed with trackMouse must stay still before mouseHeld; 0
+    // (the default) asks for none.
+    i32 holdDelay(void)
+        {
+        return (i32)0;
+        }
+    // The press followed with trackMouse stayed within a few pixels of where it went down for
+    // holdDelay() ms, button still held.  Once a press; the drag goes on after it.
+    void mouseHeld(UXEvent* e)
+        {
+        }
+    // A pinch (e.a = the change in scale, in thousandths).  Like the wheel, it goes to the view
+    // under the pointer and climbs from there.
+    void magnify(UXEvent* e)
+        {
+        if (nextResponder != (UXResponder*)0)
+            {
+            nextResponder.magnify(e);
+            }
+        }
     // The pointer moved with no button down.  Like scrollWheel, it acts on what the pointer is
     // OVER (the toolkit hit-tests it), so it climbs from that view up — hover highlighting.
     void mouseMoved(UXEvent* e)

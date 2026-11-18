@@ -1444,6 +1444,7 @@ class UXGemDriver : Object<UXViewDriver>
     // exactly what the clock needs.  0 keeps the old block-until-there-is-one mask.
     void nextEvent(i32 timeoutMs, UXEvent* ev)
         {
+        ev.init(); // every field fresh: the run loop hands the same event back each turn
         i32 classes = MU_KEYBD | MU_BUTTON | MU_MESAG | MU_M1; // M1: hover
         if (timeoutMs > (i32)0)
             {
@@ -1500,6 +1501,39 @@ class UXGemDriver : Object<UXViewDriver>
         x[0] = mx;
         y[0] = my;
         gUXModifiers = (u16)ks; // as held at this step
+        return (r & (i32)MU_BUTTON) != (i32)0 ? (i32)0 : (i32)1;
+#endif
+        }
+    // trackDragStep with MU_TIMER: 2 when ms go by with no motion and no release.  The host GEM
+    // (arm64) has no timed drag step, so there a held press is not timed (never 2).
+    i32 trackDragStepWithin(i32* x, i32* y, i32 ms)
+        {
+        if (gInputReplay)
+            {
+            return (i32)0;
+            }
+#ifdef ARCH_arm64
+        return xg_drag_next(x, y);
+#else
+        i32 mx = (i32)0;
+        i32 my = (i32)0;
+        i32 mb = (i32)0;
+        i32 ks = (i32)0;
+        i32 key = (i32)0;
+        i32 nc = (i32)0;
+        i32 r = evnt_multi((i32)(MU_BUTTON | MU_M1 | MU_TIMER), (i32)1, (i32)1, (i32)0,
+                           (i32)1, (i32)0, (i32)0, (i32)0, (i32)0,
+                           (i32)0, (i32)0, (i32)0, (i32)0, (i32)0,
+                           (pointer)0, ms > (i32)0 ? ms : (i32)1, (i32)0,
+                           (pointer)&mx, (pointer)&my, (pointer)&mb,
+                           (pointer)&ks, (pointer)&key, (pointer)&nc);
+        gUXModifiers = (u16)ks;
+        if ((r & (i32)(MU_BUTTON | MU_M1)) == (i32)0)
+            {
+            return (i32)2; // the timer alone: still held, still where it was
+            }
+        x[0] = mx;
+        y[0] = my;
         return (r & (i32)MU_BUTTON) != (i32)0 ? (i32)0 : (i32)1;
 #endif
         }

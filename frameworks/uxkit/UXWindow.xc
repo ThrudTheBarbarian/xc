@@ -716,6 +716,20 @@ class UXWindow : UXResponder
             }
         v.scrollWheel(e);
         }
+    // A pinch: to the view under the pointer, like the wheel.
+    void dispatchMagnify(UXEvent* e)
+        {
+        i32 hit = self.hitScrolled(e);
+        if (hit < (i32)0)
+            {
+            return;
+            }
+        UXView* v = (UXView* ?)tree.viewAt((u16)hit);
+        if (v != (UXView*)0)
+            {
+            v.magnify(e);
+            }
+        }
     // Pointer movement: hit-test the point and hand it to that view, exactly as the wheel does —
     // hover acts on what the pointer is OVER, and no focus changes.
     void dispatchMouseMoved(UXEvent* e)

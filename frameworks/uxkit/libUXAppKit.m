@@ -136,6 +136,24 @@ int ux_ak_modifiers(void)
     {
     return g_evMods;
     }
+/* The wheel's horizontal delta, in the DOM's sense (pixels, positive scrolls right), for the event
+ * being dispatched: the dispatch word has room for the vertical one only. */
+static int g_evDX;
+int ux_ak_wheel_dx(void)
+    {
+    return g_evDX;
+    }
+static int ak_wheel_dx(NSEvent* ev)
+    {
+    double dx = [ev scrollingDeltaX];
+    return -([ev hasPreciseScrollingDeltas] ? (int)dx : (int)(dx * 100.0)); /* AppKit counts left as positive */
+    }
+/* A pinch's change in scale, in thousandths, clamped to the dispatch word's 16 bits. */
+static int ak_magnify_milli(NSEvent* ev)
+    {
+    double m = [ev magnification] * 1000.0;
+    return m > 32000 ? 32000 : m < -32000 ? -32000 : (int)m;
+    }
 /* A key as the toolkit has it on every backend: GEM's (scancode << 8) | ascii.  AppKit hands the
  * keys with no character as private-use function-key characters (NSUpArrowFunctionKey...), which
  * become GEM's scan codes here (UX_KEY_* in UXEvent.xc). */
@@ -256,7 +274,16 @@ static void ak_scrollWheel(__unsafe_unretained id self, SEL _cmd, __unsafe_unret
      * gave.  Passing the delta unrounded, as the browser does. */
     double dy = [(NSEvent*)ev scrollingDeltaY];
     int px = [(NSEvent*)ev hasPreciseScrollingDeltas] ? (int)dy : (int)(dy * 100.0);
+    g_evDX = ak_wheel_dx((NSEvent*)ev);
     g_dispatch(11, (int)p.x, (int)p.y, AK_WHEEL_PACK(ak_win_of((NSView*)self), px)); // 11 = UXEventWheel
+    }
+static void ak_magnify(__unsafe_unretained id self, SEL _cmd, __unsafe_unretained id ev)
+    {
+    if (!g_dispatch)
+        return;
+    g_evMods = ak_mods_of((NSEvent*)ev);
+    NSPoint p = [(NSView*)self convertPoint:[(NSEvent*)ev locationInWindow] fromView:nil];
+    g_dispatch(19, (int)p.x, (int)p.y, AK_WHEEL_PACK(ak_win_of((NSView*)self), ak_magnify_milli((NSEvent*)ev))); // 19 = UXEventMagnify
     }
 /* A tracking area is what makes AppKit send mouseMoved: — without one the message is never
  * delivered, which is why the toolkit heard clicks and nothing else.  The rect is NSZeroRect with
@@ -367,6 +394,7 @@ static Class ak_view_class(void)
     class_addMethod(c, sel_registerName("rightMouseDown:"), (IMP)ak_rightMouseDown, "v@:@");
     class_addMethod(c, sel_registerName("otherMouseDown:"), (IMP)ak_otherMouseDown, "v@:@");
     class_addMethod(c, sel_registerName("scrollWheel:"), (IMP)ak_scrollWheel, "v@:@");
+    class_addMethod(c, sel_registerName("magnifyWithEvent:"), (IMP)ak_magnify, "v@:@");
     class_addMethod(c, sel_registerName("updateTrackingAreas"), (IMP)ak_updateTrackingAreas, "v@:");
     class_addMethod(c, sel_registerName("draggingEntered:"), (IMP)ak_draggingEntered, "Q@:@");
     class_addMethod(c, sel_registerName("performDragOperation:"), (IMP)ak_performDragOperation, "B@:@");
@@ -595,7 +623,19 @@ static void ak_glScrollWheel(__unsafe_unretained id self, SEL _cmd, __unsafe_unr
     NSPoint p = [g_view[h] convertPoint:[(NSEvent*)ev locationInWindow] fromView:nil];
     double dy = [(NSEvent*)ev scrollingDeltaY];
     int px = [(NSEvent*)ev hasPreciseScrollingDeltas] ? (int)dy : (int)(dy * 100.0);
+    g_evDX = ak_wheel_dx((NSEvent*)ev);
     g_dispatch(11, (int)p.x, (int)p.y, AK_WHEEL_PACK(h, px));
+    }
+static void ak_glMagnify(__unsafe_unretained id self, SEL _cmd, __unsafe_unretained id ev)
+    {
+    if (!g_dispatch)
+        return;
+    g_evMods = ak_mods_of((NSEvent*)ev);
+    int h = ak_gl_win_of((NSView*)self);
+    if (!h || !g_view[h])
+        return;
+    NSPoint p = [g_view[h] convertPoint:[(NSEvent*)ev locationInWindow] fromView:nil];
+    g_dispatch(19, (int)p.x, (int)p.y, AK_WHEEL_PACK(h, ak_magnify_milli((NSEvent*)ev)));
     }
 
 static Class ak_gl_class(void)
@@ -610,6 +650,7 @@ static Class ak_gl_class(void)
     class_addMethod(c, sel_registerName("rightMouseDown:"), (IMP)ak_glRightMouseDown, "v@:@");
     class_addMethod(c, sel_registerName("otherMouseDown:"), (IMP)ak_glOtherMouseDown, "v@:@");
     class_addMethod(c, sel_registerName("scrollWheel:"), (IMP)ak_glScrollWheel, "v@:@");
+    class_addMethod(c, sel_registerName("magnifyWithEvent:"), (IMP)ak_glMagnify, "v@:@");
     class_addMethod(c, sel_registerName("updateTrackingAreas"), (IMP)ak_updateTrackingAreas, "v@:");
     objc_registerClassPair(c);
     g_glClass = c;
@@ -2884,6 +2925,19 @@ int ux_ak_test_drop_file(int handle, const char* path, int x, int y)
     NSURL* u = [NSURL fileURLWithPath:ak_ns(path)];
     return ak_deliver_files(g_view[handle], @[ u ], NSMakePoint(x, y));
     }
+/* For tests: a left button release posted to the event queue after ms, as the system would post the
+ * user's, so a drag being followed (ux_ak_drag_next) ends.  The block runs on the main queue, which
+ * the tracking run loop mode serves. */
+void ux_ak_test_release_after(int handle, int ms)
+    {
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)ms * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+      NSWindow* w = (handle > 0 && handle < UX_MAXW) ? g_win[handle] : nil;
+      NSEvent* e = [NSEvent mouseEventWithType:NSEventTypeLeftMouseUp location:NSMakePoint(10, 10) modifierFlags:0
+                                     timestamp:0 windowNumber:[w windowNumber] context:nil eventNumber:0
+                                    clickCount:1 pressure:0];
+      [NSApp postEvent:e atStart:NO];
+    });
+    }
 /* For tests: an input event built as AppKit builds one and handed to window handle's content view,
  * as AppKit would hand it.  kind is the toolkit's (1 press, 16 right press, 18 middle press, 11 wheel
  * with ch the pixel delta, 4 key down, 17 key up with ch the character or an NS*FunctionKey); mods
@@ -2908,6 +2962,30 @@ int ux_ak_test_input(int handle, int kind, int x, int y, int mods, int ch)
             [v keyDown:e];
         else
             [v keyUp:e];
+        return 1;
+        }
+    if (kind == 11)
+        {
+        /* a pixel scroll: ch = the vertical delta, x/y packed as the point; the horizontal delta
+         * rides in the modifiers' high bits (mods >> 8, signed byte times 4) */
+        int dx = (signed char)((mods >> 8) & 0xFF) * 4;
+        CGEventRef cg = CGEventCreateScrollWheelEvent(NULL, kCGScrollEventUnitPixel, 2, (int32_t)ch, (int32_t)dx);
+        /* An event made this way belongs to no window, so AppKit reports its screen point as its
+         * locationInWindow: place it where that reads as w.  (CG's origin is the top left.) */
+        CGFloat top = NSMaxY([[[NSScreen screens] firstObject] frame]);
+        CGEventSetLocation(cg, CGPointMake(w.x, top - w.y));
+        NSEvent* e = [NSEvent eventWithCGEvent:cg];
+        CFRelease(cg);
+        [v scrollWheel:e];
+        return 1;
+        }
+    if (kind == 19)
+        {
+        /* AppKit has no public way to build a magnify event: this is the dispatch ak_magnify makes */
+        if (!g_dispatch)
+            return 0;
+        g_evMods = 0;
+        g_dispatch(19, x, y, AK_WHEEL_PACK(handle, ch));
         return 1;
         }
     NSEventType t = kind == 16 ? NSEventTypeRightMouseDown : kind == 18 ? NSEventTypeOtherMouseDown : NSEventTypeLeftMouseDown;
@@ -4671,16 +4749,25 @@ void ux_ak_scroll_reload(int handle, int node, int contentH)
 
 // One modal drag-track step (a split-view divider, etc.): pull the next left-mouse dragged/up event.
 // Returns window-local (g_view) coords + 1 while dragging, 0 once released.
+int ux_ak_drag_next_within(int* x, int* y, int ms);
 int ux_ak_drag_next(int* x, int* y)
+    {
+    return ux_ak_drag_next_within(x, y, 0);
+    }
+/* ms > 0: give up after that long with nothing (2: the press still held, x/y untouched). */
+int ux_ak_drag_next_within(int* x, int* y, int ms)
     {
     /* any button: a drag that began with the secondary one (a connection drawn by right-drag)
      * is followed the same way, and its release ends it */
+    NSDate* until = ms > 0 ? [NSDate dateWithTimeIntervalSinceNow:ms / 1000.0] : [NSDate distantFuture];
     NSEvent* e = [NSApp nextEventMatchingMask:(NSEventMaskLeftMouseDragged | NSEventMaskLeftMouseUp |
                                                NSEventMaskRightMouseDragged | NSEventMaskRightMouseUp |
                                                NSEventMaskOtherMouseDragged | NSEventMaskOtherMouseUp)
-                                    untilDate:[NSDate distantFuture]
+                                    untilDate:until
                                        inMode:NSEventTrackingRunLoopMode
                                       dequeue:YES];
+    if (!e && ms > 0)
+        return 2;
     if (e)
         g_evMods = ak_mods_of(e);
     if (!e || [e type] == NSEventTypeLeftMouseUp || [e type] == NSEventTypeRightMouseUp || [e type] == NSEventTypeOtherMouseUp)

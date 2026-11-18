@@ -186,6 +186,7 @@ win64: ; XCC=$(XCC) sh run_win32.sh
 
 # The web backend (wasm32): the design doc's §5 milestones, headless under Node.
 web-real: ; XCC=$(XCC) sh run_web_real.sh
+web-hold: ; XCC=$(XCC) sh run_web_hold.sh
 web-loop: ; XCC=$(XCC) sh run_web_loop.sh
 web-memgate: ; XCC=$(XCC) sh run_web_memgate.sh
 web-drag: ; XCC=$(XCC) sh run_web_drag.sh
@@ -413,6 +414,7 @@ win32-memgate: ; XCC=$(XCC) sh run_win32_memgate.sh
 # to a neutral MenuSelect and routed to the bound method (the GEM MN_SELECTED path).  Skips if
 # wine is absent.
 win32-menu: ; XCC=$(XCC) sh run_win32_menu.sh
+win32-input: ; XCC=$(XCC) sh run_win32_input.sh
 
 # ---- win32-focus — keyboard focus traversal + default button on Win32 ------------
 # Exercises the neutral tab-ring (UXWindow.moveFocus) and the app-declared default button (§5)

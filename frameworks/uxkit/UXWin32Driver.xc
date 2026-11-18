@@ -4306,6 +4306,27 @@ class UXWin32Driver : Object<UXViewDriver>
         Sleep((u32)8); // ~120 Hz, don't spin the CPU
         return (i32)1;
         }
+    // Polled, as trackDragStep is, until the pointer leaves (x, y), the buttons come up, or ms go by.
+    i32 trackDragStepWithin(i32* x, i32* y, i32 ms)
+        {
+        i32 end = self.nowMs() + ms;
+        i32 nx = x[0];
+        i32 ny = y[0];
+        for (;;)
+            {
+            i32 r = self.trackDragStep(&nx, &ny);
+            if (r == (i32)0 || nx != x[0] || ny != y[0])
+                {
+                x[0] = nx;
+                y[0] = ny;
+                return r;
+                }
+            if (self.nowMs() - end >= (i32)0)
+                {
+                return (i32)2;
+                }
+            }
+        }
 
     // ---- the shadow tree -----------------------------------------------------
     pointer structNew(void)
@@ -6240,8 +6261,7 @@ class UXWin32Driver : Object<UXViewDriver>
         }
     void nextEvent(i32 timeoutMs, UXEvent* ev)
         {
-        ev.kind = (u8)UXEventNone;
-        ev.handle = (i32)0;
+        ev.init(); // every field fresh: the run loop hands the same event back each turn
         MSG msg;
         // With a frame clock the wait must END on its own: wait for input OR the deadline, and
         // return an empty turn when the deadline beats it.  GetMessageA (below) blocks until there
@@ -6354,6 +6374,27 @@ class UXWin32Driver : Object<UXViewDriver>
             ev.y = (i16)pt.y;
             ev.a = delta / (i32)WHEEL_DELTA;                       // notches, positive up
             ev.b = (i32)0 - (delta * (i32)100) / (i32)WHEEL_DELTA; // the DOM's deltaY: 100 a click, down +
+            ev.dx = (i32)0;
+            ev.handle = self.handleOf(msg.hwnd);
+            gUXModifiers = w32Mods();
+            ev.modifiers = gUXModifiers;
+            return;
+            }
+        // The sideways wheel: a tilt wheel, or a touchpad's sideways swipe.  Positive is right, as the
+        // DOM's deltaX counts it; the point is in screen coords, as the vertical wheel's is.
+        if (msg.message == (u32)$020E && onWindow != (i32)0) // WM_MOUSEHWHEEL
+            {
+            i32 delta = (i32)((i16)((u32)msg.wParam >> (u32)16));
+            POINT pt;
+            pt.x = (i32)(i16)((u32)msg.lParam & (u32)$FFFF);
+            pt.y = (i32)(i16)((u32)msg.lParam >> (u32)16);
+            ScreenToClient(msg.hwnd, (pointer)&pt);
+            ev.kind = (u8)UXEventWheel;
+            ev.x = (i16)pt.x;
+            ev.y = (i16)pt.y;
+            ev.dx = (delta * (i32)100) / (i32)WHEEL_DELTA;
+            ev.a = (i32)0; // no vertical part
+            ev.b = (i32)0;
             ev.handle = self.handleOf(msg.hwnd);
             gUXModifiers = w32Mods();
             ev.modifiers = gUXModifiers;

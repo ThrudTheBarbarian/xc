@@ -10,6 +10,7 @@
 #import "UXGeometry.xc"
 
 i32 ux_ak_test_input(i32 handle, i32 kind, i32 x, i32 y, i32 mods, i32 ch);
+void ux_ak_test_release_after(i32 handle, i32 ms);
 
 i32 gFails;
 void check(u8* what, i32 got, i32 want)
@@ -33,6 +34,12 @@ class Recorder : UXView
     i32 buttons;
     i32 key;
     i32 count;
+    i32 held;
+    i32 ups;
+    bool tracks;
+    i32 wheelDY;
+    i32 wheelDX;
+    i32 scale;
     void note(UXEvent* e)
         {
         heard = (i32)e.kind;
@@ -48,6 +55,22 @@ class Recorder : UXView
     void mouseDown(UXEvent* e)
         {
         self.note(e);
+        if (tracks)
+            {
+            self.trackMouse(e);
+            }
+        }
+    i32 holdDelay(void)
+        {
+        return tracks ? (i32)150 : (i32)0;
+        }
+    void mouseHeld(UXEvent* e)
+        {
+        held = held + (i32)1;
+        }
+    void mouseUp(UXEvent* e)
+        {
+        ups = ups + (i32)1;
         }
     void rightMouseDown(UXEvent* e)
         {
@@ -64,6 +87,17 @@ class Recorder : UXView
     void keyUp(UXEvent* e)
         {
         self.note(e);
+        }
+    void scrollWheel(UXEvent* e)
+        {
+        self.note(e);
+        wheelDY = e.b;
+        wheelDX = e.dx;
+        }
+    void magnify(UXEvent* e)
+        {
+        self.note(e);
+        scale = e.a;
         }
     }
 
@@ -110,6 +144,26 @@ class Controller : Object<UXApplicationDelegate>
         check("delete is Backspace", r.key, (i32)UX_KEY_BACKSPACE);
         ux_ak_test_input(h, (i32)4, (i32)0, (i32)0, (i32)0, (i32)$1B);
         check("escape", r.key, (i32)UX_KEY_ESCAPE);
+
+        Stdio.printf("-- the trackpad\n");
+        // 12 px down (AppKit: -12, scrolling down) and 20 px right (AppKit: -20)
+        ux_ak_test_input(h, (i32)11, (i32)40, (i32)40, (i32)((-5) & 255) << 8, (i32)-12);
+        check("a scroll is a wheel event", r.heard, (i32)UXEventWheel);
+        check("  its vertical delta, positive down", r.wheelDY, (i32)12);
+        check("  its horizontal delta, positive right", r.wheelDX, (i32)20);
+        ux_ak_test_input(h, (i32)19, (i32)40, (i32)40, (i32)0, (i32)150);
+        check("a pinch is a magnify event", r.heard, (i32)UXEventMagnify);
+        check("  its change in scale, in thousandths", r.scale, (i32)150);
+        ux_ak_test_input(h, (i32)19, (i32)40, (i32)40, (i32)0, (i32)-80);
+        check("  and a pinch inward", r.scale, (i32)-80);
+
+        Stdio.printf("-- a long press\n");
+        r.tracks = true;
+        ux_ak_test_release_after(h, (i32)500); // the release comes 500 ms after the press
+        ux_ak_test_input(h, (i32)1, (i32)40, (i32)40, (i32)0, (i32)0);
+        check("a press held still past holdDelay is mouseHeld", r.held, (i32)1);
+        check("  and is followed to its release", r.ups, (i32)1);
+        r.tracks = false;
 
         ux_ak_post_quit();
         return (i32)0;

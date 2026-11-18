@@ -649,6 +649,10 @@ protocol UXViewDriver
     // window-local x,y; returns 1 while dragging, 0 once released.  A table calls this in a loop after a
     // press to drag-select rows.  Backends whose native controls own drag (win32/AppKit tables) return 0.
     i32 trackDragStep(i32 * x, i32 * y);
+    // trackDragStep that gives up after ms with the button still held and the pointer where it was:
+    // returns 2 then (x,y unchanged), else as trackDragStep.  A press held still is timed with it (a
+    // long press: UXView.holdDelay).
+    i32 trackDragStepWithin(i32 * x, i32 * y, i32 ms);
     // Whether a view may track a drag modally, by looping on trackDragStep inside its mouseDown.
     // True where the toolkit owns the loop (the desktops, GEM, the web's worker); false on the touch
     // backends, where the platform owns the loop and a drag arrives as mouseDragged / mouseUp events

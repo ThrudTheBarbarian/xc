@@ -1686,6 +1686,25 @@ class UXWebDriver : Object<UXViewDriver>
             ev.x = (i16)r[1];
             ev.y = (i16)r[2];
             }
+        else if (t == (i32)22)
+            {
+            // the page script's wheel: a = x, b = y, c = the DOM's deltaY, d = its deltaX (pixels)
+            ev.kind = (u8)UXEventWheel;
+            ev.x = (i16)r[1];
+            ev.y = (i16)r[2];
+            ev.b = r[3];
+            ev.a = (i32)0 - r[3] / (i32)100;
+            ev.dx = r[4];
+            }
+        else if (t == (i32)23)
+            {
+            // the page script's pinch (a Control-wheel, as the browsers send one): a = x, b = y,
+            // c = the change in scale in thousandths
+            ev.kind = (u8)UXEventMagnify;
+            ev.x = (i16)r[1];
+            ev.y = (i16)r[2];
+            ev.a = r[3];
+            }
         else if (t == (i32)8)
             {
             ev.kind = (u8)UXEventWheel;
@@ -1781,7 +1800,7 @@ class UXWebDriver : Object<UXViewDriver>
         if (ev.kind == (u8)UXEventMouseDown || ev.kind == (u8)UXEventRightMouseDown ||
             ev.kind == (u8)UXEventOtherMouseDown ||
             ev.kind == (u8)UXEventMouseUp || ev.kind == (u8)UXEventMouseDragged ||
-            ev.kind == (u8)UXEventMouseMoved || ev.kind == (u8)UXEventWheel)
+            ev.kind == (u8)UXEventMouseMoved || ev.kind == (u8)UXEventWheel || ev.kind == (u8)UXEventMagnify)
             {
             ev.x = (i16)((i32)ev.x - gWebWinX[gWebFront]);
             ev.y = (i16)((i32)ev.y - gWebWinY[gWebFront]);
@@ -1840,6 +1859,15 @@ class UXWebDriver : Object<UXViewDriver>
         }
     i32 trackDragStep(i32* x, i32* y)
         {
+        return self.webDragStep(x, y, (i32)0);
+        }
+    i32 trackDragStepWithin(i32* x, i32* y, i32 ms)
+        {
+        return self.webDragStep(x, y, ms > (i32)0 ? ms : (i32)1);
+        }
+    // One drag step; within > 0: give up after that many ms of nothing (2), the press still held.
+    i32 webDragStep(i32* x, i32* y, i32 within)
+        {
         if (gInputReplay)
             {
             return (i32)0;
@@ -1852,13 +1880,28 @@ class UXWebDriver : Object<UXViewDriver>
             return (i32)0;
             }
         gWebDragging = true;
+        i32 deadline = self.nowMs() + within;
         i32 r[8];
         for (;;)
             {
             // A pointer held still sends nothing: wait as long as it takes.  The page script sends the
             // release wherever it happens, and one when the page loses the focus, so the wait ends.
-            if (_xt_ring_wait((i32)4000) == (i32)0)
+            // against a deadline: the frame ticks that arrive meanwhile must not restart the wait
+            i32 wait = (i32)4000;
+            if (within > (i32)0)
                 {
+                wait = deadline - self.nowMs();
+                if (wait <= (i32)0)
+                    {
+                    return (i32)2; // nothing within the time: still held, still where it was
+                    }
+                }
+            if (_xt_ring_wait(wait) == (i32)0)
+                {
+                if (within > (i32)0)
+                    {
+                    return (i32)2;
+                    }
                 continue;
                 }
             if (_xt_ring_read(&r[0]) < (i32)0)

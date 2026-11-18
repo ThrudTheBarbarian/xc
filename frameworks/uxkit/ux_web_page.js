@@ -20,7 +20,8 @@
 // toolkit's UX_MOD_* bits, b = 1 when the browser runs on Apple's platforms, where Command is the
 // command key) whenever they change, before the press, move, wheel or key they apply to; and each
 // key as ring type 21 (a = the toolkit's key code, b = 1 pressed / 0 released), which the driver
-// takes in place of the loader's raw keyCodes.
+// takes in place of the loader's raw keyCodes; the wheel both ways as ring type 22, and the pinch
+// as ring type 23 (see the wheel listener).
 (() => {
   const css = `
 .ux-menubar { display: flex; gap: 2px; padding: 2px 4px; font: 13px system-ui, sans-serif;
@@ -116,6 +117,24 @@
     held = false;
   }, { capture: true });
   globalThis.addEventListener('blur', () => { if (held) { held = false; ring(2, lastX, lastY, 0); } });
+  // The wheel over the canvas, both ways (ring 22: x, y, deltaY, deltaX in pixels), and the pinch,
+  // which the browsers send as a wheel with Control held (ring 23: x, y, the change in scale in
+  // thousandths).  Taken here, before the loader's own listener, which sends the vertical delta
+  // alone; the page does not scroll or zoom.
+  const px = (d, mode, size) => mode === 1 ? d * 100 : mode === 2 ? d * size : d;
+  globalThis.addEventListener('wheel', (e) => {
+    const c = theCanvas();
+    if (!c || e.target !== c || !globalThis.xccPushEvent) return; // without the ring, the loader's own
+    e.preventDefault();
+    e.stopPropagation();
+    sendMods(e);
+    const [x, y] = local(e);
+    const dy = px(e.deltaY, e.deltaMode, c.clientHeight), dx = px(e.deltaX, e.deltaMode, c.clientWidth);
+    if (e.ctrlKey) {
+      const milli = Math.round((Math.exp(-dy / 100) - 1) * 1000);
+      if (milli !== 0) ring(23, x, y, Math.max(-500, Math.min(500, milli)));
+    } else ring(22, x, y, Math.round(dy), Math.round(dx));
+  }, { capture: true, passive: false });
   globalThis.addEventListener('keydown', (e) => { sendMods(e); ring(21, keyOf(e), 1); });
   globalThis.addEventListener('keyup', (e) => { sendMods(e); ring(21, keyOf(e), 0); });
   const keyLabel = (it) => isMac ? (it.shift ? '\u21e7' : '') + '\u2318' + it.key

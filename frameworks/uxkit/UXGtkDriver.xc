@@ -397,6 +397,8 @@ void uxGtkFireControl(i32 handle, i32 node)
 UXEvent* gGtkMouseEvent;
 i32 gGtkMouseWin;
 i32 ux_gtk_modifiers(void); // the modifier keys at the latest event, as UX_MOD_*
+i32 ux_gtk_wheel_dx(void);   // the dispatched wheel's horizontal delta, DOM sense
+i32 ux_gtk_drag_next_within(i32* x, i32* y, i32 ms); // 2: nothing within ms
 void uxGtkDispatch(i32 kind, i32 x, i32 y, i32 handle, i32 extra)
     {
     if (gApp == (UXApplication*)0)
@@ -440,6 +442,11 @@ void uxGtkDispatch(i32 kind, i32 x, i32 y, i32 handle, i32 extra)
         {
         gGtkMouseEvent.b = extra;                   // the DOM's deltaY in pixels, positive down
         gGtkMouseEvent.a = (i32)0 - extra / (i32)100; // notches, positive up
+        gGtkMouseEvent.dx = ux_gtk_wheel_dx();        // the horizontal delta, positive right
+        }
+    if (kind == (i32)UXEventMagnify)
+        {
+        gGtkMouseEvent.a = extra; // the change in scale, in thousandths
         }
     gGtkMouseWin = handle;
     if (gEventTap != (callback void(UXEvent * e))0)
@@ -2096,7 +2103,23 @@ class UXGtkDriver : Object<UXViewDriver>
             {
             return (i32)0;
             }
-        i32 r = ux_gtk_drag_next(x, y);
+        return self.gtkDragStep(x, y, (i32)0);
+        }
+    i32 trackDragStepWithin(i32* x, i32* y, i32 ms)
+        {
+        return self.gtkDragStep(x, y, ms > (i32)0 ? ms : (i32)1);
+        }
+    i32 gtkDragStep(i32* x, i32* y, i32 within)
+        {
+        if (gInputReplay)
+            {
+            return (i32)0;
+            }
+        i32 r = within > (i32)0 ? ux_gtk_drag_next_within(x, y, within) : ux_gtk_drag_next(x, y);
+        if (r == (i32)2)
+            {
+            return r; // nothing within the time: x, y are where they were
+            }
         gUXModifiers = (u16)ux_gtk_modifiers(); // as held at this step
         x[0] = x[0] + gUXDragDX; // in the press's terms: a drag that began on a scrolled document
         y[0] = y[0] + gUXDragDY;

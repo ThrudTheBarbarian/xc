@@ -172,7 +172,9 @@ void ux_ak_layer_end();
 // clips with the scroll (ax,ay is the control's absolute origin; setFrame 0 leaves it to AppKit).
 void ux_ak_reparent_to_scroll(i32 handle, i32 node, i32 scrollNode, i32 ax, i32 ay, i32 aw, i32 ah, i32 setFrame);
 i32 ux_ak_drag_next(i32* x, i32* y);
-i32 ux_ak_modifiers(void); // the modifier keys held now, as UX_MOD_*
+i32 ux_ak_drag_next_within(i32* x, i32* y, i32 ms); // 2: nothing within ms
+i32 ux_ak_modifiers(void);
+i32 ux_ak_wheel_dx(void); // the dispatched wheel's horizontal delta, DOM sense // the modifier keys held now, as UX_MOD_*
 // The input shield (UXKindShield): a real NSView above the controls, so a click on a
 // design surface reaches the toolkit instead of pressing the button under it.
 void ux_ak_make_shield(i32 handle, i32 x, i32 y, i32 w, i32 h, i32 hidden);
@@ -303,7 +305,7 @@ void xgAKDispatch(i32 kind, i32 x, i32 y, i32 key)
     // the modifier keys held, on every input event (a menu pick or a resize does not care)
     if (kind == (i32)UXEventMouseDown || kind == (i32)UXEventRightMouseDown || kind == (i32)UXEventOtherMouseDown ||
         kind == (i32)UXEventWheel || kind == (i32)UXEventMouseMoved || kind == (i32)UXEventKeyDown ||
-        kind == (i32)UXEventKeyUp)
+        kind == (i32)UXEventKeyUp || kind == (i32)UXEventMagnify)
         {
         gUXModifiers = (u16)ux_ak_modifiers();
         gAKEvent.modifiers = gUXModifiers;
@@ -362,6 +364,18 @@ void xgAKDispatch(i32 kind, i32 x, i32 y, i32 key)
         gAKEvent.handle = key >> 16;
         gAKEvent.b = (i32)0 - px;      // AppKit counts scrolling UP as positive; the DOM, DOWN
         gAKEvent.a = px / (i32)100;
+        gAKEvent.dx = ux_ak_wheel_dx(); // the horizontal delta, already in the DOM's sense
+        }
+    // a pinch packs (window, the change in scale in thousandths) the same way
+    if (kind == (i32)UXEventMagnify)
+        {
+        i32 m = key & (i32)$FFFF;
+        if (m >= (i32)32768)
+            {
+            m = m - (i32)65536;
+            }
+        gAKEvent.handle = key >> 16;
+        gAKEvent.a = m;
         }
     gAKApp.dispatchEvent(gAKEvent);
     gAKApp.displayIfNeeded();
@@ -997,7 +1011,23 @@ class UXAppKitDriver : Object<UXViewDriver>
             {
             return (i32)0;
             }
-        i32 r = ux_ak_drag_next(x, y);
+        return self.akDragStep(x, y, (i32)0);
+        }
+    i32 trackDragStepWithin(i32* x, i32* y, i32 ms)
+        {
+        return self.akDragStep(x, y, ms > (i32)0 ? ms : (i32)1);
+        }
+    i32 akDragStep(i32* x, i32* y, i32 within)
+        {
+        if (gInputReplay)
+            {
+            return (i32)0;
+            }
+        i32 r = ux_ak_drag_next_within(x, y, within);
+        if (r == (i32)2)
+            {
+            return r; // nothing within the time: x, y are where they were
+            }
         gUXModifiers = (u16)ux_ak_modifiers(); // as held at this step
         x[0] = x[0] + gUXDragDX; // in the press's terms: a drag that began on a scrolled document
         y[0] = y[0] + gUXDragDY;

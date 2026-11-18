@@ -33,7 +33,10 @@ class Pad : UXView
     void mouseMoved(UXEvent* e) { moved = moved + (i32)1; }
     void mouseDragged(UXEvent* e) { dragged = dragged + (i32)1; }
     void rightMouseDown(UXEvent* e) { right = right + (i32)1; }
-    void scrollWheel(UXEvent* e) { wheels = wheels + (i32)1; wheelPx = e.b; }
+    i32 wheelDX;
+    i32 scale;
+    void scrollWheel(UXEvent* e) { wheels = wheels + (i32)1; wheelPx = e.b; wheelDX = e.dx; }
+    void magnify(UXEvent* e) { scale = e.a; }
     }
 
 i32 gFails = 0;
@@ -58,9 +61,13 @@ UXEvent@ gEv;
 // Feed one slot through the decoder and the dispatch, as nextEvent + the run loop would.
 UXEvent* slot(i32 t, i32 a, i32 b, i32 c)
     {
+    return slot5(t, a, b, c, (i32)0);
+    }
+UXEvent* slot5(i32 t, i32 a, i32 b, i32 c, i32 d)
+    {
     i32 r[8];
     r[0] = t; r[1] = a; r[2] = b; r[3] = c;
-    r[4] = (i32)0; r[5] = (i32)0; r[6] = (i32)0; r[7] = (i32)0;
+    r[4] = d; r[5] = (i32)0; r[6] = (i32)0; r[7] = (i32)0;
     gEv.init();
     gWd.decodeRing(&r[(i32)0], gEv);
     gApp.dispatchEvent(gEv);
@@ -110,6 +117,14 @@ void main(void)
     ck(e.kind == (u8)UXEventWheel && e.b == (i32)-120, "the wheel carries the DOM's deltaY in pixels");
     ck(e.a == (i32)1, "...and its notches the other way round (-120 px is one notch UP)");
     ck(pad.wheels == (i32)1 && pad.wheelPx == (i32)-120, "...and reaches the view's scrollWheel");
+
+    // the page script's wheel (22) and pinch (23)
+    e = slot5((i32)22, (i32)130, (i32)120, (i32)40, (i32)-25);
+    ck(e.kind == (u8)UXEventWheel && e.b == (i32)40 && e.dx == (i32)-25, "the page's wheel carries both deltas");
+    ck(e.x == (i16)50 && pad.wheelDX == (i32)-25, "...made window-local, and reaches the view");
+    e = slot((i32)23, (i32)130, (i32)120, (i32)95);
+    ck(e.kind == (u8)UXEventMagnify && e.a == (i32)95 && e.x == (i16)50, "the page's pinch is magnify, window-local");
+    ck(pad.scale == (i32)95, "...and reaches the view's magnify");
 
     // the page script's records: the modifier keys (20) and normalised keys (21)
     e = slot((i32)20, (i32)(UX_MOD_SHIFT | UX_MOD_CMD), (i32)1, (i32)0);

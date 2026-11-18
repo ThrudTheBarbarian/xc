@@ -13,6 +13,8 @@
 #import "UXEvent.xc"
 
 extern void ux_gtk_input(i32 handle, i32 what, i32 button, double x, double y, i32 px);
+extern void ux_gtk_test_wheel(i32 handle, double x, double y, i32 px, i32 dxpx);
+extern void ux_gtk_test_pinch(i32 handle, double x, double y, i32 milli);
 
 class Pad : UXView
     {
@@ -25,7 +27,10 @@ class Pad : UXView
     void mouseMoved(UXEvent* e) { moved = moved + (i32)1; }
     void mouseDown(UXEvent* e) { downs = downs + (i32)1; }
     void rightMouseDown(UXEvent* e) { right = right + (i32)1; }
-    void scrollWheel(UXEvent* e) { wheels = wheels + (i32)1; wheelPx = e.b; wheelNotches = e.a; }
+    i32 wheelDX;
+    i32 scale;
+    void scrollWheel(UXEvent* e) { wheels = wheels + (i32)1; wheelPx = e.b; wheelNotches = e.a; wheelDX = e.dx; }
+    void magnify(UXEvent* e) { scale = e.a; }
     }
 
 i32 gFails = 0;
@@ -65,9 +70,13 @@ void main(void)
     ux_gtk_input(h, (i32)4, (i32)0, 50.0, 40.0, (i32)-100); // one wheel click up
     ck(pad.wheels == (i32)1 && pad.wheelPx == (i32)-100, "the wheel carries the DOM's deltaY in pixels");
     ck(pad.wheelNotches == (i32)1, "...and its notches the other way round (one notch UP)");
+    ux_gtk_test_wheel(h, 50.0, 40.0, (i32)0, (i32)30); // a sideways swipe, 30 px right
+    ck(pad.wheels == (i32)2 && pad.wheelDX == (i32)30 && pad.wheelPx == (i32)0, "a sideways scroll carries the DOM's deltaX");
+    ux_gtk_test_pinch(h, 50.0, 40.0, (i32)120);
+    ck(pad.scale == (i32)120, "a pinch is magnify, its change in thousandths");
     if (gFails == (i32)0)
         {
-        Stdio.printf("PASS: GTK input -- hover, the secondary button and the wheel decode and route\n");
+        Stdio.printf("PASS: GTK input -- hover, the secondary button, the wheel both ways and the pinch decode and route\n");
         }
     else
         {

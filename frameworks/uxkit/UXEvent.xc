@@ -12,6 +12,8 @@ enum UXEventKind = {
     // positive scrolls DOWN, a line-wheel click is 100 -- the same number a browser hands a page, so
     // web code ports unchanged.  a = whole notches, positive scrolls UP (GEM's sense), for readers
     // that step by lines.  Every backend reports both in this sense whatever its native sign.
+    // dx = the DOM's deltaX in pixels, positive scrolls RIGHT: a trackpad's sideways swipe, a tilt
+    // wheel, Shift and the wheel where the platform makes that sideways.
     UXEventWheel = 11,
     // A scroll view came to rest at a new offset (a = its node index, b = the offset).  NOT input:
     // it is the OUTCOME of input, announced because the input itself is unrecordable — dragging a
@@ -39,7 +41,11 @@ enum UXEventKind = {
     UXEventKeyUp = 17,
     // The middle button, or any button past the second (x,y = point, handle = window, buttons =
     // UX_BUTTON_MIDDLE).  Like the right button it has its own kind: a 3-D view orbits on it.
-    UXEventOtherMouseDown = 18};
+    UXEventOtherMouseDown = 18,
+    // A pinch on a trackpad or touchpad (x,y = point, handle = window).  a = the change in scale in
+    // thousandths: 100 is 10% larger, -100 10% smaller.  Like the wheel it goes to the view under
+    // the pointer and climbs.
+    UXEventMagnify = 19};
 
 // The button a press came from, in ev.buttons.
 #define UX_BUTTON_LEFT $01
@@ -112,6 +118,7 @@ class UXEvent
     i32 handle;   // the window a system event refers to
     i32 a;        // decoded payload (menu title object)
     i32 b;        // decoded payload (menu item object)
+    i32 dx;       // the wheel's horizontal delta in pixels, positive right
     Object* data; // optional payload: IndexSet for a selection, String for field text
 
     void init(void)
@@ -126,5 +133,6 @@ class UXEvent
         handle = (i32)0;
         a = (i32)0;
         b = (i32)0;
+        dx = (i32)0;
         }
     }

@@ -56,7 +56,7 @@ tree.
 
 ## Topics
 
-[setNextResponder](#setnextresponder) · [mouseDown](#mousedown) · [mouseUp](#mouseup) · [mouseDragged](#mousedragged) · [scrollWheel](#scrollwheel) · [mouseMoved](#mousemoved) · [rightMouseDown](#rightmousedown) · [otherMouseDown](#othermousedown) · [keyDown](#keydown) · [keyUp](#keyup) · [acceptsFirstResponder](#acceptsfirstresponder) · [becomeFirstResponder](#becomefirstresponder) · [resignFirstResponder](#resignfirstresponder)
+[setNextResponder](#setnextresponder) · [mouseDown](#mousedown) · [mouseUp](#mouseup) · [mouseDragged](#mousedragged) · [scrollWheel](#scrollwheel) · [magnify](#magnify) · [holdDelay](#holddelay) · [mouseHeld](#mouseheld) · [mouseMoved](#mousemoved) · [rightMouseDown](#rightmousedown) · [otherMouseDown](#othermousedown) · [keyDown](#keydown) · [keyUp](#keyup) · [acceptsFirstResponder](#acceptsfirstresponder) · [becomeFirstResponder](#becomefirstresponder) · [resignFirstResponder](#resignfirstresponder)
 
 ### setNextResponder
 
@@ -122,6 +122,46 @@ a cell does not scroll, so it forwards, and the first ancestor that scrolls (the
 table, or a [`UXScrollView`](/compiler/api/uxkit/uxscrollview/)) consumes it. The
 wheel acts on whatever the pointer is over, not on the focused view.
 
+### holdDelay
+
+```c
+i32 holdDelay(void)      // default 0
+```
+
+How long, in milliseconds, a press followed with `trackMouse` must stay still
+before [`mouseHeld`](#mouseheld). The default 0 asks for no long press.
+
+### mouseHeld
+
+```c
+void mouseHeld(UXEvent* e)
+```
+
+A long press. The press followed with `trackMouse` has stayed within 4 pixels
+of where it went down for `holdDelay()` milliseconds, with the button still
+held. It comes once a press, at the pointer's point, and the drag goes on to
+its release.
+
+```c
+i32 holdDelay(void) { return 400; }
+void mouseDown(UXEvent* e) { self.trackMouse(e); }
+void mouseHeld(UXEvent* e) { self.openPickMenu(e.x, e.y); }
+```
+
+macOS, Windows, Linux, the web and GEM on the Atari time it. On iOS and Android
+a drag arrives as events rather than through `trackMouse`, so there is no long
+press.
+
+### magnify
+
+```c
+void magnify(UXEvent* e)
+```
+
+A pinch on a trackpad, at `e.x, e.y`, with `e.a` the change in scale in
+thousandths. Like the wheel, it goes to the view under the pointer, takes no
+focus, and climbs. A view that zooms multiplies its scale by
+`1 + e.a / 1000.0` on each one.
 ### mouseMoved
 
 ```c

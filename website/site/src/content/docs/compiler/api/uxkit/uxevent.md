@@ -23,6 +23,7 @@ class UXEvent {
     u16     modifiers;
     i32     handle;       // which window a system event refers to
     i32     a, b;         // decoded payload, per kind
+    i32     dx;           // the wheel's horizontal delta
     Object* data;         // optional payload: an UXIndexSet, a String
 }
 ```
@@ -47,7 +48,8 @@ keeping other objects alive. The one exception is
 | `UXEventMouseUp` | a release |
 | `UXEventMouseDragged` | movement with a button held |
 | `UXEventKeyDown` | a key, in [`key`](#keys-and-modifiers) |
-| `UXEventWheel` | the wheel, at `x, y`: `b` is the DOM's `deltaY` in pixels (positive scrolls down, 100 a notch), `a` the whole notches (positive scrolls up) |
+| `UXEventWheel` | the wheel, at `x, y`: `b` is the DOM's `deltaY` in pixels (positive scrolls down, 100 a notch), `a` the whole notches (positive scrolls up), `dx` the DOM's `deltaX` in pixels (positive scrolls right) |
+| `UXEventMagnify` | a pinch on a trackpad, at `x, y`: `a` is the change in scale in thousandths (100 is 10% larger, -100 10% smaller) |
 | `UXEventMouseMoved` | the pointer moved with no button held, at `x, y` (hover) |
 | `UXEventRightMouseDown` | a press of the secondary button, at `x, y` |
 | `UXEventOtherMouseDown` | a press of the middle button, at `x, y` |
@@ -56,6 +58,13 @@ keeping other objects alive. The one exception is
 Every backend delivers the wheel, hover and the secondary button in this form,
 whatever its native sign or message. The middle button and key releases come
 from macOS, Windows, Linux and the web; GEM has neither.
+
+The horizontal delta comes from a trackpad's sideways swipe or a tilt wheel on
+macOS, Windows, Linux and the web. The pinch comes from macOS, Linux and the web.
+On Windows, a touchpad's pinch arrives as the wheel with Control held, which is
+how the system sends it. On the web, the browsers send a pinch as the wheel with
+Control held, and the toolkit turns that into `UXEventMagnify`, so Control and the
+wheel zoom there.
 
 A press carries its button in `buttons`:
 

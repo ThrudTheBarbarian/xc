@@ -521,6 +521,14 @@ class UXApplication : UXResponder
                 w.dispatchMouse(ev);
                 }
             }
+        else if (k == (u8)UXEventMagnify)
+            {
+            UXWindow* w = self.windowWithHandle(ev.handle);
+            if (w != (UXWindow*)0)
+                {
+                w.dispatchMagnify(ev);
+                }
+            }
         else if (k == (u8)UXEventWheel)
             {
             // The wheel acts on the window it happened over (the driver tagged it), not the key window.
@@ -664,6 +672,7 @@ class UXApplication : UXResponder
 // UXView.trackMouse: where the driver tracks a drag modally (the desktops, GEM, the web), follow it to
 // the release with trackDragStep, handing the view each move and then the release.  Elsewhere the
 // moves and the release reach the view as events, so there is nothing to do.
+#define UX_HOLD_SLOP 4 // how far a long press may wander, in pixels
 void uxTrackMouse(pointer vp, pointer ep)
     {
     UXView* v = (UXView*)(Object*)vp;
@@ -682,10 +691,49 @@ void uxTrackMouse(pointer vp, pointer ep)
     e.kind = (u8)UXEventMouseDragged;
     i32 nx = x;
     i32 ny = y;
-    while (gDriver.trackDragStep(&nx, &ny) != (i32)0)
+    // A long press: until the view's delay has gone by, each step waits no longer than what is left of
+    // it; a press that moves more than UX_HOLD_SLOP from where it went down is no longer held.
+    i32 hold = v.holdDelay();
+    i32 heldAt = hold > (i32)0 ? gDriver.nowMs() + hold : (i32)0;
+    i32 px = x;
+    i32 py = y;
+    for (;;)
         {
+        i32 r = (i32)0;
+        if (heldAt != (i32)0)
+            {
+            i32 left = heldAt - gDriver.nowMs();
+            r = left > (i32)0 ? gDriver.trackDragStepWithin(&nx, &ny, left) : (i32)2;
+            if (r == (i32)2)
+                {
+                heldAt = (i32)0; // once a press
+                e.kind = (u8)UXEventMouseDragged;
+                e.x = (i16)x;
+                e.y = (i16)y;
+                e.modifiers = gUXModifiers;
+                v.mouseHeld(e);
+                if (gApp != (UXApplication*)0)
+                    {
+                    gApp.displayIfNeeded();
+                    }
+                continue;
+                }
+            }
+        else
+            {
+            r = gDriver.trackDragStep(&nx, &ny);
+            }
+        if (r == (i32)0)
+            {
+            break;
+            }
         x = nx;
         y = ny;
+        if (heldAt != (i32)0 && (x - px > (i32)UX_HOLD_SLOP || px - x > (i32)UX_HOLD_SLOP ||
+                                 y - py > (i32)UX_HOLD_SLOP || py - y > (i32)UX_HOLD_SLOP))
+            {
+            heldAt = (i32)0; // it moved: not a long press
+            }
         e.x = (i16)x;
         e.y = (i16)y;
         e.modifiers = gUXModifiers; // as held now: a drag may start plain and turn into a shift-drag

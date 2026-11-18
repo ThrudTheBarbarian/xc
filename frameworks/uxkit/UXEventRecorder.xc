@@ -62,6 +62,7 @@ class UXRecordedEvent : Object
         c.handle = e.handle;
         c.a = e.a;
         c.b = e.b;
+        c.dx = e.dx;
         c.data = e.data; // the payload is immutable once announced, so the reference is the copy
         return c;
         }

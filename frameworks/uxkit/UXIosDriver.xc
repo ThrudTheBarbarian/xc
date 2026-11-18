@@ -1920,6 +1920,10 @@ class UXIosDriver : Object<UXViewDriver>
         {
         return (i32)0;
         }
+    i32 trackDragStepWithin(i32* x, i32* y, i32 ms)
+        {
+        return (i32)0; // a drag arrives as events here, not through a modal loop
+        }
 
     i32 liveNativeCount(void)
         {

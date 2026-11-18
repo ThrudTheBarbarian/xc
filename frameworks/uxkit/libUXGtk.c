@@ -105,6 +105,14 @@ int ux_gtk_modifiers(void)
     {
     return gMods;
     }
+/* The wheel's horizontal delta for the event being dispatched, in the DOM's sense (pixels, positive
+ * scrolls right): the dispatch carries the vertical one only. */
+static int gWheelDX;
+int ux_gtk_wheel_dx(void)
+    {
+    return gWheelDX;
+    }
+static double gPinchLast; /* a touchpad pinch's scale at its previous update (GTK's is cumulative) */
 static int mods_of(GdkModifierType m)
     {
     return ((m & GDK_SHIFT_MASK) ? 0x03 : 0) | ((m & GDK_CONTROL_MASK) ? 0x04 : 0) |
@@ -304,7 +312,7 @@ void ux_gtk_input(int handle, int what, int button, double x, double y, int px)
     {
     if (what == 4)
         {
-        if (px != 0 && gMouse)
+        if ((px != 0 || gWheelDX != 0) && gMouse)
             gMouse(11, (int)x, (int)y, handle, px); /* 11 == UXEventWheel */
         return;
         }
@@ -339,12 +347,25 @@ void ux_gtk_input(int handle, int what, int button, double x, double y, int px)
     gPrimaryDown = 0;
     }
 
+/* For tests: a scroll with a horizontal part, and a pinch's step, as event_cb hands them on. */
+void ux_gtk_test_wheel(int handle, double x, double y, int px, int dxpx)
+    {
+    gWheelDX = dxpx;
+    ux_gtk_input(handle, 4, 0, x, y, px);
+    }
+void ux_gtk_test_pinch(int handle, double x, double y, int milli)
+    {
+    if (gMouse)
+        gMouse(19, (int)x, (int)y, handle, milli);
+    }
+
 static gboolean event_cb(GtkEventControllerLegacy* c, GdkEvent* ev, gpointer ud)
     {
     int handle = GPOINTER_TO_INT(ud);
     GdkEventType t = gdk_event_get_event_type(ev);
     double x = 0, y = 0;
-    if (t != GDK_BUTTON_PRESS && t != GDK_MOTION_NOTIFY && t != GDK_BUTTON_RELEASE && t != GDK_SCROLL)
+    if (t != GDK_BUTTON_PRESS && t != GDK_MOTION_NOTIFY && t != GDK_BUTTON_RELEASE && t != GDK_SCROLL &&
+        t != GDK_TOUCHPAD_PINCH)
         return FALSE;
     gdk_event_get_position(ev, &x, &y);
     gMods = mods_of(gdk_event_get_modifier_state(ev));
@@ -359,6 +380,22 @@ static gboolean event_cb(GtkEventControllerLegacy* c, GdkEvent* ev, gpointer ud)
         }
     if (y < 0 && t != GDK_MOTION_NOTIFY)
         return FALSE; /* on the menu bar above the content: the bar's, not the toolkit's */
+    if (t == GDK_TOUCHPAD_PINCH)
+        {
+        /* the change since the last update, in thousandths, as UXEventMagnify has it */
+        GdkTouchpadGesturePhase ph = gdk_touchpad_event_get_gesture_phase(ev);
+        double sc = gdk_touchpad_event_get_pinch_scale(ev);
+        if (ph == GDK_TOUCHPAD_GESTURE_PHASE_BEGIN)
+            gPinchLast = 1.0;
+        else if (ph == GDK_TOUCHPAD_GESTURE_PHASE_UPDATE && gPinchLast > 0 && sc > 0)
+            {
+            int milli = (int)((sc / gPinchLast - 1.0) * 1000.0);
+            gPinchLast = sc;
+            if (milli != 0 && gMouse)
+                gMouse(19, (int)x, (int)y, handle, milli); /* 19 == UXEventMagnify */
+            }
+        return FALSE;
+        }
     if (t == GDK_SCROLL)
         {
         /* A wheel reports whole clicks (100 px each, as WebKit counts a line), a touchpad its own
@@ -369,9 +406,15 @@ static gboolean event_cb(GtkEventControllerLegacy* c, GdkEvent* ev, gpointer ud)
             dy = -1;
         else if (d == GDK_SCROLL_DOWN)
             dy = 1;
+        else if (d == GDK_SCROLL_LEFT)
+            dx = -1;
+        else if (d == GDK_SCROLL_RIGHT)
+            dx = 1;
         else if (d == GDK_SCROLL_SMOOTH)
             gdk_scroll_event_get_deltas(ev, &dx, &dy);
-        int px = gdk_scroll_event_get_unit(ev) == GDK_SCROLL_UNIT_SURFACE ? (int)dy : (int)(dy * 100.0);
+        int surf = gdk_scroll_event_get_unit(ev) == GDK_SCROLL_UNIT_SURFACE;
+        int px = surf ? (int)dy : (int)(dy * 100.0);
+        gWheelDX = surf ? (int)dx : (int)(dx * 100.0);
         ux_gtk_input(handle, 4, 0, x, y, px);
         return FALSE;
         }
@@ -425,6 +468,30 @@ static void key_released_cb(GtkEventControllerKey* k, guint kv, guint code, GdkM
  * button comes up.  BLOCKING, not polling -- a spin loop here would burn a core
  * for as long as the user holds the mouse down.  The release is itself an
  * event, so the wait always ends. */
+int ux_gtk_drag_next(int* x, int* y);
+static int gDragTimedOut;
+static gboolean drag_timeout_cb(gpointer ud)
+    {
+    gDragTimedOut = 1;
+    return G_SOURCE_REMOVE;
+    }
+/* ux_gtk_drag_next that gives up after ms with the button still held (2, x/y untouched). */
+int ux_gtk_drag_next_within(int* x, int* y, int ms)
+    {
+    if (!gBtnDown)
+        return 0;
+    gDragTimedOut = 0;
+    guint t = g_timeout_add((guint)(ms > 0 ? ms : 1), drag_timeout_cb, NULL);
+    gFollowing = 1;
+    while (gBtnDown && !gPtrMoved && !gDragTimedOut)
+        g_main_context_iteration(NULL, TRUE);
+    gFollowing = 0;
+    if (!gDragTimedOut)
+        g_source_remove(t);
+    if (gBtnDown && !gPtrMoved)
+        return 2;
+    return ux_gtk_drag_next(x, y); /* moved or released: consumed as a plain step */
+    }
 int ux_gtk_drag_next(int* x, int* y)
     {
     if (!gBtnDown)
