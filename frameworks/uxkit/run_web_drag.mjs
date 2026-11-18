@@ -30,19 +30,22 @@ const worker = new Worker(path.join(here, 'run_web_loop_worker.cjs'),
 worker.on('exit', (code) => process.exit(code));
 worker.on('error', (e) => { console.error(e); process.exit(1); });
 
-// Slider at (10,60,200,20), value 0: the knob sits at the left end, centre
-// ~(16,70).  Down on the knob, four moves marching to the far end, release —
-// then the Stop click (40,120,80x24 -> its centre), all one queued gesture.
-setTimeout(() => {
-  push(1, 16, 70, 0);          // down on the knob
-  push(3, 60, 70);             // moves: the value must FOLLOW, step by step
-  push(3, 110, 70);
-  push(3, 160, 70);
-  push(3, 206, 70);            // the far end
-  push(2, 206, 70, 0);         // release
-  push(1, 80, 132, 0);         // Stop
-}, 300);
+// Slider at (10,60,200,20), value 0: the knob sits at the left end, centre ~(16,70).  Down on the
+// knob; moves that arrive apart, each its own step (the value must FOLLOW); the pointer held still
+// for longer than the old 4 s wait, which must not end the drag; then a burst of 40 moves queued at
+// once, which trackDragStep gathers into one step at the newest; the release; the Stop click.
+const at = (ms, f) => setTimeout(f, ms);
+at(300, () => push(1, 16, 70, 0));   // down on the knob
+at(450, () => push(3, 40, 70));
+at(600, () => push(3, 60, 70));
+at(750, () => push(3, 80, 70));
+// held still from here to 5300 ms
+at(5300, () => {
+  for (let k = 1; k <= 40; k++) push(3, 80 + k * 3, 70); // to x = 200, the far end
+  push(2, 200, 70, 0);       // release
+  push(1, 80, 132, 0);       // Stop
+});
 // Belt and braces: a late second Stop cannot fake the value/fires assertions.
-setTimeout(() => push(1, 80, 132, 0), 1500);
+at(6500, () => push(1, 80, 132, 0));
 // Hard stop so a wedged run fails rather than hangs.
-setTimeout(() => { console.error('web-drag: timed out'); process.exit(2); }, 8000);
+at(12000, () => { console.error('web-drag: timed out'); process.exit(2); });

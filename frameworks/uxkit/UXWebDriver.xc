@@ -96,6 +96,7 @@ pointer gWebContentFn[UXWEB_MAXW];
 pointer gWebContentUd[UXWEB_MAXW];
 bool gWebPressed;     // the primary button is down: a move is a drag, not a hover
 bool gWebKeys;        // the page script sends keys (ring 21), so the loader's raw keyCodes (4, 5) are not used
+bool gWebDragEnded; // a release read while gathering a drag step's moves: the next step ends the drag
 bool gWebDragging;    // a modal drag is running (trackDragStep): paint invalidations at once, since
                       // the run loop is parked and no tick will arrive to present them
 i32 gWebFront;      // topmost window (single canvas z-order, JS composites)
@@ -1843,14 +1844,22 @@ class UXWebDriver : Object<UXViewDriver>
             {
             return (i32)0;
             }
+        // the release that came in behind the last step's moves
+        if (gWebDragEnded)
+            {
+            gWebDragEnded = false;
+            gWebDragging = false;
+            return (i32)0;
+            }
         gWebDragging = true;
         i32 r[8];
         for (;;)
             {
+            // A pointer held still sends nothing: wait as long as it takes.  The page script sends the
+            // release wherever it happens, and one when the page loses the focus, so the wait ends.
             if (_xt_ring_wait((i32)4000) == (i32)0)
                 {
-                gWebDragging = false;
-                return (i32)0;
+                continue;
                 }
             if (_xt_ring_read(&r[0]) < (i32)0)
                 {
@@ -1865,6 +1874,26 @@ class UXWebDriver : Object<UXViewDriver>
                 {
                 x[0] = r[1] - gWebWinX[gWebFront];
                 y[0] = r[2] - gWebWinY[gWebFront];
+                // The moves queued behind this one: the newest is where the pointer is, and a view
+                // that takes longer to draw than the moves come in would otherwise fall further and
+                // further behind.  A release among them ends the drag at the next step.
+                while (_xt_ring_wait((i32)0) != (i32)0 && _xt_ring_read(&r[0]) >= (i32)0)
+                    {
+                    if (r[0] == (i32)3)
+                        {
+                        x[0] = r[1] - gWebWinX[gWebFront];
+                        y[0] = r[2] - gWebWinY[gWebFront];
+                        }
+                    else if (r[0] == (i32)20)
+                        {
+                        gUXModifiers = (u16)r[1];
+                        }
+                    else if (r[0] == (i32)2)
+                        {
+                        gWebDragEnded = true;
+                        break;
+                        }
+                    }
                 return (i32)1;
                 }
             if (r[0] == (i32)2)

@@ -94,6 +94,28 @@
     return 0;
   };
   for (const t of ['mousedown', 'mouseup', 'mousemove', 'wheel']) globalThis.addEventListener(t, sendMods, { capture: true });
+  // A drag that leaves the canvas: the loader listens on the canvas alone, so the moves and the
+  // release outside it are sent from here, in the canvas's coordinates, while a press on the canvas
+  // is held; and a page that loses the focus mid-drag releases it, so a modal drag always ends.
+  let held = false, lastX = 0, lastY = 0;
+  const theCanvas = () => document.getElementById('ux-canvas') || document.getElementById('xcc-canvas') ||
+                          document.querySelector('canvas');
+  const local = (e) => {
+    const c = theCanvas(), r = c ? c.getBoundingClientRect() : { left: 0, top: 0 };
+    return [Math.round(e.clientX - r.left), Math.round(e.clientY - r.top)];
+  };
+  globalThis.addEventListener('mousedown', (e) => { if (e.target === theCanvas()) held = true; }, { capture: true });
+  globalThis.addEventListener('mousemove', (e) => {
+    if (!held) return;
+    [lastX, lastY] = local(e);
+    if (e.target !== theCanvas()) ring(3, lastX, lastY, 0);
+  }, { capture: true });
+  globalThis.addEventListener('mouseup', (e) => {
+    if (!held) return;
+    if (e.target !== theCanvas()) { const [x, y] = local(e); ring(2, x, y, e.button); }
+    held = false;
+  }, { capture: true });
+  globalThis.addEventListener('blur', () => { if (held) { held = false; ring(2, lastX, lastY, 0); } });
   globalThis.addEventListener('keydown', (e) => { sendMods(e); ring(21, keyOf(e), 1); });
   globalThis.addEventListener('keyup', (e) => { sendMods(e); ring(21, keyOf(e), 0); });
   const keyLabel = (it) => isMac ? (it.shift ? '\u21e7' : '') + '\u2318' + it.key

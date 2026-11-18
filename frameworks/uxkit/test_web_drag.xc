@@ -86,10 +86,12 @@ class Controller : Object<UXApplicationDelegate>
     Controller* c = new Controller();
     app.setDelegate(c);
     app.run(); // blocks in nextEvent — Worker territory
-    // >= 80: the drag reached the track's far end; > 2 fires: it MOVED there step by step through
+    // >= 80: the drag reached the track's far end, after a pause longer than the old 4 s wait; > 2
+    // fires: it MOVED there step by step through
     // trackDragStep, it didn't jump on the down-click; >= 3 draws: it repainted LIVE, not once at the
     // release (the run loop is parked in trackDragStep, so the driver must present the drag itself).
-    bool ok = gFinal >= (i32)80 && gFires > (i32)2 && gDraws >= (i32)3;
+    // < 10 fires: the burst of 40 queued moves was gathered into a step or two, not 40
+    bool ok = gFinal >= (i32)80 && gFires > (i32)2 && gFires < (i32)10 && gDraws >= (i32)3;
     Stdio.printf(ok
                      ? "PASS: trackDragStep blocked on the ring, the value followed the drag, and the slider repainted live (%d draws)\n"
                      : "FAIL: value=%d fires=%d draws=%d\n",
