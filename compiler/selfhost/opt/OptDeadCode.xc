@@ -22,8 +22,10 @@
     // whether its result is read or not.
     final void deadCode(IRModule* m)
         {
+        _dcModule = m;
         for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
             deadCodeInFunc((IRFunc*)m.funcs().get(f));
+        _dcModule = (IRModule*)0;
         }
 
     final String* dseKey(IROperand* p, Map* defOf, u32 depth)
@@ -120,6 +122,47 @@
             }
         }
 
+    // Removes from `slots` every pinned local an asm body names: the digits
+    // after each "{{XTLOCAL:" or "{{XTLOCALB:" are the local's value id.
+    final void dcDropAsmNamed(Array* bytes, Set* slots, IRFunc* fn)
+        {
+        String* t = String.withCString("");
+        for (u32 b = (u32)0; b < bytes.count(); b = b + (u32)1)
+            t.appendByte((u8)((Number*)bytes.get(b)).asU32());
+        String* marker = String.withCString("{{XTLOCAL");
+        u32 i = (u32)0;
+        while (i < t.byteLength())
+            {
+            u32 at = t.byteIndexOf(marker, i);
+            if (at == (u32)$FFFF_FFFF)
+                return;
+            u32 j = at + marker.byteLength();
+            if (j < t.byteLength() && t.byteAt(j) == (u8)'B')
+                j = j + (u32)1;
+            i = j;
+            if (j >= t.byteLength() || t.byteAt(j) != (u8)':')
+                continue;
+            j = j + (u32)1;
+            u32 vid = (u32)0;
+            u32 digits = (u32)0;
+            while (j < t.byteLength() && t.byteAt(j) >= (u8)'0' && t.byteAt(j) <= (u8)'9')
+                {
+                vid = vid * (u32)10 + (u32)(t.byteAt(j) - (u8)'0');
+                j = j + (u32)1;
+                digits = digits + (u32)1;
+                }
+            i = j;
+            if (digits == (u32)0)
+                continue;
+            for (u32 p = (u32)0; p < fn.pinned().count(); p = p + (u32)1)
+                {
+                IRPinned* pl = (IRPinned*)fn.pinned().get(p);
+                if (pl.val() != (IRValue*)0 && pl.val().pid() == vid)
+                    slots.remove((Hashable*)pl.val());
+                }
+            }
+        }
+
     // Write-only locals: a frame slot that does not escape and whose address
     // (AddrOf, then field and element steps) is used only as a store's
     // address is never read, so every store to it is dead (struct_copy's
@@ -147,6 +190,35 @@
             if (bb.term() != 0)
                 all.add((Object*)bb.term());
             }
+        // Inline asm names locals inside its text, as {{XTLOCAL:<vid>}} (or
+        // {{XTLOCALB:<vid>:<sel>}}) placeholders in the constant pool, not as
+        // operands. A local an Asm names is read, so it is not write-only
+        // (#400: every store feeding Gfx8's asm went, so every gfx8 program
+        // drew nothing at -O2; on arm64 a local only an asm block loaded read
+        // garbage). A body with no constant to read keeps every slot. As the
+        // reference.
+        for (u32 i = (u32)0; i < all.count(); i = i + (u32)1)
+            {
+            IRInsn* an = (IRInsn*)all.get(i);
+            if (!an.isOp(opAsm))
+                continue;
+            bool seen = false;
+            for (u32 k = (u32)0; k < an.ops().count(); k = k + (u32)1)
+                {
+                IROperand* ao = (IROperand*)an.ops().get(k);
+                if (ao.kind() != (u8)OPK_CPOOL || _dcModule == (IRModule*)0 || ao.cid() >= _dcModule.consts().count())
+                    continue;
+                Array* bytes = (Array*)_dcModule.consts().get(ao.cid());
+                if (bytes == (Array*)0)
+                    continue;
+                seen = true;
+                dcDropAsmNamed(bytes, slots, fn);
+                }
+            if (!seen)
+                return;
+            }
+        if (slots.count() == (u32)0)
+            return;
         Map* slotOf = new Map();
         bool grew = true;
         while (grew)

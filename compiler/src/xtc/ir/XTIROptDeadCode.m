@@ -1,5 +1,6 @@
 #import "XTIRType.h"
 #import "XTIROptDeadCode.h"
+#import "XTIRConstant.h"
 #import "XTIRModule.h"
 #import "XTIRFunction.h"
 #import "XTIRBlock.h"
@@ -7,6 +8,11 @@
 #import "XTIROperand.h"
 #import "XTIROpcode.h"
 #import "XTIRValue.h"
+
+
+// The module whose functions runOnModule is walking, for the constant pool
+// (writeOnlyLocalsIn reads asm bodies from it).
+static XTIRModule* sDCModule;
 
 @implementation XTIROptDeadCode
 
@@ -84,8 +90,10 @@ static BOOL XTIRDCEIsPure(XTIROpcode op)
              errors:(NSMutableArray<NSString*>* _Nullable* _Nullable)outErrors
     {
     (void)outErrors;
+    sDCModule = mod;
     for (XTIRFunction* fn in mod.functions)
         [self runOnFunction:fn];
+    sDCModule = nil;
     return YES;
     }
 
@@ -208,6 +216,35 @@ static NSString* XTIRDSEKey(XTIROperand* p, NSDictionary<NSNumber*, XTIRInsn*>* 
         if (bb.terminator)
             [all addObject:bb.terminator];
         }
+    // Inline asm names locals inside its text, as {{XTLOCAL:<vid>}} (or
+    // {{XTLOCALB:<vid>:<sel>}}) placeholders in the constant pool, not as
+    // operands. A local an Asm names is read, so it is not write-only (#400:
+    // every store feeding Gfx8's asm went, so every gfx8 program drew nothing
+    // at -O2; on arm64 a local only an asm block loaded read garbage). A
+    // body with no constant to read keeps every slot.
+    for (XTIRInsn* insn in all)
+        {
+        if (insn.opcode != XTIROpAsm)
+            continue;
+        BOOL seen = NO;
+        for (XTIROperand* op in insn.operands)
+            {
+            if (op.kind != XTIROperandKindConstAgg)
+                continue;
+            XTIRConstant* c = [sDCModule constantForId:op.constantId];
+            NSString* t = c.stringBytes ? [[NSString alloc] initWithData:c.stringBytes encoding:NSUTF8StringEncoding] : nil;
+            if (!t)
+                continue;
+            seen = YES;
+            NSRegularExpression* re = [NSRegularExpression regularExpressionWithPattern:@"\\{\\{XTLOCALB?:([0-9]+)" options:0 error:nil];
+            for (NSTextCheckingResult* m in [re matchesInString:t options:0 range:NSMakeRange(0, t.length)])
+                [slots removeObject:@([[t substringWithRange:[m rangeAtIndex:1]] integerValue])];
+            }
+        if (!seen)
+            return;
+        }
+    if (slots.count == 0)
+        return;
     // The slot each address value points into, AddrOf first, then the steps
     // (a fixed point over the list, whatever the block order).
     NSMutableDictionary<NSNumber*, NSNumber*>* slotOf = [NSMutableDictionary dictionary];

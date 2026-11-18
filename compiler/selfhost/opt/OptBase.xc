@@ -1905,6 +1905,7 @@ class BeFact : Object
     Map* _cseDefOf;
 
     bool _cseCrossBlock;
+    IRModule* _dcModule;     // dead-code: the module deadCode() walks (asm bodies), else 0
     bool _cseLate;
 
     // ── inline ───────────────────────────────────────────────────────────
