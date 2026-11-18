@@ -252,13 +252,13 @@ class Wasm32
 
     // ── Widths (the type-width invariant's backend side) ─────────────────
     static bool isPtrTy(String* t)
-    { return t != (String*)0 && t.hasPrefix(String.withCString("Ptr(")); }
+    { return IRType.isPtr(t); }
 
     static bool isAggTy(String* t)
-    { return t != (String*)0 && t.hasPrefix(String.withCString("Agg(")); }
+    { return IRType.isAgg(t); }
 
     static bool isVecTy(String* t)
-    { return t != (String*)0 && t.hasPrefix(String.withCString("Vec(")); }
+    { return IRType.isVec(t); }
 
     // The lane type a Vec(lane) carries — brace-matched, as pointeeOf does.
     static String* laneOf(String* t)
@@ -284,49 +284,40 @@ class Wasm32
     static String* laneShape(String* lane)
     {
         if (lane == (String*)0) return (String*)0;
-        if (lane.equals(String.withCString("I8")) || lane.equals(String.withCString("U8")))
+        if (IRType.is(lane, tyI8) || IRType.is(lane, tyU8))
             return String.withCString("i8x16");
-        if (lane.equals(String.withCString("I16")) || lane.equals(String.withCString("U16")))
+        if (IRType.is(lane, tyI16) || IRType.is(lane, tyU16))
             return String.withCString("i16x8");
-        if (lane.equals(String.withCString("I32")) || lane.equals(String.withCString("U32")))
+        if (IRType.is(lane, tyI32) || IRType.is(lane, tyU32))
             return String.withCString("i32x4");
-        if (lane.equals(String.withCString("F32"))) return String.withCString("f32x4");
+        if (IRType.is(lane, tyF32)) return String.withCString("f32x4");
         return (String*)0;
     }
 
     static bool memOrVoid(String* t)
     {
-        return t == (String*)0 || t.equals(String.withCString("Mem"))
-            || t.equals(String.withCString("Void"));
+        return t == (String*)0 || IRType.is(t, tyMem)
+            || IRType.is(t, tyVoid);
     }
 
     static bool is64Ty(String* t)
     {
-        return t != (String*)0 && (t.equals(String.withCString("I64"))
-                                || t.equals(String.withCString("U64")));
+        return t != (String*)0 && (IRType.is(t, tyI64)
+                                || IRType.is(t, tyU64));
     }
 
     static bool isSignedTy(String* t)
     {
-        return t != (String*)0 && (t.equals(String.withCString("I8"))
-                                || t.equals(String.withCString("I16"))
-                                || t.equals(String.withCString("I32"))
-                                || t.equals(String.withCString("I64")));
+        return t != (String*)0 && (IRType.is(t, tyI8)
+                                || IRType.is(t, tyI16)
+                                || IRType.is(t, tyI32)
+                                || IRType.is(t, tyI64));
     }
 
     // XTIRType.byteWidth: fixed-width leaves only; 0 for Ptr/Agg/Void/Mem.
     static u32 leafWidth(String* t)
     {
-        if (t == (String*)0) return (u32)0;
-        if (t.equals(String.withCString("I8"))  || t.equals(String.withCString("U8"))
-         || t.equals(String.withCString("Bool"))) return (u32)1;
-        if (t.equals(String.withCString("I16")) || t.equals(String.withCString("U16")))
-            return (u32)2;
-        if (t.equals(String.withCString("I32")) || t.equals(String.withCString("U32"))
-         || t.equals(String.withCString("F32"))) return (u32)4;
-        if (t.equals(String.withCString("I64")) || t.equals(String.withCString("U64"))
-         || t.equals(String.withCString("F64"))) return (u32)8;
-        return (u32)0;
+        return IRType.bytes(t);
     }
 
     // wasmFieldWidth: pointers are 4 here, aggregates their full size.
@@ -364,11 +355,11 @@ class Wasm32
     static String* valType(String* t)
     {
         if (t == (String*)0) return String.withCString("i32");
-        if (t.equals(String.withCString("I64")) || t.equals(String.withCString("U64")))
+        if (IRType.is(t, tyI64) || IRType.is(t, tyU64))
             return String.withCString("i64");
-        if (t.equals(String.withCString("F32"))) return String.withCString("f32");
-        if (t.equals(String.withCString("F64"))) return String.withCString("f64");
-        if (t.hasPrefix(String.withCString("Vec("))) return String.withCString("v128");
+        if (IRType.is(t, tyF32)) return String.withCString("f32");
+        if (IRType.is(t, tyF64)) return String.withCString("f64");
+        if (IRType.isVec(t)) return String.withCString("v128");
         return String.withCString("i32");
     }
 
@@ -376,15 +367,15 @@ class Wasm32
     static String* canonSuffix(String* t)
     {
         if (t == (String*)0) return (String*)0;
-        if (t.equals(String.withCString("I8")))
+        if (IRType.is(t, tyI8))
             return String.withCString("    i32.extend8_s\n");
-        if (t.equals(String.withCString("I16")))
+        if (IRType.is(t, tyI16))
             return String.withCString("    i32.extend16_s\n");
-        if (t.equals(String.withCString("U8")))
+        if (IRType.is(t, tyU8))
             return String.withCString("    i32.const 255\n    i32.and\n");
-        if (t.equals(String.withCString("U16")))
+        if (IRType.is(t, tyU16))
             return String.withCString("    i32.const 65535\n    i32.and\n");
-        if (t.equals(String.withCString("Bool")))
+        if (IRType.is(t, tyBool))
             return String.withCString("    i32.const 1\n    i32.and\n");
         return (String*)0;
     }
@@ -665,7 +656,7 @@ class Wasm32
             IROperand* o = (IROperand*)n.ops().get(i);
             if (o.kind() == (u8)OPK_USE && o.val() != 0
                 && o.val().ty() != (String*)0
-                && o.val().ty().equals(String.withCString("Mem"))) continue;
+                && IRType.is(o.val().ty(), tyMem)) continue;
             r.add((Object*)o);
         }
         return r;
@@ -890,14 +881,14 @@ class Wasm32
             for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1) {
                 IRBlock* bb = (IRBlock*)fn.blocks().get(b);
                 for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1) {
-                    String* op = ((IRInsn*)bb.insns().get(i)).op();
-                    if (op.equals(String.withCString("Retain"))
-                     || op.equals(String.withCString("Release"))
-                     || op.equals(String.withCString("Autorelease"))) _needsARC = true;
-                    else if (op.equals(String.withCString("WeakRegister"))) _needsWeakReg = true;
-                    else if (op.equals(String.withCString("WeakUnregister"))) _needsWeakUnreg = true;
-                    else if (op.equals(String.withCString("ProtoDispatch"))
-                          || op.equals(String.withCString("ProtoLoad"))) _needsItab = true;
+                    u16 op = ((IRInsn*)bb.insns().get(i)).opc();
+                    if (op == opRetain
+                     || op == opRelease
+                     || op == opAutorelease) _needsARC = true;
+                    else if (op == opWeakRegister) _needsWeakReg = true;
+                    else if (op == opWeakUnregister) _needsWeakUnreg = true;
+                    else if (op == opProtoDispatch
+                          || op == opProtoLoad) _needsItab = true;
                 }
             }
         }
@@ -1047,7 +1038,7 @@ class Wasm32
         // The memory token is skipped, as the signature emitter skips it.
         for (u32 i = (u32)0; i < mainFn.params().count(); i = i + (u32)1) {
             String* pt = ((IRValue*)mainFn.params().get(i)).ty();
-            if (pt != 0 && pt.equals(String.withCString("Mem"))) continue;
+            if (pt != 0 && IRType.is(pt, tyMem)) continue;
             out.appendFormat("    %s.const 0\n", Wasm32.valType(pt).cString());
         }
         out.appendCString("    call $main\n");
@@ -1115,7 +1106,7 @@ class Wasm32
                 if (init != 0 && init.count() > (u32)0) {
                     // An f32 slot narrows the abstract 8-byte double image.
                     if (sym.globalTy() != 0
-                        && sym.globalTy().equals(String.withCString("F32"))
+                        && IRType.is(sym.globalTy(), tyF32)
                         && init.count() == (u32)8) {
                         u64 d = (u64)0;
                         for (u32 k = (u32)0; k < (u32)8; k = k + (u32)1)
@@ -1357,8 +1348,8 @@ class Wasm32
                  || ret.hasPrefix(String.withCString("("));
         if (sret) out.appendCString("(param i32) ");
         out.append(params);
-        if (!sret && !ret.equals(String.withCString("Void"))
-            && !ret.equals(String.withCString("Mem")))
+        if (!sret && !IRType.is(ret, tyVoid)
+            && !IRType.is(ret, tyMem))
             out.appendFormat("(result %s)", Wasm32.valType(ret).cString());
         return out.trimmed();
     }
@@ -1377,7 +1368,7 @@ class Wasm32
             else if (c == (u8)')') depth = depth - (u32)1;
             else if (c == (u8)',' && depth == (u32)0) {
                 String* one = list.substringBytes(start, i - start).trimmed();
-                if (one.byteLength() > (u32)0 && !one.equals(String.withCString("Mem"))
+                if (one.byteLength() > 0 && !IRType.is(one, tyMem)
                     && !one.equals(String.withCString("...")))
                     out.appendFormat("(param %s) ", Wasm32.valType(one).cString());
                 start = i + (u32)1;
@@ -1571,10 +1562,10 @@ class Wasm32
                 for (u32 i = (u32)0; i < total; i = i + (u32)1) {
                     IRInsn* insn = i < bb.insns().count()
                         ? (IRInsn*)bb.insns().get(i) : bb.term();
-                    String* op = insn.op();
-                    if (!op.equals(String.withCString("Call"))
-                     && !op.equals(String.withCString("CallCloaked"))
-                     && !op.equals(String.withCString("CallBanked"))) continue;
+                    u16 op = insn.opc();
+                    if (op != opCall
+                     && op != opCallCloaked
+                     && op != opCallBanked) continue;
                     if (insn.ops().count() < (u32)1) continue;
                     IROperand* callee = (IROperand*)insn.ops().get((u32)0);
                     if (callee.kind() != (u8)OPK_SYM) continue;
@@ -1722,7 +1713,7 @@ class Wasm32
         u32 nParams = fn.params().count();
         for (u32 i = (u32)0; i < nParams; i = i + (u32)1) {
             String* pt = ((IRValue*)fn.params().get(i)).ty();
-            if (pt != 0 && pt.equals(String.withCString("Mem"))) continue;
+            if (pt != 0 && IRType.is(pt, tyMem)) continue;
             out.appendFormat(" (param $v%lu %s)", vnum(i), Wasm32.valType(pt).cString());
             if (i < nIds) ctx._declared[i] = true;
         }
@@ -1855,11 +1846,11 @@ class Wasm32
             // constant, or the module is `i32.const 0` into an f64 local:
             // invalid, refused by every runtime at load (bug 131). Mirrors
             // the reference's `f64.const %a` of the value as a double.
-            if (op.ty() != (String*)0 && op.ty().equals(String.withCString("F64"))) {
+            if (op.ty() != (String*)0 && IRType.is(op.ty(), tyF64)) {
                 out.appendFormat("    f64.const %s\n", Wasm32.hexFloat(Wasm32.dblBitsOfInt(op.imm())).cString());
                 return;
             }
-            if (op.ty() != (String*)0 && op.ty().equals(String.withCString("F32"))) {
+            if (op.ty() != (String*)0 && IRType.is(op.ty(), tyF32)) {
                 out.appendFormat("    f32.const %s\n", Wasm32.hexFloat(Wasm32.fltToDblBits(Wasm32.fltBitsOfInt(op.imm()))).cString());
                 return;
             }
@@ -1871,7 +1862,7 @@ class Wasm32
         }
         if (k == (u8)OPK_IMMF) {
             u64 bits = Wasm32.bitsOfHex(op.fpHex());
-            if (op.ty() != 0 && op.ty().equals(String.withCString("F32"))) {
+            if (op.ty() != 0 && IRType.is(op.ty(), tyF32)) {
                 u64 nb = Wasm32.fltToDblBits(Wasm32.dblToFltBits(bits));
                 out.appendFormat("    f32.const %s\n", Wasm32.hexFloat(nb).cString());
             } else {
@@ -1958,7 +1949,7 @@ class Wasm32
     // ── Instructions ─────────────────────────────────────────────────────
     void emitInsn(IRInsn* insn, IRFunc* fn, WasmFnCtx* ctx, String* out)
     {
-        String* op = insn.op();
+        u16 op = insn.opc();
         if (emitCore(insn, op, out)) return;
         if (emitShifts(insn, op, out)) return;
         if (emitCmpSel(insn, op, out)) return;
@@ -1978,27 +1969,28 @@ class Wasm32
     }
 
     // ── SIMD (V* from the vectoriser) → wasm v128 ────────────────────────
-    bool emitVector(IRInsn* insn, String* op, String* out)
+    bool emitVector(IRInsn* insn, u16 op, String* out)
     {
-        if (op.byteLength() < (u32)2 || op.byteAt((u32)0) != (u8)'V') return false;
+        String* nm = IROp.name(op);
+        if (nm.byteLength() < 2 || nm.byteAt(0) != 'V') return false;
         IRValue* res = insn.res();
         Array* ops = Wasm32.dataOps(insn);
 
-        if (op.equals(String.withCString("VLoad"))) {
+        if (op == opVLoad) {
             if (res == 0 || ops.count() < (u32)1) return true;
             pushOperand((IROperand*)ops.get((u32)0), out);
             out.appendCString("    v128.load\n");
             setResult(res, false, out);
             return true;
         }
-        if (op.equals(String.withCString("VStore"))) {
+        if (op == opVStore) {
             if (ops.count() < (u32)2) return true;
             pushOperand((IROperand*)ops.get((u32)0), out);
             pushOperand((IROperand*)ops.get((u32)1), out);
             out.appendCString("    v128.store\n");
             return true;
         }
-        if (op.equals(String.withCString("VSplat"))) {
+        if (op == opVSplat) {
             if (res == 0 || ops.count() < (u32)1) return true;
             String* shape = Wasm32.laneShape(Wasm32.laneOf(res.ty()));
             if (shape == (String*)0) return true;
@@ -2007,17 +1999,17 @@ class Wasm32
             setResult(res, false, out);
             return true;
         }
-        if (op.equals(String.withCString("VAdd")) || op.equals(String.withCString("VSub"))
-         || op.equals(String.withCString("VMul")) || op.equals(String.withCString("VAnd"))
-         || op.equals(String.withCString("VOr"))  || op.equals(String.withCString("VXor"))) {
+        if (op == opVAdd || op == opVSub
+         || op == opVMul || op == opVAnd
+         || op == opVOr  || op == opVXor) {
             if (res == 0 || ops.count() < (u32)2) return true;
-            bool bitwise = op.equals(String.withCString("VAnd"))
-                        || op.equals(String.withCString("VOr"))
-                        || op.equals(String.withCString("VXor"));
+            bool bitwise = op == opVAnd
+                        || op == opVOr
+                        || op == opVXor;
             String* lane = Wasm32.laneOf(res.ty());
-            bool lane8 = lane != (String*)0 && (lane.equals(String.withCString("I8"))
-                                             || lane.equals(String.withCString("U8")));
-            if (op.equals(String.withCString("VMul")) && lane8) {
+            bool lane8 = lane != (String*)0 && (IRType.is(lane, tyI8)
+                                             || IRType.is(lane, tyU8));
+            if (op == opVMul && lane8) {
                 // wasm has no i8x16.mul: widen both to i16x8 (low/high
                 // halves), multiply there, and take each 16-bit product's
                 // LOW byte back — exact wrapping u8*u8/i8*i8.
@@ -2039,23 +2031,23 @@ class Wasm32
             pushOperand((IROperand*)ops.get((u32)1), out);
             if (bitwise)
                 out.appendFormat("    v128.%s\n",
-                    op.equals(String.withCString("VAnd")) ? "and"
-                  : op.equals(String.withCString("VOr"))  ? "or" : "xor");
+                    op == opVAnd ? "and"
+                  : op == opVOr  ? "or" : "xor");
             else
                 out.appendFormat("    %s.%s\n", shape.cString(),
-                    op.equals(String.withCString("VAdd")) ? "add"
-                  : op.equals(String.withCString("VSub")) ? "sub" : "mul");
+                    op == opVAdd ? "add"
+                  : op == opVSub ? "sub" : "mul");
             setResult(res, false, out);
             return true;
         }
-        if (op.equals(String.withCString("VMax")) || op.equals(String.withCString("VMin"))) {
+        if (op == opVMax || op == opVMin) {
             if (res == 0 || ops.count() < (u32)2) return true;
             String* lane = Wasm32.laneOf(res.ty());
             String* shape = Wasm32.laneShape(lane);
             if (shape == (String*)0) return true;
-            bool flt = lane != (String*)0 && lane.equals(String.withCString("F32"));
+            bool flt = lane != (String*)0 && IRType.is(lane, tyF32);
             bool sgn = Wasm32.isSignedTy(lane);
-            String* mn = op.equals(String.withCString("VMax"))
+            String* mn = op == opVMax
                 ? (flt ? String.withCString("max")
                        : (sgn ? String.withCString("max_s") : String.withCString("max_u")))
                 : (flt ? String.withCString("min")
@@ -2066,7 +2058,7 @@ class Wasm32
             setResult(res, false, out);
             return true;
         }
-        if (op.equals(String.withCString("VICmp"))) {
+        if (op == opVICmp) {
             if (res == 0 || ops.count() < (u32)2) return true;
             String* shape = Wasm32.laneShape(Wasm32.laneOf(res.ty()));
             if (shape == (String*)0) return true;
@@ -2077,19 +2069,19 @@ class Wasm32
             setResult(res, false, out);
             return true;
         }
-        if (op.equals(String.withCString("VAddLP"))) {
+        if (op == opVAddLP) {
             if (res == 0 || ops.count() < (u32)1) return true;
             IROperand* src = (IROperand*)ops.get((u32)0);
             String* lane = Wasm32.laneOf(Wasm32.tyOfOp(src));
-            bool lane8 = lane != (String*)0 && (lane.equals(String.withCString("I8"))
-                                             || lane.equals(String.withCString("U8")));
+            bool lane8 = lane != (String*)0 && (IRType.is(lane, tyI8)
+                                             || IRType.is(lane, tyU8));
             pushOperand(src, out);
             out.appendCString(lane8 ? "    i16x8.extadd_pairwise_i8x16_u\n"
                                     : "    i32x4.extadd_pairwise_i16x8_u\n");
             setResult(res, false, out);
             return true;
         }
-        if (op.equals(String.withCString("VReduceAdd"))) {
+        if (op == opVReduceAdd) {
             // i32/u32 lanes (.4s) by construction; wasm has no horizontal
             // add — extract the four lanes and chain scalar adds.
             if (res == 0 || ops.count() < (u32)1) return true;
@@ -2102,13 +2094,13 @@ class Wasm32
             setResult(res, false, out);
             return true;
         }
-        if (op.equals(String.withCString("VReduceMax")) || op.equals(String.withCString("VReduceMin"))) {
+        if (op == opVReduceMax || op == opVReduceMin) {
             // Seed the result local with lane 0, then fold lanes 1..3
             // through `select` (each lane is extracted twice — the running
             // value lives in the result local, so no scratch local).
             if (res == 0 || ops.count() < (u32)1) return true;
             bool sgn = Wasm32.isSignedTy(res.ty());
-            String* cmp = op.equals(String.withCString("VReduceMax"))
+            String* cmp = op == opVReduceMax
                 ? (sgn ? String.withCString("gt_s") : String.withCString("gt_u"))
                 : (sgn ? String.withCString("lt_s") : String.withCString("lt_u"));
             pushOperand((IROperand*)ops.get((u32)0), out);
@@ -2129,14 +2121,14 @@ class Wasm32
         return false;
     }
 
-    static String* intBinMn(String* op)
+    static String* intBinMn(u16 op)
     {
-        if (op.equals(String.withCString("Add"))) return String.withCString("add");
-        if (op.equals(String.withCString("Sub"))) return String.withCString("sub");
-        if (op.equals(String.withCString("Mul"))) return String.withCString("mul");
-        if (op.equals(String.withCString("And"))) return String.withCString("and");
-        if (op.equals(String.withCString("Or")))  return String.withCString("or");
-        if (op.equals(String.withCString("Xor"))) return String.withCString("xor");
+        if (op == opAdd) return String.withCString("add");
+        if (op == opSub) return String.withCString("sub");
+        if (op == opMul) return String.withCString("mul");
+        if (op == opAnd) return String.withCString("and");
+        if (op == opOr)  return String.withCString("or");
+        if (op == opXor) return String.withCString("xor");
         return (String*)0;
     }
 
@@ -2183,19 +2175,19 @@ class Wasm32
         return (String*)0;
     }
 
-    bool emitCore(IRInsn* insn, String* op, String* out)
+    bool emitCore(IRInsn* insn, u16 op, String* out)
     {
         IRValue* res = insn.res();
         Array* ops = Wasm32.dataOps(insn);
 
-        if (op.equals(String.withCString("Const"))) {
+        if (op == opConst) {
             if (res == 0 || ops.count() < (u32)1) return true;
             pushOperand((IROperand*)ops.get((u32)0), out);
             setResult(res, true, out);
             return true;
         }
-        if (op.equals(String.withCString("Copy")) || op.equals(String.withCString("Bitcast"))
-         || op.equals(String.withCString("IntToPtr")) || op.equals(String.withCString("PtrToInt"))) {
+        if (op == opCopy || op == opBitcast
+         || op == opIntToPtr || op == opPtrToInt) {
             if (res == 0 || ops.count() < (u32)1) return true;
             IROperand* src = (IROperand*)ops.get((u32)0);
             String* st = Wasm32.tyOfOp(src);
@@ -2216,7 +2208,7 @@ class Wasm32
                 else if (from.equals(String.withCString("i32")) && to.equals(String.withCString("i64")))
                     out.appendCString("    i64.extend_i32_u\n");
             }
-            setResult(res, !op.equals(String.withCString("Copy")), out);
+            setResult(res, op != opCopy, out);
             return true;
         }
         String* mn = Wasm32.intBinMn(op);
@@ -2228,12 +2220,12 @@ class Wasm32
             setResult(res, true, out);
             return true;
         }
-        if (op.equals(String.withCString("SDiv")) || op.equals(String.withCString("UDiv"))
-         || op.equals(String.withCString("SRem")) || op.equals(String.withCString("URem"))) {
+        if (op == opSDiv || op == opUDiv
+         || op == opSRem || op == opURem) {
             if (res == 0 || ops.count() < (u32)2) return true;
-            String* m = op.equals(String.withCString("SDiv")) ? String.withCString("div_s")
-                      : op.equals(String.withCString("UDiv")) ? String.withCString("div_u")
-                      : op.equals(String.withCString("SRem")) ? String.withCString("rem_s")
+            String* m = op == opSDiv ? String.withCString("div_s")
+                      : op == opUDiv ? String.withCString("div_u")
+                      : op == opSRem ? String.withCString("rem_s")
                       : String.withCString("rem_u");
             pushOperand((IROperand*)ops.get((u32)0), out);
             pushOperand((IROperand*)ops.get((u32)1), out);
@@ -2241,7 +2233,7 @@ class Wasm32
             setResult(res, true, out);
             return true;
         }
-        if (op.equals(String.withCString("Neg"))) {
+        if (op == opNeg) {
             if (res == 0 || ops.count() < (u32)1) return true;
             String* p = Wasm32.valType(res.ty());
             out.appendFormat("    %s.const 0\n", p.cString());
@@ -2250,7 +2242,7 @@ class Wasm32
             setResult(res, true, out);
             return true;
         }
-        if (op.equals(String.withCString("Not"))) {
+        if (op == opNot) {
             if (res == 0 || ops.count() < (u32)1) return true;
             String* p = Wasm32.valType(res.ty());
             pushOperand((IROperand*)ops.get((u32)0), out);
@@ -2258,39 +2250,39 @@ class Wasm32
             setResult(res, true, out);
             return true;
         }
-        if (op.equals(String.withCString("Phi")) || op.equals(String.withCString("DbgValue")))
+        if (op == opPhi || op == opDbgValue)
             return true;
         return false;
     }
 
-    bool emitShifts(IRInsn* insn, String* op, String* out)
+    bool emitShifts(IRInsn* insn, u16 op, String* out)
     {
         IRValue* res = insn.res();
         Array* ops = Wasm32.dataOps(insn);
 
-        if (op.equals(String.withCString("Shl")) || op.equals(String.withCString("LShr"))
-         || op.equals(String.withCString("AShr"))) {
+        if (op == opShl || op == opLShr
+         || op == opAShr) {
             if (res == 0 || ops.count() < (u32)2) return true;
             String* p = Wasm32.valType(res.ty());
             pushOperand((IROperand*)ops.get((u32)0), out);
-            if (op.equals(String.withCString("LShr"))) {
+            if (op == opLShr) {
                 // Mask to the SOURCE's width first, only for signed narrow sources.
                 String* st = Wasm32.tyOfOp((IROperand*)ops.get((u32)0));
-                if (st != 0 && st.equals(String.withCString("I8")))
+                if (st != 0 && IRType.is(st, tyI8))
                     out.appendCString("    i32.const 255\n    i32.and\n");
-                else if (st != 0 && st.equals(String.withCString("I16")))
+                else if (st != 0 && IRType.is(st, tyI16))
                     out.appendCString("    i32.const 65535\n    i32.and\n");
             }
             pushOperand((IROperand*)ops.get((u32)1), out);
             widenCount((IROperand*)ops.get((u32)1), p, out);
-            String* m2 = op.equals(String.withCString("Shl")) ? String.withCString("shl")
-                       : op.equals(String.withCString("LShr")) ? String.withCString("shr_u")
+            String* m2 = op == opShl ? String.withCString("shl")
+                       : op == opLShr ? String.withCString("shr_u")
                        : String.withCString("shr_s");
             out.appendFormat("    %s.%s\n", p.cString(), m2.cString());
             setResult(res, true, out);
             return true;
         }
-        if (op.equals(String.withCString("Rol")) || op.equals(String.withCString("Ror"))) {
+        if (op == opRol || op == opRor) {
             if (res == 0 || ops.count() < (u32)2) return true;
             u32 w = Wasm32.leafWidth(res.ty());
             String* p = Wasm32.valType(res.ty());
@@ -2299,13 +2291,13 @@ class Wasm32
                 pushOperand((IROperand*)ops.get((u32)1), out);
                 widenCount((IROperand*)ops.get((u32)1), p, out);
                 out.appendFormat("    %s.%s\n", p.cString(),
-                                 op.equals(String.withCString("Rol")) ? "rotl" : "rotr");
+                                 op == opRol ? "rotl" : "rotr");
                 setResult(res, true, out);
                 return true;
             }
             u32 bits = w * (u32)8;
             u32 mask = ((u32)1 << bits) - (u32)1;
-            bool rol = op.equals(String.withCString("Rol"));
+            bool rol = op == opRol;
             pushOperand((IROperand*)ops.get((u32)0), out);
             out.appendFormat("    i32.const %lu\n    i32.and\n", mask);
             pushOperand((IROperand*)ops.get((u32)1), out);
@@ -2324,20 +2316,20 @@ class Wasm32
         return false;
     }
 
-    bool emitCmpSel(IRInsn* insn, String* op, String* out)
+    bool emitCmpSel(IRInsn* insn, u16 op, String* out)
     {
         IRValue* res = insn.res();
         Array* ops = Wasm32.dataOps(insn);
 
-        if (op.equals(String.withCString("ICmp"))) {
+        if (op == opICmp) {
             if (res == 0 || ops.count() < (u32)2) return true;
             String* at = Wasm32.tyOfOp((IROperand*)ops.get((u32)0));
             String* p = Wasm32.is64Ty(at) ? String.withCString("i64") : String.withCString("i32");
             String* pred = insn.pred() == 0 ? String.withCString("EQ") : insn.pred();
             bool unsignedPred = Wasm32.icmpUnsigned(pred);
-            bool narrowSigned = at != 0 && (at.equals(String.withCString("I8"))
-                                         || at.equals(String.withCString("I16")));
-            String* mask = at != 0 && at.equals(String.withCString("I8"))
+            bool narrowSigned = at != 0 && (IRType.is(at, tyI8)
+                                         || IRType.is(at, tyI16));
+            String* mask = at != 0 && IRType.is(at, tyI8)
                 ? String.withCString("    i32.const 255\n    i32.and\n")
                 : String.withCString("    i32.const 65535\n    i32.and\n");
             pushOperand((IROperand*)ops.get((u32)0), out);
@@ -2348,19 +2340,19 @@ class Wasm32
             setResult(res, false, out);
             return true;
         }
-        if (op.equals(String.withCString("FCmp"))) {
+        if (op == opFCmp) {
             if (res == 0 || ops.count() < (u32)2) return true;
             String* at = Wasm32.tyOfOp((IROperand*)ops.get((u32)0));
             String* pred = insn.pred() == 0 ? String.withCString("OEQ") : insn.pred();
             pushOperand((IROperand*)ops.get((u32)0), out);
             pushOperand((IROperand*)ops.get((u32)1), out);
             out.appendFormat("    %s.%s\n",
-                             (at != 0 && at.equals(String.withCString("F32"))) ? "f32" : "f64",
+                             (at != 0 && IRType.is(at, tyF32)) ? "f32" : "f64",
                              cmpMn(Wasm32.fcmpMn(pred), pred).cString());
             setResult(res, false, out);
             return true;
         }
-        if (op.equals(String.withCString("Select"))) {
+        if (op == opSelect) {
             if (res == 0 || ops.count() < (u32)3) return true;
             pushOperand((IROperand*)ops.get((u32)1), out);
             pushOperand((IROperand*)ops.get((u32)2), out);
@@ -2372,17 +2364,17 @@ class Wasm32
         return false;
     }
 
-    bool emitFloat(IRInsn* insn, String* op, String* out)
+    bool emitFloat(IRInsn* insn, u16 op, String* out)
     {
         IRValue* res = insn.res();
         Array* ops = Wasm32.dataOps(insn);
 
-        if (op.equals(String.withCString("FAdd")) || op.equals(String.withCString("FSub"))
-         || op.equals(String.withCString("FMul")) || op.equals(String.withCString("FDiv"))) {
+        if (op == opFAdd || op == opFSub
+         || op == opFMul || op == opFDiv) {
             if (res == 0 || ops.count() < (u32)2) return true;
-            String* m3 = op.equals(String.withCString("FAdd")) ? String.withCString("add")
-                       : op.equals(String.withCString("FSub")) ? String.withCString("sub")
-                       : op.equals(String.withCString("FMul")) ? String.withCString("mul")
+            String* m3 = op == opFAdd ? String.withCString("add")
+                       : op == opFSub ? String.withCString("sub")
+                       : op == opFMul ? String.withCString("mul")
                        : String.withCString("div");
             pushOperand((IROperand*)ops.get((u32)0), out);
             pushOperand((IROperand*)ops.get((u32)1), out);
@@ -2390,66 +2382,66 @@ class Wasm32
             setResult(res, false, out);
             return true;
         }
-        if (op.equals(String.withCString("FNeg"))) {
+        if (op == opFNeg) {
             if (res == 0 || ops.count() < (u32)1) return true;
             pushOperand((IROperand*)ops.get((u32)0), out);
             out.appendFormat("    %s.neg\n", Wasm32.valType(res.ty()).cString());
             setResult(res, false, out);
             return true;
         }
-        if (op.equals(String.withCString("FSqrt"))) {
+        if (op == opFSqrt) {
             if (res == 0 || ops.count() < (u32)1) return true;
             pushOperand((IROperand*)ops.get((u32)0), out);
             out.appendFormat("    %s.sqrt\n", Wasm32.valType(res.ty()).cString());
             setResult(res, false, out);
             return true;
         }
-        if (op.equals(String.withCString("Phi")) || op.equals(String.withCString("DbgValue")))
+        if (op == opPhi || op == opDbgValue)
             return true;
         return false;
     }
 
-    bool emitCasts(IRInsn* insn, String* op, String* out)
+    bool emitCasts(IRInsn* insn, u16 op, String* out)
     {
         IRValue* res = insn.res();
         Array* ops = Wasm32.dataOps(insn);
 
-        if (op.equals(String.withCString("ZExt")) || op.equals(String.withCString("SExt"))
-         || op.equals(String.withCString("Trunc"))) {
+        if (op == opZExt || op == opSExt
+         || op == opTrunc) {
             if (res == 0 || ops.count() < (u32)1) return true;
             IROperand* src = (IROperand*)ops.get((u32)0);
             String* st = Wasm32.tyOfOp(src);
             pushOperand(src, out);
             bool src64 = Wasm32.is64Ty(st);
             bool dst64 = Wasm32.is64Ty(res.ty());
-            if (op.equals(String.withCString("ZExt")) && st != 0) {
-                if (st.equals(String.withCString("I8")))
+            if (op == opZExt && st != 0) {
+                if (IRType.is(st, tyI8))
                     out.appendCString("    i32.const 255\n    i32.and\n");
-                if (st.equals(String.withCString("I16")))
+                if (IRType.is(st, tyI16))
                     out.appendCString("    i32.const 65535\n    i32.and\n");
             }
             if (src64 && !dst64) out.appendCString("    i32.wrap_i64\n");
             else if (!src64 && dst64)
-                out.appendCString(op.equals(String.withCString("SExt"))
+                out.appendCString(op == opSExt
                     ? "    i64.extend_i32_s\n" : "    i64.extend_i32_u\n");
             setResult(res, true, out);
             return true;
         }
-        if (op.equals(String.withCString("FpExt"))) {
+        if (op == opFpExt) {
             if (res == 0 || ops.count() < (u32)1) return true;
             pushOperand((IROperand*)ops.get((u32)0), out);
             out.appendCString("    f64.promote_f32\n");
             setResult(res, false, out);
             return true;
         }
-        if (op.equals(String.withCString("FpTrunc"))) {
+        if (op == opFpTrunc) {
             if (res == 0 || ops.count() < (u32)1) return true;
             pushOperand((IROperand*)ops.get((u32)0), out);
             out.appendCString("    f32.demote_f64\n");
             setResult(res, false, out);
             return true;
         }
-        if (op.equals(String.withCString("SIToFp")) || op.equals(String.withCString("UIToFp"))) {
+        if (op == opSIToFp || op == opUIToFp) {
             if (res == 0 || ops.count() < (u32)1) return true;
             IROperand* src = (IROperand*)ops.get((u32)0);
             String* st = Wasm32.tyOfOp(src);
@@ -2457,19 +2449,19 @@ class Wasm32
             out.appendFormat("    %s.convert_%s_%s\n",
                              Wasm32.valType(res.ty()).cString(),
                              Wasm32.is64Ty(st) ? "i64" : "i32",
-                             op.equals(String.withCString("SIToFp")) ? "s" : "u");
+                             op == opSIToFp ? "s" : "u");
             setResult(res, false, out);
             return true;
         }
-        if (op.equals(String.withCString("FpToSI")) || op.equals(String.withCString("FpToUI"))) {
+        if (op == opFpToSI || op == opFpToUI) {
             if (res == 0 || ops.count() < (u32)1) return true;
             IROperand* src = (IROperand*)ops.get((u32)0);
             String* st = Wasm32.tyOfOp(src);
             pushOperand(src, out);
             out.appendFormat("    %s.trunc_sat_%s_%s\n",
                              Wasm32.is64Ty(res.ty()) ? "i64" : "i32",
-                             (st != 0 && st.equals(String.withCString("F32"))) ? "f32" : "f64",
-                             op.equals(String.withCString("FpToSI")) ? "s" : "u");
+                             (st != 0 && IRType.is(st, tyF32)) ? "f32" : "f64",
+                             op == opFpToSI ? "s" : "u");
             setResult(res, true, out);
             return true;
         }
@@ -2514,12 +2506,12 @@ class Wasm32
         }
     }
 
-    bool emitMemoryOps(IRInsn* insn, String* op, String* out)
+    bool emitMemoryOps(IRInsn* insn, u16 op, String* out)
     {
         IRValue* res = insn.res();
         Array* ops = Wasm32.dataOps(insn);
 
-        if (op.equals(String.withCString("Load")) || op.equals(String.withCString("LoadVolatile"))) {
+        if (op == opLoad || op == opLoadVolatile) {
             if (res == 0 || ops.count() < (u32)1) return true;
             String* rt = res.ty();
             if (Wasm32.isAggTy(rt)) {
@@ -2534,7 +2526,7 @@ class Wasm32
             setResult(res, false, out);
             return true;
         }
-        if (op.equals(String.withCString("Store")) || op.equals(String.withCString("StoreVolatile"))) {
+        if (op == opStore || op == opStoreVolatile) {
             if (ops.count() < (u32)2) return true;
             IROperand* vop = (IROperand*)ops.get((u32)1);
             String* vt = Wasm32.tyOfOp(vop);
@@ -2550,22 +2542,22 @@ class Wasm32
             emitScalarStore(vt, out);
             return true;
         }
-        if (op.equals(String.withCString("MemCopy")) || op.equals(String.withCString("MemSet"))) {
+        if (op == opMemCopy || op == opMemSet) {
             if (ops.count() < (u32)3) return true;
             pushOperand((IROperand*)ops.get((u32)0), out);
             pushOperand((IROperand*)ops.get((u32)1), out);
             pushOperand((IROperand*)ops.get((u32)2), out);
-            out.appendCString(op.equals(String.withCString("MemCopy"))
+            out.appendCString(op == opMemCopy
                 ? "    memory.copy\n" : "    memory.fill\n");
             return true;
         }
-        if (op.equals(String.withCString("AddrOf"))) {
+        if (op == opAddrOf) {
             if (res == 0 || ops.count() < (u32)1) return true;
             pushOperand((IROperand*)ops.get((u32)0), out);
             setResult(res, false, out);
             return true;
         }
-        if (op.equals(String.withCString("FieldAddr"))) {
+        if (op == opFieldAddr) {
             if (res == 0 || ops.count() < (u32)2) return true;
             IROperand* base = (IROperand*)ops.get((u32)0);
             String* bt = Wasm32.tyOfOp(base);
@@ -2577,7 +2569,7 @@ class Wasm32
             setResult(res, false, out);
             return true;
         }
-        if (op.equals(String.withCString("ElementAddr"))) {
+        if (op == opElementAddr) {
             if (res == 0 || ops.count() < (u32)2) return true;
             IROperand* base = (IROperand*)ops.get((u32)0);
             String* bt = Wasm32.tyOfOp(base);
@@ -2600,12 +2592,12 @@ class Wasm32
         return false;
     }
 
-    bool emitAggOps(IRInsn* insn, String* op, String* out)
+    bool emitAggOps(IRInsn* insn, u16 op, String* out)
     {
         IRValue* res = insn.res();
         Array* ops = Wasm32.dataOps(insn);
 
-        if (op.equals(String.withCString("AggBuild"))) {
+        if (op == opAggBuild) {
             if (res == 0) return true;
             IRLayout* lay = layoutOf(res.ty());
             if (lay == (IRLayout*)0) return true;
@@ -2630,7 +2622,7 @@ class Wasm32
             }
             return true;
         }
-        if (op.equals(String.withCString("AggExtract"))) {
+        if (op == opAggExtract) {
             if (res == 0 || ops.count() < (u32)2) return true;
             IROperand* agg = (IROperand*)ops.get((u32)0);
             String* at = Wasm32.tyOfOp(agg);
@@ -2657,13 +2649,13 @@ class Wasm32
         return false;
     }
 
-    bool emitCalls(IRInsn* insn, String* op, String* out)
+    bool emitCalls(IRInsn* insn, u16 op, String* out)
     {
         IRValue* res = insn.res();
         Array* ops = Wasm32.dataOps(insn);
 
-        if (op.equals(String.withCString("Call")) || op.equals(String.withCString("CallCloaked"))
-         || op.equals(String.withCString("CallBanked"))) {
+        if (op == opCall || op == opCallCloaked
+         || op == opCallBanked) {
             if (ops.count() < (u32)1
                 || ((IROperand*)ops.get((u32)0)).kind() != (u8)OPK_SYM) {
                 if (res != 0) {
@@ -2682,8 +2674,8 @@ class Wasm32
                 setResult(res, false, out);
             return true;
         }
-        if (op.equals(String.withCString("CallIndirect"))
-         || op.equals(String.withCString("CallBankedIndirect"))) {
+        if (op == opCallIndirect
+         || op == opCallBankedIndirect) {
             if (ops.count() < (u32)1) return true;
             bool sretCall = res != 0 && Wasm32.isAggTy(res.ty());
             if (sretCall) out.appendFormat("    local.get $v%lu\n", vnum(res.pid()));
@@ -2701,7 +2693,7 @@ class Wasm32
                 setResult(res, false, out);
             return true;
         }
-        if (op.equals(String.withCString("VTblDispatch"))) {
+        if (op == opVTblDispatch) {
             if (ops.count() < (u32)2) return true;
             bool sretCall = res != 0 && Wasm32.isAggTy(res.ty());
             if (sretCall) out.appendFormat("    local.get $v%lu\n", vnum(res.pid()));
@@ -2729,7 +2721,7 @@ class Wasm32
                 setResult(res, false, out);
             return true;
         }
-        if (op.equals(String.withCString("VTblLoad"))) {
+        if (op == opVTblLoad) {
             if (res == 0 || ops.count() < (u32)2) return true;
             pushOperand((IROperand*)ops.get((u32)0), out);
             out.appendFormat("    local.set $v%lu\n", vnum(res.pid()));
@@ -2783,7 +2775,7 @@ class Wasm32
         "    i32.const 0\n  )\n");
     }
 
-    bool emitArc(IRInsn* insn, String* op, String* out)
+    bool emitArc(IRInsn* insn, u16 op, String* out)
     {
         IRValue* res = insn.res();
         Array* ops = Wasm32.dataOps(insn);
@@ -2792,7 +2784,7 @@ class Wasm32
         // the receiver's itable ($__xtc_itab, emitted into this module), and
         // the call is the VTblDispatch call_indirect. A class that does not
         // answer to the protocol gives index 0, which traps.
-        if (op.equals(String.withCString("ProtoDispatch"))) {
+        if (op == opProtoDispatch) {
             if (ops.count() < (u32)3) return true;
             bool sretCall = res != 0 && Wasm32.isAggTy(res.ty());
             if (sretCall) out.appendFormat("    local.get $v%lu\n", vnum(res.pid()));
@@ -2817,54 +2809,54 @@ class Wasm32
         }
         // [recv, protoId, index]: the table index alone, 0 for a null
         // receiver or an unimplemented `optional` (the respondsTo test).
-        if (op.equals(String.withCString("ProtoLoad"))) {
+        if (op == opProtoLoad) {
             if (res == 0 || ops.count() < (u32)3) return true;
             pushOperand((IROperand*)ops.get((u32)0), out);
             emitItabLookup(ops, out);
             setResult(res, false, out);
             return true;
         }
-        if (op.equals(String.withCString("Retain"))) {
+        if (op == opRetain) {
             if (ops.count() < (u32)1) return true;
             pushOperand((IROperand*)ops.get((u32)0), out);
             out.appendCString("    call $__xtc_retain\n");
             return true;
         }
-        if (op.equals(String.withCString("Release")) || op.equals(String.withCString("Autorelease"))) {
+        if (op == opRelease || op == opAutorelease) {
             if (ops.count() < (u32)1) return true;
             pushOperand((IROperand*)ops.get((u32)0), out);
             out.appendCString("    call $__xtc_release\n");
             return true;
         }
-        if (op.equals(String.withCString("WeakRegister"))) {
+        if (op == opWeakRegister) {
             if (ops.count() < (u32)2) return true;
             pushOperand((IROperand*)ops.get((u32)0), out);
             pushOperand((IROperand*)ops.get((u32)1), out);
             out.appendCString("    call $_xtc_weak_register\n");
             return true;
         }
-        if (op.equals(String.withCString("WeakUnregister"))) {
+        if (op == opWeakUnregister) {
             if (ops.count() < (u32)1) return true;
             pushOperand((IROperand*)ops.get((u32)0), out);
             out.appendCString("    call $_xtc_weak_unregister\n");
             return true;
         }
-        if (op.equals(String.withCString("WeakLoad"))) {
+        if (op == opWeakLoad) {
             if (res == 0 || ops.count() < (u32)1) return true;
             pushOperand((IROperand*)ops.get((u32)0), out);
             out.appendCString("    i32.load\n");
             setResult(res, false, out);
             return true;
         }
-        if (op.equals(String.withCString("ClassDowncast"))
-         || op.equals(String.withCString("ClassDowncastFailable"))) {
+        if (op == opClassDowncast
+         || op == opClassDowncastFailable) {
             if (res != 0 && ops.count() >= (u32)1) {
                 pushOperand((IROperand*)ops.get((u32)0), out);
                 setResult(res, false, out);
             }
             return true;
         }
-        if (op.equals(String.withCString("Asm"))) {
+        if (op == opAsm) {
             // No wasm lowering for inline asm, and this is FATAL — the module
             // written without it is missing the asm's effect and is refused
             // at load. Mirrors the reference; reported through the flag the
@@ -2873,9 +2865,9 @@ class Wasm32
             _fatalImport = true;
             return true;
         }
-        if (op.equals(String.withCString("BankSave"))
-         || op.equals(String.withCString("BankRestore"))
-         || op.equals(String.withCString("BankSelectFor")))
+        if (op == opBankSave
+         || op == opBankRestore
+         || op == opBankSelectFor)
             return true;
         return false;
     }
@@ -2926,12 +2918,12 @@ class Wasm32
     {
         if (!_tailCalls || ctx._frameSize != (u32)0 || ctx._hasSret) return (IRInsn*)0;
         IRInsn* term = b.term();
-        if (term == (IRInsn*)0 || !term.op().equals(String.withCString("Return")))
+        if (term == (IRInsn*)0 || !term.isOp(opReturn))
             return (IRInsn*)0;
         if (b.insns().count() == (u32)0) return (IRInsn*)0;
         IRInsn* last = (IRInsn*)b.insns().get(b.insns().count() - (u32)1);
-        bool isCall = last.op().equals(String.withCString("Call"));
-        bool isInd  = last.op().equals(String.withCString("CallIndirect"));
+        bool isCall = last.isOp(opCall);
+        bool isInd  = last.isOp(opCallIndirect);
         if (!isCall && !isInd) return (IRInsn*)0;
         Array* dops = Wasm32.dataOps(last);
         if (isCall && (dops.count() < (u32)1
@@ -2957,7 +2949,7 @@ class Wasm32
     void emitTailCall(IRInsn* call, IRFunc* fn, WasmFnCtx* ctx, String* out)
     {
         Array* ops = Wasm32.dataOps(call);
-        if (call.op().equals(String.withCString("Call"))) {
+        if (call.isOp(opCall)) {
             IROperand* callee = (IROperand*)ops.get((u32)0);
             for (u32 i = (u32)1; i < ops.count(); i = i + (u32)1)
                 pushOperand((IROperand*)ops.get(i), out);
@@ -2982,10 +2974,10 @@ class Wasm32
     void emitTerminator(IRInsn* term, IRBlock* b, IRFunc* fn, WasmFnCtx* ctx, String* out)
     {
         if (term == 0) { out.appendCString("    unreachable\n"); return; }
-        String* op = term.op();
+        u16 op = term.opc();
         Array* ops = Wasm32.dataOps(term);
 
-        if (op.equals(String.withCString("Branch"))) {
+        if (op == opBranch) {
             IRBlock* target = ops.count() > (u32)0
                 ? ((IROperand*)ops.get((u32)0)).blk() : (IRBlock*)0;
             emitPhiCopies(b, target, out);
@@ -2993,7 +2985,7 @@ class Wasm32
                              blockIndexOf(fn, target));
             return;
         }
-        if (op.equals(String.withCString("CondBranch"))) {
+        if (op == opCondBranch) {
             IRBlock* thenB = ops.count() > (u32)1
                 ? ((IROperand*)ops.get((u32)1)).blk() : (IRBlock*)0;
             IRBlock* elseB = ops.count() > (u32)2
@@ -3009,7 +3001,7 @@ class Wasm32
             out.appendCString("    br $dispatch\n");
             return;
         }
-        if (op.equals(String.withCString("Return"))) {
+        if (op == opReturn) {
             IROperand* val = ops.count() > (u32)0 ? (IROperand*)ops.get((u32)0) : (IROperand*)0;
             if (ctx._hasSret && val != 0) {
                 out.appendCString("    local.get $sret\n");
@@ -3036,7 +3028,7 @@ class Wasm32
             }
             return;
         }
-        if (op.equals(String.withCString("Unreachable"))) {
+        if (op == opUnreachable) {
             out.appendCString("    unreachable\n");
             return;
         }
@@ -3089,9 +3081,9 @@ class Wasm32
             IRInsn* term = b.term();
             Array* s = new Array();
             if (term != 0) {
-                String* op = term.op();
-                bool isBr = op.equals(String.withCString("Branch"));
-                bool isCond = op.equals(String.withCString("CondBranch"));
+                u16 op = term.opc();
+                bool isBr = op == opBranch;
+                bool isCond = op == opCondBranch;
                 if (isBr || isCond) {
                     for (u32 k = (u32)0; k < term.ops().count(); k = k + (u32)1) {
                         IROperand* o = (IROperand*)term.ops().get(k);
@@ -3100,8 +3092,8 @@ class Wasm32
                     }
                     if (isBr && s.count() != (u32)1) { plan.dropSlots(); return (WasmCFGPlan*)0; }
                     if (isCond && s.count() != (u32)2) { plan.dropSlots(); return (WasmCFGPlan*)0; }
-                } else if (op.equals(String.withCString("Return"))
-                        || op.equals(String.withCString("Unreachable"))) {
+                } else if (op == opReturn
+                        || op == opUnreachable) {
                 } else {
                     plan.dropSlots();
                     return (WasmCFGPlan*)0;
@@ -3223,13 +3215,13 @@ class Wasm32
     void emitStructuredTerminator(IRInsn* term, u32 u, WasmCFGPlan* plan,
                                   IRFunc* fn, WasmFnCtx* ctx, String* out)
     {
-        if (term != 0 && term.op().equals(String.withCString("Branch"))) {
+        if (term != 0 && term.isOp(opBranch)) {
             Array* ops = Wasm32.dataOps(term);
             u32 t = blockIndexOf(fn, ((IROperand*)ops.get((u32)0)).blk());
             emitStructuredBranchTo(t, u, plan, fn, ctx, out);
             return;
         }
-        if (term != 0 && term.op().equals(String.withCString("CondBranch"))) {
+        if (term != 0 && term.isOp(opCondBranch)) {
             Array* ops = Wasm32.dataOps(term);
             u32 ti = blockIndexOf(fn, ((IROperand*)ops.get((u32)1)).blk());
             u32 ei = blockIndexOf(fn, ((IROperand*)ops.get((u32)2)).blk());

@@ -172,9 +172,9 @@ class CgCommon
     {
         u32 b = (u32)8;
         if (t != (String*)0) {
-            if (t.equals(String.withCString("I8")) || t.equals(String.withCString("U8")) || t.equals(String.withCString("Bool"))) b = (u32)1;
-            else if (t.equals(String.withCString("I16")) || t.equals(String.withCString("U16"))) b = (u32)2;
-            else if (t.equals(String.withCString("I32")) || t.equals(String.withCString("U32"))) b = (u32)4;
+            if (IRType.is(t, tyI8) || IRType.is(t, tyU8) || IRType.is(t, tyBool)) b = 1;
+            else if (IRType.is(t, tyI16) || IRType.is(t, tyU16)) b = 2;
+            else if (IRType.is(t, tyI32) || IRType.is(t, tyU32)) b = 4;
         }
         if (b == (u32)8) return v;
         u32 sh = (u32)64 - b * (u32)8;
@@ -249,8 +249,7 @@ class CgCommon
 
     static bool isFloatTy(String* t)
     {
-        return t != (String*)0 && (t.equals(String.withCString("F32"))
-                                || t.equals(String.withCString("F64")));
+        return IRType.isFloat(t);
     }
 
     // `{{XTLOCAL:<vid>}}` becomes the local's sp-relative slot WITHOUT enclosing

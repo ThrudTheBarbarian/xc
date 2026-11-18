@@ -98,53 +98,43 @@ class M68k
     // A type is its SPELLING here, so these read the text rather than a kind.
     static bool isPtrTy(String* t)
         {
-        return t != (String*)0 && t.hasPrefix(String.withCString("Ptr("));
+        return IRType.isPtr(t);
         }
 
     static bool isAggTy(String* t)
         {
-        return t != (String*)0 && t.hasPrefix(String.withCString("Agg("));
+        return IRType.isAgg(t);
         }
 
     static bool isMemTy(String* t)
         {
-        return t != (String*)0 && t.equals(String.withCString("Mem"));
+        return IRType.is(t, tyMem);
         }
 
     static bool isVecTy(String* t)
         {
-        return t != (String*)0 && t.hasPrefix(String.withCString("Vec("));
+        return IRType.isVec(t);
         }
 
     static bool isIntegerTy(String* t)
         {
         if (t == (String*)0)
             return false;
-        return t.equals(String.withCString("I8")) || t.equals(String.withCString("U8")) || t.equals(String.withCString("I16")) || t.equals(String.withCString("U16")) || t.equals(String.withCString("I32")) || t.equals(String.withCString("U32"));
+        return IRType.is(t, tyI8) || IRType.is(t, tyU8) || IRType.is(t, tyI16) || IRType.is(t, tyU16) || IRType.is(t, tyI32) || IRType.is(t, tyU32);
         }
 
     static bool isSignedTy(String* t)
         {
         if (t == (String*)0)
             return false;
-        return t.equals(String.withCString("I8")) || t.equals(String.withCString("I16")) || t.equals(String.withCString("I32")) || t.equals(String.withCString("I64"));
+        return IRType.is(t, tyI8) || IRType.is(t, tyI16) || IRType.is(t, tyI32) || IRType.is(t, tyI64);
         }
 
     // The IR's own width for a scalar leaf — the FRONT END's half of the
     // type-width invariant, which is what an initialiser image is laid out in.
     static u32 irWidth(String* t)
         {
-        if (t == (String*)0)
-            return (u32)0;
-        if (t.equals(String.withCString("I8")) || t.equals(String.withCString("U8")) || t.equals(String.withCString("Bool")))
-            return (u32)1;
-        if (t.equals(String.withCString("I16")) || t.equals(String.withCString("U16")))
-            return (u32)2;
-        if (t.equals(String.withCString("I32")) || t.equals(String.withCString("U32")) || t.equals(String.withCString("F32")))
-            return (u32)4;
-        if (t.equals(String.withCString("I64")) || t.equals(String.withCString("U64")) || t.equals(String.withCString("F64")))
-            return (u32)8;
-        return (u32)0;
+        return IRType.bytes(t);
         }
 
     // The width THIS target lays a field out as. A pointer is 4 bytes here —
@@ -701,8 +691,8 @@ class M68k
 
     void emitInsn(IRFunc* fn, IRBlock* bb, IRInsn* n)
         {
-        String* op = n.op();
-        if (op.equals(String.withCString("Phi")))
+        u16 op = n.opc();
+        if (op == opPhi)
             return; // edge copies
         // 64-bit values, intercepted before every path below — all of which
         // work in `.l` registers and would silently compute the low half only.
@@ -714,127 +704,127 @@ class M68k
             emitBinary(mn, n);
             return;
             }
-        if (op.equals(String.withCString("Neg")))
+        if (op == opNeg)
             {
             emitUnary(n, String.withCString("neg"));
             return;
             }
-        if (op.equals(String.withCString("Not")))
+        if (op == opNot)
             {
             emitUnary(n, String.withCString("not"));
             return;
             }
-        if (op.equals(String.withCString("Const")))
+        if (op == opConst)
             {
             emitConst(n);
             return;
             }
-        if (op.equals(String.withCString("Copy")))
+        if (op == opCopy)
             {
             emitCopy(n);
             return;
             }
-        if (op.equals(String.withCString("Load")))
+        if (op == opLoad)
             {
             emitLoad(fn, n);
             return;
             }
-        if (op.equals(String.withCString("Store")))
+        if (op == opStore)
             {
             emitStore(fn, n);
             return;
             }
-        if (op.equals(String.withCString("ZExt")))
+        if (op == opZExt)
             {
             emitZExt(n);
             return;
             }
-        if (op.equals(String.withCString("SExt")))
+        if (op == opSExt)
             {
             emitSExt(n);
             return;
             }
-        if (op.equals(String.withCString("Trunc")))
+        if (op == opTrunc)
             {
             emitTrunc(n);
             return;
             }
-        if (op.equals(String.withCString("Shl")) || op.equals(String.withCString("LShr")) || op.equals(String.withCString("AShr")))
+        if (op == opShl || op == opLShr || op == opAShr)
             {
             emitShift(n);
             return;
             }
-        if (op.equals(String.withCString("Mul")))
+        if (op == opMul)
             {
             emitMul(n);
             return;
             }
-        if (op.equals(String.withCString("UDiv")) || op.equals(String.withCString("SDiv")))
+        if (op == opUDiv || op == opSDiv)
             {
             emitDiv(n);
             return;
             }
-        if (op.equals(String.withCString("URem")) || op.equals(String.withCString("SRem")))
+        if (op == opURem || op == opSRem)
             {
             emitRem(n);
             return;
             }
-        if (op.equals(String.withCString("Call")) || op.equals(String.withCString("CallBanked")) || op.equals(String.withCString("CallCloaked")))
+        if (op == opCall || op == opCallBanked || op == opCallCloaked)
             {
             emitCall(fn, n);
             return;
             }
-        if (op.equals(String.withCString("CallIndirect")) || op.equals(String.withCString("CallBankedIndirect")))
+        if (op == opCallIndirect || op == opCallBankedIndirect)
             {
             emitCallIndirect(n);
             return;
             }
-        if (op.equals(String.withCString("Retain")))
+        if (op == opRetain)
             {
             emitRetain(n);
             return;
             }
-        if (op.equals(String.withCString("Release")) || op.equals(String.withCString("Autorelease")))
+        if (op == opRelease || op == opAutorelease)
             {
             emitRelease(n);
             return;
             }
-        if (op.equals(String.withCString("WeakRegister")))
+        if (op == opWeakRegister)
             {
             emitWeakRegister(n);
             return;
             }
-        if (op.equals(String.withCString("WeakUnregister")))
+        if (op == opWeakUnregister)
             {
             emitWeakUnregister(n);
             return;
             }
-        if (op.equals(String.withCString("WeakLoad")))
+        if (op == opWeakLoad)
             {
             emitWeakLoad(n);
             return;
             }
-        if (op.equals(String.withCString("Select")))
+        if (op == opSelect)
             {
             emitSelect(n);
             return;
             }
-        if (op.equals(String.withCString("AggBuild")))
+        if (op == opAggBuild)
             {
             emitAggBuild(n);
             return;
             }
-        if (op.equals(String.withCString("AggExtract")))
+        if (op == opAggExtract)
             {
             emitAggExtract(n);
             return;
             }
-        if (op.equals(String.withCString("VTblDispatch")))
+        if (op == opVTblDispatch)
             {
             emitVTblDispatch(n);
             return;
             }
-        if (op.equals(String.withCString("VTblLoad")))
+        if (op == opVTblLoad)
             {
             emitVTblLoad(n);
             return;
@@ -844,7 +834,7 @@ class M68k
         // the cast silently succeeded with a mistyped pointer and the program
         // carried on, exiting 0, so a failed cast looked like a clean run.
         // Use `(T* ?)p` when failure is a possibility rather than a bug.
-        if (op.equals(String.withCString("Unreachable")))
+        if (op == opUnreachable)
             {
             _out.appendCString("\tillegal\n"); // $4AFC
             return;
@@ -857,7 +847,7 @@ class M68k
         // missing and exited 0 — double_math_lnexp, whose 6502 `asm { LDA d
         // ... }` copies never ran, printed FAIL lines that looked like a 68881
         // bug (bug 254).
-        if (op.equals(String.withCString("Asm")))
+        if (op == opAsm)
             {
             if (asmHasText(n))
                 {
@@ -867,89 +857,89 @@ class M68k
                 }
             return;
             }
-        if (op.equals(String.withCString("Call")))
+        if (op == opCall)
             {
             emitCall(fn, n);
             return;
             }
-        if (op.equals(String.withCString("Return")))
+        if (op == opReturn)
             {
             emitReturn(fn, n);
             return;
             }
-        if (op.equals(String.withCString("FAdd")) || op.equals(String.withCString("FSub")) || op.equals(String.withCString("FMul")) || op.equals(String.withCString("FDiv")))
+        if (op == opFAdd || op == opFSub || op == opFMul || op == opFDiv)
             {
             emitFBin(n);
             return;
             }
-        if (op.equals(String.withCString("FNeg")))
+        if (op == opFNeg)
             {
             emitFNeg(n);
             return;
             }
-        if (op.equals(String.withCString("FpToSI")) || op.equals(String.withCString("FpToUI")))
+        if (op == opFpToSI || op == opFpToUI)
             {
             emitFpToInt(fn, n);
             return;
             }
-        if (op.equals(String.withCString("SIToFp")) || op.equals(String.withCString("UIToFp")))
+        if (op == opSIToFp || op == opUIToFp)
             {
             emitIntToFp(n);
             return;
             }
-        if (op.equals(String.withCString("FpExt")) || op.equals(String.withCString("FpTrunc")))
+        if (op == opFpExt || op == opFpTrunc)
             {
             emitFpConvert(fn, n);
             return;
             }
-        if (op.equals(String.withCString("FCmp")))
+        if (op == opFCmp)
             {
             emitFCmp(fn, n);
             return;
             }
-        if (op.equals(String.withCString("ICmp")))
+        if (op == opICmp)
             {
             emitICmp(n);
             return;
             }
-        if (op.equals(String.withCString("Branch")))
+        if (op == opBranch)
             {
             emitBranch(fn, bb, n);
             return;
             }
-        if (op.equals(String.withCString("CondBranch")))
+        if (op == opCondBranch)
             {
             emitCondBranch(fn, bb, n);
             return;
             }
-        if (op.equals(String.withCString("IntToPtr")) || op.equals(String.withCString("PtrToInt")))
+        if (op == opIntToPtr || op == opPtrToInt)
             {
             // A 64-bit source gives its LOW long: the address is the low half.
             loadOperandLow32((IROperand*)n.ops().get((u32)0), String.withCString("d0"));
             storeReg(String.withCString("d0"), n.res());
             return;
             }
-        if (op.equals(String.withCString("Bitcast")))
+        if (op == opBitcast)
             {
             emitBitcast(n);
             return;
             }
-        if (op.equals(String.withCString("AddrOf")))
+        if (op == opAddrOf)
             {
             emitAddrOf(n);
             return;
             }
-        if (op.equals(String.withCString("FieldAddr")))
+        if (op == opFieldAddr)
             {
             emitFieldAddr(n);
             return;
             }
-        if (op.equals(String.withCString("ElementAddr")))
+        if (op == opElementAddr)
             {
             emitElementAddr(n);
             return;
             }
-        unsupported(op);
+        unsupported(n.op());
         }
 
     // ── Casts and shifts ─────────────────────────────────────────────────
@@ -1043,15 +1033,15 @@ class M68k
             unsupported(n.op());
             return;
             }
-        String* op = n.op();
-        String* m = String.withCString(op.equals(String.withCString("Shl")) ? "lsl"
-                                                                            : (op.equals(String.withCString("LShr")) ? "lsr" : "asr"));
+        u16 op = n.opc();
+        String* m = String.withCString(op == opShl ? "lsl"
+                                                                            : (op == opLShr ? "lsr" : "asr"));
         IROperand* v = (IROperand*)n.ops().get((u32)0);
         loadOperand(v, String.withCString("d0"));
         u32 vw = widthOfOperand(v);
-        if (op.equals(String.withCString("AShr")))
+        if (op == opAShr)
             signExtendFrom(vw);
-        else if (op.equals(String.withCString("LShr")))
+        else if (op == opLShr)
             maskToWidth(vw);
         loadOperand((IROperand*)n.ops().get((u32)1), String.withCString("d1"));
         _out.appendFormat("\t%s.l\td1,d0\n", m.cString());
@@ -1102,7 +1092,7 @@ class M68k
             unsupported(n.op());
             return;
             }
-        bool uns = n.op().equals(String.withCString("UDiv"));
+        bool uns = n.isOp(opUDiv);
         loadOperand((IROperand*)n.ops().get((u32)0), String.withCString("d0"));
         loadOperand((IROperand*)n.ops().get((u32)1), String.withCString("d1"));
         extendForDiv(String.withCString("d0"), n, !uns);
@@ -1123,7 +1113,7 @@ class M68k
             unsupported(n.op());
             return;
             }
-        bool uns = n.op().equals(String.withCString("URem"));
+        bool uns = n.isOp(opURem);
         loadOperand((IROperand*)n.ops().get((u32)0), String.withCString("d0"));
         loadOperand((IROperand*)n.ops().get((u32)1), String.withCString("d1"));
         extendForDiv(String.withCString("d0"), n, !uns);
@@ -1414,7 +1404,7 @@ class M68k
                     if (dd == (Object*)0)
                         continue;
                     IRInsn* d = (IRInsn*)dd;
-                    if (!d.op().equals(String.withCString("ElementAddr")))
+                    if (!d.isOp(opElementAddr))
                         continue;
                     if (d.ops().count() < (u32)2)
                         continue;
@@ -1461,7 +1451,7 @@ class M68k
                 if (n == advInsn)
                     continue;
                 u32 at = ((Number*)ats.get(k)).asU32();
-                bool mem = n.op().equals(String.withCString("Load")) || n.op().equals(String.withCString("Store"));
+                bool mem = n.isOp(opLoad) || n.isOp(opStore);
                 if (mem && at == (u32)0)
                     continue;
                 return false;
@@ -1852,7 +1842,7 @@ class M68k
     // is a libgcc-style call.
     static bool isF64(String* t)
         {
-        return t != (String*)0 && t.equals(String.withCString("F64"));
+        return t != (String*)0 && IRType.is(t, tyF64);
         }
 
     // A 64-bit INTEGER. Eight bytes, and it travels every route a double
@@ -1860,7 +1850,7 @@ class M68k
     // for a return — so almost everywhere this is asked next to isF64.
     static bool isI64(String* t)
         {
-        return t != (String*)0 && (t.equals(String.withCString("I64")) || t.equals(String.withCString("U64")));
+        return t != (String*)0 && (IRType.is(t, tyI64) || IRType.is(t, tyU64));
         }
 
     // The FPU format suffix an operand's type takes.
@@ -1890,12 +1880,12 @@ class M68k
         i32 o0 = slotOfOperand((IROperand*)n.ops().get((u32)0));
         i32 o1 = slotOfOperand((IROperand*)n.ops().get((u32)1));
         i32 r = slotOf(n.res());
-        String* op = n.op();
+        u16 op = n.opc();
         if (_hardFloat)
             {
-            String* m = op.equals(String.withCString("FAdd")) ? String.withCString("fadd")
-                                                              : (op.equals(String.withCString("FSub")) ? String.withCString("fsub")
-                                                                                                       : (op.equals(String.withCString("FMul")) ? String.withCString("fmul")
+            String* m = op == opFAdd ? String.withCString("fadd")
+                                                              : (op == opFSub ? String.withCString("fsub")
+                                                                                                       : (op == opFMul ? String.withCString("fmul")
                                                                                                                                                 : String.withCString("fdiv")));
             String* sf = String.withCString(dbl ? "d" : "s");
             _out.appendFormat("\tfmove.%s\t%ld(a6),fp0\n", sf.cString(), o0);
@@ -1903,9 +1893,9 @@ class M68k
             _out.appendFormat("\tfmove.%s\tfp0,%ld(a6)\n", sf.cString(), r);
             return;
             }
-        String* sop = op.equals(String.withCString("FAdd")) ? String.withCString("add")
-                                                            : (op.equals(String.withCString("FSub")) ? String.withCString("sub")
-                                                                                                     : (op.equals(String.withCString("FMul")) ? String.withCString("mul")
+        String* sop = op == opFAdd ? String.withCString("add")
+                                                            : (op == opFSub ? String.withCString("sub")
+                                                                                                     : (op == opFMul ? String.withCString("mul")
                                                                                                                                               : String.withCString("div")));
         emitSoftFloatBinary(sop, dbl, o0, o1, r);
         }
@@ -1967,7 +1957,7 @@ class M68k
         // both float modes take the HLE helper, which returns d0:d1.
         if (isI64(n.res().ty()))
             {
-            bool uns = n.op().equals(String.withCString("FpToUI"));
+            bool uns = n.isOp(opFpToUI);
             String* h = dbl ? (uns ? String.withCString("__fixunsdfdi")
                                    : String.withCString("__fixdfdi"))
                             : (uns ? String.withCString("__fixunssfdi")
@@ -2007,7 +1997,7 @@ class M68k
         u32 w = irWidth(n.res().ty());
         if (w == (u32)0)
             w = (u32)4;
-        bool sgn = n.op().equals(String.withCString("FpToSI"));
+        bool sgn = n.isOp(opFpToSI);
         if (_hardFloat)
             {
             if (dbl)
@@ -2074,7 +2064,7 @@ class M68k
         IROperand* s0 = (IROperand*)n.ops().get((u32)0);
         if (s0.kind() == (u8)OPK_USE && s0.val() != (IRValue*)0 && isI64(s0.val().ty()))
             {
-            bool uns = n.op().equals(String.withCString("UIToFp"));
+            bool uns = n.isOp(opUIToFp);
             String* h = dbl ? (uns ? String.withCString("__floatundidf")
                                    : String.withCString("__floatdidf"))
                             : (uns ? String.withCString("__floatundisf")
@@ -2092,7 +2082,7 @@ class M68k
         // __floatsidf): 3000000000 converted as -1294967296. It goes through
         // the u64 helper with a zero high half, in both float modes.
         String* st = (s0.kind() == (u8)OPK_USE && s0.val() != (IRValue*)0) ? s0.val().ty() : s0.ty();
-        if (n.op().equals(String.withCString("UIToFp")) && st != (String*)0 && st.equals(String.withCString("U32")))
+        if (n.isOp(opUIToFp) && st != (String*)0 && IRType.is(st, tyU32))
             {
             _out.appendFormat("\tmove.l\td0,-(sp)\n\tclr.l\t-(sp)\n\tjsr\t%s\n\taddq.l\t#8,sp\n",
                               dbl ? "__floatundidf" : "__floatundisf");
@@ -2261,7 +2251,7 @@ class M68k
             {
             IRBlock* bb = (IRBlock*)fn.blocks().get(b);
             IRInsn* t = bb.term();
-            if (t == (IRInsn*)0 || !t.op().equals(String.withCString("CondBranch")))
+            if (t == (IRInsn*)0 || !t.isOp(opCondBranch))
                 continue;
             if (t.ops().count() < (u32)1)
                 continue;
@@ -2273,7 +2263,7 @@ class M68k
             if (bb.insns().count() == (u32)0)
                 continue;
             IRInsn* last = (IRInsn*)bb.insns().get(bb.insns().count() - (u32)1);
-            if (!last.op().equals(String.withCString("ICmp")))
+            if (!last.isOp(opICmp))
                 continue;
             if (last.res() != cond.val())
                 continue;
@@ -2339,16 +2329,16 @@ class M68k
             for (u32 i = (u32)0; i + (u32)1 < ins.count(); i = i + (u32)1)
                 {
                 IRInsn* ea = (IRInsn*)ins.get(i);
-                bool isEA = ea.op().equals(String.withCString("ElementAddr"));
-                if (!isEA && !ea.op().equals(String.withCString("FieldAddr")))
+                bool isEA = ea.isOp(opElementAddr);
+                if (!isEA && !ea.isOp(opFieldAddr))
                     continue;
                 if (ea.res() == (IRValue*)0)
                     continue;
                 if (countIn(uc, ea.res()) != (u32)1)
                     continue;
                 IRInsn* nx = (IRInsn*)ins.get(i + (u32)1);
-                bool isLoad = nx.op().equals(String.withCString("Load"));
-                bool isStore = nx.op().equals(String.withCString("Store"));
+                bool isLoad = nx.isOp(opLoad);
+                bool isStore = nx.isOp(opStore);
                 if (!isLoad && !isStore)
                     continue;
                 if (nx.ops().count() < (u32)1)
@@ -2403,7 +2393,7 @@ class M68k
         String* ct1 = operandTy((IROperand*)n.ops().get((u32)1));
         if ((isI64(ct0) || isI64(ct1)) && n.res() != (IRValue*)0)
             {
-            bool sgn = ct0.equals(String.withCString("I64")) || ct1.equals(String.withCString("I64"));
+            bool sgn = IRType.is(ct0, tyI64) || IRType.is(ct1, tyI64);
             pushInt64Operand((IROperand*)n.ops().get((u32)1));
             pushInt64Operand((IROperand*)n.ops().get((u32)0));
             _out.appendFormat("\tjsr\t%s\n\tlea\t16(sp),sp\n",
@@ -2812,7 +2802,7 @@ class M68k
             // which is this machine's order.
             i32 off = slotOf(n.res());
             String* hex = op.fpHex();
-            if (n.res().ty().equals(String.withCString("F64")))
+            if (IRType.is(n.res().ty(), tyF64))
                 {
                 // The IR spells the pattern in lower case; the assembly uses
                 // upper, as every other hex constant here does.
@@ -2926,7 +2916,7 @@ class M68k
     String* foldedMemOp(IRFunc* fn, IRInsn* ea)
         {
         loadOperand((IROperand*)ea.ops().get((u32)0), String.withCString("a0"));
-        if (ea.op().equals(String.withCString("FieldAddr")))
+        if (ea.isOp(opFieldAddr))
             {
             u32 off = fieldByteOffset(ea);
             if (off == (u32)0)
@@ -3273,17 +3263,17 @@ class M68k
         }
 
     // The integer binaries that are one m68k ALU instruction, or null.
-    static String* intBinOpMnemonic(String* op)
+    static String* intBinOpMnemonic(u16 op)
         {
-        if (op.equals(String.withCString("Add")))
+        if (op == opAdd)
             return String.withCString("add");
-        if (op.equals(String.withCString("Sub")))
+        if (op == opSub)
             return String.withCString("sub");
-        if (op.equals(String.withCString("And")))
+        if (op == opAnd)
             return String.withCString("and");
-        if (op.equals(String.withCString("Or")))
+        if (op == opOr)
             return String.withCString("or");
-        if (op.equals(String.withCString("Xor")))
+        if (op == opXor)
             return String.withCString("eor");
         return (String*)0;
         }
@@ -3473,7 +3463,7 @@ class M68k
     //
     // Returns false for an opcode this does not handle, so the caller falls
     // through to the ordinary paths.
-    bool emitInt64(IRInsn* n, String* op)
+    bool emitInt64(IRInsn* n, u16 op)
         {
         i32 r = slotOf(n.res());
         u32 nops = n.ops().count();
@@ -3483,7 +3473,7 @@ class M68k
         // A 64-bit CONSTANT needs both longs written. The Const path emits a
         // single `move.l #imm`, which left the high word holding whatever the
         // slot had — a correct low half and a wrong high half.
-        if (op.equals(String.withCString("Const")) && a0.kind() == (u8)OPK_IMMI)
+        if (op == opConst && a0.kind() == OPK_IMMI)
             {
             i64 v = a0.imm();
             _out.appendFormat("\tmove.l\t#%lu,%ld(a6)\n", (u32)(v >> (i64)32), r);
@@ -3497,18 +3487,18 @@ class M68k
         // 32-bit address zero-extended into both longs. As a plain copy it
         // wrote the address into the HIGH long only, so `(i64)(pointer)p`
         // read as 0 through its low half (bug 269).
-        bool ptr = op.equals(String.withCString("PtrToInt"));
-        if (op.equals(String.withCString("ZExt")) || op.equals(String.withCString("SExt")) || ptr)
+        bool ptr = op == opPtrToInt;
+        if (op == opZExt || op == opSExt || ptr)
             {
             loadOperand(a0, String.withCString("d0"));
-            extendD0ToPair(op.equals(String.withCString("SExt")), ptr ? (u32)4 : widthOfOperand(a0));
+            extendD0ToPair(op == opSExt, ptr ? 4 : widthOfOperand(a0));
             // Big-endian: the HIGH long sits at the lower address.
             _out.appendFormat("\tmove.l\td1,%ld(a6)\n\tmove.l\td0,%ld(a6)\n", r, r + (i32)4);
             return true;
             }
         // A same-width reinterpretation (i64 <-> u64) is an eight-byte copy,
         // not the `move.l` the generic Bitcast falls through to.
-        if (op.equals(String.withCString("Bitcast")) && a0.kind() == (u8)OPK_USE && a0.val() != (IRValue*)0 && isI64(a0.val().ty()))
+        if (op == opBitcast && a0.kind() == OPK_USE && a0.val() != (IRValue*)0 && isI64(a0.val().ty()))
             {
             i32 so = slotOf(a0.val());
             _out.appendFormat("\tmove.l\t%ld(a6),d0\n\tmove.l\td0,%ld(a6)\n", so, r);
@@ -3523,8 +3513,8 @@ class M68k
         // nor ADDX, so that pair assembles and then traps at run time.
         if (nops == (u32)1)
             {
-            bool isNeg = op.equals(String.withCString("Neg"));
-            if (!isNeg && !op.equals(String.withCString("Not")))
+            bool isNeg = op == opNeg;
+            if (!isNeg && op != opNot)
                 return false;
             if (isNeg)
                 {
@@ -3547,31 +3537,31 @@ class M68k
         if (nops < (u32)2)
             return false;
         String* h = (String*)0;
-        if (op.equals(String.withCString("Add")))
+        if (op == opAdd)
             h = String.withCString("__adddi3");
-        else if (op.equals(String.withCString("Sub")))
+        else if (op == opSub)
             h = String.withCString("__subdi3");
-        else if (op.equals(String.withCString("Mul")))
+        else if (op == opMul)
             h = String.withCString("__muldi3");
-        else if (op.equals(String.withCString("SDiv")))
+        else if (op == opSDiv)
             h = String.withCString("__divdi3");
-        else if (op.equals(String.withCString("UDiv")))
+        else if (op == opUDiv)
             h = String.withCString("__udivdi3");
-        else if (op.equals(String.withCString("SRem")))
+        else if (op == opSRem)
             h = String.withCString("__moddi3");
-        else if (op.equals(String.withCString("URem")))
+        else if (op == opURem)
             h = String.withCString("__umoddi3");
-        else if (op.equals(String.withCString("And")))
+        else if (op == opAnd)
             h = String.withCString("__anddi3");
-        else if (op.equals(String.withCString("Or")))
+        else if (op == opOr)
             h = String.withCString("__ordi3");
-        else if (op.equals(String.withCString("Xor")))
+        else if (op == opXor)
             h = String.withCString("__xordi3");
-        else if (op.equals(String.withCString("Shl")))
+        else if (op == opShl)
             h = String.withCString("__ashldi3");
-        else if (op.equals(String.withCString("LShr")))
+        else if (op == opLShr)
             h = String.withCString("__lshrdi3");
-        else if (op.equals(String.withCString("AShr")))
+        else if (op == opAShr)
             h = String.withCString("__ashrdi3");
         if (h == (String*)0)
             return false;
@@ -4759,7 +4749,7 @@ class M68k
         {
         if (ty == (String*)0)
             return bytes;
-        if (ty.equals(String.withCString("F32")) && bytes.count() == (u32)8)
+        if (IRType.is(ty, tyF32) && bytes.count() == 8)
             {
             // The image is 8 little-endian double bits; narrow to IEEE single
             // and emit big-endian.
@@ -4769,7 +4759,7 @@ class M68k
                 r.add((Object*)Number.with((i32)((fb >> ((u32)8 * ((u32)3 - k))) & (u32)$FF)));
             return r;
             }
-        if (ty.equals(String.withCString("F64")) && bytes.count() == (u32)8)
+        if (IRType.is(ty, tyF64) && bytes.count() == 8)
             return reversed(bytes);
         if (isAggTy(ty))
             return relayAgg(bytes, layoutOf(ty));
@@ -4785,7 +4775,7 @@ class M68k
             return reversed(r);
             }
         // i64/u64 were missing here, so `u64 g = 1;` read back as 1 << 56.
-        bool scalarInt = ty.equals(String.withCString("I16")) || ty.equals(String.withCString("U16")) || ty.equals(String.withCString("I32")) || ty.equals(String.withCString("U32")) || ty.equals(String.withCString("I64")) || ty.equals(String.withCString("U64"));
+        bool scalarInt = IRType.is(ty, tyI16) || IRType.is(ty, tyU16) || IRType.is(ty, tyI32) || IRType.is(ty, tyU32) || IRType.is(ty, tyI64) || IRType.is(ty, tyU64);
         if (scalarInt && (bytes.count() == (u32)2 || bytes.count() == (u32)4 || bytes.count() == (u32)8))
             return reversed(bytes);
         return bytes;

@@ -220,15 +220,14 @@ class BitSet
     // in a caller-saved register. The hidden ones count too — bulk memory ops
     // and the ARC helpers are calls on some backends — and being generous here
     // only nudges a value to callee-saved.
-    static bool isCallOp(String* op)
+    static bool isCallOp(u16 op)
         {
-        return op.equals(String.withCString("Call")) || op.equals(String.withCString("CallBanked")) || op.equals(String.withCString("CallCloaked")) || op.equals(String.withCString("CallIndirect")) || op.equals(String.withCString("CallBankedIndirect")) || op.equals(String.withCString("VTblDispatch")) || op.equals(String.withCString("ProtoDispatch")) || op.equals(String.withCString("MemCopy")) || op.equals(String.withCString("MemSet")) || op.equals(String.withCString("Release")) || op.equals(String.withCString("Autorelease")) || op.equals(String.withCString("WeakRegister")) || op.equals(String.withCString("WeakUnregister")) || op.equals(String.withCString("WeakLoad"))
-            || op.equals(String.withCString("Invoke"));
+        return IROp.has(op, OPF_CLOBBERS);
         }
 
     static bool isFloatTy(String* t)
         {
-        return t != 0 && (t.equals(String.withCString("F32")) || t.equals(String.withCString("F64")));
+        return IRType.isFloat(t);
         }
 
     // The one entry point: assign homes for `fn` out of the two tiers.
@@ -359,7 +358,7 @@ class BitSet
                 // A Load folded into a VSplat is elided too, so the splat reads
                 // the Load's pointer, and through it the base and index of an
                 // address folded into that Load.
-                if (_foldInfo != 0 && insn.ops().count() >= (u32)1 && (insn.op().equals(String.withCString("Load")) || insn.op().equals(String.withCString("Store")) || insn.op().equals(String.withCString("VLoad")) || insn.op().equals(String.withCString("VStore")) || insn.op().equals(String.withCString("VSplat"))))
+                if (_foldInfo != 0 && insn.ops().count() >= 1 && (insn.isOp(opLoad) || insn.isOp(opStore) || insn.isOp(opVLoad) || insn.isOp(opVStore) || insn.isOp(opVSplat)))
                     {
                     IROperand* p0 = (IROperand*)insn.ops().get((u32)0);
                     if (p0.kind() == (u8)OPK_USE && p0.val() != 0)
@@ -369,7 +368,7 @@ class BitSet
                             {
                             recordUses((IRInsn*)fea, pos, defs, ue);
                             IRInsn* fi = (IRInsn*)fea;
-                            if (fi.op().equals(String.withCString("Load")) && fi.ops().count() >= (u32)1)
+                            if (fi.isOp(opLoad) && fi.ops().count() >= 1)
                                 {
                                 IROperand* q0 = (IROperand*)fi.ops().get((u32)0);
                                 if (q0.kind() == (u8)OPK_USE && q0.val() != 0)
@@ -392,7 +391,7 @@ class BitSet
                         if (vo.kind() != (u8)OPK_USE || vo.val() == 0)
                             continue;
                         Object* fv = _foldInfo.get((Hashable*)Number.with(vo.val().pid()));
-                        if (fv == 0 || !((IRInsn*)fv).op().equals(String.withCString("VLoad")))
+                        if (fv == 0 || !((IRInsn*)fv).isOp(opVLoad))
                             continue;
                         recordUses((IRInsn*)fv, pos, defs, ue);
                         IROperand* q0 = (IROperand*)((IRInsn*)fv).ops().get((u32)0);
@@ -404,7 +403,7 @@ class BitSet
                             }
                         }
                     }
-                if (_selInfo != 0 && insn.ops().count() >= (u32)1 && insn.op().equals(String.withCString("Select")))
+                if (_selInfo != 0 && insn.ops().count() >= 1 && insn.isOp(opSelect))
                     {
                     IROperand* c0 = (IROperand*)insn.ops().get((u32)0);
                     if (c0.kind() == (u8)OPK_USE && c0.val() != 0)
@@ -427,11 +426,11 @@ class BitSet
                             }
                         }
                     }
-                if (Homing.isCallOp(insn.op()))
+                if (Homing.isCallOp(insn.opc()))
                     _callPos.add((Object*)Number.with(pos));
                 // An AddrOf operand is address-TAKEN: it must live at a real
                 // slot, so it never gets a home.
-                if (insn.op().equals(String.withCString("AddrOf")))
+                if (insn.isOp(opAddrOf))
                     for (u32 k = (u32)0; k < insn.ops().count(); k = k + (u32)1)
                         {
                         IROperand* o = (IROperand*)insn.ops().get(k);
@@ -448,7 +447,7 @@ class BitSet
             if (b.term() != 0)
                 {
                 recordUses(b.term(), pos, defs, ue);
-                if (Homing.isCallOp(b.term().op()))
+                if (Homing.isCallOp(b.term().opc()))
                     _callPos.add((Object*)Number.with(pos));
                 // An Invoke's result is defined where it ends its block (it
                 // lives on into its normal successor).
@@ -739,9 +738,9 @@ class BitSet
                 IRInsn* fi = (IRInsn*)b.insns().get(i);
                 if (fi.res() == 0 || fi.ops().count() < (u32)2)
                     continue;
-                String* fo = fi.op();
-                bool comm = fo.equals(String.withCString("FAdd")) || fo.equals(String.withCString("FMul"));
-                if (!comm && !fo.equals(String.withCString("FSub")) && !fo.equals(String.withCString("FDiv")))
+                u16 fo = fi.opc();
+                bool comm = fo == opFAdd || fo == opFMul;
+                if (!comm && fo != opFSub && fo != opFDiv)
                     continue;
                 u32 rv = fi.res().pid();
                 for (u32 k = (u32)0; k < (comm ? (u32)2 : (u32)1); k = k + (u32)1)
@@ -767,10 +766,10 @@ class BitSet
                 for (u32 i = (u32)0; i < si.count(); i = i + (u32)1)
                     {
                     IRInsn* sn = (IRInsn*)si.get(i);
-                    if (!sn.op().equals(String.withCString("Select")) || sn.res() == 0 || sn.ops().count() != (u32)3)
+                    if (!sn.isOp(opSelect) || sn.res() == 0 || sn.ops().count() != 3)
                         continue;
                     String* sty = sn.res().ty();
-                    if (!sty.equals(String.withCString("F32")) && !sty.equals(String.withCString("F64")))
+                    if (!IRType.is(sty, tyF32) && !IRType.is(sty, tyF64))
                         continue;
                     if ((i > (u32)0 && selSameCond(sn, (IRInsn*)si.get(i - (u32)1)))
                         || (i + (u32)1 < si.count() && selSameCond(sn, (IRInsn*)si.get(i + (u32)1))))
@@ -803,7 +802,7 @@ class BitSet
     // Is o a Select on the same condition value as s?
     static bool selSameCond(IRInsn* s, IRInsn* o)
         {
-        if (!o.op().equals(String.withCString("Select")) || o.ops().count() != (u32)3)
+        if (!o.isOp(opSelect) || o.ops().count() != 3)
             return false;
         IROperand* a = (IROperand*)s.ops().get((u32)0);
         IROperand* b = (IROperand*)o.ops().get((u32)0);
@@ -885,8 +884,8 @@ class BitSet
             // and lanes (dense, short, heavily weighted) took every GP
             // register, and the loop's counter went to a frame slot:
             // int_muldiv loaded, added and stored it every pass (5% on Zen 5).
-            if (t.equals(String.withCString("Mem")) || t.equals(String.withCString("Void")) || t.hasPrefix(String.withCString("Agg("))
-                || t.hasPrefix(String.withCString("Vec(")))
+            if (IRType.is(t, tyMem) || IRType.is(t, tyVoid) || IRType.isAgg(t)
+                || IRType.isVec(t))
                 continue;
             if (Homing.isFloatTy(t))
                 fp.add((Object*)Number.with(v));

@@ -263,30 +263,23 @@ class Arm64
     // ── Type sizing, AArch64-native ──────────────────────────────────────
     // A type is its SPELLING here, so these read the text rather than a kind.
     static bool isPtrTy(String* t)
-    { return t != (String*)0 && t.hasPrefix(String.withCString("Ptr(")); }
+    { return IRType.isPtr(t); }
 
     static bool isAggTy(String* t)
-    { return t != (String*)0 && t.hasPrefix(String.withCString("Agg(")); }
+    { return IRType.isAgg(t); }
 
     static bool isMemTy(String* t)
-    { return t != (String*)0 && t.equals(String.withCString("Mem")); }
+    { return IRType.is(t, tyMem); }
 
     static bool isVecTy(String* t)
-    { return t != (String*)0 && t.hasPrefix(String.withCString("Vec(")); }
+    { return IRType.isVec(t); }
 
     // The width a scalar leaf occupies. Pointers are 8 on this target — the
     // half of the type-width invariant the BACK END owns.
     static u32 width(String* t)
     {
-        if (t == (String*)0) return (u32)0;
-        if (t.equals(String.withCString("I8"))  || t.equals(String.withCString("U8"))
-         || t.equals(String.withCString("Bool"))) return (u32)1;
-        if (t.equals(String.withCString("I16")) || t.equals(String.withCString("U16")))
-            return (u32)2;
-        if (t.equals(String.withCString("I32")) || t.equals(String.withCString("U32"))
-         || t.equals(String.withCString("F32"))) return (u32)4;
-        if (t.equals(String.withCString("I64")) || t.equals(String.withCString("U64"))
-         || t.equals(String.withCString("F64"))) return (u32)8;
+        u32 w = IRType.bytes(t);
+        if (w != 0) return w;
         if (isPtrTy(t)) return (u32)8;
         if (isVecTy(t)) return (u32)16;
         return (u32)0;
@@ -1429,128 +1422,128 @@ class Arm64
         // The dispatch is split across four routines by kind of instruction.
         // (The split was first made for a 16 KB frame limit that is gone: a
         // large frame is reached through x28.)
-        String* op = n.op();
+        u16 op = n.opc();
         if (dispatchCore(n, op)) return;
         if (dispatchMemory(n, op)) return;
         if (dispatchRuntime(n, op)) return;
         if (dispatchFloat(n, op)) return;
         if (dispatchVector(n, op)) return;
-        unsupported(op);
+        unsupported(n.op());
     }
 
     // Control flow, integer arithmetic, comparisons, casts.
-    bool dispatchCore(IRInsn* n, String* op)
+    bool dispatchCore(IRInsn* n, u16 op)
     {
-        if (op.equals(String.withCString("Const")))  { emitConst(n);  return true; }
-        if (op.equals(String.withCString("Phi")))    { return true; }   // edge copies
-        if (op.equals(String.withCString("Return"))) { emitReturn(n); return true; }
-        if (op.equals(String.withCString("Branch")))     { emitBranch(n); return true; }
-        if (op.equals(String.withCString("CondBranch"))) { emitCondBranch(n); return true; }
-        if (op.equals(String.withCString("ICmp")))   { emitICmp(n);   return true; }
-        if (op.equals(String.withCString("Select"))) { emitSelect(n); return true; }
-        if (op.equals(String.withCString("Neg")))    { emitUnary(n, String.withCString("neg")); return true; }
-        if (op.equals(String.withCString("Not")))    { emitUnary(n, String.withCString("mvn")); return true; }
-        if (op.equals(String.withCString("Unreachable"))) { _out.appendCString("    brk #0\n"); return true; }
-        if (op.equals(String.withCString("Invoke")))      { emitInvoke(n); return true; }
-        if (op.equals(String.withCString("Resume")))      { emitResume(n); return true; }
-        if (op.equals(String.withCString("LandingPad")))  { storeReg(String.withCString("x0"), n.res()); return true; }
-        if (op.equals(String.withCString("EhSelector")))  { storeReg(String.withCString("w1"), n.res()); return true; }
-        if (op.equals(String.withCString("EhTypeId")))    { emitEhTypeId(n); return true; }
-        if (op.equals(String.withCString("SExt")) || op.equals(String.withCString("ZExt"))
-         || op.equals(String.withCString("Trunc")) || op.equals(String.withCString("Bitcast")))
+        if (op == opConst)  { emitConst(n);  return true; }
+        if (op == opPhi)    { return true; }   // edge copies
+        if (op == opReturn) { emitReturn(n); return true; }
+        if (op == opBranch)     { emitBranch(n); return true; }
+        if (op == opCondBranch) { emitCondBranch(n); return true; }
+        if (op == opICmp)   { emitICmp(n);   return true; }
+        if (op == opSelect) { emitSelect(n); return true; }
+        if (op == opNeg)    { emitUnary(n, String.withCString("neg")); return true; }
+        if (op == opNot)    { emitUnary(n, String.withCString("mvn")); return true; }
+        if (op == opUnreachable) { _out.appendCString("    brk #0\n"); return true; }
+        if (op == opInvoke)      { emitInvoke(n); return true; }
+        if (op == opResume)      { emitResume(n); return true; }
+        if (op == opLandingPad)  { storeReg(String.withCString("x0"), n.res()); return true; }
+        if (op == opEhSelector)  { storeReg(String.withCString("w1"), n.res()); return true; }
+        if (op == opEhTypeId)    { emitEhTypeId(n); return true; }
+        if (op == opSExt || op == opZExt
+         || op == opTrunc || op == opBitcast)
             { emitCast(n); return true; }
         String* mn = intBinOpMnemonic(op);
         if (mn != (String*)0) { emitBinOp(n, mn); return true; }
-        if (op.equals(String.withCString("SRem")) || op.equals(String.withCString("URem")))
+        if (op == opSRem || op == opURem)
             { emitRem(n); return true; }
         return false;
     }
 
     // Memory, address arithmetic, pointer casts, direct calls.
-    bool dispatchMemory(IRInsn* n, String* op)
+    bool dispatchMemory(IRInsn* n, u16 op)
     {
-        if (op.equals(String.withCString("Load")) || op.equals(String.withCString("LoadVolatile")))
+        if (op == opLoad || op == opLoadVolatile)
             { emitLoad(n); return true; }
-        if (op.equals(String.withCString("Store")) || op.equals(String.withCString("StoreVolatile")))
+        if (op == opStore || op == opStoreVolatile)
             { emitStore(n); return true; }
-        if (op.equals(String.withCString("VaStart")))     { emitVaStart(n); return true; }
-        if (op.equals(String.withCString("VaArg")))       { emitVaArg(n);   return true; }
-        if (op.equals(String.withCString("Call"))
-         || op.equals(String.withCString("CallBanked"))
-         || op.equals(String.withCString("CallCloaked"))) { emitCall(n); return true; }
-        if (op.equals(String.withCString("AddrOf")))      { emitAddrOf(n); return true; }
-        if (op.equals(String.withCString("FieldAddr")))   { emitFieldAddr(n); return true; }
-        if (op.equals(String.withCString("ElementAddr"))) { emitElementAddr(n); return true; }
-        if (op.equals(String.withCString("IntToPtr")))    { emitIntToPtr(n); return true; }
-        if (op.equals(String.withCString("PtrToInt")))    { emitPtrToInt(n); return true; }
-        if (op.equals(String.withCString("AggBuild")))   { emitAggBuild(n); return true; }
-        if (op.equals(String.withCString("AggExtract"))) { emitAggExtract(n); return true; }
-        if (op.equals(String.withCString("MemCopy"))) { emitMemHelper(n, String.withCString("_memcpy"), true); return true; }
-        if (op.equals(String.withCString("MemSet")))  { emitMemHelper(n, String.withCString("_memset"), false); return true; }
+        if (op == opVaStart)     { emitVaStart(n); return true; }
+        if (op == opVaArg)       { emitVaArg(n);   return true; }
+        if (op == opCall
+         || op == opCallBanked
+         || op == opCallCloaked) { emitCall(n); return true; }
+        if (op == opAddrOf)      { emitAddrOf(n); return true; }
+        if (op == opFieldAddr)   { emitFieldAddr(n); return true; }
+        if (op == opElementAddr) { emitElementAddr(n); return true; }
+        if (op == opIntToPtr)    { emitIntToPtr(n); return true; }
+        if (op == opPtrToInt)    { emitPtrToInt(n); return true; }
+        if (op == opAggBuild)   { emitAggBuild(n); return true; }
+        if (op == opAggExtract) { emitAggExtract(n); return true; }
+        if (op == opMemCopy) { emitMemHelper(n, String.withCString("_memcpy"), true); return true; }
+        if (op == opMemSet)  { emitMemHelper(n, String.withCString("_memset"), false); return true; }
         return false;
     }
 
     // ARC, vtables, indirect calls, downcasts, inline asm, banking.
-    bool dispatchRuntime(IRInsn* n, String* op)
+    bool dispatchRuntime(IRInsn* n, u16 op)
     {
-        if (op.equals(String.withCString("Retain")))  { emitRetain(n); return true; }
-        if (op.equals(String.withCString("Release")) || op.equals(String.withCString("Autorelease")))
+        if (op == opRetain)  { emitRetain(n); return true; }
+        if (op == opRelease || op == opAutorelease)
             { emitRelease(n); return true; }
-        if (op.equals(String.withCString("WeakRegister")))
+        if (op == opWeakRegister)
             { emitWeakCall(n, String.withCString("__xtc_weak_register"), (u32)2, false); return true; }
-        if (op.equals(String.withCString("WeakUnregister")))
+        if (op == opWeakUnregister)
             { emitWeakCall(n, String.withCString("__xtc_weak_unregister"), (u32)1, false); return true; }
-        if (op.equals(String.withCString("WeakLoad")))
+        if (op == opWeakLoad)
             { emitWeakCall(n, String.withCString("__xtc_weak_load"), (u32)1, true); return true; }
-        if (op.equals(String.withCString("VTblLoad")))     { emitVTblLoad(n); return true; }
-        if (op.equals(String.withCString("VTblDispatch"))) { emitVTblDispatch(n); return true; }
-        if (op.equals(String.withCString("ProtoLoad")))    { emitProtoLoad(n); return true; }
-        if (op.equals(String.withCString("ProtoDispatch"))) { emitProtoDispatch(n); return true; }
-        if (op.equals(String.withCString("CallIndirect")))  { emitCallIndirect(n); return true; }
-        if (op.equals(String.withCString("ClassDowncast"))
-         || op.equals(String.withCString("ClassDowncastFailable"))) { emitDowncast(n); return true; }
-        if (op.equals(String.withCString("Asm")))     { emitAsm(n); return true; }
+        if (op == opVTblLoad)     { emitVTblLoad(n); return true; }
+        if (op == opVTblDispatch) { emitVTblDispatch(n); return true; }
+        if (op == opProtoLoad)    { emitProtoLoad(n); return true; }
+        if (op == opProtoDispatch) { emitProtoDispatch(n); return true; }
+        if (op == opCallIndirect)  { emitCallIndirect(n); return true; }
+        if (op == opClassDowncast
+         || op == opClassDowncastFailable) { emitDowncast(n); return true; }
+        if (op == opAsm)     { emitAsm(n); return true; }
         // The IR carries banking intent so the 6502 target can act on it; a
         // single flat address space has nothing to do.
-        if (op.equals(String.withCString("BankSelectFor"))
-         || op.equals(String.withCString("BankSave"))
-         || op.equals(String.withCString("BankRestore"))) { _out.appendCString("    nop\n"); return true; }
+        if (op == opBankSelectFor
+         || op == opBankSave
+         || op == opBankRestore) { _out.appendCString("    nop\n"); return true; }
         return false;
     }
 
-    bool dispatchFloat(IRInsn* n, String* op)
+    bool dispatchFloat(IRInsn* n, u16 op)
     {
-        if (op.equals(String.withCString("FAdd"))) { emitFBin(n, String.withCString("fadd")); return true; }
-        if (op.equals(String.withCString("FSub"))) { emitFBin(n, String.withCString("fsub")); return true; }
-        if (op.equals(String.withCString("FMul"))) { emitFBin(n, String.withCString("fmul")); return true; }
-        if (op.equals(String.withCString("FDiv"))) { emitFBin(n, String.withCString("fdiv")); return true; }
-        if (op.equals(String.withCString("FNeg")))  { emitFUnary(n, String.withCString("fneg")); return true; }
-        if (op.equals(String.withCString("FSqrt"))) { emitFUnary(n, String.withCString("fsqrt")); return true; }
-        if (op.equals(String.withCString("FCmp")))  { emitFCmp(n); return true; }
-        if (op.equals(String.withCString("SIToFp")) || op.equals(String.withCString("UIToFp")))
+        if (op == opFAdd) { emitFBin(n, String.withCString("fadd")); return true; }
+        if (op == opFSub) { emitFBin(n, String.withCString("fsub")); return true; }
+        if (op == opFMul) { emitFBin(n, String.withCString("fmul")); return true; }
+        if (op == opFDiv) { emitFBin(n, String.withCString("fdiv")); return true; }
+        if (op == opFNeg)  { emitFUnary(n, String.withCString("fneg")); return true; }
+        if (op == opFSqrt) { emitFUnary(n, String.withCString("fsqrt")); return true; }
+        if (op == opFCmp)  { emitFCmp(n); return true; }
+        if (op == opSIToFp || op == opUIToFp)
             { emitIntToFp(n); return true; }
-        if (op.equals(String.withCString("FpToSI")) || op.equals(String.withCString("FpToUI")))
+        if (op == opFpToSI || op == opFpToUI)
             { emitFpToInt(n); return true; }
-        if (op.equals(String.withCString("FpExt")) || op.equals(String.withCString("FpTrunc")))
+        if (op == opFpExt || op == opFpTrunc)
             { emitFpConvert(n); return true; }
         return false;
     }
 
     // The integer binaries that are one AArch64 instruction, or null when the
     // opcode is not one of them.
-    static String* intBinOpMnemonic(String* op)
+    static String* intBinOpMnemonic(u16 op)
     {
-        if (op.equals(String.withCString("Add")))  return String.withCString("add");
-        if (op.equals(String.withCString("Sub")))  return String.withCString("sub");
-        if (op.equals(String.withCString("Mul")))  return String.withCString("mul");
-        if (op.equals(String.withCString("SDiv"))) return String.withCString("sdiv");
-        if (op.equals(String.withCString("UDiv"))) return String.withCString("udiv");
-        if (op.equals(String.withCString("And")))  return String.withCString("and");
-        if (op.equals(String.withCString("Or")))   return String.withCString("orr");
-        if (op.equals(String.withCString("Xor")))  return String.withCString("eor");
-        if (op.equals(String.withCString("Shl")))  return String.withCString("lsl");
-        if (op.equals(String.withCString("LShr"))) return String.withCString("lsr");
-        if (op.equals(String.withCString("AShr"))) return String.withCString("asr");
+        if (op == opAdd)  return String.withCString("add");
+        if (op == opSub)  return String.withCString("sub");
+        if (op == opMul)  return String.withCString("mul");
+        if (op == opSDiv) return String.withCString("sdiv");
+        if (op == opUDiv) return String.withCString("udiv");
+        if (op == opAnd)  return String.withCString("and");
+        if (op == opOr)   return String.withCString("orr");
+        if (op == opXor)  return String.withCString("eor");
+        if (op == opShl)  return String.withCString("lsl");
+        if (op == opLShr) return String.withCString("lsr");
+        if (op == opAShr) return String.withCString("asr");
         return (String*)0;
     }
 
@@ -1560,13 +1553,13 @@ class Arm64
         if (emitMagicDivide(n)) return;
         // A small constant addend folds into the imm12 form rather than being
         // materialised into a register first.
-        String* op = n.op();
-        bool addsub = op.equals(String.withCString("Add")) || op.equals(String.withCString("Sub"));
+        u16 op = n.opc();
+        bool addsub = op == opAdd || op == opSub;
         i32 k = (i32)0;
-        bool isShiftImm = op.equals(String.withCString("Shl")) || op.equals(String.withCString("LShr"))
-                       || op.equals(String.withCString("AShr"));
-        bool isLogic = op.equals(String.withCString("And")) || op.equals(String.withCString("Or"))
-                    || op.equals(String.withCString("Xor"));
+        bool isShiftImm = op == opShl || op == opLShr
+                       || op == opAShr;
+        bool isLogic = op == opAnd || op == opOr
+                    || op == opXor;
         u32 dw = width(n.res().ty()) == (u32)8 ? (u32)64 : (u32)32;
         i32 ksh = (i32)0;
         if (addsub && imm12Shifted((IROperand*)n.ops().get((u32)1), &ksh)) {
@@ -1591,7 +1584,7 @@ class Arm64
             // the register-count form below does (C's `(uint8_t)b >> 4` read
             // from clang's `lshr i8`: 0x80 shifted 0xFFFFFF80 and indexed far
             // past a 16-entry table).
-            if (op.equals(String.withCString("LShr")) && isSignedTy(n.res().ty())
+            if (op == opLShr && isSignedTy(n.res().ty())
                 && width(n.res().ty()) < (u32)4 && ar.hasPrefix(String.withCString("w"))) {
                 _out.appendFormat("    %s w16, %s\n", width(n.res().ty()) == (u32)1 ? "uxtb" : "uxth", ar.cString());
                 ar = String.withCString("w16");
@@ -1613,7 +1606,7 @@ class Arm64
                     Object* d = _defOf.get((Hashable*)ro.val());
                     if (d != (Object*)0) {
                         IRInsn* dn = (IRInsn*)d;
-                        if (dn.op().equals(String.withCString("Const")) && dn.ops().count() >= (u32)1) {
+                        if (dn.isOp(opConst) && dn.ops().count() >= 1) {
                             IROperand* a0 = (IROperand*)dn.ops().get((u32)0);
                             if (a0.kind() == (u8)OPK_IMMI) { lv = a0.imm(); have = true; }
                         }
@@ -1658,9 +1651,9 @@ class Arm64
         // own assembler used to be lax about it — clang rejects it outright.
         // Move it into the X scratch, which also zeroes the top half, exactly
         // what a 0..63 count wants.
-        bool isShift = op.equals(String.withCString("Shl"))
-                    || op.equals(String.withCString("LShr"))
-                    || op.equals(String.withCString("AShr"));
+        bool isShift = op == opShl
+                    || op == opLShr
+                    || op == opAShr;
         if (isShift && d.hasPrefix(String.withCString("x"))
                     && b.hasPrefix(String.withCString("w"))) {
             _out.appendFormat("    mov w17, %s\n", b.cString());
@@ -1674,7 +1667,7 @@ class Arm64
         // shape is the rotate expansion in the lowering — which is why every
         // i16/i8 rotate disagreed with the other back ends while u16/u32 were
         // right.
-        if (op.equals(String.withCString("LShr")) && isSignedTy(n.res().ty())
+        if (op == opLShr && isSignedTy(n.res().ty())
             && width(n.res().ty()) < (u32)4
             && a.hasPrefix(String.withCString("w"))) {
             _out.appendFormat("    %s w16, %s\n",
@@ -1704,9 +1697,9 @@ class Arm64
     // for every input by construction, not approximately.
     bool emitMagicDivide(IRInsn* n)
     {
-        String* op = n.op();
-        bool uns = op.equals(String.withCString("UDiv")) || op.equals(String.withCString("URem"));
-        bool sgn = op.equals(String.withCString("SDiv")) || op.equals(String.withCString("SRem"));
+        u16 op = n.opc();
+        bool uns = op == opUDiv || op == opURem;
+        bool sgn = op == opSDiv || op == opSRem;
         if (!uns && !sgn) return false;
         i64 dC64 = constDivisor(n);
         u32 W = width(n.res().ty()) * (u32)8;
@@ -1743,7 +1736,7 @@ class Arm64
         u32 addIndicator = (u32)0;
         u32 sh = (u32)0;
         CgCommon.magicU(d, W, &M, &addIndicator, &sh);
-        bool isDiv = n.op().equals(String.withCString("UDiv"));
+        bool isDiv = n.isOp(opUDiv);
         String* x = operandReg((IROperand*)n.ops().get((u32)0), String.withCString("w16"));
         String* dst = resultReg(n.res(), String.withCString("w16"));
         emitImm32(M, String.withCString("w17"));
@@ -1774,7 +1767,7 @@ class Arm64
         i32 M = (i32)0;
         u32 sh = (u32)0;
         CgCommon.magicS(d, &M, &sh);
-        bool isDiv = n.op().equals(String.withCString("SDiv"));
+        bool isDiv = n.isOp(opSDiv);
         String* x = operandReg((IROperand*)n.ops().get((u32)0), String.withCString("w16"));
         String* dst = resultReg(n.res(), String.withCString("w16"));
         emitImm32((u32)M, String.withCString("w17"));
@@ -1807,7 +1800,7 @@ class Arm64
         String* b = operandReg((IROperand*)n.ops().get((u32)1), scratchName((u32)17, n.res().ty()));
         String* d = resultReg(n.res(), scratchName((u32)16, n.res().ty()));
         String* dv = String.withCString(
-            n.op().equals(String.withCString("SRem")) ? "sdiv" : "udiv");
+            n.isOp(opSRem) ? "sdiv" : "udiv");
         String* q = scratchName((u32)15, n.res().ty());
         _out.appendFormat("    %s %s, %s, %s\n", dv.cString(), q.cString(),
                           a.cString(), b.cString());
@@ -1849,7 +1842,7 @@ class Arm64
         u32 addIndicator = (u32)0;
         u32 sh = (u32)0;
         CgCommon.magicU64(d, &M, &addIndicator, &sh);
-        bool isDiv = n.op().equals(String.withCString("UDiv"));
+        bool isDiv = n.isOp(opUDiv);
         String* x = operandReg((IROperand*)n.ops().get((u32)0), String.withCString("x16"));
         String* dst = resultReg(n.res(), String.withCString("x16"));
         emitImm64(M, String.withCString("x17"));
@@ -1876,7 +1869,7 @@ class Arm64
         i64 M = (i64)0;
         u32 sh = (u32)0;
         CgCommon.magicS64(d, &M, &sh);
-        bool isDiv = n.op().equals(String.withCString("SDiv"));
+        bool isDiv = n.isOp(opSDiv);
         String* x = operandReg((IROperand*)n.ops().get((u32)0), String.withCString("x16"));
         String* dst = resultReg(n.res(), String.withCString("x16"));
         emitImm64((u64)M, String.withCString("x17"));
@@ -1904,14 +1897,14 @@ class Arm64
         if (d == (IRInsn*)0 || d.ops().count() < (u32)1 || d.res() == (IRValue*)0) return false;
         IROperand* a0 = (IROperand*)d.ops().get((u32)0);
         String* rt = d.res().ty();
-        if (d.op().equals(String.withCString("Const"))) {
+        if (d.isOp(opConst)) {
             if (a0.kind() != (u8)OPK_IMMI) return false;
             *out = CgCommon.fitConst((i64)a0.imm(), rt, CgCommon.constSigned(rt));
             return true;
         }
-        bool sx = d.op().equals(String.withCString("SExt"));
-        bool zx = d.op().equals(String.withCString("ZExt"));
-        if (!(sx || zx || d.op().equals(String.withCString("Trunc"))) || a0.kind() != (u8)OPK_USE) return false;
+        bool sx = d.isOp(opSExt);
+        bool zx = d.isOp(opZExt);
+        if (!(sx || zx || d.isOp(opTrunc)) || a0.kind() != OPK_USE) return false;
         i64 s = (i64)0;
         if (!constThrough(a0.val(), &s, depth + (u32)1)) return false;
         // An extension reads its source at the source's width: sign bits for
@@ -1974,7 +1967,7 @@ class Arm64
         // Widening a SIGNED 32-bit value into 64 bits is `sxtw Xd, Wn`. The
         // table above answers null for I32/U32 because at 32 bits no extend is
         // needed, so without this the sign was simply dropped.
-        if (ext == (String*)0 && n.op().equals(String.withCString("SExt")) && needsXReg(ty)) {
+        if (ext == (String*)0 && n.isOp(opSExt) && needsXReg(ty)) {
             if (st != (String*)0 && !needsXReg(st) && isSignedTy(st))
                 ext = String.withCString("sxtw");
         }
@@ -1988,7 +1981,7 @@ class Arm64
         // the store.
         String* dStore = d;
         bool zx = (ext == (String*)0) && wide && !ptr
-               && !n.op().equals(String.withCString("SExt"))
+               && !n.isOp(opSExt)
                && st != (String*)0 && width(st) <= (u32)4 && !CgCommon.isFloatTy(st);
         if (zx) {
             if (d.hasPrefix(String.withCString("x"))) d = wForm(d);
@@ -2014,11 +2007,11 @@ class Arm64
     static String* extendMnemonic(String* ty)
     {
         if (ty == (String*)0) return (String*)0;
-        if (ty.equals(String.withCString("I8")))  return String.withCString("sxtb");
-        if (ty.equals(String.withCString("U8")) || ty.equals(String.withCString("Bool")))
+        if (IRType.is(ty, tyI8))  return String.withCString("sxtb");
+        if (IRType.is(ty, tyU8) || IRType.is(ty, tyBool))
             return String.withCString("uxtb");
-        if (ty.equals(String.withCString("I16"))) return String.withCString("sxth");
-        if (ty.equals(String.withCString("U16"))) return String.withCString("uxth");
+        if (IRType.is(ty, tyI16)) return String.withCString("sxth");
+        if (IRType.is(ty, tyU16)) return String.withCString("uxth");
         return (String*)0;
     }
 
@@ -2480,12 +2473,12 @@ class Arm64
     static bool writesW32(IRInsn* d)
     {
         if (d == (IRInsn*)0 || d.res() == (IRValue*)0) return false;
-        String* op = d.op();
-        return op.equals(String.withCString("Add")) || op.equals(String.withCString("Sub"))
-            || op.equals(String.withCString("Mul")) || op.equals(String.withCString("And"))
-            || op.equals(String.withCString("Or"))  || op.equals(String.withCString("Xor"))
-            || op.equals(String.withCString("Shl")) || op.equals(String.withCString("LShr"))
-            || op.equals(String.withCString("AShr")) || op.equals(String.withCString("Load"));
+        u16 op = d.opc();
+        return op == opAdd || op == opSub
+            || op == opMul || op == opAnd
+            || op == opOr  || op == opXor
+            || op == opShl || op == opLShr
+            || op == opAShr || op == opLoad;
     }
 
     // The result of a call: FP in s0/d0, integers and pointers in w0/x0.
@@ -2510,7 +2503,7 @@ class Arm64
         materialise((IROperand*)n.ops().get((u32)0), String.withCString("x16"));
         if (((IROperand*)n.ops().get((u32)1)).kind() != (u8)OPK_IMMI)
             { unsupported(String.withCString("Downcast:id")); return; }
-        if (n.op().equals(String.withCString("ClassDowncastFailable"))) {
+        if (n.isOp(opClassDowncastFailable)) {
             String* done = localLabel(String.withCString("downcast_done"));
             _out.appendFormat("    cbz x16, %s\n", done.cString());
             _out.appendFormat("%s:\n", done.cString());
@@ -2647,7 +2640,7 @@ class Arm64
             IRBlock* bb = (IRBlock*)fn.blocks().get(b);
             for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1) {
                 IRInsn* n = (IRInsn*)bb.insns().get(i);
-                if (!n.op().equals(String.withCString("FDiv"))) continue;
+                if (!n.isOp(opFDiv)) continue;
                 if (n.res() == (IRValue*)0 || n.ops().count() < (u32)2) continue;
                 IROperand* o0 = (IROperand*)n.ops().get((u32)0);
                 IROperand* o1 = (IROperand*)n.ops().get((u32)1);
@@ -2656,15 +2649,15 @@ class Arm64
                 Object* cd = _defOf.get((Hashable*)o0.val());
                 if (cd == (Object*)0) continue;
                 IRInsn* cvt = (IRInsn*)cd;
-                bool sgn = cvt.op().equals(String.withCString("SIToFp"));
-                if (!sgn && !cvt.op().equals(String.withCString("UIToFp"))) continue;
+                bool sgn = cvt.isOp(opSIToFp);
+                if (!sgn && !cvt.isOp(opUIToFp)) continue;
                 if (cvt.ops().count() < (u32)1) continue;
                 IROperand* src = (IROperand*)cvt.ops().get((u32)0);
                 if (src.kind() != (u8)OPK_USE) continue;
                 Object* dv = _defOf.get((Hashable*)o1.val());
                 u32 fbits = dv == (Object*)0 ? (u32)0 : pow2FbitsOfConst((IRInsn*)dv);
                 if (fbits < (u32)1) continue;
-                u32 maxb = n.res().ty().equals(String.withCString("F64")) ? (u32)64 : (u32)32;
+                u32 maxb = IRType.is(n.res().ty(), tyF64) ? 64 : 32;
                 if (fbits > maxb) continue;
                 _fuseKind.set((Hashable*)n.res(), (Object*)String.withCString("scvtf"));
                 _fuseSrc.set((Hashable*)n.res(), (Object*)src);
@@ -2689,7 +2682,7 @@ class Arm64
     // else zero.
     static u32 pow2FbitsOfConst(IRInsn* c)
     {
-        if (c == (IRInsn*)0 || !c.op().equals(String.withCString("Const"))) return (u32)0;
+        if (c == (IRInsn*)0 || !c.isOp(opConst)) return 0;
         if (c.ops().count() < (u32)1) return (u32)0;
         IROperand* o = (IROperand*)c.ops().get((u32)0);
         if (o.kind() != (u8)OPK_IMMF) return (u32)0;
@@ -2716,8 +2709,8 @@ class Arm64
             IRBlock* bb = (IRBlock*)fn.blocks().get(b);
             for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1) {
                 IRInsn* n = (IRInsn*)bb.insns().get(i);
-                bool isAdd = n.op().equals(String.withCString("FAdd"));
-                bool isSub = n.op().equals(String.withCString("FSub"));
+                bool isAdd = n.isOp(opFAdd);
+                bool isSub = n.isOp(opFSub);
                 if (!isAdd && !isSub) continue;
                 if (n.res() == (IRValue*)0 || n.ops().count() < (u32)2) continue;
                 if (n.pred() == (String*)0 || !n.pred().equals(String.withCString("contract"))) continue;
@@ -2811,8 +2804,8 @@ class Arm64
     // only, and the Mul must be immediately before its consumer.
     static bool isWordIntTy(String* t)
     {
-        return t != (String*)0 && (t.equals(String.withCString("I32")) || t.equals(String.withCString("U32"))
-                                || t.equals(String.withCString("I64")) || t.equals(String.withCString("U64")));
+        return t != (String*)0 && (IRType.is(t, tyI32) || IRType.is(t, tyU32)
+                                || IRType.is(t, tyI64) || IRType.is(t, tyU64));
     }
 
     void fuseIntMultiplyAdds(IRFunc* fn)
@@ -2821,8 +2814,8 @@ class Arm64
             IRBlock* bb = (IRBlock*)fn.blocks().get(b);
             for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1) {
                 IRInsn* n = (IRInsn*)bb.insns().get(i);
-                bool isAdd = n.op().equals(String.withCString("Add"));
-                bool isSub = n.op().equals(String.withCString("Sub"));
+                bool isAdd = n.isOp(opAdd);
+                bool isSub = n.isOp(opSub);
                 if (!isAdd && !isSub) continue;
                 if (n.res() == (IRValue*)0 || n.ops().count() < (u32)2) continue;
                 String* ty = n.res().ty();
@@ -2865,8 +2858,8 @@ class Arm64
             IRBlock* bb = (IRBlock*)fn.blocks().get(b);
             for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1) {
                 IRInsn* n = (IRInsn*)bb.insns().get(i);
-                bool isSub = n.op().equals(String.withCString("VSub"));
-                if ((!n.op().equals(String.withCString("VAdd")) && !isSub) || n.res() == (IRValue*)0 || n.ops().count() < (u32)2)
+                bool isSub = n.isOp(opVSub);
+                if ((!n.isOp(opVAdd) && !isSub) || n.res() == (IRValue*)0 || n.ops().count() < 2)
                     continue;
                 String* lane = laneOf(n.res().ty());
                 if (lane == (String*)0) continue;
@@ -2906,7 +2899,7 @@ class Arm64
         Object* d = _defOf.get((Hashable*)o.val());
         if (d == (Object*)0) return (IRInsn*)0;
         IRInsn* n = (IRInsn*)d;
-        if (!n.op().equals(String.withCString("VMul")) || n.ops().count() < (u32)2 || n.res() == (IRValue*)0)
+        if (!n.isOp(opVMul) || n.ops().count() < 2 || n.res() == (IRValue*)0)
             return (IRInsn*)0;
         if (((IROperand*)n.ops().get((u32)0)).kind() != (u8)OPK_USE || ((IROperand*)n.ops().get((u32)1)).kind() != (u8)OPK_USE)
             return (IRInsn*)0;
@@ -2922,7 +2915,7 @@ class Arm64
         Object* d = _defOf.get((Hashable*)o.val());
         if (d == (Object*)0) return (IRInsn*)0;
         IRInsn* n = (IRInsn*)d;
-        if (!n.op().equals(String.withCString("Mul")) || n.ops().count() < (u32)2 || n.res() == (IRValue*)0)
+        if (!n.isOp(opMul) || n.ops().count() < 2 || n.res() == (IRValue*)0)
             return (IRInsn*)0;
         if (width(n.res().ty()) != width(ty)) return (IRInsn*)0;
         if (n != prev) return (IRInsn*)0;
@@ -2950,13 +2943,13 @@ class Arm64
             IRBlock* bb = (IRBlock*)fn.blocks().get(b);
             for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1) {
                 IRInsn* n = (IRInsn*)bb.insns().get(i);
-                String* op = n.op();
+                u16 op = n.opc();
                 String* mn = (String*)0;
-                if (op.equals(String.withCString("Add"))) mn = String.withCString("add");
-                else if (op.equals(String.withCString("Sub"))) mn = String.withCString("sub");
-                else if (op.equals(String.withCString("And"))) mn = String.withCString("and");
-                else if (op.equals(String.withCString("Or")))  mn = String.withCString("orr");
-                else if (op.equals(String.withCString("Xor"))) mn = String.withCString("eor");
+                if (op == opAdd) mn = String.withCString("add");
+                else if (op == opSub) mn = String.withCString("sub");
+                else if (op == opAnd) mn = String.withCString("and");
+                else if (op == opOr)  mn = String.withCString("orr");
+                else if (op == opXor) mn = String.withCString("eor");
                 if (mn == (String*)0) continue;
                 if (n.res() == (IRValue*)0 || n.ops().count() < (u32)2) continue;
                 if (width(n.res().ty()) < (u32)4) continue;
@@ -2967,15 +2960,15 @@ class Arm64
                 IRInsn* prev = (i > (u32)0) ? (IRInsn*)bb.insns().get(i - (u32)1) : (IRInsn*)0;
                 if (prev == (IRInsn*)0 || prev.res() != o1.val()) continue;
                 String* sh = (String*)0;
-                if (prev.op().equals(String.withCString("Shl")))  sh = String.withCString("lsl");
-                else if (prev.op().equals(String.withCString("LShr"))) sh = String.withCString("lsr");
-                else if (prev.op().equals(String.withCString("AShr"))) sh = String.withCString("asr");
+                if (prev.isOp(opShl))  sh = String.withCString("lsl");
+                else if (prev.isOp(opLShr)) sh = String.withCString("lsr");
+                else if (prev.isOp(opAShr)) sh = String.withCString("asr");
                 if (sh == (String*)0 || prev.ops().count() < (u32)2) continue;
                 if (((IROperand*)prev.ops().get((u32)0)).kind() != (u8)OPK_USE) continue;
                 if (width(prev.res().ty()) != width(n.res().ty())) continue;
                 // A LOGICAL right shift of a SIGNED value needs the
                 // zero-extension dance the normal path does; keep it out.
-                if (prev.op().equals(String.withCString("LShr")) && isSignedTy(prev.res().ty()))
+                if (prev.isOp(opLShr) && isSignedTy(prev.res().ty()))
                     continue;
                 i64 k = (i64)-1;
                 IROperand* ko = (IROperand*)prev.ops().get((u32)1);
@@ -2984,7 +2977,7 @@ class Arm64
                     Object* kd = _defOf.get((Hashable*)ko.val());
                     if (kd != (Object*)0) {
                         IRInsn* kn = (IRInsn*)kd;
-                        if (kn.op().equals(String.withCString("Const")) && kn.ops().count() >= (u32)1
+                        if (kn.isOp(opConst) && kn.ops().count() >= 1
                             && ((IROperand*)kn.ops().get((u32)0)).kind() == (u8)OPK_IMMI)
                             k = ((IROperand*)kn.ops().get((u32)0)).imm();
                     }
@@ -3013,7 +3006,7 @@ class Arm64
         Object* d = _defOf.get((Hashable*)o.val());
         if (d == (Object*)0) return (IRInsn*)0;
         IRInsn* n = (IRInsn*)d;
-        if (!n.op().equals(String.withCString("FMul")) || n.ops().count() < (u32)2)
+        if (!n.isOp(opFMul) || n.ops().count() < 2)
             return (IRInsn*)0;
         for (u32 k = (u32)0; k < (u32)2; k = k + (u32)1) {
             IROperand* m = (IROperand*)n.ops().get(k);
@@ -3052,7 +3045,7 @@ class Arm64
         Object* d = _defOf.get((Hashable*)o.val());
         if (d == (Object*)0) return (IRInsn*)0;
         IRInsn* n = (IRInsn*)d;
-        if (!n.op().equals(String.withCString("FMul")) || n.ops().count() < (u32)2)
+        if (!n.isOp(opFMul) || n.ops().count() < 2)
             return (IRInsn*)0;
         if (n != prev) return (IRInsn*)0;      // adjacency (bug 34)
         return n;
@@ -3102,7 +3095,7 @@ class Arm64
             String* fb = String.withCString("v");
             if (lane)
                 fb.appendFormat("%lu.%s[%lu]", lb != (Object*)0 ? vb : va,
-                                (flt && laneOf(ty).equals(String.withCString("F64"))) ? "d" : "s",
+                                (flt && IRType.is(laneOf(ty), tyF64)) ? "d" : "s",
                                 ((Number*)(lb != (Object*)0 ? lb : la)).asU32());
             else
                 fb.appendFormat("%lu.%s", vb, arr.cString());
@@ -3168,10 +3161,10 @@ class Arm64
     static u32 typeMaxU(String* t)
     {
         if (t == (String*)0) return UNBOUNDED();
-        if (t.equals(String.withCString("Bool")) || t.equals(String.withCString("U8")))
+        if (IRType.is(t, tyBool) || IRType.is(t, tyU8))
             return (u32)$FF;
-        if (t.equals(String.withCString("U16"))) return (u32)$FFFF;
-        if (t.equals(String.withCString("U32"))) return (u32)$FFFF_FFFF;
+        if (IRType.is(t, tyU16)) return $FFFF;
+        if (IRType.is(t, tyU32)) return $FFFF_FFFF;
         return UNBOUNDED();
     }
 
@@ -3234,20 +3227,20 @@ class Arm64
             Object* gb = _guardBound.get((Hashable*)v);
             if (gb != (Object*)0) return ((Number*)gb).asU32();
         }
-        String* op = d.op();
-        if (op.equals(String.withCString("Const"))) {
+        u16 op = d.opc();
+        if (op == opConst) {
             if (d.ops().count() < (u32)1) return UNBOUNDED();
             return immBound((IROperand*)d.ops().get((u32)0));
         }
-        if (op.equals(String.withCString("Add"))) {
+        if (op == opAdd) {
             if (d.ops().count() < (u32)2) return UNBOUNDED();
             return satAdd(opBound(d, (u32)0, visiting), opBound(d, (u32)1, visiting));
         }
-        if (op.equals(String.withCString("Mul"))) {
+        if (op == opMul) {
             if (d.ops().count() < (u32)2) return UNBOUNDED();
             return satMul(opBound(d, (u32)0, visiting), opBound(d, (u32)1, visiting));
         }
-        if (op.equals(String.withCString("Shl"))) {
+        if (op == opShl) {
             // Only a CONSTANT shift has a known multiplier; a variable one can
             // push bits arbitrarily high, so it keeps its mask.
             if (d.ops().count() < (u32)2) return UNBOUNDED();
@@ -3256,17 +3249,17 @@ class Arm64
                 return UNBOUNDED();
             return satMul(opBound(d, (u32)0, visiting), (u32)1 << (u32)sh.imm());
         }
-        if (op.equals(String.withCString("And"))) {
+        if (op == opAnd) {
             if (d.ops().count() < (u32)2) return UNBOUNDED();
             u32 a = opBound(d, (u32)0, visiting);
             u32 b = opBound(d, (u32)1, visiting);
             return a < b ? a : b;
         }
-        if (op.equals(String.withCString("ZExt"))) {
+        if (op == opZExt) {
             if (d.ops().count() < (u32)1) return UNBOUNDED();
             return opBound(d, (u32)0, visiting);
         }
-        if (op.equals(String.withCString("Phi"))) {
+        if (op == opPhi) {
             // Every input is <= its own type max, so the phi is too — and a
             // loop guard may tighten that further.
             Object* gb = _guardBound.get((Hashable*)v);
@@ -3414,14 +3407,14 @@ class Arm64
             if (body == (Array*)0) continue;                 // not a loop header
             IRBlock* H = (IRBlock*)fn.blocks().get(hi);
             IRInsn* term = H.term();
-            if (term == (IRInsn*)0 || !term.op().equals(String.withCString("CondBranch"))) continue;
+            if (term == (IRInsn*)0 || !term.isOp(opCondBranch)) continue;
             if (term.ops().count() < (u32)3) continue;
             IROperand* c = (IROperand*)term.ops().get((u32)0);
             if (c.kind() != (u8)OPK_USE || c.val() == (IRValue*)0) continue;
             Object* cd = _defOf.get((Hashable*)c.val());
             if (cd == (Object*)0) continue;
             IRInsn* cmp = (IRInsn*)cd;
-            if (!cmp.op().equals(String.withCString("ICmp")) || cmp.ops().count() < (u32)2) continue;
+            if (!cmp.isOp(opICmp) || cmp.ops().count() < 2) continue;
             IROperand* o0 = (IROperand*)cmp.ops().get((u32)0);
             IROperand* o1 = (IROperand*)cmp.ops().get((u32)1);
             bool phiIs0 = isHeaderPhi(H, o0);
@@ -3493,14 +3486,14 @@ class Arm64
         collectUseSites(fn, useBlk, useIn);
         for (u32 bg = (u32)0; bg < nb; bg = bg + (u32)1) {
             IRInsn* term = ((IRBlock*)fn.blocks().get(bg)).term();
-            if (term == (IRInsn*)0 || !term.op().equals(String.withCString("CondBranch"))) continue;
+            if (term == (IRInsn*)0 || !term.isOp(opCondBranch)) continue;
             if (term.ops().count() < (u32)3) continue;
             IROperand* c = (IROperand*)term.ops().get((u32)0);
             if (c.kind() != (u8)OPK_USE || c.val() == (IRValue*)0) continue;
             Object* cd = _defOf.get((Hashable*)c.val());
             if (cd == (Object*)0) continue;
             IRInsn* cmp = (IRInsn*)cd;
-            if (!cmp.op().equals(String.withCString("ICmp")) || cmp.ops().count() < (u32)2) continue;
+            if (!cmp.isOp(opICmp) || cmp.ops().count() < 2) continue;
             IROperand* o0 = (IROperand*)cmp.ops().get((u32)0);
             IROperand* o1 = (IROperand*)cmp.ops().get((u32)1);
             // Exactly one side a value to bound; the other the bound.
@@ -3641,13 +3634,13 @@ class Arm64
                 IRInsn* n = (IRInsn*)bb.insns().get(i);
                 if (n.res() == (IRValue*)0) continue;
                 String* t = n.res().ty();
-                if (!t.equals(String.withCString("U8")) && !t.equals(String.withCString("U16")))
+                if (!IRType.is(t, tyU8) && !IRType.is(t, tyU16))
                     continue;
-                String* op = n.op();
-                if (!op.equals(String.withCString("Add")) && !op.equals(String.withCString("Mul"))
-                 && !op.equals(String.withCString("Shl")) && !op.equals(String.withCString("And"))
-                 && !op.equals(String.withCString("ZExt"))
-                 && !op.equals(String.withCString("Const"))) continue;   // a literal already in range
+                u16 op = n.opc();
+                if (op != opAdd && op != opMul
+                 && op != opShl && op != opAnd
+                 && op != opZExt
+                 && op != opConst) continue;   // a literal already in range
                 // ignoreGuard: this value's OWN guard must not let its
                 // definition drop the mask — the guard compare reads it
                 // pre-mask.
@@ -3812,7 +3805,7 @@ class Arm64
     // target slot size, so it bypasses this.
     Array* relayFloatInit(Array* src, String* ty)
     {
-        if (ty.equals(String.withCString("F64"))) {
+        if (IRType.is(ty, tyF64)) {
             Array* dst = new Array();
             for (u32 i = (u32)0; i < (u32)8; i = i + (u32)1)
                 dst.add(i < src.count() ? src.get(i) : (Object*)Number.with((i32)0));
@@ -3973,7 +3966,7 @@ class Arm64
             _vecReg.set((Hashable*)o.val(), (Object*)name);
             IROperand* ko = rm ? (IROperand*)_vRemat.get((Hashable*)o.val()) : (IROperand*)0;
             String* rl = rm ? laneOf(o.val().ty()) : (String*)0;
-            if (rm && ko.kind() == (u8)OPK_IMMF && rl != (String*)0 && rl.equals(String.withCString("F32"))) {
+            if (rm && ko.kind() == OPK_IMMF && rl != (String*)0 && IRType.is(rl, tyF32)) {
                 // An f32 constant is its float's own 32 bits: the immediate
                 // holds a double's, whose low half a `dup .4s` would take
                 // (0.0001 came out as 0xE0000000).
@@ -4002,38 +3995,38 @@ class Arm64
             _vecReg.remove((Hashable*)made.get(k));
     }
 
-    bool dispatchVector(IRInsn* n, String* op)
+    bool dispatchVector(IRInsn* n, u16 op)
     {
         return dispatchVector0(n, op);
     }
 
-    bool dispatchVector0(IRInsn* n, String* op)
+    bool dispatchVector0(IRInsn* n, u16 op)
     {
-        if (op.equals(String.withCString("VLoad")))  { emitVLoad(n);  return true; }
-        if (op.equals(String.withCString("VStore"))) { emitVStore(n); return true; }
-        if (op.equals(String.withCString("VSplat"))) { emitVSplat(n); return true; }
-        if (op.equals(String.withCString("VAdd")) || op.equals(String.withCString("VSub"))
-         || op.equals(String.withCString("VMul")) || op.equals(String.withCString("VDiv"))
-         || op.equals(String.withCString("VAnd"))
-         || op.equals(String.withCString("VOr"))  || op.equals(String.withCString("VXor")))
+        if (op == opVLoad)  { emitVLoad(n);  return true; }
+        if (op == opVStore) { emitVStore(n); return true; }
+        if (op == opVSplat) { emitVSplat(n); return true; }
+        if (op == opVAdd || op == opVSub
+         || op == opVMul || op == opVDiv
+         || op == opVAnd
+         || op == opVOr  || op == opVXor)
             { emitVBin(n); return true; }
-        if (op.equals(String.withCString("VSqrt"))) { emitVSqrt(n); return true; }
-        if (op.equals(String.withCString("VMax")) || op.equals(String.withCString("VMin")))
+        if (op == opVSqrt) { emitVSqrt(n); return true; }
+        if (op == opVMax || op == opVMin)
             { emitVMinMax(n); return true; }
-        if (op.equals(String.withCString("VAddLP"))) { emitVAddLP(n); return true; }
-        if (op.equals(String.withCString("VMulHi"))) { emitVMulHi(n); return true; }
-        if (op.equals(String.withCString("VLShr"))) { emitVLShr(n); return true; }
-        if (op.equals(String.withCString("VShl"))) { emitVShl(n); return true; }
-        if (op.equals(String.withCString("VNot"))) { emitVNot(n); return true; }
-        if (op.equals(String.withCString("VBsl"))) { emitVBsl(n); return true; }
-        if (op.equals(String.withCString("VRotl"))) { emitVRotl(n); return true; }
-        if (op.equals(String.withCString("VExtract"))) { emitVExtract(n); return true; }
-        if (op.equals(String.withCString("VICmp")))  { emitVICmp(n);  return true; }
-        if (op.equals(String.withCString("VFCmp")))  { emitVFCmp(n);  return true; }
-        if (op.equals(String.withCString("VSIToFp"))) { emitVSIToFp(n); return true; }
-        if (op.equals(String.withCString("VFpToSI"))) { emitVFpToSI(n); return true; }
-        if (op.equals(String.withCString("VReduceAdd")) || op.equals(String.withCString("VReduceMax"))
-         || op.equals(String.withCString("VReduceMin"))) { emitVReduce(n); return true; }
+        if (op == opVAddLP) { emitVAddLP(n); return true; }
+        if (op == opVMulHi) { emitVMulHi(n); return true; }
+        if (op == opVLShr) { emitVLShr(n); return true; }
+        if (op == opVShl) { emitVShl(n); return true; }
+        if (op == opVNot) { emitVNot(n); return true; }
+        if (op == opVBsl) { emitVBsl(n); return true; }
+        if (op == opVRotl) { emitVRotl(n); return true; }
+        if (op == opVExtract) { emitVExtract(n); return true; }
+        if (op == opVICmp)  { emitVICmp(n);  return true; }
+        if (op == opVFCmp)  { emitVFCmp(n);  return true; }
+        if (op == opVSIToFp) { emitVSIToFp(n); return true; }
+        if (op == opVFpToSI) { emitVFpToSI(n); return true; }
+        if (op == opVReduceAdd || op == opVReduceMax
+         || op == opVReduceMin) { emitVReduce(n); return true; }
         return false;
     }
 
@@ -4138,22 +4131,22 @@ class Arm64
         IROperand* o0 = (IROperand*)n.ops().get((u32)0);
         IROperand* o1 = (IROperand*)n.ops().get((u32)1);
         if (o0.kind() != (u8)OPK_USE || o1.kind() != (u8)OPK_USE) { unsupported(n.op()); return; }
-        String* op = n.op();
-        bool bitwise = op.equals(String.withCString("VAnd")) || op.equals(String.withCString("VOr"))
-                    || op.equals(String.withCString("VXor"));
+        u16 op = n.opc();
+        bool bitwise = op == opVAnd || op == opVOr
+                    || op == opVXor;
         String* lane = laneOf(n.res().ty());
         bool flt = CgCommon.isFloatTy(lane);
         // A bitwise op is lane-agnostic, so it always spells .16b.
         String* arr = bitwise ? String.withCString("16b") : neonArr(lane);
         String* mnem;
-        if (op.equals(String.withCString("VAdd"))) mnem = String.withCString(flt ? "fadd" : "add");
-        else if (op.equals(String.withCString("VSub"))) mnem = String.withCString(flt ? "fsub" : "sub");
-        else if (op.equals(String.withCString("VMul"))) mnem = String.withCString(flt ? "fmul" : "mul");
-        else if (op.equals(String.withCString("VDiv"))) mnem = String.withCString("fdiv");
-        else if (op.equals(String.withCString("VAnd"))) mnem = String.withCString("and");
-        else if (op.equals(String.withCString("VOr")))  mnem = String.withCString("orr");
+        if (op == opVAdd) mnem = String.withCString(flt ? "fadd" : "add");
+        else if (op == opVSub) mnem = String.withCString(flt ? "fsub" : "sub");
+        else if (op == opVMul) mnem = String.withCString(flt ? "fmul" : "mul");
+        else if (op == opVDiv) mnem = String.withCString("fdiv");
+        else if (op == opVAnd) mnem = String.withCString("and");
+        else if (op == opVOr)  mnem = String.withCString("orr");
         else mnem = String.withCString("eor");
-        if (op.equals(String.withCString("VMul"))) {
+        if (op == opVMul) {
             Object* la = _laneOf.get((Hashable*)o0.val());
             Object* lb = _laneOf.get((Hashable*)o1.val());
             if (la != (Object*)0 || lb != (Object*)0) {
@@ -4197,7 +4190,7 @@ class Arm64
         if (o0.kind() != (u8)OPK_USE || o1.kind() != (u8)OPK_USE) { unsupported(n.op()); return; }
         String* lane = laneOf(n.res().ty());
         bool sgn = isSignedTy(lane);
-        String* mnem = n.op().equals(String.withCString("VMax"))
+        String* mnem = n.isOp(opVMax)
             ? String.withCString(sgn ? "smax" : "umax")
             : String.withCString(sgn ? "smin" : "umin");
         emitVec3(mnem, neonArr(lane), vecIndex(n.res()), vecIndex(o0.val()), vecIndex(o1.val()));
@@ -4485,10 +4478,10 @@ class Arm64
             return;
             }
         bool sgn = isSignedTy(n.res().ty());
-        String* op = n.op();
+        u16 op = n.opc();
         String* mnem;
-        if (op.equals(String.withCString("VReduceAdd")))      mnem = String.withCString("addv");
-        else if (op.equals(String.withCString("VReduceMax"))) mnem = String.withCString(sgn ? "smaxv" : "umaxv");
+        if (op == opVReduceAdd)      mnem = String.withCString("addv");
+        else if (op == opVReduceMax) mnem = String.withCString(sgn ? "smaxv" : "umaxv");
         else                                                  mnem = String.withCString(sgn ? "sminv" : "uminv");
         u32 v = vecIndex(o0.val());
         _out.appendFormat("    %s s%lu, v%lu.4s\n", mnem.cString(), v, v);
@@ -4758,7 +4751,7 @@ class Arm64
             IRBlock* bb = (IRBlock*)fn.blocks().get(b);
             for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1) {
                 IRInsn* n = (IRInsn*)bb.insns().get(i);
-                if (n.op().equals(String.withCString("Const")) && n.res() != (IRValue*)0 && n.ops().count() >= (u32)1) {
+                if (n.isOp(opConst) && n.res() != (IRValue*)0 && n.ops().count() >= 1) {
                     IROperand* k = (IROperand*)n.ops().get((u32)0);
                     if (k.kind() == (u8)OPK_IMMI || k.kind() == (u8)OPK_IMMF)
                         consts.set((Hashable*)n.res(), (Object*)n);
@@ -4790,7 +4783,7 @@ class Arm64
             IRBlock* bb = (IRBlock*)fn.blocks().get(b);
             for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1) {
                 IRInsn* n = (IRInsn*)bb.insns().get(i);
-                if (!n.op().equals(String.withCString("VSplat")) || n.res() == (IRValue*)0 || n.ops().count() < (u32)1) continue;
+                if (!n.isOp(opVSplat) || n.res() == (IRValue*)0 || n.ops().count() < 1) continue;
                 IRValue* v = n.res();
                 if (classOfVec(v) != v || inMap(members, v) || inMap(_vVecPhis, v) || inMap(phiIn, v)
                     || _laneBase.get((Hashable*)v) != (Object*)0 || _laneLeader.get((Hashable*)v) != (Object*)0) continue;
@@ -5121,7 +5114,7 @@ class Arm64
     Object* vecReuseFor(IRFunc* fn, IRValue* cls, i32 start, Array* active, Map* regOf, Map* hi)
     {
         IRInsn* def = vecDefOf(fn, cls);
-        if (def == (IRInsn*)0 || !def.op().equals(String.withCString("VAdd")) || def.ops().count() != (u32)2)
+        if (def == (IRInsn*)0 || !def.isOp(opVAdd) || def.ops().count() != 2)
             return (Object*)0;
         IROperand* d0 = (IROperand*)def.ops().get((u32)0);
         IROperand* d1 = (IROperand*)def.ops().get((u32)1);
@@ -5130,7 +5123,7 @@ class Arm64
             for (u32 q = (u32)0; q < (u32)2; q = q + (u32)1) {
                 IROperand* o = q == (u32)0 ? d0 : d1;
                 IRInsn* od = vecDefOf(fn, o.val());
-                bool isProduct = od != (IRInsn*)0 && od.op().equals(String.withCString("VMul"));
+                bool isProduct = od != (IRInsn*)0 && od.isOp(opVMul);
                 if ((pass == (u32)0) == isProduct) continue;
                 IRValue* ocls = classOfVec(o.val());
                 if (ocls == cls || regOf.get((Hashable*)ocls) == (Object*)0) continue;
@@ -5191,7 +5184,7 @@ class Arm64
                         if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0) continue;
                         Object* c = uses.get((Hashable*)o.val());
                         uses.set((Hashable*)o.val(), (Object*)Number.withU32(c == (Object*)0 ? (u32)1 : ((Number*)c).asU32() + (u32)1));
-                        if (!n.op().equals(String.withCString("VMul")))
+                        if (!n.isOp(opVMul))
                             allMul.set((Hashable*)o.val(), (Object*)o.val());
                     }
                 }
@@ -5206,7 +5199,7 @@ class Arm64
             Array* cMem = new Array();
             for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1) {
                 IRInsn* sp = (IRInsn*)bb.insns().get(i);
-                if (!sp.op().equals(String.withCString("VSplat")) || sp.res() == (IRValue*)0 || sp.ops().count() < (u32)1) continue;
+                if (!sp.isOp(opVSplat) || sp.res() == (IRValue*)0 || sp.ops().count() < 1) continue;
                 String* lane = laneOf(sp.res().ty());
                 // Four 32-bit lanes: `Vec(lane)` is the 16-byte vector.
                 if (lane == (String*)0 || width(lane) != (u32)4 || sp.res().ty().byteLength() != lane.byteLength() + (u32)5) continue;
@@ -5217,7 +5210,7 @@ class Arm64
                 Object* ldo = defOf.get((Hashable*)so.val());
                 if (ldo == (Object*)0) continue;
                 IRInsn* ld = (IRInsn*)ldo;
-                if (!ld.op().equals(String.withCString("Load")) || !hasInsnIn(bb.insns(), ld) || ld.ops().count() < (u32)2) continue;
+                if (!ld.isOp(opLoad) || !hasInsnIn(bb.insns(), ld) || ld.ops().count() < 2) continue;
                 IROperand* la0 = (IROperand*)ld.ops().get((u32)0);
                 IROperand* la1 = (IROperand*)ld.ops().get((u32)1);
                 if (la0.kind() != (u8)OPK_USE || la1.kind() != (u8)OPK_USE) continue;
@@ -5227,7 +5220,7 @@ class Arm64
                 Object* ado = defOf.get((Hashable*)base);
                 if (ado != (Object*)0) {
                     IRInsn* ad = (IRInsn*)ado;
-                    if (ad.op().equals(String.withCString("ElementAddr")) && ad.ops().count() == (u32)2 &&
+                    if (ad.isOp(opElementAddr) && ad.ops().count() == 2 &&
                         ((IROperand*)ad.ops().get((u32)0)).kind() == (u8)OPK_USE &&
                         ((IROperand*)ad.ops().get((u32)1)).kind() == (u8)OPK_IMMI &&
                         ad.res() != (IRValue*)0 && width(pointeeOf(ad.res().ty())) == (u32)4) {
@@ -5360,7 +5353,7 @@ class Arm64
     static String* fregName(u32 n, String* ty)
     {
         String* o = String.withCString(
-            ty != (String*)0 && ty.equals(String.withCString("F64")) ? "d" : "s");
+            ty != (String*)0 && IRType.is(ty, tyF64) ? "d" : "s");
         o.appendFormat("%lu", n);
         return o;
     }
@@ -5440,7 +5433,7 @@ class Arm64
         if (!inMap(_fusedCmps, c.val())) return (String*)0;
         IRInsn* cmp = (IRInsn*)_fusedCmps.get((Hashable*)c.val());
         if (cmp == (IRInsn*)0) return (String*)0;
-        if (cmp.op().equals(String.withCString("FCmp"))) return emitCompareF(cmp);
+        if (cmp.isOp(opFCmp)) return emitCompareF(cmp);
         return emitCompare(cmp);
     }
 
@@ -5469,7 +5462,7 @@ class Arm64
         String* a = operandReg(src, String.withCString(width(opType(src)) >= (u32)8 ? "x16" : "w16"));
         String* d = resultReg(n.res(), fregName((u32)0, n.res().ty()));
         _out.appendFormat("    %s %s, %s\n",
-                          n.op().equals(String.withCString("SIToFp")) ? "scvtf" : "ucvtf",
+                          n.isOp(opSIToFp) ? "scvtf" : "ucvtf",
                           d.cString(), a.cString());
         storeReg(d, n.res());
     }
@@ -5483,7 +5476,7 @@ class Arm64
         if (n.res() == (IRValue*)0 || n.ops().count() < (u32)1) { unsupported(n.op()); return; }
         String* at = opType((IROperand*)n.ops().get((u32)0));
         String* src = operandReg((IROperand*)n.ops().get((u32)0), fregName((u32)0, at));
-        bool sgn = n.op().equals(String.withCString("FpToSI"));
+        bool sgn = n.isOp(opFpToSI);
         u32 w = width(n.res().ty());
         // UNCHECKED (C's casts): out of range is undefined, so the convert
         // writes the result's own register at its width, saturating as it
@@ -5677,7 +5670,7 @@ class Arm64
         if (count == (u32)0 || count > (u32)4) return (u32)0;
         // Trailing padding would break the register mapping, so the element
         // count has to account for the whole aggregate.
-        bool dbl = ek.equals(String.withCString("F64"));
+        bool dbl = IRType.is(ek, tyF64);
         if (aggSize(l) != count * (dbl ? (u32)8 : (u32)4)) return (u32)0;
         *outIsDouble = dbl;
         return count;
@@ -5739,7 +5732,7 @@ class Arm64
             return;
         }
         _out.appendCString("    add x9, x17, #8\n    str x9, [x16]\n");
-        if (rt.equals(String.withCString("F32"))) {
+        if (IRType.is(rt, tyF32)) {
             _out.appendCString("    ldr d0, [x17]\n    fcvt s0, d0\n    fmov w16, s0\n");
             storeReg(String.withCString("w16"), n.res());
             return;
@@ -5755,10 +5748,9 @@ class Arm64
     // banked or cloaked callee takes the same arguments in the same places; on
     // arm64 the placement changes nothing, so a variadic one needs its tail on
     // the stack like any other.
-    bool isDirectCallOp(String* op)
+    bool isDirectCallOp(u16 op)
     {
-        return op.equals(String.withCString("Call")) || op.equals(String.withCString("CallBanked"))
-            || op.equals(String.withCString("CallCloaked"));
+        return IROp.has(op, OPF_CALL_DIRECT);
     }
 
     // YES if this is a DIRECT call, inside a `vaforward` function, to a variadic
@@ -5768,11 +5760,11 @@ class Arm64
     {
         IRSymbol* own = symbolNamed(_fn.name());
         if (own == (IRSymbol*)0 || !own.vaforward()) return false;
-        if (n.op().equals(String.withCString("VTblDispatch"))) {
+        if (n.isOp(opVTblDispatch)) {
             IRSymbol* m = virtualCallee(n);
             return m != (IRSymbol*)0 && m.variadic();
         }
-        if (!isDirectCallOp(n.op()) || n.ops().count() < (u32)2) return false;
+        if (!isDirectCallOp(n.opc()) || n.ops().count() < 2) return false;
         IROperand* callee = (IROperand*)n.ops().get((u32)0);
         if (callee.kind() != (u8)OPK_SYM) return false;
         IRSymbol* cs = symbolNamed(callee.name());
@@ -5789,7 +5781,7 @@ class Arm64
     // its va_start never looks). Mirrors the original.
     IRSymbol* virtualCallee(IRInsn* n)
     {
-        if (!n.op().equals(String.withCString("VTblDispatch")) || n.ops().count() < (u32)2) return (IRSymbol*)0;
+        if (!n.isOp(opVTblDispatch) || n.ops().count() < 2) return (IRSymbol*)0;
         IROperand* recv = (IROperand*)n.ops().get((u32)0);
         IROperand* slot = (IROperand*)n.ops().get((u32)1);
         if (recv.kind() != (u8)OPK_USE || recv.val() == (IRValue*)0 || slot.kind() != (u8)OPK_IMMI) return (IRSymbol*)0;
@@ -5968,7 +5960,7 @@ class Arm64
         // opcode reaches offsetsForTypes through HERE, the frame sizing and
         // the marshalling cannot disagree. Mirrors the original.
         i32 vfrom = (i32)-1;
-        if (n.op().equals(String.withCString("VTblDispatch")) && first == (u32)2) {
+        if (n.isOp(opVTblDispatch) && first == 2) {
             // An xc method: its tail goes on the stack, like any xc variadic.
             // The index counts the args AFTER the receiver, so self is not one.
             IRSymbol* m = virtualCallee(n);
@@ -5977,7 +5969,7 @@ class Arm64
                 if (fixed >= (i32)0) vfrom = fixed;
             }
         }
-        if (isDirectCallOp(n.op()) && first == (u32)1) {
+        if (isDirectCallOp(n.opc()) && first == 1) {
             IROperand* callee = (IROperand*)n.ops().get((u32)0);
             if (callee.kind() == (u8)OPK_SYM) {
                 IRSymbol* s = symbolNamed(callee.name());
@@ -6071,7 +6063,7 @@ class Arm64
             }
             if (CgCommon.isFloatTy(t)) {
                 if (fp < (u32)8) { fp = fp + (u32)1; offs.add((Object*)Number.with(-1)); continue; }
-                u32 sz = t.equals(String.withCString("F64")) ? (u32)8 : (u32)4;
+                u32 sz = IRType.is(t, tyF64) ? 8 : 4;
                 if (_aapcs64Abi) sz = (u32)8;
                 stk = (stk + sz - (u32)1) & ~(sz - (u32)1);
                 offs.add((Object*)Number.with((i32)stk));
@@ -6104,19 +6096,19 @@ class Arm64
         u32 first = (u32)0;
         u32 argc = (u32)0;
         u32 startGP = (u32)0;
-        String* op = n.op();
-        if (op.equals(String.withCString("Invoke"))) {
+        u16 op = n.opc();
+        if (op == opInvoke) {
             if (n.ops().count() < (u32)4) return (u32)0;
             first = (u32)1; argc = n.ops().count() - (u32)4;
         } else
-        if (op.equals(String.withCString("Call")) || op.equals(String.withCString("CallBanked"))
-         || op.equals(String.withCString("CallCloaked")) || op.equals(String.withCString("CallIndirect"))) {
+        if (op == opCall || op == opCallBanked
+         || op == opCallCloaked || op == opCallIndirect) {
             if (n.ops().count() < (u32)2) return (u32)0;
             first = (u32)1; argc = n.ops().count() - (u32)2;
-        } else if (op.equals(String.withCString("VTblDispatch"))) {
+        } else if (op == opVTblDispatch) {
             if (n.ops().count() < (u32)3) return (u32)0;
             first = (u32)2; argc = n.ops().count() - (u32)3; startGP = (u32)1;  // receiver in x0
-        } else if (op.equals(String.withCString("ProtoDispatch"))) {
+        } else if (op == opProtoDispatch) {
             if (n.ops().count() < (u32)4) return (u32)0;
             first = (u32)3; argc = n.ops().count() - (u32)4; startGP = (u32)1;  // receiver in x0
         } else {
@@ -7617,7 +7609,7 @@ class Arm64
     {
         if (t == (String*)0) return (u32)0;
         if (isAggTy(t)) return aggSize(layoutOf(t));
-        if (isMemTy(t) || t.equals(String.withCString("Void"))) return (u32)0;
+        if (isMemTy(t) || IRType.is(t, tyVoid)) return 0;
         return width(t);
     }
 
@@ -7704,8 +7696,8 @@ class Arm64
     static bool isSignedTy(String* t)
     {
         if (t == (String*)0) return false;
-        return t.equals(String.withCString("I8")) || t.equals(String.withCString("I16"))
-            || t.equals(String.withCString("I32")) || t.equals(String.withCString("I64"));
+        return IRType.is(t, tyI8) || IRType.is(t, tyI16)
+            || IRType.is(t, tyI32) || IRType.is(t, tyI64);
     }
 
     void emitStore(IRInsn* n)
@@ -7754,7 +7746,7 @@ class Arm64
         Object* d = _defOf.get((Hashable*)o.val());
         if (d == (Object*)0) return false;
         IRInsn* n = (IRInsn*)d;
-        if (!n.op().equals(String.withCString("Const")) || n.res() == (IRValue*)0) return false;
+        if (!n.isOp(opConst) || n.res() == (IRValue*)0) return false;
         if (CgCommon.isFloatTy(n.res().ty())) return false;
         if (n.ops().count() < (u32)1) return false;
         IROperand* a0 = (IROperand*)n.ops().get((u32)0);
@@ -8035,15 +8027,15 @@ class Arm64
         else
             materialise(a0, r);
         if (!full && st != (String*)0) {
-            if (st.equals(String.withCString("I8")))
+            if (IRType.is(st, tyI8))
                 _out.appendCString("    sxtb x16, w16\n");
-            else if (st.equals(String.withCString("I16")))
+            else if (IRType.is(st, tyI16))
                 _out.appendCString("    sxth x16, w16\n");
-            else if (st.equals(String.withCString("I32")))
+            else if (IRType.is(st, tyI32))
                 _out.appendCString("    sxtw x16, w16\n");
-            else if (st.equals(String.withCString("U8")) || st.equals(String.withCString("Bool")))
+            else if (IRType.is(st, tyU8) || IRType.is(st, tyBool))
                 _out.appendCString("    uxtb w16, w16\n");
-            else if (st.equals(String.withCString("U16")))
+            else if (IRType.is(st, tyU16))
                 _out.appendCString("    uxth w16, w16\n");
         }
         storeReg(String.withCString("x16"), n.res());
@@ -8165,7 +8157,7 @@ class Arm64
             Object* d = _defOf.get((Hashable*)o.val());
             if (d == (Object*)0) return false;
             IRInsn* n = (IRInsn*)d;
-            if (!n.op().equals(String.withCString("Const"))) return false;
+            if (!n.isOp(opConst)) return false;
             if (n.ops().count() < (u32)1) return false;
             IROperand* a0 = (IROperand*)n.ops().get((u32)0);
             if (a0.kind() != (u8)OPK_IMMI) return false;
@@ -8191,9 +8183,9 @@ class Arm64
             Object* d = _defOf.get((Hashable*)cur.val());
             if (d == (Object*)0) return false;
             IRInsn* cd = (IRInsn*)d;
-            if (!cd.op().equals(String.withCString("ZExt"))
-             && !cd.op().equals(String.withCString("SExt"))
-             && !cd.op().equals(String.withCString("Trunc"))) return false;
+            if (!cd.isOp(opZExt)
+             && !cd.isOp(opSExt)
+             && !cd.isOp(opTrunc)) return false;
             if (cd.ops().count() < (u32)1) return false;
             cur = (IROperand*)cd.ops().get((u32)0);
             if (imm12Operand(cur, out)) return true;
@@ -8242,7 +8234,7 @@ class Arm64
             Object* d = _defOf.get((Hashable*)o.val());
             if (d == (Object*)0) return false;
             IRInsn* n = (IRInsn*)d;
-            if (!n.op().equals(String.withCString("Const"))) return false;
+            if (!n.isOp(opConst)) return false;
             if (n.ops().count() < (u32)1) return false;
             IROperand* a0 = (IROperand*)n.ops().get((u32)0);
             if (a0.kind() != (u8)OPK_IMMI) return false;
@@ -8300,7 +8292,7 @@ class Arm64
         // refusal was 71 of the 74 failures in the first corpus sweep run
         // through the xc compiler.
         if (CgCommon.isFloatTy(ty)) {
-            bool dbl = ty.equals(String.withCString("F64"));
+            bool dbl = IRType.is(ty, tyF64);
             // d16/d17 ONLY. d15 was the second operand's scratch here, and
             // d15 is in the FP HOME pool (d8-d15) — so an F64 Select quietly
             // clobbered whatever value was homed there. Three values fit in
@@ -8437,7 +8429,7 @@ class Arm64
             IRBlock* bb = (IRBlock*)fn.blocks().get(b);
             IRInsn* lp = (IRInsn*)0;
             for (u32 k = (u32)0; k < bb.insns().count() && lp == (IRInsn*)0; k = k + (u32)1)
-                if (((IRInsn*)bb.insns().get(k)).op().equals(String.withCString("LandingPad")))
+                if (((IRInsn*)bb.insns().get(k)).isOp(opLandingPad))
                     lp = (IRInsn*)bb.insns().get(k);
             if (lp == (IRInsn*)0) continue;
             // Clauses: (#kind, then a typeinfo for a catch).
@@ -8579,7 +8571,7 @@ class Arm64
             String* LO2 = labelFor(String.withCString("so2"), lbl);
             for (u32 k = (u32)0; k < (u32)2; k = k + (u32)1) {
                 IRInsn* d = (IRInsn*)both.get(k);
-                String* cc = d.op().equals(String.withCString("FCmp")) ? emitCompareF(d) : emitCompare(d);
+                String* cc = d.isOp(opFCmp) ? emitCompareF(d) : emitCompare(d);
                 _out.appendFormat("    b.%s %s\n", cc.cString(),
                                   (k == (u32)0 ? LO1 : LO2).cString());
             }
@@ -8620,7 +8612,7 @@ class Arm64
             for (u32 k = (u32)0; k < (u32)2; k = k + (u32)1) {
                 IRInsn* d = (IRInsn*)both.get(k);
                 _out = String.withCString("");
-                ccs.add((Object*)(d.op().equals(String.withCString("FCmp")) ? emitCompareF(d) : emitCompare(d)));
+                ccs.add((Object*)(d.isOp(opFCmp) ? emitCompareF(d) : emitCompare(d)));
                 cmps.add((Object*)_out);
             }
             _out = String.withCString("");
@@ -8666,7 +8658,7 @@ class Arm64
             // A float compare: `fcmp`, then the branch on its condition, the
             // inverse (where needed) by condition code, which is exact for
             // the unordered case too (mi/pl, ls/hi, gt/le, ge/lt).
-            if (icmp.op().equals(String.withCString("FCmp"))) {
+            if (icmp.isOp(opFCmp)) {
                 String* fc = emitCompareF(icmp);
                 if (takenPhiClobbersFallSrc(t, f, _bb)) {
                     String* lf = String.withCString(".Lpc_");
@@ -8841,7 +8833,7 @@ class Arm64
     bool armRejoins(IRBlock* a, IRBlock* j, IRBlock* b)
     {
         IRInsn* at = a.term();
-        if (at == (IRInsn*)0 || !at.op().equals(String.withCString("Branch")) || at.ops().count() < (u32)1
+        if (at == (IRInsn*)0 || !at.isOp(opBranch) || at.ops().count() < 1
             || ((IROperand*)at.ops().get((u32)0)).blk() != j || a.phis().count() != (u32)0)
             return false;
         for (u32 i = (u32)0; i < j.phis().count(); i = i + (u32)1) {
@@ -8870,7 +8862,7 @@ class Arm64
         Array* srcs = new Array();
         for (u32 i = (u32)0; i < to.phis().count(); i = i + (u32)1) {
             IRInsn* phi = (IRInsn*)to.phis().get(i);
-            if (!phi.op().equals(String.withCString("Phi"))) continue;
+            if (!phi.isOp(opPhi)) continue;
             // A memory token orders effects and holds no value: no copy (a
             // devirtualised call's join had one, copied through the frame).
             if (phi.res() != (IRValue*)0 && isMemTy(phi.res().ty())) continue;
@@ -8976,7 +8968,7 @@ class Arm64
         }
         String* save;
         if (CgCommon.isFloatTy(pty))
-            save = String.withCString(pty.equals(String.withCString("F64")) ? "d17" : "s17");
+            save = String.withCString(IRType.is(pty, tyF64) ? "d17" : "s17");
         else
             save = String.withCString(needsXReg(pty) ? "x15" : "w15");
         materialise((IROperand*)srcs.get(last), save);
@@ -9077,7 +9069,7 @@ class Arm64
         // Unhomed, or a constant operand (a float immediate has to build
         // through a GP register) — stage via scratch and let storeReg settle it.
         String* scratch = (fp && vop.kind() == (u8)OPK_USE)
-            ? String.withCString(pty.equals(String.withCString("F64")) ? "d16" : "s16")
+            ? String.withCString(IRType.is(pty, tyF64) ? "d16" : "s16")
             : String.withCString(needsXReg(pty) ? "x16" : "w16");
         String* src = operandReg(vop, scratch);
         storeReg(src, phi.res());
@@ -9100,12 +9092,7 @@ class Arm64
     // The bit width tbz/tbnz may test in a value of this integer type, or 0.
     static u32 bitTestWidth(String* ty)
     {
-        if (ty == (String*)0) return (u32)0;
-        if (ty.equals(String.withCString("I8")) || ty.equals(String.withCString("U8"))) return (u32)8;
-        if (ty.equals(String.withCString("I16")) || ty.equals(String.withCString("U16"))) return (u32)16;
-        if (ty.equals(String.withCString("I32")) || ty.equals(String.withCString("U32"))) return (u32)32;
-        if (ty.equals(String.withCString("I64")) || ty.equals(String.withCString("U64"))) return (u32)64;
-        return (u32)0;
+        return IRType.isInt(ty) ? IRType.bytes(ty) * 8 : 0;
     }
 
     // The bit an integer constant 2^k sets (an immediate or a Const), or -1.
@@ -9117,7 +9104,7 @@ class Arm64
             Object* d = _defOf.get((Hashable*)o.val());
             if (d == (Object*)0) return (i32)-1;
             IRInsn* n = (IRInsn*)d;
-            if (!n.op().equals(String.withCString("Const")) || n.res() == (IRValue*)0 || CgCommon.isFloatTy(n.res().ty())
+            if (!n.isOp(opConst) || n.res() == (IRValue*)0 || CgCommon.isFloatTy(n.res().ty())
              || n.ops().count() < (u32)1) return (i32)-1;
             IROperand* a0 = (IROperand*)n.ops().get((u32)0);
             if (a0.kind() != (u8)OPK_IMMI) return (i32)-1;
@@ -9196,7 +9183,7 @@ class Arm64
         if (target == (IRBlock*)0) return false;
         for (u32 i = (u32)0; i < target.phis().count(); i = i + (u32)1) {
             IRInsn* phi = (IRInsn*)target.phis().get(i);
-            if (!phi.op().equals(String.withCString("Phi"))) continue;
+            if (!phi.isOp(opPhi)) continue;
             if (phi.res() != (IRValue*)0 && isMemTy(phi.res().ty())) continue;
             if (phiSourceFrom(phi, from) != (IROperand*)0) return true;
         }
@@ -9213,13 +9200,13 @@ class Arm64
         Array* dests = new Array();
         for (u32 i = (u32)0; i < t.phis().count(); i = i + (u32)1) {
             IRInsn* phi = (IRInsn*)t.phis().get(i);
-            if (!phi.op().equals(String.withCString("Phi")) || phi.res() == (IRValue*)0) continue;
+            if (!phi.isOp(opPhi) || phi.res() == (IRValue*)0) continue;
             if (phiSourceFrom(phi, from) != (IROperand*)0) dests.add((Object*)phi.res());
         }
         if (dests.count() == (u32)0) return false;
         for (u32 i = (u32)0; i < f.phis().count(); i = i + (u32)1) {
             IRInsn* phi = (IRInsn*)f.phis().get(i);
-            if (!phi.op().equals(String.withCString("Phi"))) continue;
+            if (!phi.isOp(opPhi)) continue;
             IROperand* src = phiSourceFrom(phi, from);
             if (src == (IROperand*)0 || src.kind() != (u8)OPK_USE) continue;
             for (u32 k = (u32)0; k < dests.count(); k = k + (u32)1)
@@ -9292,7 +9279,7 @@ class Arm64
             if (_home.get((Hashable*)n.res()) != (Object*)0) {
                 String* fh = resultReg(n.res(), String.withCString("w16"));
                 if (fh.hasPrefix(String.withCString("s")) || fh.hasPrefix(String.withCString("d"))) {
-                    String* ft = ty.equals(String.withCString("F64"))
+                    String* ft = IRType.is(ty, tyF64)
                         ? fpImmText64(hex) : fpImmText32(f32BitsOfDoubleHex(hex));
                     if (ft != (String*)0) {
                         _out.appendFormat("    fmov %s, #%s\n", fh.cString(), ft.cString());
@@ -9300,7 +9287,7 @@ class Arm64
                     }
                 }
             }
-            if (ty.equals(String.withCString("F64"))) {
+            if (IRType.is(ty, tyF64)) {
                 emitBits64(hex, String.withCString("x16"));
                 storeReg(String.withCString("x16"), n.res());
             } else {
@@ -9387,13 +9374,13 @@ class Arm64
     void canonicalise(String* reg, String* ty)
     {
         if (ty == (String*)0) return;
-        if (ty.equals(String.withCString("U8")) || ty.equals(String.withCString("Bool")))
+        if (IRType.is(ty, tyU8) || IRType.is(ty, tyBool))
             _out.appendFormat("    uxtb %s, %s\n", reg.cString(), reg.cString());
-        else if (ty.equals(String.withCString("U16")))
+        else if (IRType.is(ty, tyU16))
             _out.appendFormat("    uxth %s, %s\n", reg.cString(), reg.cString());
-        else if (ty.equals(String.withCString("I8")))
+        else if (IRType.is(ty, tyI8))
             _out.appendFormat("    sxtb %s, %s\n", reg.cString(), reg.cString());
-        else if (ty.equals(String.withCString("I16")))
+        else if (IRType.is(ty, tyI16))
             _out.appendFormat("    sxth %s, %s\n", reg.cString(), reg.cString());
     }
 
@@ -9494,7 +9481,7 @@ class Arm64
         if (canon.hasPrefix(String.withCString("d"))
          || canon.hasPrefix(String.withCString("s"))) {
             String* o = String.withCString(
-                ty != (String*)0 && ty.equals(String.withCString("F64")) ? "d" : "s");
+                ty != (String*)0 && IRType.is(ty, tyF64) ? "d" : "s");
             o.append(num);
             return o;
         }
@@ -9514,8 +9501,8 @@ class Arm64
         // mnemonics are the same at both widths — so naming the register `x`
         // is most of what i64/u64 need on this target.
         return isPtrTy(ty) || isMemTy(ty)
-            || ty.equals(String.withCString("I64"))
-            || ty.equals(String.withCString("U64"));
+            || IRType.is(ty, tyI64)
+            || IRType.is(ty, tyU64);
     }
 
     // The scratch register (16 or 17) sized to a type.
@@ -9605,7 +9592,7 @@ class Arm64
             Object* d = _defOf.get((Hashable*)op.val());
             if (d != (Object*)0) {
                 IRInsn* dn = (IRInsn*)d;
-                if (dn.op().equals(String.withCString("Const")) && dn.ops().count() >= (u32)1
+                if (dn.isOp(opConst) && dn.ops().count() >= 1
                     && ((IROperand*)dn.ops().get((u32)0)).kind() == (u8)OPK_IMMI) {
                     materialise((IROperand*)dn.ops().get((u32)0), reg);
                     return;
@@ -9724,11 +9711,11 @@ class Arm64
         Object* d = _defOf.get((Hashable*)v);
         if (d == (Object*)0) return false;
         IRInsn* n = (IRInsn*)d;
-        if (!n.op().equals(String.withCString("Const"))) return false;
+        if (!n.isOp(opConst)) return false;
         if (n.res() == (IRValue*)0) return false;
         String* k = n.res().ty();
-        if (!(k.equals(String.withCString("U8")) || k.equals(String.withCString("U16"))
-           || k.equals(String.withCString("U32")) || k.equals(String.withCString("Bool"))))
+        if (!(IRType.is(k, tyU8) || IRType.is(k, tyU16)
+           || IRType.is(k, tyU32) || IRType.is(k, tyBool)))
             return false;
         if (n.ops().count() < (u32)1) return false;
         IROperand* o = (IROperand*)n.ops().get((u32)0);
@@ -9743,9 +9730,9 @@ class Arm64
 
     static u32 unsignedTypeMax(String* t)
     {
-        if (t.equals(String.withCString("Bool")) || t.equals(String.withCString("U8")))
+        if (IRType.is(t, tyBool) || IRType.is(t, tyU8))
             return (u32)$FF;
-        if (t.equals(String.withCString("U16"))) return (u32)$FFFF;
+        if (IRType.is(t, tyU16)) return $FFFF;
         return (u32)$FFFFFFFF;
     }
 
@@ -9861,8 +9848,8 @@ class Arm64
 
     void scanInsn(IRInsn* n, u32 d)
     {
-        if (n.op().equals(String.withCString("Asm"))) _hasAsm = true;
-        if (n.op().equals(String.withCString("AddrOf")) && n.ops().count() >= (u32)1) {
+        if (n.isOp(opAsm)) _hasAsm = true;
+        if (n.isOp(opAddrOf) && n.ops().count() >= 1) {
             IROperand* o = (IROperand*)n.ops().get((u32)0);
             if (o.kind() == (u8)OPK_USE && !hasVal(_addrTaken, o.val()))
                 _addrTaken.add((Object*)o.val());
@@ -9922,22 +9909,9 @@ class Arm64
     // are hardware instructions —
     // guessing any of those in would wrongly push values out of the
     // caller-saved tier and change which registers get used.
-    static bool emitsCall(String* op)
+    static bool emitsCall(u16 op)
     {
-        return op.equals(String.withCString("Call")) || op.equals(String.withCString("Invoke"))
-            || op.equals(String.withCString("CallBanked"))
-            || op.equals(String.withCString("CallCloaked"))
-            || op.equals(String.withCString("CallIndirect"))
-            || op.equals(String.withCString("CallBankedIndirect"))
-            || op.equals(String.withCString("VTblDispatch"))
-            || op.equals(String.withCString("ProtoDispatch"))
-            || op.equals(String.withCString("MemCopy"))
-            || op.equals(String.withCString("MemSet"))
-            || op.equals(String.withCString("Release"))
-            || op.equals(String.withCString("Autorelease"))
-            || op.equals(String.withCString("WeakRegister"))
-            || op.equals(String.withCString("WeakUnregister"))
-            || op.equals(String.withCString("WeakLoad"));
+        return IROp.has(op, OPF_CLOBBERS);
     }
 
     // The backward dataflow. Per block: the values it defines, its
@@ -10007,7 +9981,7 @@ class Arm64
             for (u32 i = (u32)0; i < b.insns().count(); i = i + (u32)1) {
                 IRInsn* n = (IRInsn*)b.insns().get(i);
                 noteUses(n, defs, ue, lastUse, pos);
-                if (emitsCall(n.op())) _callPos.add((Object*)Number.withI32(pos));
+                if (emitsCall(n.opc())) _callPos.add((Object*)Number.withI32(pos));
                 if (n.res() != (IRValue*)0) {
                     defPos.set((Hashable*)n.res(), (Object*)Number.withI32(pos));
                     defs.add(n.res());
@@ -10016,7 +9990,7 @@ class Arm64
             }
             if (b.term() != (IRInsn*)0) {
                 noteUses(b.term(), defs, ue, lastUse, pos);
-                if (emitsCall(b.term().op())) _callPos.add((Object*)Number.withI32(pos));
+                if (emitsCall(b.term().opc())) _callPos.add((Object*)Number.withI32(pos));
                 // An Invoke's result is defined where it ends its block.
                 if (b.term().res() != (IRValue*)0) {
                     defPos.set((Hashable*)b.term().res(), (Object*)Number.withI32(pos));
@@ -10318,21 +10292,21 @@ class Arm64
         // cmp/fcmp here, so its operands are read at THIS position, not the
         // elided comparison's. Same hazard: a value defined between the two
         // would otherwise take an operand's register.
-        if ((n.op().equals(String.withCString("CondBranch")) || n.op().equals(String.withCString("Select")))
+        if ((n.isOp(opCondBranch) || n.isOp(opSelect))
          && inMap(_fusedCmps, p0.val()))
             noteOperands((IRInsn*)_fusedCmps.get((Hashable*)p0.val()), defs, ue, lastUse, pos);
         // A bit test reads the And's x at the branch (tbz/tbnz).
-        if (n.op().equals(String.withCString("CondBranch")) && _bitTests != (Map*)0 && inMap(_bitTests, p0.val()))
+        if (n.isOp(opCondBranch) && _bitTests != (Map*)0 && inMap(_bitTests, p0.val()))
             noteOperands((IRInsn*)_bitTests.get((Hashable*)p0.val()), defs, ue, lastUse, pos);
         // And the same for a fused short-circuit &&: both comparisons are emitted
         // at the branch, so THEIR operands are read there too.
-        if (n.op().equals(String.withCString("CondBranch")) && inMap(_fusedAnds, p0.val())) {
+        if (n.isOp(opCondBranch) && inMap(_fusedAnds, p0.val())) {
             Array* both = (Array*)_fusedAnds.get((Hashable*)p0.val());
             for (u32 k = (u32)0; k < both.count(); k = k + (u32)1)
                 noteOperands((IRInsn*)both.get(k), defs, ue, lastUse, pos);
         }
         // ...and for a fused ||, whose two comparisons are emitted there too.
-        if (n.op().equals(String.withCString("CondBranch")) && inMap(_fusedOrs, p0.val())) {
+        if (n.isOp(opCondBranch) && inMap(_fusedOrs, p0.val())) {
             Array* both = (Array*)_fusedOrs.get((Hashable*)p0.val());
             for (u32 k = (u32)0; k < both.count(); k = k + (u32)1)
                 noteOperands((IRInsn*)both.get(k), defs, ue, lastUse, pos);
@@ -10663,10 +10637,10 @@ class Arm64
     {
         // A: B's only successor-arm, a single block straight to J.
         IRInsn* at = A.term();
-        if (at == (IRInsn*)0 || !at.op().equals(String.withCString("Branch")) || at.ops().count() < (u32)1
+        if (at == (IRInsn*)0 || !at.isOp(opBranch) || at.ops().count() < 1
             || ((IROperand*)at.ops().get((u32)0)).blk() != J || A.phis().count() != (u32)0) return false;
         IRInsn* bt = B.term();
-        if (bt == (IRInsn*)0 || !bt.op().equals(String.withCString("CondBranch"))) return false;
+        if (bt == (IRInsn*)0 || !bt.isOp(opCondBranch)) return false;
         bool bToA = false;
         for (u32 k = (u32)1; k < bt.ops().count(); k = k + (u32)1)
             if (((IROperand*)bt.ops().get(k)).blk() == A) bToA = true;
@@ -10896,7 +10870,7 @@ class Arm64
                     if (hasVal(_addrTaken, vIn)) continue;
                     String* vt = vIn.ty();
                     if (vt == (String*)0) continue;
-                    if (isMemTy(vt) || isAggTy(vt) || vt.equals(String.withCString("Void"))) continue;
+                    if (isMemTy(vt) || isAggTy(vt) || IRType.is(vt, tyVoid)) continue;
                     if (isFPReg(R) != CgCommon.isFloatTy(vt)) continue;
                     Object* db = defBlk.get((Hashable*)vIn);
                     if (db == (Object*)0) continue;
@@ -10978,7 +10952,7 @@ class Arm64
             if (t == (String*)0) continue;
             if (hasVal(_addrTaken, v)) continue;
             if (isMemTy(t) || isAggTy(t) || isVecTy(t)
-                || t.equals(String.withCString("Void"))) continue;
+                || IRType.is(t, tyVoid)) continue;
             if (useCount(v) == (u32)0) continue;
             if (CgCommon.isFloatTy(t)) {
                 if (hotDepthOf(v) > (u32)0) fp.add((Object*)v);
@@ -11039,7 +11013,7 @@ class Arm64
     static bool gpScalarTy(String* t)
     {
         return t != (String*)0 && !(isAggTy(t) || isVecTy(t) || isMemTy(t) || CgCommon.isFloatTy(t)
-                                    || t.equals(String.withCString("Void")));
+                                    || IRType.is(t, tyVoid));
     }
 
     bool isParamValue(IRFunc* fn, IRValue* v)
@@ -11070,7 +11044,7 @@ class Arm64
             for (u32 p = (u32)0; p < nUser && allGP; p = p + (u32)1) {
                 String* pt = ((IRValue*)fn.params().get(p)).ty();
                 if (pt == (String*)0 || isAggTy(pt) || isVecTy(pt) || isMemTy(pt) || CgCommon.isFloatTy(pt)
-                    || pt.equals(String.withCString("Void")))
+                    || IRType.is(pt, tyVoid))
                     allGP = false;
             }
             if (allGP)
@@ -11086,17 +11060,17 @@ class Arm64
             IRBlock* pb = (IRBlock*)fn.blocks().get(b);
             for (u32 i = (u32)0; i < pb.insns().count(); i = i + (u32)1) {
                 IRInsn* pi = (IRInsn*)pb.insns().get(i);
-                String* op = pi.op();
-                if (!(op.equals(String.withCString("Call")) || op.equals(String.withCString("CallIndirect"))
-                      || op.equals(String.withCString("VTblDispatch"))
-                      || op.equals(String.withCString("ProtoDispatch"))))
+                u16 op = pi.opc();
+                if (!(op == opCall || op == opCallIndirect
+                      || op == opVTblDispatch
+                      || op == opProtoDispatch))
                     continue;
                 if (pi.res() == (IRValue*)0 || !gpScalarTy(pi.res().ty())) continue;
                 if (ownArg.get((Hashable*)pi.res()) != (Object*)0) continue;
                 ownArg.set((Hashable*)pi.res(), (Object*)String.withCString("x0"));
             }
             IRInsn* rt = pb.term();
-            if (rt != (IRInsn*)0 && rt.op().equals(String.withCString("Return")))
+            if (rt != (IRInsn*)0 && rt.isOp(opReturn))
                 for (u32 q = (u32)0; q < rt.ops().count(); q = q + (u32)1) {
                     IROperand* o = (IROperand*)rt.ops().get(q);
                     if (o.kind() != (u8)OPK_USE) continue;
@@ -11427,8 +11401,8 @@ class Arm64
             IRBlock* bb = (IRBlock*)fn.blocks().get(b);
             for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1) {
                 IRInsn* n = (IRInsn*)bb.insns().get(i);
-                if (n.op().equals(String.withCString("Asm"))) hasAsm = true;
-                if (n.op().equals(String.withCString("AddrOf")) && n.ops().count() >= (u32)1) {
+                if (n.isOp(opAsm)) hasAsm = true;
+                if (n.isOp(opAddrOf) && n.ops().count() >= 1) {
                     IROperand* o = (IROperand*)n.ops().get((u32)0);
                     if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0) {
                         noShare.set((Hashable*)o.val(), (Object*)o.val());
@@ -11642,13 +11616,13 @@ class Arm64
             IRBlock* bb = (IRBlock*)fn.blocks().get(b);
             Array* conds = new Array();
             IRInsn* t0 = bb.term();
-            if (t0 != (IRInsn*)0 && t0.op().equals(String.withCString("CondBranch")) && t0.ops().count() >= (u32)1) {
+            if (t0 != (IRInsn*)0 && t0.isOp(opCondBranch) && t0.ops().count() >= 1) {
                 IROperand* c0 = (IROperand*)t0.ops().get((u32)0);
                 if (c0.kind() == (u8)OPK_USE && c0.val() != (IRValue*)0) conds.add((Object*)c0.val());
             }
             for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1) {
                 IRInsn* n = (IRInsn*)bb.insns().get(i);
-                if (!n.op().equals(String.withCString("Select")) || n.ops().count() < (u32)1) continue;
+                if (!n.isOp(opSelect) || n.ops().count() < 1) continue;
                 IROperand* c0 = (IROperand*)n.ops().get((u32)0);
                 if (c0.kind() == (u8)OPK_USE && c0.val() != (IRValue*)0) conds.add((Object*)c0.val());
             }
@@ -11657,7 +11631,7 @@ class Arm64
                 Object* d = _defOf.get((Hashable*)cv);
                 if (d == (Object*)0) continue;
                 IRInsn* cmp = (IRInsn*)d;
-                if (!cmp.op().equals(String.withCString("ICmp")) && !cmp.op().equals(String.withCString("FCmp"))) continue;
+                if (!cmp.isOp(opICmp) && !cmp.isOp(opFCmp)) continue;
                 if (cmp.res() == (IRValue*)0) continue;
                 if (!listContains(bb.insns(), cmp)) continue;
                 // Every reference to it in this block must be one of those
@@ -11671,7 +11645,7 @@ class Arm64
                     for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1) {
                         IROperand* o = (IROperand*)n.ops().get(k);
                         if (o.kind() != (u8)OPK_USE || o.val() != cv) continue;
-                        if (!(k == (u32)0 && n.op().equals(String.withCString("Select")))) allConds = false;
+                        if (!(k == 0 && n.isOp(opSelect))) allConds = false;
                         inBlock = inBlock + (u32)1;
                     }
                 }
@@ -11696,11 +11670,11 @@ class Arm64
         for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1) {
             IRBlock* bb = (IRBlock*)fn.blocks().get(b);
             IRInsn* bt = bb.term();
-            if (bt == (IRInsn*)0 || !bt.op().equals(String.withCString("CondBranch")) || bt.ops().count() < (u32)3) continue;
+            if (bt == (IRInsn*)0 || !bt.isOp(opCondBranch) || bt.ops().count() < 3) continue;
             IROperand* bc = (IROperand*)bt.ops().get((u32)0);
             if (bc.kind() != (u8)OPK_USE || bc.val() == (IRValue*)0 || !inMap(_fusedCmps, bc.val())) continue;
             IRInsn* cmp = (IRInsn*)_fusedCmps.get((Hashable*)bc.val());
-            if (!cmp.op().equals(String.withCString("ICmp")) || cmp.pred() == (String*)0) continue;
+            if (!cmp.isOp(opICmp) || cmp.pred() == (String*)0) continue;
             if (!cmp.pred().equals(String.withCString("EQ")) && !cmp.pred().equals(String.withCString("NE"))) continue;
             IROperand* zv = icmpZeroTestValue(cmp);
             if (zv == (IROperand*)0 || zv.kind() != (u8)OPK_USE || zv.val() == (IRValue*)0) continue;
@@ -11708,7 +11682,7 @@ class Arm64
             Object* ad = _defOf.get((Hashable*)zv.val());
             if (ad == (Object*)0) continue;
             IRInsn* an = (IRInsn*)ad;
-            if (!an.op().equals(String.withCString("And")) || an.ops().count() != (u32)2 || an.res() == (IRValue*)0) continue;
+            if (!an.isOp(opAnd) || an.ops().count() != 2 || an.res() == (IRValue*)0) continue;
             if (!listContains(bb.insns(), an)) continue;
             u32 w = bitTestWidth(an.res().ty());
             if (w == (u32)0) continue;
@@ -11736,14 +11710,14 @@ class Arm64
         for (u32 ab = (u32)0; ab < fn.blocks().count(); ab = ab + (u32)1) {
             IRBlock* abb = (IRBlock*)fn.blocks().get(ab);
             IRInsn* at = abb.term();
-            if (at == (IRInsn*)0 || !at.op().equals(String.withCString("CondBranch")) || at.ops().count() < (u32)3) continue;
+            if (at == (IRInsn*)0 || !at.isOp(opCondBranch) || at.ops().count() < 3) continue;
             IROperand* ac = (IROperand*)at.ops().get((u32)0);
             if (ac.kind() != (u8)OPK_USE || ac.val() == (IRValue*)0) continue;
             Object* ad = _defOf.get((Hashable*)ac.val());
             IRInsn* an = ad != (Object*)0 ? (IRInsn*)ad : (IRInsn*)0;
-            bool isOr = an != (IRInsn*)0 && an.op().equals(String.withCString("Or"));
-            if (an == (IRInsn*)0 || (!an.op().equals(String.withCString("And")) && !isOr) || an.res() == (IRValue*)0) continue;
-            if (!an.res().ty().equals(String.withCString("Bool"))) continue;
+            bool isOr = an != (IRInsn*)0 && an.isOp(opOr);
+            if (an == (IRInsn*)0 || (!an.isOp(opAnd) && !isOr) || an.res() == (IRValue*)0) continue;
+            if (!IRType.is(an.res().ty(), tyBool)) continue;
             if (!listContains(abb.insns(), an)) continue;
             if (useCountOf(ac.val()) != (u32)1) continue;
             if (an.ops().count() < (u32)2) continue;
@@ -11756,7 +11730,7 @@ class Arm64
                 Object* dd = _defOf.get((Hashable*)o.val());
                 IRInsn* d = dd != (Object*)0 ? (IRInsn*)dd : (IRInsn*)0;
                 bool isCmp = d != (IRInsn*)0
-                          && (d.op().equals(String.withCString("ICmp")) || d.op().equals(String.withCString("FCmp")));
+                          && (d.isOp(opICmp) || d.isOp(opFCmp));
                 if (!isCmp || d.res() == (IRValue*)0 || !listContains(abb.insns(), d)
                  || useCountOf(o.val()) != (u32)1) { aok = false; break; }
                 if (k == (u32)0) d1 = d; else d2 = d;
@@ -11775,11 +11749,11 @@ class Arm64
             IRBlock* bb = (IRBlock*)fn.blocks().get(b);
             for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1) {
                 IRInsn* n = (IRInsn*)bb.insns().get(i);
-                String* op = n.op();
-                bool isLoad = op.equals(String.withCString("Load"))
-                           || op.equals(String.withCString("LoadVolatile"));
-                bool isStore = op.equals(String.withCString("Store"))
-                            || op.equals(String.withCString("StoreVolatile"));
+                u16 op = n.opc();
+                bool isLoad = op == opLoad
+                           || op == opLoadVolatile;
+                bool isStore = op == opStore
+                            || op == opStoreVolatile;
                 // A Store whose value is a single-use integer Const #0 stores the
                 // zero register directly, so the const's mov/extend/spill goes
                 // away. A multi-use zero still stores wzr but keeps its def.
@@ -11799,8 +11773,8 @@ class Arm64
                 // Only the DECISION was missing: vecAddrOperand already asks
                 // _foldInfo and defers to foldedAddrOperand, so the emit side
                 // has always been able to write this form.
-                if (op.equals(String.withCString("VLoad"))
-                 || op.equals(String.withCString("VStore"))) {
+                if (op == opVLoad
+                 || op == opVStore) {
                     if (n.ops().count() < (u32)1) continue;
                     IROperand* vp = (IROperand*)n.ops().get((u32)0);
                     if (vp.kind() != (u8)OPK_USE || vp.val() == (IRValue*)0) continue;
@@ -11808,7 +11782,7 @@ class Arm64
                     Object* vd = _defOf.get((Hashable*)vp.val());
                     if (vd == (Object*)0) continue;
                     IRInsn* ea = (IRInsn*)vd;
-                    if (!ea.op().equals(String.withCString("ElementAddr"))) continue;
+                    if (!ea.isOp(opElementAddr)) continue;
                     if (ea.res() == (IRValue*)0 || ea.ops().count() < (u32)2) continue;
                     i32 vk = (i32)0;
                     if (!constIndex(ea, &vk) || vk < (i32)0) continue;
@@ -11832,7 +11806,7 @@ class Arm64
                 IRInsn* a = (IRInsn*)ad;
                 if (a.res() == (IRValue*)0 || a.ops().count() < (u32)2) continue;
                 u32 w = accessWidth(xfer);
-                if (a.op().equals(String.withCString("ElementAddr"))) {
+                if (a.isOp(opElementAddr)) {
                     // The register-offset form needs a power-of-two element no
                     // wider than 8 whose scale equals the transfer size — the
                     // plain array case.
@@ -11841,7 +11815,7 @@ class Arm64
                     if (es > (u32)8 || es != w) continue;
                     _foldInfo.set((Hashable*)ptr.val(), (Object*)a);
                     _foldedAddr.set((Hashable*)a.res(), (Object*)a.res());
-                } else if (a.op().equals(String.withCString("FieldAddr"))) {
+                } else if (a.isOp(opFieldAddr)) {
                     u32 off = fieldByteOffset(a);
                     // The scaled unsigned-immediate field: a multiple of the
                     // access width whose quotient fits 12 bits.
@@ -11879,7 +11853,7 @@ class Arm64
         IROperand* ptr = (IROperand*)n.ops().get((u32)0);
         IRInsn* a = (IRInsn*)_foldInfo.get((Hashable*)ptr.val());
         String* base = operandReg((IROperand*)a.ops().get((u32)0), String.withCString("x16"));
-        if (a.op().equals(String.withCString("FieldAddr"))) {
+        if (a.isOp(opFieldAddr)) {
             String* o = String.withCString("[");
             o.appendFormat("%s, #%lu]", base.cString(), fieldByteOffset(a));
             return o;
@@ -11895,11 +11869,11 @@ class Arm64
             // accessWidth — which caps at 8 — would refuse every offset above
             // 32760 that computeAddrFold had already accepted, quietly costing
             // the fold and leaving exactly the diff bug 070 was about.
-            bool isVec = n.op().equals(String.withCString("VLoad"))
-                      || n.op().equals(String.withCString("VStore"));
+            bool isVec = n.isOp(opVLoad)
+                      || n.isOp(opVStore);
             u32 accW = isVec ? (u32)16
-                             : accessWidth(n.op().equals(String.withCString("Store"))
-                                || n.op().equals(String.withCString("StoreVolatile"))
+                             : accessWidth(n.isOp(opStore)
+                                || n.isOp(opStoreVolatile)
                                    ? argType((IROperand*)n.ops().get((u32)1))
                                    : n.res().ty());
             // 4095 covers both: the scalar scaled-immediate limit, and the

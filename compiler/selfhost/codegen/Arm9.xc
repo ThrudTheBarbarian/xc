@@ -85,22 +85,22 @@ class Arm9
     // A type is its SPELLING here, so these read the text rather than a kind.
     static bool isPtrTy(String* t)
         {
-        return t != 0 && t.hasPrefix(String.withCString("Ptr("));
+        return IRType.isPtr(t);
         }
 
     static bool isAggTy(String* t)
         {
-        return t != 0 && t.hasPrefix(String.withCString("Agg("));
+        return IRType.isAgg(t);
         }
 
     static bool isMemTy(String* t)
         {
-        return t != 0 && t.equals(String.withCString("Mem"));
+        return IRType.is(t, tyMem);
         }
 
     static bool isFloatTy(String* t)
         {
-        return t != 0 && (t.equals(String.withCString("F32")) || t.equals(String.withCString("F64")));
+        return IRType.isFloat(t);
         }
 
     // `Agg(N)` -> N.
@@ -149,29 +149,12 @@ class Arm9
             return (u32)0;
         if (Arm9.isPtrTy(t))
             return (u32)4; // 32-bit host pointer
-        if (t.equals(String.withCString("F64")))
-            return (u32)8;
-        // 8 wherever the ARITHMETIC lands: width is a layout contract, so the
-        // front end and this back end must agree or an optimiser-folded struct
-        // offset reads at the wrong address.
-        if (Arm9.isI64(t))
-            return (u32)8;
-        if (t.equals(String.withCString("F32")))
-            return (u32)4;
-        if (t.equals(String.withCString("I32")))
-            return (u32)4;
-        if (t.equals(String.withCString("U32")))
-            return (u32)4;
-        if (t.equals(String.withCString("I16")))
-            return (u32)2;
-        if (t.equals(String.withCString("U16")))
-            return (u32)2;
-        if (t.equals(String.withCString("I8")))
-            return (u32)1;
-        if (t.equals(String.withCString("U8")))
-            return (u32)1;
-        if (t.equals(String.withCString("Bool")))
-            return (u32)1;
+        // A 64-bit integer is 8 wherever the ARITHMETIC lands: width is a
+        // layout contract, so the front end and this back end must agree or an
+        // optimiser-folded struct offset reads at the wrong address.
+        u32 w = IRType.bytes(t);
+        if (w != 0)
+            return w;
         if (Arm9.isAggTy(t))
             return aggSize(Arm9.aggIndex(t));
         return (u32)0; // Void / Mem
@@ -404,8 +387,8 @@ class Arm9
                 IRBlock* blk = (IRBlock*)fn.blocks().get(b);
                 for (u32 i = (u32)0; i < blk.insns().count(); i = i + (u32)1)
                     {
-                    String* op = ((IRInsn*)blk.insns().get(i)).op();
-                    if (op.equals(String.withCString("ProtoDispatch")) || op.equals(String.withCString("ProtoLoad")))
+                    u16 op = ((IRInsn*)blk.insns().get(i)).opc();
+                    if (op == opProtoDispatch || op == opProtoLoad)
                         return true;
                     }
                 }
@@ -555,7 +538,7 @@ class Arm9
         for (u32 i = (u32)4; i < (u32)8 && i < b.count(); i = i + (u32)1)
             hi = hi | (((Number*)b.get(i)).asU32() << ((i - (u32)4) * (u32)8));
         Array* out = new Array();
-        if (sym.dataType().equals(String.withCString("F64")))
+        if (IRType.is(sym.dataType(), tyF64))
             {
             for (u32 i = (u32)0; i < (u32)4; i = i + (u32)1)
                 out.add((Object*)Number.with((lo >> (i * (u32)8)) & (u32)$FF));
@@ -708,7 +691,7 @@ class Arm9
                 Object* d = defs.get(v);
                 if (d == 0)
                     continue;
-                if (!Arm9.isPureConstOp(((IRInsn*)d).op()))
+                if (!Arm9.isPureConstOp(((IRInsn*)d).opc()))
                     continue;
                 Array* us = (Array*)users.get(v);
                 bool allDead = true;
@@ -735,7 +718,7 @@ class Arm9
 
     bool inlinedByVSplat(IRInsn* u, u32 vid)
         {
-        if (!u.op().equals(String.withCString("VSplat")))
+        if (!u.isOp(opVSplat))
             return false;
         if (u.ops().count() < (u32)1)
             return false;
@@ -772,7 +755,7 @@ class Arm9
             IRInsn* term = blk.term();
             if (term == (IRInsn*)0)
                 continue;
-            if (!term.op().equals(String.withCString("CondBranch")))
+            if (!term.isOp(opCondBranch))
                 continue;
             IROperand* cop = (IROperand*)0;
             for (u32 i = (u32)0; i < term.ops().count(); i = i + (u32)1)
@@ -791,7 +774,7 @@ class Arm9
             IRInsn* last = (IRInsn*)blk.insns().get(blk.insns().count() - (u32)1);
             if (last.res() == (IRValue*)0)
                 continue;
-            if (!last.op().equals(String.withCString("ICmp")))
+            if (!last.isOp(opICmp))
                 continue;
             if (last.res().pid() != cop.val().pid())
                 continue;
@@ -801,7 +784,7 @@ class Arm9
             for (u32 i = (u32)0; i < last.ops().count(); i = i + (u32)1)
                 {
                 String* t = operandType((IROperand*)last.ops().get(i));
-                if (t != (String*)0 && (t.equals(String.withCString("I64")) || t.equals(String.withCString("U64"))))
+                if (t != (String*)0 && (IRType.is(t, tyI64) || IRType.is(t, tyU64)))
                     wide = true;
                 }
             if (wide)
@@ -877,9 +860,9 @@ class Arm9
             }
         }
 
-    static bool isPureConstOp(String* op)
+    static bool isPureConstOp(u16 op)
         {
-        return op.equals(String.withCString("Const")) || op.equals(String.withCString("ZExt")) || op.equals(String.withCString("SExt")) || op.equals(String.withCString("Trunc")) || op.equals(String.withCString("Bitcast"));
+        return op == opConst || op == opZExt || op == opSExt || op == opTrunc || op == opBitcast;
         }
 
     // A FORWARDER — `printf(fmt, ...)` — has no VaStart of its own, but still
@@ -983,7 +966,7 @@ class Arm9
             {
             IRBlock* blk = (IRBlock*)_fn.blocks().get(b);
             for (u32 i = (u32)0; i < blk.insns().count(); i = i + (u32)1)
-                if (((IRInsn*)blk.insns().get(i)).op().equals(String.withCString("VaStart")))
+                if (((IRInsn*)blk.insns().get(i)).isOp(opVaStart))
                     return true;
             }
         return false;
@@ -1001,7 +984,7 @@ class Arm9
             {
             IRBlock* blk = (IRBlock*)_fn.blocks().get(b);
             for (u32 i = (u32)0; i < blk.insns().count(); i = i + (u32)1)
-                if (((IRInsn*)blk.insns().get(i)).op().equals(String.withCString("Asm")))
+                if (((IRInsn*)blk.insns().get(i)).isOp(opAsm))
                     return;
             }
         Array* callee = new Array();
@@ -1226,7 +1209,7 @@ class Arm9
             for (u32 i = (u32)0; i < blk.insns().count(); i = i + (u32)1)
                 {
                 IRInsn* insn = (IRInsn*)blk.insns().get(i);
-                if (!isArgPassing(insn.op()))
+                if (!isArgPassing(insn.opc()))
                     continue;
                 Array* ats = argTypesOf(insn);
                 bool cSret = insn.res() != 0 && !Arm9.isMemTy(insn.res().ty()) && returnsViaSret(insn.res().ty());
@@ -1246,7 +1229,7 @@ class Arm9
                 // A forwarding call also writes the relayed tail into the
                 // outgoing area, past whatever the explicit args used — reserve
                 // for it, or the relay lands on this function's own locals.
-                if (isVaForward() && insn.op().equals(String.withCString("Call")))
+                if (isVaForward() && insn.isOp(opCall))
                     {
                     u32 k = cSret ? (u32)1 : (u32)0;
                     for (u32 z = (u32)0; z < clocs.count(); z = z + (u32)1)
@@ -1264,9 +1247,9 @@ class Arm9
         return maxOut;
         }
 
-    static bool isArgPassing(String* op)
+    static bool isArgPassing(u16 op)
         {
-        return op.equals(String.withCString("Call")) || op.equals(String.withCString("CallIndirect")) || op.equals(String.withCString("CallCloaked")) || op.equals(String.withCString("CallBanked")) || op.equals(String.withCString("CallBankedIndirect")) || op.equals(String.withCString("VTblDispatch")) || op.equals(String.withCString("ProtoDispatch"));
+        return IROp.has(op, OPF_CALL | OPF_DISPATCH);
         }
 
     // The by-value argument types of a call-shaped instruction. Which operands
@@ -1275,9 +1258,9 @@ class Arm9
     // protocol id AND a method index — none of those are arguments.
     Array* argTypesOf(IRInsn* insn)
         {
-        bool cIndirect = insn.op().equals(String.withCString("CallIndirect")) || insn.op().equals(String.withCString("CallBankedIndirect"));
-        bool cVtbl = insn.op().equals(String.withCString("VTblDispatch"));
-        bool cProto = insn.op().equals(String.withCString("ProtoDispatch"));
+        bool cIndirect = insn.isOp(opCallIndirect) || insn.isOp(opCallBankedIndirect);
+        bool cVtbl = insn.isOp(opVTblDispatch);
+        bool cProto = insn.isOp(opProtoDispatch);
         Array* ats = new Array();
         for (u32 i = (u32)0; i < insn.ops().count(); i = i + (u32)1)
             {
@@ -1524,21 +1507,21 @@ class Arm9
         {
         if (ty == 0)
             return;
-        if (ty.equals(String.withCString("U8")))
+        if (IRType.is(ty, tyU8))
             _out.appendFormat("\tand\t%s, %s, #255\n", reg.cString(), reg.cString());
-        else if (ty.equals(String.withCString("Bool")))
+        else if (IRType.is(ty, tyBool))
             _out.appendFormat("\tand\t%s, %s, #1\n", reg.cString(), reg.cString());
-        else if (ty.equals(String.withCString("I8")))
+        else if (IRType.is(ty, tyI8))
             _out.appendFormat("\tsxtb\t%s, %s\n", reg.cString(), reg.cString());
-        else if (ty.equals(String.withCString("U16")))
+        else if (IRType.is(ty, tyU16))
             _out.appendFormat("\tuxth\t%s, %s\n", reg.cString(), reg.cString());
-        else if (ty.equals(String.withCString("I16")))
+        else if (IRType.is(ty, tyI16))
             _out.appendFormat("\tsxth\t%s, %s\n", reg.cString(), reg.cString());
         }
 
     static bool isSignedTy(String* t)
         {
-        return t != 0 && (t.equals(String.withCString("I8")) || t.equals(String.withCString("I16")) || t.equals(String.withCString("I32")));
+        return t != 0 && (IRType.is(t, tyI8) || IRType.is(t, tyI16) || IRType.is(t, tyI32));
         }
 
     String* operandType(IROperand* o)
@@ -1559,7 +1542,7 @@ class Arm9
         // A fused compare is emitted by its CondBranch, not here.
         if (insn.res() != 0 && _fusedCmp != 0 && _fusedCmp.has(insn.res().pid()))
             return;
-        String* op = insn.op();
+        u16 op = insn.opc();
         Array* ops = insn.ops();
         IRValue* res = insn.res();
 
@@ -1577,7 +1560,7 @@ class Arm9
             // sits in its slot un-extended — an i8 −16 is 0x000000F0 there. So
             // the left side is canonicalised first: AShr needs the sign bits,
             // LShr needs the high bits clear.
-            if (op.equals(String.withCString("AShr")) || op.equals(String.withCString("LShr")))
+            if (op == opAShr || op == opLShr)
                 {
                 String* lt = operandType((IROperand*)ops.get((u32)0));
                 // ... and for LShr that extension must be UNSIGNED even when the
@@ -1587,7 +1570,7 @@ class Arm9
                 // AShr, so the only producer of this shape is the rotate
                 // expansion in the shared lowering: every i8/i16 `<:` / `:>` was
                 // wrong here while the unsigned ones were right.
-                if (op.equals(String.withCString("LShr")) && Arm9.isSignedTy(lt) && fieldWidth(lt) < (u32)4)
+                if (op == opLShr && Arm9.isSignedTy(lt) && fieldWidth(lt) < 4)
                     {
                     if (fieldWidth(lt) == (u32)1)
                         _out.appendCString("\tand\tr0, r0, #255\n");
@@ -1659,15 +1642,15 @@ class Arm9
     // 32-bit path, which writes the LOW word only and leaves the high word
     // holding whatever the frame had — `i64 x = -5000000000;` (a Neg over a
     // wide Const) printed a high half of $A5A5A5A5, the stack fill pattern.
-    bool emitInt64Unary(String* op, Array* ops, i32 rs)
+    bool emitInt64Unary(u16 op, Array* ops, i32 rs)
         {
-        if (op.equals(String.withCString("FpToSI")) || op.equals(String.withCString("FpToUI")))
+        if (op == opFpToSI || op == opFpToUI)
             {
             emitFloatToInt64(op, ops, rs);
             return true;
             }
-        bool isNeg = op.equals(String.withCString("Neg"));
-        if (!isNeg && !op.equals(String.withCString("Not")))
+        bool isNeg = op == opNeg;
+        if (!isNeg && op != opNot)
             return false;
         loadInt64((IROperand*)ops.get((u32)0), String.withCString("r0"),
                   String.withCString("r1"));
@@ -1692,7 +1675,7 @@ class Arm9
     // `(i64)-3.0` printed 4294967293. The conversion is a call into
     // aeabi64.s, which takes the double in r0:r1; a float is widened first,
     // which is exact.
-    void emitFloatToInt64(String* op, Array* ops, i32 rs)
+    void emitFloatToInt64(u16 op, Array* ops, i32 rs)
         {
         IROperand* a0 = (IROperand*)ops.get((u32)0);
         if (Arm9.isF64(operandType(a0)))
@@ -1704,7 +1687,7 @@ class Arm9
             vfpLoad(String.withCString("s0"), a0);
             _out.appendCString("\tvcvt.f64.f32\td2, s0\n\tvmov\tr0, s4\n\tvmov\tr1, s5\n");
             }
-        _out.appendFormat("\tbl\t%s\n", op.equals(String.withCString("FpToSI"))
+        _out.appendFormat("\tbl\t%s\n", op == opFpToSI
                                             ? "__fixdfdi" : "__fixunsdfdi");
         emitSpAccess(String.withCString("str"), String.withCString("r0"), (u32)rs);
         emitSpAccess(String.withCString("str"), String.withCString("r1"), (u32)rs + (u32)4);
@@ -1712,7 +1695,7 @@ class Arm9
 
     // ...and a 64-bit integer to a float. Read as its low word, 5000000000
     // converted as 705032704.
-    bool emitInt64ToFloat(String* op, Array* ops, IRValue* res)
+    bool emitInt64ToFloat(u16 op, Array* ops, IRValue* res)
         {
         IROperand* a0 = (IROperand*)ops.get((u32)0);
         if (!Arm9.isI64(operandType(a0)))
@@ -1723,7 +1706,7 @@ class Arm9
         bool dbl = Arm9.isF64(res.ty());
         loadInt64(a0, String.withCString("r0"), String.withCString("r1"));
         _out.appendFormat("\tbl\t__float%sdi%sf\n",
-                          op.equals(String.withCString("UIToFp")) ? "un" : "",
+                          op == opUIToFp ? "un" : "",
                           dbl ? "d" : "s");
         emitSpAccess(String.withCString("str"), String.withCString("r0"), (u32)rs);
         if (dbl)
@@ -1738,7 +1721,7 @@ class Arm9
     // links. Add, subtract and the bitwise ops do NOT: libgcc has no __adddi3 /
     // __subdi3 / __anddi3 / __ordi3 / __xordi3 on ARM, because every compiler
     // emits them inline. They are two instructions each here.
-    bool emitInt64(IRInsn* insn, String* op, Array* ops, IRValue* res)
+    bool emitInt64(IRInsn* insn, u16 op, Array* ops, IRValue* res)
         {
         i32 rs = slotOf(res);
         if (rs < (i32)0 || ops.count() < (u32)1)
@@ -1746,15 +1729,15 @@ class Arm9
         // Producing a 64-bit value from a narrower one, or from another 64-bit
         // one: each falls through to a one-word path that leaves the high word
         // holding whatever the slot did.
-        if (op.equals(String.withCString("Const")) || op.equals(String.withCString("Bitcast")) || op.equals(String.withCString("ZExt")) || op.equals(String.withCString("SExt")) || op.equals(String.withCString("PtrToInt")))
+        if (op == opConst || op == opBitcast || op == opZExt || op == opSExt || op == opPtrToInt)
             {
             IROperand* a0 = (IROperand*)ops.get((u32)0);
-            if (op.equals(String.withCString("Const")) && a0.kind() == (u8)OPK_IMMI)
+            if (op == opConst && a0.kind() == OPK_IMMI)
                 {
                 emitMovImm((i32)a0.imm(), String.withCString("r0"));
                 emitMovImm((i32)(a0.imm() >> (i64)32), String.withCString("r1"));
                 }
-            else if (op.equals(String.withCString("Const")) || op.equals(String.withCString("Bitcast")))
+            else if (op == opConst || op == opBitcast)
                 {
                 loadInt64(a0, String.withCString("r0"), String.withCString("r1"));
                 }
@@ -1763,7 +1746,7 @@ class Arm9
                 loadOperand(a0, String.withCString("r0"));
                 String* st = operandType(a0);
                 u32 sw = fieldWidth(st);
-                if (op.equals(String.withCString("SExt")))
+                if (op == opSExt)
                     {
                     if (sw == (u32)1)
                         _out.appendCString("\tsxtb\tr0, r0\n");
@@ -1793,46 +1776,46 @@ class Arm9
         String* h = (String*)0;
         String* loOp = (String*)0;
         String* hiOp = (String*)0;
-        if (op.equals(String.withCString("Add")))
+        if (op == opAdd)
             {
             loOp = String.withCString("adds");
             hiOp = String.withCString("adc");
             }
-        else if (op.equals(String.withCString("Sub")))
+        else if (op == opSub)
             {
             loOp = String.withCString("subs");
             hiOp = String.withCString("sbc");
             }
-        else if (op.equals(String.withCString("And")))
+        else if (op == opAnd)
             {
             loOp = String.withCString("and");
             hiOp = String.withCString("and");
             }
-        else if (op.equals(String.withCString("Or")))
+        else if (op == opOr)
             {
             loOp = String.withCString("orr");
             hiOp = String.withCString("orr");
             }
-        else if (op.equals(String.withCString("Xor")))
+        else if (op == opXor)
             {
             loOp = String.withCString("eor");
             hiOp = String.withCString("eor");
             }
-        else if (op.equals(String.withCString("Mul")))
+        else if (op == opMul)
             h = String.withCString("__muldi3");
-        else if (op.equals(String.withCString("SDiv")))
+        else if (op == opSDiv)
             h = String.withCString("__divdi3");
-        else if (op.equals(String.withCString("UDiv")))
+        else if (op == opUDiv)
             h = String.withCString("__udivdi3");
-        else if (op.equals(String.withCString("SRem")))
+        else if (op == opSRem)
             h = String.withCString("__moddi3");
-        else if (op.equals(String.withCString("URem")))
+        else if (op == opURem)
             h = String.withCString("__umoddi3");
-        else if (op.equals(String.withCString("Shl")))
+        else if (op == opShl)
             h = String.withCString("__ashldi3");
-        else if (op.equals(String.withCString("LShr")))
+        else if (op == opLShr)
             h = String.withCString("__lshrdi3");
-        else if (op.equals(String.withCString("AShr")))
+        else if (op == opAShr)
             h = String.withCString("__ashrdi3");
         if (h == (String*)0 && loOp == (String*)0)
             return false;
@@ -1840,7 +1823,7 @@ class Arm9
                   String.withCString("r1"));
         // A shift takes its COUNT in r2 as a SINGLE word — that is libgcc's
         // signature, `__ashldi3(long long, int)`.
-        bool isShift = op.equals(String.withCString("Shl")) || op.equals(String.withCString("LShr")) || op.equals(String.withCString("AShr"));
+        bool isShift = op == opShl || op == opLShr || op == opAShr;
         if (isShift)
             loadOperand((IROperand*)ops.get((u32)1), String.withCString("r2"));
         else
@@ -1858,39 +1841,39 @@ class Arm9
         return true;
         }
 
-    static String* binaryMnemonic(String* op)
+    static String* binaryMnemonic(u16 op)
         {
-        if (op.equals(String.withCString("Add")))
+        if (op == opAdd)
             return String.withCString("add");
-        if (op.equals(String.withCString("Sub")))
+        if (op == opSub)
             return String.withCString("sub");
-        if (op.equals(String.withCString("Mul")))
+        if (op == opMul)
             return String.withCString("mul");
-        if (op.equals(String.withCString("And")))
+        if (op == opAnd)
             return String.withCString("and");
-        if (op.equals(String.withCString("Or")))
+        if (op == opOr)
             return String.withCString("orr");
-        if (op.equals(String.withCString("Xor")))
+        if (op == opXor)
             return String.withCString("eor");
-        if (op.equals(String.withCString("Shl")))
+        if (op == opShl)
             return String.withCString("lsl");
-        if (op.equals(String.withCString("LShr")))
+        if (op == opLShr)
             return String.withCString("lsr");
-        if (op.equals(String.withCString("AShr")))
+        if (op == opAShr)
             return String.withCString("asr");
         return (String*)0;
         }
 
-    void emitOther(IRInsn* insn, String* op, Array* ops, IRValue* res)
+    void emitOther(IRInsn* insn, u16 op, Array* ops, IRValue* res)
         {
         if (dispatchVector(insn, op, ops, res))
             return;
-        if (op.equals(String.withCString("Const")))
+        if (op == opConst)
             {
             emitConst(insn, ops, res);
             return;
             }
-        if (op.equals(String.withCString("Copy")) || op.equals(String.withCString("IntToPtr")))
+        if (op == opCopy || op == opIntToPtr)
             {
             if (res == 0 || ops.count() == (u32)0)
                 return;
@@ -1898,7 +1881,7 @@ class Arm9
             storeResult(res, String.withCString("r0"));
             return;
             }
-        if (op.equals(String.withCString("Bitcast")) || op.equals(String.withCString("PtrToInt")))
+        if (op == opBitcast || op == opPtrToInt)
             {
             if (res == 0 || ops.count() == (u32)0)
                 return;
@@ -1907,7 +1890,7 @@ class Arm9
             storeResult(res, String.withCString("r0"));
             return;
             }
-        if (op.equals(String.withCString("Neg")))
+        if (op == opNeg)
             {
             if (res == 0 || ops.count() == (u32)0)
                 return;
@@ -1916,7 +1899,7 @@ class Arm9
             storeResult(res, String.withCString("r0"));
             return;
             }
-        if (op.equals(String.withCString("Not")))
+        if (op == opNot)
             {
             if (res == 0 || ops.count() == (u32)0)
                 return;
@@ -1925,42 +1908,42 @@ class Arm9
             storeResult(res, String.withCString("r0"));
             return;
             }
-        if (op.equals(String.withCString("ZExt")) || op.equals(String.withCString("Trunc")))
+        if (op == opZExt || op == opTrunc)
             {
             emitZExtTrunc(op, ops, res);
             return;
             }
-        if (op.equals(String.withCString("SExt")))
+        if (op == opSExt)
             {
             emitSExt(ops, res);
             return;
             }
-        if (op.equals(String.withCString("ICmp")))
+        if (op == opICmp)
             {
             emitICmp(insn, ops, res);
             return;
             }
-        if (op.equals(String.withCString("Load")) || op.equals(String.withCString("LoadVolatile")))
+        if (op == opLoad || op == opLoadVolatile)
             {
             emitLoad(ops, res);
             return;
             }
-        if (op.equals(String.withCString("Store")) || op.equals(String.withCString("StoreVolatile")))
+        if (op == opStore || op == opStoreVolatile)
             {
             emitStore(ops);
             return;
             }
-        if (op.equals(String.withCString("AddrOf")))
+        if (op == opAddrOf)
             {
             emitAddrOf(ops, res);
             return;
             }
-        if (op.equals(String.withCString("FieldAddr")))
+        if (op == opFieldAddr)
             {
             emitFieldAddr(insn, ops, res);
             return;
             }
-        if (op.equals(String.withCString("ElementAddr")))
+        if (op == opElementAddr)
             {
             emitElementAddr(insn, ops, res);
             return;
@@ -1970,22 +1953,22 @@ class Arm9
             emitCall(insn, op, ops, res);
             return;
             }
-        if (op.equals(String.withCString("VTblDispatch")))
+        if (op == opVTblDispatch)
             {
             emitDispatch(ops, res, (u32)2, false);
             return;
             }
-        if (op.equals(String.withCString("ProtoDispatch")))
+        if (op == opProtoDispatch)
             {
             emitDispatch(ops, res, (u32)3, true);
             return;
             }
-        if (op.equals(String.withCString("VTblLoad")))
+        if (op == opVTblLoad)
             {
             emitVTblLoad(ops, res);
             return;
             }
-        if (op.equals(String.withCString("ProtoLoad")))
+        if (op == opProtoLoad)
             {
             emitProtoLoad(ops, res);
             return;
@@ -1995,76 +1978,76 @@ class Arm9
             emitFloatBinary(op, ops, res);
             return;
             }
-        if (op.equals(String.withCString("FNeg")) || op.equals(String.withCString("FSqrt")))
+        if (op == opFNeg || op == opFSqrt)
             {
             emitFloatUnary(op, ops, res);
             return;
             }
-        if (op.equals(String.withCString("FCmp")))
+        if (op == opFCmp)
             {
             emitFCmp(insn, ops, res);
             return;
             }
-        if (op.equals(String.withCString("SIToFp")) || op.equals(String.withCString("UIToFp")))
+        if (op == opSIToFp || op == opUIToFp)
             {
             emitIntToFloat(op, ops, res);
             return;
             }
-        if (op.equals(String.withCString("FpToSI")) || op.equals(String.withCString("FpToUI")))
+        if (op == opFpToSI || op == opFpToUI)
             {
             emitFloatToInt(op, ops, res);
             return;
             }
-        if (op.equals(String.withCString("FpExt")))
+        if (op == opFpExt)
             {
             emitFpConvert(ops, res, true);
             return;
             }
-        if (op.equals(String.withCString("FpTrunc")))
+        if (op == opFpTrunc)
             {
             emitFpConvert(ops, res, false);
             return;
             }
-        if (op.equals(String.withCString("Select")))
+        if (op == opSelect)
             {
             emitSelect(ops, res);
             return;
             }
-        if (op.equals(String.withCString("SDiv")) || op.equals(String.withCString("UDiv")))
+        if (op == opSDiv || op == opUDiv)
             {
             emitDivHelper(op, ops, res, String.withCString("r0"));
             return;
             }
-        if (op.equals(String.withCString("SRem")) || op.equals(String.withCString("URem")))
+        if (op == opSRem || op == opURem)
             {
             emitDivHelper(op, ops, res, String.withCString("r1"));
             return;
             }
         if (emitOtherB(insn, op, ops, res))
             return;
-        giveUp(op);
+        giveUp(IROp.name(op));
         }
 
     // The second half of the dispatch. (Split for an arm64 frame limit that is
     // gone; kept as two routines because one would be very long.)
-    bool emitOtherB(IRInsn* insn, String* op, Array* ops, IRValue* res)
+    bool emitOtherB(IRInsn* insn, u16 op, Array* ops, IRValue* res)
         {
-        if (op.equals(String.withCString("AggBuild")))
+        if (op == opAggBuild)
             {
             emitAggBuild(ops, res);
             return true;
             }
-        if (op.equals(String.withCString("AggExtract")))
+        if (op == opAggExtract)
             {
             emitAggExtract(ops, res);
             return true;
             }
-        if (op.equals(String.withCString("MemCopy")) || op.equals(String.withCString("MemSet")))
+        if (op == opMemCopy || op == opMemSet)
             {
             emitMemHelper(op, ops);
             return true;
             }
-        if (op.equals(String.withCString("WeakRegister")))
+        if (op == opWeakRegister)
             {
             if (ops.count() < (u32)2)
                 return true;
@@ -2073,7 +2056,7 @@ class Arm9
             _out.appendCString("\tbl\t_xtc_weak_register\n");
             return true;
             }
-        if (op.equals(String.withCString("WeakUnregister")))
+        if (op == opWeakUnregister)
             {
             if (ops.count() == (u32)0)
                 return true;
@@ -2081,7 +2064,7 @@ class Arm9
             _out.appendCString("\tbl\t_xtc_weak_unregister\n");
             return true;
             }
-        if (op.equals(String.withCString("WeakLoad")))
+        if (op == opWeakLoad)
             {
             if (ops.count() == (u32)0 || res == 0)
                 return true;
@@ -2090,45 +2073,45 @@ class Arm9
             storeResult(res, String.withCString("r0"));
             return true;
             }
-        if (op.equals(String.withCString("VaStart")))
+        if (op == opVaStart)
             {
             emitVaStart(ops);
             return true;
             }
-        if (op.equals(String.withCString("VaArg")))
+        if (op == opVaArg)
             {
             emitVaArg(ops, res);
             return true;
             }
-        if (op.equals(String.withCString("Asm")))
+        if (op == opAsm)
             {
             emitAsm(ops);
             return true;
             }
-        if (op.equals(String.withCString("Rol")) || op.equals(String.withCString("Ror")))
+        if (op == opRol || op == opRor)
             {
             if (res == 0 || ops.count() < (u32)2)
                 return true;
             loadOperand((IROperand*)ops.get((u32)0), String.withCString("r0"));
             loadOperand((IROperand*)ops.get((u32)1), String.withCString("r1"));
             // There is no rotate-left: rol n is ror (32 − n).
-            if (op.equals(String.withCString("Rol")))
+            if (op == opRol)
                 _out.appendCString("\trsb\tr1, r1, #32\n");
             _out.appendCString("\tror\tr0, r0, r1\n");
             storeResult(res, String.withCString("r0"));
             return true;
             }
-        if (op.equals(String.withCString("Autorelease")))
+        if (op == opAutorelease)
             {
             emitRelease(ops);
             return true;
             }
-        if (op.equals(String.withCString("Retain")))
+        if (op == opRetain)
             {
             emitRetain(ops);
             return true;
             }
-        if (op.equals(String.withCString("Release")))
+        if (op == opRelease)
             {
             emitRelease(ops);
             return true;
@@ -2136,9 +2119,9 @@ class Arm9
         return false;
         }
 
-    static bool isPlainCall(String* op)
+    static bool isPlainCall(u16 op)
         {
-        return op.equals(String.withCString("Call")) || op.equals(String.withCString("CallIndirect")) || op.equals(String.withCString("CallCloaked")) || op.equals(String.withCString("CallBanked")) || op.equals(String.withCString("CallBankedIndirect"));
+        return IROp.has(op, OPF_CALL);
         }
 
     // AAPCS32. A direct call names its callee with a Sym; an indirect one leads
@@ -2147,9 +2130,9 @@ class Arm9
     // argument passes by value, split across r0-r3 and the outgoing stack area;
     // an aggregate result over 4 bytes uses sret, so the hidden result pointer
     // takes r0 and the real arguments shift up.
-    void emitCall(IRInsn* insn, String* op, Array* ops, IRValue* res)
+    void emitCall(IRInsn* insn, u16 op, Array* ops, IRValue* res)
         {
-        bool indirect = op.equals(String.withCString("CallIndirect")) || op.equals(String.withCString("CallBankedIndirect"));
+        bool indirect = op == opCallIndirect || op == opCallBankedIndirect;
         String* callee = (String*)0;
         IROperand* calleeOp = (IROperand*)0;
         Array* args = new Array();
@@ -2408,9 +2391,9 @@ class Arm9
     // The ABI is softfp: a float LIVES as raw bits in its slot and travels in
     // core registers, but the arithmetic is genuine VFP. So every float op is
     // load-to-VFP, compute, store-back.
-    static bool isFloatBinary(String* op)
+    static bool isFloatBinary(u16 op)
         {
-        return op.equals(String.withCString("FAdd")) || op.equals(String.withCString("FSub")) || op.equals(String.withCString("FMul")) || op.equals(String.withCString("FDiv"));
+        return op == opFAdd || op == opFSub || op == opFMul || op == opFDiv;
         }
 
     // vldr/vstr reach ±1020 only; a slot beyond that needs a staged base.
@@ -2447,7 +2430,7 @@ class Arm9
 
     static bool isF64(String* t)
         {
-        return t != 0 && t.equals(String.withCString("F64"));
+        return t != 0 && IRType.is(t, tyF64);
         }
 
     // A 64-bit INTEGER. Eight bytes like a double, and it travels the same
@@ -2455,10 +2438,10 @@ class Arm9
     // for an argument — so almost everywhere this is asked next to isF64.
     static bool isI64(String* t)
         {
-        return t != 0 && (t.equals(String.withCString("I64")) || t.equals(String.withCString("U64")));
+        return t != 0 && (IRType.is(t, tyI64) || IRType.is(t, tyU64));
         }
 
-    void emitFloatBinary(String* op, Array* ops, IRValue* res)
+    void emitFloatBinary(u16 op, Array* ops, IRValue* res)
         {
         if (ops.count() < (u32)2 || res == 0)
             return;
@@ -2467,11 +2450,11 @@ class Arm9
         String* ra = String.withCString(d ? "d2" : "s0");
         String* rb = String.withCString(d ? "d3" : "s1");
         string m = "vdiv";
-        if (op.equals(String.withCString("FAdd")))
+        if (op == opFAdd)
             m = "vadd";
-        else if (op.equals(String.withCString("FSub")))
+        else if (op == opFSub)
             m = "vsub";
-        else if (op.equals(String.withCString("FMul")))
+        else if (op == opFMul)
             m = "vmul";
         vfpLoad(ra, (IROperand*)ops.get((u32)0));
         vfpLoad(rb, (IROperand*)ops.get((u32)1));
@@ -2480,7 +2463,7 @@ class Arm9
         vfpStore(ra, res);
         }
 
-    void emitFloatUnary(String* op, Array* ops, IRValue* res)
+    void emitFloatUnary(u16 op, Array* ops, IRValue* res)
         {
         if (ops.count() == (u32)0 || res == 0)
             return true;
@@ -2488,7 +2471,7 @@ class Arm9
         String* ra = String.withCString(d ? "d2" : "s0");
         vfpLoad(ra, (IROperand*)ops.get((u32)0));
         _out.appendFormat("\t%s.%s\t%s, %s\n",
-                          op.equals(String.withCString("FNeg")) ? "vneg" : "vsqrt",
+                          op == opFNeg ? "vneg" : "vsqrt",
                           d ? "f64" : "f32", ra.cString(), ra.cString());
         vfpStore(ra, res);
         }
@@ -2532,14 +2515,14 @@ class Arm9
         storeResult(res, String.withCString("r0"));
         }
 
-    void emitIntToFloat(String* op, Array* ops, IRValue* res)
+    void emitIntToFloat(u16 op, Array* ops, IRValue* res)
         {
         if (ops.count() == (u32)0 || res == 0)
             return true;
         if (emitInt64ToFloat(op, ops, res))
             return true;
         bool d = Arm9.isF64(res.ty());
-        bool sgn = op.equals(String.withCString("SIToFp"));
+        bool sgn = op == opSIToFp;
         loadOperand((IROperand*)ops.get((u32)0), String.withCString("r0"));
         // A narrow source has to be extended before it is a number.
         canonicalise(String.withCString("r0"), operandType((IROperand*)ops.get((u32)0)));
@@ -2554,13 +2537,13 @@ class Arm9
     // takes two tests: re-extending the low bits catches a value that overflows
     // a NARROW destination, and the FPSCR invalid-operation flag catches a vcvt
     // that saturated the 32-bit conversion itself.
-    void emitFloatToInt(String* op, Array* ops, IRValue* res)
+    void emitFloatToInt(u16 op, Array* ops, IRValue* res)
         {
         if (ops.count() == (u32)0 || res == 0)
             return true;
         String* st = operandType((IROperand*)ops.get((u32)0));
         bool d = Arm9.isF64(st);
-        bool sgn = op.equals(String.withCString("FpToSI"));
+        bool sgn = op == opFpToSI;
         String* src = String.withCString(d ? "d2" : "s0");
         vfpLoad(src, (IROperand*)ops.get((u32)0));
         _out.appendCString("\tvmrs\tr1, fpscr\n\tbic\tr1, r1, #1\n\tvmsr\tfpscr, r1\n");
@@ -2648,7 +2631,7 @@ class Arm9
         storeResult(res, String.withCString("r0"));
         }
 
-    void emitMemHelper(String* op, Array* ops)
+    void emitMemHelper(u16 op, Array* ops)
         {
         if (ops.count() < (u32)3)
             return;
@@ -2656,7 +2639,7 @@ class Arm9
         loadOperand((IROperand*)ops.get((u32)1), String.withCString("r1"));
         loadOperand((IROperand*)ops.get((u32)2), String.withCString("r2"));
         _out.appendFormat("\tbl\t%s\n",
-                          op.equals(String.withCString("MemCopy")) ? "memcpy" : "memset");
+                          op == opMemCopy ? "memcpy" : "memset");
         }
 
     // Native AAPCS va_list: `ap` is the address of the first VARIADIC argument,
@@ -2681,7 +2664,7 @@ class Arm9
             return;
         String* rt = res.ty();
         bool f64 = Arm9.isF64(rt);
-        bool f32 = rt != 0 && rt.equals(String.withCString("F32"));
+        bool f32 = rt != 0 && IRType.is(rt, tyF32);
         // A 64-bit INTEGER is 8-byte aligned and 8 bytes wide, exactly as an
         // f64 is — AAPCS makes no distinction. It used to fall through to the
         // generic word branch below, which reads ONE word and advances four:
@@ -2854,18 +2837,18 @@ class Arm9
     // The Cortex-A9 has NO hardware integer divide — sdiv/udiv are undefined
     // there — so division and remainder go through the EABI runtime helpers.
     // The divmod pair returns the quotient in r0 and the remainder in r1.
-    void emitDivHelper(String* op, Array* ops, IRValue* res, String* resultReg)
+    void emitDivHelper(u16 op, Array* ops, IRValue* res, String* resultReg)
         {
         if (res == 0 || ops.count() < (u32)2)
             return;
         loadOperand((IROperand*)ops.get((u32)0), String.withCString("r0"));
         loadOperand((IROperand*)ops.get((u32)1), String.withCString("r1"));
         string helper = "__aeabi_uidiv";
-        if (op.equals(String.withCString("SDiv")))
+        if (op == opSDiv)
             helper = "__aeabi_idiv";
-        else if (op.equals(String.withCString("SRem")))
+        else if (op == opSRem)
             helper = "__aeabi_idivmod";
-        else if (op.equals(String.withCString("URem")))
+        else if (op == opURem)
             helper = "__aeabi_uidivmod";
         _out.appendFormat("\tbl\t%s\n", helper);
         storeResult(res, resultReg);
@@ -2982,12 +2965,12 @@ class Arm9
         return (sign << 31) | ((u32)e << 23) | mant;
         }
 
-    void emitZExtTrunc(String* op, Array* ops, IRValue* res)
+    void emitZExtTrunc(u16 op, Array* ops, IRValue* res)
         {
         if (res == 0 || ops.count() == (u32)0)
             return;
         loadOperand((IROperand*)ops.get((u32)0), String.withCString("r0"));
-        if (op.equals(String.withCString("Trunc")))
+        if (op == opTrunc)
             {
             // Truncate to the result's width AND signedness: a signed narrow
             // result is sign-extended, an unsigned one zero-extended.
@@ -3067,7 +3050,7 @@ class Arm9
         String* ct1 = operandTy((IROperand*)ops.get((u32)1));
         if (Arm9.isI64(ct0) || Arm9.isI64(ct1))
             {
-            bool sgn = ct0.equals(String.withCString("I64")) || ct1.equals(String.withCString("I64"));
+            bool sgn = IRType.is(ct0, tyI64) || IRType.is(ct1, tyI64);
             String* p = insn.pred();
             bool ordered = !p.equals(String.withCString("EQ")) && !p.equals(String.withCString("NE"));
             if (sgn && ordered)
@@ -3443,14 +3426,14 @@ class Arm9
 
     void emitTerminator(IRInsn* t, IRBlock* blk)
         {
-        String* op = t.op();
+        u16 op = t.opc();
         Array* ops = t.ops();
-        if (op.equals(String.withCString("Return")))
+        if (op == opReturn)
             {
             emitReturn(ops);
             return;
             }
-        if (op.equals(String.withCString("Branch")))
+        if (op == opBranch)
             {
             if (ops.count() == (u32)0)
                 return;
@@ -3459,7 +3442,7 @@ class Arm9
             _out.appendFormat("\tb\t%s\n", blockLabel(dst).cString());
             return;
             }
-        if (op.equals(String.withCString("CondBranch")))
+        if (op == opCondBranch)
             {
             emitCondBranch(t, blk);
             return;
@@ -3469,7 +3452,7 @@ class Arm9
         // with a mistyped pointer and the program exited 0 — a failed cast
         // looked like a clean run. Fixed in the original first, then here.
         // Use `(T* ?)p` when failure is a possibility rather than a bug.
-        if (op.equals(String.withCString("Unreachable")))
+        if (op == opUnreachable)
             {
             _out.appendCString("\tudf\t#0\n");
             return;
@@ -3478,7 +3461,7 @@ class Arm9
         // original's opcode NUMBER, so the output matches the reference's up to
         // the refusal.
         _out.appendFormat("\t@ TODO terminator %ld\n", (i32)Arm9.opcodeNumber(op));
-        giveUp(op);
+        giveUp(t.op());
         emitFrameReturn();
         }
 
@@ -3596,9 +3579,9 @@ class Arm9
 
     // The numeric opcode the original's placeholder prints. Only the
     // terminators that reach the default arm need one.
-    static i32 opcodeNumber(String* op)
+    static i32 opcodeNumber(u16 op)
         {
-        if (op.equals(String.withCString("Unreachable")))
+        if (op == opUnreachable)
             return (i32)61;
         return (i32)0;
         }
@@ -3911,7 +3894,7 @@ class Arm9
 
     static bool isVecTy(String* t)
         {
-        return t != (String*)0 && t.hasPrefix(String.withCString("Vec("));
+        return IRType.isVec(t);
         }
 
     // The lane type a Vec(T) carries.
@@ -3987,44 +3970,44 @@ class Arm9
         return r == (Object*)0 ? (u32)8 : ((Number*)r).asU32();
         }
 
-    bool dispatchVector(IRInsn* n, String* op, Array* ops, IRValue* res)
+    bool dispatchVector(IRInsn* n, u16 op, Array* ops, IRValue* res)
         {
-        if (op.equals(String.withCString("VLoad")))
+        if (op == opVLoad)
             {
             emitVLoad(n, ops, res);
             return true;
             }
-        if (op.equals(String.withCString("VStore")))
+        if (op == opVStore)
             {
             emitVStore(n, ops);
             return true;
             }
-        if (op.equals(String.withCString("VSplat")))
+        if (op == opVSplat)
             {
             emitVSplat(n, ops, res);
             return true;
             }
-        if (op.equals(String.withCString("VAdd")) || op.equals(String.withCString("VSub")) || op.equals(String.withCString("VMul")) || op.equals(String.withCString("VAnd")) || op.equals(String.withCString("VOr")) || op.equals(String.withCString("VXor")))
+        if (op == opVAdd || op == opVSub || op == opVMul || op == opVAnd || op == opVOr || op == opVXor)
             {
             emitVBin(op, ops, res);
             return true;
             }
-        if (op.equals(String.withCString("VMax")) || op.equals(String.withCString("VMin")))
+        if (op == opVMax || op == opVMin)
             {
             emitVMinMax(op, ops, res);
             return true;
             }
-        if (op.equals(String.withCString("VAddLP")))
+        if (op == opVAddLP)
             {
             emitVAddLP(ops, res);
             return true;
             }
-        if (op.equals(String.withCString("VICmp")))
+        if (op == opVICmp)
             {
             emitVICmp(n, ops, res);
             return true;
             }
-        if (op.equals(String.withCString("VReduceAdd")) || op.equals(String.withCString("VReduceMax")) || op.equals(String.withCString("VReduceMin")))
+        if (op == opVReduceAdd || op == opVReduceMax || op == opVReduceMin)
             {
             emitVReduce(op, ops, res);
             return true;
@@ -4129,14 +4112,14 @@ class Arm9
             if (def == (IRInsn*)0 || def.ops().count() < (u32)1)
                 return false;
             IROperand* o0 = (IROperand*)def.ops().get((u32)0);
-            if (def.op().equals(String.withCString("Const")))
+            if (def.isOp(opConst))
                 {
                 if (o0.kind() != (u8)OPK_IMMI)
                     return false;
                 out.add((Object*)Number.with((u32)o0.imm()));
                 return true;
                 }
-            if ((def.op().equals(String.withCString("ZExt")) || def.op().equals(String.withCString("SExt")) || def.op().equals(String.withCString("Trunc")) || def.op().equals(String.withCString("Bitcast"))) && o0.kind() == (u8)OPK_USE && o0.val() != (IRValue*)0)
+            if ((def.isOp(opZExt) || def.isOp(opSExt) || def.isOp(opTrunc) || def.isOp(opBitcast)) && o0.kind() == OPK_USE && o0.val() != (IRValue*)0)
                 {
                 v = o0.val();
                 continue;
@@ -4146,53 +4129,53 @@ class Arm9
         return false;
         }
 
-    void emitVBin(String* op, Array* ops, IRValue* res)
+    void emitVBin(u16 op, Array* ops, IRValue* res)
         {
         if (ops.count() < (u32)2 || res == (IRValue*)0)
             {
-            giveUp(op);
+            giveUp(IROp.name(op));
             return;
             }
         IROperand* o0 = (IROperand*)ops.get((u32)0);
         IROperand* o1 = (IROperand*)ops.get((u32)1);
         if (o0.kind() != (u8)OPK_USE || o1.kind() != (u8)OPK_USE)
             {
-            giveUp(op);
+            giveUp(IROp.name(op));
             return;
             }
         u32 a = vq(o0.val());
         u32 b = vq(o1.val());
         u32 d = vq(res);
-        if (op.equals(String.withCString("VAnd")) || op.equals(String.withCString("VOr")) || op.equals(String.withCString("VXor")))
+        if (op == opVAnd || op == opVOr || op == opVXor)
             {
             // 128-bit bitwise: no size suffix.
-            string m = op.equals(String.withCString("VAnd")) ? "vand"
-                                                             : (op.equals(String.withCString("VOr")) ? "vorr" : "veor");
+            string m = op == opVAnd ? "vand"
+                                                             : (op == opVOr ? "vorr" : "veor");
             _out.appendFormat("\t%s\tq%lu, q%lu, q%lu\n", m, d, a, b);
             return;
             }
-        string m = op.equals(String.withCString("VAdd")) ? "vadd"
-                                                         : (op.equals(String.withCString("VSub")) ? "vsub" : "vmul");
+        string m = op == opVAdd ? "vadd"
+                                                         : (op == opVSub ? "vsub" : "vmul");
         _out.appendFormat("\t%s.%s\tq%lu, q%lu, q%lu\n", m,
                           neonI(Arm9.laneOf(res.ty())).cString(), d, a, b);
         }
 
-    void emitVMinMax(String* op, Array* ops, IRValue* res)
+    void emitVMinMax(u16 op, Array* ops, IRValue* res)
         {
         if (ops.count() < (u32)2 || res == (IRValue*)0)
             {
-            giveUp(op);
+            giveUp(IROp.name(op));
             return;
             }
         IROperand* o0 = (IROperand*)ops.get((u32)0);
         IROperand* o1 = (IROperand*)ops.get((u32)1);
         if (o0.kind() != (u8)OPK_USE || o1.kind() != (u8)OPK_USE)
             {
-            giveUp(op);
+            giveUp(IROp.name(op));
             return;
             }
         _out.appendFormat("\t%s.%s\tq%lu, q%lu, q%lu\n",
-                          op.equals(String.withCString("VMax")) ? "vmax" : "vmin",
+                          op == opVMax ? "vmax" : "vmin",
                           neonU(Arm9.laneOf(res.ty())).cString(),
                           vq(res), vq(o0.val()), vq(o1.val()));
         }
@@ -4280,30 +4263,30 @@ class Arm9
         }
 
     // Horizontal add / max / min of 4×i32 down to a GP scalar.
-    void emitVReduce(String* op, Array* ops, IRValue* res)
+    void emitVReduce(u16 op, Array* ops, IRValue* res)
         {
         if (ops.count() < (u32)1 || res == (IRValue*)0)
             {
-            giveUp(op);
+            giveUp(IROp.name(op));
             return;
             }
         IROperand* o0 = (IROperand*)ops.get((u32)0);
         if (o0.kind() != (u8)OPK_USE || o0.val() == (IRValue*)0)
             {
-            giveUp(op);
+            giveUp(IROp.name(op));
             return;
             }
         u32 q = vq(o0.val());
         u32 dl = (u32)2 * q;
         u32 dh = dl + (u32)1;
-        if (op.equals(String.withCString("VReduceAdd")))
+        if (op == opVReduceAdd)
             {
             _out.appendFormat("\tvadd.i32\td%lu, d%lu, d%lu\n", dl, dl, dh);
             _out.appendFormat("\tvpadd.i32\td%lu, d%lu, d%lu\n", dl, dl, dl);
             }
         else
             {
-            bool mx = op.equals(String.withCString("VReduceMax"));
+            bool mx = op == opVReduceMax;
             String* su = neonU(res.ty());
             _out.appendFormat("\t%s.%s\td%lu, d%lu, d%lu\n", mx ? "vmax" : "vmin",
                               su.cString(), dl, dl, dh);
@@ -4573,7 +4556,7 @@ class Arm9
             for (u32 i = (u32)0; i < blk.insns().count(); i = i + (u32)1)
                 {
                 IRInsn* ea = (IRInsn*)blk.insns().get(i);
-                if (!ea.op().equals(String.withCString("ElementAddr")))
+                if (!ea.isOp(opElementAddr))
                     continue;
                 if (ea.ops().count() < (u32)2 || ea.res() == (IRValue*)0)
                     continue;
@@ -4597,7 +4580,7 @@ class Arm9
                 for (u32 k = (u32)0; k < bu.count(); k = k + (u32)1)
                     {
                     IRInsn* u = (IRInsn*)bu.get(k);
-                    if (!u.op().equals(String.withCString("VLoad")) && !u.op().equals(String.withCString("VStore")))
+                    if (!u.isOp(opVLoad) && !u.isOp(opVStore))
                         continue;
                     if (u.ops().count() < (u32)1)
                         continue;
@@ -4617,7 +4600,7 @@ class Arm9
                     for (u32 k = (u32)0; k < au.count() && safe; k = k + (u32)1)
                         {
                         IRInsn* u = (IRInsn*)au.get(k);
-                        if (!u.op().equals(String.withCString("Phi")) && Arm9.blockHas(blk, u))
+                        if (!u.isOp(opPhi) && Arm9.blockHas(blk, u))
                             safe = false;
                         }
                     }

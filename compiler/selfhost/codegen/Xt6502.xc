@@ -93,37 +93,29 @@ class Xt6502
     // is what makes every deref uniform — the back end writes the data-bank
     // register from it, so no path has to branch on "is this banked?".
     static bool isPtrTy(String* t)
-    { return t != (String*)0 && t.hasPrefix(String.withCString("Ptr(")); }
+    { return IRType.isPtr(t); }
 
     static bool isAggTy(String* t)
-    { return t != (String*)0 && t.hasPrefix(String.withCString("Agg(")); }
+    { return IRType.isAgg(t); }
 
     static bool isMemTy(String* t)
-    { return t != (String*)0 && t.equals(String.withCString("Mem")); }
+    { return IRType.is(t, tyMem); }
 
     static bool isSignedTy(String* t)
     {
         if (t == (String*)0) return false;
-        return t.equals(String.withCString("I8")) || t.equals(String.withCString("I16"))
-            || t.equals(String.withCString("I32")) || t.equals(String.withCString("I64"));
+        return IRType.is(t, tyI8) || IRType.is(t, tyI16)
+            || IRType.is(t, tyI32) || IRType.is(t, tyI64);
     }
 
     u32 byteWidth(String* t)
     {
-        if (t == (String*)0) return (u32)0;
-        if (t.equals(String.withCString("I8")) || t.equals(String.withCString("U8"))
-         || t.equals(String.withCString("Bool"))) return (u32)1;
-        if (t.equals(String.withCString("I16")) || t.equals(String.withCString("U16")))
-            return (u32)2;
-        if (t.equals(String.withCString("I32")) || t.equals(String.withCString("U32")))
-            return (u32)4;
-        // 8 whatever the arithmetic can do: width is a LAYOUT contract, and a
-        // back end that disagreed with the front end would corrupt struct
-        // offsets in optimised code rather than fail.
-        if (t.equals(String.withCString("I64")) || t.equals(String.withCString("U64")))
-            return (u32)8;
-        if (t.equals(String.withCString("F32"))) return (u32)4;   // IEEE single
-        if (t.equals(String.withCString("F64"))) return (u32)8;
+        // A 64-bit integer is 8 whatever the arithmetic can do: width is a
+        // LAYOUT contract, and a back end that disagreed with the front end
+        // would corrupt struct offsets in optimised code rather than fail. A
+        // float is IEEE.
+        u32 w = IRType.bytes(t);
+        if (w != 0) return w;
         if (isMemTy(t)) return (u32)0;                            // a phantom
         // Every pointer is three bytes: [addr-lo, addr-hi, bank-lo]. A main-RAM
         // pointer simply carries bank 0.
@@ -319,17 +311,17 @@ class Xt6502
         for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1) {
             IRBlock* bb = (IRBlock*)fn.blocks().get(b);
             for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
-                if (isCallOp(((IRInsn*)bb.insns().get(i)).op())) return false;
-            if (bb.term() != (IRInsn*)0 && isCallOp(bb.term().op())) return false;
+                if (isCallOp(((IRInsn*)bb.insns().get(i)).opc())) return false;
+            if (bb.term() != (IRInsn*)0 && isCallOp(bb.term().opc())) return false;
         }
         return true;
     }
 
-    static bool isCallOp(String* op)
+    static bool isCallOp(u16 op)
     {
-        return op.equals(String.withCString("Call"))
-            || op.equals(String.withCString("CallIndirect"))
-            || op.equals(String.withCString("VTblDispatch"));
+        return op == opCall
+            || op == opCallIndirect
+            || op == opVTblDispatch;
     }
 
     // ── Frame-slot allocation ────────────────────────────────────────────
@@ -503,8 +495,8 @@ class Xt6502
             IRBlock* bb = (IRBlock*)fn.blocks().get(b);
             for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1) {
                 IRInsn* n = (IRInsn*)bb.insns().get(i);
-                if (!n.op().equals(String.withCString("Load"))
-                 && !n.op().equals(String.withCString("LoadVolatile"))) continue;
+                if (!n.isOp(opLoad)
+                 && !n.isOp(opLoadVolatile)) continue;
                 if (n.res() == (IRValue*)0 || n.ops().count() < (u32)1) continue;
                 IROperand* p = (IROperand*)n.ops().get((u32)0);
                 if (p.kind() != (u8)OPK_USE) continue;
@@ -674,7 +666,7 @@ class Xt6502
     }
 
     static bool isPhi(IRInsn* n)
-    { return n.op().equals(String.withCString("Phi")); }
+    { return n.isOp(opPhi); }
 
     // The values succ's phis take on the edge from pred: live at the end of
     // pred, where the edge copies read them. Counting them as uses inside the
@@ -906,9 +898,9 @@ class Xt6502
             for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1) {
                 IRBlock* bb = (IRBlock*)fn.blocks().get(b);
                 for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1) {
-                    String* op = ((IRInsn*)bb.insns().get(i)).op();
-                    if (op.equals(String.withCString("VTblDispatch"))
-                     || op.equals(String.withCString("CallIndirect"))) return true;
+                    u16 op = ((IRInsn*)bb.insns().get(i)).opc();
+                    if (op == opVTblDispatch
+                     || op == opCallIndirect) return true;
                 }
             }
         }
@@ -1084,7 +1076,7 @@ class Xt6502
         for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1) {
             IRBlock* bb = (IRBlock*)fn.blocks().get(b);
             for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
-                if (((IRInsn*)bb.insns().get(i)).op().equals(String.withCString("Call")))
+                if (((IRInsn*)bb.insns().get(i)).isOp(opCall))
                     n = n + (u32)1;
         }
         return n;
@@ -1514,7 +1506,7 @@ class Xt6502
             IRBlock* bb = (IRBlock*)fn.blocks().get(b);
             for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1) {
                 IRInsn* n = (IRInsn*)bb.insns().get(i);
-                if (!n.op().equals(String.withCString("AddrOf"))) continue;
+                if (!n.isOp(opAddrOf)) continue;
                 for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1) {
                     IROperand* o = (IROperand*)n.ops().get(k);
                     if (o.kind() == (u8)OPK_USE) addVal(out, o.val());
@@ -1534,7 +1526,7 @@ class Xt6502
             IRBlock* bb = (IRBlock*)fn.blocks().get(b);
             for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1) {
                 IRInsn* n = (IRInsn*)bb.insns().get(i);
-                if (!n.op().equals(String.withCString("Asm"))) continue;
+                if (!n.isOp(opAsm)) continue;
                 for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1) {
                     IROperand* o = (IROperand*)n.ops().get(k);
                     if (o.kind() != (u8)OPK_CPOOL) continue;
@@ -1928,99 +1920,99 @@ class Xt6502
 
     void emitInsn(IRFunc* fn, IRBlock* bb, IRInsn* n)
     {
-        String* op = n.op();
+        u16 op = n.opc();
         if (dispatchCore(fn, bb, n, op)) return;
         if (dispatchMemory(fn, bb, n, op)) return;
         if (dispatchFloat(fn, bb, n, op)) return;
         if (dispatchRuntime(fn, bb, n, op)) return;
-        unsupported(op);
+        unsupported(n.op());
     }
 
     // Dispatch is split four ways purely for the arm64 frame budget: one
     // chain of literal comparisons builds more temporaries than a single
     // frame can hold.
-    bool dispatchCore(IRFunc* fn, IRBlock* bb, IRInsn* n, String* op)   // the shapes every function has: constants, arithmetic, control flow and calls
+    bool dispatchCore(IRFunc* fn, IRBlock* bb, IRInsn* n, u16 op)   // the shapes every function has: constants, arithmetic, control flow and calls
     {
-        if (op.equals(String.withCString("Phi"))) return true;   // handled: edge copies
-        if (op.equals(String.withCString("Const"))) { emitConst(n); return true; }
-        if (op.equals(String.withCString("Add")) || op.equals(String.withCString("Sub")))
+        if (op == opPhi) return true;   // handled: edge copies
+        if (op == opConst) { emitConst(n); return true; }
+        if (op == opAdd || op == opSub)
             { emitAddSub(n); return true; }
-        if (op.equals(String.withCString("Asm")))    { emitAsm(n); return true; }
-        if (op.equals(String.withCString("Branch")))     { emitBranch(bb, n); return true; }
-        if (op.equals(String.withCString("CondBranch"))) { emitCondBranch(bb, n); return true; }
-        if (op.equals(String.withCString("Return")))     { emitReturn(n); return true; }
-        if (op.equals(String.withCString("Unreachable"))) { _out.appendCString("    BRK\n"); return true; }
-        if (op.equals(String.withCString("Call")) || op.equals(String.withCString("CallBanked"))
-            || op.equals(String.withCString("CallCloaked"))) { emitCall(n); return true; }
-        if (op.equals(String.withCString("ICmp")))    { emitICmp(n); return true; }
-        if (op.equals(String.withCString("And")) || op.equals(String.withCString("Or"))
-            || op.equals(String.withCString("Xor")))  { emitBitwise(n); return true; }
-        if (op.equals(String.withCString("Not")))     { emitNot(n); return true; }
-        if (op.equals(String.withCString("Neg")))     { emitNeg(n); return true; }
-        if (op.equals(String.withCString("Mul")) || op.equals(String.withCString("SDiv"))
-            || op.equals(String.withCString("UDiv")) || op.equals(String.withCString("SRem"))
-            || op.equals(String.withCString("URem"))) { emitMulDiv(n); return true; }
-        if (op.equals(String.withCString("Shl")) || op.equals(String.withCString("LShr"))
-            || op.equals(String.withCString("AShr")) || op.equals(String.withCString("Rol"))
-            || op.equals(String.withCString("Ror")))  { emitShift(n); return true; }
-        if (op.equals(String.withCString("ZExt")))    { emitZExt(n); return true; }
-        if (op.equals(String.withCString("SExt")))    { emitSExt(n); return true; }
-        if (op.equals(String.withCString("Trunc")) || op.equals(String.withCString("Bitcast")))
+        if (op == opAsm)    { emitAsm(n); return true; }
+        if (op == opBranch)     { emitBranch(bb, n); return true; }
+        if (op == opCondBranch) { emitCondBranch(bb, n); return true; }
+        if (op == opReturn)     { emitReturn(n); return true; }
+        if (op == opUnreachable) { _out.appendCString("    BRK\n"); return true; }
+        if (op == opCall || op == opCallBanked
+            || op == opCallCloaked) { emitCall(n); return true; }
+        if (op == opICmp)    { emitICmp(n); return true; }
+        if (op == opAnd || op == opOr
+            || op == opXor)  { emitBitwise(n); return true; }
+        if (op == opNot)     { emitNot(n); return true; }
+        if (op == opNeg)     { emitNeg(n); return true; }
+        if (op == opMul || op == opSDiv
+            || op == opUDiv || op == opSRem
+            || op == opURem) { emitMulDiv(n); return true; }
+        if (op == opShl || op == opLShr
+            || op == opAShr || op == opRol
+            || op == opRor)  { emitShift(n); return true; }
+        if (op == opZExt)    { emitZExt(n); return true; }
+        if (op == opSExt)    { emitSExt(n); return true; }
+        if (op == opTrunc || op == opBitcast)
             { emitTruncBitcast(n); return true; }
         return false;
     }
 
-    bool dispatchMemory(IRFunc* fn, IRBlock* bb, IRInsn* n, String* op)   // memory, addressing and aggregates
+    bool dispatchMemory(IRFunc* fn, IRBlock* bb, IRInsn* n, u16 op)   // memory, addressing and aggregates
     {
-        if (op.equals(String.withCString("AddrOf"))) { emitAddrOf(n); return true; }
-        if (op.equals(String.withCString("Select")))  { emitSelect(n); return true; }
-        if (op.equals(String.withCString("MemCopy")))  { emitMemCopy(n); return true; }
-        if (op.equals(String.withCString("MemSet")))   { emitMemSet(n); return true; }
-        if (op.equals(String.withCString("AggBuild")))   { emitAggBuild(n); return true; }
-        if (op.equals(String.withCString("AggExtract"))) { emitAggExtract(n); return true; }
-        if (op.equals(String.withCString("ElementAddr"))) { emitElementAddr(n); return true; }
-        if (op.equals(String.withCString("IntToPtr")))    { emitIntToPtr(n); return true; }
-        if (op.equals(String.withCString("PtrToInt")))    { emitPtrToInt(n); return true; }
-        if (op.equals(String.withCString("FieldAddr"))) { emitFieldAddr(n); return true; }
-        if (op.equals(String.withCString("Store")) || op.equals(String.withCString("StoreVolatile")))
+        if (op == opAddrOf) { emitAddrOf(n); return true; }
+        if (op == opSelect)  { emitSelect(n); return true; }
+        if (op == opMemCopy)  { emitMemCopy(n); return true; }
+        if (op == opMemSet)   { emitMemSet(n); return true; }
+        if (op == opAggBuild)   { emitAggBuild(n); return true; }
+        if (op == opAggExtract) { emitAggExtract(n); return true; }
+        if (op == opElementAddr) { emitElementAddr(n); return true; }
+        if (op == opIntToPtr)    { emitIntToPtr(n); return true; }
+        if (op == opPtrToInt)    { emitPtrToInt(n); return true; }
+        if (op == opFieldAddr) { emitFieldAddr(n); return true; }
+        if (op == opStore || op == opStoreVolatile)
             { emitStore(n); return true; }
-        if (op.equals(String.withCString("Load")) || op.equals(String.withCString("LoadVolatile")))
+        if (op == opLoad || op == opLoadVolatile)
             { emitLoad(n); return true; }
         return false;
     }
 
-    bool dispatchFloat(IRFunc* fn, IRBlock* bb, IRInsn* n, String* op)   // the float ops, all of which reach IEEE through MECH
+    bool dispatchFloat(IRFunc* fn, IRBlock* bb, IRInsn* n, u16 op)   // the float ops, all of which reach IEEE through MECH
     {
-        if (op.equals(String.withCString("FAdd")) || op.equals(String.withCString("FSub"))
-            || op.equals(String.withCString("FMul")) || op.equals(String.withCString("FDiv")))
+        if (op == opFAdd || op == opFSub
+            || op == opFMul || op == opFDiv)
             { emitFArith(n); return true; }
-        if (op.equals(String.withCString("FNeg")))   { emitFNeg(n); return true; }
-        if (op.equals(String.withCString("FCmp")))   { emitFCmp(n); return true; }
-        if (op.equals(String.withCString("SIToFp")) || op.equals(String.withCString("UIToFp")))
+        if (op == opFNeg)   { emitFNeg(n); return true; }
+        if (op == opFCmp)   { emitFCmp(n); return true; }
+        if (op == opSIToFp || op == opUIToFp)
             { emitIntToFp(n); return true; }
-        if (op.equals(String.withCString("FpToSI")) || op.equals(String.withCString("FpToUI")))
+        if (op == opFpToSI || op == opFpToUI)
             { emitFpToInt(n); return true; }
-        if (op.equals(String.withCString("FpExt")) || op.equals(String.withCString("FpTrunc")))
+        if (op == opFpExt || op == opFpTrunc)
             { emitFpCast(n); return true; }
-        if (op.equals(String.withCString("FSqrt")))  { emitFSqrt(n); return true; }
+        if (op == opFSqrt)  { emitFSqrt(n); return true; }
         return false;
     }
 
-    bool dispatchRuntime(IRFunc* fn, IRBlock* bb, IRInsn* n, String* op)   // dispatch, ARC, weak references and the banking ops
+    bool dispatchRuntime(IRFunc* fn, IRBlock* bb, IRInsn* n, u16 op)   // dispatch, ARC, weak references and the banking ops
     {
-        if (op.equals(String.withCString("VTblDispatch")) || op.equals(String.withCString("CallIndirect")))
+        if (op == opVTblDispatch || op == opCallIndirect)
             { emitIndirectCall(n); return true; }
-        if (op.equals(String.withCString("VTblLoad")))   { emitVTblLoad(n); return true; }
-        if (op.equals(String.withCString("ClassDowncast"))
-            || op.equals(String.withCString("ClassDowncastFailable"))) { emitPtrToInt(n); return true; }
-        if (op.equals(String.withCString("BankSelectFor"))) { emitBankSelectFor(n); return true; }
-        if (op.equals(String.withCString("BankSave")))     { emitBankSave(); return true; }
-        if (op.equals(String.withCString("BankRestore")))  { emitBankRestore(); return true; }
-        if (op.equals(String.withCString("Retain")) || op.equals(String.withCString("Release"))
-            || op.equals(String.withCString("Autorelease"))) { emitArc(n); return true; }
-        if (op.equals(String.withCString("WeakRegister")))   { emitWeakRegister(n); return true; }
-        if (op.equals(String.withCString("WeakUnregister"))) { emitWeakUnregister(n); return true; }
-        if (op.equals(String.withCString("WeakLoad")))       { emitWeakLoad(n); return true; }
+        if (op == opVTblLoad)   { emitVTblLoad(n); return true; }
+        if (op == opClassDowncast
+            || op == opClassDowncastFailable) { emitPtrToInt(n); return true; }
+        if (op == opBankSelectFor) { emitBankSelectFor(n); return true; }
+        if (op == opBankSave)     { emitBankSave(); return true; }
+        if (op == opBankRestore)  { emitBankRestore(); return true; }
+        if (op == opRetain || op == opRelease
+            || op == opAutorelease) { emitArc(n); return true; }
+        if (op == opWeakRegister)   { emitWeakRegister(n); return true; }
+        if (op == opWeakUnregister) { emitWeakUnregister(n); return true; }
+        if (op == opWeakLoad)       { emitWeakLoad(n); return true; }
         return false;
     }
 
@@ -2300,7 +2292,7 @@ class Xt6502
     {
         if (n.ops().count() < (u32)2) return;
         emitCallerSave(n);
-        bool isVtbl = n.op().equals(String.withCString("VTblDispatch"));
+        bool isVtbl = n.isOp(opVTblDispatch);
         u32 firstArg = isVtbl ? (u32)2 : (u32)1;
         IROperand* recvOrFn = (IROperand*)n.ops().get((u32)0);
         u32 pushed = (u32)0;
@@ -2629,7 +2621,7 @@ class Xt6502
         _out.appendCString("    LDA $93\n");
         // Autorelease degrades to a release.
         _out.appendFormat("    JSR %s\n",
-            n.op().equals(String.withCString("Retain")) ? "__xtc_retain" : "__xtc_release");
+            n.isOp(opRetain) ? "__xtc_retain" : "__xtc_release");
     }
 
     // The object's BANK is part of the side-table key alongside its address,
@@ -2688,10 +2680,10 @@ class Xt6502
         if (n.ops().count() < (u32)2 || n.res() == (IRValue*)0) return;
         u32 w = byteWidth(n.res().ty());
         u32 mcType = w == (u32)8 ? (u32)1 : (u32)0;         // F64 : F32
-        String* op = n.op();
-        u32 mcOp = op.equals(String.withCString("FAdd")) ? (u32)$01
-                 : op.equals(String.withCString("FSub")) ? (u32)$02
-                 : op.equals(String.withCString("FMul")) ? (u32)$03 : (u32)$04;
+        u16 op = n.opc();
+        u32 mcOp = op == opFAdd ? $01
+                 : op == opFSub ? $02
+                 : op == opFMul ? $03 : $04;
         emitMechBinop(n, w, mcType, mcOp, w, false, w);
     }
 
@@ -2755,7 +2747,7 @@ class Xt6502
         IROperand* a = (IROperand*)n.ops().get((u32)0);
         u32 sw = byteWidth(a.val().ty());
         u32 dw = byteWidth(n.res().ty());
-        bool sgn = n.op().equals(String.withCString("SIToFp"));
+        bool sgn = n.isOp(opSIToFp);
         u32 dstType = dw == (u32)8 ? (u32)1 : (u32)0;
         if (!sgn && sw == (u32)8) { emitU64ToFp(n, dstType, dw); return; }
         u32 srcType = (u32)2;
@@ -2799,7 +2791,7 @@ class Xt6502
         u32 fw = byteWidth(a.val().ty());
         u32 iw = byteWidth(n.res().ty());
         u32 srcType = fw == (u32)8 ? (u32)1 : (u32)0;
-        bool sgn = n.op().equals(String.withCString("FpToSI"));
+        bool sgn = n.isOp(opFpToSI);
         if (!sgn && iw == (u32)8) { emitFpToU64(n, fw, srcType); return; }
         mechMap();
         mechStore(a, fw, (u32)0, fw, false);
@@ -3038,7 +3030,7 @@ class Xt6502
             Array* rev = reversedInsns(bb);
             for (u32 i = (u32)0; i < rev.count(); i = i + (u32)1) {
                 IRInsn* n = (IRInsn*)rev.get(i);
-                if (isCallOp(n.op())) {
+                if (isCallOp(n.opc())) {
                     Array* held = copyVals(live);
                     for (u32 k = (u32)0; k < live.count(); k = k + (u32)1) {
                         Object* r = roots.get((Hashable*)(IRValue*)live.get(k));
@@ -3065,22 +3057,22 @@ class Xt6502
     // converted to an integer. Its storage is then shared with code that may
     // change it during a call, and restoring the caller's copy afterwards
     // would undo that.
-    static bool derivesAddress(String* op)
+    static bool derivesAddress(u16 op)
     {
-        return op.equals(String.withCString("FieldAddr"))
-            || op.equals(String.withCString("ElementAddr"))
-            || op.equals(String.withCString("Bitcast"))
-            || op.equals(String.withCString("Copy"))
-            || op.equals(String.withCString("Select"))
-            || op.equals(String.withCString("Phi"));
+        return op == opFieldAddr
+            || op == opElementAddr
+            || op == opBitcast
+            || op == opCopy
+            || op == opSelect
+            || op == opPhi;
     }
 
-    static bool accessesThrough(String* op)
+    static bool accessesThrough(u16 op)
     {
-        return op.equals(String.withCString("Load"))
-            || op.equals(String.withCString("Store"))
-            || op.equals(String.withCString("LoadVolatile"))
-            || op.equals(String.withCString("StoreVolatile"));
+        return op == opLoad
+            || op == opStore
+            || op == opLoadVolatile
+            || op == opStoreVolatile;
     }
 
     static void appendInsns(Array* into, Array* from)
@@ -3100,8 +3092,8 @@ class Xt6502
             for (u32 i = (u32)0; i < all.count(); i = i + (u32)1) {
                 IRInsn* n = (IRInsn*)all.get(i);
                 if (n.res() == (IRValue*)0) continue;
-                bool isAddrOf = n.op().equals(String.withCString("AddrOf"));
-                if (!isAddrOf && !derivesAddress(n.op())) continue;
+                bool isAddrOf = n.isOp(opAddrOf);
+                if (!isAddrOf && !derivesAddress(n.opc())) continue;
                 Object* mo = roots.get((Hashable*)n.res());
                 Array* mine = mo == (Object*)0 ? (Array*)0 : (Array*)mo;
                 for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1) {
@@ -3126,15 +3118,15 @@ class Xt6502
         Array* escaped = new Array();
         for (u32 i = (u32)0; i < all.count(); i = i + (u32)1) {
             IRInsn* n = (IRInsn*)all.get(i);
-            bool derives = n.op().equals(String.withCString("AddrOf"))
-                        || derivesAddress(n.op())
-                        || n.op().equals(String.withCString("ICmp"));
+            bool derives = n.isOp(opAddrOf)
+                        || derivesAddress(n.opc())
+                        || n.isOp(opICmp);
             for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1) {
                 IROperand* o = (IROperand*)n.ops().get(k);
                 if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0) continue;
                 Object* r = roots.get((Hashable*)o.val());
                 if (r == (Object*)0) continue;
-                bool through = k == (u32)0 && accessesThrough(n.op());
+                bool through = k == 0 && accessesThrough(n.opc());
                 if (!derives && !through) unionVals(escaped, (Array*)r);
             }
         }
@@ -3176,8 +3168,8 @@ class Xt6502
     {
         if (n.ops().count() < (u32)2 || n.res() == (IRValue*)0) return;
         u32 width = byteWidth(n.res().ty());
-        String* mn = n.op().equals(String.withCString("And")) ? String.withCString("AND")
-                   : n.op().equals(String.withCString("Or"))  ? String.withCString("ORA")
+        String* mn = n.isOp(opAnd) ? String.withCString("AND")
+                   : n.isOp(opOr)  ? String.withCString("ORA")
                                                               : String.withCString("EOR");
         IROperand* r = (IROperand*)n.ops().get((u32)1);
         for (u32 b = (u32)0; b < width; b = b + (u32)1) {
@@ -3237,7 +3229,7 @@ class Xt6502
         if (n.ops().count() < (u32)2 || n.res() == (IRValue*)0) return;
         u32 width = byteWidth(n.res().ty());
         bool isSigned = isSignedTy(n.res().ty());
-        String* op = n.op();
+        u16 op = n.opc();
         // 32-bit goes to the MECH math coprocessor instead: a software 32-bit
         // divide is ~2-3k cycles, far past MECH's flat ~23us doorbell floor at
         // every turbo tier, so the offload always wins. MECH integer ops are
@@ -3246,16 +3238,16 @@ class Xt6502
             u32 mcType = (u32)2;
             u32 mcOp = (u32)$03;
             bool zx = false;
-            if (op.equals(String.withCString("Mul")))       { mcType = (u32)2; mcOp = (u32)$03; }
-            else if (op.equals(String.withCString("SDiv"))) { mcType = (u32)2; mcOp = (u32)$04; }
-            else if (op.equals(String.withCString("UDiv"))) { mcType = (u32)3; mcOp = (u32)$04; zx = true; }
-            else if (op.equals(String.withCString("SRem"))) { mcType = (u32)2; mcOp = (u32)$0B; }
-            else if (op.equals(String.withCString("URem"))) { mcType = (u32)3; mcOp = (u32)$0B; zx = true; }
+            if (op == opMul)       { mcType = 2; mcOp = $03; }
+            else if (op == opSDiv) { mcType = 2; mcOp = $04; }
+            else if (op == opUDiv) { mcType = 3; mcOp = $04; zx = true; }
+            else if (op == opSRem) { mcType = 2; mcOp = $0B; }
+            else if (op == opURem) { mcType = 3; mcOp = $0B; zx = true; }
             emitMechBinop(n, (u32)4, mcType, mcOp, zx ? (u32)8 : (u32)4, false, (u32)4);
             return;
         }
-        String* opName = op.equals(String.withCString("Mul")) ? String.withCString("Mul")
-            : (op.equals(String.withCString("SDiv")) || op.equals(String.withCString("UDiv")))
+        String* opName = op == opMul ? String.withCString("Mul")
+            : (op == opSDiv || op == opUDiv)
                 ? String.withCString("Div") : String.withCString("Mod");
         String* tag = widthTag(width, isSigned);
         if (tag == (String*)0) { unsupported(String.withCString("MulDiv:width")); return; }
@@ -3388,7 +3380,7 @@ class Xt6502
         IROperand* src = (IROperand*)n.ops().get((u32)0);
         u32 srcW = srcWidthOf(src, dstW);
         String* st = src.kind() == (u8)OPK_USE ? src.val().ty() : src.ty();
-        bool sx8 = srcW == (u32)1 && st != (String*)0 && st.equals(String.withCString("I8"));
+        bool sx8 = srcW == 1 && st != (String*)0 && IRType.is(st, tyI8);
         for (u32 b = (u32)0; b < dstW; b = b + (u32)1) {
             if (b < srcW) loadOperandByte(src, b);
             else if (b == (u32)1 && sx8) signFill(src, srcW);
@@ -3553,12 +3545,12 @@ class Xt6502
                 if (n.res() == (IRValue*)0 || !isPtrTy(n.res().ty())) continue;
                 if (n.ops().count() < (u32)1) continue;
                 IROperand* o = (IROperand*)n.ops().get((u32)0);
-                if (n.op().equals(String.withCString("AddrOf"))) {
+                if (n.isOp(opAddrOf)) {
                     if (o.kind() != (u8)OPK_SYM || o.name() == (String*)0) continue;
                     String* lbl = String.withCString("_");
                     lbl.append(o.name());
                     _absSym.set((Hashable*)n.res(), (Object*)lbl);
-                } else if (n.op().equals(String.withCString("Bitcast"))) {
+                } else if (n.isOp(opBitcast)) {
                     if (o.kind() != (u8)OPK_USE) continue;
                     Object* src = _absSym.get((Hashable*)o.val());
                     if (src != (Object*)0) _absSym.set((Hashable*)n.res(), src);
@@ -3583,7 +3575,7 @@ class Xt6502
             IRBlock* bb = (IRBlock*)fn.blocks().get(b);
             for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1) {
                 IRInsn* n = (IRInsn*)bb.insns().get(i);
-                if (!n.op().equals(String.withCString("AddrOf"))) continue;
+                if (!n.isOp(opAddrOf)) continue;
                 if (n.res() == (IRValue*)0) continue;
                 if (_absSym.get((Hashable*)n.res()) == (Object*)0) continue;
                 String* pte = pointeeOf(n.res().ty());
@@ -3600,10 +3592,10 @@ class Xt6502
             Array* seq = allInsns(bb);
             for (u32 i = (u32)0; i < seq.count(); i = i + (u32)1) {
                 IRInsn* n = (IRInsn*)seq.get(i);
-                bool isLoadStore = n.op().equals(String.withCString("Load"))
-                    || n.op().equals(String.withCString("LoadVolatile"))
-                    || n.op().equals(String.withCString("Store"))
-                    || n.op().equals(String.withCString("StoreVolatile"));
+                bool isLoadStore = n.isOp(opLoad)
+                    || n.isOp(opLoadVolatile)
+                    || n.isOp(opStore)
+                    || n.isOp(opStoreVolatile);
                 for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1) {
                     IROperand* o = (IROperand*)n.ops().get(k);
                     if (o.kind() != (u8)OPK_USE) continue;
@@ -3628,11 +3620,11 @@ class Xt6502
         // Nothing in the tree took the address of a 64-bit GLOBAL until
         // tests/fixtures/int64_unary.xc, so the two stayed silently out of step
         // and the port emitted a dead `LDA #<_sym` triple the reference elides.
-        return CgCommon.isFloatTy(t) || t.equals(String.withCString("Bool"))
-            || t.equals(String.withCString("I8"))  || t.equals(String.withCString("U8"))
-            || t.equals(String.withCString("I16")) || t.equals(String.withCString("U16"))
-            || t.equals(String.withCString("I32")) || t.equals(String.withCString("U32"))
-            || t.equals(String.withCString("I64")) || t.equals(String.withCString("U64"));
+        return CgCommon.isFloatTy(t) || IRType.is(t, tyBool)
+            || IRType.is(t, tyI8)  || IRType.is(t, tyU8)
+            || IRType.is(t, tyI16) || IRType.is(t, tyU16)
+            || IRType.is(t, tyI32) || IRType.is(t, tyU32)
+            || IRType.is(t, tyI64) || IRType.is(t, tyU64);
     }
 
     String* absSymFor(IRValue* v)
@@ -4366,7 +4358,7 @@ class Xt6502
     void emitAddSub(IRInsn* n)
     {
         if (n.ops().count() < (u32)2 || n.res() == (IRValue*)0) { unsupported(n.op()); return; }
-        bool add = n.op().equals(String.withCString("Add"));
+        bool add = n.isOp(opAdd);
         u32 width = byteWidth(n.res().ty());
         _out.appendCString(add ? "    CLC\n" : "    SEC\n");
         String* mnem = String.withCString(add ? "ADC" : "SBC");
