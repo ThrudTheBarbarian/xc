@@ -611,29 +611,54 @@ class BitSet
             _end.set(v, (Object*)Number.with(en));
             }
         segments();
+        // A value crosses a call when some call position lies in one of its
+        // segments. The positions, doubled as the segments are, sorted once;
+        // each segment asks for the first position at or after its start
+        // (#331: every value tested every call against every segment).
         _crossesCall = BitSet.withCapacity(_nv);
+        u32 nc = _callPos.count();
+        if (nc == (u32)0)
+            return;
+        u32* calls = new u32[nc];
+        for (u32 i = (u32)0; i < nc; i = i + (u32)1)
+            calls[i] = (u32)2 * ((Number*)_callPos.get(i)).asU32();
+        for (u32 i = (u32)1; i < nc; i = i + (u32)1)
+            {
+            u32 c = calls[i];
+            u32 j = i;
+            while (j > (u32)0 && calls[j - (u32)1] > c)
+                {
+                calls[j] = calls[j - (u32)1];
+                j = j - (u32)1;
+                }
+            calls[j] = c;
+            }
         for (u32 v = (u32)0; v < _nv; v = v + (u32)1)
             {
             Array* sg = (Array*)_segs.get(v);
             if (sg == (Array*)0)
                 continue;
-            for (u32 i = (u32)0; i < _callPos.count(); i = i + (u32)1)
+            for (u32 k = (u32)0; k < sg.count(); k = k + (u32)1)
                 {
-                u32 c = (u32)2 * ((Number*)_callPos.get(i)).asU32();
-                bool hit = false;
-                for (u32 k = (u32)0; k < sg.count(); k = k + (u32)1)
+                Seg* g = (Seg*)sg.get(k);
+                u32 lo = (u32)0;
+                u32 hi = nc;
+                while (lo < hi)
                     {
-                    Seg* g = (Seg*)sg.get(k);
-                    if (g._lo <= c && c <= g._hi)
-                        hit = true;
+                    u32 mid = (lo + hi) / (u32)2;
+                    if (calls[mid] < g._lo)
+                        lo = mid + (u32)1;
+                    else
+                        hi = mid;
                     }
-                if (hit)
+                if (lo < nc && calls[lo] <= g._hi)
                     {
                     _crossesCall.add(v);
-                    i = _callPos.count();
+                    k = sg.count();
                     }
                 }
             }
+        delete calls;
         }
 
     // The hull [start,end] is filled by a loop-carried value from its phi to
@@ -651,6 +676,15 @@ class BitSet
         _related = new Array();
         _segLo = new Array();
         _segHi = new Array();
+        // Each block's first and last position, unboxed once (#331): the loop
+        // below reads them for every value and every block.
+        u32* blkS = new u32[_nb + (u32)1];
+        u32* blkE = new u32[_nb + (u32)1];
+        for (u32 bi = (u32)0; bi < _nb; bi = bi + (u32)1)
+            {
+            blkS[bi] = ((Number*)_blkStart.get(bi)).asU32();
+            blkE[bi] = ((Number*)_blkEnd.get(bi)).asU32();
+            }
         for (u32 v = (u32)0; v < _nv; v = v + (u32)1)
             {
             _related.add((Object*)0);
@@ -667,8 +701,8 @@ class BitSet
             u32 dp = hasDef ? ((Number*)dpo).asU32() : (u32)0;
             for (u32 bi = (u32)0; bi < _nb; bi = bi + (u32)1)
                 {
-                u32 bs = ((Number*)_blkStart.get(bi)).asU32();
-                u32 be = ((Number*)_blkEnd.get(bi)).asU32();
+                u32 bs = blkS[bi];
+                u32 be = blkE[bi];
                 bool inL = ((BitSet*)_liveIn.get(bi)).has(v);
                 bool outL = ((BitSet*)_liveOut.get(bi)).has(v);
                 bool defHere = hasDef && dp >= bs && dp <= be;
@@ -692,6 +726,8 @@ class BitSet
                 }
             _segs.add((Object*)list);
             }
+        delete blkS;
+        delete blkE;
         for (u32 bi = (u32)0; bi < _nb; bi = bi + (u32)1)
             {
             IRBlock* b = (IRBlock*)_fn.blocks().get(bi);
