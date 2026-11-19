@@ -22,6 +22,13 @@ work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
 cat > "$work/app.xc" <<'XC'
 #import <Stdio.xc>
 #use <UXKit>
+// The file classes are in the library too: a client saves and opens files with them.  Compiled and
+// linked, never called (a save panel is modal, and the web reads files through its page).
+void saveAs(void)
+    {
+    u8* path = UXSavePanel.run((u8*)"Save", (u8*)0, (u8*)"out.txt");
+    UXFileIO.write(path, UXFileIO.read(path));
+    }
 class App : Object<UXApplicationDelegate>
     {
     i32 applicationDidStart(UXApplication* app)

@@ -73,6 +73,7 @@ i32 UXK_ABI_SYM(void)
 #import "UXEventRecorder.xc"
 #import "UXFileChooser.xc"
 #import "UXFilePanel.xc"
+#import "UXFileIO.xc"    // whole files in and out; on the web, a download
 #import "UXFont.xc"
 #if UX_PLATFORM_GEM
 #import "UXGem.xc"
@@ -89,6 +90,7 @@ i32 UXK_ABI_SYM(void)
 #import "UXPopUpButton.xc"
 #import "UXProgressBar.xc"
 #import "UXScrollView.xc"
+#import "UXSavePanel.xc"
 #import "UXSegmentedControl.xc"
 #import "UXShapePath.xc"
 #import "UXSlider.xc"
