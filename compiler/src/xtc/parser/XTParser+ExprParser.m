@@ -917,6 +917,7 @@ static XTOpInfo operatorInfo(XTTokenType type)
                                 location:loc];
                     }
                 }
+            [self blkNoteBareCall:cur.value at:loc];
             return [self stampFwd:[[XTCallExprNode alloc] initWithCallee:cur.value arguments:args location:loc]];
             }
         [self blkNoteIdentifierUse:cur.value at:loc]; // task #26

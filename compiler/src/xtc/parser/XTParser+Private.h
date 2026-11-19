@@ -110,6 +110,8 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)blkEnterClass:(nullable NSString*)name parent:(nullable NSString*)parent;
 - (void)blkLeaveClass:(nullable NSString*)saved;
 - (void)blkAddIvarName:(NSString*)name;
+- (void)blkScanMethodNames;
+- (void)blkNoteBareCall:(NSString*)name at:(XTSourceLocation*)loc;
 - (NSMutableDictionary*)blkBases;
 @end
 

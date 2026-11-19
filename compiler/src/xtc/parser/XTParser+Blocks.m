@@ -229,6 +229,96 @@ NS_ASSUME_NONNULL_BEGIN
     return NO;
     }
 
+/****************************************************************************\
+|* The method names of the class whose body starts at the current token (just
+|* past its `{`), read from the tokens so a method declared after the one being
+|* parsed counts too: at the body's own level, a name followed by `(` that is
+|* not in an ivar's initialiser, not after `.` or `:`, and not `since`. A bare
+|* call to one of them, or to a parent's, means `self.m(…)`, which a block
+|* cannot make (blkNoteBareCall). Mirrored in the port (blkScanMethods).
+\****************************************************************************/
+- (void)blkScanMethodNames
+    {
+    NSString* cls = self.blkState[@"curClass"];
+    if (!cls)
+        return;
+    NSMutableDictionary* all = self.blkState[@"classMethods"];
+    if (!all)
+        self.blkState[@"classMethods"] = all = [NSMutableDictionary dictionary];
+    NSMutableSet* own = all[cls];
+    if (!own)
+        all[cls] = own = [NSMutableSet set];
+    NSInteger braces = 0, parens = 0;
+    BOOL inInit = NO;
+    XTTokenType prev = XTTokenEOF;
+    for (NSUInteger i = 0;; i++)
+        {
+        XTToken* t = [self peekToken:i];
+        XTTokenType ty = t.type;
+        if (ty == XTTokenEOF)
+            break;
+        if (ty == XTTokenLBrace)
+            braces++;
+        else if (ty == XTTokenRBrace)
+            {
+            if (braces == 0)
+                break;
+            if (--braces == 0)
+                inInit = NO;
+            }
+        else if (braces == 0)
+            {
+            if (ty == XTTokenLParen)
+                parens++;
+            else if (ty == XTTokenRParen && parens > 0)
+                parens--;
+            else if (parens == 0 && ty == XTTokenAssign)
+                inInit = YES;
+            else if (parens == 0 && ty == XTTokenSemicolon)
+                inInit = NO;
+            else if (parens == 0 && ty == XTTokenIdentifier && !inInit && prev != XTTokenDot && prev != XTTokenColon &&
+                     [self peekToken:i + 1].type == XTTokenLParen && ![t.value isEqualToString:@"since"])
+                [own addObject:t.value];
+            }
+        prev = ty;
+        }
+    }
+
+// A method of the class being parsed or of a parent (blkScanMethodNames).
+- (BOOL)blkIsMethod:(NSString*)name
+    {
+    NSDictionary* all = self.blkState[@"classMethods"];
+    NSDictionary* parents = self.blkState[@"classParents"];
+    NSString* cls = self.blkState[@"curClass"];
+    for (NSUInteger hop = 0; cls && hop < 64; hop++)
+        {
+        if ([all[cls] containsObject:name])
+            return YES;
+        cls = parents[cls];
+        }
+    return NO;
+    }
+
+/****************************************************************************\
+|* A bare call `m(…)` in a block or par body, `m` a method of the enclosing
+|* class and no local or parameter: it means `self.m(…)`, and a block cannot
+|* capture self. Said here, as `self.m(…)` is, rather than left to sema, which
+|* reads the body outside the class and reports `m` undeclared; under
+|* --par-style=auto the error takes the block form back and the loop stays a
+|* loop. As the port.
+\****************************************************************************/
+- (void)blkNoteBareCall:(NSString*)name at:(XTSourceLocation*)loc
+    {
+    if (![self blkFrames].count || [self blkLookup:name depth:NULL] || ![self blkIsMethod:name])
+        return;
+    [self.diagnostics emitError:[NSString stringWithFormat:
+                                              @"a block cannot call the method '%@': it needs 'self', and a block "
+                                              @"cannot capture 'self' (v1 captures locals and parameters only) — copy "
+                                              @"it into a local first, e.g. `auto me = self;` outside the block",
+                                              name]
+                             at:loc];
+    }
+
 - (void)blkPushScope
     {
     [[self blkScopes] addObject:[NSMutableDictionary dictionary]];

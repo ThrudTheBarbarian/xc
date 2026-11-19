@@ -91,6 +91,7 @@ class Parser
     Map*    _blkFnRet;      // function name -> return spelling
     Map*    _blkClassIvars; // class -> Set of its own ivar names (capture error)
     Map*    _blkClassParent; // class -> parent class
+    Map*    _blkClassMethods; // class -> Set of its method names (bare-call error)
     String* _blkCurClass;   // the class being parsed, or 0
     u32     _blkCounter;
     String* _lastBlkName;
@@ -125,6 +126,7 @@ class Parser
         _blkFnRet   = new Map();
         _blkClassIvars = new Map();
         _blkClassParent = new Map();
+        _blkClassMethods = new Map();
         _blkCurClass = (String*)0;
         _blkCounter = (u32)0;
         _lastBlkName = (String*)0;
@@ -228,6 +230,80 @@ class Parser
             cls = (String*)_blkClassParent.get((Hashable*)cls);
         }
         return false;
+    }
+
+    // The method names of the class whose body starts at the current token
+    // (just past its `{`), read from the tokens so a method declared after
+    // the one being parsed counts too: at the body's own level, a name
+    // followed by `(` that is not in an ivar's initialiser, not after `.` or
+    // `:`, and not `since`. As the reference (blkScanMethodNames).
+    void blkScanMethods(void)
+    {
+        if (_blkCurClass == (String*)0) return;
+        Set* own = (Set*)_blkClassMethods.get((Hashable*)_blkCurClass);
+        if (own == (Set*)0) {
+            own = new Set();
+            _blkClassMethods.set((Hashable*)String.withString(_blkCurClass), (Object*)own);
+        }
+        u32 braces = 0;
+        u32 parens = 0;
+        bool inInit = false;
+        u16 prev = (u16)tokEOF;
+        u32 i = 0;
+        while (true) {
+            Token* t = peek(i);
+            u16 ty = t.type();
+            if (ty == (u16)tokEOF) break;
+            if (ty == (u16)tokLBrace) {
+                braces = braces + 1;
+            } else if (ty == (u16)tokRBrace) {
+                if (braces == 0) break;
+                braces = braces - 1;
+                if (braces == 0) inInit = false;
+            } else if (braces == 0) {
+                if (ty == (u16)tokLParen) {
+                    parens = parens + 1;
+                } else if (ty == (u16)tokRParen && parens > 0) {
+                    parens = parens - 1;
+                } else if (parens == 0 && ty == (u16)tokAssign) {
+                    inInit = true;
+                } else if (parens == 0 && ty == (u16)tokSemicolon) {
+                    inInit = false;
+                } else if (parens == 0 && ty == (u16)tokIdentifier && !inInit
+                           && prev != (u16)tokDot && prev != (u16)tokColon
+                           && peek(i + 1).type() == (u16)tokLParen && !Parser._same(t.value(), "since")) {
+                    own.add((Hashable*)String.withString(t.value()));
+                }
+            }
+            prev = ty;
+            i = i + 1;
+        }
+    }
+
+    // A method of the class being parsed or of a parent (blkScanMethods).
+    bool blkIsMethod(String* name)
+    {
+        String* cls = _blkCurClass;
+        for (u32 hop = 0; cls != (String*)0 && hop < 64; hop = hop + 1) {
+            Set* own = (Set*)_blkClassMethods.get((Hashable*)cls);
+            if (own != (Set*)0 && own.contains((Hashable*)name)) return true;
+            cls = (String*)_blkClassParent.get((Hashable*)cls);
+        }
+        return false;
+    }
+
+    // A bare call `m(…)` in a block or par body, `m` a method of the
+    // enclosing class and no local or parameter: it means `self.m(…)`, and a
+    // block cannot capture self. Said here, as `self.m(…)` is, rather than
+    // left to sema, which reads the body outside the class and reports `m`
+    // undeclared; under --par-style=auto the error takes the block form back
+    // and the loop stays a loop. As the reference (blkNoteBareCall).
+    void blkNoteBareCall(Node* callee)
+    {
+        String* name = callee.name();
+        if (_blkFrames.count() == 0) return;
+        if (blkLookup(name, (u32*)0) != 0 || !blkIsMethod(name)) return;
+        _errorAt(String.withFormat("a block cannot call the method '%s': it needs 'self', and a block cannot capture 'self' (v1 captures locals and parameters only) — copy it into a local first, e.g. `auto me = self;` outside the block", name.cString()), callee);
     }
 
     // In a par body, `self.f` (not a call) where `f` resolves to this class's
@@ -1921,6 +1997,7 @@ class Parser
         Array* methods = new Array();
         if (openBlock()) {
             blkPushScope();                          // class scope (task #26)
+            blkScanMethods();
             while (!closeBlockAhead() && !check((u16)tokEOF)) {
                 if (match((u16)tokSemicolon)) continue;
                 u32 before = _pos;
@@ -7076,6 +7153,7 @@ class Parser
                         n = mkNamed((u16)nkMethodCall, String.withCString("invoke"));
                         n.add(mkNamed((u16)nkIdent, node.name()));
                     } else {
+                        blkNoteBareCall(node);
                         n = mkNamed((u16)nkCall, node.name());
                     }
                 } else {

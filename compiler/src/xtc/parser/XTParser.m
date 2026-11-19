@@ -1188,6 +1188,7 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
     [self blkPushScope];
     NSString* blkSavedClass = [self blkState][@"curClass"];
     [self blkEnterClass:nameTok.value parent:parentName];
+    [self blkScanMethodNames];
 
     NSMutableArray<XTVariableDeclNode*>* ivars = [NSMutableArray array];
     NSMutableArray<XTMethodDeclNode*>* methods = [NSMutableArray array];
