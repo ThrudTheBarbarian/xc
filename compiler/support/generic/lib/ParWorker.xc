@@ -262,6 +262,7 @@ class ParCpuJob : Object
 #if OS_linux
 i32 sched_getaffinity(i32 pid, u64 size, u8* mask);
 i32 sched_setaffinity(i32 pid, u64 size, u8* mask);
+i32 sched_getcpu(void);
 #endif
 class ParCpuLane : Object
     {
@@ -332,7 +333,7 @@ class ParCpuLane : Object
 Array* gParLanes;
 u32 gParLanesBusy;
 Mutex* gParLanesLock;   // held by whoever runs on the lanes; a loser spawns
-i32 gParLanesFirstCpu;  // the calling thread's CPU during a run when the lanes are pinned, else -1
+i32 gParLanesFirstCpu;  // the calling thread's CPU during a run when the lanes are pinned (home), else -1
 
 class ParCpuLanes
     {
@@ -387,6 +388,22 @@ class ParCpuLanes
 #endif
         }
 
+    // Where in the pinned CPUs the calling thread's own is: the one it runs
+    // on as the lanes are made, which the scheduler chose for it. The lanes
+    // take the CPUs after it, so several programs running blocks at once
+    // each have their calling thread on a CPU of its own, not all on the
+    // first of the set (#460).
+    static u32 home(Array* cpus)
+        {
+#if OS_linux
+        i32 now = sched_getcpu();
+        for (u32 c = 0; now >= 0 && c < cpus.count(); c = c + 1)
+            if (((Number*)cpus.get(c)).asU32() == (u32)now)
+                return c;
+#endif
+        return 0;
+        }
+
     static Mutex* lock(void)
         {
         if (gParLanesLock == (Mutex*)0)
@@ -400,14 +417,16 @@ class ParCpuLanes
             gParLanes = new Array();
             i32 n = Par.threads();
             Array* cpus = ParCpuLanes.pinCpus(n);
-            gParLanesFirstCpu = cpus == (Array*)0 ? (i32)-1 : (i32)((Number*)cpus.get((u32)0)).asU32();
+            u32 h = cpus == (Array*)0 ? 0 : ParCpuLanes.home(cpus);
+            gParLanesFirstCpu = cpus == (Array*)0 ? -1 : (i32)((Number*)cpus.get(h)).asU32();
             for (i32 i = (i32)0; i < n; i = i + (i32)1)
                 {
                 ParCpuLane* lane = new ParCpuLane();
-                // Lane i on the (i + 1)th allowed CPU: the calling thread,
-                // which runs piece 0 and is not pinned, has the first.
+                // Lane i on the (i + 1)th allowed CPU after the calling
+                // thread's own (home), which that thread, running piece 0,
+                // has for each run.
                 lane._cpu = cpus == (Array*)0 ? (i32)-1
-                          : (i32)((Number*)cpus.get((u32)(i + (i32)1) % cpus.count())).asU32();
+                          : (i32)((Number*)cpus.get((h + (u32)i + 1) % cpus.count())).asU32();
                 lane.start();
                 gParLanes.add((Object*)lane);
                 }
@@ -469,9 +488,9 @@ class ParCpuLanes
             lane._go.post();
             }
 #if OS_linux
-        // The calling thread on the one allowed CPU no lane has, for the run
-        // only (its own mask restored after): unpinned, it shared a lane's CPU
-        // now and then, and piece 0 was the slow one.
+        // The calling thread on its home CPU, which no lane of the run has,
+        // for the run only (its own mask restored after): unpinned, it shared
+        // a lane's CPU now and then, and piece 0 was the slow one.
         u8 saved[128];
         bool pinned = gParLanesFirstCpu >= (i32)0 && sched_getaffinity((i32)0, (u64)128, &saved[0]) == (i32)0;
         if (pinned)

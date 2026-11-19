@@ -214,7 +214,9 @@ calling thread (or on the GPU through WebGPU).
 
 On Linux each of the block's threads is pinned to its own CPU, taken from the
 CPUs the process may use, so `taskset` and container limits still apply.
-`XC_PAR_PIN=0` leaves the threads unpinned.
+The calling thread keeps the CPU it runs on when its first block starts, and
+the other threads take the CPUs after it, so programs running blocks at the
+same time spread over the machine. `XC_PAR_PIN=0` leaves the threads unpinned.
 
 ## Running on the GPU
 
