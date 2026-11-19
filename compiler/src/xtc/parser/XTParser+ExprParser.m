@@ -923,11 +923,13 @@ static BOOL parPlainDecimal(NSString* t)
                     XTASTNode* recv = [[XTIdentifierNode alloc]
                         initWithName:@"self"
                             location:loc];
-                    return [[XTMethodCallExprNode alloc]
+                    XTASTNode* inv = [[XTMethodCallExprNode alloc]
                         initWithReceiver:recv
                               methodName:@"invoke"
                                arguments:args
                                 location:loc];
+                    inv.srcFacts |= XTSrcCalled;
+                    return inv;
                     }
                 NSDictionary* info = [self blkLookup:cur.value depth:NULL];
                 if (info[@"base"])
@@ -936,11 +938,13 @@ static BOOL parPlainDecimal(NSString* t)
                     XTASTNode* recv = [[XTIdentifierNode alloc]
                         initWithName:cur.value
                             location:loc];
-                    return [[XTMethodCallExprNode alloc]
+                    XTASTNode* inv = [[XTMethodCallExprNode alloc]
                         initWithReceiver:recv
                               methodName:@"invoke"
                                arguments:args
                                 location:loc];
+                    inv.srcFacts |= XTSrcCalled;
+                    return inv;
                     }
                 // A call through a function pointer that is a local or a
                 // parameter: a block body captures the pointer like any other

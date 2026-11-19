@@ -879,7 +879,9 @@ class Parser
         // Replacement: BlkImpl$N.mk(captures) — the capture-arg USES must
         // register with an enclosing literal frame too.
         Node* mkCall = mkNamed((u16)nkMethodCall, String.withCString("mk"));
-        mkCall.add(mkNamed((u16)nkIdent, String.withString(implName)));
+        Node* implRef = mkNamed(nkIdent, String.withString(implName));
+        implRef.addSrc(SRC_SYNTH);
+        mkCall.add(implRef);
         for (u32 i = (u32)0; i < capNames.count(); i = i + (u32)1) {
             String* cn = (String*)capNames.get(i);
             mkCall.add(mkNamed((u16)nkIdent, cn));
@@ -890,12 +892,14 @@ class Parser
             Node* addr = mkNamed((u16)nkUnary, String.withCString("&"));
             addr.setOp(String.withCString("&"));
             addr.add(mkNamed((u16)nkIdent, wn));
+            addr.addSrc(SRC_SYNTH);
             mkCall.add(addr);
         }
         mkCall.setNum((i64)(capNames.count() + wbNames.count()));
         if (wbNames.count() > (u32)0)
             _blkWbImpls.add((Hashable*)String.withString(implName));
         _mkAt = savedMkAt;
+        pfwRegister(mkCall, body, params, (Array*)0, 0, (Node*)0);
         return mkCall;
     }
 
@@ -3142,6 +3146,7 @@ class Parser
         parGridEnter("loops", false);
         blkPopScope();
         _blkFrames.removeAt(_blkFrames.count() - (u32)1);
+        parFrameCheck(frame, loop, forTok, true, loop == (Node*)0 || _errors.count() > errMark);
         if (loop == (Node*)0 || _errors.count() > errMark) {
             parAutoRefused(errMark, warnMark, fatalMark, plainEnd, forTok);
             _parTok = savedParTok;
@@ -3180,7 +3185,11 @@ class Parser
         }
         Token* savedMkAt = _mkAt;
         _mkAt = forTok;
+        Array* savedNoted = _pfwNoted;
+        _pfwNoted = new Array();
         Node* out = parDesugar(body, frame, name, reds);
+        pfwRegister(out, loop, (Array*)0, _pfwNoted, 2, plain);
+        _pfwNoted = savedNoted;
         _mkAt = savedMkAt;
         _parTok = savedParTok;
         if (out == (Node*)0 || _errors.count() > errMark) {
@@ -3748,6 +3757,465 @@ class Parser
         out.appendCString(s ? "=1" : "=0");
         if (s != h) out.appendCString(h ? "/1!" : "/0!");
         return s == h;
+    }
+
+    // ── The par frame walk (#338) ────────────────────────────────
+    // What the par-frame hooks collect while a par body is parsed (blkNoteUse,
+    // parNoteWrite, parNoteUpdate, parNoteSubscriptBase, parNoteExit and
+    // parGridMember), computed again from the body's tree once it is parsed:
+    // the captures and their types in first-use order, the globals the body
+    // names, the names it assigns, and its uses of each name, as subscript
+    // bases and as array updates. The walk visits the tree in the order the
+    // parser read it, and binds the body's declarations as the parser did, in
+    // scopes pushed on _blkScopes above the frame's depth, so a name resolves
+    // as it did where it was used. A block literal or a nested par block in
+    // the body is read through the site the parser registered for it
+    // (pfwRegister): its body counts toward the uses, and the names its site
+    // passes in are uses at the site. XC_PAR_AUTO_CHECK=frame compares the
+    // walk with the hooks (parFrameCheck).
+    bool   _parFrameCheckOn;
+    Map*   _pfw;        // the frame the walk fills
+    bool   _pfwTop;     // at the body's own level, not in a literal or nested block
+    Array* _pfwSites;   // pfwRegister's entries
+    Array* _pfwNoted;   // the names parDesugar's site notes, for pfwRegister
+    void setParFrameCheck(bool b) { _parFrameCheckOn = b; }
+
+    static Object* pfwGet(Map* m, string k)
+    {
+        return m.get((Hashable*)String.withCString(k));
+    }
+
+    // A literal's mk call (kind 0), or a nested written (1) or automatic (2)
+    // par block's site, with the body the parser read for it, the literal's
+    // parameters, the names the site noted, and for an automatic block the
+    // loop as written. Only under XC_PAR_AUTO_CHECK=frame, inside a frame.
+    void pfwRegister(Node* site, Node* body, Array* params, Array* noted, u32 kind, Node* plain)
+    {
+        if (!_parFrameCheckOn || _blkFrames.count() == 0 || site == (Node*)0 || body == (Node*)0) return;
+        if (_pfwSites == (Array*)0) _pfwSites = new Array();
+        Array* e = new Array();
+        e.add((Object*)site);
+        e.add((Object*)body);
+        e.add((Object*)(params != (Array*)0 ? params : new Array()));
+        e.add((Object*)(noted != (Array*)0 ? noted : new Array()));
+        e.add((Object*)Number.with(kind));
+        e.add((Object*)(plain != (Node*)0 ? plain : site));
+        _pfwSites.add((Object*)e);
+    }
+
+    Array* pfwSite(Node* n)
+    {
+        for (u32 i = 0; i < _pfwSites.count(); i++) {
+            Array* e = (Array*)_pfwSites.get(i);
+            if ((Object*)e.get(0) == (Object*)n) return e;
+        }
+        return (Array*)0;
+    }
+
+    // The frame the hooks would have built for `body`, a par body (a block)
+    // or a lifted loop, parsed in `frame`: names, types, wbnames, outer,
+    // written, refs, subBase, memWritten, updates, exits and gridUsed.
+    Map* parFrameWalk(Node* body, Map* frame)
+    {
+        Map* w = new Map();
+        w.set((Hashable*)String.withCString("depth"), pfwGet(frame, "depth"));
+        w.set((Hashable*)String.withCString("names"), (Object*)new Array());
+        w.set((Hashable*)String.withCString("types"), (Object*)new Map());
+        w.set((Hashable*)String.withCString("wbnames"), (Object*)new Array());
+        w.set((Hashable*)String.withCString("written"), (Object*)new Set());
+        if (pfwGet(frame, "grid") != (Object*)0)
+            w.set((Hashable*)String.withCString("gridUsed"), (Object*)new Set());
+        Map* savedW = _pfw;
+        bool savedTop = _pfwTop;
+        _pfw = w;
+        _pfwTop = true;
+        blkPushScope();
+        pfwNode(body);
+        blkPopScope();
+        _pfw = savedW;
+        _pfwTop = savedTop;
+        return w;
+    }
+
+    void pfwKids(Node* n)
+    {
+        for (u32 i = 0; i < n.kidCount(); i++) pfwNode(n.kid(i));
+    }
+
+    void pfwNode(Node* n)
+    {
+        if (n == (Node*)0) return;
+        u16 k = n.kind();
+        if (k == nkIdent) {
+            if (n.hasSrc(SRC_SYNTH)) pfwGridName(n.name());
+            else pfwUse(n.name());
+            return;
+        }
+        if (n.hasSrc(SRC_SYNTH)) return;
+        if (_pfwSites != (Array*)0 && (k == nkMethodCall || k == nkBlock)) {
+            Array* site = pfwSite(n);
+            if (site != (Array*)0) {
+                pfwSiteWalk(n, site);
+                return;
+            }
+        }
+        if (k == nkBlock) {
+            if (n.hasFlag(NF_DECLLIST)) {
+                pfwKids(n);
+                return;
+            }
+            blkPushScope();
+            pfwKids(n);
+            blkPopScope();
+            return;
+        }
+        if (k == nkVariableDecl) {
+            // Bound once its initialiser is read, as parseVarDeclStatement does.
+            pfwKids(n);
+            blkBind(n.name(), n.op(), (Array*)0);
+            if (Parser._same(n.op(), "auto") && n.kidCount() > 0) blkBindAuto(n.name(), n.kid(0));
+            return;
+        }
+        if (k == nkForCStyle && n.hasSrc(SRC_RANGE) && n.kidCount() == 4) {
+            // A range: its bounds, then the body with the variable bound; the
+            // condition's and the step's use of the variable are the parser's.
+            Node* d = Parser.pacKid0(n.kid(0));
+            Node* c = Parser.pacKid0(n.kid(1));
+            if (d != (Node*)0) pfwKids(d);
+            if (c != (Node*)0 && c.kidCount() > 1) pfwNode(c.kid(1));
+            blkPushScope();
+            if (d != (Node*)0) blkBind(d.name(), d.op(), (Array*)0);
+            pfwNode(n.kid(3));
+            blkPopScope();
+            return;
+        }
+        if (k == nkForIn && n.kidCount() == 3) {
+            Node* v = n.kid(0);
+            pfwNode(n.kid(1));
+            blkPushScope();
+            blkBind(v.name(), Parser._same(v.op(), "-") ? (String*)0 : v.op(), (Array*)0);
+            pfwNode(n.kid(2));
+            blkPopScope();
+            return;
+        }
+        if (k == nkTupleAssign && n.kidCount() > 0) {
+            // The targets, the value, then the declared targets are bound.
+            u32 last = n.kidCount() - 1;
+            for (u32 i = 0; i < last; i++)
+                if (n.kid(i).kind() != nkVariableDecl) pfwNode(n.kid(i));
+            pfwNode(n.kid(last));
+            for (u32 i = 0; i < last; i++)
+                if (n.kid(i).kind() == nkVariableDecl) blkBind(n.kid(i).name(), n.kid(i).op(), (Array*)0);
+            return;
+        }
+        if (k == nkAssign && n.kidCount() == 2) {
+            pfwNode(n.kid(0));
+            pfwNode(n.kid(1));
+            pfwWrite(n.kid(0));
+            pfwUpdate(n.kid(0), n.op(), n.kid(1));
+            return;
+        }
+        if (k == nkUnary && n.kidCount() > 0) {
+            pfwNode(n.kid(0));
+            if (Parser._same(n.op(), "&")) pfwMemWrite(n.kid(0));
+            if (Parser._same(n.op(), "++") || Parser._same(n.op(), "--")) pfwWrite(n.kid(0));
+            return;
+        }
+        if (k == nkPostfix && n.kidCount() > 0) {
+            pfwNode(n.kid(0));
+            pfwWrite(n.kid(0));
+            if (Parser._same(n.op(), "++")) pfwUpdate(n.kid(0), String.withCString("+="), (Node*)0);
+            return;
+        }
+        if (k == nkSubscript && n.kidCount() > 0) {
+            pfwKids(n);
+            pfwSubBase(n.kid(0));
+            return;
+        }
+        if (k == nkCall) {
+            // A callee that is not a name rides last but was read first; a
+            // name is a use after the arguments when it is a local or a
+            // parameter (#437), and before them too when it was written in
+            // parentheses, `(f)(x)`, which read it as a name.
+            u32 argc = n.kidCount();
+            bool named = !Parser._same(n.name(), "<indirect>");
+            if (!named && argc > 0) {
+                argc = argc - 1;
+                pfwNode(n.kid(argc));
+            }
+            if (named && n.hasSrc(SRC_PARENCALLEE)) pfwUse(n.name());
+            for (u32 i = 0; i < argc; i++) pfwNode(n.kid(i));
+            if (named && blkLookup(n.name(), (u32*)0) != (Map*)0) pfwUse(n.name());
+            return;
+        }
+        if (k == nkMethodCall && n.hasSrc(SRC_CALLED) && n.kidCount() > 0) {
+            // `b(…)` through a block binding: a use of b after the arguments
+            // (and before them when written `(b)(…)`). A named literal
+            // calling itself is `self.invoke(…)`, no use.
+            if (n.hasSrc(SRC_PARENCALLEE)) pfwUse(n.kid(0).name());
+            for (u32 i = 1; i < n.kidCount(); i++) pfwNode(n.kid(i));
+            Node* r = n.kid(0);
+            if (r.kind() == nkIdent && !Parser._same(r.name(), "self")) pfwUse(r.name());
+            return;
+        }
+        if (k == nkReturn || k == nkBreak || k == nkContinue)
+            _pfw.set((Hashable*)String.withCString("exits"), (Object*)Number.withU32(1));
+        pfwKids(n);
+    }
+
+    // A literal or a nested block, read as the parser read it: an automatic
+    // block's loop as written first (parsed before the block), the body in
+    // its own frame, then the names its site passes in.
+    void pfwSiteWalk(Node* n, Array* e)
+    {
+        Node* body = (Node*)e.get(1);
+        Array* params = (Array*)e.get(2);
+        Array* noted = (Array*)e.get(3);
+        u32 kind = ((Number*)e.get(4)).asU32();
+        if (kind == 2) pfwNode((Node*)e.get(5));
+        bool savedTop = _pfwTop;
+        _pfwTop = false;
+        blkPushScope();
+        for (u32 i = 0; i < params.count(); i++) {
+            Node* p = (Node*)params.get(i);
+            blkBind(p.name(), p.op(), (Array*)0);
+        }
+        pfwNode(body);
+        blkPopScope();
+        _pfwTop = savedTop;
+        if (kind == 0) {
+            pfwKids(n);
+            return;
+        }
+        for (u32 i = 0; i < noted.count(); i++) pfwUse((String*)noted.get(i));
+    }
+
+    void pfwCount(string key, String* name, u32 by)
+    {
+        Map* m = (Map*)pfwGet(_pfw, key);
+        if (m == (Map*)0) {
+            m = new Map();
+            _pfw.set((Hashable*)String.withCString(key), (Object*)m);
+        }
+        Number* had = (Number*)m.get((Hashable*)name);
+        u32 c = had == (Number*)0 ? 0 : had.asU32();
+        m.set((Hashable*)String.withString(name), (Object*)Number.withU32(c + by));
+    }
+
+    // blkNoteUse, for the frame being walked.
+    void pfwUse(String* name)
+    {
+        pfwCount("refs", name, 1);
+        if (!_pfwTop) return;
+        u32 foundDepth = 0;
+        Map* info = blkLookup(name, &foundDepth);
+        if (info == (Map*)0) {
+            Array* outer = (Array*)pfwGet(_pfw, "outer");
+            if (outer == (Array*)0) {
+                outer = new Array();
+                _pfw.set((Hashable*)String.withCString("outer"), (Object*)outer);
+            }
+            for (u32 i = 0; i < outer.count(); i++)
+                if (((String*)outer.get(i)).equals(name)) return;
+            outer.add((Object*)String.withString(name));
+            return;
+        }
+        if (foundDepth >= ((Number*)pfwGet(_pfw, "depth")).asU32()) return;
+        Array* names = (Array*)pfwGet(_pfw, "names");
+        for (u32 i = 0; i < names.count(); i++)
+            if (((String*)names.get(i)).equals(name)) return;
+        String* ty = blkTyOf(info);
+        if (Parser._same(ty, "auto")) return;
+        if (info.get((Hashable*)String.withCString("wb")) != (Object*)0) {
+            // The frame itself is off the stack by now: any frame left is
+            // one the block sits in.
+            if (_blkFrames.count() > 0) return;
+            ((Array*)pfwGet(_pfw, "wbnames")).add((Object*)name);
+        }
+        names.add((Object*)name);
+        ((Map*)pfwGet(_pfw, "types")).set((Hashable*)name, (Object*)ty);
+    }
+
+    // `par.x` … in a `par :grid` body, which the parser reads as these names.
+    void pfwGridName(String* name)
+    {
+        Set* used = (Set*)pfwGet(_pfw, "gridUsed");
+        if (!_pfwTop || used == (Set*)0) return;
+        if (Parser._same(name, "par$x") || Parser._same(name, "par$y") || Parser._same(name, "par$z")
+            || Parser._same(name, "par$w") || Parser._same(name, "par$h") || Parser._same(name, "par$d"))
+            used.add((Hashable*)name);
+    }
+
+    // parNoteWrite and parNoteMemoryWrite.
+    void pfwWrite(Node* t)
+    {
+        pfwMemWrite(t);
+        if (_pfwTop && t != (Node*)0 && t.kind() == nkIdent)
+            ((Set*)pfwGet(_pfw, "written")).add((Hashable*)t.name());
+    }
+
+    void pfwMemWrite(Node* t)
+    {
+        if (t == (Node*)0 || t.kind() == nkIdent) return;
+        String* root = Parser.parRootName(t);
+        if (root == (String*)0) return;
+        Set* mw = (Set*)pfwGet(_pfw, "memWritten");
+        if (mw == (Set*)0) {
+            mw = new Set();
+            _pfw.set((Hashable*)String.withCString("memWritten"), (Object*)mw);
+        }
+        mw.add((Hashable*)String.withString(root));
+    }
+
+    void pfwUpdate(Node* t, String* op, Node* rhs)
+    {
+        u32 uses = 0;
+        String* key = Parser.parUpdateKey(t, op, rhs, &uses);
+        if (key != (String*)0) pfwCount("updates", key, uses);
+    }
+
+    void pfwSubBase(Node* base)
+    {
+        if (base != (Node*)0 && base.kind() == nkIdent) pfwCount("subBase", base.name(), 1);
+    }
+
+    // XC_PAR_AUTO_CHECK=frame: the frame the hooks built for a par body or a
+    // lifted loop, against the walk's, field by field, as a line of the
+    // trace: "same", or "differ" and each field that does.
+    void parFrameCheck(Map* frame, Node* body, Token* at, bool lifted, bool errs)
+    {
+        if (!_parFrameCheckOn || body == (Node*)0) return;
+        String* lf = (at != (Token*)0 && at.file() != (String*)0) ? at.file() : String.withCString("?");
+        if (_libFiles != (Set*)0 && _libFiles.contains((Hashable*)lf)) return;
+        Map* w = parFrameWalk(body, frame);
+        String* d = String.withCString("");
+        Parser.pfcList(d, "names", (Array*)pfwGet(frame, "names"), (Array*)pfwGet(w, "names"));
+        Parser.pfcList(d, "wbnames", (Array*)pfwGet(frame, "wbnames"), (Array*)pfwGet(w, "wbnames"));
+        Parser.pfcList(d, "outer", (Array*)pfwGet(frame, "outer"), (Array*)pfwGet(w, "outer"));
+        Parser.pfcMap(d, "types", (Map*)pfwGet(frame, "types"), (Map*)pfwGet(w, "types"), false);
+        Parser.pfcMap(d, "refs", (Map*)pfwGet(frame, "refs"), (Map*)pfwGet(w, "refs"), true);
+        Parser.pfcMap(d, "subBase", (Map*)pfwGet(frame, "subBase"), (Map*)pfwGet(w, "subBase"), true);
+        Parser.pfcMap(d, "updates", (Map*)pfwGet(frame, "updates"), (Map*)pfwGet(w, "updates"), true);
+        Parser.pfcSet(d, "written", (Set*)pfwGet(frame, "written"), (Set*)pfwGet(w, "written"));
+        Parser.pfcSet(d, "memWritten", (Set*)pfwGet(frame, "memWritten"), (Set*)pfwGet(w, "memWritten"));
+        Parser.pfcSet(d, "gridUsed", (Set*)pfwGet(frame, "gridUsed"), (Set*)pfwGet(w, "gridUsed"));
+        if ((pfwGet(frame, "exits") != (Object*)0) != (pfwGet(w, "exits") != (Object*)0))
+            d.appendCString(pfwGet(frame, "exits") != (Object*)0 ? " exits=1/0" : " exits=0/1");
+        u32 cut = 0;
+        for (u32 q = 0; q < lf.byteLength(); q++) : serial
+            if (lf.byteAt(q) == '/') cut = q + 1;
+        String* l = String.withCString("par-frame-check: ");
+        l.append(lf.substringBytes(cut, lf.byteLength() - cut));
+        l.appendByte(':');
+        l.append(String.withU32(at != (Token*)0 ? at.line() : 0));
+        l.appendByte(':');
+        l.append(String.withU32(at != (Token*)0 ? at.col() : 0));
+        l.appendCString(lifted ? " lifted" : " written");
+        l.appendCString(d.byteLength() == 0 ? " same" : " differ");
+        l.appendCString(" captures=");
+        l.append(String.withU32(((Array*)pfwGet(frame, "names")).count()));
+        if (errs) l.appendCString(" errors");
+        l.append(d);
+        if (_parAutoTrace == (Array*)0) _parAutoTrace = new Array();
+        _parAutoTrace.add((Object*)l);
+    }
+
+    // An ordered list of names, hook against walk.
+    static void pfcList(String* d, string key, Array* h, Array* w)
+    {
+        u32 hn = h != (Array*)0 ? h.count() : 0;
+        u32 wn = w != (Array*)0 ? w.count() : 0;
+        bool same = hn == wn;
+        for (u32 i = 0; same && i < hn; i++)
+            if (!((String*)h.get(i)).equals((String*)w.get(i))) same = false;
+        if (same) return;
+        d.appendByte(' ');
+        d.appendCString(key);
+        d.appendCString("=[");
+        for (u32 i = 0; i < hn; i++) {
+            if (i > 0) d.appendByte(',');
+            d.append((String*)h.get(i));
+        }
+        d.appendCString("]/[");
+        for (u32 i = 0; i < wn; i++) {
+            if (i > 0) d.appendByte(',');
+            d.append((String*)w.get(i));
+        }
+        d.appendByte(']');
+    }
+
+    // A map of names to a type spelling or a count: each name whose entry
+    // differs, as name:hook/walk.
+    static void pfcMap(String* d, string key, Map* h, Map* w, bool counts)
+    {
+        String* out = String.withCString("");
+        if (h != (Map*)0) {
+            Array* ks = h.allKeys();
+            for (u32 i = 0; i < ks.count(); i++) {
+                String* n = (String*)ks.get(i);
+                Object* hv = h.get((Hashable*)n);
+                Object* wv = w != (Map*)0 ? w.get((Hashable*)n) : (Object*)0;
+                if (!Parser.pfcText(hv, counts).equals(Parser.pfcText(wv, counts))) Parser.pfcEntry(out, n, hv, wv, counts);
+            }
+        }
+        if (w != (Map*)0) {
+            Array* ks = w.allKeys();
+            for (u32 i = 0; i < ks.count(); i++) {
+                String* n = (String*)ks.get(i);
+                if (h == (Map*)0 || h.get((Hashable*)n) == (Object*)0) Parser.pfcEntry(out, n, (Object*)0, w.get((Hashable*)n), counts);
+            }
+        }
+        if (out.byteLength() == 0) return;
+        d.appendByte(' ');
+        d.appendCString(key);
+        d.appendByte('=');
+        d.append(out);
+    }
+
+    // A frame value as text: a type spelling, or a count.
+    // A frame value as text: a type spelling, or a count.
+    static String* pfcText(Object* v, bool counts)
+    {
+        if (v == (Object*)0) return String.withCString("-");
+        if (!counts) return (String*)v;
+        return String.withU32(((Number*)v).asU32());
+    }
+
+    static void pfcEntry(String* out, String* n, Object* hv, Object* wv, bool counts)
+    {
+        if (out.byteLength() > 0) out.appendByte(',');
+        out.append(n);
+        out.appendByte(':');
+        out.append(Parser.pfcText(hv, counts));
+        out.appendByte('/');
+        out.append(Parser.pfcText(wv, counts));
+    }
+
+    static void pfcSet(String* d, string key, Set* h, Set* w)
+    {
+        String* out = String.withCString("");
+        if (h != (Set*)0) {
+            Array* hs = h.allObjects();
+            for (u32 i = 0; i < hs.count(); i++)
+                if (w == (Set*)0 || !w.contains((Hashable*)hs.get(i))) {
+                    out.appendCString(" -");
+                    out.append((String*)hs.get(i));
+                }
+        }
+        if (w != (Set*)0) {
+            Array* ws = w.allObjects();
+            for (u32 i = 0; i < ws.count(); i++)
+                if (h == (Set*)0 || !h.contains((Hashable*)ws.get(i))) {
+                    out.appendCString(" +");
+                    out.append((String*)ws.get(i));
+                }
+        }
+        if (out.byteLength() == 0) return;
+        d.appendByte(' ');
+        d.appendCString(key);
+        d.appendByte('{');
+        d.append(out);
+        d.appendCString(" }");
     }
 
     // A marker's expression, or 0.
@@ -5008,10 +5476,12 @@ class Parser
         blkPushScope();
         u32 savedGoal = _goalNow;
         _goalNow = (flags & (u32)1) != (u32)0 ? (u32)2 : (u32)1;
+        u32 bodyErrs = _errors.count();
         Node* body = parseBlock();
         _goalNow = savedGoal;
         blkPopScope();
         _blkFrames.removeAt(_blkFrames.count() - (u32)1);
+        parFrameCheck(frame, body, parAt, false, _errors.count() > bodyErrs);
         if (body == 0) return (Node*)0;
         Array* reds = new Array();
         for (u32 i = (u32)0; i < p.kidCount(); i = i + (u32)1) reds.add((Object*)p.kid(i));
@@ -5019,7 +5489,11 @@ class Parser
         // reference builds it; the body's own statements keep theirs.
         Token* savedMkAt = _mkAt;
         _mkAt = parAt;
+        Array* savedNoted = _pfwNoted;
+        _pfwNoted = new Array();
         Node* out = parDesugar(body, frame, p.name(), reds);
+        pfwRegister(out, body, (Array*)0, _pfwNoted, 1, (Node*)0);
+        _pfwNoted = savedNoted;
         _mkAt = savedMkAt;
         return out;
     }
@@ -5173,6 +5647,34 @@ class Parser
         ((Set*)frame.get((Hashable*)String.withCString("written"))).add((Hashable*)t.name());
     }
 
+    // The key parNoteUpdate counts an update under, "<op><a>", with the
+    // uses of a it makes in *uses; 0 when the assignment is no such update.
+    static String* parUpdateKey(Node* t, String* op, Node* rhs, u32* uses)
+    {
+        if (t == (Node*)0 || t.kind() != nkSubscript || t.kidCount() < 2 || op == (String*)0) return (String*)0;
+        Node* base = t.kid(0);
+        if (base.kind() != nkIdent || base.name() == (String*)0) return (String*)0;
+        u8 c = 0;
+        *uses = 1;
+        if (op.byteLength() == 2 && op.byteAt(1) == '=')
+            c = op.byteAt(0);
+        else if (Parser._same(op, "=") && rhs != (Node*)0 && rhs.kind() == nkBinary && rhs.kidCount() == 2
+                 && rhs.op() != (String*)0 && rhs.op().byteLength() == 1) {
+            Node* l = rhs.kid(0);
+            if (l.kind() == nkSubscript && l.kidCount() >= 2 && l.kid(0).kind() == nkIdent
+                && l.kid(0).name() != (String*)0 && l.kid(0).name().equals(base.name())
+                && Parser.parSameIndex(l.kid(1), t.kid(1))) {
+                c = rhs.op().byteAt(0);
+                *uses = 2;
+            }
+        }
+        if (c != '+' && c != '|' && c != '&' && c != '^') return (String*)0;
+        String* key = new String();
+        key.appendByte(c);
+        key.append(base.name());
+        return key;
+    }
+
     // `a[k] op= x`, `a[k]++`, or `a[k] = a[k] op x` with the same index,
     // op one of + | & ^, inside a `par` body: counted on every enclosing par frame
     // under "<op><a>", once per use of a, so an array reduction
@@ -5180,27 +5682,9 @@ class Parser
     // the reference.
     void parNoteUpdate(Node* t, String* op, Node* rhs)
     {
-        if (t == (Node*)0 || t.kind() != (u16)nkSubscript || t.kidCount() < (u32)2 || op == (String*)0) return;
-        Node* base = t.kid((u32)0);
-        if (base.kind() != (u16)nkIdent || base.name() == (String*)0) return;
-        u8 c = (u8)0;
-        u32 uses = (u32)1;
-        if (op.byteLength() == (u32)2 && op.byteAt((u32)1) == (u8)'=')
-            c = op.byteAt((u32)0);
-        else if (Parser._same(op, "=") && rhs != (Node*)0 && rhs.kind() == (u16)nkBinary && rhs.kidCount() == (u32)2
-                 && rhs.op() != (String*)0 && rhs.op().byteLength() == (u32)1) {
-            Node* l = rhs.kid((u32)0);
-            if (l.kind() == (u16)nkSubscript && l.kidCount() >= (u32)2 && l.kid((u32)0).kind() == (u16)nkIdent
-                && l.kid((u32)0).name() != (String*)0 && l.kid((u32)0).name().equals(base.name())
-                && Parser.parSameIndex(l.kid((u32)1), t.kid((u32)1))) {
-                c = rhs.op().byteAt((u32)0);
-                uses = (u32)2;
-            }
-        }
-        if (c != (u8)'+' && c != (u8)'|' && c != (u8)'&' && c != (u8)'^') return;
-        String* key = new String();
-        key.appendByte(c);
-        key.append(base.name());
+        u32 uses = 0;
+        String* key = Parser.parUpdateKey(t, op, rhs, &uses);
+        if (key == (String*)0) return;
         for (u32 fi = (u32)0; fi < _blkFrames.count(); fi = fi + (u32)1) {
             Map* pf = (Map*)_blkFrames.get(fi);
             if (pf.get((Hashable*)String.withCString("par")) == (Object*)0) continue;
@@ -5290,6 +5774,7 @@ class Parser
         ((Set*)frame.get((Hashable*)String.withCString("gridUsed"))).add((Hashable*)n);
         Node* id = mkNamed((u16)nkIdent, n);
         id.setPos(at.fileId(), at.line(), at.col());
+        id.addSrc(SRC_SYNTH);
         return id;
     }
 
@@ -6551,6 +7036,7 @@ class Parser
             }
             site.add(parAssign(parMember(pv, Parser.parFieldOf(cn)), v));
             blkNoteUse(cn);
+            if (_pfwNoted != (Array*)0) _pfwNoted.add((Object*)cn);
         }
         for (u32 i = (u32)0; i < reds.count(); i = i + (u32)1) {
             Node* r = (Node*)reds.get(i);
@@ -6564,11 +7050,13 @@ class Parser
                 addr.add(sub);
                 site.add(parAssign(parMember(pv, Parser.parFieldOf(r.name())), addr));
                 blkNoteUse(r.name());
+                if (_pfwNoted != (Array*)0) _pfwNoted.add((Object*)r.name());
                 continue;
             }
             site.add(parAssign(parMember(pv, Parser.parFieldOf(r.name())),
                                parStart(r.op(), (String*)redTypes.get((Hashable*)r.name()), parIdent(r.name()))));
             blkNoteUse(r.name());
+            if (_pfwNoted != (Array*)0) _pfwNoted.add((Object*)r.name());
         }
         Node* hi = cond.kid((u32)1);
         if (Parser._same(cond.op(), "<=")) hi = parBin("+", parCast(String.withCString("i64"), hi), parInt((i64)1));
@@ -6939,6 +7427,7 @@ class Parser
             Node* st = mk((u16)nkExprStatement);
             st.add(call);
             st.setStmtPos(startTok.fileId(), startTok.line(), startTok.col());
+            st.addSrc(SRC_SYNTH);
             b.add(st);
             b.setStmtPos(startTok.fileId(), startTok.line(), startTok.col());
             return b;
@@ -7732,10 +8221,12 @@ class Parser
                     if (isSelfName) {
                         n = mkNamed((u16)nkMethodCall, String.withCString("invoke"));
                         n.add(mkNamed((u16)nkIdent, String.withCString("self")));
+                        n.addSrc(SRC_CALLED);
                     } else if (bInfo != 0 && blkBaseOf(bInfo) != 0) {
                         blkNoteUse(node.name());
                         n = mkNamed((u16)nkMethodCall, String.withCString("invoke"));
                         n.add(mkNamed((u16)nkIdent, node.name()));
+                        n.addSrc(SRC_CALLED);
                     } else {
                         // A call through a function pointer that is a local or
                         // a parameter: a block body captures the pointer like
@@ -7945,14 +8436,18 @@ class Parser
         // of that name — the statement forms are handled in parseStatement.
         if (t == (u16)tokDelete || t == (u16)tokRetain || t == (u16)tokRelease) {
             Token* tok = advance();
-            return mkNamed((u16)nkIdent, tok.value());
+            Node* rn = mkNamed(nkIdent, tok.value());
+            rn.addSrc(SRC_SYNTH);
+            return rn;
         }
         if (isTypeKeywordToken(t)) {
             // A bare type keyword in expression position is a static-call
             // receiver (`u16.max`) in the original's grammar; record it as an
             // identifier so the shape matches.
             Token* tok = advance();
-            return mkNamed((u16)nkIdent, tok.value());
+            Node* tn = mkNamed(nkIdent, tok.value());
+            tn.addSrc(SRC_SYNTH);
+            return tn;
         }
         if (t == (u16)tokLParen) {
             match((u16)tokLParen);              // splits a merged `((`

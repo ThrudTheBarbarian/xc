@@ -62,7 +62,37 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic) NSUInteger pacSeen;
 @property(nonatomic) NSUInteger pacVal;
 @property(nonatomic, strong, nullable) NSMutableDictionary<NSString*, NSNumber*>* parAutoTraceSeen;
+// The par frame walk (XTParser+ParFrame.m): the frame it fills, whether it is
+// at the body's own level, the sites the parser registered for it, and the
+// names parDesugarBody's site notes, for pfwRegister.
+@property(nonatomic, strong, nullable) NSMutableDictionary* pfw;
+@property(nonatomic) BOOL pfwTop;
+@property(nonatomic, strong, nullable) NSMapTable* pfwSites;
+@property(nonatomic, strong, nullable) NSMutableArray<NSString*>* pfwNoted;
+// A line of parAutoTrace.
+- (void)parAutoTraceAdd:(NSString*)line;
 @end
+
+// The par frame walk, XC_PAR_AUTO_CHECK=frame (XTParser+ParFrame.m).
+@interface XTParser (ParFrame)
+- (void)pfwRegister:(nullable XTASTNode*)site
+               body:(nullable XTASTNode*)body
+             params:(nullable NSArray<XTParamNode*>*)params
+              noted:(nullable NSArray<NSString*>*)noted
+               kind:(NSUInteger)kind
+              plain:(nullable XTASTNode*)plain;
+- (NSMutableDictionary*)parFrameWalk:(XTASTNode*)body frame:(NSDictionary*)frame;
+- (void)parFrameCheck:(NSDictionary*)frame
+                 body:(nullable XTASTNode*)body
+                   at:(XTSourceLocation*)loc
+               lifted:(BOOL)lifted
+               errors:(BOOL)errors;
+@end
+
+// XTParser+Blocks.m: the name an element access is rooted at, and the key an
+// array update is counted under (parNoteUpdate), with its uses.
+NSString* _Nullable parRootName(XTASTNode* _Nullable n);
+NSString* _Nullable parUpdateKey(XTASTNode* _Nullable target, XTAssignOp aop, XTASTNode* _Nullable rhs, NSUInteger* uses);
 
 // Callbacks (0.5) — the named spelling of a bound method
 // (XTParser+Callbacks.m). New SYNTAX for the existing `^` type, not a new

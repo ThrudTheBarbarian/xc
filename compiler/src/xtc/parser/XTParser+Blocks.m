@@ -1101,9 +1101,11 @@ static NSString* blkMangleFragment(XTType* ty)
     for (NSString* wn in wbNames)
         {
         XTASTNode* slot = [[XTIdentifierNode alloc] initWithName:wn location:loc];
-        [args addObject:[[XTUnaryExprNode alloc] initWithOp:XTUnaryOpAddrOf
-                                                    operand:slot
-                                                   location:loc]];
+        XTASTNode* addr = [[XTUnaryExprNode alloc] initWithOp:XTUnaryOpAddrOf
+                                                      operand:slot
+                                                     location:loc];
+        addr.srcFacts |= XTSrcSynth;
+        [args addObject:addr];
         }
     if (wbNames.count)
         {
@@ -1112,10 +1114,13 @@ static NSString* blkMangleFragment(XTType* ty)
         [self.blkState[@"wbImpls"] addObject:implName];
         }
     XTASTNode* cls = [[XTIdentifierNode alloc] initWithName:implName location:loc];
-    return [[XTMethodCallExprNode alloc] initWithReceiver:cls
-                                               methodName:@"mk"
-                                                arguments:args
-                                                 location:loc];
+    cls.srcFacts |= XTSrcSynth;
+    XTASTNode* mkCall = [[XTMethodCallExprNode alloc] initWithReceiver:cls
+                                                            methodName:@"mk"
+                                                             arguments:args
+                                                              location:loc];
+    [self pfwRegister:mkCall body:body params:params noted:nil kind:0 plain:nil];
+    return mkCall;
     }
 
 /****************************************************************************\
@@ -1208,15 +1213,33 @@ static BOOL parSameIndex(XTASTNode* a, XTASTNode* b)
 \****************************************************************************/
 - (void)parNoteUpdate:(nullable XTASTNode*)target op:(XTAssignOp)aop rhs:(nullable XTASTNode*)rhs
     {
-    if (![target isKindOfClass:[XTSubscriptExprNode class]])
+    NSUInteger uses = 0;
+    NSString* key = parUpdateKey(target, aop, rhs, &uses);
+    if (!key)
         return;
+    for (NSMutableDictionary* f in [self blkFrames])
+        if ([f[@"par"] boolValue])
+            {
+            NSMutableDictionary* ups = f[@"updates"];
+            if (!ups)
+                f[@"updates"] = ups = [NSMutableDictionary dictionary];
+            ups[key] = @([ups[key] unsignedIntegerValue] + uses);
+            }
+    }
+
+// The key parNoteUpdate counts an update under, "<op><a>", with the uses of
+// a it makes in *uses; nil when the assignment is no such update.
+NSString* _Nullable parUpdateKey(XTASTNode* _Nullable target, XTAssignOp aop, XTASTNode* _Nullable rhs, NSUInteger* uses)
+    {
+    if (![target isKindOfClass:[XTSubscriptExprNode class]])
+        return nil;
     XTASTNode* base = ((XTSubscriptExprNode*)target).base;
     if (![base isKindOfClass:[XTIdentifierNode class]])
-        return;
+        return nil;
     NSString* name = ((XTIdentifierNode*)base).identName;
     NSString* c = aop == XTAssignOpAdd ? @"+" : aop == XTAssignOpBitOr ? @"|" : aop == XTAssignOpBitAnd ? @"&"
                   : aop == XTAssignOpBitXor ? @"^" : nil;
-    NSUInteger uses = 1;
+    *uses = 1;
     if (aop == XTAssignOpAssign && [rhs isKindOfClass:[XTBinaryExprNode class]])
         {
         XTBinaryExprNode* b = (XTBinaryExprNode*)rhs;
@@ -1228,26 +1251,18 @@ static BOOL parSameIndex(XTASTNode* a, XTASTNode* b)
             {
             c = b.op == XTBinaryOpAdd ? @"+" : b.op == XTBinaryOpBitOr ? @"|" : b.op == XTBinaryOpBitAnd ? @"&"
                 : b.op == XTBinaryOpBitXor ? @"^" : nil;
-            uses = 2;
+            *uses = 2;
             }
         }
     if (!c)
-        return;
-    NSString* key = [c stringByAppendingString:name];
-    for (NSMutableDictionary* f in [self blkFrames])
-        if ([f[@"par"] boolValue])
-            {
-            NSMutableDictionary* ups = f[@"updates"];
-            if (!ups)
-                f[@"updates"] = ups = [NSMutableDictionary dictionary];
-            ups[key] = @([ups[key] unsignedIntegerValue] + uses);
-            }
+        return nil;
+    return [c stringByAppendingString:name];
     }
 
 /****************************************************************************\
 |* The name an element access is rooted at: `a` for a[i], a[i][j], a[i].f.
 \****************************************************************************/
-static NSString* parRootName(XTASTNode* n)
+NSString* _Nullable parRootName(XTASTNode* _Nullable n)
     {
     while (n)
         {
@@ -1356,7 +1371,9 @@ static NSString* parRootName(XTASTNode* n)
     [self advance];
     [self advance];
     [frame[@"gridUsed"] addObject:n];
-    return [[XTIdentifierNode alloc] initWithName:n location:loc];
+    XTASTNode* gn = [[XTIdentifierNode alloc] initWithName:n location:loc];
+    gn.srcFacts |= XTSrcSynth;
+    return gn;
     }
 
 // Loops and switches entered inside a `par :grid` body, for parGridReturn: and
@@ -2496,6 +2513,7 @@ static NSString* parRootName(XTASTNode* n)
                                            location:loc];
         [site addObject:assign(member(pv, fieldOf(cn)), v)];
         [self blkNoteIdentifierUse:cn at:loc];
+        [self.pfwNoted addObject:cn];
         }
     for (NSArray<NSString*>* r in reductions)
         {
@@ -2510,6 +2528,7 @@ static NSString* parRootName(XTASTNode* n)
         else
             [site addObject:assign(member(pv, fieldOf(r[1])), startOf(r, ident(r[1])))];
         [self blkNoteIdentifierUse:r[1] at:loc];
+        [self.pfwNoted addObject:r[1]];
         }
     XTASTNode* hi = cond.right;
     if (cond.op == XTBinaryOpLe)

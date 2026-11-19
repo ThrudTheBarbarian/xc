@@ -66,7 +66,7 @@ typedef NS_ENUM(NSInteger, XTASTNodeKind) {
 |* Source facts (srcFacts): what the tokens said that the tree no longer
 |* shows. --par-style=auto decides from the tokens; these let a decision made
 |* on the tree come out the same (#338). Nothing reads them yet, apart from
-|* the XC_PAR_AUTO_CHECK=flags comparison. The dump does not print them.
+|* XC_PAR_AUTO_CHECK (flags and frame). The dump does not print them.
 |* Mirrored in the port (SRC_* in NodeDefs.xc), bit for bit.
 \****************************************************************************/
 typedef NS_OPTIONS(NSUInteger, XTSrcFact) {
@@ -80,6 +80,8 @@ typedef NS_OPTIONS(NSUInteger, XTSrcFact) {
     XTSrcParenCallee = 1 << 7, // a call whose callee name or member was written in parentheses
     XTSrcChkCond = 1 << 8,     // XC_PAR_AUTO_CHECK only, never on a node: the C-style condition…
     XTSrcChkStep = 1 << 9,     // …and step shapes --par-style=auto takes
+    XTSrcSynth = 1 << 10,      // made by the parser, not read: the par frame walk passes over it
+    XTSrcCalled = 1 << 11,     // `b(…)` made into `b.invoke(…)` (a block binding, or a literal calling itself)
 };
 
 @interface XTASTNode : NSObject

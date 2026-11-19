@@ -3143,6 +3143,7 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
         XTExpressionStatementNode* initStmt = [[XTExpressionStatementNode alloc]
             initWithExpression:initCall
                       location:loc];
+        initStmt.srcFacts |= XTSrcSynth; // its arguments are the declaration's (pfwNode)
         NSMutableArray<XTASTNode*>* stmts = [NSMutableArray arrayWithArray:decls];
         [stmts addObject:initStmt];
         XTBlockNode* block = [[XTBlockNode alloc] initWithStatements:stmts location:loc];
@@ -3990,6 +3991,13 @@ static BOOL pacFact(NSMutableString* out, NSString* name, XTSrcFact bit, NSUInte
         _parAutoTrace = [NSMutableArray array];
     [_parAutoTrace addObject:[NSString stringWithFormat:@"par-auto-check: %@:%lu:%lu %@%@", file.lastPathComponent,
                                                         (unsigned long)loc.line, (unsigned long)loc.column, ok ? @"ok" : @"differ", facts]];
+    }
+
+- (void)parAutoTraceAdd:(NSString*)line
+    {
+    if (!_parAutoTrace)
+        _parAutoTrace = [NSMutableArray array];
+    [_parAutoTrace addObject:line];
     }
 
 // The scan behind parAutoFor: the cursor is at the `for`. Fills `reds`
@@ -5226,6 +5234,7 @@ static int64_t parAutoConst(XTASTNode* e)
     [self parGridLoop:-1];
     [self blkPopScope];
     [[self blkFrames] removeLastObject];
+    [self parFrameCheck:frame body:loop at:loc lifted:YES errors:!loop || _diagnostics.errorCount > errMark];
     if (!loop || _diagnostics.errorCount > errMark)
         {
         [self parAutoTakeBack:diagMark at:loc];
@@ -5255,7 +5264,11 @@ static int64_t parAutoConst(XTASTNode* e)
     labels[name] = @(nth);
     if (nth > 1)
         name = [NSString stringWithFormat:@"%@#%lu", name, (unsigned long)nth];
+    NSMutableArray* savedNoted = self.pfwNoted;
+    self.pfwNoted = [NSMutableArray array];
     XTASTNode* out = [self parDesugarBody:body frame:frame name:name reductions:reds at:loc];
+    [self pfwRegister:out body:loop params:nil noted:self.pfwNoted kind:2 plain:plain];
+    self.pfwNoted = savedNoted;
     if (!out || _diagnostics.errorCount > errMark)
         {
         [self parAutoTakeBack:diagMark at:loc];
@@ -5963,10 +5976,12 @@ static NSString* scCombine(NSString* op, NSString* r, NSString* v)
     [self blkPushScope];
     NSUInteger savedGoal = self.goalNow;
     self.goalNow = accuracy ? 2 : 1;
+    NSUInteger bodyErrs = _diagnostics.errorCount;
     XTBlockNode* body = (XTBlockNode*)[self parseBlock];
     self.goalNow = savedGoal;
     [self blkPopScope];
     [[self blkFrames] removeLastObject];
+    [self parFrameCheck:frame body:body at:loc lifted:NO errors:_diagnostics.errorCount > bodyErrs];
     if (!body)
         return nil;
     // The speed goal lets the GPU use its fast maths (approximate sin, cos,
@@ -5980,7 +5995,12 @@ static NSString* scCombine(NSString* op, NSString* r, NSString* v)
         frame[@"device"] = @(device);
     if (scanPass)
         frame[@"scanpass"] = @YES;
-    return [self parDesugarBody:body frame:frame name:name reductions:reductions at:loc];
+    NSMutableArray* savedNoted = self.pfwNoted;
+    self.pfwNoted = [NSMutableArray array];
+    XTASTNode* out = [self parDesugarBody:body frame:frame name:name reductions:reductions at:loc];
+    [self pfwRegister:out body:body params:nil noted:self.pfwNoted kind:1 plain:nil];
+    self.pfwNoted = savedNoted;
+    return out;
     }
 
 - (nullable XTASTNode*)parseDefer
@@ -6761,7 +6781,12 @@ static NSString* scCombine(NSString* op, NSString* r, NSString* v)
             {
             XTToken* n = [self expect:XTTokenIdentifier];
             if (n)
-                [targets addObject:[[XTIdentifierNode alloc] initWithName:n.value location:n.location]];
+                {
+                // Read as a token, not as a name: no capture (pfwNode).
+                XTASTNode* tn = [[XTIdentifierNode alloc] initWithName:n.value location:n.location];
+                tn.srcFacts |= XTSrcSynth;
+                [targets addObject:tn];
+                }
             }
         [self match:XTTokenComma];
         }

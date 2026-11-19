@@ -502,6 +502,22 @@ class FeOptions
         return String.withCString(buf);
         }
 
+    // Whether the comma-separated list holds the word.
+    static bool listHas(String* list, string word)
+        {
+        String* w = String.withCString(word);
+        u32 from = 0;
+        for (u32 i = 0; i <= list.byteLength(); i++)
+            {
+            if (i < list.byteLength() && list.byteAt(i) != ',')
+                continue;
+            if (list.substringBytes(from, i - from).equals(w))
+                return true;
+            from = i + 1;
+            }
+        return false;
+        }
+
     static IRModule* lower(FeOptions* o)
         {
         o.setClassNames(false);
@@ -618,10 +634,14 @@ class FeOptions
         // looks at, what it decided and why. As the reference.
         String* trace = Platform.env(String.withCString("XC_PAR_AUTO_TRACE"));
         parser.setParAutoTrace(trace.byteLength() > 0 && !trace.equals(String.withCString("0")));
-        // XC_PAR_AUTO_CHECK=flags: a line on stderr for each loop the scan
-        // reads, comparing the source facts on its node with the tokens
-        // (Parser.parAutoCheck). As the reference.
-        parser.setParAutoCheck(Platform.env(String.withCString("XC_PAR_AUTO_CHECK")).equals(String.withCString("flags")));
+        // XC_PAR_AUTO_CHECK, a comma-separated list. flags: a line on stderr
+        // for each loop the scan reads, comparing the source facts on its node
+        // with the tokens (Parser.parAutoCheck). frame: a line for each par
+        // body and lifted loop, comparing the frame its hooks built with the
+        // walk of its tree (Parser.parFrameCheck). As the reference.
+        String* check = Platform.env(String.withCString("XC_PAR_AUTO_CHECK"));
+        parser.setParAutoCheck(Frontend.listHas(check, "flags"));
+        parser.setParFrameCheck(Frontend.listHas(check, "frame"));
         parser.setWebModules(platformOf(o).equals(String.withCString("wasm32")));
         parser.setGoalDefault(pp.goal() != (u32)0 ? pp.goal() : o.goalDefault());
         parser.setLibraryFiles(pp.libraryFiles());
