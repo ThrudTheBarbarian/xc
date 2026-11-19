@@ -58,6 +58,9 @@ u16 y;
 (x, y) = myFunc();
 ```
 
+A tuple target cannot be a struct. Return a struct through a pointer parameter
+instead.
+
 A method may return several values too, instance or static, and is unpacked the
 same way, through a receiver or, inside the class, without one:
 

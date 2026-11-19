@@ -1985,10 +1985,29 @@
     [self analyzeNode:node.sourceExpr];
     for (XTASTNode* target in node.targets)
         {
+        // A tuple's values are taken apart from one aggregate in registers,
+        // and a struct is not a value that can be bound that way: the lowering
+        // bound it as an SSA name, so a member access found no slot and was
+        // refused, but a use that passed or assigned the whole struct built
+        // silently and read the wrong bytes (#452). Refused here, for every
+        // target and every use.
+        XTType* tt = nil;
+        NSString* tn = nil;
         if ([target isKindOfClass:[XTVariableDeclNode class]])
             {
             [self analyzeNode:target];
+            tt = ((XTVariableDeclNode*)target).declaredType;
+            tn = ((XTVariableDeclNode*)target).varName;
             }
+        else if (target.nodeKind == XTASTNodeKindIdentifier)
+            {
+            tn = ((XTIdentifierNode*)target).identName;
+            tt = [[self currentScope] lookupSymbol:tn].symbolType;
+            }
+        if (tt && tt.kind == XTTypeKindStruct)
+            [self.diagnostics emitError:[NSString stringWithFormat:
+                                                      @"a tuple cannot hold the struct '%@'; pass a pointer to it instead", tn]
+                                     at:target.location];
         }
     }
 

@@ -452,6 +452,28 @@ class Sema
         _errorAt(m, e);
         }
 
+    // A tuple's values are taken apart from one aggregate in registers, and a
+    // struct is not a value that can be bound that way: the lowering bound it
+    // as an SSA name, so a member access found no slot and was refused, but
+    // a use that passed or assigned the whole struct built silently and read
+    // the wrong bytes (#452). Refused here, for every target and every use.
+    void checkTupleTarget(Node* t, String* ty)
+        {
+        String* r = ty;
+        for (u32 hop = (u32)0; r != 0 && hop < (u32)8; hop = hop + (u32)1)
+            {
+            if (_structs.get((Hashable*)r) != 0)
+                {
+                String* m = String.withCString("a tuple cannot hold the struct '");
+                m.append(t.name());
+                m.appendCString("'; pass a pointer to it instead");
+                _errorAt(m, t);
+                return;
+                }
+            r = (String*)_typedefTargets.get((Hashable*)r);
+            }
+        }
+
     void _errorAt(String* msg, Node* n)
         {
         // A node with no position degrades to the bare message rather than
@@ -2970,6 +2992,12 @@ class Sema
                     {
                     define(k2.name(), k2.op());
                     k2.setTy(k2.op());
+                    checkTupleTarget(k2, k2.op());
+                    continue;
+                    }
+                if (k2.kind() == (u16)nkIdent && i + (u32)1 < n.kidCount())
+                    {
+                    checkTupleTarget(k2, lookup(k2.name()));
                     continue;
                     }
                 if (k2.kind() == (u16)nkCall || k2.kind() == (u16)nkMethodCall)
