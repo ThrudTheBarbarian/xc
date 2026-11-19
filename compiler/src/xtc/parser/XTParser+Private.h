@@ -50,6 +50,8 @@ NS_ASSUME_NONNULL_BEGIN
 // parAutoScan found a running total (#144): its variable and operator.
 @property(nonatomic, copy, nullable) NSString* parScanAcc;
 @property(nonatomic, copy, nullable) NSString* parScanOp;
+// The grid levels the nest parAutoScan last read may take (parAutoGridCap).
+@property(nonatomic) NSUInteger parAutoGridCap;
 @end
 
 // Callbacks (0.5) — the named spelling of a bound method

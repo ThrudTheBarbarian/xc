@@ -1055,6 +1055,7 @@ class Parser
     void setParAuto(bool b) { _parAuto = b; }
     // The front end then parses again with the runtime imported.
     bool parAutoWantsRuntime(void) { return _parAutoWantsRuntime; }
+    u32     _parAutoGridCap;   // the grid levels the nest parAutoScan last read may take (parAutoGridCap)
     // wasm32: a module's memory is its own, so a protocol's static members
     // are calls BETWEEN modules and may pass only numbers, or a buffer and its
     // length (the reference's webModules).
@@ -2770,11 +2771,12 @@ class Parser
         return d;
     }
 
-    Node* parAutoGridNest(Node* node, Map* frame)
+    // `cap` is the grid levels the nest may take (parAutoGridCap).
+    Node* parAutoGridNest(Node* node, Map* frame, u32 cap)
     {
         Node* iv1 = (Node*)0;
         Node* cond1 = (Node*)0;
-        if (!Parser.parAutoAscending(node, &iv1, &cond1)) return (Node*)0;
+        if (cap < 2 || !Parser.parAutoAscending(node, &iv1, &cond1)) return (Node*)0;
         // The inner loop: the outer body's one statement, braced or not.
         Node* inner = node.kid((u32)3);
         if (inner.kind() == (u16)nkBlock) {
@@ -2791,7 +2793,7 @@ class Parser
             thirdNode = thirdNode.kidCount() == (u32)1 ? thirdNode.kid((u32)0) : (Node*)0;
         Node* iv3 = (Node*)0;
         Node* cond3 = (Node*)0;
-        bool three = thirdNode != (Node*)0 && Parser.parAutoAscending(thirdNode, &iv3, &cond3);
+        bool three = cap >= 3 && thirdNode != (Node*)0 && Parser.parAutoAscending(thirdNode, &iv3, &cond3);
         if (three && !(Parser.parAutoBoundFree(iv3.kid((u32)0), iv1.name()) && Parser.parAutoBoundFree(cond3.kid((u32)1), iv1.name())
                        && Parser.parAutoBoundFree(iv3.kid((u32)0), iv2.name()) && Parser.parAutoBoundFree(cond3.kid((u32)1), iv2.name())))
             three = false;
@@ -2887,6 +2889,13 @@ class Parser
                 if (Parser.parAutoAnyAssignOp(nx) || nx == (u16)tokPlusPlus || nx == (u16)tokMinusMinus
                     || pv == (u16)tokPlusPlus || pv == (u16)tokMinusMinus || pv == (u16)tokAmpersand) return false;
             }
+        }
+        // #416: a bound the body changes. The `for` reads it once when it is
+        // a block, and `v = B` after it would read the changed one.
+        String* bw = parAutoBoundWritten(at + 4, pe, pe + 2, inc, v);
+        if (bw != (String*)0) {
+            parAutoWarnSerial(bw);
+            return false;
         }
         // v: a local of an integer type, spelt as its keyword.
         u32 d = (u32)0;
@@ -3010,6 +3019,7 @@ class Parser
         // Without the par runtime the loop stays a loop, and the front end is
         // told: it parses again with Par.xc imported (--par-style=auto imports it).
         bool scanned = parAutoScan(reds, &goal);
+        u32 gridCap = _parAutoGridCap;
         if (scanned && !isTypeName(String.withCString("ParChunk")))
             _parAutoWantsRuntime = true;
         if (!scanned || !isTypeName(String.withCString("ParChunk"))) {
@@ -3090,7 +3100,7 @@ class Parser
         // reference explains).
         Token* savedMkAt0 = _mkAt;
         _mkAt = forTok;
-        Node* body = parAutoGridNest(loop, frame);
+        Node* body = parAutoGridNest(loop, frame, gridCap);
         _mkAt = savedMkAt0;
         if (body == (Node*)0) {
             body = mk((u16)nkBlock);
@@ -3335,6 +3345,211 @@ class Parser
         return (u32)0;
     }
 
+    // -Wpar-auto, at the loop the cursor is on: why it stays a loop.
+    void parAutoWarnSerial(String* why)
+    {
+        String* w = String.withCString("this loop runs serially, not as a 'par' block (--par-style): ");
+        w.append(why);
+        warnAt(String.withCString("par-auto"), w, cur());
+    }
+
+    // Token i is a variable's name: an identifier not after `.` or `->`.
+    bool parAutoIsVarTok(u32 i)
+    {
+        u16 p = parTokType(i - 1);
+        return parTokType(i) == tokIdentifier && p != tokDot && p != tokArrow;
+    }
+
+    // The variable at token i is written there: assigned, or stepped by ++ or
+    // --. A declaration of the name (a type before it) is not a write, nor is
+    // a store through it.
+    bool parAutoWritesAt(u32 i)
+    {
+        u16 nx = parTokType(i + 1);
+        u16 pv = parTokType(i - 1);
+        if (isTypeKeywordToken(pv) || (pv == tokIdentifier && isTypeName(parTokValue(i - 1)))) return false;
+        // `*p = …` writes what p points at, not p.
+        if (pv == tokStar && Parser.parAutoAnyAssignOp(nx)) return false;
+        return Parser.parAutoAnyAssignOp(nx) || nx == tokPlusPlus || nx == tokMinusMinus
+            || pv == tokPlusPlus || pv == tokMinusMinus;
+    }
+
+    // #415: the body [bs, be) writes the loop's own variable (`i++`, `i += 2`,
+    // `i = …`). A block's work items each have their own copy, and the loop
+    // as written skips or repeats iterations.
+    bool parAutoIVWritten(u32 bs, u32 be, String* var)
+    {
+        for (u32 i = bs; i < be; i++)
+            if (parAutoIsVarTok(i) && parTokValue(i).equals(var) && parAutoWritesAt(i))
+                return true;
+        return false;
+    }
+
+    // #416: a block reads the loop's bound [b0, b1) once, before its items run;
+    // the loop as written reads it before every iteration. A bound that names
+    // the loop's variable or a variable the body [bs, be) writes, or that
+    // reads memory (a subscript, a member, a call, `*p`) through a name the
+    // body stores through, keeps the loop serial. A call in the body is not
+    // taken as a store, as elsewhere in the scan. The reason for -Wpar-auto,
+    // else 0.
+    String* parAutoBoundWritten(u32 b0, u32 b1, u32 bs, u32 be, String* var)
+    {
+        Array* names = new Array();
+        bool mem = false;
+        for (u32 i = b0; i < b1; i++) {
+            u16 t = parTokType(i);
+            if (t == tokLBracket || t == tokDot || t == tokArrow) mem = true;
+            if (t == tokStar) {
+                u16 p = parTokType(i - 1);
+                if (i == b0 || !(p == tokIdentifier || p == tokIntLiteral || p == tokRParen || p == tokRBracket))
+                    mem = true;
+            }
+            if (!parAutoIsVarTok(i)) continue;
+            if (parTokType(i + 1) == tokLParen) {
+                mem = true;
+                continue;
+            }
+            String* nm = parTokValue(i);
+            if (isTypeName(nm)) continue;
+            if (nm.equals(var)) {
+                String* m = String.withCString("its bound reads its loop variable '");
+                m.append(nm);
+                m.appendCString("'");
+                return m;
+            }
+            names.add((Object*)nm);
+        }
+        for (u32 i = bs; i < be; i++) {
+            if (!parAutoIsVarTok(i)) continue;
+            String* nm = parTokValue(i);
+            bool listed = false;
+            for (u32 k = 0; k < names.count(); k++)
+                if (((String*)names.get(k)).equals(nm)) listed = true;
+            if (!listed) continue;
+            if (parAutoWritesAt(i)) {
+                String* m = String.withCString("its bound reads '");
+                m.append(nm);
+                m.appendCString("', which its body writes");
+                return m;
+            }
+            if (!mem) continue;
+            // Through the name: a store at the end of its subscripts and
+            // members (a method call ends them), or `*p = …`.
+            u32 j = i + 1;
+            bool chained = false;
+            while (j < be) {
+                u16 t = parTokType(j);
+                if (t == tokLBracket) {
+                    u32 d = 0;
+                    while (j < be) {
+                        u16 tj = parTokType(j);
+                        if (tj == tokLBracket) d++;
+                        if (tj == tokRBracket) {
+                            d--;
+                            if (d == 0) break;
+                        }
+                        j++;
+                    }
+                    j++;
+                    chained = true;
+                    continue;
+                }
+                if ((t == tokDot || t == tokArrow) && parTokType(j + 1) == tokIdentifier && parTokType(j + 2) != tokLParen) {
+                    j = j + 2;
+                    chained = true;
+                    continue;
+                }
+                break;
+            }
+            u16 at = parTokType(j);
+            u16 pv = parTokType(i - 1);
+            bool stored = chained && (Parser.parAutoAnyAssignOp(at) || at == tokPlusPlus || at == tokMinusMinus
+                                      || pv == tokPlusPlus || pv == tokMinusMinus);
+            if (pv == tokStar && Parser.parAutoAnyAssignOp(parTokType(i + 1))) stored = true;
+            if (stored) {
+                String* m = String.withCString("its bound reads memory through '");
+                m.append(nm);
+                m.appendCString("', which its body may write");
+                return m;
+            }
+        }
+        return (String*)0;
+    }
+
+    // The grid levels (3, 2, or 1 for none) a perfect nest may take, the body
+    // of its level `level - 1` being [bs, be): a level whose body writes its
+    // own variable or a name in its header runs as written inside the block,
+    // for the reasons of #415 and #416 one level in.
+    u32 parAutoGridCap(u32 bs, u32 be, u32 level)
+    {
+        if (level > 3 || parTokType(bs) != tokFor || parTokType(bs + 1) != tokLParen) return 3;
+        u32 n = _tokens.count();
+        u32 e = parAutoStatementEnd(bs, n);
+        if (e == 0 || (e + 1 != be && e != be)) return 3;
+        u32 he = 0;
+        u32 d = 0;
+        String* iv = (String*)0;
+        String* ivEq = (String*)0;
+        for (u32 i = bs + 1; i < e; i++) {
+            u16 t = parTokType(i);
+            if (t == tokLParen) d++;
+            else if (t == tokRParen) {
+                d--;
+                if (d == 0) {
+                    he = i;
+                    break;
+                }
+            } else if (d == 1 && t == tokIn && parTokType(i - 1) == tokIdentifier && iv == (String*)0)
+                iv = parTokValue(i - 1);
+            else if (d == 1 && t == tokAssign && parTokType(i - 1) == tokIdentifier && ivEq == (String*)0)
+                ivEq = parTokValue(i - 1);
+        }
+        if (iv == (String*)0) iv = ivEq;
+        if (he == 0 || iv == (String*)0) return 3;
+        Array* names = new Array();
+        names.add((Object*)iv);
+        // In order, one name at a time (:serial keeps --par-style=auto off it).
+        for (u32 i = bs + 2; i < he; i++) : serial {
+            if (!parAutoIsVarTok(i) || parTokType(i + 1) == tokLParen) continue;
+            String* nm = parTokValue(i);
+            if (isTypeName(nm) || nm.equals(iv) || Parser._same(nm, "step")) continue;
+            names.add((Object*)nm);
+        }
+        // The level's annotations, then its body.
+        u32 k = he + 1;
+        if (parTokType(k) == tokColon) {
+            k++;
+            while (parTokType(k) == tokIdentifier) {
+                k++;
+                if (parTokType(k) == tokLParen) {
+                    u32 pd = 0;
+                    while (k < e) {
+                        u16 t = parTokType(k);
+                        if (t == tokLParen) pd++;
+                        if (t == tokRParen) {
+                            pd--;
+                            if (pd == 0) break;
+                        }
+                        k++;
+                    }
+                    k++;
+                }
+                if (parTokType(k) != tokComma) break;
+                k++;
+            }
+        }
+        u32 ibs = k;
+        u32 ibe = e;
+        if (parTokType(k) == tokLBrace) ibs = k + 1;
+        for (u32 i = ibs; i < ibe; i++) {
+            if (!parAutoIsVarTok(i) || !parAutoWritesAt(i)) continue;
+            String* nm = parTokValue(i);
+            for (u32 q = 0; q < names.count(); q++)
+                if (((String*)names.get(q)).equals(nm)) return level - 1;
+        }
+        return parAutoGridCap(ibs, ibe, level + 1);
+    }
+
     // The scan behind parAutoFor: the cursor is at the `for`. Fills `reds`
     // (nkParReduce nodes) and says whether the loop qualifies.
     bool parAutoScan(Array* reds, u32* goalOut)
@@ -3344,6 +3559,7 @@ class Parser
         *goalOut = _goalNow != (u32)0 ? _goalNow : _goalDefault;
         _parScanAcc = (String*)0;
         _parScanOp = (String*)0;
+        _parAutoGridCap = 3;
         if (parTokType(at + (u32)1) != (u16)tokLParen) return false;
         // Not in the standard library or the prelude (the reference explains).
         if (_libFiles != (Set*)0 && _libFiles.contains((Hashable*)cur().file())) return false;
@@ -3377,6 +3593,10 @@ class Parser
             }
         }
         if (pe == (u32)0) return false;
+        // The bound the loop as written reads before each iteration: after
+        // the `<` or `<=`, or after the `..` or `...` up to a `step`.
+        u32 bndFrom = 0;
+        u32 bndTo = 0;
         if (!sawIn) {
             // C-style: `T i = a` ; `i < b` or `i <= b` ; the step.
             if (semi1 == (u32)0 || semi2 == (u32)0 || semi1 < at + (u32)3 || parTokType(semi1 - (u32)1) == (u16)tokAssign) return false;
@@ -3392,6 +3612,8 @@ class Parser
             if (parTokType(semi1 + (u32)1) != (u16)tokIdentifier || !parTokValue(semi1 + (u32)1).equals(var)
                 || (parTokType(semi1 + (u32)2) != (u16)tokLess && parTokType(semi1 + (u32)2) != (u16)tokLessEq))
                 return false;
+            bndFrom = semi1 + 3;
+            bndTo = semi2;
             u32 sx = semi2 + (u32)1;
             bool stepOk = false;
             if (parTokType(sx) == (u16)tokIdentifier && parTokValue(sx).equals(var)) {
@@ -3408,6 +3630,17 @@ class Parser
             if (!stepOk) return false;
         } else if (!sawDots || var == (String*)0 || semi1 != (u32)0)
             return false;
+        else {
+            u32 d = 0;
+            for (u32 i = at + 1; i < pe; i++) {
+                u16 ty = parTokType(i);
+                if (ty == tokLParen || ty == tokLBracket) d++;
+                else if (ty == tokRParen || ty == tokRBracket) d--;
+                else if (d == 1 && bndFrom == 0 && (ty == tokDotDot || ty == tokEllipsis)) bndFrom = i + 1;
+                else if (d == 1 && bndFrom != 0 && bndTo == 0 && ty == tokIdentifier && Parser._same(parTokValue(i), "step")) bndTo = i;
+            }
+            if (bndTo == 0) bndTo = pe;
+        }
         // `in 10..0`: a range whose literal bounds descend counts down, and a
         // block's range ascends. As the reference.
         for (u32 i = at + (u32)2; sawIn && i + (u32)1 < pe; i = i + (u32)1)
@@ -3666,6 +3899,24 @@ class Parser
             r.setNum((i64)1);
             reds.add((Object*)r);
         }
+        // A loop that qualifies so far, but whose body writes its variable
+        // (#415) or changes what its bound reads (#416), stays a loop.
+        if (parAutoIVWritten(bs, be, var)) {
+            String* w = String.withCString("its body writes its loop variable '");
+            w.append(var);
+            w.appendCString("'");
+            parAutoWarnSerial(w);
+            _parScanAcc = (String*)0;
+            return false;
+        }
+        String* bw = parAutoBoundWritten(bndFrom, bndTo, bs, be, var);
+        if (bw != (String*)0) {
+            parAutoWarnSerial(bw);
+            _parScanAcc = (String*)0;
+            return false;
+        }
+        // A perfect nest's inner levels, for parAutoGridNest.
+        _parAutoGridCap = parAutoGridCap(bs, be, 2);
         return true;
     }
 
