@@ -4981,9 +4981,17 @@ static XTForCStyleNode* _Nullable parAutoAscending(XTASTNode* node, XTVariableDe
         [self parAutoWarnSerial:bw];
         return NO;
         }
-    // v: a local of an integer type, spelt as its keyword.
+    // v: a local of an integer type, spelt as its keyword. #463: a field
+    // (the class scope's ivar binding) or a global (no binding) is not one:
+    // the rewrite's fresh variable and its `v = B` after the loop hold for a
+    // local only. Mirrored in the port.
     NSUInteger d = 0;
     NSDictionary* info = [self blkLookup:v depth:&d];
+    if (!info || [info[@"ivar"] boolValue])
+        {
+        [self parAutoWarnSerial:[NSString stringWithFormat:@"its counter '%@' is not a local variable", v]];
+        return NO;
+        }
     XTType* vt = [info[@"type"] isKindOfClass:[XTType class]] ? info[@"type"] : nil;
     NSDictionary<NSString*, NSNumber*>* kw = @{ @"u8" : @(XTTokenU8), @"i8" : @(XTTokenI8), @"u16" : @(XTTokenU16),
                                                 @"i16" : @(XTTokenI16), @"u32" : @(XTTokenU32), @"i32" : @(XTTokenI32),

@@ -2915,9 +2915,20 @@ class Parser
             parAutoWarnSerial(bw);
             return false;
         }
-        // v: a local of an integer type, spelt as its keyword.
-        u32 d = (u32)0;
-        String* vt = blkTyOf(blkLookup(v, &d));
+        // v: a local of an integer type, spelt as its keyword. #463: a field
+        // (the class scope's ivar binding) or a global (no binding) is not
+        // one: the rewrite's fresh variable and its `v = B` after the loop
+        // hold for a local only.
+        u32 d = 0;
+        Map* vinfo = blkLookup(v, &d);
+        if (vinfo == 0 || vinfo.get((Hashable*)String.withCString("ivar")) != (Object*)0) {
+            String* m = String.withCString("its counter '");
+            m.append(v);
+            m.appendCString("' is not a local variable");
+            parAutoWarnSerial(m);
+            return false;
+        }
+        String* vt = blkTyOf(vinfo);
         u16 tt = (u16)0;
         bool known = false;
         if (vt != (String*)0) {
