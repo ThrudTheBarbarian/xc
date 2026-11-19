@@ -1039,7 +1039,18 @@ class Wasm32
         }
         bool mainReturns = !Wasm32.memOrVoid(mainFn.ret())
                         && !Wasm32.isAggTy(mainFn.ret());
-        out.appendCString("  (func (export \"main\") (result i32)\n");
+        // (argc, argv) only for a main that takes parameters: the loader builds
+        // argv (on the module's heap) only when the export asks for them, so a
+        // main(void) program's heap is untouched (#457).
+        u32 np = (u32)0;
+        for (u32 i = (u32)0; i < mainFn.params().count(); i = i + (u32)1) {
+            String* pt0 = ((IRValue*)mainFn.params().get(i)).ty();
+            if (!(pt0 != 0 && IRType.is(pt0, tyMem))) np = np + (u32)1;
+        }
+        if (np > (u32)0)
+            out.appendCString("  (func (export \"main\") (param $argc i32) (param $argv i32) (result i32)\n");
+        else
+            out.appendCString("  (func (export \"main\") (result i32)\n");
         if (_linkLibs && _fixupAddrs.count() > (u32)0)
             out.appendCString("    call $__xtc_fixup_imports\n");
         for (u32 i = (u32)0; i < mod.modinits().count(); i = i + (u32)1)
@@ -1060,10 +1071,21 @@ class Wasm32
         // conforming program reads neither when argc is 0. A fake non-null
         // argv would let `argv[0]` return garbage instead of trapping.
         // The memory token is skipped, as the signature emitter skips it.
+        //
+        // The wrapper takes (argc, argv) from the loader now (#457), which builds
+        // argv in linear memory from node's command line (a page: argc 1); main's
+        // first two i32 parameters get them. A host that calls exports.main()
+        // with nothing passes zeros, the old answer.
+        u32 k = (u32)0;
         for (u32 i = (u32)0; i < mainFn.params().count(); i = i + (u32)1) {
             String* pt = ((IRValue*)mainFn.params().get(i)).ty();
             if (pt != 0 && IRType.is(pt, tyMem)) continue;
-            out.appendFormat("    %s.const 0\n", Wasm32.valType(pt).cString());
+            String* vt = Wasm32.valType(pt);
+            if (k < (u32)2 && vt.equals(String.withCString("i32")))
+                out.appendCString(k == (u32)0 ? "    local.get $argc\n" : "    local.get $argv\n");
+            else
+                out.appendFormat("    %s.const 0\n", vt.cString());
+            k = k + (u32)1;
         }
         out.appendCString("    call $main\n");
         if (!mainReturns) out.appendCString("    i32.const 0\n");

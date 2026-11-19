@@ -643,7 +643,15 @@ static NSString *watStringLit(NSData *bytes) {
     if (mainFn) {
         BOOL mainReturns = !isMemOrVoid(mainFn.returnType)
                         && mainFn.returnType.kind != XTIRTypeKindAgg;
-        [out appendFormat:@"  (func (export \"main\") (result i32)\n"];
+        // (argc, argv) only for a main that takes parameters: the loader builds
+        // argv (on the module's heap) only when the export asks for them, so a
+        // main(void) program's heap is untouched (#457).
+        NSUInteger np = 0;
+        for (XTIRType *pt0 in mainFn.paramTypes) if (!isMemOrVoid(pt0)) np++;
+        if (np > 0)
+            [out appendString:@"  (func (export \"main\") (param $argc i32) (param $argv i32) (result i32)\n"];
+        else
+            [out appendString:@"  (func (export \"main\") (result i32)\n"];
         if (sLinkLibs && sAppFixups.count)
             [out appendString:@"    call $__xtc_fixup_imports\n"];
         for (NSString *initName in mod.moduleInitFunctionNames)
@@ -664,9 +672,20 @@ static NSString *watStringLit(NSData *bytes) {
         // conforming program reads neither when argc is 0. Passing a fake
         // non-null argv would let `argv[0]` quietly return garbage instead of
         // trapping.
+        //
+        // The wrapper takes (argc, argv) from the loader now (#457), which builds
+        // argv in linear memory from node's command line (a page: argc 1); main's
+        // first two i32 parameters get them. A host that calls exports.main()
+        // with nothing passes zeros, the old answer.
+        NSUInteger k = 0;
         for (XTIRType *pt in mainFn.paramTypes) {
             if (isMemOrVoid(pt)) continue;      // the memory token is not a wasm param
-            [out appendFormat:@"    %@.const 0\n", wasmValType(pt)];
+            NSString *vt = wasmValType(pt);
+            if (k < 2 && [vt isEqualToString:@"i32"])
+                [out appendString:(k == 0 ? @"    local.get $argc\n" : @"    local.get $argv\n")];
+            else
+                [out appendFormat:@"    %@.const 0\n", vt];
+            k++;
         }
         [out appendString:@"    call $main\n"];
         if (!mainReturns) [out appendString:@"    i32.const 0\n"];

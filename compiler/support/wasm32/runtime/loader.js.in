@@ -1177,7 +1177,23 @@
     growTo(ex.__heap_base.value + 0x100000);
   }
   for (const d of order) depExports[d].__wasm_apply_relocs();
-  const rc = usesGpu ? await WebAssembly.promising(instance.exports.main)() : instance.exports.main();
+  // main(argc, argv), as C gives it (#457): argv[0] is the program (under node
+  // the script, then the arguments after it; a page has argc 1). The strings
+  // go into linear memory through _xt_argv, the pointer array through the
+  // module's allocator; a main declared without parameters ignores both.
+  // Only for a main that takes them (its export has parameters): building
+  // argv allocates on the module's heap, which a main(void) program may check.
+  let argc = 0, argvArr = 0;
+  if (instance.exports.main.length > 0 && instance.exports._xt_browser_alloc) {
+    argc = base._xt_argc();
+    argvArr = instance.exports._xt_browser_alloc(4 * (argc + 1));
+    for (let i = 0; i <= argc; i++) {
+      const p = i < argc ? base._xt_argv(i) : 0;          // may grow memory: re-derive below
+      new DataView(mem8().buffer).setUint32(argvArr + 4 * i, p, true);
+    }
+  }
+  const rc = usesGpu ? await WebAssembly.promising(instance.exports.main)(argc, argvArr)
+                     : instance.exports.main(argc, argvArr);
   flush();
   if (isNode) process.exitCode = rc | 0;
   else if (isWorker) self.postMessage({ xccExit: rc | 0 });
