@@ -182,8 +182,6 @@ static XTOpInfo operatorInfo(XTTokenType type)
                                              at:op.location];
                     }
                 }
-            [self parNoteWriteTarget:lhs];
-            [self parNoteUpdate:lhs op:aop rhs:rhs];
             lhs = [[XTAssignExprNode alloc] initWithOp:aop lhs:lhs rhs:rhs location:op.location];
             continue;
             }
@@ -345,7 +343,6 @@ static XTOpInfo operatorInfo(XTTokenType type)
         {
         [self advance];
         XTASTNode* operand = [self parseUnary];
-        [self parNoteAddressOf:operand];
         return [[XTUnaryExprNode alloc] initWithOp:XTUnaryOpAddrOf operand:operand location:cur.location];
         }
     if (cur.type == XTTokenAt || cur.type == XTTokenStar)
@@ -359,14 +356,12 @@ static XTOpInfo operatorInfo(XTTokenType type)
         {
         [self advance];
         XTASTNode* opnd = [self parseUnary];
-        [self parNoteWriteTarget:opnd];
         return [[XTUnaryExprNode alloc] initWithOp:XTUnaryOpPreInc operand:opnd location:cur.location];
         }
     if (cur.type == XTTokenMinusMinus)
         {
         [self advance];
         XTASTNode* opnd = [self parseUnary];
-        [self parNoteWriteTarget:opnd];
         return [[XTUnaryExprNode alloc] initWithOp:XTUnaryOpPreDec operand:opnd location:cur.location];
         }
     // Byte-extraction (primarily for asm context but allowed in expressions)
@@ -436,15 +431,11 @@ static BOOL parPlainDecimal(NSString* t)
         if (cur.type == XTTokenPlusPlus)
             {
             [self advance];
-            [self parNoteWriteTarget:base];
-            // `h[k]++`: an update of h by + (an array reduction may take it).
-            [self parNoteUpdate:base op:XTAssignOpAdd rhs:nil];
             base = [[XTPostfixExprNode alloc] initWithOp:XTPostfixOpInc operand:base location:cur.location];
             }
         else if (cur.type == XTTokenMinusMinus)
             {
             [self advance];
-            [self parNoteWriteTarget:base];
             base = [[XTPostfixExprNode alloc] initWithOp:XTPostfixOpDec operand:base location:cur.location];
             }
         else if (cur.type == XTTokenLBracket)
@@ -503,7 +494,6 @@ static BOOL parPlainDecimal(NSString* t)
                 }
             else
                 {
-                [self parNoteSubscriptBase:base];
                 base = [[XTSubscriptExprNode alloc] initWithBase:base index:startExpr location:lbLoc];
                 }
             }

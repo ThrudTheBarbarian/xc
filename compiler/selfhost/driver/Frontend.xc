@@ -636,12 +636,9 @@ class FeOptions
         parser.setParAutoTrace(trace.byteLength() > 0 && !trace.equals(String.withCString("0")));
         // XC_PAR_AUTO_CHECK, a comma-separated list. flags: a line on stderr
         // for each loop the scan reads, comparing the source facts on its node
-        // with the tokens (Parser.parAutoCheck). frame: a line for each par
-        // body and lifted loop, comparing the frame its hooks built with the
-        // walk of its tree (Parser.parFrameCheck). As the reference.
+        // with the tokens (Parser.parAutoCheck). As the reference.
         String* check = Platform.env(String.withCString("XC_PAR_AUTO_CHECK"));
         parser.setParAutoCheck(Frontend.listHas(check, "flags"));
-        parser.setParFrameCheck(Frontend.listHas(check, "frame"));
         parser.setWebModules(platformOf(o).equals(String.withCString("wasm32")));
         parser.setGoalDefault(pp.goal() != (u32)0 ? pp.goal() : o.goalDefault());
         parser.setLibraryFiles(pp.libraryFiles());

@@ -69,11 +69,9 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic) BOOL pfwTop;
 @property(nonatomic, strong, nullable) NSMapTable* pfwSites;
 @property(nonatomic, strong, nullable) NSMutableArray<NSString*>* pfwNoted;
-// A line of parAutoTrace.
-- (void)parAutoTraceAdd:(NSString*)line;
 @end
 
-// The par frame walk, XC_PAR_AUTO_CHECK=frame (XTParser+ParFrame.m).
+// The par frame walk (XTParser+ParFrame.m).
 @interface XTParser (ParFrame)
 - (void)pfwRegister:(nullable XTASTNode*)site
                body:(nullable XTASTNode*)body
@@ -82,15 +80,11 @@ NS_ASSUME_NONNULL_BEGIN
                kind:(NSUInteger)kind
               plain:(nullable XTASTNode*)plain;
 - (NSMutableDictionary*)parFrameWalk:(XTASTNode*)body frame:(NSDictionary*)frame;
-- (void)parFrameCheck:(NSDictionary*)frame
-                 body:(nullable XTASTNode*)body
-                   at:(XTSourceLocation*)loc
-               lifted:(BOOL)lifted
-               errors:(BOOL)errors;
+- (void)parFrameFill:(NSMutableDictionary*)frame body:(nullable XTASTNode*)body;
 @end
 
 // XTParser+Blocks.m: the name an element access is rooted at, and the key an
-// array update is counted under (parNoteUpdate), with its uses.
+// array update is counted under, with its uses.
 NSString* _Nullable parRootName(XTASTNode* _Nullable n);
 NSString* _Nullable parUpdateKey(XTASTNode* _Nullable target, XTAssignOp aop, XTASTNode* _Nullable rhs, NSUInteger* uses);
 
@@ -130,12 +124,7 @@ NSString* _Nullable parUpdateKey(XTASTNode* _Nullable target, XTAssignOp aop, XT
 - (BOOL)blkIsWbValue:(nullable XTASTNode*)e;
 - (void)blkMarkHoldsWb:(NSString*)name fromInit:(nullable XTASTNode*)init;
 - (NSMutableArray*)blkFrames;
-- (void)parNoteWriteTarget:(nullable XTASTNode*)target;
-- (void)parNoteUpdate:(nullable XTASTNode*)target op:(XTAssignOp)aop rhs:(nullable XTASTNode*)rhs;
 - (BOOL)parArrReducible:(nullable XTType*)t op:(NSString*)op;
-- (void)parNoteExit;
-- (void)parNoteSubscriptBase:(XTASTNode*)base;
-- (void)parNoteAddressOf:(XTASTNode*)operand;
 - (nullable XTASTNode*)parGridMemberAt:(XTSourceLocation*)loc;
 - (void)parGridLoop:(int)delta;
 - (void)parGridSwitch:(int)delta;

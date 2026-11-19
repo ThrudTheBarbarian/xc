@@ -1,20 +1,20 @@
 /****************************************************************************\
 |* XTParser+ParFrame.m
 |*
-|* The par frame walk (#338): what the par-frame hooks collect while a par
-|* body is parsed (blkNoteIdentifierUse, parNoteWriteTarget, parNoteUpdate,
-|* parNoteSubscriptBase, parNoteAddressOf, parNoteExit and parGridMemberAt),
-|* computed again from the body's tree once it is parsed: the captures, their
-|* types and bases in first-use order, the globals the body names, the names
-|* it assigns, and its uses of each name, as subscript bases and as array
-|* updates. The walk visits the tree in the order the parser read it, and
-|* binds the body's declarations as the parser did, in scopes pushed on
-|* blkScopes above the frame's depth, so a name resolves as it did where it
-|* was used. A block literal or a nested par block in the body is read
-|* through the site the parser registered for it (pfwRegister): its body
-|* counts toward the uses, and the names its site passes in are uses at the
-|* site. XC_PAR_AUTO_CHECK=frame compares the walk with the hooks
-|* (parFrameCheck). Mirrored in the port (Parser.xc, parFrameWalk).
+|* The par frame walk (#338): a par body's frame, computed from its tree once
+|* it is parsed: the captures, their types and bases in first-use order
+|* (which sets the block's field layout), the globals the body names, the
+|* names it assigns, and its uses of each name, as subscript bases and as
+|* array updates, whether it can leave an iteration early, and which `par.x`
+|* names a grid body reads. The walk visits the tree in the order the parser
+|* read it, and binds the body's declarations as the parser did, in scopes
+|* pushed on blkScopes above the frame's depth, so a name resolves as it did
+|* where it was used. A block literal or a nested par block in the body is
+|* read through the site the parser registered for it (pfwRegister): its
+|* body counts toward the uses, and the names its site passes in are uses at
+|* the site. What cannot be captured is still said where it is used
+|* (blkNoteIdentifierUse, blkNoteBareCall), among the parse's other errors.
+|* Mirrored in the port (Parser.xc, parFrameWalk).
 \****************************************************************************/
 #import "XTParser+Private.h"
 
@@ -26,7 +26,7 @@ NS_ASSUME_NONNULL_BEGIN
 |* A literal's mk call (kind 0), or a nested written (1) or automatic (2) par
 |* block's site, with the body the parser read for it, the literal's
 |* parameters, the names the site noted, and for an automatic block the loop
-|* as written. Only under XC_PAR_AUTO_CHECK=frame, inside a frame.
+|* as written. Only inside a par body, whose walk reads it.
 \****************************************************************************/
 - (void)pfwRegister:(nullable XTASTNode*)site
                body:(nullable XTASTNode*)body
@@ -35,7 +35,13 @@ NS_ASSUME_NONNULL_BEGIN
                kind:(NSUInteger)kind
               plain:(nullable XTASTNode*)plain
     {
-    if (!self.parFrameCheckOn || ![self blkFrames].count || !site || !body)
+    if (!site || !body)
+        return;
+    BOOL inPar = NO;
+    for (NSDictionary* f in [self blkFrames])
+        if ([f[@"par"] boolValue])
+            inPar = YES;
+    if (!inPar)
         return;
     if (!self.pfwSites)
         self.pfwSites = [NSMapTable mapTableWithKeyOptions:NSPointerFunctionsStrongMemory | NSPointerFunctionsObjectPointerPersonality
@@ -51,9 +57,9 @@ NS_ASSUME_NONNULL_BEGIN
     }
 
 /****************************************************************************\
-|* The frame the hooks would have built for `body`, a par body (a block) or a
-|* lifted loop, parsed in `frame`: names, types, bases, wb, outer, written,
-|* refs, subBase, memWritten, updates, exits and gridUsed.
+|* The frame of `body`, a par body (a block) or a lifted loop, parsed in
+|* `frame`: names, types, bases, wb, outer, written, refs, subBase,
+|* memWritten, updates, exits and gridUsed.
 \****************************************************************************/
 - (NSMutableDictionary*)parFrameWalk:(XTASTNode*)body frame:(NSDictionary*)frame
     {
@@ -425,7 +431,8 @@ NS_ASSUME_NONNULL_BEGIN
     }
 
 /****************************************************************************\
-|* blkNoteIdentifierUse, for the frame being walked.
+|* A use of a name: counted, and at the body's own level a capture when it
+|* resolves outside the body, or a global when it resolves nowhere.
 \****************************************************************************/
 - (void)pfwUse:(NSString*)name
     {
@@ -475,7 +482,8 @@ NS_ASSUME_NONNULL_BEGIN
         [used addObject:name];
     }
 
-// parNoteWriteTarget and parNoteMemoryWrite.
+// An assignment's target: a name the body writes, or an element or field of
+// the array or struct it is rooted at (memWritten).
 - (void)pfwWrite:(nullable XTASTNode*)t
     {
     [self pfwMemWrite:t];
@@ -505,91 +513,17 @@ NS_ASSUME_NONNULL_BEGIN
     }
 
 /****************************************************************************\
-|* XC_PAR_AUTO_CHECK=frame: the frame the hooks built for a par body or a
-|* lifted loop, against the walk's, field by field, as a line of the trace:
-|* "same", or "differ" and each field that does. Mirrored in the port.
+|* The frame of a par body or a lifted loop parsed in `frame`, from its tree,
+|* into `frame`, which parDesugarBody then reads.
 \****************************************************************************/
-- (void)parFrameCheck:(NSDictionary*)frame
-                 body:(nullable XTASTNode*)body
-                   at:(XTSourceLocation*)loc
-               lifted:(BOOL)lifted
-               errors:(BOOL)errors
+- (void)parFrameFill:(NSMutableDictionary*)frame body:(nullable XTASTNode*)body
     {
-    if (!self.parFrameCheckOn || !body)
-        return;
-    NSString* file = loc.filename ?: @"?";
-    if ([self.libraryFiles containsObject:file])
+    if (!body)
         return;
     NSDictionary* w = [self parFrameWalk:body frame:frame];
-    NSMutableString* d = [NSMutableString string];
-    pfcList(d, @"names", frame[@"names"], w[@"names"]);
-    pfcList(d, @"outer", frame[@"outer"], w[@"outer"]);
-    pfcMap(d, @"types", frame[@"types"], w[@"types"]);
-    pfcMap(d, @"bases", frame[@"bases"], w[@"bases"]);
-    pfcMap(d, @"refs", frame[@"refs"], w[@"refs"]);
-    pfcMap(d, @"subBase", frame[@"subBase"], w[@"subBase"]);
-    pfcMap(d, @"updates", frame[@"updates"], w[@"updates"]);
-    pfcSet(d, @"wb", frame[@"wb"], w[@"wb"]);
-    pfcSet(d, @"written", frame[@"written"], w[@"written"]);
-    pfcSet(d, @"memWritten", frame[@"memWritten"], w[@"memWritten"]);
-    pfcSet(d, @"gridUsed", frame[@"gridUsed"], w[@"gridUsed"]);
-    if ((frame[@"exits"] != nil) != (w[@"exits"] != nil))
-        [d appendString:frame[@"exits"] ? @" exits=1/0" : @" exits=0/1"];
-    [self parAutoTraceAdd:[NSString stringWithFormat:@"par-frame-check: %@:%lu:%lu %@ %@ captures=%lu%@%@",
-                                                        file.lastPathComponent, (unsigned long)loc.line,
-                                                        (unsigned long)loc.column, lifted ? @"lifted" : @"written",
-                                                        d.length ? @"differ" : @"same",
-                                                        (unsigned long)[frame[@"names"] count],
-                                                        errors ? @" errors" : @"", d]];
-    }
-
-// An ordered list of names, hook against walk.
-static void pfcList(NSMutableString* d, NSString* key, NSArray* h, NSArray* w)
-    {
-    if ([h ?: @[] isEqualToArray:w ?: @[]])
-        return;
-    [d appendFormat:@" %@=[%@]/[%@]", key, [h ?: @[] componentsJoinedByString:@","], [w ?: @[] componentsJoinedByString:@","]];
-    }
-
-static NSString* pfcText(id v)
-    {
-    if (!v)
-        return @"-";
-    if ([v isKindOfClass:[XTType class]])
-        return ((XTType*)v).displayName ?: @"?";
-    return [v description];
-    }
-
-// A map of names to a type, a base or a count: each name whose entry
-// differs, as name:hook/walk.
-static void pfcMap(NSMutableString* d, NSString* key, NSDictionary* h, NSDictionary* w)
-    {
-    NSMutableArray* out = [NSMutableArray array];
-    NSMutableOrderedSet* names = [NSMutableOrderedSet orderedSetWithArray:[h.allKeys sortedArrayUsingSelector:@selector(compare:)]];
-    [names addObjectsFromArray:[w.allKeys sortedArrayUsingSelector:@selector(compare:)]];
-    for (NSString* n in names)
-        {
-        id hv = h[n];
-        id wv = w[n];
-        if (hv == wv || [pfcText(hv) isEqualToString:pfcText(wv)])
-            continue;
-        [out addObject:[NSString stringWithFormat:@"%@:%@/%@", n, pfcText(hv), pfcText(wv)]];
-        }
-    if (out.count)
-        [d appendFormat:@" %@=%@", key, [out componentsJoinedByString:@","]];
-    }
-
-static void pfcSet(NSMutableString* d, NSString* key, NSSet* h, NSSet* w)
-    {
-    NSMutableString* out = [NSMutableString string];
-    for (NSString* n in [h.allObjects sortedArrayUsingSelector:@selector(compare:)])
-        if (![w containsObject:n])
-            [out appendFormat:@" -%@", n];
-    for (NSString* n in [w.allObjects sortedArrayUsingSelector:@selector(compare:)])
-        if (![h containsObject:n])
-            [out appendFormat:@" +%@", n];
-    if (out.length)
-        [d appendFormat:@" %@{%@ }", key, out];
+    for (NSString* k in w)
+        if (![k isEqualToString:@"depth"])
+            frame[k] = w[k];
     }
 
 @end

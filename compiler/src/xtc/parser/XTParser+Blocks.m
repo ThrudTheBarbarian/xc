@@ -458,10 +458,13 @@ NS_ASSUME_NONNULL_BEGIN
     }
 
 /****************************************************************************\
-|* Identifier-use hook, called from the expression parser's two
+|* Identifier-use hook, called from the expression parser's
 |* XTIdentifierNode creation sites. Inside a block literal's body, a
 |* name that resolves OUTSIDE the literal's own scopes is a capture:
-|* recorded once, in first-use order, with its declared type.
+|* recorded once, in first-use order, with its declared type. A `par`
+|* body's frame is computed from its tree once it is parsed (parFrameWalk);
+|* for one, this only says at once what cannot be captured, where the
+|* error belongs among the parse's others.
 \****************************************************************************/
 - (void)blkNoteIdentifierUse:(NSString*)name at:(XTSourceLocation*)loc
     {
@@ -469,31 +472,10 @@ NS_ASSUME_NONNULL_BEGIN
     if (!frames.count)
         return;
     NSMutableDictionary* frame = frames.lastObject;
-    // Every use of every name, in every enclosing `par` frame (a block
-    // literal inside the body has a frame of its own): a global the body
-    // names exactly once, as the target of its whole-range write, need not
-    // be copied to the device (gpuWritesAll, bug 645).
-    for (NSMutableDictionary* f in frames)
-        if ([f[@"par"] boolValue])
-            {
-            NSMutableDictionary* refs = f[@"refs"];
-            if (!refs)
-                f[@"refs"] = refs = [NSMutableDictionary dictionary];
-            refs[name] = @([refs[name] unsignedIntegerValue] + 1);
-            }
+    BOOL isPar = [frame[@"par"] boolValue];
     NSUInteger literalDepth = [frame[@"depth"] unsignedIntegerValue];
     NSUInteger foundDepth = 0;
     NSDictionary* info = [self blkLookup:name depth:&foundDepth];
-    if (!info && [frame[@"par"] boolValue])
-        {
-        // A `par` body's use of a name from outside every scope: a global,
-        // if the program declared one by that name (parDesugarBody filters).
-        NSMutableArray* outer = frame[@"outer"];
-        if (!outer)
-            frame[@"outer"] = outer = [NSMutableArray array];
-        if (![outer containsObject:name])
-            [outer addObject:name];
-        }
     if (!info)
         {
         // Not a visible local. `self` (and the enclosing class's ivars)
@@ -513,7 +495,7 @@ NS_ASSUME_NONNULL_BEGIN
     if (foundDepth >= literalDepth)
         return; // the literal's own local/param
     NSMutableArray* names = frame[@"names"];
-    if ([names containsObject:name])
+    if (!isPar && [names containsObject:name])
         return; // already captured
     id ty = info[@"type"];
     if (ty == [NSNull null])
@@ -543,8 +525,12 @@ NS_ASSUME_NONNULL_BEGIN
                                      at:loc];
             return;
             }
+        if (isPar)
+            return;
         [frame[@"wb"] addObject:name];
         }
+    if (isPar)
+        return;
     [names addObject:name];
     frame[@"types"][name] = ty;
     if (info[@"base"])
@@ -1157,20 +1143,6 @@ NS_ASSUME_NONNULL_END
 #pragma mark - par blocks (CPU path)
 
 /****************************************************************************\
-|* A write to a bare name inside a `par` body: recorded on the par frame, so a
-|* captured scalar the body assigns can be refused — each work item has its
-|* own copy, and the write would vanish.
-\****************************************************************************/
-- (void)parNoteWriteTarget:(nullable XTASTNode*)target
-    {
-    [self parNoteMemoryWrite:target];
-    NSMutableDictionary* frame = [self blkFrames].lastObject;
-    if (!frame[@"par"] || ![target isKindOfClass:[XTIdentifierNode class]])
-        return;
-    [frame[@"written"] addObject:((XTIdentifierNode*)target).identName];
-    }
-
-/****************************************************************************\
 |* Two index expressions alike: names, integer literals, casts, binary
 |* operators and element reads, of the same shape. Mirrored in the port.
 \****************************************************************************/
@@ -1207,28 +1179,11 @@ static BOOL parSameIndex(XTASTNode* a, XTASTNode* b)
 
 /****************************************************************************\
 |* `a[k] op= x`, `a[k]++`, or `a[k] = a[k] op x` with the same index, op one
-|* of + | & ^, inside a `par` body: counted on every enclosing par frame under
-|* "<op><a>", once per use of a, so an array reduction (:reduce(+ a[])) can
-|* check that the body uses a in no other way.
+|* of + | & ^, in a `par` body is counted under "<op><a>", once per use of a,
+|* so an array reduction (:reduce(+ a[])) can check that the body uses a in no
+|* other way (pfwUpdate). The key, with the uses of a it makes in *uses; nil
+|* when the assignment is no such update.
 \****************************************************************************/
-- (void)parNoteUpdate:(nullable XTASTNode*)target op:(XTAssignOp)aop rhs:(nullable XTASTNode*)rhs
-    {
-    NSUInteger uses = 0;
-    NSString* key = parUpdateKey(target, aop, rhs, &uses);
-    if (!key)
-        return;
-    for (NSMutableDictionary* f in [self blkFrames])
-        if ([f[@"par"] boolValue])
-            {
-            NSMutableDictionary* ups = f[@"updates"];
-            if (!ups)
-                f[@"updates"] = ups = [NSMutableDictionary dictionary];
-            ups[key] = @([ups[key] unsignedIntegerValue] + uses);
-            }
-    }
-
-// The key parNoteUpdate counts an update under, "<op><a>", with the uses of
-// a it makes in *uses; nil when the assignment is no such update.
 NSString* _Nullable parUpdateKey(XTASTNode* _Nullable target, XTAssignOp aop, XTASTNode* _Nullable rhs, NSUInteger* uses)
     {
     if (![target isKindOfClass:[XTSubscriptExprNode class]])
@@ -1279,62 +1234,6 @@ NSString* _Nullable parRootName(XTASTNode* _Nullable n)
     }
 
 /****************************************************************************\
-|* What a `par` body does with each array, so the GPU runtime can leave out a
-|* copy (bug 645). `subBase` counts the uses of a name as the base of a
-|* subscript; `memWritten` holds the names an element of which is assigned or
-|* has its address taken. An array every one of whose uses is an element read
-|* (refs == subBase, not in memWritten) is only read: it need not come back.
-\****************************************************************************/
-- (void)parNoteSubscriptBase:(XTASTNode*)base
-    {
-    if (![base isKindOfClass:[XTIdentifierNode class]])
-        return;
-    NSString* name = ((XTIdentifierNode*)base).identName;
-    for (NSMutableDictionary* f in [self blkFrames])
-        if ([f[@"par"] boolValue])
-            {
-            NSMutableDictionary* sb = f[@"subBase"];
-            if (!sb)
-                f[@"subBase"] = sb = [NSMutableDictionary dictionary];
-            sb[name] = @([sb[name] unsignedIntegerValue] + 1);
-            }
-    }
-
-- (void)parNoteMemoryWrite:(nullable XTASTNode*)target
-    {
-    if ([target isKindOfClass:[XTIdentifierNode class]])
-        return; // a bare name: parNoteWriteTarget's business
-    NSString* root = parRootName(target);
-    if (!root)
-        return;
-    for (NSMutableDictionary* f in [self blkFrames])
-        if ([f[@"par"] boolValue])
-            {
-            NSMutableSet* mw = f[@"memWritten"];
-            if (!mw)
-                f[@"memWritten"] = mw = [NSMutableSet set];
-            [mw addObject:root];
-            }
-    }
-
-- (void)parNoteAddressOf:(XTASTNode*)operand
-    {
-    [self parNoteMemoryWrite:operand];
-    }
-
-/****************************************************************************\
-|* A break, continue or return inside a `par` body: every enclosing par frame
-|* notes it, because a body that can leave an iteration early cannot promise
-|* to write every element of anything.
-\****************************************************************************/
-- (void)parNoteExit
-    {
-    for (NSMutableDictionary* f in [self blkFrames])
-        if ([f[@"par"] boolValue])
-            f[@"exits"] = @YES;
-    }
-
-/****************************************************************************\
 |* The innermost capture frame when it is a `par :grid` body's, else nil. A
 |* block literal inside the body has its own frame, so a `return` there is
 |* the literal's.
@@ -1370,7 +1269,6 @@ NSString* _Nullable parRootName(XTASTNode* _Nullable n)
     [self advance];
     [self advance];
     [self advance];
-    [frame[@"gridUsed"] addObject:n];
     XTASTNode* gn = [[XTIdentifierNode alloc] initWithName:n location:loc];
     gn.srcFacts |= XTSrcSynth;
     return gn;
@@ -1703,7 +1601,7 @@ NSString* _Nullable parRootName(XTASTNode* _Nullable n)
             }
         // `:reduce(+ h[])`: + | & or ^ over an array of integers of a size
         // known when the program is built, which the body only updates, as
-        // h[k] op= x or h[k] = h[k] op x (parNoteUpdate counted those).
+        // h[k] op= x or h[k] = h[k] op x (the frame walk counted those).
         if (isArr)
             {
             NSString* op = r[0];
@@ -2002,7 +1900,7 @@ NSString* _Nullable parRootName(XTASTNode* _Nullable n)
                                                              body:[[XTBlockNode alloc] initWithStatements:st location:loc]
                                                          location:loc]];
         }
-    // Only read by the body: every use an element read (parNoteSubscriptBase).
+    // Only read by the body: every use an element read (subBase, pfwNode).
     BOOL (^readsOnly)(NSString*) = ^BOOL(NSString* n) {
         NSUInteger r = [frame[@"refs"][n] unsignedIntegerValue];
         return r > 0 && r == [frame[@"subBase"][n] unsignedIntegerValue] && ![frame[@"memWritten"] containsObject:n];

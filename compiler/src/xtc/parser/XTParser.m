@@ -2803,7 +2803,6 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
         }
     case XTTokenReturn:
         {
-        [self parNoteExit];
         XTASTNode* n = [self parseReturn];
         return n ? [self parGridReturn:(XTReturnNode*)n] : nil;
         }
@@ -2812,14 +2811,12 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
         [self advance];
         [self expect:XTTokenSemicolon];
         [self parGridBreakAt:cur.location];
-        [self parNoteExit];
         return [[XTBreakNode alloc] initWithLocation:cur.location];
         }
     case XTTokenContinue:
         {
         [self advance];
         [self expect:XTTokenSemicolon];
-        [self parNoteExit];
         return [[XTContinueNode alloc] initWithLocation:cur.location];
         }
     case XTTokenGoto:
@@ -3991,13 +3988,6 @@ static BOOL pacFact(NSMutableString* out, NSString* name, XTSrcFact bit, NSUInte
         _parAutoTrace = [NSMutableArray array];
     [_parAutoTrace addObject:[NSString stringWithFormat:@"par-auto-check: %@:%lu:%lu %@%@", file.lastPathComponent,
                                                         (unsigned long)loc.line, (unsigned long)loc.column, ok ? @"ok" : @"differ", facts]];
-    }
-
-- (void)parAutoTraceAdd:(NSString*)line
-    {
-    if (!_parAutoTrace)
-        _parAutoTrace = [NSMutableArray array];
-    [_parAutoTrace addObject:line];
     }
 
 // The scan behind parAutoFor: the cursor is at the `for`. Fills `reds`
@@ -5234,7 +5224,6 @@ static int64_t parAutoConst(XTASTNode* e)
     [self parGridLoop:-1];
     [self blkPopScope];
     [[self blkFrames] removeLastObject];
-    [self parFrameCheck:frame body:loop at:loc lifted:YES errors:!loop || _diagnostics.errorCount > errMark];
     if (!loop || _diagnostics.errorCount > errMark)
         {
         [self parAutoTakeBack:diagMark at:loc];
@@ -5242,6 +5231,8 @@ static int64_t parAutoConst(XTASTNode* e)
         [self parAutoTraceAt:traceAt verdict:@"serial" rule:@"block-refused" form:form name:nil reds:nil grid:0 impl:nil];
         return plain;
         }
+    // The block's frame, from the loop's tree.
+    [self parFrameFill:frame body:loop];
     // A perfect two-deep nest becomes one block over the W*H grid (the
     // :grid form): W*H work items in one dispatch rather than H items each
     // running W serially, which matters when H is small.
@@ -5950,9 +5941,8 @@ static NSString* scCombine(NSString* op, NSString* r, NSString* v)
         [_diagnostics emitError:@"'par' wants a block: par { ... }" at:[self currentLocation]];
         return nil;
         }
-    // The body is parsed inside a capture frame, as a block literal's is, so
-    // the names it uses from outside are known; writes to bare names are
-    // recorded too (parNoteWriteTarget).
+    // The body is parsed inside a capture frame, as a block literal's is, and
+    // its frame computed from its tree (parFrameFill).
     NSMutableDictionary* frame = [NSMutableDictionary dictionary];
     frame[@"depth"] = @([self blkScopes].count);
     frame[@"names"] = [NSMutableArray array];
@@ -5976,14 +5966,14 @@ static NSString* scCombine(NSString* op, NSString* r, NSString* v)
     [self blkPushScope];
     NSUInteger savedGoal = self.goalNow;
     self.goalNow = accuracy ? 2 : 1;
-    NSUInteger bodyErrs = _diagnostics.errorCount;
     XTBlockNode* body = (XTBlockNode*)[self parseBlock];
     self.goalNow = savedGoal;
     [self blkPopScope];
     [[self blkFrames] removeLastObject];
-    [self parFrameCheck:frame body:body at:loc lifted:NO errors:_diagnostics.errorCount > bodyErrs];
     if (!body)
         return nil;
+    // The block's frame, from the body's tree.
+    [self parFrameFill:frame body:body];
     // The speed goal lets the GPU use its fast maths (approximate sin, cos,
     // exp, ln and pow); the CPU path is the same for both goals. The
     // desugaring marks the block's GPU placeholder with it.

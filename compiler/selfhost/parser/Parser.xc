@@ -346,41 +346,18 @@ class Parser
     }
 
     // Identifier-use hook: inside a literal body, a name resolving OUTSIDE
-    // the literal's own scopes is a capture, first-use order.
+    // the literal's own scopes is a capture, first-use order. A `par` body's
+    // frame is computed from its tree once it is parsed (parFrameWalk); for
+    // one, this only says at once what cannot be captured, where the error
+    // belongs among the parse's others.
     void blkNoteUse(String* name)
     {
         if (_blkFrames.count() == (u32)0) return;
         Map* frame = (Map*)_blkFrames.get(_blkFrames.count() - (u32)1);
-        // Every use of every name, in every enclosing `par` frame (the
-        // reference explains; gpuWritesAll, bug 645).
-        for (u32 fi = (u32)0; fi < _blkFrames.count(); fi = fi + (u32)1) {
-            Map* pf = (Map*)_blkFrames.get(fi);
-            if (pf.get((Hashable*)String.withCString("par")) == (Object*)0) continue;
-            Map* refs = (Map*)pf.get((Hashable*)String.withCString("refs"));
-            if (refs == (Map*)0) {
-                refs = new Map();
-                pf.set((Hashable*)String.withCString("refs"), (Object*)refs);
-            }
-            Number* had = (Number*)refs.get((Hashable*)name);
-            u32 c = had == (Number*)0 ? (u32)0 : had.asU32();
-            refs.set((Hashable*)String.withString(name), (Object*)Number.withU32(c + (u32)1));
-        }
+        bool isPar = frame.get((Hashable*)String.withCString("par")) != (Object*)0;
         u32 literalDepth = ((Number*)frame.get((Hashable*)String.withCString("depth"))).asU32();
         u32 foundDepth = (u32)0;
         Map* info = blkLookup(name, &foundDepth);
-        if (info == 0 && frame.get((Hashable*)String.withCString("par")) != (Object*)0) {
-            // A `par` body's use of a name from outside every scope: a global,
-            // if the program declared one by that name (parDesugar filters).
-            Array* outer = (Array*)frame.get((Hashable*)String.withCString("outer"));
-            if (outer == (Array*)0) {
-                outer = new Array();
-                frame.set((Hashable*)String.withCString("outer"), (Object*)outer);
-            }
-            bool seen = false;
-            for (u32 i = (u32)0; i < outer.count(); i = i + (u32)1)
-                if (((String*)outer.get(i)).equals(name)) seen = true;
-            if (!seen) outer.add((Object*)String.withString(name));
-        }
         if (info == 0) {
             if (Parser._same(name, "self") || blkIsIvar(name)) {
                 _error(String.withFormat("a block cannot capture '%s' (v1 captures locals and parameters only) — copy it into a local first, e.g. `auto me = self;` outside the block", name.cString()));
@@ -389,8 +366,9 @@ class Parser
         }
         if (foundDepth >= literalDepth) return;
         Array* names = (Array*)frame.get((Hashable*)String.withCString("names"));
-        for (u32 i = (u32)0; i < names.count(); i = i + (u32)1)
-            if (((String*)names.get(i)).equals(name)) return;
+        if (!isPar)
+            for (u32 i = 0; i < names.count(); i++)
+                if (((String*)names.get(i)).equals(name)) return;
         String* ty = blkTyOf(info);
         if (Parser._same(ty, "auto")) {
             _error(String.withFormat("cannot capture '%s': it was declared `auto`, and a capture needs the declared type at this point — give it an explicit type", name.cString()));
@@ -403,8 +381,10 @@ class Parser
                 _error(String.withFormat("a `block:` capture of '%s' inside a nested block is not supported (v2) — write-back reaches the enclosing FRAME, and here the enclosing scope is itself a block", name.cString()));
                 return;
             }
+            if (isPar) return;
             ((Array*)frame.get((Hashable*)String.withCString("wbnames"))).add((Object*)name);
         }
+        if (isPar) return;
         names.add((Object*)name);
         ((Map*)frame.get((Hashable*)String.withCString("types"))).set((Hashable*)name, (Object*)ty);
     }
@@ -3146,13 +3126,14 @@ class Parser
         parGridEnter("loops", false);
         blkPopScope();
         _blkFrames.removeAt(_blkFrames.count() - (u32)1);
-        parFrameCheck(frame, loop, forTok, true, loop == (Node*)0 || _errors.count() > errMark);
         if (loop == (Node*)0 || _errors.count() > errMark) {
             parAutoRefused(errMark, warnMark, fatalMark, plainEnd, forTok);
             _parTok = savedParTok;
             parAutoTraceLine(traceAt, "serial", String.withCString("block-refused"), form, (String*)0, (String*)0, 0, (String*)0);
             return plain;
         }
+        // The block's frame, from the loop's tree.
+        parFrameFill(frame, loop);
         // A perfect two-deep nest becomes one block over the W*H grid (the
         // reference explains).
         Token* savedMkAt0 = _mkAt;
@@ -3760,25 +3741,23 @@ class Parser
     }
 
     // ── The par frame walk (#338) ────────────────────────────────
-    // What the par-frame hooks collect while a par body is parsed (blkNoteUse,
-    // parNoteWrite, parNoteUpdate, parNoteSubscriptBase, parNoteExit and
-    // parGridMember), computed again from the body's tree once it is parsed:
-    // the captures and their types in first-use order, the globals the body
-    // names, the names it assigns, and its uses of each name, as subscript
-    // bases and as array updates. The walk visits the tree in the order the
-    // parser read it, and binds the body's declarations as the parser did, in
-    // scopes pushed on _blkScopes above the frame's depth, so a name resolves
-    // as it did where it was used. A block literal or a nested par block in
-    // the body is read through the site the parser registered for it
-    // (pfwRegister): its body counts toward the uses, and the names its site
-    // passes in are uses at the site. XC_PAR_AUTO_CHECK=frame compares the
-    // walk with the hooks (parFrameCheck).
-    bool   _parFrameCheckOn;
+    // A par body's frame, computed from its tree once it is parsed: the
+    // captures and their types in first-use order (which sets the block's
+    // field layout), the globals the body names, the names it assigns, and
+    // its uses of each name, as subscript bases and as array updates, whether
+    // it can leave an iteration early, and which `par.x` names a grid body
+    // reads. The walk visits the tree in the order the parser read it, and
+    // binds the body's declarations as the parser did, in scopes pushed on
+    // _blkScopes above the frame's depth, so a name resolves as it did where
+    // it was used. A block literal or a nested par block in the body is read
+    // through the site the parser registered for it (pfwRegister): its body
+    // counts toward the uses, and the names its site passes in are uses at
+    // the site. What cannot be captured is still said where it is used
+    // (blkNoteUse, blkNoteBareCall), among the parse's other errors.
     Map*   _pfw;        // the frame the walk fills
     bool   _pfwTop;     // at the body's own level, not in a literal or nested block
     Array* _pfwSites;   // pfwRegister's entries
     Array* _pfwNoted;   // the names parDesugar's site notes, for pfwRegister
-    void setParFrameCheck(bool b) { _parFrameCheckOn = b; }
 
     static Object* pfwGet(Map* m, string k)
     {
@@ -3788,10 +3767,14 @@ class Parser
     // A literal's mk call (kind 0), or a nested written (1) or automatic (2)
     // par block's site, with the body the parser read for it, the literal's
     // parameters, the names the site noted, and for an automatic block the
-    // loop as written. Only under XC_PAR_AUTO_CHECK=frame, inside a frame.
+    // loop as written. Only inside a par body, whose walk reads it.
     void pfwRegister(Node* site, Node* body, Array* params, Array* noted, u32 kind, Node* plain)
     {
-        if (!_parFrameCheckOn || _blkFrames.count() == 0 || site == (Node*)0 || body == (Node*)0) return;
+        if (site == (Node*)0 || body == (Node*)0) return;
+        bool inPar = false;
+        for (u32 i = 0; i < _blkFrames.count(); i++)
+            if (((Map*)_blkFrames.get(i)).get((Hashable*)String.withCString("par")) != (Object*)0) inPar = true;
+        if (!inPar) return;
         if (_pfwSites == (Array*)0) _pfwSites = new Array();
         Array* e = new Array();
         e.add((Object*)site);
@@ -3812,9 +3795,9 @@ class Parser
         return (Array*)0;
     }
 
-    // The frame the hooks would have built for `body`, a par body (a block)
-    // or a lifted loop, parsed in `frame`: names, types, wbnames, outer,
-    // written, refs, subBase, memWritten, updates, exits and gridUsed.
+    // The frame of `body`, a par body (a block) or a lifted loop, parsed in
+    // `frame`: names, types, wbnames, outer, written, refs, subBase,
+    // memWritten, updates, exits and gridUsed.
     Map* parFrameWalk(Node* body, Map* frame)
     {
         Map* w = new Map();
@@ -4002,7 +3985,8 @@ class Parser
         m.set((Hashable*)String.withString(name), (Object*)Number.withU32(c + by));
     }
 
-    // blkNoteUse, for the frame being walked.
+    // A use of a name: counted, and at the body's own level a capture when it
+    // resolves outside the body, or a global when it resolves nowhere.
     void pfwUse(String* name)
     {
         pfwCount("refs", name, 1);
@@ -4046,7 +4030,8 @@ class Parser
             used.add((Hashable*)name);
     }
 
-    // parNoteWrite and parNoteMemoryWrite.
+    // An assignment's target: a name the body writes, or an element or field
+    // of the array or struct it is rooted at (memWritten).
     void pfwWrite(Node* t)
     {
         pfwMemWrite(t);
@@ -4079,143 +4064,17 @@ class Parser
         if (base != (Node*)0 && base.kind() == nkIdent) pfwCount("subBase", base.name(), 1);
     }
 
-    // XC_PAR_AUTO_CHECK=frame: the frame the hooks built for a par body or a
-    // lifted loop, against the walk's, field by field, as a line of the
-    // trace: "same", or "differ" and each field that does.
-    void parFrameCheck(Map* frame, Node* body, Token* at, bool lifted, bool errs)
+    // The frame of a par body or a lifted loop parsed in `frame`, from its
+    // tree, into `frame`, which parDesugar then reads.
+    void parFrameFill(Map* frame, Node* body)
     {
-        if (!_parFrameCheckOn || body == (Node*)0) return;
-        String* lf = (at != (Token*)0 && at.file() != (String*)0) ? at.file() : String.withCString("?");
-        if (_libFiles != (Set*)0 && _libFiles.contains((Hashable*)lf)) return;
+        if (body == (Node*)0) return;
         Map* w = parFrameWalk(body, frame);
-        String* d = String.withCString("");
-        Parser.pfcList(d, "names", (Array*)pfwGet(frame, "names"), (Array*)pfwGet(w, "names"));
-        Parser.pfcList(d, "wbnames", (Array*)pfwGet(frame, "wbnames"), (Array*)pfwGet(w, "wbnames"));
-        Parser.pfcList(d, "outer", (Array*)pfwGet(frame, "outer"), (Array*)pfwGet(w, "outer"));
-        Parser.pfcMap(d, "types", (Map*)pfwGet(frame, "types"), (Map*)pfwGet(w, "types"), false);
-        Parser.pfcMap(d, "refs", (Map*)pfwGet(frame, "refs"), (Map*)pfwGet(w, "refs"), true);
-        Parser.pfcMap(d, "subBase", (Map*)pfwGet(frame, "subBase"), (Map*)pfwGet(w, "subBase"), true);
-        Parser.pfcMap(d, "updates", (Map*)pfwGet(frame, "updates"), (Map*)pfwGet(w, "updates"), true);
-        Parser.pfcSet(d, "written", (Set*)pfwGet(frame, "written"), (Set*)pfwGet(w, "written"));
-        Parser.pfcSet(d, "memWritten", (Set*)pfwGet(frame, "memWritten"), (Set*)pfwGet(w, "memWritten"));
-        Parser.pfcSet(d, "gridUsed", (Set*)pfwGet(frame, "gridUsed"), (Set*)pfwGet(w, "gridUsed"));
-        if ((pfwGet(frame, "exits") != (Object*)0) != (pfwGet(w, "exits") != (Object*)0))
-            d.appendCString(pfwGet(frame, "exits") != (Object*)0 ? " exits=1/0" : " exits=0/1");
-        u32 cut = 0;
-        for (u32 q = 0; q < lf.byteLength(); q++) : serial
-            if (lf.byteAt(q) == '/') cut = q + 1;
-        String* l = String.withCString("par-frame-check: ");
-        l.append(lf.substringBytes(cut, lf.byteLength() - cut));
-        l.appendByte(':');
-        l.append(String.withU32(at != (Token*)0 ? at.line() : 0));
-        l.appendByte(':');
-        l.append(String.withU32(at != (Token*)0 ? at.col() : 0));
-        l.appendCString(lifted ? " lifted" : " written");
-        l.appendCString(d.byteLength() == 0 ? " same" : " differ");
-        l.appendCString(" captures=");
-        l.append(String.withU32(((Array*)pfwGet(frame, "names")).count()));
-        if (errs) l.appendCString(" errors");
-        l.append(d);
-        if (_parAutoTrace == (Array*)0) _parAutoTrace = new Array();
-        _parAutoTrace.add((Object*)l);
-    }
-
-    // An ordered list of names, hook against walk.
-    static void pfcList(String* d, string key, Array* h, Array* w)
-    {
-        u32 hn = h != (Array*)0 ? h.count() : 0;
-        u32 wn = w != (Array*)0 ? w.count() : 0;
-        bool same = hn == wn;
-        for (u32 i = 0; same && i < hn; i++)
-            if (!((String*)h.get(i)).equals((String*)w.get(i))) same = false;
-        if (same) return;
-        d.appendByte(' ');
-        d.appendCString(key);
-        d.appendCString("=[");
-        for (u32 i = 0; i < hn; i++) {
-            if (i > 0) d.appendByte(',');
-            d.append((String*)h.get(i));
+        Array* ks = w.allKeys();
+        for (u32 i = 0; i < ks.count(); i++) {
+            String* k = (String*)ks.get(i);
+            if (!Parser._same(k, "depth")) frame.set((Hashable*)k, w.get((Hashable*)k));
         }
-        d.appendCString("]/[");
-        for (u32 i = 0; i < wn; i++) {
-            if (i > 0) d.appendByte(',');
-            d.append((String*)w.get(i));
-        }
-        d.appendByte(']');
-    }
-
-    // A map of names to a type spelling or a count: each name whose entry
-    // differs, as name:hook/walk.
-    static void pfcMap(String* d, string key, Map* h, Map* w, bool counts)
-    {
-        String* out = String.withCString("");
-        if (h != (Map*)0) {
-            Array* ks = h.allKeys();
-            for (u32 i = 0; i < ks.count(); i++) {
-                String* n = (String*)ks.get(i);
-                Object* hv = h.get((Hashable*)n);
-                Object* wv = w != (Map*)0 ? w.get((Hashable*)n) : (Object*)0;
-                if (!Parser.pfcText(hv, counts).equals(Parser.pfcText(wv, counts))) Parser.pfcEntry(out, n, hv, wv, counts);
-            }
-        }
-        if (w != (Map*)0) {
-            Array* ks = w.allKeys();
-            for (u32 i = 0; i < ks.count(); i++) {
-                String* n = (String*)ks.get(i);
-                if (h == (Map*)0 || h.get((Hashable*)n) == (Object*)0) Parser.pfcEntry(out, n, (Object*)0, w.get((Hashable*)n), counts);
-            }
-        }
-        if (out.byteLength() == 0) return;
-        d.appendByte(' ');
-        d.appendCString(key);
-        d.appendByte('=');
-        d.append(out);
-    }
-
-    // A frame value as text: a type spelling, or a count.
-    // A frame value as text: a type spelling, or a count.
-    static String* pfcText(Object* v, bool counts)
-    {
-        if (v == (Object*)0) return String.withCString("-");
-        if (!counts) return (String*)v;
-        return String.withU32(((Number*)v).asU32());
-    }
-
-    static void pfcEntry(String* out, String* n, Object* hv, Object* wv, bool counts)
-    {
-        if (out.byteLength() > 0) out.appendByte(',');
-        out.append(n);
-        out.appendByte(':');
-        out.append(Parser.pfcText(hv, counts));
-        out.appendByte('/');
-        out.append(Parser.pfcText(wv, counts));
-    }
-
-    static void pfcSet(String* d, string key, Set* h, Set* w)
-    {
-        String* out = String.withCString("");
-        if (h != (Set*)0) {
-            Array* hs = h.allObjects();
-            for (u32 i = 0; i < hs.count(); i++)
-                if (w == (Set*)0 || !w.contains((Hashable*)hs.get(i))) {
-                    out.appendCString(" -");
-                    out.append((String*)hs.get(i));
-                }
-        }
-        if (w != (Set*)0) {
-            Array* ws = w.allObjects();
-            for (u32 i = 0; i < ws.count(); i++)
-                if (h == (Set*)0 || !h.contains((Hashable*)ws.get(i))) {
-                    out.appendCString(" +");
-                    out.append((String*)ws.get(i));
-                }
-        }
-        if (out.byteLength() == 0) return;
-        d.appendByte(' ');
-        d.appendCString(key);
-        d.appendByte('{');
-        d.append(out);
-        d.appendCString(" }");
     }
 
     // A marker's expression, or 0.
@@ -5443,8 +5302,8 @@ class Parser
             _error(String.withCString("'par' wants a block: par { ... }"));
             return (Node*)0;
         }
-        // The body is parsed inside a capture frame, as a block literal's is;
-        // writes to bare names are recorded too (parNoteWrite). As the reference.
+        // The body is parsed inside a capture frame, as a block literal's is,
+        // and its frame computed from its tree (parFrameFill). As the reference.
         Map* frame = new Map();
         frame.set((Hashable*)String.withCString("depth"), (Object*)Number.with(_blkScopes.count()));
         frame.set((Hashable*)String.withCString("names"), (Object*)new Array());
@@ -5476,13 +5335,13 @@ class Parser
         blkPushScope();
         u32 savedGoal = _goalNow;
         _goalNow = (flags & (u32)1) != (u32)0 ? (u32)2 : (u32)1;
-        u32 bodyErrs = _errors.count();
         Node* body = parseBlock();
         _goalNow = savedGoal;
         blkPopScope();
         _blkFrames.removeAt(_blkFrames.count() - (u32)1);
-        parFrameCheck(frame, body, parAt, false, _errors.count() > bodyErrs);
         if (body == 0) return (Node*)0;
+        // The block's frame, from the body's tree.
+        parFrameFill(frame, body);
         Array* reds = new Array();
         for (u32 i = (u32)0; i < p.kidCount(); i = i + (u32)1) reds.add((Object*)p.kid(i));
         // Everything the desugaring builds is at the `par`, as the
@@ -5498,7 +5357,6 @@ class Parser
         return out;
     }
 
-    // A write to a bare name inside a `par` body, recorded on the par frame.
     // The name an element access is rooted at: `a` for a[i], a[i][j], a[i].f.
     static String* parRootName(Node* n)
     {
@@ -5509,42 +5367,6 @@ class Parser
             else return (String*)0;
         }
         return (String*)0;
-    }
-
-    // What a `par` body does with each array (the reference explains;
-    // bug 645): uses as a subscript base, and element writes.
-    void parNoteSubscriptBase(Node* base)
-    {
-        if (base == (Node*)0 || base.kind() != (u16)nkIdent) return;
-        for (u32 fi = (u32)0; fi < _blkFrames.count(); fi = fi + (u32)1) {
-            Map* pf = (Map*)_blkFrames.get(fi);
-            if (pf.get((Hashable*)String.withCString("par")) == (Object*)0) continue;
-            Map* sb = (Map*)pf.get((Hashable*)String.withCString("subBase"));
-            if (sb == (Map*)0) {
-                sb = new Map();
-                pf.set((Hashable*)String.withCString("subBase"), (Object*)sb);
-            }
-            Number* had = (Number*)sb.get((Hashable*)base.name());
-            u32 c = had == (Number*)0 ? (u32)0 : had.asU32();
-            sb.set((Hashable*)String.withString(base.name()), (Object*)Number.withU32(c + (u32)1));
-        }
-    }
-
-    void parNoteMemoryWrite(Node* t)
-    {
-        if (t == (Node*)0 || t.kind() == (u16)nkIdent) return;
-        String* root = Parser.parRootName(t);
-        if (root == (String*)0) return;
-        for (u32 fi = (u32)0; fi < _blkFrames.count(); fi = fi + (u32)1) {
-            Map* pf = (Map*)_blkFrames.get(fi);
-            if (pf.get((Hashable*)String.withCString("par")) == (Object*)0) continue;
-            Set* mw = (Set*)pf.get((Hashable*)String.withCString("memWritten"));
-            if (mw == (Set*)0) {
-                mw = new Set();
-                pf.set((Hashable*)String.withCString("memWritten"), (Object*)mw);
-            }
-            mw.add((Hashable*)String.withString(root));
-        }
     }
 
     // Only read by the body: every use an element read (the reference).
@@ -5637,18 +5459,11 @@ class Parser
         return mw == (Set*)0 || !mw.contains((Hashable*)n);
     }
 
-    void parNoteWrite(Node* t)
-    {
-        parNoteMemoryWrite(t);
-        if (t == 0 || _blkFrames.count() == (u32)0) return;
-        Map* frame = (Map*)_blkFrames.get(_blkFrames.count() - (u32)1);
-        if (frame.get((Hashable*)String.withCString("par")) == 0) return;
-        if (t.kind() != (u16)nkIdent) return;
-        ((Set*)frame.get((Hashable*)String.withCString("written"))).add((Hashable*)t.name());
-    }
-
-    // The key parNoteUpdate counts an update under, "<op><a>", with the
-    // uses of a it makes in *uses; 0 when the assignment is no such update.
+    // `a[k] op= x`, `a[k]++`, or `a[k] = a[k] op x` with the same index, op
+    // one of + | & ^, in a `par` body is counted under "<op><a>", once per use
+    // of a, so an array reduction (:reduce(+ a[])) can check that the body
+    // uses a in no other way (pfwUpdate). The key, with the uses of a it
+    // makes in *uses; 0 when the assignment is no such update.
     static String* parUpdateKey(Node* t, String* op, Node* rhs, u32* uses)
     {
         if (t == (Node*)0 || t.kind() != nkSubscript || t.kidCount() < 2 || op == (String*)0) return (String*)0;
@@ -5675,29 +5490,6 @@ class Parser
         return key;
     }
 
-    // `a[k] op= x`, `a[k]++`, or `a[k] = a[k] op x` with the same index,
-    // op one of + | & ^, inside a `par` body: counted on every enclosing par frame
-    // under "<op><a>", once per use of a, so an array reduction
-    // (:reduce(+ a[])) can check that the body uses a in no other way. As
-    // the reference.
-    void parNoteUpdate(Node* t, String* op, Node* rhs)
-    {
-        u32 uses = 0;
-        String* key = Parser.parUpdateKey(t, op, rhs, &uses);
-        if (key == (String*)0) return;
-        for (u32 fi = (u32)0; fi < _blkFrames.count(); fi = fi + (u32)1) {
-            Map* pf = (Map*)_blkFrames.get(fi);
-            if (pf.get((Hashable*)String.withCString("par")) == (Object*)0) continue;
-            Map* ups = (Map*)pf.get((Hashable*)String.withCString("updates"));
-            if (ups == (Map*)0) {
-                ups = new Map();
-                pf.set((Hashable*)String.withCString("updates"), (Object*)ups);
-            }
-            Number* had = (Number*)ups.get((Hashable*)key);
-            u32 n = had == (Number*)0 ? (u32)0 : had.asU32();
-            ups.set((Hashable*)key, (Object*)Number.withU32(n + uses));
-        }
-    }
     // Two index expressions alike: names, integer literals, casts, binary
     // operators and element reads, of the same shape. As the reference's
     // parSameIndex.
@@ -5771,7 +5563,6 @@ class Parser
         advance();
         advance();
         advance();
-        ((Set*)frame.get((Hashable*)String.withCString("gridUsed"))).add((Hashable*)n);
         Node* id = mkNamed((u16)nkIdent, n);
         id.setPos(at.fileId(), at.line(), at.col());
         id.addSrc(SRC_SYNTH);
@@ -5795,17 +5586,6 @@ class Parser
         Map* frame = parGridFrame();
         if (frame != (Map*)0 && parGridCount(frame, "loops") == (u32)0 && parGridCount(frame, "switches") == (u32)0)
             _errorAt(String.withCString("'break' would leave the 'par :grid' body; 'return' ends a work item"), parTokNode(at));
-    }
-
-    // A break, continue or return inside a `par` body: every enclosing par
-    // frame notes it (the reference explains).
-    void parNoteExit()
-    {
-        for (u32 fi = (u32)0; fi < _blkFrames.count(); fi = fi + (u32)1) {
-            Map* pf = (Map*)_blkFrames.get(fi);
-            if (pf.get((Hashable*)String.withCString("par")) != (Object*)0)
-                pf.set((Hashable*)String.withCString("exits"), (Object*)Number.withU32((u32)1));
-        }
     }
 
     // `return;` in a `par :grid` body ends the work item: `continue` of the
@@ -7135,7 +6915,7 @@ class Parser
             parGridEnter("loops", true); _loopDepth = _loopDepth + (u32)1; Node* n = parseFor(); _loopDepth = _loopDepth - (u32)1; parGridEnter("loops", false); return n;
         }
         if (check((u16)tokSwitch))   { parGridEnter("switches", true); Node* n = parseSwitch(); parGridEnter("switches", false); return n; }
-        if (check((u16)tokReturn))   { Token* rt = cur(); parNoteExit(); return parGridReturn(parseReturn(), rt); }
+        if (check(tokReturn))   { Token* rt = cur(); return parGridReturn(parseReturn(), rt); }
         // `defer` takes a BLOCK, as the reference requires: braces keep what
         // is deferred unambiguous, and leave `defer <statement>` free to mean
         // something later. A bare statement was accepted here (bug 596).
@@ -7155,8 +6935,8 @@ class Parser
         if (check((u16)tokTypedef))  return parseTypedef();
         if (check((u16)tokStruct))   return parseStruct(true);
         if (check((u16)tokEnum))     return parseEnum();
-        if (check((u16)tokBreak))    { Token* bt = cur(); advance(); expect((u16)tokSemicolon); parGridBreak(bt); parNoteExit(); return mk((u16)nkBreak); }
-        if (check((u16)tokContinue)) { advance(); expect((u16)tokSemicolon); parNoteExit(); return mk((u16)nkContinue); }
+        if (check(tokBreak))    { Token* bt = cur(); advance(); expect(tokSemicolon); parGridBreak(bt); return mk(nkBreak); }
+        if (check(tokContinue)) { advance(); expect(tokSemicolon); return mk(nkContinue); }
         if (check((u16)tokGoto)) {
             // `goto <label>;` — a C-porting aid (undocumented as a language feature).
             advance();
@@ -8051,8 +7831,6 @@ class Parser
                     if (lhs.kind() == (u16)nkIdent) blkMarkHoldsWb(lhs.name(), rhs);
                     else _error(String.withCString("a block with `block:` captures cannot be stored beyond its frame — its write-back targets a local slot. Write results into an object instead"));
                 }
-                parNoteWrite(lhs);
-                parNoteUpdate(lhs, opTok.value(), rhs);
                 a.add(lhs); a.add(rhs);
                 lhs = a;
                 continue;
@@ -8110,8 +7888,6 @@ class Parser
             if (isPointerSigil(op.type())) n.setOp(String.withCString("*"));
             else                           n.setOp(op.value());
             Node* opnd = parseUnary();
-            if (op.type() == (u16)tokAmpersand) parNoteMemoryWrite(opnd);
-            if (op.type() == (u16)tokPlusPlus || op.type() == (u16)tokMinusMinus) parNoteWrite(opnd);
             n.add(opnd);
             return n;
         }
@@ -8136,9 +7912,6 @@ class Parser
                 Token* op = advance();
                 Node* n = mk((u16)nkPostfix);
                 n.setOp(op.value());
-                parNoteWrite(node);
-                // `h[k]++`: an update of h by + (an array reduction may take it).
-                if (t == (u16)tokPlusPlus) parNoteUpdate(node, String.withCString("+="), (Node*)0);
                 n.add(node);
                 node = n;
             } else if (t == (u16)tokLBracket) {
@@ -8174,7 +7947,6 @@ class Parser
                 // `a[..hi]` and `a[lo..]` both carry ONE bound and a missing
                 // child is simply absent, so the open-LOW form says so itself.
                 if (isSlice && startE == 0) n.addFlag((u32)NF_RANGE_HI);
-                if (!isSlice) parNoteSubscriptBase(node);
                 n.add(node);
                 n.add(startE);
                 n.add(endE);
