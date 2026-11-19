@@ -916,6 +916,11 @@ static XTOpInfo operatorInfo(XTTokenType type)
                                arguments:args
                                 location:loc];
                     }
+                // A call through a function pointer that is a local or a
+                // parameter: a block body captures the pointer like any other
+                // name it reads (#437). Mirrored in the port.
+                if (info)
+                    [self blkNoteIdentifierUse:cur.value at:loc];
                 }
             [self blkNoteBareCall:cur.value at:loc];
             return [self stampFwd:[[XTCallExprNode alloc] initWithCallee:cur.value arguments:args location:loc]];

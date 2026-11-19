@@ -7404,6 +7404,11 @@ class Parser
                         n = mkNamed((u16)nkMethodCall, String.withCString("invoke"));
                         n.add(mkNamed((u16)nkIdent, node.name()));
                     } else {
+                        // A call through a function pointer that is a local or
+                        // a parameter: a block body captures the pointer like
+                        // any other name it reads (#437). As the reference.
+                        if (bInfo != 0)
+                            blkNoteUse(node.name());
                         blkNoteBareCall(node);
                         n = mkNamed((u16)nkCall, node.name());
                     }
