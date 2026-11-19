@@ -118,13 +118,13 @@ if [ "$HOST" = local ] || { [ -z "$HOST" ] && [ "$(uname -s)" = Linux ] && [ "$(
   # file there, and the gate runs several x86-64 legs on one host at once.
   # The GPU drivers' shader caches stay the user's own (see GPU_CACHES).
   mkdir -p "$BUILD/home/.config"
-  ( cd "$BUILD/bin" && for b in *; do env HOME="$BUILD/home" XDG_CONFIG_HOME="$BUILD/home/.config" "${GPU_CACHES[@]}" ${RUN_ENV:-} timeout "$TIMEOUT" ./"$b" > "$BUILD/out/$b.out" 2>/dev/null; echo $? > "$BUILD/out/$b.rc"; done )
+  ( cd "$BUILD/bin" && for b in *; do env HOME="$BUILD/home" XDG_CONFIG_HOME="$BUILD/home/.config" "${GPU_CACHES[@]}" ${RUN_ENV:-} timeout "$TIMEOUT" ./"$b" > "$BUILD/out/$b.out" 2> "$BUILD/out/$b.err"; echo $? > "$BUILD/out/$b.rc"; done )
 else
 [ -n "$HOST" ] || { echo "no x86-64 Linux host: set XTC_X86_64_HOST (or run on one)"; exit 1; }
 ssh -o BatchMode=yes "$HOST" "rm -rf $REMOTE && mkdir -p $REMOTE/out" || { echo "ssh $HOST failed"; exit 1; }
 scp -o BatchMode=yes -q "$BUILD/bin/"* "$HOST:$REMOTE/"
 ssh -o BatchMode=yes "$HOST" \
-  "cd $REMOTE; mkdir -p .home/.config; for b in *; do env HOME=$REMOTE/.home XDG_CONFIG_HOME=$REMOTE/.home/.config $GPU_CACHES_REMOTE ${RUN_ENV:-} timeout $TIMEOUT ./\$b > out/\$b.out 2>/dev/null; echo \$? > out/\$b.rc; done; tar cf - -C out ." \
+  "cd $REMOTE; mkdir -p .home/.config; for b in *; do env HOME=$REMOTE/.home XDG_CONFIG_HOME=$REMOTE/.home/.config $GPU_CACHES_REMOTE ${RUN_ENV:-} timeout $TIMEOUT ./\$b > out/\$b.out 2> out/\$b.err; echo \$? > out/\$b.rc; done; tar cf - -C out ." \
   | tar xf - -C "$BUILD/out"
 ssh -o BatchMode=yes "$HOST" "rm -rf $REMOTE" 2>/dev/null
 fi
@@ -136,6 +136,18 @@ for b in "${NAMES[@]}"; do
     PASS=$((PASS+1))
   else
     FAIL=$((FAIL+1)); FAILS="$FAILS $b"
+  fi
+done
+# A failure says why (#446): its exit status (124 is the timeout), the first
+# lines of its output against the oracle, and the end of what it wrote to
+# stderr. Indented, so nothing here reads as the PASS / run-fail lines the
+# gate parses.
+for b in $FAILS; do
+  echo "  --- $b: exit $(cat "$BUILD/out/$b.rc" 2>/dev/null || echo '?') ---"
+  diff "tests/fixtures/$b.expected.out" "$BUILD/out/$b.out" 2>&1 | head -40 | sed 's/^/  | /'
+  if [ -s "$BUILD/out/$b.err" ]; then
+    echo "  | (stderr)"
+    tail -15 "$BUILD/out/$b.err" | sed 's/^/  | /'
   fi
 done
 echo "----------------------------------------------------------------"
