@@ -31,7 +31,7 @@ mkdir -p "$WORK"
 trap 'rm -rf "$WORK"' EXIT
 
 echo "building xtirp (xtc → native arm64)…"
-"${XC_TOOL_XCC:-$BIN/xcc}" -O2 -A $XC_HOST_ARCH -H . -o "$WORK/xtirp" selfhost/tools/xtirp.xc \
+"${XC_TOOL_XCC:-$BIN/xcc}" --par-style=cpu -O2 -A $XC_HOST_ARCH -H . -o "$WORK/xtirp" selfhost/tools/xtirp.xc \
     -I selfhost/ir -I selfhost/defs 2>&1 | grep -E "^[^ ].*error" && exit 1
 
 # arm9 resolves `#import <c>` against the device libc.so, so without the

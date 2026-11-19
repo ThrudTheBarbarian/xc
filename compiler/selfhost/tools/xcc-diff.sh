@@ -36,7 +36,7 @@ SELF=(-I selfhost/lexer -I selfhost/defs -I selfhost/preproc -I selfhost/parser 
       -I selfhost/link -I selfhost/driver -I selfhost/defs)
 
 echo "building xcc.xc (the xtc driver → native arm64)…"
-"${XC_TOOL_XCC:-$BIN/xcc}" -O2 -A $XC_HOST_ARCH -H . -o "$WORK/xccxc" selfhost/tools/xcc.xc \
+"${XC_TOOL_XCC:-$BIN/xcc}" --par-style=cpu -O2 -A $XC_HOST_ARCH -H . -o "$WORK/xccxc" selfhost/tools/xcc.xc \
     "${INCS[@]}" "${SELF[@]}" > "$WORK/build.log" 2>&1
 if [ ! -x "$WORK/xccxc" ]; then
     echo "--- xcc-diff: BROKEN (the driver did not build)"

@@ -26,7 +26,7 @@ mkdir -p "$WORK"
 trap 'rm -rf "$WORK"' EXIT
 
 echo "building xtcg65 (xtc → native arm64 host binary)…"
-"${XC_TOOL_XCC:-$BIN/xcc}" -O2 -A $XC_HOST_ARCH -H . -o "$WORK/xtcg65" selfhost/tools/xtcg65.xc \
+"${XC_TOOL_XCC:-$BIN/xcc}" --par-style=cpu -O2 -A $XC_HOST_ARCH -H . -o "$WORK/xtcg65" selfhost/tools/xtcg65.xc \
     -I selfhost/ir -I selfhost/opt -I selfhost/codegen -I selfhost/driver -I selfhost/defs \
     2>&1 | grep -E "^[^ ].*error" && exit 1
 

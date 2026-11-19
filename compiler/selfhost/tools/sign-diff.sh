@@ -38,8 +38,8 @@ if [ -f build/tls/tlsshim.o ] && [ -f "$MB/libmbedtls.a" ]; then
     TLS=1; HOSTF+=(-DXT_HAVE_TLS=1 -Wl,build/tls/tlsshim.o)
     for l in mbedtls mbedx509 mbedcrypto tfpsacrypto; do HOSTF+=("-Wl,$MB/lib$l.a"); done
 fi
-"${XC_TOOL_XCC:-$BIN/xcc}" -q -O2 -A $XC_HOST_ARCH -H . "${HOSTF[@]}" -o "$WORK/xtsign" selfhost/tools/xtsign.xc "${INCS[@]}" > "$WORK/b1.log" 2>&1
-"${XC_TOOL_XCC:-$BIN/xcc}" -q -O2 -A $XC_HOST_ARCH -H . -o "$WORK/mkident" selfhost/tools/mkident.xc "${INCS[@]}" > "$WORK/b2.log" 2>&1
+"${XC_TOOL_XCC:-$BIN/xcc}" --par-style=cpu -q -O2 -A $XC_HOST_ARCH -H . "${HOSTF[@]}" -o "$WORK/xtsign" selfhost/tools/xtsign.xc "${INCS[@]}" > "$WORK/b1.log" 2>&1
+"${XC_TOOL_XCC:-$BIN/xcc}" --par-style=cpu -q -O2 -A $XC_HOST_ARCH -H . -o "$WORK/mkident" selfhost/tools/mkident.xc "${INCS[@]}" > "$WORK/b2.log" 2>&1
 [ -x "$WORK/xtsign" ] && [ -x "$WORK/mkident" ] || { grep -a error "$WORK"/b*.log | head -5; exit 1; }
 
 pass=0; fail=0; skipped=0

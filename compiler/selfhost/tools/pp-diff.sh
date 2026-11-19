@@ -37,7 +37,7 @@ if [ ! -x "$XTC" ] || [ ! -x "$FE" ]; then
 fi
 
 echo "building xtpp (xtc → native arm64)…"
-if ! "${XC_TOOL_XCC:-$XTC}" -H . -q -A $XC_HOST_ARCH -I selfhost/preproc -I selfhost/defs selfhost/tools/xtpp.xc -o "$TMP/xtpp" 2>"$TMP/build.err"; then
+if ! "${XC_TOOL_XCC:-$XTC}" --par-style=cpu -H . -q -A $XC_HOST_ARCH -I selfhost/preproc -I selfhost/defs selfhost/tools/xtpp.xc -o "$TMP/xtpp" 2>"$TMP/build.err"; then
     echo "pp-diff: xtpp failed to build" >&2
     cat "$TMP/build.err" >&2
     exit 1

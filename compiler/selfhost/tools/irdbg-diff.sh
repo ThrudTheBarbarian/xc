@@ -46,9 +46,9 @@ BUILD_INCS=(-I support/generic/lib -I support/$XC_HOST_ARCH/lib -I support/xt650
             -I selfhost/sema -I selfhost/defs -I selfhost/ir -I selfhost/opt)
 
 echo "building xtfe and xtirp (xtc → native $XC_HOST_ARCH)…"
-"${XC_TOOL_XCC:-$BIN/xcc}" -O2 -A $XC_HOST_ARCH -o "$WORK/xtfe" selfhost/tools/xtfe.xc -I selfhost/driver -I selfhost/defs \
+"${XC_TOOL_XCC:-$BIN/xcc}" --par-style=cpu -O2 -A $XC_HOST_ARCH -o "$WORK/xtfe" selfhost/tools/xtfe.xc -I selfhost/driver -I selfhost/defs \
     "${BUILD_INCS[@]}" 2>&1 | grep -E "^[^ ].*error" && exit 1
-"${XC_TOOL_XCC:-$BIN/xcc}" -O2 -A $XC_HOST_ARCH -H . -o "$WORK/xtirp" selfhost/tools/xtirp.xc \
+"${XC_TOOL_XCC:-$BIN/xcc}" --par-style=cpu -O2 -A $XC_HOST_ARCH -H . -o "$WORK/xtirp" selfhost/tools/xtirp.xc \
     -I selfhost/ir -I selfhost/defs -I selfhost/opt 2>&1 | grep -E "^[^ ].*error" && exit 1
 
 RUN_INCS=(-I selfhost/lexer -I selfhost/codegen -I selfhost/asm -I selfhost/link -I selfhost/defs -I selfhost/preproc -I selfhost/parser

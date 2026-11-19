@@ -32,7 +32,7 @@ WORK=$(mktemp -d "${TMPDIR:-/tmp}/diagdiff.XXXXXX")
 trap 'rm -rf "$WORK"' EXIT
 
 echo "building the xc driver (selfhost/tools/xcc.xc → native arm64)…"
-"${XC_TOOL_XCC:-$BIN/xcc}" -O2 -A $XC_HOST_ARCH -H . -o "$WORK/xcc-xc" selfhost/tools/xcc.xc \
+"${XC_TOOL_XCC:-$BIN/xcc}" --par-style=cpu -O2 -A $XC_HOST_ARCH -H . -o "$WORK/xcc-xc" selfhost/tools/xcc.xc \
     -I support/generic/lib -I support/$XC_HOST_ARCH/lib \
     -I selfhost/lexer -I selfhost/defs -I selfhost/preproc -I selfhost/parser -I selfhost/sema \
     -I selfhost/ir -I selfhost/defs -I selfhost/opt -I selfhost/codegen -I selfhost/asm \

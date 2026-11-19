@@ -27,7 +27,7 @@ mkdir -p "$WORK"
 trap 'rm -rf "$WORK"' EXIT
 
 echo "building xtfe (xtc → native arm64)…"
-"${XC_TOOL_XCC:-$BIN/xcc}" -O2 -A $XC_HOST_ARCH -H . -o "$WORK/xtfe" selfhost/tools/xtfe.xc -I selfhost/driver -I selfhost/defs \
+"${XC_TOOL_XCC:-$BIN/xcc}" --par-style=cpu -O2 -A $XC_HOST_ARCH -H . -o "$WORK/xtfe" selfhost/tools/xtfe.xc -I selfhost/driver -I selfhost/defs \
     -I selfhost/lexer -I selfhost/codegen -I selfhost/asm -I selfhost/link -I selfhost/defs -I selfhost/preproc -I selfhost/parser \
     -I selfhost/sema -I selfhost/defs -I selfhost/ir -I selfhost/opt 2>&1 | grep -E "^[^ ].*error" && exit 1
 

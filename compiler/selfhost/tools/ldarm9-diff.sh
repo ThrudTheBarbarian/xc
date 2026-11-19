@@ -24,7 +24,7 @@ mkdir -p "$WORK"
 trap 'rm -rf "$WORK"' EXIT
 
 echo "building xta9so + xtcg9 (xtc → native arm64 host binary)…"
-"${XC_TOOL_XCC:-$BIN/xcc}" -O2 -A $XC_HOST_ARCH -H . -o "$WORK/xta9so" selfhost/tools/xta9so.xc \
+"${XC_TOOL_XCC:-$BIN/xcc}" --par-style=cpu -O2 -A $XC_HOST_ARCH -H . -o "$WORK/xta9so" selfhost/tools/xta9so.xc \
     -I selfhost/asm -I selfhost/defs > "$WORK/build.log" 2>&1
 if [ ! -x "$WORK/xta9so" ]; then
     grep -a error "$WORK/build.log" | head -5
@@ -36,7 +36,7 @@ fi
 # contains — and nothing was comparing that shape. Both code generators are
 # already being run here, so comparing their `--emit-lib` output costs one
 # `cmp` and closes it.
-"${XC_TOOL_XCC:-$BIN/xcc}" -O2 -A $XC_HOST_ARCH -H . -o "$WORK/xtcg9" selfhost/tools/xtcg9.xc \
+"${XC_TOOL_XCC:-$BIN/xcc}" --par-style=cpu -O2 -A $XC_HOST_ARCH -H . -o "$WORK/xtcg9" selfhost/tools/xtcg9.xc \
     -I selfhost/ir -I selfhost/defs -I selfhost/codegen -I selfhost/opt > "$WORK/cgbuild.log" 2>&1
 if [ ! -x "$WORK/xtcg9" ]; then
     grep -a error "$WORK/cgbuild.log" | head -5

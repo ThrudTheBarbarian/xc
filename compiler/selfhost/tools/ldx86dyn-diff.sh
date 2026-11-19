@@ -25,7 +25,7 @@ SELF=(-I selfhost/lexer -I selfhost/defs -I selfhost/preproc -I selfhost/parser 
       -I selfhost/link -I selfhost/driver -I selfhost/defs)
 HOSTA=$( case "$(uname -m)" in (arm64|aarch64) echo arm64 ;; (*) echo x86_64 ;; esac )
 echo "building xcc.xc (the xtc driver)…"
-"${XC_TOOL_XCC:-$BIN/xcc}" -O2 -A $HOSTA -H . -o "$WORK/xccxc" selfhost/tools/xcc.xc \
+"${XC_TOOL_XCC:-$BIN/xcc}" --par-style=cpu -O2 -A $HOSTA -H . -o "$WORK/xccxc" selfhost/tools/xcc.xc \
     -I support/generic/lib -I support/$HOSTA/lib "${SELF[@]}" > "$WORK/build.log" 2>&1
 if [ ! -x "$WORK/xccxc" ]; then
     echo "--- ldx86dyn-diff: BROKEN (the driver did not build)"

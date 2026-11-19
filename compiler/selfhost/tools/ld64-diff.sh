@@ -22,7 +22,7 @@ mkdir -p "$WORK"
 trap 'rm -rf "$WORK"' EXIT
 
 echo "building xtld64 (xtc → native arm64 host binary)…"
-"${XC_TOOL_XCC:-$BIN/xcc}" -O2 -A $XC_HOST_ARCH -H . -o "$WORK/xtld64" selfhost/tools/xtld64.xc \
+"${XC_TOOL_XCC:-$BIN/xcc}" --par-style=cpu -O2 -A $XC_HOST_ARCH -H . -o "$WORK/xtld64" selfhost/tools/xtld64.xc \
     -I selfhost/asm -I selfhost/defs > "$WORK/build.log" 2>&1
 if [ ! -x "$WORK/xtld64" ]; then
     grep -a error "$WORK/build.log" | head -5

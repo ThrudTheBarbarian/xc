@@ -56,7 +56,7 @@ case "$TARGET" in
 esac
 
 echo "building xtopt (xtc → native arm64)…"
-"${XC_TOOL_XCC:-$BIN/xcc}" -O2 -A $XC_HOST_ARCH -H . -o "$WORK/xtopt" selfhost/tools/xtopt.xc \
+"${XC_TOOL_XCC:-$BIN/xcc}" --par-style=cpu -O2 -A $XC_HOST_ARCH -H . -o "$WORK/xtopt" selfhost/tools/xtopt.xc \
     -I selfhost/ir -I selfhost/defs -I selfhost/opt 2>&1 | grep -E "^[^ ].*error" && exit 1
 
 RUN_INCS=(-I selfhost/lexer -I selfhost/codegen -I selfhost/asm -I selfhost/link -I selfhost/driver -I selfhost/defs -I selfhost/preproc -I selfhost/parser

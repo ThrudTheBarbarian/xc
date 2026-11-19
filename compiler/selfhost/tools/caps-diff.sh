@@ -25,7 +25,7 @@ SELF=(-I selfhost/lexer -I selfhost/defs -I selfhost/preproc -I selfhost/parser 
       -I selfhost/ir -I selfhost/defs -I selfhost/opt -I selfhost/codegen -I selfhost/asm
       -I selfhost/link -I selfhost/driver -I selfhost/defs)
 echo "building xcc.xc (the xtc driver → native arm64)…"
-"${XC_TOOL_XCC:-$BIN/xcc}" -O2 -A $XC_HOST_ARCH -H . -o "$WORK/xccxc" selfhost/tools/xcc.xc \
+"${XC_TOOL_XCC:-$BIN/xcc}" --par-style=cpu -O2 -A $XC_HOST_ARCH -H . -o "$WORK/xccxc" selfhost/tools/xcc.xc \
     "${SELF[@]}" > "$WORK/build.log" 2>&1
 if [ ! -x "$WORK/xccxc" ]; then grep -a error "$WORK/build.log" | head -5; exit 1; fi
 
