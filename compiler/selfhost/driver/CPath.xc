@@ -85,6 +85,29 @@ i32 cPathRelocatable(String* xo, String* out)
         cc.appendCString(" ");
         cc.append(CPath.quoted(gCRestObject));
         }
+#if OS_darwin
+    // Apple's ld writes a debug map into the combined object: an N_OSO entry
+    // naming each input that has debug info (clang's half, in this run's
+    // scratch directory) and that file's modification time. Both differ on
+    // every run, so the same source gave different objects (#429). The
+    // scratch prefix comes off the name (-oso_prefix) and ZERO_AR_DATE makes
+    // the time 0, as for an archive member. Only on the host's own link: a
+    // cross target goes to ld.lld, which writes no debug map.
+    if (gCPathTarget == (String*)0 || gCPathTarget.byteLength() == (u32)0)
+        {
+        String* dir = (gCRestObject != (String*)0) ? gCRestObject.deletingLastPathComponent() : (String*)0;
+        if (dir != (String*)0 && dir.byteLength() > (u32)0)
+            {
+            String* pre = String.withString(dir);
+            pre.appendCString("/");
+            cc.appendCString(" -Wl,-oso_prefix,");
+            cc.append(CPath.quoted(pre));
+            }
+        String* z = String.withCString("ZERO_AR_DATE=1 ");
+        z.append(cc);
+        cc = z;
+        }
+#endif
     return system(cc.cString());
     }
 
