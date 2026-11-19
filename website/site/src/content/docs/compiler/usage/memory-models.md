@@ -13,7 +13,8 @@ xcc -m xt app.xc -o app.xex
 Memory models apply to the **6502 backend only**. The other six targets
 (`arm64`, `x86_64`, `win64`, `arm9`, `m68k`, `wasm32`) are native platforms, or a
 managed runtime in the case of `wasm32`, with their own loaders. They have no layout
-to choose, and `-m` does not apply.
+to choose, and `-m` does not apply. The fixed wasm32 layout is described
+[below](#the-wasm32-layout).
 
 `-m xt` implies `-A 6502`, so it selects the target on its own.
 
@@ -127,6 +128,40 @@ needs it, grows up to the window's last page (3 MB), and gives empty banks back.
 There is no fixed reservation to tune, and a program uses as much heap as it needs without
 editing the layout. The one limit: **a single allocation cannot span a bank boundary**, so
 no one object may exceed ~12 KB. Total heap size is unaffected.
+
+## The wasm32 layout
+
+A wasm32 program's linear memory, from address 0 up:
+
+```
+0x00000             unused: an address below 0x10000 is a class id, not a pointer
+0x10000             shadow stack, 1 MiB by default; __sp starts at its top
+                    and the stack grows down towards 0x10000 (__stack_low)
+stack top           the program's static data, up to __data_end
+__data_end          each wasm library's static data, placed by the loader
+__heap_base         the heap, on a 64 KiB boundary, growing the memory as needed
+```
+
+Static data comes after a fixed-size stack, so a program's data can be as large as it
+needs without leaving the stack less room. Each function that uses the shadow stack checks
+its frame against `__stack_low` on entry. A call that would pass the bottom of the stack
+traps (`RuntimeError: unreachable`) before it writes anything, so an overflow stops the
+program and never overwrites data.
+
+`-ss <n>` (`--stack-size <n>`) sets the shadow stack's size in bytes, rounded up to 16:
+
+```bash
+xcc -A wasm32 -ss 0x400000 app.xc -o app.wasm    # a 4 MiB stack
+```
+
+A wasm library has no stack of its own. Its functions run on the app's stack, so the
+option goes on the app's build.
+
+When an app imports wasm libraries, the loader places each library's data after
+`__data_end`, growing the memory to fit, and then moves `__heap_base` above the last
+library before the program runs. The ARC runtime treats an address below `__heap_base` as
+static or stack storage and an address above it as a heap object. Library data must
+therefore sit below the heap.
 
 ## Libraries resolve by architecture × platform
 

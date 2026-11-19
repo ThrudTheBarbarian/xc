@@ -1004,13 +1004,14 @@
   XCC = { instance, memory: sharedMemory || instance.exports.memory };
   globalThis.xcc = XCC;
   (globalThis.xccModules || (globalThis.xccModules = {}))["__BASE__"] = XCC;
-  // Instantiate each dep: data goes BETWEEN the app's static data and the
-  // 1 MiB heap base (so the ARC "is this a heap object" compare stays a
-  // single guard — library statics must NOT read as heap objects), funcs
-  // go at the grown end of the app's one table, env is thunked to the
+  // Instantiate each dep: data goes after the app's static data
+  // (__data_end), the memory growing to hold it, and the heap base then
+  // moves above the last dep (so the ARC "is this a heap object" compare
+  // stays a single guard — library statics must NOT read as heap objects).
+  // Funcs go at the grown end of the app's one table, env is thunked to the
   // app's exported runtime, and the dep's reloc-apply patches the vtable
-  // words a data segment cannot compute. __stack_low is raised past the
-  // last dep so the shadow stack cannot grow down into library data.
+  // words a data segment cannot compute. The shadow stack sits below all of
+  // this, at 0x10000, so library data does not change it.
   // ── Spawning, from main or from any thread (wasm32-threads.md). A thread
   // gets a 256 KiB shadow stack and a handle {done, stack, detached} from the
   // heap. Node starts a worker per thread, from whichever thread spawns. A
@@ -1117,12 +1118,16 @@
     }
   }
   let dcur = order.length ? instance.exports.__data_end.value : 0;
+  // Grow the app's memory to at least `end` bytes.
+  const growTo = (end) => {
+    const mem = instance.exports.memory, have = mem.buffer.byteLength;
+    if (end > have) mem.grow(Math.ceil((end - have) / 65536));
+  };
   for (const d of order) {
     const dbytes = libBytes[d], dmeta = libMeta[d];
     const dbase = (dcur + 15) & ~15;
     if (dbase < 0x10000) throw new Error(`xcc: lib${d} data base ${dbase} below 0x10000 (classid guard)`);
-    if (dbase + dmeta.dataSize > 0x100000)
-      throw new Error(`xcc: lib${d} data (${dmeta.dataSize} bytes at ${dbase}) overflows the pre-heap region`);
+    growTo(dbase + dmeta.dataSize);
     const dtable = instance.exports.__indirect_function_table;
     const dtbase = dmeta.tableSize ? dtable.grow(dmeta.tableSize) : dtable.length;
     const denvBase = {
@@ -1159,8 +1164,19 @@
   // another library's data, read through that library's __addr_ getter.
   // Relocating also runs the library's startup code, which may call into the
   // libraries it imports, so it goes in `order`: those are relocated first.
+  // The heap starts above the last dep's data, before anything is allocated
+  // (relocating runs library code, which may allocate), with one starter MiB.
+  if (order.length) {
+    const ex = instance.exports, hb = (dcur + 0xffff) & ~0xffff;
+    if (hb > ex.__heap_base.value) {
+      if (ex.__heap.value !== ex.__heap_base.value)
+        throw new Error("xcc: the heap was used before the libraries were placed");
+      ex.__heap_base.value = hb;
+      ex.__heap.value = hb;
+    }
+    growTo(ex.__heap_base.value + 0x100000);
+  }
   for (const d of order) depExports[d].__wasm_apply_relocs();
-  if (order.length) instance.exports.__stack_low.value = (dcur + 15) & ~15;
   const rc = usesGpu ? await WebAssembly.promising(instance.exports.main)() : instance.exports.main();
   flush();
   if (isNode) process.exitCode = rc | 0;

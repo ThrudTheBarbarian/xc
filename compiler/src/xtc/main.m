@@ -5252,6 +5252,10 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
     // to (and resolve library symbols through package imports). The
     // dispatcher is the only party that knows the dep list — it read the
     // front end's `.needs` sidecar.
+    // --stack-size: the wasm32 app's shadow stack (a library uses the app's).
+    if (opts.useWasm32Backend && !opts.emitLib && opts.stackSize)
+        [cgArgs addObjectsFromArray:@[@"--stack-size",
+            [NSString stringWithFormat:@"%lu", (unsigned long)opts.stackSize]]];
     if (opts.useWasm32Backend && !opts.emitLib) {
         for (NSString *lib in neededLibs) {
             if ([lib.pathExtension isEqualToString:@"wasm"]) {

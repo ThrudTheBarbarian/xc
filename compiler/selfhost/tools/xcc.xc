@@ -260,6 +260,7 @@ class DriverOptions
     bool       _emitIROpt;      // --emit-ir-opt: the optimised IR to stderr
     bool       _tailCalls;      // -x-wasm32,return-call
     bool       _linkLibs;       // --link-libs: a wasm32 app that links .wasm libraries
+    u32        _stackSize;      // -ss / --stack-size: the wasm32 shadow stack, 0 = default
     Array*     _rawLinkFlags;   // linker FLAGS from -Xlinker / -Wl, / $XTC_LDFLAGS
     Array*     _rpaths;         // -rpath <dir>: extra LC_RPATH entries (Mach-O)
     bool       _rpathPending;   // the last flag was -rpath; its directory comes next
@@ -331,6 +332,7 @@ class DriverOptions
         _emitIROpt = false;
         _tailCalls = false;
         _linkLibs = false;
+        _stackSize = (u32)0;
         _rawLinkFlags = new Array();
         _rpaths = new Array();
         _emitRuntime = false;
@@ -415,6 +417,8 @@ class DriverOptions
     void setTailCalls(bool b)       { _tailCalls = b; }
     bool linkLibs(void)             { return _linkLibs; }
     void setLinkLibs(bool b)        { _linkLibs = b; }
+    u32 stackSize(void)             { return _stackSize; }
+    void setStackSize(u32 n)        { _stackSize = n; }
     Array* rawLinkFlags(void)       { return _rawLinkFlags; }
     Array* rpaths(void)             { return _rpaths; }
     bool emitRuntime(void)          { return _emitRuntime; }
@@ -2004,6 +2008,8 @@ void emitWasm(DriverOptions* d, IRModule* mod)
     }
     // -x-wasm32,return-call: a tail call becomes `return_call`.
     if (d.tailCalls()) be.setTailCalls(true);
+    // -ss: the app's shadow stack (a library runs on the app's).
+    if (!d.emitLib()) be.setStackSize(d.stackSize());
     String* wat = be.assembly(mod);
     // The wasm back end reports a fatal unresolved import rather than a
     // generic failure — a module that imports something the host will not
@@ -7156,8 +7162,9 @@ void usage(void)
     Stdio.printf("  -fauto-cloak=never|auto|always\n");
     Stdio.printf("                             Checked; no effect, as no layout has a cloaked\n");
     Stdio.printf("                             region\n");
-    Stdio.printf("  -ss, --stack-size <n>      Checked (decimal, $hex or 0xhex; 1..65535); no\n");
-    Stdio.printf("                             effect, as no layout has a flat xtc stack\n");
+    Stdio.printf("  -ss, --stack-size <n>      wasm32: the shadow stack's size in bytes\n");
+    Stdio.printf("                             (decimal, $hex or 0xhex; default 1 MiB, at\n");
+    Stdio.printf("                             most 1 GiB). No effect on other targets\n");
     Stdio.printf("\n");
     Stdio.printf("Output containers on 6502 and m68k:\n");
     Stdio.printf("    .s .asm                  assembly (stops before the assembler)\n");
@@ -7363,7 +7370,7 @@ i32 parseStackSize(String* v)
         else if (hex && c >= (u8)'A' && c <= (u8)'F') dgt = (u32)(c - (u8)'A') + (u32)10;
         if (dgt == (u32)99) return (i32)-1;
         n = n * (hex ? (u32)16 : (u32)10) + dgt;
-        if (n > (u32)$10000) n = (u32)$10000;   // out of range either way
+        if (n > (u32)$40000001) n = (u32)$40000001;   // out of range either way
     }
     return (i32)n;
 }
@@ -8720,8 +8727,8 @@ u32 applyOption(DriverOptions* d, u32 id, String* a, u32 i, u32 argc)
         }
         return (u32)1;
     }
-    // -ss / --stack-size <n>, also joined with `=`: checked, and without
-    // effect on every current layout (none has a flat xtc stack to cap).
+    // -ss / --stack-size <n>, also joined with `=`: the wasm32 shadow
+    // stack's size; no other target has a stack this sets.
     if (id == (u32)doptStackSize) {
         u32 i0 = i;
         String* v = (String*)0;
@@ -8738,12 +8745,13 @@ u32 applyOption(DriverOptions* d, u32 id, String* a, u32 i, u32 argc)
             return (u32)0;
         }
         i32 n = parseStackSize(v);
-        if (n <= (i32)0 || n > (i32)65535) {
-            Stdio.printf("xcc: --stack-size expects a positive integer up to 65535, got '%s'\n",
+        if (n <= (i32)0 || n > (i32)$40000000) {
+            Stdio.printf("xcc: --stack-size expects a positive integer up to 1073741824, got '%s'\n",
                          v.cString());
             driverExit((i32)1);
             return (u32)0;
         }
+        d.setStackSize((u32)n);
         return i - i0;
     }
     // Accepted, and already what happens: every build links in-house, and

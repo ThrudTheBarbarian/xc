@@ -584,7 +584,7 @@ equiv "-S (keep assembly)"  "$A -o refout.s ret.xc"  "$A -S -o xcout.s ret.xc"
 ! grep -q "xtc-stack frame push" s6502.s && cmp -s s6502.s s6502ref.s \
     && ok "-S on xt6502: assembly, with the hardware-stack convention, in both" \
     || bad "-S on xt6502 selected the software-stack convention or the drivers differ"
-for v in "-ss 512" "-ss=\$200" "--stack-size 0x200" "--stack-size=512" "-ss 0" "-ss 70000"; do
+for v in "-ss 512" "-ss=\$200" "--stack-size 0x200" "--stack-size=512" "-ss 0" "-ss 70000" "-ss 0x40000001"; do
     same "$v"               $A $v -o @OUT@ ret.xc
 done
 same "-fnew-ir"             $A -fnew-ir -o @OUT@ ret.xc

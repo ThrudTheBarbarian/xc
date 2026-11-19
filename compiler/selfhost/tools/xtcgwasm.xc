@@ -33,6 +33,7 @@ void main(void)
     bool tailCalls = false;
     bool emitLib = false;
     bool linkLibs = false;
+    u32 stackSize = (u32)0;
     i32 arcMode = (i32)-1;
     u32 argc = Process.argumentCount();
     u32 i = (u32)1;
@@ -85,6 +86,16 @@ void main(void)
             {
             linkLibs = true;
             i = i + (u32)1;
+            continue;
+            }
+        // As xcc-cg-wasm32: the app's shadow stack, below its static data.
+        if (a.equals(String.withCString("--stack-size")) && i + (u32)1 < argc)
+            {
+            String* v = Process.argument(i + (u32)1);
+            stackSize = (u32)0;
+            for (u32 k = (u32)0; k < v.byteLength(); k = k + (u32)1)
+                stackSize = stackSize * (u32)10 + (u32)(v.byteAt(k) - (u8)'0');
+            i = i + (u32)2;
             continue;
             }
         // As xcc-cg-wasm32: force the threaded module (atomic ARC) on or off.
@@ -160,6 +171,7 @@ void main(void)
     be.setTailCalls(tailCalls);
     be.setEmitLib(emitLib);
     be.setLinkLibs(linkLibs);
+    be.setStackSize(stackSize);
     be.setThreadSafeArcOverride(arcMode);
     String* wat = be.assembly(m);
     if (be.fatalImport())

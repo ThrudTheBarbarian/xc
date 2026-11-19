@@ -257,15 +257,8 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, readonly) BOOL emitIROpt;     // --emit-ir-opt: dump IR after optimisation to stderr
 @property(nonatomic, readonly) BOOL emitAsmFromIR; // --emit-asm-from-ir: replace codegen with IR→asm pipeline
 /****************************************************************************\
-|* Stack ceiling in bytes (`--stack-size=<n>`). Used on flat-heap targets
-|* to reclaim the space between the xtc software stack and the layout-
-|* declared heap start. When nonzero the codegen emits
-|*   stack_top = stack_low + stackSize
-|*   heap_low  = stack_top
-|* so the heap grows from right after the bounded stack up to the top of
-|* usable RAM. Default 0 means "use the layout's fixed heapLow" (current
-|* behaviour — stack expands up to the code-region boundary with the
-|* excess between stack usage and that boundary left unused).
+|* The wasm32 shadow stack's size in bytes (`--stack-size=<n>`, 1..1 GiB).
+|* 0 = the back end's default (1 MiB). No other target reads it.
 \****************************************************************************/
 @property(nonatomic, readonly) NSUInteger stackSize;
 /****************************************************************************\

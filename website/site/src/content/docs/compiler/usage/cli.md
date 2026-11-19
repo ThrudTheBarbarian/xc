@@ -211,7 +211,7 @@ is reported and ignored.
 | Flag | Effect |
 |------|--------|
 | `--xtc-stack` | xt6502: every function keeps its return address and saved registers in a frame on the xcc software stack instead of on the hardware stack. A function marked `:hwStack` keeps the hardware-stack convention; `:xtcStack` selects the software stack for one function without the flag. See [Functions](/compiler/language/functions/#default-calling-convention). |
-| `-ss <n>`, `--stack-size <n>` | Cap the xcc stack at `n` bytes (decimal, `$hex` or `0xhex`; 1..65535). No effect on banked-heap or non-heap targets, which is all of the current ones. |
+| `-ss <n>`, `--stack-size <n>` | wasm32: the shadow stack's size in bytes (decimal, `$hex` or `0xhex`; default 1 MiB, at most 1 GiB). A frame that would pass the bottom of the stack traps. No effect on other targets. See [The wasm32 layout](/compiler/usage/memory-models/#the-wasm32-layout). |
 
 ## Runtime behaviour
 

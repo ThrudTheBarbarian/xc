@@ -29,7 +29,7 @@
 // ARCHITECTURE like the wasm32 Stdio.xc.
 //
 // The wasm32 allocator is the generated in-module coalescing free-list
-// (XTWasmBackend emitRuntimeInto): a bump frontier above the 1 MiB heap
+// (XTWasmBackend emitRuntimeInto): a bump frontier above the heap
 // base, growing linear memory on demand, with freed blocks on an
 // address-ordered coalescing list. The three externs below are emitted
 // INTO the module alongside it (they read the allocator's $__heap /

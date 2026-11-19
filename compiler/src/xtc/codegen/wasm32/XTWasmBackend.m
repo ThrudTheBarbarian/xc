@@ -279,14 +279,27 @@ static BOOL sNeedsItab;
 static BOOL sTailCalls;
 static NSMutableSet<NSString *> *sNewSuffixes;   // _xtc_new_<T> suffixes referenced
 
-// Heap: bump allocation ABOVE the 1 MiB stack region, growing the memory as
-// needed. Everything below $__heap_base is data or shadow stack, which is
-// what makes the ARC "is this a heap object" guard a single compare.
-static const uint32_t kWasmHeapBase = 1u << 20;
-// This module's heap base: kWasmHeapBase, unless its data runs within 64 KiB
-// of it (a large global array): then the data's end plus a 1 MiB stack, on a
-// 64 KiB boundary, and the memory starts that much larger (bug 627).
+// The layout of an app's linear memory, low to high:
+//   [0, 0x10000)            never used: an address below 0x10000 is a class id
+//   [0x10000, +stack size)  the shadow stack; $__sp starts at its top and
+//                           every frame push traps below $__stack_low
+//   static data             up to $__data_end
+//   library data            placed by the loader, from $__data_end up
+//   heap                    from $__heap_base, growing the memory on demand
+// Nothing grows into data: the stack is bounded below by its own check and
+// the heap grows up from above all data. Everything below $__heap_base is data
+// or stack, which is what makes the ARC "is this a heap object" guard a single
+// compare. An app that links libraries exports $__heap_base mutable, and the
+// loader moves it (and $__heap) above the last library's data.
+static const uint32_t kWasmStackSize = 1u << 20;   // --stack-size changes it
+static uint32_t sStackSize = 1u << 20;
+// This module's heap base: the end of its static data (and, threaded, of the
+// runtime words after it), on a 64 KiB boundary.
 static uint32_t sHeapBase = 1u << 20;
+// --stack-size: the shadow stack's size in bytes, on 16; 0 = the default.
++ (void)setStackSize:(NSUInteger)bytes {
+    sStackSize = bytes ? (uint32_t)((bytes + 15) & ~(NSUInteger)15) : kWasmStackSize;
+}
 
 // ── Local naming (-O1+): dense rank instead of raw value id ────────────────
 // The opt passes allocate value ids for values that later die (an aborted
@@ -357,8 +370,9 @@ static NSString *watStringLit(NSData *bytes) {
     // `< 0x10000` — a vtable placed below 64 KiB would read as a class id
     // (the same guard the ARC runtime uses for the Map/Set sentinels).
     // A LIBRARY's addresses are RELATIVE to __memory_base (the loader places
-    // it at ≥ 0x10000 and asserts so), so its own offsets start at 0.
-    sDataEnd = sEmitLib ? 0 : 0x10000;
+    // it at ≥ 0x10000 and asserts so), so its own offsets start at 0. An app's
+    // data starts above its shadow stack, which sits at 0x10000.
+    sDataEnd = sEmitLib ? 0 : 0x10000 + sStackSize;
 
     for (XTIRFunction *fn in mod.functions) [sDefinedFns addObject:fn.name];
 
@@ -458,9 +472,7 @@ static NSString *watStringLit(NSData *bytes) {
         sFatalImportError = YES;
     }
     sRtWords = alignUp32(sDataEnd, 16);
-    sHeapBase = kWasmHeapBase;
-    if (!sEmitLib && sDataEnd > kWasmHeapBase - 0x10000u)
-        sHeapBase = alignUp32(sDataEnd + kWasmHeapBase, 0x10000u);
+    sHeapBase = alignUp32(sThreaded ? sRtWords + 32 : sDataEnd, 0x10000u);
 
     // ── Imports: every function symbol with no body is a host import from
     // the `env` package (the #package directive refines this later). The
@@ -537,16 +549,15 @@ static NSString *watStringLit(NSData *bytes) {
         [out appendFormat:@"  (import \"%@\" \"%@\" (func $%@ %@))\n",
                           sImportPkg[name] ?: @"env", name, name, sImportSigs[name]];
     }
-    // 32 pages = 2 MiB: data + the 1 MiB shadow-stack region below
-    // kWasmHeapBase, one starter MiB of heap above it; _xtc_alloc grows the
-    // memory beyond that.
+    // The stack and the data below the heap base, and one starter MiB of heap
+    // above it; _xtc_alloc grows the memory beyond that.
     if (!sThreaded)
         [out appendFormat:@"  (memory (export \"memory\") %u)\n", sHeapBase / 0x10000u + 16u];
-    uint32_t stackTop = sHeapBase;
-    uint32_t stackLow = alignUp32(sDataEnd, 16);
+    uint32_t stackTop = 0x10000u + sStackSize;
+    uint32_t stackLow = 0x10000u;
     if (sThreaded) {
-        // Each thread's instance gets its own stack and id from the loader.
-        stackLow = sRtWords + 32;
+        // This is the main thread's stack; every other thread's instance gets
+        // its own stack (from the heap) and id from the loader.
         [out appendFormat:@"  (global $__sp (export \"__sp\") (mut i32) (i32.const %u))\n", stackTop];
         [out appendFormat:@"  (global $__stack_low (export \"__stack_low\") (mut i32) "
                           @"(i32.const %u))\n", stackLow];
@@ -554,9 +565,8 @@ static NSString *watStringLit(NSData *bytes) {
         [out appendFormat:@"  (global $__xt_rt (export \"__xt_rt\") i32 (i32.const %u))\n", sRtWords];
     } else if (sLinkLibs) {
         // The loader wires each library to THIS module's memory, table,
-        // stack globals and runtime: export the lot. $__stack_low is mutable
-        // here — the loader raises it past the last library's data so the
-        // shadow stack cannot silently grow down into library statics.
+        // stack globals and runtime: export the lot. The libraries import
+        // $__sp and $__stack_low as mutable globals, so they are mutable here.
         [out appendFormat:@"  (global $__sp (export \"__sp\") (mut i32) (i32.const %u))\n",
                           stackTop];
         [out appendFormat:@"  (global $__stack_low (export \"__stack_low\") (mut i32) "
@@ -567,8 +577,18 @@ static NSString *watStringLit(NSData *bytes) {
         [out appendFormat:@"  (global $__sp (mut i32) (i32.const %u))\n", stackTop];
         [out appendFormat:@"  (global $__stack_low i32 (i32.const %u))\n", stackLow];
     }
+    // Linking libraries, the loader moves the heap base (and the heap, before
+    // anything is allocated) above the last library's data.
+    if (sNeedsAlloc && sLinkLibs)
+        [out appendFormat:@"  (global $__heap_base (export \"__heap_base\") (mut i32) (i32.const %u))\n",
+                          sHeapBase];
+    else if (sNeedsAlloc)
+        [out appendFormat:@"  (global $__heap_base i32 (i32.const %u))\n", sHeapBase];
     if (sNeedsAlloc && !sThreaded) {
-        [out appendFormat:@"  (global $__heap (mut i32) (i32.const %u))\n", sHeapBase];
+        if (sLinkLibs)
+            [out appendFormat:@"  (global $__heap (export \"__heap\") (mut i32) (i32.const %u))\n", sHeapBase];
+        else
+            [out appendFormat:@"  (global $__heap (mut i32) (i32.const %u))\n", sHeapBase];
         [out appendString:@"  (global $__free (mut i32) (i32.const 0))\n"];
     }
     // The funcref table (index 0 reserved-null) and the declared functypes
@@ -2310,7 +2330,7 @@ static NSString *opPrefix(XTIRType *t) { return wasmValType(t); }
 // count u32@12, dealloc TABLE INDEX@20, weak head@28, refcount u32@36,
 // payload@40 — see _xtc_alloc in src/xtc/main.m and rt-freestanding.c), so
 // `.length` header reads and delete[] iteration work unchanged. Bump
-// allocation from kWasmHeapBase upward, growing the memory a MiB at a time;
+// allocation from $__heap_base upward, growing the memory a MiB at a time;
 // everything below the base is data/stack, which makes the ARC heap guard a
 // single compare. free() is a no-op for now — the coalescing free-list is a
 // later stage; memory.grow is real, so programs just grow.
@@ -2424,7 +2444,7 @@ static NSString *opPrefix(XTIRType *t) { return wasmValType(t); }
     return [NSString stringWithFormat:@""
     "\n  (func $__xtc_retain (param $p i32)\n"
     "    (local $rc i32)\n"
-    "    local.get $p\n    i32.const %u\n    i32.lt_u\n"
+    "    local.get $p\n    global.get $__heap_base\n    i32.lt_u\n"
     "    if\n      return\n    end\n"
     "    loop $again\n"
     "      local.get $p\n      i32.const 4\n      i32.sub\n      i32.atomic.load\n"
@@ -2433,14 +2453,14 @@ static NSString *opPrefix(XTIRType *t) { return wasmValType(t); }
     "      local.get $p\n      i32.const 4\n      i32.sub\n"
     "      local.get $rc\n      local.get $rc\n      i32.const 1\n      i32.add\n"
     "      i32.atomic.rmw.cmpxchg\n      local.get $rc\n      i32.ne\n      br_if $again\n"
-    "    end\n  )\n", sHeapBase];
+    "    end\n  )\n"];
 }
 
 + (NSString *)atomicRelease {
     return [NSString stringWithFormat:@""
     "\n  (func $__xtc_release (param $p i32)\n"
     "    (local $rc i32)\n"
-    "    local.get $p\n    i32.const %u\n    i32.lt_u\n"
+    "    local.get $p\n    global.get $__heap_base\n    i32.lt_u\n"
     "    if\n      return\n    end\n"
     "    loop $again\n"
     "      local.get $p\n      i32.const 4\n      i32.sub\n      i32.atomic.load\n"
@@ -2451,7 +2471,7 @@ static NSString *opPrefix(XTIRType *t) { return wasmValType(t); }
     "      i32.atomic.rmw.cmpxchg\n      local.get $rc\n      i32.ne\n      br_if $again\n"
     "    end\n"
     "    local.get $rc\n    i32.const 1\n    i32.eq\n"
-    "    if\n      local.get $p\n      call $_xtc_dealloc\n    end\n  )\n", sHeapBase];
+    "    if\n      local.get $p\n      call $_xtc_dealloc\n    end\n  )\n"];
 }
 
 + (void)emitRuntimeInto:(NSMutableString *)out {
@@ -2605,7 +2625,7 @@ static NSString *opPrefix(XTIRType *t) { return wasmValType(t); }
         [out appendFormat:@""
         "  (func $_xtc_heap_total_bytes%@ (result i32)\n"
         "    memory.size\n    i32.const 16\n    i32.shl\n"
-        "    i32.const %u\n    i32.sub\n  )\n"
+        "    global.get $__heap_base\n    i32.sub\n  )\n"
         "  (func $_xtc_heap_free_bytes%@ (result i32)\n"
         "    (local $cur i32) (local $sum i32)\n"
         "    memory.size\n    i32.const 16\n    i32.shl\n"
@@ -2630,7 +2650,7 @@ static NSString *opPrefix(XTIRType *t) { return wasmValType(t); }
         "    local.get $cur\n    i32.load offset=4\n    local.set $cur\n"
         "    br $walk\n    end\n    end\n"
         "    local.get $max\n  )\n",
-        X(@"_xtc_heap_total_bytes"), sHeapBase,
+        X(@"_xtc_heap_total_bytes"),
         X(@"_xtc_heap_free_bytes"), X(@"_xtc_heap_largest")];
     }
 
@@ -2643,19 +2663,19 @@ static NSString *opPrefix(XTIRType *t) { return wasmValType(t); }
     [out appendFormat:@""
     "  (func $__xtc_retain%@ (param $p i32)\n"
     "    (local $rc i32)\n"
-    "    local.get $p\n    i32.const %u\n    i32.lt_u\n"
+    "    local.get $p\n    global.get $__heap_base\n    i32.lt_u\n"
     "    if\n      return\n    end\n"                                  // null / data / stack
     "    local.get $p\n    i32.const 4\n    i32.sub\n    i32.load\n"
     "    local.tee $rc\n    i32.eqz\n"
     "    if\n      return\n    end\n"                                  // 0 = dying (bug 038)
     "    local.get $p\n    i32.const 4\n    i32.sub\n"
     "    local.get $rc\n    i32.const 1\n    i32.add\n    i32.store\n  )\n",
-    X(@"__xtc_retain"), sHeapBase];
+    X(@"__xtc_retain")];
 
     [out appendFormat:@""
     "  (func $__xtc_release%@ (param $p i32)\n"
     "    (local $rc i32)\n"
-    "    local.get $p\n    i32.const %u\n    i32.lt_u\n"
+    "    local.get $p\n    global.get $__heap_base\n    i32.lt_u\n"
     "    if\n      return\n    end\n"
     "    local.get $p\n    i32.const 4\n    i32.sub\n    i32.load\n"
     "    local.tee $rc\n    i32.eqz\n"
@@ -2665,7 +2685,7 @@ static NSString *opPrefix(XTIRType *t) { return wasmValType(t); }
     "    local.get $rc\n    i32.const 1\n    i32.eq\n"
     "    if\n"
     "      local.get $p\n      call $_xtc_dealloc\n"
-    "    end\n  )\n", X(@"__xtc_release"), sHeapBase];
+    "    end\n  )\n", X(@"__xtc_release")];
 
     // Weak references — the intrusive chain (weak-refs-intrusive.md): the
     // head lives in the header (base+28 = payload−12), a slot's two hidden
@@ -2694,7 +2714,7 @@ static NSString *opPrefix(XTIRType *t) { return wasmValType(t); }
     "    (local $nx i32)\n"
     "    local.get $s\n    call $_xtc_weak_unregister\n"
     "    local.get $o\n    i32.eqz\n    if\n      return\n    end\n"
-    "    local.get $o\n    i32.const %u\n    i32.lt_u\n    if\n      return\n    end\n"
+    "    local.get $o\n    global.get $__heap_base\n    i32.lt_u\n    if\n      return\n    end\n"
     "    local.get $o\n    i32.const 40\n    i32.sub\n    i32.load\n"
     "    i32.const 1481920322\n    i32.ne\n    if\n      return\n    end\n"
     "    local.get $o\n    i32.const 12\n    i32.sub\n    i32.load\n    local.set $nx\n"
@@ -2707,7 +2727,7 @@ static NSString *opPrefix(XTIRType *t) { return wasmValType(t); }
     "      local.get $s\n      i32.const 4\n      i32.sub\n      i32.store\n"
     "    end\n"
     "    local.get $o\n    i32.const 12\n    i32.sub\n    local.get $s\n    i32.store\n  )\n",
-    X(@"_xtc_weak_register"), sHeapBase];
+    X(@"_xtc_weak_register")];
     [out appendString:@""
     "  (func $_xtc_weak_load (param $s i32) (result i32)\n"
     "    local.get $s\n    i32.load\n  )\n"
@@ -2767,10 +2787,10 @@ static NSString *opPrefix(XTIRType *t) { return wasmValType(t); }
     if ([sNewSuffixes containsObject:@"__count__"]) {
         [out appendFormat:@""
         "  (func $_xtc_count%@ (param $p i32) (result i32)\n"
-        "    local.get $p\n    i32.const %u\n    i32.lt_u\n"
+        "    local.get $p\n    global.get $__heap_base\n    i32.lt_u\n"
         "    if\n      i32.const 0\n      return\n    end\n"
         "    local.get $p\n    i32.const 28\n    i32.sub\n    i32.load\n  )\n",
-        X(@"_xtc_count"), sHeapBase];
+        X(@"_xtc_count")];
     }
     for (NSString *suffix in
          [sNewSuffixes.allObjects sortedArrayUsingSelector:@selector(compare:)]) {

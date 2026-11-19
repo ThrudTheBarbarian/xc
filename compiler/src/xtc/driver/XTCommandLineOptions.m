@@ -1355,15 +1355,14 @@ static NSString* sExecutablePath = nil;
                 {
                 ok = [sc scanLongLong:&n] && sc.isAtEnd;
                 }
-            if (!ok || n <= 0 || n > 0xFFFF)
+            if (!ok || n <= 0 || n > 0x40000000)
                 {
-                fprintf(stderr, "xcc: --stack-size expects a positive integer up to 65535, got '%s'\n",
+                fprintf(stderr, "xcc: --stack-size expects a positive integer up to 1073741824, got '%s'\n",
                         val.UTF8String);
                 return nil;
                 }
-            NSRange eqr = [arg rangeOfString:@"="];
-            fprintf(stderr, "xcc: warning: %s has no effect and will be removed\n",
-                    (eqr.location != NSNotFound ? [arg substringToIndex:eqr.location] : arg).UTF8String);
+            // The wasm32 shadow stack's size; no other target has a stack
+            // this sets.
             opts.stackSize = (NSUInteger)n;
             }
         else if ([arg hasPrefix:@"-Wno-"])
@@ -1886,11 +1885,9 @@ static NSString* sExecutablePath = nil;
             "                             when 'Cannot find include file' fires on a new\n"
             "                             install or alien platform.\n"
             "  -v, --version              Print version and exit\n"
-            "  -ss, --stack-size <n>      Cap the xtc stack at <n> bytes (decimal,\n"
-            "                             $hex, or 0xhex; 1..65535). No effect on\n"
-            "                             banked-heap or non-heap targets, which is\n"
-            "                             all of them today — kept for layouts with a\n"
-            "                             flat heap.\n"
+            "  -ss, --stack-size <n>      wasm32: the shadow stack's size in bytes\n"
+            "                             (decimal, $hex or 0xhex; default 1 MiB, at\n"
+            "                             most 1 GiB). No effect on other targets.\n"
             "\n"
             "Platform options:\n"
             "  -dl, --dump-layout         Print memory-map diagram and exit (use with -m)\n"

@@ -130,9 +130,18 @@ class Wasm32
     Map*      _symAddr;         // name -> Number@ linear address
     Array*    _constAddr;       // Number@ addr or (Object*)0 per constant id
     u32       _dataEnd;
-    // The heap base: 1 MiB, unless the data runs within 64 KiB of it; then
-    // the data's end plus a 1 MiB stack, on 64 KiB. As the reference (627).
+    // The layout of an app's linear memory, low to high (as the reference):
+    //   [0, 0x10000)            never used: an address below it is a class id
+    //   [0x10000, +_stackSize)  the shadow stack; a frame push below
+    //                           $__stack_low traps
+    //   static data             up to $__data_end
+    //   library data            placed by the loader, from $__data_end up
+    //   heap                    from $__heap_base, growing on demand
+    // _heapBase is the end of the data (threaded: of the runtime words after
+    // it) on 64 KiB. An app that links libraries exports $__heap_base
+    // mutable, and the loader moves it above the last library's data.
     u32       _heapBase;
+    u32       _stackSize;       // --stack-size, on 16; 1 MiB by default
     Array*    _dataSegs;        // String@
     Map*      _importSigs;      // name -> String@ "(param i32) (result i32)"
     Array*    _importNames;     // String@, insertion order (sorted at print)
@@ -184,12 +193,18 @@ class Wasm32
     u32       _rtWords;
     i32       _arcOverride;
 
-    void init(void) { _optLevel = (u32)0; _tailCalls = false; _vRank = (u32*)0; _vRankN = (u32)0; _arcOverride = (i32)-1; }
+    void init(void) { _optLevel = (u32)0; _tailCalls = false; _vRank = (u32*)0; _vRankN = (u32)0; _arcOverride = (i32)-1;
+                      _stackSize = (u32)1048576; }
 
     void setThreadSafeArcOverride(i32 mode) { _arcOverride = mode; }
 
     void setEmitLib(bool on)  { _emitLib = on; }
     void setLinkLibs(bool on) { _linkLibs = on; }
+    // --stack-size: the shadow stack's bytes, on 16; 0 = the 1 MiB default.
+    void setStackSize(u32 bytes)
+    {
+        _stackSize = bytes == (u32)0 ? (u32)1048576 : Wasm32.alignUp(bytes, (u32)16);
+    }
 
     u32 vnum(u32 vid)
     {
@@ -693,9 +708,10 @@ class Wasm32
         _externAddrOrder = new Array();
         _fixupAddrs = new Array();
         _fixupNames = new Array();
-        // Data starts ABOVE 0x10000 (the RTTI `< 0x10000` class-id guard);
-        // a LIBRARY's offsets are relative to __memory_base, so start at 0.
-        _dataEnd = _emitLib ? (u32)0 : (u32)$10000;
+        // Data starts ABOVE 0x10000 (the RTTI `< 0x10000` class-id guard),
+        // after the shadow stack there; a LIBRARY's offsets are relative to
+        // __memory_base, so start at 0.
+        _dataEnd = _emitLib ? (u32)0 : (u32)$10000 + _stackSize;
 
         for (u32 i = (u32)0; i < mod.syms().count(); i = i + (u32)1) {
             IRSymbol* s = (IRSymbol*)mod.syms().get(i);
@@ -734,9 +750,7 @@ class Wasm32
             _fatalImport = true;
         }
         _rtWords = Wasm32.alignUp(_dataEnd, (u32)16);
-        _heapBase = (u32)1048576;
-        if (!_emitLib && _dataEnd > (u32)1048576 - (u32)$10000)
-            _heapBase = Wasm32.alignUp(_dataEnd + (u32)1048576, (u32)$10000);
+        _heapBase = Wasm32.alignUp(_threaded ? _rtWords + (u32)32 : _dataEnd, (u32)$10000);
         collectImports(mod);
 
         // Function bodies first: they discover the call_indirect signatures.
@@ -946,11 +960,11 @@ class Wasm32
         }
         if (!_threaded)
             out.appendFormat("  (memory (export \"memory\") %lu)\n", _heapBase / (u32)$10000 + (u32)16);
-        u32 stackTop = _heapBase;
-        u32 stackLow = Wasm32.alignUp(_dataEnd, (u32)16);
+        u32 stackTop = (u32)$10000 + _stackSize;
+        u32 stackLow = (u32)$10000;
         if (_threaded) {
-            // Each thread's instance gets its own stack and id from the loader.
-            stackLow = _rtWords + (u32)32;
+            // The main thread's stack; every other thread's instance gets its
+            // own stack (from the heap) and id from the loader.
             out.appendFormat("  (global $__sp (export \"__sp\") (mut i32) (i32.const %lu))\n", stackTop);
             out.appendFormat("  (global $__stack_low (export \"__stack_low\") (mut i32) "
                              "(i32.const %lu))\n", stackLow);
@@ -958,7 +972,7 @@ class Wasm32
             out.appendFormat("  (global $__xt_rt (export \"__xt_rt\") i32 (i32.const %lu))\n", _rtWords);
         } else if (_linkLibs) {
             // Export the surface the loader wires each library to; the
-            // mutable $__stack_low is raised past the last library's data.
+            // libraries import $__sp and $__stack_low as mutable globals.
             out.appendFormat("  (global $__sp (export \"__sp\") (mut i32) (i32.const %lu))\n",
                              stackTop);
             out.appendFormat("  (global $__stack_low (export \"__stack_low\") (mut i32) "
@@ -969,8 +983,18 @@ class Wasm32
             out.appendFormat("  (global $__sp (mut i32) (i32.const %lu))\n", stackTop);
             out.appendFormat("  (global $__stack_low i32 (i32.const %lu))\n", stackLow);
         }
+        // Linking libraries, the loader moves the heap base (and the heap,
+        // before anything is allocated) above the last library's data.
+        if (_needsAlloc && _linkLibs)
+            out.appendFormat("  (global $__heap_base (export \"__heap_base\") (mut i32) (i32.const %lu))\n",
+                             _heapBase);
+        else if (_needsAlloc)
+            out.appendFormat("  (global $__heap_base i32 (i32.const %lu))\n", _heapBase);
         if (_needsAlloc && !_threaded) {
-            out.appendFormat("  (global $__heap (mut i32) (i32.const %lu))\n", _heapBase);
+            if (_linkLibs)
+                out.appendFormat("  (global $__heap (export \"__heap\") (mut i32) (i32.const %lu))\n", _heapBase);
+            else
+                out.appendFormat("  (global $__heap (mut i32) (i32.const %lu))\n", _heapBase);
             out.appendCString("  (global $__free (mut i32) (i32.const 0))\n");
         }
         if (_fnTableOrder.count() > (u32)0) {
@@ -3457,7 +3481,7 @@ class Wasm32
         return String.withFormat(""
             "\n  (func $__xtc_retain (param $p i32)\n"
             "    (local $rc i32)\n"
-            "    local.get $p\n    i32.const %lu\n    i32.lt_u\n"
+            "    local.get $p\n    global.get $__heap_base\n    i32.lt_u\n"
             "    if\n      return\n    end\n"
             "    loop $again\n"
             "      local.get $p\n      i32.const 4\n      i32.sub\n      i32.atomic.load\n"
@@ -3466,7 +3490,7 @@ class Wasm32
             "      local.get $p\n      i32.const 4\n      i32.sub\n"
             "      local.get $rc\n      local.get $rc\n      i32.const 1\n      i32.add\n"
             "      i32.atomic.rmw.cmpxchg\n      local.get $rc\n      i32.ne\n      br_if $again\n"
-            "    end\n  )\n", _heapBase);
+            "    end\n  )\n");
     }
 
     String* atomicRelease(void)
@@ -3474,7 +3498,7 @@ class Wasm32
         return String.withFormat(""
             "\n  (func $__xtc_release (param $p i32)\n"
             "    (local $rc i32)\n"
-            "    local.get $p\n    i32.const %lu\n    i32.lt_u\n"
+            "    local.get $p\n    global.get $__heap_base\n    i32.lt_u\n"
             "    if\n      return\n    end\n"
             "    loop $again\n"
             "      local.get $p\n      i32.const 4\n      i32.sub\n      i32.atomic.load\n"
@@ -3485,7 +3509,7 @@ class Wasm32
             "      i32.atomic.rmw.cmpxchg\n      local.get $rc\n      i32.ne\n      br_if $again\n"
             "    end\n"
             "    local.get $rc\n    i32.const 1\n    i32.eq\n"
-            "    if\n      local.get $p\n      call $_xtc_dealloc\n    end\n  )\n", _heapBase);
+            "    if\n      local.get $p\n      call $_xtc_dealloc\n    end\n  )\n");
     }
 
     void emitRuntime(String* out)
@@ -3625,7 +3649,7 @@ class Wasm32
             out.appendFormat(
             "  (func $_xtc_heap_total_bytes%s (result i32)\n"
             "    memory.size\n    i32.const 16\n    i32.shl\n"
-            "    i32.const %lu\n    i32.sub\n  )\n"
+            "    global.get $__heap_base\n    i32.sub\n  )\n"
             "  (func $_xtc_heap_free_bytes%s (result i32)\n"
             "    (local $cur i32) (local $sum i32)\n"
             "    memory.size\n    i32.const 16\n    i32.shl\n"
@@ -3650,7 +3674,7 @@ class Wasm32
             "    local.get $cur\n    i32.load offset=4\n    local.set $cur\n"
             "    br $walk\n    end\n    end\n"
             "    local.get $max\n  )\n",
-            rtExp(String.withCString("_xtc_heap_total_bytes")).cString(), _heapBase,
+            rtExp(String.withCString("_xtc_heap_total_bytes")).cString(),
             rtExp(String.withCString("_xtc_heap_free_bytes")).cString(),
             rtExp(String.withCString("_xtc_heap_largest")).cString());
         }
@@ -3665,19 +3689,19 @@ class Wasm32
         out.appendFormat(
         "  (func $__xtc_retain%s (param $p i32)\n"
         "    (local $rc i32)\n"
-        "    local.get $p\n    i32.const %lu\n    i32.lt_u\n"
+        "    local.get $p\n    global.get $__heap_base\n    i32.lt_u\n"
         "    if\n      return\n    end\n"
         "    local.get $p\n    i32.const 4\n    i32.sub\n    i32.load\n"
         "    local.tee $rc\n    i32.eqz\n"
         "    if\n      return\n    end\n"
         "    local.get $p\n    i32.const 4\n    i32.sub\n"
         "    local.get $rc\n    i32.const 1\n    i32.add\n    i32.store\n  )\n",
-        rtExp(String.withCString("__xtc_retain")).cString(), _heapBase);
+        rtExp(String.withCString("__xtc_retain")).cString());
 
         out.appendFormat(
         "  (func $__xtc_release%s (param $p i32)\n"
         "    (local $rc i32)\n"
-        "    local.get $p\n    i32.const %lu\n    i32.lt_u\n"
+        "    local.get $p\n    global.get $__heap_base\n    i32.lt_u\n"
         "    if\n      return\n    end\n"
         "    local.get $p\n    i32.const 4\n    i32.sub\n    i32.load\n"
         "    local.tee $rc\n    i32.eqz\n"
@@ -3688,7 +3712,7 @@ class Wasm32
         "    if\n"
         "      local.get $p\n      call $_xtc_dealloc\n"
         "    end\n  )\n",
-        rtExp(String.withCString("__xtc_release")).cString(), _heapBase);
+        rtExp(String.withCString("__xtc_release")).cString());
 
         out.appendFormat(
         "  (func $_xtc_weak_unregister%s (param $s i32)\n"
@@ -3709,7 +3733,7 @@ class Wasm32
         "    (local $nx i32)\n"
         "    local.get $s\n    call $_xtc_weak_unregister\n"
         "    local.get $o\n    i32.eqz\n    if\n      return\n    end\n"
-        "    local.get $o\n    i32.const %lu\n    i32.lt_u\n    if\n      return\n    end\n"
+        "    local.get $o\n    global.get $__heap_base\n    i32.lt_u\n    if\n      return\n    end\n"
         "    local.get $o\n    i32.const 40\n    i32.sub\n    i32.load\n"
         "    i32.const 1481920322\n    i32.ne\n    if\n      return\n    end\n"
         "    local.get $o\n    i32.const 12\n    i32.sub\n    i32.load\n    local.set $nx\n"
@@ -3722,7 +3746,7 @@ class Wasm32
         "      local.get $s\n      i32.const 4\n      i32.sub\n      i32.store\n"
         "    end\n"
         "    local.get $o\n    i32.const 12\n    i32.sub\n    local.get $s\n    i32.store\n  )\n",
-        rtExp(String.withCString("_xtc_weak_register")).cString(), _heapBase);
+        rtExp(String.withCString("_xtc_weak_register")).cString());
         out.appendCString(
         "  (func $_xtc_weak_load (param $s i32) (result i32)\n"
         "    local.get $s\n    i32.load\n  )\n"
@@ -3770,10 +3794,10 @@ class Wasm32
         if (hasSuffix(String.withCString("__count__"))) {
             out.appendFormat(
             "  (func $_xtc_count%s (param $p i32) (result i32)\n"
-            "    local.get $p\n    i32.const %lu\n    i32.lt_u\n"
+            "    local.get $p\n    global.get $__heap_base\n    i32.lt_u\n"
             "    if\n      i32.const 0\n      return\n    end\n"
             "    local.get $p\n    i32.const 28\n    i32.sub\n    i32.load\n  )\n",
-            rtExp(String.withCString("_xtc_count")).cString(), _heapBase);
+            rtExp(String.withCString("_xtc_count")).cString());
         }
         Array* sfx = Wasm32.sorted(_newSuffixes);
         for (u32 i = (u32)0; i < sfx.count(); i = i + (u32)1) {

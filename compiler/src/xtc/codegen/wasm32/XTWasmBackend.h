@@ -64,6 +64,13 @@ NS_ASSUME_NONNULL_BEGIN
 + (void)setEmitLib:(BOOL)on;
 + (void)setLinkLibs:(BOOL)on;
 
+/****************************************************************************\
+|* --stack-size: the app's shadow stack in bytes (rounded up to 16; 0 = the
+|* 1 MiB default). The stack sits at 0x10000, below the static data, so a
+|* frame push that would pass its bottom traps instead of reaching data.
+\****************************************************************************/
++ (void)setStackSize:(NSUInteger)bytes;
+
 @end
 
 NS_ASSUME_NONNULL_END

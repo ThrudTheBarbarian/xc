@@ -34,6 +34,7 @@ static void usage(void)
             "  -O0..-O3              IR opt-pass level.\n"
             "  --emit-lib            Library build (W2): relocatable dylink-shaped module.\n"
             "  --link-libs           App build that #imports .wasm libraries.\n"
+            "  --stack-size <n>      Shadow stack bytes (default 1 MiB).\n"
             "  -q, --quiet           Suppress informational stderr.\n"
             "  --dump-opt-ir         Print the IR after the opt pipeline and stop.\n"
             "  --thread-safe-arc     Force atomic ARC retain/release.\n"
@@ -108,6 +109,11 @@ int main(int argc, const char* argv[])
                 // App that #imports .wasm libraries: export the runtime /
                 // memory / table surface the loader wires each library to.
                 [XTWasmBackend setLinkLibs:YES];
+                }
+            else if ([arg isEqualToString:@"--stack-size"] && i + 1 < argc)
+                {
+                // The app's shadow stack, below its static data.
+                [XTWasmBackend setStackSize:(NSUInteger)strtoul(argv[++i], NULL, 10)];
                 }
             else if ([arg isEqualToString:@"--thread-safe-arc"])
                 {
