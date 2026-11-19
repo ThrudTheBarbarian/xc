@@ -35,54 +35,51 @@
             }
         }
 
-    final void sgCountOps(Array* used, Array* ops)
+    // Each block's pure instructions (AddrOf, Load, ICmp, Const, ZExt, SExt,
+    // Trunc) whose results nothing in the function reads, block by block in
+    // fn's order. A block is swept, last instruction first, against the uses
+    // as they stood when the sweep began, and swept again while a sweep
+    // removes anything. The use counts come from the analysis cache and lose
+    // each removed instruction's operands after its sweep, so they are built
+    // once per call rather than once per sweep of every block.
+    final void sgDeadStrip(IRFunc* fn)
         {
-        for (u32 i = (u32)0; i < ops.count(); i = i + (u32)1)
+        bool began = _faFn == (IRFunc*)0;
+        if (began)
+            self.faBegin(fn, "staticInitGuard");
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
             {
-            IROperand* o = (IROperand*)ops.get(i);
-            if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0 && !self.hasValue(used, o.val()))
-                used.add((Object*)o.val());
-            }
-        }
-    final void sgCountUses(Array* used, Array* insns)
-        {
-        for (u32 i = (u32)0; i < insns.count(); i = i + (u32)1)
-            sgCountOps(used, ((IRInsn*)insns.get(i)).ops());
-        }
-    final void sgDeadStripBlock(IRBlock* blk, IRFunc* fn)
-        {
-        bool removed = true;
-        while (removed)
-            {
-            removed = false;
-            Array* used = new Array();
-            for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            IRBlock* blk = (IRBlock*)fn.blocks().get(b);
+            bool removed = true;
+            while (removed)
                 {
-                IRBlock* bb = (IRBlock*)fn.blocks().get(b);
-                sgCountUses(used, bb.phis());
-                sgCountUses(used, bb.insns());
-                if (bb.term() != (IRInsn*)0)
-                    sgCountOps(used, bb.term().ops());
-                }
-            for (i32 i = (i32)blk.insns().count() - (i32)1; i >= (i32)0; i = i - (i32)1)
-                {
-                IRInsn* n = (IRInsn*)blk.insns().get((u32)i);
-                u16 oc = n.opc();
-                bool pure = oc == opAddrOf || oc == opLoad
-                         || oc == opICmp || oc == opConst
-                         || oc == opZExt || oc == opSExt
-                         || oc == opTrunc;
-                if (!pure)
-                    continue;
-                bool resUsed = n.res() != (IRValue*)0 && self.hasValue(used, n.res());
-                bool memUsed = n.memRes() != (IRValue*)0 && self.hasValue(used, n.memRes());
-                if (!resUsed && !memUsed)
+                removed = false;
+                Map* uses = self.faUseCounts(fn);
+                Array* gone = new Array();
+                for (i32 i = (i32)blk.insns().count() - (i32)1; i >= (i32)0; i = i - (i32)1)
                     {
-                    blk.insns().removeAt((u32)i);
-                    removed = true;
+                    IRInsn* n = (IRInsn*)blk.insns().get((u32)i);
+                    u16 oc = n.opc();
+                    bool pure = oc == opAddrOf || oc == opLoad
+                             || oc == opICmp || oc == opConst
+                             || oc == opZExt || oc == opSExt
+                             || oc == opTrunc;
+                    if (!pure)
+                        continue;
+                    bool resUsed = n.res() != (IRValue*)0 && self.countOf(uses, n.res()) > (u32)0;
+                    bool memUsed = n.memRes() != (IRValue*)0 && self.countOf(uses, n.memRes()) > (u32)0;
+                    if (!resUsed && !memUsed)
+                        {
+                        blk.insns().removeAt((u32)i);
+                        gone.add((Object*)n);
+                        removed = true;
+                        }
                     }
+                self.faDropUses(fn, gone);
                 }
             }
+        if (began)
+            self.faEnd();
         }
 
     final void initGuardsInFunc(IRModule* m, IRFunc* fn)
@@ -98,8 +95,7 @@
             for (u32 k = (u32)0; k < _sgGuards.count(); k = k + (u32)1)
                 foldGuard(fn, k);
             coalesceStraightLine(fn);
-            for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
-                sgDeadStripBlock((IRBlock*)fn.blocks().get(b), fn);
+            sgDeadStrip(fn);
             return;
             }
 
@@ -108,8 +104,7 @@
             hoistGuardsToEntry(m, fn);
             recogniseGuards(m, fn);
             }
-        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
-            sgDeadStripBlock((IRBlock*)fn.blocks().get(b), fn);
+        sgDeadStrip(fn);
 
         // A guard whose init block only sets its own flag does nothing: the
         // class has no initialiser (Math), and nothing but its guards reads
@@ -128,8 +123,7 @@
             // tail to dead-code elimination, which keeps a Load): strip it, or
             // the loop still reads the flag every time round. As the reference.
             coalesceStraightLine(fn);
-            for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
-                sgDeadStripBlock((IRBlock*)fn.blocks().get(b), fn);
+            sgDeadStrip(fn);
             recogniseGuards(m, fn);
             }
 
