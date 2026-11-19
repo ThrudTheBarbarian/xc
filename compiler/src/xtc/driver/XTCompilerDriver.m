@@ -1816,10 +1816,12 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     parser.parAutoTraceOn = trace && trace[0] && strcmp(trace, "0") != 0;
     // XC_PAR_AUTO_CHECK, a comma-separated list. flags: a line on stderr for
     // each loop the scan reads, comparing the source facts on its node with the
-    // tokens (parAutoCheck). Mirrored in the port.
+    // tokens (parAutoCheck). recog: a line for each, comparing the scan's
+    // verdict with the recogniser's (plCheckFor). Mirrored in the port.
     const char* check = getenv("XC_PAR_AUTO_CHECK");
     NSArray* checks = check ? [@(check) componentsSeparatedByString:@","] : @[];
     parser.parAutoCheckOn = [checks containsObject:@"flags"];
+    parser.parAutoRecogOn = [checks containsObject:@"recog"];
     parser.webModules = _options.useWasm32Backend;
     parser.goalDefault = _goalDirective ? _goalDirective : _options.goalDefault;
     parser.libraryFiles = _libraryFiles;

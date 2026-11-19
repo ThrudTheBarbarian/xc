@@ -82,6 +82,8 @@ typedef NS_OPTIONS(NSUInteger, XTSrcFact) {
     XTSrcChkStep = 1 << 9,     // …and step shapes --par-style=auto takes
     XTSrcSynth = 1 << 10,      // made by the parser, not read: the par frame walk passes over it
     XTSrcCalled = 1 << 11,     // `b(…)` made into `b.invoke(…)` (a block binding, or a literal calling itself)
+    XTSrcAnnot = 1 << 12,      // a loop with an annotation the parser does not know (it warns and drops it);
+                               // retired when the token scan goes (part C phase B / step 4–5)
 };
 
 @interface XTASTNode : NSObject

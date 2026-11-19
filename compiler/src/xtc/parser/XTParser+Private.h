@@ -69,6 +69,20 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic) BOOL pfwTop;
 @property(nonatomic, strong, nullable) NSMapTable* pfwSites;
 @property(nonatomic, strong, nullable) NSMutableArray<NSString*>* pfwNoted;
+// The --par-style=auto recogniser (XTParser+ParLift.m): the tokens its walk
+// rebuilds and the names each declaration there declares (by the index of
+// its first token), the location they carry, whether the scan's body rules
+// are reading them (plStream), the sites the parser recorded for the walk,
+// and the increment of the last `while` parAutoWhileToFor rewrote (1 `v++`,
+// 2 `++v`, 3 `v += 1`, 4 `v = v + 1`).
+@property(nonatomic, strong, nullable) NSMutableArray<XTToken*>* plToks;
+@property(nonatomic, strong, nullable) NSMutableDictionary<NSNumber*, NSArray<NSString*>*>* plDecls;
+@property(nonatomic, strong, nullable) XTSourceLocation* plLoc;
+@property(nonatomic) BOOL plStream;
+@property(nonatomic, strong, nullable) NSMapTable* plSites;
+@property(nonatomic) NSInteger plWhileInc;
+@property(nonatomic) BOOL plSkipWhileIf;
+@property(nonatomic) NSUInteger plLits;
 @end
 
 // The par frame walk (XTParser+ParFrame.m).
@@ -82,6 +96,30 @@ NS_ASSUME_NONNULL_BEGIN
 - (NSMutableDictionary*)parFrameWalk:(XTASTNode*)body frame:(NSDictionary*)frame;
 - (void)parFrameFill:(NSMutableDictionary*)frame body:(nullable XTASTNode*)body;
 @end
+
+// The --par-style=auto recogniser (XTParser+ParLift.m).
+@interface XTParser (ParLift)
+- (void)plCheckFor:(nullable XTASTNode*)plain at:(XTSourceLocation*)loc scan:(NSDictionary*)scan fromWhile:(BOOL)fromWhile;
+- (void)plCheckWhile:(nullable XTASTNode*)w at:(XTSourceLocation*)loc why:(NSString*)why;
+- (void)plRegister:(nullable XTASTNode*)site entry:(NSDictionary*)e;
+@end
+
+// XTParser.m: what the scan and the recogniser share.
+@interface XTParser ()
+- (BOOL)parAutoScanBodyAfter:(NSUInteger)pe
+                         var:(NSString*)var
+                   boundFrom:(NSUInteger)bndFrom
+                          to:(NSUInteger)bndTo
+                        reds:(NSMutableArray<NSArray<NSString*>*>*)reds
+                        goal:(NSUInteger*)goalOut;
+- (BOOL)parAutoWhileToFor;
+- (BOOL)parAutoSmall:(XTASTNode*)loop from:(NSUInteger)from to:(NSUInteger)to;
+- (void)parAutoAddLine:(NSString*)line;
+@end
+BOOL pacStepInBound(XTASTNode* _Nullable e);
+XTASTNode* _Nullable pacFirstKid(XTASTNode* e);
+BOOL pacIsVar(XTASTNode* _Nullable e, NSString* v);
+BOOL pacIsOne(XTASTNode* _Nullable e);
 
 // XTParser+Blocks.m: the name an element access is rooted at, and the key an
 // array update is counted under, with its uses.

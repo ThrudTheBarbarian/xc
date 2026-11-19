@@ -1,12 +1,17 @@
 #!/bin/bash
-# auto-check.sh — XC_PAR_AUTO_CHECK=flags over the par_auto fixtures and the
+# auto-check.sh — XC_PAR_AUTO_CHECK=flags,recog over the par_auto fixtures and the
 # header spellings below: for each loop the --par-style=auto scan reads, the
 # source facts the parser put on the loop's node (range syntax, `: serial`, a
 # `: goal` of its own, a range step that is not a plain literal, literal
 # bounds that descend, and the condition and step shapes the tree gives with
 # its parentheses and literal spellings) must agree with what the scan saw in
-# the tokens. A line that says "differ" fails. The check must not change the
-# output: the assembly is compared with it on and off.
+# the tokens. With XC_PAR_AUTO_CHECK=recog as well, the recogniser's verdict
+# on each loop, read from its tree, must be the scan's: lift or serial, the
+# rule, the form, the reductions, a running total, the grid levels, the goal
+# and the small-loop test, over the same files and the loops below that
+# exercise the rules the scan reads from the token beside a name. A line
+# that says "differ" fails. The check must not change the output: the
+# assembly is compared with it on and off.
 #
 #   bash tests/par/auto-check.sh                   # bin/<plat>/xcc-xc
 #   XC=path/to/xcc bash tests/par/auto-check.sh
@@ -74,11 +79,107 @@ i32 main(void)
 }
 XC
 
+# For recog: loops that exercise each rule the scan reads from the token
+# before or after a name, and the ones the recogniser reads through a site.
+cat > "$W/recog.xc" <<'XC'
+#import "Stdio.xc"
+#import "Par.xc"
+#define N 100000
+u32 a[N];
+u32 b[N];
+i32 c[N];
+float fa[N];
+u32 g2[90000];
+struct S { u32 n; u32 v; u32 acc; };
+S gs;
+u32 f1(u32 x) { return x + 1; }
+class K
+    {
+    u32 _k;
+    void init(void) { _k = 1; }
+    u32 twice(u32 x) { return x * 2; }
+    void run(void)
+        {
+        for (u32 i = 0; i < N; i++) a[i] = twice(i);
+        }
+    }
+i32 main(void)
+{
+    u32 n = N;
+    u32 acc = 0;
+    u32 acc2 = 0;
+    i32 sacc = 0;
+    u32 mask = 7;
+    u32 m = 4000000000;
+    u32 serial = 0;
+    u32 total = N;
+    float fs = 0.0;
+    u32 q = 0;
+    // A statement starts after `)`, so a cast's operand counts: `acc++;`.
+    for (u32 i = 0; i < n; i++) { u32 y = (u32)acc++; b[i] = y; }
+    // `expr & name` takes the name's address unless `[` follows.
+    for (u32 i = 0; i < n; i++) b[i] = a[i] & mask;
+    for (u32 i = 0; i < n; i++) b[i] = a[i] & a[0];
+    // `++` next to a name that is not the body's own, a member's too.
+    for (u32 i = 0; i < n; i++) { gs.n++; b[i] = 1; }
+    for (u32 i = 0; i < n; i++) { S t; t.n = i; t.n++; b[i] = t.n; }
+    // A name after a cast and before `:` reads as a label.
+    for (u32 i = 0; i < n; i++) b[i] = a[i] > 3 ? (u32)mask : 0;
+    // `acc = acc op e`: an operator after a cast is binary, after `+` unary.
+    for (u32 i = 0; i < n; i++) sacc = sacc + (i32)-c[i];
+    for (u32 i = 0; i < n; i++) sacc = sacc + -c[i];
+    for (u32 i = 0; i < n; i++) acc = acc * 3 + a[i];
+    // `break` is inside an inner loop or switch when the `{` it sits in is
+    // the first after a `for`, `while` or `switch`, braced or not.
+    for (u32 i = 0; i < n; i++) { u32 t = 0; for (u32 j = 0; j < 4; j++) t += j; if (t > 50) { break; } b[i] = t; }
+    for (u32 i = 0; i < n; i++) { if (a[i] > 3) break; b[i] = 1; }
+    for (u32 i = 0; i < n; i++) { switch (a[i]) { case 1: b[i] = 2; break; default: b[i] = 3; } }
+    // Every name token is a use: a member's name, an annotation's word.
+    for (u32 i = 0; i < n; i++) { acc += a[i]; b[i] = gs.acc; }
+    for (u32 i = 0; i < n; i++) { serial += a[i]; for (u32 j = 0; j < 2; j++) : serial { b[j] = 0; } }
+    // min and max: the two expressions spelt alike.
+    for (u32 i = 0; i < n; i++) if (a[i] + 16 < m) m = a[i] + 16;
+    for (u32 i = 0; i < n; i++) if (a[i] + 16 < m) m = a[i] + 0x10;
+    for (u32 i = 0; i < n; i++) if (acc2 < (a[i])) acc2 = (a[i]);
+    // A running total becomes a scan.
+    for (u32 i = 0; i < n; i++) { acc2 += a[i]; b[i] = acc2; }
+    // #415 and #416.
+    for (u32 i = 0; i < n; i++) { b[i] = 1; i++; }
+    for (u32 i = 0; i < total; i++) total += a[i] & 1;
+    for (u32 i = 0; i < b[0]; i++) b[i] = 0;
+    // Grid nests, and the levels they may take.
+    for (u32 y = 0; y < 300; y++) for (u32 x = 0; x < 300; x++) g2[y * 300 + x] = x + y;
+    for (u32 y = 0; y < 300; y++) for (u32 x = 0; x < 300; x++) { g2[y * 300 + x] = 1; x++; }
+    // Small loops: a constant count under 65536, no call.
+    for (u32 i = 0; i < 100; i++) b[i] = i;
+    for (u32 i = 0; i < 100; i++) b[i] = f1(i);
+    // A float sum under an explicit speed goal.
+    for (u32 i = 0; i < n; i++) : goal(speed) fs += fa[i];
+    // Counted `while` loops, alone and inside a loop the scan reads.
+    u32 v = 0;
+    while (v < n) { b[v] = 2; ++v; }
+    v = 0;
+    while (v < n) { v++; b[0] = 1; }
+    u32 lim = 10;
+    while (v < lim) { lim = lim + 1; v += 1; }
+    for (u32 r = 0; r < 3; r++) { u32 w = 0; while (w < n) { b[w] = r; w = w + 1; } q = r; }
+    for (u32 r = 0; r < 3; r++) { u32 w2 = 0; if (r > 0) while (w2 < n) { b[w2] = r; w2++; } q = r + w2; }
+    // An annotation the parser does not know still ends the header.
+    for (u32 i = 0; i < n; i++) : Unroll b[i] = b[i] + 1;
+    // A written par block in a loop.
+    for (u32 r = 0; r < 3; r++) { par :reduce(+ acc) { for (u32 i in 0..4096) acc = acc + a[i]; } }
+    K* k = new K();
+    k.run();
+    Stdio.printf("%u %u %u %d %u %u %u %u\n", acc, acc2, m, sacc, serial, total, q, b[5]);
+    return 0;
+}
+XC
+
 fail=0
 : > "$W/got"
-for src in tests/fixtures/par_auto_*.xc "$W/headers.xc"; do
+for src in tests/fixtures/par_auto_*.xc "$W/headers.xc" "$W/recog.xc"; do
     name=$(basename "$src" .xc)
-    if ! XC_PAR_AUTO_CHECK=flags "$XC" -q -H . -A x86_64 -O2 -S -o "$W/$name.on.s" "$src" > "$W/$name.err" 2>&1; then
+    if ! XC_PAR_AUTO_CHECK=flags,recog "$XC" -q -H . -A x86_64 -O2 -S -o "$W/$name.on.s" "$src" > "$W/$name.err" 2>&1; then
         echo "FAIL $name: does not build"; sed 's/^/    /' "$W/$name.err" | head -5
         fail=1; continue
     fi
@@ -86,13 +187,23 @@ for src in tests/fixtures/par_auto_*.xc "$W/headers.xc"; do
     "$XC" -q -H . -A x86_64 -O2 -S -o "$W/$name.off.s" "$src" > /dev/null 2>&1
     cmp -s "$W/$name.on.s" "$W/$name.off.s" || { echo "FAIL $name: the check changed the assembly"; fail=1; }
 done
-if grep -q ' differ' "$W/got"; then
-    echo "FAIL auto-check: source facts and tokens disagree:"; grep ' differ' "$W/got" | head -20
+if grep -v ' recog ' "$W/got" | grep -q ' differ'; then
+    echo "FAIL auto-check: source facts and tokens disagree:"; grep -v ' recog ' "$W/got" | grep ' differ' | head -20
+    fail=1
+fi
+if grep ' recog ' "$W/got" | grep -q ' differ'; then
+    echo "FAIL auto-check: the recogniser and the scan disagree:"; grep ' recog ' "$W/got" | grep ' differ' | head -20
     fail=1
 fi
 # Each fact is seen set at least once, so a flag the parser stopped setting shows.
 for f in range=1 serial=1 goal=1 stepbad=1 desc=1 cond=1 cond=0 step=1 step=0; do
     grep -q " $f" "$W/got" || { echo "FAIL auto-check: no loop with $f"; fail=1; }
+done
+# Each rule the recog loops are there for is met at least once.
+for f in rule=label rule=address rule=outer-step rule=break rule=reduction-uses rule=outer-write rule=iv-write \
+         rule=bound-write rule=bound-memory rule=while-shape reds=+:acc reds=min:m scan=+:acc2 grid=1 small=1 \
+         form=while; do
+    grep ' recog ' "$W/got" | grep -q " $f" || { echo "FAIL auto-check: no recog loop with $f"; fail=1; }
 done
 echo "--- par auto-check: $(wc -l < "$W/got") loops, $(grep -c ' differ' "$W/got") differ ---"
 [ $fail = 0 ]

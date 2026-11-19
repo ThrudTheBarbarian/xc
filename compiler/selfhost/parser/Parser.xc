@@ -2880,6 +2880,7 @@ class Parser
                  && parTokType(be - (u32)2) == (u16)tokIntLiteral && Parser._same(parTokValue(be - (u32)2), "1"))
             inc = be - (u32)6;
         if (inc == (u32)0 || inc <= pe + (u32)1) return false;
+        u32 incForm = inc == be - 3 ? (parTokType(inc) == tokPlusPlus ? 2 : 1) : inc == be - 4 ? 3 : 4;
         u16 before = parTokType(inc - (u32)1);
         if (before != (u16)tokSemicolon && before != (u16)tokRBrace && before != (u16)tokLBrace) return false;
         for (u32 i = pe + (u32)2; i < inc; i = i + (u32)1) {
@@ -2969,6 +2970,7 @@ class Parser
         out.add((Object*)parSynTok((u16)tokSemicolon, String.withCString(";"), w0));
         _tokens.removeRange(at, be + (u32)1 - at);
         _tokens.insertAll(at, out);
+        _plWhileInc = incForm;
         return true;
     }
 
@@ -3040,16 +3042,41 @@ class Parser
         String* form = fromWhile ? String.withCString("while") : _parAutoForm;
         String* why = _parAutoWhy;
         u32 gridCap = _parAutoGridCap;
+        u32 whileInc = _plWhileInc;
+        // XC_PAR_AUTO_CHECK=recog: the scan's verdict, for the recogniser's
+        // to be compared with once the loop is parsed (plCheckFor).
+        Map* scanV = (Map*)0;
+        if (_parAutoRecogOn) {
+            scanV = new Map();
+            Parser.plSet(scanV, "lift", String.withCString(scanned ? "1" : "0"));
+            Parser.plSet(scanV, "form", form);
+            if (!scanned)
+                Parser.plSet(scanV, "rule", why != (String*)0 ? why : String.withCString("?"));
+            else {
+                Parser.plSet(scanV, "reds", Parser.plReds(reds));
+                Parser.plSet(scanV, "grid", String.withU32(gridCap));
+                Parser.plSet(scanV, "goal", String.withU32(goal));
+                if (_parScanAcc != (String*)0) Parser.plSet(scanV, "scan", Parser.plScan(_parScanOp, _parScanAcc));
+            }
+        }
         if (scanned && !isTypeName(String.withCString("ParChunk")))
             _parAutoWantsRuntime = true;
         if (!scanned || !isTypeName(String.withCString("ParChunk"))) {
             parAutoTraceLine(traceAt, "serial", scanned ? String.withCString("no-runtime") : why, form, (String*)0, (String*)0, 0, (String*)0);
             // Not a block: the loops inside it are judged on their own (the
             // work inside a timing loop), so the loop depth stays put.
+            u32 forAt = _pos;
             parGridEnter("loops", true);
             Node* plain = parseFor();
             parGridEnter("loops", false);
             parAutoCheck(plain, traceAt, pacSeen, pacVal);
+            if (scanV != (Map*)0) {
+                if (scanned && plain != (Node*)0)
+                    Parser.plSet(scanV, "small", String.withCString(parAutoSmall(plain, forAt, _pos) ? "1" : "0"));
+                _plWhileInc = whileInc;
+                plCheckFor(plain, traceAt, scanV, fromWhile);
+                if (fromWhile) plRegister(plain, 3, plain, (Array*)0, whileInc);
+            }
             return plain;
         }
         // The loop as written first, as --par-style=cpu parses it (nothing in
@@ -3063,8 +3090,18 @@ class Parser
         _loopDepth = _loopDepth - (u32)1;
         parGridEnter("loops", false);
         parAutoCheck(plain, traceAt, pacSeen, pacVal);
+        if (scanV != (Map*)0) {
+            if (plain != (Node*)0)
+                Parser.plSet(scanV, "small", String.withCString(parAutoSmall(plain, forPos, _pos) ? "1" : "0"));
+            _plWhileInc = whileInc;
+            plCheckFor(plain, traceAt, scanV, fromWhile);
+        }
+        // The site the walk reads in place of what this returns (_plSites):
+        // the loop as written, or the `while` it was.
+        u32 plKind = fromWhile ? 3 : 2;
         if (plain == (Node*)0 || parAutoSmall(plain, forPos, _pos)) {
             parAutoTraceLine(traceAt, "serial", String.withCString(plain == (Node*)0 ? "parse" : "small"), form, (String*)0, (String*)0, 0, (String*)0);
+            if (fromWhile) plRegister(plain, 3, plain, (Array*)0, whileInc);
             return plain;
         }
         // A running total (#144): the loop's tokens become
@@ -3076,6 +3113,7 @@ class Parser
             sreds.append(_parScanAcc);
             u32 implFrom = _parCounter;
             Node* sc = parAutoScanFor(plain, forPos);
+            if (sc != plain || fromWhile) plRegister(sc, plKind, plain, (Array*)0, whileInc);
             if (sc == plain)
                 parAutoTraceLine(traceAt, "serial", String.withCString("scan-refused"), form, (String*)0, (String*)0, 0, (String*)0);
             else
@@ -3130,6 +3168,7 @@ class Parser
             parAutoRefused(errMark, warnMark, fatalMark, plainEnd, forTok);
             _parTok = savedParTok;
             parAutoTraceLine(traceAt, "serial", String.withCString("block-refused"), form, (String*)0, (String*)0, 0, (String*)0);
+            if (fromWhile) plRegister(plain, 3, plain, (Array*)0, whileInc);
             return plain;
         }
         // The block's frame, from the loop's tree.
@@ -3176,8 +3215,10 @@ class Parser
         if (out == (Node*)0 || _errors.count() > errMark) {
             parAutoRefused(errMark, warnMark, fatalMark, plainEnd, forTok);
             parAutoTraceLine(traceAt, "serial", String.withCString("block-refused"), form, (String*)0, (String*)0, 0, (String*)0);
+            if (fromWhile) plRegister(plain, 3, plain, (Array*)0, whileInc);
             return plain;
         }
+        plRegister(out, plKind, plain, (Array*)0, whileInc);
         if (_parAutoTraceOn) {
             Array* grid = (Array*)frame.get((Hashable*)String.withCString("grid"));
             String* rl = (String*)0;
@@ -3425,6 +3466,7 @@ class Parser
     // -Wpar-auto, at the loop the cursor is on: why it stays a loop.
     void parAutoWarnSerial(String* why)
     {
+        if (_plStream) return;
         String* w = String.withCString("this loop runs serially, not as a 'par' block (--par-style): ");
         w.append(why);
         warnAt(String.withCString("par-auto"), w, cur());
@@ -3771,6 +3813,7 @@ class Parser
     void pfwRegister(Node* site, Node* body, Array* params, Array* noted, u32 kind, Node* plain)
     {
         if (site == (Node*)0 || body == (Node*)0) return;
+        if (kind == 0) plRegister(site, kind, body, params, 0);
         bool inPar = false;
         for (u32 i = 0; i < _blkFrames.count(); i++)
             if (((Map*)_blkFrames.get(i)).get((Hashable*)String.withCString("par")) != (Object*)0) inPar = true;
@@ -4077,6 +4120,1144 @@ class Parser
         }
     }
 
+    // ── The --par-style=auto recogniser (#338) ───────────────────
+    // Whether a loop becomes a par block, decided from its tree once it is
+    // parsed, beside the token scan (parAutoScan) that still decides. It
+    // makes the scan's decisions: the verdict, the rule that kept a loop
+    // serial, the loop's form, its reductions, a running total, the grid
+    // levels a nest may take, and the small-loop test.
+    //
+    // The header is read from the tree and the source facts the parser put
+    // on it (SRC_RANGE, SRC_SERIAL, SRC_GOAL, SRC_STEPBAD, SRC_DESC, and
+    // SRC_PAREN and SRC_PLAIN for the condition and the step). The body's
+    // rules read the token before or after a name, so a walk of the tree
+    // rebuilds the loop's tokens in source order (plStmt, plExpr), with the
+    // parentheses SRC_PAREN records and each declaration's names, and the
+    // body's rules run on them (parAutoScanBodyAfter, shared with the scan).
+    // A block literal, a nested par block, a loop lifted inside the loop and
+    // a counted `while` the parser rewrote are read through the sites the
+    // parser recorded for them, as they were written. An integer literal not
+    // spelled as its decimal value is equal to no other.
+    //
+    // XC_PAR_AUTO_CHECK=recog prints, for each loop the scan reads, a line
+    // comparing the two: "same", or "differ" and each field that does. As
+    // the reference (XTParser+ParLift.m).
+    bool    _parAutoRecogOn;
+    Array*  _plToks;        // the walk's tokens
+    Map*    _plDecls;       // the index of a declaration's first token -> its names
+    Token*  _plAt;          // the place the walk's tokens carry
+    bool    _plStream;      // the scan's body rules are reading the walk's tokens
+    Array*  _plSites;       // [site, kind, plain or body, params, increment]
+    u32     _plWhileInc;    // parAutoWhileToFor's last increment: 1 v++, 2 ++v, 3 v += 1, 4 v = v + 1
+    bool    _plSkipWhileIf; // the next statement is the `if` a rewritten `while` left
+    u32     _plLits;        // literals not spelled as their value, so far
+    void setParAutoRecog(bool b) { _parAutoRecogOn = b; }
+
+    void plTok(u16 t, string v)
+    {
+        _plToks.add((Object*)parSynTok(t, String.withCString(v), _plAt));
+    }
+    void plTokS(u16 t, String* v)
+    {
+        _plToks.add((Object*)parSynTok(t, v, _plAt));
+    }
+
+    // A type keyword's token type, or tokEOF.
+    static u16 plKeyword(String* w)
+    {
+        if (Parser._same(w, "u8")) return tokU8;
+        if (Parser._same(w, "i8")) return tokI8;
+        if (Parser._same(w, "u16")) return tokU16;
+        if (Parser._same(w, "i16")) return tokI16;
+        if (Parser._same(w, "u32")) return tokU32;
+        if (Parser._same(w, "i32")) return tokI32;
+        if (Parser._same(w, "u64")) return tokU64;
+        if (Parser._same(w, "i64")) return tokI64;
+        if (Parser._same(w, "bool")) return tokBool;
+        if (Parser._same(w, "float")) return tokFloat;
+        if (Parser._same(w, "double")) return tokDouble;
+        if (Parser._same(w, "void")) return tokVoid;
+        if (Parser._same(w, "pointer")) return tokPointer;
+        if (Parser._same(w, "string")) return tokString;
+        if (Parser._same(w, "auto")) return tokAuto;
+        return tokEOF;
+    }
+
+    static bool plWordByte(u8 c)
+    {
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '$';
+    }
+
+    // A type's spelling as tokens: its words (a type keyword as one), its
+    // pointer sigils as `*`, and its brackets and commas. With `dims` false
+    // an array's dimensions are left for after the declarator's name.
+    void plTypeSpelling(String* s, bool dims)
+    {
+        if (s == (String*)0) return;
+        u32 n = s.byteLength();
+        for (u32 i = 0; i < n;) {
+            u8 c = s.byteAt(i);
+            if (Parser.plWordByte(c)) {
+                u32 j = i;
+                while (j < n && Parser.plWordByte(s.byteAt(j)))
+                    j++;
+                String* w = s.substringBytes(i, j - i);
+                u16 k = Parser.plKeyword(w);
+                if (k != tokEOF) plTokS(k, w);
+                else if (c >= '0' && c <= '9') plTokS(tokIntLiteral, w);
+                else plTokS(tokIdentifier, w);
+                i = j;
+                continue;
+            }
+            if (c == '[' && !dims) return;
+            if (c == '*' || c == '@') plTok(tokStar, "*");
+            else if (c == '<') plTok(tokLess, "<");
+            else if (c == '>') plTok(tokGreater, ">");
+            else if (c == ',') plTok(tokComma, ",");
+            else if (c == '(') plTok(tokLParen, "(");
+            else if (c == ')') plTok(tokRParen, ")");
+            else if (c == '[') plTok(tokLBracket, "[");
+            else if (c == ']') plTok(tokRBracket, "]");
+            else if (c == '^') plTok(tokCaret, "^");
+            else if (c == '?') plTok(tokQuestion, "?");
+            i++;
+        }
+    }
+
+    // A declaration's array dimensions, after its name.
+    void plDims(String* s)
+    {
+        if (s == (String*)0) return;
+        u32 lb = s.indexOfByte('[');
+        if (lb == String.notFound()) return;
+        plTypeSpelling(s.substringBytes(lb, s.byteLength() - lb), true);
+    }
+
+    // An operator's token type.
+    static u16 plOpTok(String* op)
+    {
+        if (Parser._same(op, "+")) return tokPlus;
+        if (Parser._same(op, "-")) return tokMinus;
+        if (Parser._same(op, "*")) return tokStar;
+        if (Parser._same(op, "/")) return tokSlash;
+        if (Parser._same(op, "%")) return tokPercent;
+        if (Parser._same(op, "&")) return tokAmpersand;
+        if (Parser._same(op, "|")) return tokPipe;
+        if (Parser._same(op, "^")) return tokCaret;
+        if (Parser._same(op, "~")) return tokTilde;
+        if (Parser._same(op, "<<")) return tokShiftLeft;
+        if (Parser._same(op, ">>")) return tokShiftRight;
+        if (Parser._same(op, "<:")) return tokRotateLeft;
+        if (Parser._same(op, ":>")) return tokRotateRight;
+        if (Parser._same(op, "&&")) return tokLogicalAnd;
+        if (Parser._same(op, "||")) return tokLogicalOr;
+        if (Parser._same(op, "!")) return tokBang;
+        if (Parser._same(op, "==")) return tokEqual;
+        if (Parser._same(op, "!=")) return tokNotEqual;
+        if (Parser._same(op, "<")) return tokLess;
+        if (Parser._same(op, ">")) return tokGreater;
+        if (Parser._same(op, "<=")) return tokLessEq;
+        if (Parser._same(op, ">=")) return tokGreaterEq;
+        if (Parser._same(op, "=")) return tokAssign;
+        if (Parser._same(op, "+=")) return tokPlusAssign;
+        if (Parser._same(op, "-=")) return tokMinusAssign;
+        if (Parser._same(op, "*=")) return tokStarAssign;
+        if (Parser._same(op, "/=")) return tokSlashAssign;
+        if (Parser._same(op, "%=")) return tokPercentAssign;
+        if (Parser._same(op, "&=")) return tokAmpAssign;
+        if (Parser._same(op, "|=")) return tokPipeAssign;
+        if (Parser._same(op, "^=")) return tokCaretAssign;
+        if (Parser._same(op, "<<=")) return tokShlAssign;
+        if (Parser._same(op, ">>=")) return tokShrAssign;
+        if (Parser._same(op, "<:=")) return tokRolAssign;
+        if (Parser._same(op, ":>=")) return tokRorAssign;
+        if (Parser._same(op, "++")) return tokPlusPlus;
+        if (Parser._same(op, "--")) return tokMinusMinus;
+        if (Parser._same(op, ">>>")) return tokByte3;
+        return tokIdentifier;
+    }
+
+    // The arguments [from, to) of a call, comma-separated.
+    void plArgs(Node* n, u32 from, u32 to)
+    {
+        for (u32 i = from; i < to; i++) {
+            if (i > from) plTok(tokComma, ",");
+            plExpr(n.kid(i));
+        }
+    }
+
+    // A name as its token: the parser reads a type keyword, `delete`,
+    // `retain` and `release` as names in places, and `par.x` in a grid as
+    // `par$x`.
+    void plName(String* name, bool synth)
+    {
+        if (synth && name.hasPrefix(String.withCString("par$"))) {
+            plTok(tokIdentifier, "par");
+            plTok(tokDot, ".");
+            plTokS(tokIdentifier, name.substringFromByte(4));
+            return;
+        }
+        u16 k = Parser.plKeyword(name);
+        if (synth && k != tokEOF) plTokS(k, name);
+        else if (synth && Parser._same(name, "delete")) plTokS(tokDelete, name);
+        else if (synth && Parser._same(name, "retain")) plTokS(tokRetain, name);
+        else if (synth && Parser._same(name, "release")) plTokS(tokRelease, name);
+        else plTokS(tokIdentifier, name);
+    }
+
+    // The site the parser recorded for `n`, or 0.
+    Array* plSite(Node* n)
+    {
+        if (_plSites == (Array*)0 || n == (Node*)0) return (Array*)0;
+        for (u32 i = 0; i < _plSites.count(); i++) {
+            Array* e = (Array*)_plSites.get(i);
+            if ((Object*)e.get(0) == (Object*)n) return e;
+        }
+        return (Array*)0;
+    }
+
+    void plExpr(Node* e)
+    {
+        if (e == (Node*)0) return;
+        Array* site = plSite(e);
+        if (site != (Array*)0) {
+            plSiteWalk(site);
+            return;
+        }
+        bool paren = e.hasSrc(SRC_PAREN);
+        if (paren) plTok(tokLParen, "(");
+        plExprInner(e);
+        if (paren) plTok(tokRParen, ")");
+    }
+
+    void plExprInner(Node* e)
+    {
+        u16 k = e.kind();
+        if (k == nkIdent) {
+            plName(e.name(), e.hasSrc(SRC_SYNTH));
+            return;
+        }
+        if (k == nkInt) {
+            if (e.nilLit()) plTok(tokNil, "nil");
+            else if (e.hasSrc(SRC_PLAIN)) plTokS(tokIntLiteral, String.withI64(e.num()));
+            else {
+                _plLits++;
+                String* w = String.withCString("#");
+                w.append(String.withU32(_plLits));
+                plTokS(tokIntLiteral, w);
+            }
+            return;
+        }
+        if (k == nkFloat) {
+            plTok(tokFloatLiteral, "0.0");
+            return;
+        }
+        if (k == nkStr) {
+            plTokS(tokStringLiteral, e.name());
+            return;
+        }
+        if (k == nkChar) {
+            plTokS(tokCharLiteral, String.withI64(e.num()));
+            return;
+        }
+        if (k == nkBool) {
+            if (e.num() != 0) plTok(tokTrue, "true");
+            else plTok(tokFalse, "false");
+            return;
+        }
+        if (k == nkBinary || k == nkAssign) {
+            plExpr(e.kid(0));
+            plTokS(Parser.plOpTok(e.op()), e.op());
+            plExpr(e.kid(1));
+            return;
+        }
+        if (k == nkUnary) {
+            String* op = e.op();
+            if (Parser._same(op, "<")) plTok(tokLess, "<");
+            else plTokS(Parser.plOpTok(op), op);
+            plExpr(e.kid(0));
+            return;
+        }
+        if (k == nkPostfix) {
+            plExpr(e.kid(0));
+            plTokS(Parser.plOpTok(e.op()), e.op());
+            return;
+        }
+        if (k == nkCall) {
+            u32 argc = e.kidCount();
+            if (Parser._same(e.name(), "<indirect>")) {
+                if (argc > 0) argc = argc - 1;
+                plExpr(e.kid(argc));
+            } else if (e.hasSrc(SRC_PARENCALLEE)) {
+                plTok(tokLParen, "(");
+                plName(e.name(), false);
+                plTok(tokRParen, ")");
+            } else
+                plName(e.name(), false);
+            plTok(tokLParen, "(");
+            plArgs(e, 0, argc);
+            if (e.hasFlag(NF_VAFWD)) {
+                if (argc > 0) plTok(tokComma, ",");
+                plTok(tokEllipsis, "...");
+            }
+            plTok(tokRParen, ")");
+            return;
+        }
+        if (k == nkMethodCall) {
+            Node* r = e.kid(0);
+            if (e.hasSrc(SRC_CALLED) && r != (Node*)0 && r.kind() == nkIdent)
+                plTokS(tokIdentifier, r.name());
+            else {
+                plExpr(r);
+                plTok(tokDot, ".");
+                if (e.hasSrc(SRC_PARENCALLEE)) {
+                    plTok(tokLParen, "(");
+                    plTokS(tokIdentifier, e.name());
+                    plTok(tokRParen, ")");
+                } else
+                    plTokS(tokIdentifier, e.name());
+            }
+            plTok(tokLParen, "(");
+            plArgs(e, 1, e.kidCount());
+            if (e.hasFlag(NF_VAFWD)) {
+                if (e.kidCount() > 1) plTok(tokComma, ",");
+                plTok(tokEllipsis, "...");
+            }
+            plTok(tokRParen, ")");
+            return;
+        }
+        if (k == nkSubscript) {
+            plExpr(e.kid(0));
+            plTok(tokLBracket, "[");
+            plExpr(e.kid(1));
+            plTok(tokRBracket, "]");
+            return;
+        }
+        if (k == nkSlice) {
+            plExpr(e.kid(0));
+            plTok(tokLBracket, "[");
+            plExpr(e.kid(1));
+            if (e.hasFlag(NF_INCLUSIVE)) plTok(tokEllipsis, "...");
+            else plTok(tokDotDot, "..");
+            plExpr(e.kid(2));
+            plTok(tokRBracket, "]");
+            return;
+        }
+        if (k == nkRange) {
+            plExpr(e.kid(0));
+            if (e.hasFlag(NF_INCLUSIVE)) plTok(tokEllipsis, "...");
+            else plTok(tokDotDot, "..");
+            plExpr(e.kid(1));
+            return;
+        }
+        if (k == nkMember) {
+            plExpr(e.kid(0));
+            if (e.hasFlag(NF_ARROW)) plTok(tokArrow, "->");
+            else plTok(tokDot, ".");
+            plTokS(tokIdentifier, e.name());
+            return;
+        }
+        if (k == nkTernary) {
+            plExpr(e.kid(0));
+            plTok(tokQuestion, "?");
+            plExpr(e.kid(1));
+            plTok(tokColon, ":");
+            plExpr(e.kid(2));
+            return;
+        }
+        if (k == nkCast) {
+            plTok(tokLParen, "(");
+            plTypeSpelling(e.name(), true);
+            if (e.hasFlag(NF_FAILABLE)) plTok(tokQuestion, "?");
+            plTok(tokRParen, ")");
+            plExpr(e.kid(0));
+            return;
+        }
+        if (k == nkNew) {
+            plTok(tokNew, "new");
+            plTypeSpelling(e.name(), true);
+            if (e.kidCount() > 0 && e.num() == 0) {
+                plTok(tokLBracket, "[");
+                plExpr(e.kid(0));
+                plTok(tokRBracket, "]");
+            } else {
+                plTok(tokLParen, "(");
+                plArgs(e, 0, e.kidCount());
+                plTok(tokRParen, ")");
+            }
+            return;
+        }
+        if (k == nkSizeof) {
+            plTok(tokSizeof, "sizeof");
+            plTok(tokLParen, "(");
+            if (Parser._same(e.name(), "-")) plExpr(e.kid(0));
+            else plTypeSpelling(e.name(), true);
+            plTok(tokRParen, ")");
+            return;
+        }
+        if (k == nkBlock) {
+            // An initialiser list.
+            plTok(tokLBrace, "{");
+            plArgs(e, 0, e.kidCount());
+            plTok(tokRBrace, "}");
+            return;
+        }
+    }
+
+    // A declaration statement: its qualifiers, its type, each declarator,
+    // `;`. The declarators' names are recorded at the type's first token
+    // (_plDecls). A constructor's arguments are the kids of a declaration
+    // whose statement has the init call the parser added (SRC_SYNTH).
+    void plDecls(Array* ds, bool ctor)
+    {
+        if (ds.count() == 0) return;
+        Node* d0 = (Node*)ds.get(0);
+        if (d0.hasFlag(NF_STATIC)) plTok(tokStatic, "static");
+        if (d0.hasFlag(NF_GLOBAL)) plTok(tokGlobal, "global");
+        if (d0.hasFlag(NF_VOLATILE)) plTok(tokVolatile, "volatile");
+        if (d0.hasFlag(NF_REGISTER)) plTok(tokRegister, "register");
+        u32 typeAt = _plToks.count();
+        plTypeSpelling(d0.op(), false);
+        Array* names = new Array();
+        for (u32 i = 0; i < ds.count(); i++) {
+            Node* d = (Node*)ds.get(i);
+            if (i > 0) plTok(tokComma, ",");
+            names.add((Object*)d.name());
+            plTokS(tokIdentifier, d.name());
+            plDims(d.op());
+            if (ctor && i + 1 == ds.count()) {
+                plTok(tokLParen, "(");
+                plArgs(d, 0, d.kidCount());
+                plTok(tokRParen, ")");
+            } else if (d.kidCount() > 0) {
+                plTok(tokAssign, "=");
+                plExpr(d.kid(0));
+            }
+        }
+        if (typeAt < _plToks.count())
+            _plDecls.set((Hashable*)String.withU32(typeAt), (Object*)names);
+        plTok(tokSemicolon, ";");
+    }
+
+    // The statements of `n` from kid `from` on.
+    void plStmts(Node* n, u32 from)
+    {
+        for (u32 i = from; i < n.kidCount(); i++) {
+            if (_plSkipWhileIf) {
+                // The `if (v < B) v = B;` a rewritten `while` left after it
+                // (or after the statement it was the body of).
+                _plSkipWhileIf = false;
+                continue;
+            }
+            plStmt(n.kid(i));
+        }
+    }
+
+    // A loop's annotations, `: unroll, serial, goal(speed)`.
+    void plAnnotations(Node* n)
+    {
+        bool unroll = n.hasFlag(NF_UNROLL);
+        bool serial = n.hasSrc(SRC_SERIAL);
+        bool ownGoal = n.hasSrc(SRC_GOAL);
+        bool other = n.hasSrc(SRC_ANNOT);
+        if (!unroll && !serial && !ownGoal && !other) return;
+        plTok(tokColon, ":");
+        // An annotation the parser does not know (its word is not kept).
+        if (other) plTok(tokIdentifier, "_");
+        if (unroll) {
+            if (other) plTok(tokComma, ",");
+            plTok(tokIdentifier, "unroll");
+        }
+        if (serial) {
+            if (other || unroll) plTok(tokComma, ",");
+            plTok(tokIdentifier, "serial");
+        }
+        if (ownGoal) {
+            if (other || unroll || serial) plTok(tokComma, ",");
+            plTok(tokIdentifier, "goal");
+            plTok(tokLParen, "(");
+            if (n.hasFlag(NF_GOAL_SPEED)) plTok(tokIdentifier, "speed");
+            else plTok(tokIdentifier, "accuracy");
+            plTok(tokRParen, ")");
+        }
+    }
+
+    static void plMark(Map* marks, string k, u32 v)
+    {
+        if (marks != (Map*)0) marks.set((Hashable*)String.withCString(k), (Object*)Number.withU32(v));
+    }
+    static u32 plMarkAt(Map* marks, string k)
+    {
+        Number* v = (Number*)marks.get((Hashable*)String.withCString(k));
+        return v != (Number*)0 ? v.asU32() : 0;
+    }
+
+    // A `for`: its header, recording where its parts start for the
+    // recogniser (marks) when it is the loop being read, then its
+    // annotations and body.
+    void plFor(Node* f, Map* marks)
+    {
+        plTok(tokFor, "for");
+        plTok(tokLParen, "(");
+        Node* init = Parser.pacKid0(f.kid(0));
+        Node* d = init != (Node*)0 && init.kind() == nkVariableDecl ? init : (Node*)0;
+        Node* c = Parser.pacKid0(f.kid(1));
+        Node* st = Parser.pacKid0(f.kid(2));
+        if (f.hasSrc(SRC_RANGE)) {
+            // `T v in a .. b [step s]`, from the C-style form it became.
+            if (d != (Node*)0) plTypeSpelling(d.op(), true);
+            plTokS(tokIdentifier, d != (Node*)0 ? d.name() : String.withCString("_"));
+            plTok(tokIn, "in");
+            if (d != (Node*)0) plExpr(d.kid(0));
+            bool incl = c != (Node*)0 && (Parser._same(c.op(), "<=") || Parser._same(c.op(), ">="));
+            if (incl) plTok(tokEllipsis, "...");
+            else plTok(tokDotDot, "..");
+            Parser.plMark(marks, "bndFrom", _plToks.count());
+            if (c != (Node*)0) plExpr(c.kid(1));
+            Parser.plMark(marks, "bndTo", _plToks.count());
+            i64 mag = st != (Node*)0 && st.kid(1) != (Node*)0 && st.kid(1).kind() == nkInt ? st.kid(1).num() : 1;
+            bool down = st != (Node*)0 && Parser._same(st.op(), "-=");
+            bool lits = d != (Node*)0 && d.kid(0) != (Node*)0 && d.kid(0).kind() == nkInt
+                     && c != (Node*)0 && c.kid(1) != (Node*)0 && c.kid(1).kind() == nkInt;
+            if (f.hasSrc(SRC_STEPBAD)) {
+                plTok(tokIdentifier, "step");
+                plTok(tokIdentifier, "_");
+            } else if (mag != 1 || (down && !lits)) {
+                plTok(tokIdentifier, "step");
+                if (down) plTok(tokMinus, "-");
+                plTokS(tokIntLiteral, String.withI64(mag));
+            }
+        } else {
+            Parser.plMark(marks, "initFrom", _plToks.count());
+            if (d != (Node*)0) plDecls(Array.with((Object*)d), false);
+            else if (init != (Node*)0 && init.kind() == nkBlock && init.hasFlag(NF_DECLLIST)) plStmt(init);
+            else {
+                plExpr(init);
+                plTok(tokSemicolon, ";");
+            }
+            Parser.plMark(marks, "initTo", _plToks.count() - 1);
+            Parser.plMark(marks, "condFrom", _plToks.count());
+            plExpr(c);
+            Parser.plMark(marks, "condTo", _plToks.count());
+            plTok(tokSemicolon, ";");
+            plExpr(st);
+        }
+        plTok(tokRParen, ")");
+        plAnnotations(f);
+        Parser.plMark(marks, "pe", _plToks.count() - 1);
+        plStmt(f.kid(3));
+    }
+
+    // A site the parser recorded: a block literal (0), a written par block
+    // (1), a lifted loop (2), a counted `while` it rewrote to a `for` (3),
+    // as written.
+    void plSiteWalk(Array* e)
+    {
+        u32 kind = ((Number*)e.get(1)).asU32();
+        Node* body = (Node*)e.get(2);
+        if (kind == 2) {
+            plStmt(body);
+            return;
+        }
+        if (kind == 3) {
+            plWhileFrom(body, ((Number*)e.get(4)).asU32());
+            _plSkipWhileIf = true;
+            return;
+        }
+        if (kind == 1) {
+            // A written par block: its header as written, then its body.
+            Array* head = (Array*)e.get(3);
+            for (u32 i = 0; i < head.count(); i++)
+                plTokS(((Token*)head.get(i)).type(), ((Token*)head.get(i)).value());
+            plStmt(body);
+            return;
+        }
+        plTok(tokIdentifier, "block");
+        plTok(tokVoid, "void");
+        plTok(tokLParen, "(");
+        Array* params = (Array*)e.get(3);
+        for (u32 i = 0; i < params.count(); i++) {
+            Node* p = (Node*)params.get(i);
+            if (i > 0) plTok(tokComma, ",");
+            plTypeSpelling(p.op(), true);
+            plTokS(tokIdentifier, p.name());
+        }
+        plTok(tokRParen, ")");
+        plStmt(body);
+    }
+
+    // `while (v < B) { …; v++; }` from the `for` the parser made of it:
+    // `for (T __autopar_w = v; __autopar_w < B; __autopar_w += 1) { T v =
+    // __autopar_w; … }`, with the increment as it was spelt.
+    void plWhileFrom(Node* f, u32 inc)
+    {
+        Node* d = f != (Node*)0 && f.kind() == nkForCStyle ? Parser.pacKid0(f.kid(0)) : (Node*)0;
+        Node* c = d != (Node*)0 ? Parser.pacKid0(f.kid(1)) : (Node*)0;
+        if (d == (Node*)0 || d.kind() != nkVariableDecl || c == (Node*)0 || d.kid(0) == (Node*)0 || d.kid(0).kind() != nkIdent) {
+            plStmt(f);
+            return;
+        }
+        String* v = d.kid(0).name();
+        plTok(tokWhile, "while");
+        plTok(tokLParen, "(");
+        plTokS(tokIdentifier, v);
+        if (Parser._same(c.op(), "<=")) plTok(tokLessEq, "<=");
+        else plTok(tokLess, "<");
+        plExpr(c.kid(1));
+        plTok(tokRParen, ")");
+        plTok(tokLBrace, "{");
+        Node* b = f.kid(3);
+        if (b != (Node*)0 && b.kind() == nkBlock) plStmts(b, 1);
+        if (inc == 2) {
+            plTok(tokPlusPlus, "++");
+            plTokS(tokIdentifier, v);
+        } else if (inc == 3) {
+            plTokS(tokIdentifier, v);
+            plTok(tokPlusAssign, "+=");
+            plTok(tokIntLiteral, "1");
+        } else if (inc == 4) {
+            plTokS(tokIdentifier, v);
+            plTok(tokAssign, "=");
+            plTokS(tokIdentifier, v);
+            plTok(tokPlus, "+");
+            plTok(tokIntLiteral, "1");
+        } else {
+            plTokS(tokIdentifier, v);
+            plTok(tokPlusPlus, "++");
+        }
+        plTok(tokSemicolon, ";");
+        plTok(tokRBrace, "}");
+    }
+
+    void plStmt(Node* n)
+    {
+        if (n == (Node*)0 || n.hasSrc(SRC_SYNTH)) return;
+        Array* site = plSite(n);
+        if (site != (Array*)0) {
+            plSiteWalk(site);
+            return;
+        }
+        u16 k = n.kind();
+        if (k == nkBlock) {
+            if (n.hasFlag(NF_DECLLIST)) {
+                Array* ds = new Array();
+                bool ctor = false;
+                for (u32 i = 0; i < n.kidCount(); i++) {
+                    Node* s = n.kid(i);
+                    if (s.kind() == nkVariableDecl) ds.add((Object*)s);
+                    else if (s.hasSrc(SRC_SYNTH)) ctor = true;
+                }
+                plDecls(ds, ctor);
+                return;
+            }
+            plTok(tokLBrace, "{");
+            plStmts(n, 0);
+            plTok(tokRBrace, "}");
+            return;
+        }
+        if (k == nkVariableDecl) {
+            plDecls(Array.with((Object*)n), false);
+            return;
+        }
+        if (k == nkExprStatement) {
+            plExpr(n.kid(0));
+            plTok(tokSemicolon, ";");
+            return;
+        }
+        if (k == nkIf) {
+            plTok(tokIf, "if");
+            plTok(tokLParen, "(");
+            plExpr(n.kid(0));
+            plTok(tokRParen, ")");
+            plStmt(n.kid(1));
+            if (n.kidCount() > 2) {
+                plTok(tokElse, "else");
+                plStmt(n.kid(2));
+            }
+            return;
+        }
+        if (k == nkWhile) {
+            plTok(tokWhile, "while");
+            plTok(tokLParen, "(");
+            plExpr(n.kid(0));
+            plTok(tokRParen, ")");
+            plStmt(n.kid(1));
+            return;
+        }
+        if (k == nkForCStyle && n.kidCount() == 4) {
+            plFor(n, (Map*)0);
+            return;
+        }
+        if (k == nkForIn && n.kidCount() == 3) {
+            Node* v = n.kid(0);
+            plTok(tokFor, "for");
+            plTok(tokLParen, "(");
+            if (!Parser._same(v.op(), "-")) plTypeSpelling(v.op(), true);
+            plTokS(tokIdentifier, v.name());
+            plTok(tokIn, "in");
+            plExpr(n.kid(1));
+            plTok(tokRParen, ")");
+            plStmt(n.kid(2));
+            return;
+        }
+        if (k == nkReturn) {
+            plTok(tokReturn, "return");
+            plArgs(n, 0, n.kidCount());
+            plTok(tokSemicolon, ";");
+            return;
+        }
+        if (k == nkBreak) {
+            plTok(tokBreak, "break");
+            plTok(tokSemicolon, ";");
+            return;
+        }
+        if (k == nkContinue) {
+            plTok(tokContinue, "continue");
+            plTok(tokSemicolon, ";");
+            return;
+        }
+        if (k == nkGoto) {
+            plTok(tokGoto, "goto");
+            plTokS(tokIdentifier, n.name());
+            plTok(tokSemicolon, ";");
+            return;
+        }
+        if (k == nkGotoLabel) {
+            plTokS(tokIdentifier, n.name());
+            plTok(tokColon, ":");
+            return;
+        }
+        if (k == nkSwitch) {
+            plTok(tokSwitch, "switch");
+            plTok(tokLParen, "(");
+            plExpr(n.kid(0));
+            plTok(tokRParen, ")");
+            plTok(tokLBrace, "{");
+            for (u32 i = 1; i < n.kidCount(); i++) {
+                Node* c = n.kid(i);
+                if (c == (Node*)0 || c.kind() != nkCase) {
+                    plStmt(c);
+                    continue;
+                }
+                bool labels = false;
+                for (u32 j = 0; j < c.kidCount(); j++) {
+                    Node* l = c.kid(j);
+                    if (l == (Node*)0 || l.kind() != nkLabel) continue;
+                    labels = true;
+                    plTok(tokCase, "case");
+                    if (l.hasFlag(NF_RANGE)) {
+                        if (!l.hasFlag(NF_RANGE_HI)) plExpr(l.kid(0));
+                        plTok(tokDotDot, "..");
+                        if (l.hasFlag(NF_RANGE_HI)) plExpr(l.kid(0));
+                        else plExpr(l.kid(1));
+                    } else
+                        plExpr(l.kid(0));
+                    plTok(tokColon, ":");
+                }
+                if (c.hasFlag(NF_DEFAULT)) {
+                    plTok(tokDefault, "default");
+                    plTok(tokColon, ":");
+                }
+                for (u32 j = 0; j < c.kidCount(); j++) {
+                    Node* s = c.kid(j);
+                    if (s != (Node*)0 && s.kind() == nkLabel) continue;
+                    if (_plSkipWhileIf) {
+                        _plSkipWhileIf = false;
+                        continue;
+                    }
+                    plStmt(s);
+                }
+            }
+            plTok(tokRBrace, "}");
+            return;
+        }
+        if (k == nkDefer) {
+            plTok(tokDefer, "defer");
+            plStmt(n.kid(0));
+            return;
+        }
+        if (k == nkThrow) {
+            plTok(tokThrow, "throw");
+            plExpr(n.kid(0));
+            plTok(tokSemicolon, ";");
+            return;
+        }
+        if (k == nkTry) {
+            plTok(tokTry, "try");
+            plStmt(n.kid(0));
+            for (u32 i = 1; i < n.kidCount(); i++) {
+                Node* c = n.kid(i);
+                plTok(tokCatch, "catch");
+                plTok(tokLParen, "(");
+                if (!Parser._same(c.op(), "-")) plTypeSpelling(c.op(), true);
+                plTokS(tokIdentifier, c.name());
+                plTok(tokRParen, ")");
+                plStmt(c.kid(0));
+            }
+            return;
+        }
+        if (k == nkDelete) {
+            if (n.num() == 1) plTok(tokRetain, "retain");
+            else if (n.num() == 2) plTok(tokRelease, "release");
+            else plTok(tokDelete, "delete");
+            plExpr(n.kid(0));
+            plTok(tokSemicolon, ";");
+            return;
+        }
+        if (k == nkAsmBlock) {
+            plTok(tokAsm, "asm");
+            plTok(tokLBrace, "{");
+            plTok(tokRBrace, "}");
+            return;
+        }
+        if (k == nkTupleAssign && n.kidCount() > 0) {
+            u32 last = n.kidCount() - 1;
+            plTok(tokLParen, "(");
+            for (u32 i = 0; i < last; i++) {
+                Node* t = n.kid(i);
+                if (i > 0) plTok(tokComma, ",");
+                if (t != (Node*)0 && t.kind() == nkVariableDecl) {
+                    plTypeSpelling(t.op(), true);
+                    plTokS(tokIdentifier, t.name());
+                } else
+                    plExpr(t);
+            }
+            plTok(tokRParen, ")");
+            plTok(tokAssign, "=");
+            plExpr(n.kid(last));
+            plTok(tokSemicolon, ";");
+            return;
+        }
+        // An expression where a statement goes (a `for`'s init clause).
+        plExpr(n);
+    }
+
+    // The C-style condition the scan takes, its first two tokens `var` and
+    // `<` or `<=` (as pacCondOk, for any variable).
+    static bool plCondOk(Node* n, String* var)
+    {
+        while (n != (Node*)0 && !n.hasSrc(SRC_PAREN)) {
+            u16 k = n.kind();
+            if (!(k == nkBinary || k == nkAssign || k == nkTernary || k == nkPostfix || k == nkMember
+                  || k == nkSubscript || k == nkMethodCall) || n.kidCount() == 0) return false;
+            Node* first = n.kid(0);
+            if (first != (Node*)0 && first.kind() == nkIdent)
+                return !first.hasSrc(SRC_PAREN) && first.name().equals(var) && k == nkBinary
+                    && (Parser._same(n.op(), "<") || Parser._same(n.op(), "<="));
+            n = first;
+        }
+        return false;
+    }
+
+    // The C-style step the scan takes (as pacStepOk, for any variable).
+    static bool plStepOk(Node* st, String* var)
+    {
+        if (st == (Node*)0 || st.hasSrc(SRC_PAREN) || st.kidCount() == 0) return false;
+        if (!Parser.pacIsVar(st.kid(0), var)) return false;
+        u16 k = st.kind();
+        if (k == nkPostfix || k == nkUnary) return Parser._same(st.op(), "++");
+        if (k != nkAssign || st.kidCount() < 2) return false;
+        Node* rhs = st.kid(1);
+        if (Parser._same(st.op(), "+=")) return Parser.pacIsOne(rhs);
+        if (!Parser._same(st.op(), "=") || rhs == (Node*)0 || rhs.kind() != nkBinary || rhs.hasSrc(SRC_PAREN)
+            || !Parser._same(rhs.op(), "+")) return false;
+        return Parser.pacIsVar(rhs.kid(0), var) && Parser.pacIsOne(rhs.kid(1));
+    }
+
+    // What the recogniser sets aside while the scan's rules read its tokens.
+    Map* plStateSave(void)
+    {
+        Map* s = new Map();
+        s.set((Hashable*)String.withCString("tokens"), (Object*)_tokens);
+        s.set((Hashable*)String.withCString("pos"), (Object*)Number.withU32(_pos));
+        if (_parAutoWhy != (String*)0) s.set((Hashable*)String.withCString("why"), (Object*)_parAutoWhy);
+        if (_parAutoForm != (String*)0) s.set((Hashable*)String.withCString("form"), (Object*)_parAutoForm);
+        s.set((Hashable*)String.withCString("cap"), (Object*)Number.withU32(_parAutoGridCap));
+        if (_parScanAcc != (String*)0) s.set((Hashable*)String.withCString("acc"), (Object*)_parScanAcc);
+        if (_parScanOp != (String*)0) s.set((Hashable*)String.withCString("op"), (Object*)_parScanOp);
+        s.set((Hashable*)String.withCString("seen"), (Object*)Number.withU32(_pacSeen));
+        s.set((Hashable*)String.withCString("val"), (Object*)Number.withU32(_pacVal));
+        return s;
+    }
+
+    void plStateRestore(Map* s)
+    {
+        _tokens = (Array*)pfwGet(s, "tokens");
+        _pos = ((Number*)pfwGet(s, "pos")).asU32();
+        _parAutoWhy = (String*)pfwGet(s, "why");
+        _parAutoForm = (String*)pfwGet(s, "form");
+        _parAutoGridCap = ((Number*)pfwGet(s, "cap")).asU32();
+        _parScanAcc = (String*)pfwGet(s, "acc");
+        _parScanOp = (String*)pfwGet(s, "op");
+        _pacSeen = ((Number*)pfwGet(s, "seen")).asU32();
+        _pacVal = ((Number*)pfwGet(s, "val")).asU32();
+        _plStream = false;
+        _plToks = (Array*)0;
+        _plDecls = (Map*)0;
+    }
+
+    void plBegin(Token* at)
+    {
+        _plAt = at;
+        _plToks = new Array();
+        _plDecls = new Map();
+        _plLits = 0;
+        _plSkipWhileIf = false;
+    }
+
+    static void plSet(Map* v, string k, String* x)
+    {
+        v.set((Hashable*)String.withCString(k), (Object*)x);
+    }
+
+    // The recogniser's verdict on `loop`, a `for` as parsed (the loop as
+    // written, or the `for` a counted `while` became): lift, rule, form,
+    // reds, grid, scan and goal, as parAutoFor reads them from the scan,
+    // and small.
+    Map* plRecogniseFor(Node* loop, Token* at)
+    {
+        Map* v = new Map();
+        Parser.plSet(v, "lift", String.withCString("0"));
+        Parser.plSet(v, "form", String.withCString("for"));
+        u32 goal = _goalNow != 0 ? _goalNow : _goalDefault;
+        if (_libFiles != (Set*)0 && at != (Token*)0 && _libFiles.contains((Hashable*)at.file())) {
+            Parser.plSet(v, "rule", String.withCString("library"));
+            return v;
+        }
+        if (loop != (Node*)0 && loop.kind() == nkForIn) {
+            Parser.plSet(v, "form", String.withCString("range"));
+            Parser.plSet(v, "rule", String.withCString("header"));
+            return v;
+        }
+        if (loop == (Node*)0 || loop.kind() != nkForCStyle || loop.kidCount() != 4) {
+            Parser.plSet(v, "rule", String.withCString("header"));
+            return v;
+        }
+        Node* init = Parser.pacKid0(loop.kid(0));
+        Node* d = init != (Node*)0 && init.kind() == nkVariableDecl ? init : (Node*)0;
+        bool range = loop.hasSrc(SRC_RANGE);
+        if (!range && d != (Node*)0 && Parser._same(d.name(), "__autopar_w"))
+            Parser.plSet(v, "form", String.withCString("while"));
+        // The loop's tokens, from its tree.
+        Map* saved = plStateSave();
+        plBegin(at);
+        Map* marks = new Map();
+        plFor(loop, marks);
+        Array* toks = _plToks;
+        Map* decls = _plDecls;
+        String* var = (String*)0;
+        u32 bndFrom = 0;
+        u32 bndTo = 0;
+        String* rule = (String*)0;
+        Node* c = Parser.pacKid0(loop.kid(1));
+        if (range) {
+            if (!Parser._same((String*)pfwGet(v, "form"), "while"))
+                Parser.plSet(v, "form", String.withCString("range"));
+            var = d != (Node*)0 ? d.name() : String.withCString("_");
+            // A `step` with no literal stops the scan before it names the form.
+            if (loop.hasSrc(SRC_STEPBAD) || (c != (Node*)0 && c.kidCount() == 2 && Parser.pacStepInBound(c.kid(1)))) {
+                rule = String.withCString("step");
+                Parser.plSet(v, "form", String.withCString("for"));
+            } else if (loop.hasSrc(SRC_DESC))
+                rule = String.withCString("descending");
+            bndFrom = Parser.plMarkAt(marks, "bndFrom");
+            bndTo = Parser.plMarkAt(marks, "bndTo");
+        } else {
+            // The init clause, as the scan reads its tokens: the first `=`, a
+            // name before it, and a type before the name. The scan's token
+            // numbers count from the `for` (0) and its `(` (1).
+            u32 i0 = Parser.plMarkAt(marks, "initFrom");
+            u32 semi1 = Parser.plMarkAt(marks, "initTo");
+            u32 eq = 0;
+            for (u32 i = i0; i < semi1 && eq == 0; i++)
+                if (((Token*)toks.get(i)).type() == tokAssign) eq = i;
+            if (semi1 == i0 || ((Token*)toks.get(semi1 - 1)).type() == tokAssign)
+                rule = String.withCString("header");
+            else if (eq == 0 || ((Token*)toks.get(eq - 1)).type() != tokIdentifier)
+                rule = String.withCString("header");
+            else if (eq < 4)
+                rule = String.withCString("outer-variable");
+            else {
+                var = ((Token*)toks.get(eq - 1)).value();
+                if (!Parser.plCondOk(c, var))
+                    rule = String.withCString("condition");
+                else if (!Parser.plStepOk(Parser.pacKid0(loop.kid(2)), var))
+                    rule = String.withCString("step");
+                bndFrom = Parser.plMarkAt(marks, "condFrom") + 2;
+                bndTo = Parser.plMarkAt(marks, "condTo");
+            }
+        }
+        if (rule == (String*)0 && loop.hasSrc(SRC_SERIAL))
+            rule = String.withCString("serial");
+        if (rule == (String*)0 && loop.hasSrc(SRC_GOAL))
+            goal = loop.hasFlag(NF_GOAL_SPEED) ? 1 : 2;
+        if (rule != (String*)0) {
+            Parser.plSet(v, "rule", rule);
+            plStateRestore(saved);
+            return v;
+        }
+        // The body, on the walk's tokens.
+        _tokens = toks;
+        _pos = 0;
+        _plStream = true;
+        _plDecls = decls;
+        _parAutoWhy = (String*)0;
+        _parAutoGridCap = 3;
+        _parScanAcc = (String*)0;
+        _parScanOp = (String*)0;
+        Array* reds = new Array();
+        bool lift = parAutoScanBodyAfter(Parser.plMarkAt(marks, "pe"), var, bndFrom, bndTo, reds, &goal);
+        if (!lift)
+            Parser.plSet(v, "rule", _parAutoWhy != (String*)0 ? _parAutoWhy : String.withCString("?"));
+        else {
+            Parser.plSet(v, "lift", String.withCString("1"));
+            Parser.plSet(v, "goal", String.withU32(goal));
+            Parser.plSet(v, "grid", String.withU32(_parAutoGridCap));
+            Parser.plSet(v, "reds", Parser.plReds(reds));
+            if (_parScanAcc != (String*)0) Parser.plSet(v, "scan", Parser.plScan(_parScanOp, _parScanAcc));
+            Parser.plSet(v, "small", String.withCString(parAutoSmall(loop, 0, toks.count()) ? "1" : "0"));
+        }
+        plStateRestore(saved);
+        return v;
+    }
+
+    // The reductions as the trace spells them, `op:name[,…]`.
+    static String* plReds(Array* reds)
+    {
+        String* rl = String.withCString("");
+        for (u32 q = 0; q < reds.count(); q++) {
+            Node* r = (Node*)reds.get(q);
+            if (q > 0) rl.appendByte(',');
+            rl.append(r.op());
+            rl.appendByte(':');
+            rl.append(r.name());
+            if (r.num() == 1) rl.appendCString("[]");
+        }
+        return rl;
+    }
+    static String* plScan(String* op, String* acc)
+    {
+        String* s = String.withString(op);
+        s.appendByte(':');
+        s.append(acc);
+        return s;
+    }
+
+    // The recogniser on a `while` the scan left alone (or on the `while` a
+    // rewritten `for` was, `inc` its increment's spelling): whether the
+    // counted form takes it, and the rule when it does not.
+    String* plRecogniseWhile(Node* n, u32 inc, Token* at)
+    {
+        Map* saved = plStateSave();
+        plBegin(at);
+        if (n != (Node*)0 && n.kind() == nkForCStyle) plWhileFrom(n, inc);
+        else plStmt(n);
+        _tokens = _plToks;
+        _pos = 0;
+        _plStream = true;
+        _parAutoWhy = (String*)0;
+        bool ok = parAutoWhileToFor();
+        String* why = _parAutoWhy;
+        plStateRestore(saved);
+        if (ok) return (String*)0;
+        return why != (String*)0 ? why : String.withCString("while-shape");
+    }
+
+    static String* plField(Map* d, string k)
+    {
+        String* x = (String*)d.get((Hashable*)String.withCString(k));
+        if (x == (String*)0 || x.byteLength() == 0) return String.withCString("-");
+        return x;
+    }
+
+    // XC_PAR_AUTO_CHECK=recog: the line for the loop at `at`, the scan's
+    // verdict against the recogniser's, field by field.
+    void plCompare(Map* scan, Map* recog, Token* at)
+    {
+        String* lf = (at != (Token*)0 && at.file() != (String*)0) ? at.file() : String.withCString("?");
+        if (_libFiles != (Set*)0 && _libFiles.contains((Hashable*)lf)) return;
+        String* out = String.withCString("");
+        bool same = true;
+        same = plFieldCmp(out, scan, recog, "lift") && same;
+        same = plFieldCmp(out, scan, recog, "rule") && same;
+        same = plFieldCmp(out, scan, recog, "form") && same;
+        same = plFieldCmp(out, scan, recog, "reds") && same;
+        same = plFieldCmp(out, scan, recog, "grid") && same;
+        same = plFieldCmp(out, scan, recog, "scan") && same;
+        same = plFieldCmp(out, scan, recog, "goal") && same;
+        same = plFieldCmp(out, scan, recog, "small") && same;
+        same = plFieldCmp(out, scan, recog, "while") && same;
+        u32 cut = 0;
+        for (u32 q = 0; q < lf.byteLength(); q++)
+            if (lf.byteAt(q) == '/') cut = q + 1;
+        String* l = String.withCString("par-auto-check: ");
+        l.append(lf.substringBytes(cut, lf.byteLength() - cut));
+        l.appendByte(':');
+        l.append(String.withU32(at != (Token*)0 ? at.line() : 0));
+        l.appendByte(':');
+        l.append(String.withU32(at != (Token*)0 ? at.col() : 0));
+        l.appendCString(same ? " recog same" : " recog differ");
+        l.append(out);
+        if (_parAutoTrace == (Array*)0) _parAutoTrace = new Array();
+        _parAutoTrace.add((Object*)l);
+    }
+
+    bool plFieldCmp(String* out, Map* scan, Map* recog, string k)
+    {
+        String* a = Parser.plField(scan, k);
+        String* b = Parser.plField(recog, k);
+        out.appendByte(' ');
+        out.appendCString(k);
+        out.appendByte('=');
+        out.append(a);
+        if (a.equals(b)) return true;
+        out.appendByte('/');
+        out.append(b);
+        out.appendByte('!');
+        return false;
+    }
+
+    void plCheckFor(Node* plain, Token* at, Map* scan, bool fromWhile)
+    {
+        if (!_parAutoRecogOn) return;
+        Map* r = plRecogniseFor(plain, at);
+        if (fromWhile) {
+            // The `while` it was, too: the counted form must take it.
+            String* w = plRecogniseWhile(plain, _plWhileInc, at);
+            if (w != (String*)0) Parser.plSet(r, "while", w);
+        }
+        plCompare(scan, r, at);
+    }
+
+    void plCheckWhile(Node* w, Token* at, String* why)
+    {
+        if (!_parAutoRecogOn) return;
+        String* r = plRecogniseWhile(w, 0, at);
+        Map* scan = new Map();
+        Parser.plSet(scan, "lift", String.withCString("0"));
+        Parser.plSet(scan, "rule", why);
+        Parser.plSet(scan, "form", String.withCString("while"));
+        Map* recog = new Map();
+        Parser.plSet(recog, "lift", String.withCString(r == (String*)0 ? "1" : "0"));
+        Parser.plSet(recog, "rule", r != (String*)0 ? r : String.withCString("-"));
+        Parser.plSet(recog, "form", String.withCString("while"));
+        plCompare(scan, recog, at);
+    }
+
+    // A site for the walk: kind as plSiteWalk reads it.
+    void plRegister(Node* site, u32 kind, Node* body, Array* params, u32 inc)
+    {
+        if (site == (Node*)0 || body == (Node*)0 || !_parAutoRecogOn) return;
+        if (_plSites == (Array*)0) _plSites = new Array();
+        Array* e = new Array();
+        e.add((Object*)site);
+        e.add((Object*)Number.withU32(kind));
+        e.add((Object*)body);
+        e.add((Object*)(params != (Array*)0 ? params : new Array()));
+        e.add((Object*)Number.withU32(inc));
+        _plSites.add((Object*)e);
+    }
+
     // A marker's expression, or 0.
     static Node* pacKid0(Node* m)
     {
@@ -4311,11 +5492,22 @@ class Parser
         }
         pacNote(SRC_SERIAL, false);
         pacNote(SRC_GOAL, sawGoal);
+        return parAutoScanBodyAfter(pe, var, bndFrom, bndTo, reds, goalOut);
+    }
+
+    // The body of the loop whose header ends at token pe, for parAutoScan,
+    // and for the recogniser on the tokens its walk rebuilt (plRecogniseFor):
+    // the body's tokens, its names and their uses, its reductions, and the
+    // tests of #415 and #416 against the bound [bndFrom, bndTo). As the
+    // reference.
+    bool parAutoScanBodyAfter(u32 pe, String* var, u32 bndFrom, u32 bndTo, Array* reds, u32* goalOut)
+    {
+        u32 n = _tokens.count();
         // The body: a block, to its `}`; or one plain statement, to its `;`
         // (a bare `if`, loop or switch as the body is left alone).
-        u32 bs = (u32)0;
-        u32 be = (u32)0;
-        depth = (u32)0;
+        u32 bs = 0;
+        u32 be = 0;
+        u32 depth = 0;
         if (parTokType(pe + (u32)1) == (u16)tokLBrace) {
             bs = pe + (u32)2;
             for (u32 i = pe + (u32)1; i < n; i = i + (u32)1) {
@@ -4379,10 +5571,16 @@ class Parser
             // A declaration: its declarators are the body's own names.
             bool declStart = stmtStart || (prev == (u16)tokLParen && parTokType(i - (u32)2) == (u16)tokFor);
             if (declStart && ty != (u16)tokIdentifier || declStart && ty == (u16)tokIdentifier && isTypeName(parTokValue(i))) {
+                // On the tokens the recogniser's walk rebuilt, the declarators
+                // its declaration statement names (_plDecls).
+                Array* walked = _plStream ? (Array*)_plDecls.get((Hashable*)String.withU32(i)) : (Array*)0;
+                if (walked != (Array*)0 && (isTypeKeywordToken(ty) || isTypeName(parTokValue(i))))
+                    for (u32 w = 0; w < walked.count(); w++)
+                        declared.add((Hashable*)walked.get(w));
                 u32 save = _pos;
                 _pos = i;
                 // The reference's test: a type keyword, or a declared type name.
-                if (isTypeKeywordToken(curType()) || (check((u16)tokIdentifier) && isTypeName(cur().value()))) {
+                if (!_plStream && (isTypeKeywordToken(curType()) || (check(tokIdentifier) && isTypeName(cur().value())))) {
                     parseTypeSpelling();
                     u32 j = _pos;
                     while (j < be && parTokType(j) == (u16)tokIdentifier) {
@@ -5126,6 +6324,7 @@ class Parser
         }
         _parTok = cur();
         Token* parAt = _parTok; // a nested `par` in the body moves _parTok
+        u32 parFrom = _pos;
         advance(); // 'par'
         Node* p = mk((u16)nkPar);
         if (check((u16)tokIdentifier)) {
@@ -5335,6 +6534,10 @@ class Parser
         blkPushScope();
         u32 savedGoal = _goalNow;
         _goalNow = (flags & (u32)1) != (u32)0 ? (u32)2 : (u32)1;
+        // The header as written, for the recogniser's walk (plSiteWalk).
+        // TODO(#338): removed in part C step 4–6, when a written par is copied
+        // from its tree.
+        Array* head = _parAutoRecogOn ? _tokens.subarray(parFrom, _pos - parFrom) : (Array*)0;
         Node* body = parseBlock();
         _goalNow = savedGoal;
         blkPopScope();
@@ -5352,6 +6555,7 @@ class Parser
         _pfwNoted = new Array();
         Node* out = parDesugar(body, frame, p.name(), reds);
         pfwRegister(out, body, (Array*)0, _pfwNoted, 1, (Node*)0);
+        if (head != (Array*)0) plRegister(out, 1, body, head, 0);
         _pfwNoted = savedNoted;
         _mkAt = savedMkAt;
         return out;
@@ -6901,8 +8105,15 @@ class Parser
                 _parAutoFromWhile = true;
                 return parAutoFor();
             }
-            parAutoTraceLine(wt, "serial", _parAutoWhy != (String*)0 ? _parAutoWhy : String.withCString("while-shape"),
-                             String.withCString("while"), (String*)0, (String*)0, 0, (String*)0);
+            String* wwhy = _parAutoWhy != (String*)0 ? _parAutoWhy : String.withCString("while-shape");
+            parAutoTraceLine(wt, "serial", wwhy, String.withCString("while"), (String*)0, (String*)0, 0, (String*)0);
+            parGridEnter("loops", true);
+            _loopDepth = _loopDepth + 1;
+            Node* wn = parseWhile();
+            _loopDepth = _loopDepth - 1;
+            parGridEnter("loops", false);
+            plCheckWhile(wn, wt, wwhy);
+            return wn;
         }
         if (check((u16)tokWhile))    { parGridEnter("loops", true); _loopDepth = _loopDepth + (u32)1; Node* n = parseWhile(); _loopDepth = _loopDepth - (u32)1; parGridEnter("loops", false); return n; }
         if (check((u16)tokFor)) {
@@ -7517,6 +8728,7 @@ class Parser
                 }
                 expect((u16)tokRParen);
             } else if (tok != (Token*)0) {
+                annots = annots | 32;    // SRC_ANNOT
                 String* w = String.withCString("Unknown loop annotation '");
                 w.append(tok.value());
                 w.appendCString("'");
@@ -7542,6 +8754,7 @@ class Parser
         if ((annots & (u32)1) != (u32)0) n.addFlag((u32)NF_UNROLL);
         if ((annots & 8) != 0) n.addSrc(SRC_SERIAL);
         if ((annots & 16) != 0) n.addSrc(SRC_GOAL);
+        if ((annots & 32) != 0) n.addSrc(SRC_ANNOT);
         goalFlags(n, goal);
     }
 

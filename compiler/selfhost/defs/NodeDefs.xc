@@ -76,3 +76,6 @@
 // A call `b(...)` the parser made into `b.invoke(...)`: through a block
 // binding, or a named literal calling itself.
 #define SRC_CALLED $0800
+// A loop with an annotation the parser does not know (it warns and drops it).
+// Retired when the token scan goes (part C phase B / step 4–5).
+#define SRC_ANNOT $1000

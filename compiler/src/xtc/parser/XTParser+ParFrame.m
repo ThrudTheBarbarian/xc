@@ -37,6 +37,8 @@ NS_ASSUME_NONNULL_BEGIN
     {
     if (!site || !body)
         return;
+    if (kind == 0)
+        [self plRegister:site entry:@{ @"kind" : @(kind), @"body" : body, @"params" : params ?: @[] }];
     BOOL inPar = NO;
     for (NSDictionary* f in [self blkFrames])
         if ([f[@"par"] boolValue])
