@@ -51,6 +51,7 @@ class TargetRow
     bool _itables;      // classes carry the conformance itable; vtables a parent link
     bool _itableAlways; // protocol calls always go through it (else: a library build or an import)
     bool _nativeVarargs; // a variadic's arguments ride the C ABI, not the pack buffer
+    bool _threads;      // a par block has threads to run on (else it runs serially)
 
     void init(void)
         {
@@ -97,6 +98,7 @@ class TargetRow
     bool itables(void) { return _itables; }
     bool itableAlways(void) { return _itableAlways; }
     bool nativeVarargs(void) { return _nativeVarargs; }
+    bool threads(void) { return _threads; }
 
     // The layout and dispatch columns, from the back end: every row on one back
     // end shares them, so they are written once per back end, here, rather
@@ -116,6 +118,7 @@ class TargetRow
         _itables = reg;
         _itableAlways = b.equals(String.withCString("arm9"));
         _nativeVarargs = b.equals(String.withCString("arm9")) || b.equals(String.withCString("arm64"));
+        _threads = wide || b.equals(String.withCString("wasm32"));
         }
     static String* orNull(string s)
         {

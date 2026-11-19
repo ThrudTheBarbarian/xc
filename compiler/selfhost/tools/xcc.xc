@@ -486,38 +486,35 @@ bool linkJoinsObjects(DriverOptions* d)
     return false;
 }
 
-bool isAndroid(DriverOptions* d) { return d.arch().equals(String.withCString("android")); }
-bool isWasm(DriverOptions* d)
+// The target predicates read the target row, never the arch string (#332):
+// every spelling -A or -m takes (atarist, xt, wasm, ...) resolves to its row,
+// and a token no row has answers false everywhere, as before.
+bool rowOs(DriverOptions* d, string os)
 {
-    return d.arch().equals(String.withCString("wasm32"))
-        || d.arch().equals(String.withCString("wasm"));
+    TargetRow* r = d.targetRow();
+    return r != (TargetRow*)0 && r.os().equals(String.withCString(os));
 }
-bool isX86_64(DriverOptions* d)
+bool rowCpu(DriverOptions* d, string cpu)
 {
-    return d.arch().equals(String.withCString("x86_64"));
+    TargetRow* r = d.targetRow();
+    return r != (TargetRow*)0 && r.cpu().equals(String.withCString(cpu));
 }
-
-bool isArm9(DriverOptions* d) { return d.arch().equals(String.withCString("arm9")); }
+bool isAndroid(DriverOptions* d) { return rowOs(d, "android"); }
+bool isWasm(DriverOptions* d) { return rowCpu(d, "wasm32"); }
+// x86-64 Linux, glibc or musl; Windows is isWin64.
+bool isX86_64(DriverOptions* d) { return rowCpu(d, "x86_64") && rowOs(d, "linux"); }
+bool isWin64(DriverOptions* d) { return rowOs(d, "windows"); }
+bool isArm9(DriverOptions* d) { return rowCpu(d, "armv7"); }
 // iOS is the ARM64 back end with a Mach-O platform flavour, exactly as android
 // is the arm64 back end under different options. Stage 0 of docs/mobile/iOS.md:
 // the target spelling, the platform stamp, and libraries resolved from the
 // arm64 support tree. `-A ios` is the device, `-A ios-sim` the simulator.
-bool isIos(DriverOptions* d)
-{
-    return d.arch().equals(String.withCString("ios"))
-        || d.arch().equals(String.withCString("ios-sim"));
-}
-bool isM68k(DriverOptions* d)
-{
-    return d.arch().equals(String.withCString("m68k"))
-        || d.arch().equals(String.withCString("atarist"));
-}
-bool isXt6502(DriverOptions* d)
-{
-    return d.arch().equals(String.withCString("xt6502"))
-        || d.arch().equals(String.withCString("6502"))
-        || d.arch().equals(String.withCString("xt"));
-}
+bool isIos(DriverOptions* d) { return rowOs(d, "ios"); }
+bool isIosSim(DriverOptions* d) { return isIos(d) && d.targetRow().env() != (String*)0; }
+// arm64 macOS: the `arm64` spelling (arm64 Linux is its own row).
+bool isMacArm64(DriverOptions* d) { return rowCpu(d, "arm64") && rowOs(d, "macos"); }
+bool isM68k(DriverOptions* d) { return rowCpu(d, "m68k"); }
+bool isXt6502(DriverOptions* d) { return rowCpu(d, "6502"); }
 
 // The back end's own target name. Android IS the arm64 back end — a different
 // ABI and a different link, not a different code generator.
@@ -543,7 +540,7 @@ String* backendTargetOf(DriverOptions* d)
     // a runtime that is not in the image — so the failure surfaced at the LINK,
     // naming `_putc`, with nothing pointing at the platform choice that caused
     // it. Same shape as bug 083.
-    if (d.arch().equals(String.withCString("win64")))
+    if (isWin64(d))
         return String.withCString("win64");
     return String.withCString("arm64");
 }
@@ -1122,7 +1119,7 @@ String* resolveLinkInput(DriverOptions* d, String* arg)
     // win64 adds the mingw toolchain's lib and clang-rt dirs (bug 141).
     Array* ardirs = new Array();
     for (u32 i = (u32)0; dirs != (Array*)0 && i < dirs.count(); i = i + (u32)1) ardirs.add(dirs.get(i));
-    if (d.arch().equals(String.withCString("win64"))) {
+    if (isWin64(d)) {
         String* tc = win64Toolchain();
         ardirs.add((Object*)String.withString(tc).appending(String.withCString("/x86_64-w64-mingw32/lib")));
         ardirs.add((Object*)String.withString(tc).appending(String.withCString("/x86_64-w64-mingw32/clang-rt")));
@@ -1145,9 +1142,9 @@ String* appleSdkRoot(DriverOptions* d)
     Array* roots = new Array();
     String* env = Platform.env(String.withCString("SDKROOT"));
     if (env != 0 && env.byteLength() > (u32)0) roots.add((Object*)env);
-    if (d.arch().equals(String.withCString("ios")))
+    if (isIos(d) && !isIosSim(d))
         roots.add((Object*)String.withCString("/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk"));
-    else if (d.arch().equals(String.withCString("ios-sim")))
+    else if (isIosSim(d))
         roots.add((Object*)String.withCString("/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator.sdk"));
     else {
         roots.add((Object*)String.withCString("/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"));
@@ -4642,7 +4639,7 @@ bool addObjectDepLibs(DriverOptions* d)
         if (!op.hasSuffix(String.withCString(".o"))) continue;
         Data* od = Files.readData(op);
         Array* dl = (Array*)0;
-        if (d.arch().equals(String.withCString("win64")))
+        if (isWin64(d))
             dl = CoffObject.defaultLibsOf(od);
         else
             dl = ElfObject.parse(od).depLibs();
@@ -5028,7 +5025,7 @@ void signIfRequested(DriverOptions* d, String* outPath)
 String* iosRuntimeSource(DriverOptions* d)
 {
     if (!isIos(d)) return (String*)0;
-    String* name = String.withCString(d.arch().equals(String.withCString("ios-sim")) ? "xtios-sim.s" : "xtios.s");
+    String* name = String.withCString(isIosSim(d) ? "xtios-sim.s" : "xtios.s");
     String* t = readRuntimeIn(d.fe(), "ios/runtime", name);
     if (t == 0) {
         Stdio.printf("xcc: error: cannot read %s from the support tree\n", name.cString());
@@ -5311,7 +5308,7 @@ void linkObjects(DriverOptions* d)
     // .drectve).
     bool askers = false;
     if ((d.targetRow() != (TargetRow*)0 && d.targetRow().exeFormat().hasPrefix(String.withCString("elf")))
-        || d.arch().equals(String.withCString("win64")))
+        || isWin64(d))
         askers = addObjectDepLibs(d);
     // A C or C++ object that asks for no library is one too when it carries
     // the heap of the program's large blocks (CAlloc.xc, compiled for the
@@ -5321,14 +5318,14 @@ void linkObjects(DriverOptions* d)
         askers = true;
     // win64: a C++ program's objects keep clang's SEH tables (.pdata/.xdata),
     // as the one-step C path does.
-    if (askers && d.arch().equals(String.withCString("win64")))
+    if (askers && isWin64(d))
         CoffObject.setKeepUnwind(true);
     // A C/C++ program's objects: their frame tables gathered, as the C path's.
     if (askers) elfSetEhGather(true);
     if (d.targetRow() != (TargetRow*)0 && d.targetRow().exeFormat().equals(String.withCString("elf-pie"))) {
         linkObjectsArm64Elf(d); return;
     }
-    if (d.arch().equals(String.withCString("arm64")) || isIos(d)) { linkObjectsArm64(d); return; }
+    if (isMacArm64(d) || isIos(d)) { linkObjectsArm64(d); return; }
     // An object link is the dynamic glibc one, as a build from source is
     // (-c compiled the objects for glibc); -static gives the static musl one.
     if (isX86_64(d) && !d.caps().staticLink()) {
@@ -5336,7 +5333,7 @@ void linkObjects(DriverOptions* d)
     }
     if (isX86_64(d)) { linkX86_64(d, String.withCString("")); return; }
     if (isArm9(d)) { linkObjectsArm9(d); return; }
-    if (d.arch().equals(String.withCString("win64"))) {
+    if (isWin64(d)) {
         // A win64 object link is a STATIC PE and cannot record a DLL
         // dependency for an xtc library the objects imported.
         Array* needs = objectNeeds(d.objectInputs());
@@ -5440,7 +5437,7 @@ i32 multiSourceBuild(DriverOptions* d)
         }
         argv.add((Object*)String.withCString("-c"));
         // win64 has no relocatable COFF link: a C/C++ file's two objects.
-        if (!cOnly && d.arch().equals(String.withCString("win64")))
+        if (!cOnly && isWin64(d))
             argv.add((Object*)String.withCString("--c-pair"));
         argv.add((Object*)String.withCString("-o"));
         argv.add((Object*)obj);
@@ -5577,8 +5574,8 @@ void xccMain(void)
     }
     if (d.emitLib() && !isWasm(d) && !isX86_64(d) && !isArm9(d) && !isAndroid(d)
         && (d.targetRow() == (TargetRow*)0 || !d.targetRow().exeFormat().equals(String.withCString("elf-pie")))
-        && !isIos(d) && !d.arch().equals(String.withCString("arm64"))
-        && !d.arch().equals(String.withCString("win64"))) {
+        && !isIos(d) && !isMacArm64(d)
+        && !isWin64(d)) {
         Stdio.printf("xcc: error: --emit-lib is not supported for '%s' "
                      "(it is for arm64, ios, android, x86_64, win64, arm9 and wasm32)\n",
                      d.arch().cString());
@@ -5591,7 +5588,7 @@ void xccMain(void)
         // is true of x86_64 and win64 and of nothing else, so anyone asking
         // for arm9 or ios was sent to the wrong work.
         string why = "it is not implemented in this driver";
-        if (d.arch().equals(String.withCString("win64")))
+        if (isWin64(d))
             why = "its linker must read .a archives and foreign COFF objects first (task #47); "
                   "the ELF half of that is done and x86_64 now works";
         Stdio.printf("xcc: error: '%s' is not wired in this driver yet — %s.\n"
@@ -5606,8 +5603,8 @@ void xccMain(void)
     // that quietly built an EXECUTABLE for `-c` would be discovered by whatever
     // tried to link it.
     if (d.compileOnly() && !isX86_64(d) && !isArm9(d) && !isIos(d)
-        && !d.arch().equals(String.withCString("win64"))
-        && !d.arch().equals(String.withCString("arm64"))
+        && !isWin64(d)
+        && !isMacArm64(d)
         && !d.targetRow().exeFormat().equals(String.withCString("elf-pie"))) {
         Stdio.printf("xcc: error: -c is implemented for arm64, ios, ios-sim, x86_64, win64 and arm9 "
                      "in this driver (task #63); '%s' needs its object writer "
@@ -5692,7 +5689,7 @@ void xccMain(void)
         // win64's link has no relocatable form: there, build in one step.
         if (d.compileOnly() && !d.keepAsm())
             {
-            if (d.arch().equals(String.withCString("win64")) && !gCSplitPair)
+            if (isWin64(d) && !gCSplitPair)
                 {
                 Stdio.printf("xcc: error: -c of a C file is not done for %s: build the program in one step\n",
                              crow != (TargetRow*)0 ? crow.name().cString() : d.arch().cString());
@@ -5703,7 +5700,7 @@ void xccMain(void)
         // clang's own stack protector for its half, where the link has its
         // runtime: macOS, and Linux linked against glibc (the default; arm64
         // Linux is glibc's).
-        cPathSetProtect((d.arch().equals(String.withCString("arm64")) && !isIos(d))
+        cPathSetProtect((isMacArm64(d) && !isIos(d))
                         || (isX86_64(d) && d.caps().dynamic())
                         || (cElfArm64 && !isAndroid(d)));
         // A whole program (not -c, not -S): xcc may take an ODR copy, the
@@ -5720,7 +5717,7 @@ void xccMain(void)
         // xcc's half carries the heap of the program's large blocks
         // (CAlloc.xc, #235) where the link can turn it on: macOS, and x86-64
         // linked against glibc.
-        cPathSetHeap((d.arch().equals(String.withCString("arm64")) && !isIos(d) && !cElfArm64)
+        cPathSetHeap((isMacArm64(d) && !isIos(d) && !cElfArm64)
                      || (isX86_64(d) && d.caps().dynamic()));
         // -Wpar-auto: the outliner says what it lifted from this file, and why not.
         optSetWarnParAuto(!d.fe().warningSuppressed(String.withCString("par-auto")));
@@ -6110,9 +6107,9 @@ void emitModule(DriverOptions* d, IRModule* mod)
     // (linkWin64, which refuses anything else by name); anything else says so,
     // because a library silently missing from a link is a symbol that resolves
     // nowhere and a failure with no message at run time.
-    bool win64 = d.arch().equals(String.withCString("win64"));
+    bool win64 = isWin64(d);
     if ((d.linkInputs().count() > (u32)0 || d.frameworks().count() > (u32)0)
-        && !isX86_64(d) && !d.arch().equals(String.withCString("arm64"))
+        && !isX86_64(d) && !isMacArm64(d)
         && !isIos(d)
         && !(d.targetRow() != (TargetRow*)0 && d.targetRow().exeFormat().equals(String.withCString("elf-pie")))
         && !(win64 && d.frameworks().count() == (u32)0)) {
@@ -6123,7 +6120,7 @@ void emitModule(DriverOptions* d, IRModule* mod)
     }
     if (isXt6502(d)) { emitXt6502(d, mod); return; }
     if (isX86_64(d)) { emitX86_64(d, mod); return; }
-    if (d.arch().equals(String.withCString("win64"))) { emitWin64(d, mod); return; }
+    if (isWin64(d)) { emitWin64(d, mod); return; }
     if (isArm9(d))   { emitArm9(d, mod);   return; }
     if (isM68k(d))   { emitM68k(d, mod);   return; }
     if (isWasm(d))   { emitWasm(d, mod);   return; }
@@ -6629,7 +6626,7 @@ void addLinkerFlags(DriverOptions* d, Array* a)
 bool linksExternally(DriverOptions* d)
 {
     if (isAndroid(d)) return d.caps().noSelfHost() && (d.emitApk() || !d.emitLib());
-    if (!d.arch().equals(String.withCString("arm64")) || d.emitLib()) return false;
+    if (!isMacArm64(d) || d.emitLib()) return false;
     return d.caps().noSelfHost() || gLangLinker != (String*)0;
 }
 
@@ -6789,7 +6786,7 @@ bool externalArm64(DriverOptions* d, String* prog)
         files.add((Object*)supportPath(d, "arm64/runtime", row.checkedRuntime()));
     if (isIos(d))
         files.add((Object*)supportPath(d, "ios/runtime",
-            String.withCString(d.arch().equals(String.withCString("ios-sim")) ? "xtios-sim.s" : "xtios.s")));
+            String.withCString(isIosSim(d) ? "xtios-sim.s" : "xtios.s")));
     for (u32 i = (u32)0; i < files.count(); i = i + (u32)1) {
         String* f = (String*)files.get(i);
         if (f == (String*)0 || !Files.exists(f)) {
@@ -7562,7 +7559,7 @@ void addLdFlagsFromEnvironment(DriverOptions* d)
 // `-rpath` is implemented only where the output is Mach-O.
 void noteLinkFlags(DriverOptions* d)
 {
-    bool machO = d.arch().equals(String.withCString("arm64")) || isIos(d);
+    bool machO = isMacArm64(d) || isIos(d);
     for (u32 i = (u32)0; i < d.rawLinkFlags().count(); i = i + (u32)1)
         Stdio.error(String.withFormat("xcc: note: ignoring unrecognised linker flag '%s'\n",
                                       ((String*)d.rawLinkFlags().get(i)).cString()));
@@ -7626,7 +7623,7 @@ void applyOptFlags(DriverOptions* d, OptProfile* p)
     // program's xcc half is compiled as an object, but it is the program's
     // only one with a table (clang's half, the globals, has none), so it
     // dispatches too.
-    if (simd == (String*)0 && (isX86_64(d) || d.arch().equals(String.withCString("win64")))
+    if (simd == (String*)0 && (isX86_64(d) || isWin64(d))
         && (!d.compileOnly() || gCSplitOut != (String*)0) && !d.emitLib())
         simd = String.withCString("auto");
     if (simd != (String*)0)
@@ -7868,7 +7865,7 @@ void checkCapabilities(DriverOptions* d)
 {
     CapOptions* c = d.caps();
     String* arch = d.arch();
-    if (c.simdFlag() != (String*)0 && !isX86_64(d) && !arch.equals(String.withCString("win64"))) {
+    if (c.simdFlag() != (String*)0 && !isX86_64(d) && !isWin64(d)) {
         Stdio.printf("xcc: %s: the vector level applies to -A x86_64 and -A win64 only\n",
                      c.simdFlag().cString());
         driverExit((i32)1); return;
@@ -7937,7 +7934,7 @@ void checkCapabilities(DriverOptions* d)
         if (isM68k(d) || isXt6502(d) || isWasm(d)) {
             Stdio.printf("xcc: warning: --no-self-host has no effect on '%s': its "
                          "image is always written in-house\n", arch.cString());
-        } else if (isX86_64(d) || arch.equals(String.withCString("win64"))) {
+        } else if (isX86_64(d) || isWin64(d)) {
             Stdio.printf("xcc: error: --no-self-host: '%s' has no vendor-toolchain "
                          "link; its runtime is linked in-house only\n", arch.cString());
             driverExit((i32)1); return;

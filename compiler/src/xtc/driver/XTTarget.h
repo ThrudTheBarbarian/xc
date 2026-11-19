@@ -83,6 +83,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, readonly) BOOL itables;            // classes carry the conformance itable
 @property(nonatomic, readonly) BOOL itableAlways;       // protocol calls always go through it
 @property(nonatomic, readonly) BOOL nativeVarargs;      // a variadic's arguments ride the C ABI
+@property(nonatomic, readonly) BOOL threads;            // a par block has threads to run on
 
 // Every row, in the order both compilers list them.
 + (NSArray<XTTarget*>*)rows;

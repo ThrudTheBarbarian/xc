@@ -889,8 +889,7 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     // arm64, x86-64, win64 and wasm32 back ends. On xt6502, the Atari and
     // arm9 a block runs serially, and the lifting only moves the loop's code.
     // Mirrored in the port (Frontend).
-    parser.parAuto = _options.parAuto && (_options.useArm64Backend || _options.useX86_64Backend
-                                          || _options.useWin64Backend || _options.useWasm32Backend);
+    parser.parAuto = _options.parAuto && [_options effectiveTarget].threads;
 #ifndef __APPLE__
     // An Apple target from another host: the par runtime it would import
     // needs the SDK's frameworks (Metal, CoreFoundation), which this host has
@@ -1089,8 +1088,7 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     // arm64, x86-64, win64 and wasm32 back ends. On xt6502, the Atari and
     // arm9 a block runs serially, and the lifting only moves the loop's code.
     // Mirrored in the port (Frontend).
-    parser.parAuto = _options.parAuto && (_options.useArm64Backend || _options.useX86_64Backend
-                                          || _options.useWin64Backend || _options.useWasm32Backend);
+    parser.parAuto = _options.parAuto && [_options effectiveTarget].threads;
 #ifndef __APPLE__
     // An Apple target from another host: the par runtime it would import
     // needs the SDK's frameworks (Metal, CoreFoundation), which this host has
@@ -1803,8 +1801,7 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     // arm64, x86-64, win64 and wasm32 back ends. On xt6502, the Atari and
     // arm9 a block runs serially, and the lifting only moves the loop's code.
     // Mirrored in the port (Frontend).
-    parser.parAuto = _options.parAuto && (_options.useArm64Backend || _options.useX86_64Backend
-                                          || _options.useWin64Backend || _options.useWasm32Backend);
+    parser.parAuto = _options.parAuto && [_options effectiveTarget].threads;
 #ifndef __APPLE__
     // An Apple target from another host: the par runtime it would import
     // needs the SDK's frameworks (Metal, CoreFoundation), which this host has

@@ -626,9 +626,7 @@ class FeOptions
         // Loops become blocks only where a block has threads to run on: the
         // arm64, x86-64, win64 and wasm32 back ends (xt6502, the Atari and
         // arm9 run a block serially). As the reference.
-        String* pp0 = platformOf(o);
-        parser.setParAuto(o.parAuto() && (pp0.equals(String.withCString("arm64")) || pp0.equals(String.withCString("x86_64"))
-                                          || pp0.equals(String.withCString("win64")) || pp0.equals(String.withCString("wasm32"))));
+        parser.setParAuto(o.parAuto() && layoutRow(o).threads());
         parser.setParDeviceDefault(o.parDeviceDefault());
         // XC_PAR_AUTO_TRACE=1: a line on stderr for each loop --par-style=auto
         // looks at, what it decided and why. As the reference.
@@ -639,7 +637,7 @@ class FeOptions
         // with the tokens (Parser.parAutoCheck). As the reference.
         String* check = Platform.env(String.withCString("XC_PAR_AUTO_CHECK"));
         parser.setParAutoCheck(Frontend.listHas(check, "flags"));
-        parser.setWebModules(platformOf(o).equals(String.withCString("wasm32")));
+        parser.setWebModules(layoutRow(o).cpu().equals(String.withCString("wasm32")));
         parser.setGoalDefault(pp.goal() != (u32)0 ? pp.goal() : o.goalDefault());
         parser.setLibraryFiles(pp.libraryFiles());
 
@@ -962,7 +960,7 @@ class FeOptions
         // ancestry alone, so two libraries agree and a client program adopts
         // the numbers. A library build numbers them the same way itself and
         // does not need to.
-        bool adoptAmbient = platformOf(o).equals(String.withCString("wasm32")) || (itableProtos && !o.libraryBuild());
+        bool adoptAmbient = layoutRow(o).cpu().equals(String.withCString("wasm32")) || (itableProtos && !o.libraryBuild());
         Map* ambientSeen = new Map();
         for (u32 i = (u32)0; i < adoptedSlots.count(); i = i + (u32)1)
             {
@@ -1523,29 +1521,12 @@ u32 ptrWidthFor(FeOptions* o)
 String* platformOf(FeOptions* o)
     {
     String* t = o.target();
-    if (t.equals(String.withCString("arm64")))
-        return String.withCString("arm64");
-    // iOS resolves libraries from the ARM64 support tree: stage 0 ships no
-    // support/ios layer (docs/mobile/iOS.md says one arrives with stage 4), so
-    // this is the deliberate answer rather than a target falling through.
-    if (t.equals(String.withCString("ios")))
-        return String.withCString("arm64");
-    if (t.equals(String.withCString("ios-sim")))
-        return String.withCString("arm64");
-    if (t.equals(String.withCString("arm9")))
-        return String.withCString("arm9");
-    if (t.equals(String.withCString("atarist")))
-        return String.withCString("atarist");
-    if (t.equals(String.withCString("x86_64")))
-        return String.withCString("x86_64");
-    if (t.equals(String.withCString("win64")))
-        return String.withCString("win64");
-    if (t.equals(String.withCString("wasm32")))
-        return String.withCString("wasm32");
-    if (t.equals(String.withCString("xt6502")))
-        return String.withCString("xt6502");
-    if (t.equals(String.withCString("6502")))
-        return String.withCString("xt6502");
+    // The row's back end: arm64 for iOS and Android too (iOS resolves its
+    // libraries from the arm64 support tree; stage 0 ships no support/ios
+    // layer, docs/mobile/iOS.md), xt6502 for `6502` (#332).
+    TargetRow* r = o.targetRow();
+    if (r != (TargetRow*)0)
+        return r.backend();
     // An unlisted target STOPS. It used to fall through to xt6502 — a REAL
     // platform — so wasm32, which was missing here, silently compiled against
     // the 6502 library: it built, it ran, and it printed nothing. A default
@@ -1855,7 +1836,7 @@ bool injectClassNames(Node* program, FeOptions* o, Array* ifaces, u32 xtcImports
         }
     if (!haveObject)
         return false;
-    bool m68k = platformOf(o).equals(String.withCString("atarist"));
+    bool m68k = layoutRow(o).cpu().equals(String.withCString("m68k"));
     bool always = !m68k && (o.libraryBuild() || xtcImports > (u32)0);
     bool emit = o.classNames() || always;
     bool isRoot = !o.compileOnly() || definesMain;
