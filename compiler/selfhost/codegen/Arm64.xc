@@ -80,15 +80,17 @@ class LiveVec
         _n = _n + 1;
         }
     // Sets entry i, first extending the list with zeros to reach it.
+    // The fill is :serial. Written as a counted while loop, --par-style=auto
+    // made a par block of it: a par run for every put, a few words each, and
+    // on Linux every run pins its caller to the first CPU.
     void put(u32 i, u32 x)
         {
         if (i >= _cap)
             grow(i + 1);
-        while (_n <= i)
-            {
-            _v[_n] = 0;
-            _n = _n + 1;
-            }
+        for (u32 k = _n; k <= i; k = k + (u32)1) : serial
+            _v[k] = 0;
+        if (_n <= i)
+            _n = i + 1;
         _v[i] = x;
         }
     void grow(u32 need)
