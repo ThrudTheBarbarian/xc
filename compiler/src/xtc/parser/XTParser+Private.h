@@ -50,8 +50,14 @@ NS_ASSUME_NONNULL_BEGIN
 // parAutoScan found a running total (#144): its variable and operator.
 @property(nonatomic, copy, nullable) NSString* parScanAcc;
 @property(nonatomic, copy, nullable) NSString* parScanOp;
-// The grid levels the nest parAutoScan last read may take (parAutoGridCap).
+// XC_PAR_AUTO_TRACE (parAutoTraceLine): the rule that kept the loop parAutoScan
+// last read serial, that loop's header ("for" or "range"), the grid levels its
+// nest may take (parAutoGridCap), and whether parAutoFor's loop was a `while`.
+@property(nonatomic, copy, nullable) NSString* parAutoWhy;
+@property(nonatomic, copy, nullable) NSString* parAutoForm;
 @property(nonatomic) NSUInteger parAutoGridCap;
+@property(nonatomic) BOOL parAutoFromWhile;
+@property(nonatomic, strong, nullable) NSMutableDictionary<NSString*, NSNumber*>* parAutoTraceSeen;
 @end
 
 // Callbacks (0.5) — the named spelling of a bound method

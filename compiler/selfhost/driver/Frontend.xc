@@ -614,6 +614,10 @@ class FeOptions
         parser.setParAuto(o.parAuto() && (pp0.equals(String.withCString("arm64")) || pp0.equals(String.withCString("x86_64"))
                                           || pp0.equals(String.withCString("win64")) || pp0.equals(String.withCString("wasm32"))));
         parser.setParDeviceDefault(o.parDeviceDefault());
+        // XC_PAR_AUTO_TRACE=1: a line on stderr for each loop --par-style=auto
+        // looks at, what it decided and why. As the reference.
+        String* trace = Platform.env(String.withCString("XC_PAR_AUTO_TRACE"));
+        parser.setParAutoTrace(trace.byteLength() > 0 && !trace.equals(String.withCString("0")));
         parser.setWebModules(platformOf(o).equals(String.withCString("wasm32")));
         parser.setGoalDefault(pp.goal() != (u32)0 ? pp.goal() : o.goalDefault());
         parser.setLibraryFiles(pp.libraryFiles());
@@ -803,6 +807,13 @@ class FeOptions
             o.setParAutoImport(true);
             return Frontend.lowerUnit(o);
             }
+        if (parser.parAutoTrace() != (Array*)0)
+            for (u32 t = 0; t < parser.parAutoTrace().count(); t++)
+                {
+                String* tl = String.withString((String*)parser.parAutoTrace().get(t));
+                tl.appendByte(10);
+                Stdio.error(tl);
+                }
         // A PARSE ERROR MUST FAIL THE BUILD. The parser collected these all
         // along and nothing ever read them, so the shipped compiler took
         // `i32 x = ;`, said nothing, exited 0 and wrote a runnable binary —

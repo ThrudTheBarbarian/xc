@@ -30,6 +30,10 @@ NS_ASSUME_NONNULL_BEGIN
 /// --par-style=auto found a loop to wrap, but Par.xc was not imported: the driver
 /// parses the unit again with the runtime imported.
 @property(nonatomic, readonly) BOOL parAutoWantsRuntime;
+/// XC_PAR_AUTO_TRACE: a line for each loop --par-style=auto looks at, which the
+/// driver prints once the parse is final (parAutoTraceLine). Mirrored in the port.
+@property(nonatomic) BOOL parAutoTraceOn;
+@property(nonatomic, readonly, nullable) NSMutableArray<NSString*>* parAutoTrace;
 // wasm32: a module's memory is its own, so a protocol's static members are
 // calls BETWEEN modules (an export of the provider, an import of everyone
 // else) and may pass only numbers, or a buffer and its length.

@@ -4,7 +4,11 @@
 // self-hosting M5. The counterpart of `xtc-fe --dump-ast`;
 // selfhost/tools/ast-diff.sh runs both and diffs the trees.
 //
-//   xtast [-I dir]… [-D name=value]… [--raw] <file.xc>
+//   xtast [-I dir]… [-D name=value]… [--raw] [--par-style=auto] <file.xc>
+//
+// --par-style=auto parses as a compile with that style does: loops become
+// blocks where their shape allows, and when one does in a file that did not
+// import the par runtime, the file is read again with Par.xc imported.
 //
 // The file is preprocessed with the xtc preprocessor (Task #820) unless --raw
 // is given, then lexed with the xtc lexer (Task #818) and parsed with the xtc
@@ -35,6 +39,9 @@ void main(void)
     Preprocessor* pp = new Preprocessor();
     String* input = (String*)0;
     bool raw = false;
+    bool parAuto = false;
+    Array* incArgs = new Array();
+    Array* defArgs = new Array();
 
     u32 argc = Process.argumentCount();
     u32 i = (u32)1;
@@ -47,27 +54,37 @@ void main(void)
             i = i + (u32)1;
             continue;
             }
+        if (a.equals(String.withCString("--par-style=auto")))
+            {
+            parAuto = true;
+            i++;
+            continue;
+            }
         if (a.equals(String.withCString("-I")) && i + (u32)1 < argc)
             {
             pp.addIncludePath(Process.argument(i + (u32)1));
+            incArgs.add((Object*)Process.argument(i + 1));
             i = i + (u32)2;
             continue;
             }
         if (a.hasPrefix(String.withCString("-I")) && a.byteLength() > (u32)2)
             {
             pp.addIncludePath(a.substringFromByte((u32)2));
+            incArgs.add((Object*)a.substringFromByte(2));
             i = i + (u32)1;
             continue;
             }
         if (a.equals(String.withCString("-D")) && i + (u32)1 < argc)
             {
             defineArg(pp, Process.argument(i + (u32)1));
+            defArgs.add((Object*)Process.argument(i + 1));
             i = i + (u32)2;
             continue;
             }
         if (a.hasPrefix(String.withCString("-D")) && a.byteLength() > (u32)2)
             {
             defineArg(pp, a.substringFromByte((u32)2));
+            defArgs.add((Object*)a.substringFromByte(2));
             i = i + (u32)1;
             continue;
             }
@@ -78,7 +95,7 @@ void main(void)
 
     if (input == 0)
         {
-        Stdio.printf("usage: xtast [-I dir] [-D name=value] [--raw] <file.xc>\n");
+        Stdio.printf("usage: xtast [-I dir] [-D name=value] [--raw] [--par-style=auto] <file.xc>\n");
         Process.exit((i32)2);
         return;
         }
@@ -87,6 +104,7 @@ void main(void)
     // a Platform.xc anywhere on the -I list (task #36). The compile path has
     // it, so the dump oracles have it; an oracle parsing a DIFFERENT unit
     // than a real compile reads ambient-surface files as error files.
+    bool prelude = false;
     if (!raw)
         {
         Array* incs = pp.includePaths();
@@ -97,6 +115,7 @@ void main(void)
             if (Files.exists(ppp))
                 {
                 pp.setPrelude(String.withCString("Platform.xc"));
+                prelude = true;
                 ppi = incs.count();
                 }
             }
@@ -115,7 +134,31 @@ void main(void)
     Parser* parser = Parser.with(tokens);
     parser.setGoalDefault(pp.goal());   // a #goal in the file, as the front end honours it
     parser.setLibraryFiles(pp.libraryFiles());
+    parser.setParAuto(parAuto);
     Node* program = parser.parse();
+    // A loop to lift in a file without the par runtime: read it again with
+    // Par.xc imported, as the front end does.
+    if (parAuto && !raw && parser.parAutoWantsRuntime())
+        {
+        Preprocessor* pp2 = new Preprocessor();
+        for (u32 k = 0; k < incArgs.count(); k++)
+            pp2.addIncludePath((String*)incArgs.get(k));
+        for (u32 k = 0; k < defArgs.count(); k++)
+            defineArg(pp2, (String*)defArgs.get(k));
+        if (prelude)
+            pp2.setPrelude(String.withCString("Platform.xc"));
+        pp2.setAutoImport(String.withCString("Par.xc"));
+        String* source2 = pp2.preprocessFile(input);
+        if (source2 != (String*)0)
+            {
+            Lexer* lex2 = Lexer.with(source2, input);
+            parser = Parser.with(lex2.tokenise());
+            parser.setGoalDefault(pp2.goal());
+            parser.setLibraryFiles(pp2.libraryFiles());
+            parser.setParAuto(true);
+            program = parser.parse();
+            }
+        }
 
     String* out = String.withCString("");
     AstDump.emit(program, out, (u32)0);

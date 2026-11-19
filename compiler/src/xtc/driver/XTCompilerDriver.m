@@ -1822,6 +1822,10 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
         parser.parAuto = NO;
 #endif
     parser.parDeviceDefault = _options.parDeviceDefault;
+    // XC_PAR_AUTO_TRACE=1: a line on stderr for each loop --par-style=auto
+    // looks at, what it decided and why. Mirrored in the port.
+    const char* trace = getenv("XC_PAR_AUTO_TRACE");
+    parser.parAutoTraceOn = trace && trace[0] && strcmp(trace, "0") != 0;
     parser.webModules = _options.useWasm32Backend;
     parser.goalDefault = _goalDirective ? _goalDirective : _options.goalDefault;
     parser.libraryFiles = _libraryFiles;
@@ -1841,6 +1845,8 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
         [_diagnostics truncateToCount:diagMark];
         return [self frontendPassForFile:inputFile];
         }
+    for (NSString* line in parser.parAutoTrace)
+        fprintf(stderr, "%s\n", line.UTF8String);
     if (!ast || _diagnostics.hasFatalError)
         {
         [_diagnostics printAll];

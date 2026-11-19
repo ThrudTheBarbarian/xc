@@ -1055,7 +1055,17 @@ class Parser
     void setParAuto(bool b) { _parAuto = b; }
     // The front end then parses again with the runtime imported.
     bool parAutoWantsRuntime(void) { return _parAutoWantsRuntime; }
-    u32     _parAutoGridCap;   // the grid levels the nest parAutoScan last read may take (parAutoGridCap)
+    // XC_PAR_AUTO_TRACE: one line for each loop --par-style=auto looks at,
+    // which the front end prints once the parse is final (parAutoTraceLine).
+    bool    _parAutoTraceOn;
+    Array*  _parAutoTrace;
+    Map*    _parAutoTraceSeen; // file:line -> loops looked at there
+    String* _parAutoWhy;       // the rule that kept the loop parAutoScan last read serial
+    String* _parAutoForm;      // that loop's header: "for" (C-style) or "range"
+    u32     _parAutoGridCap;   // the grid levels its nest may take (parAutoGridCap)
+    bool    _parAutoFromWhile; // parAutoFor's loop was a `while` (parAutoWhileToFor)
+    void setParAutoTrace(bool b) { _parAutoTraceOn = b; }
+    Array* parAutoTrace(void) { return _parAutoTrace; }
     // wasm32: a module's memory is its own, so a protocol's static members
     // are calls BETWEEN modules and may pass only numbers, or a buffer and its
     // length (the reference's webModules).
@@ -3016,13 +3026,19 @@ class Parser
     {
         Array* reds = new Array();
         u32 goal = (u32)0;
+        bool fromWhile = _parAutoFromWhile;
+        _parAutoFromWhile = false;
+        Token* traceAt = cur();
         // Without the par runtime the loop stays a loop, and the front end is
         // told: it parses again with Par.xc imported (--par-style=auto imports it).
         bool scanned = parAutoScan(reds, &goal);
+        String* form = fromWhile ? String.withCString("while") : _parAutoForm;
+        String* why = _parAutoWhy;
         u32 gridCap = _parAutoGridCap;
         if (scanned && !isTypeName(String.withCString("ParChunk")))
             _parAutoWantsRuntime = true;
         if (!scanned || !isTypeName(String.withCString("ParChunk"))) {
+            parAutoTraceLine(traceAt, "serial", scanned ? String.withCString("no-runtime") : why, form, (String*)0, (String*)0, 0, (String*)0);
             // Not a block: the loops inside it are judged on their own (the
             // work inside a timing loop), so the loop depth stays put.
             parGridEnter("loops", true);
@@ -3040,13 +3056,25 @@ class Parser
         Node* plain = parseFor();
         _loopDepth = _loopDepth - (u32)1;
         parGridEnter("loops", false);
-        if (plain == (Node*)0 || parAutoSmall(plain, forPos, _pos))
+        if (plain == (Node*)0 || parAutoSmall(plain, forPos, _pos)) {
+            parAutoTraceLine(traceAt, "serial", String.withCString(plain == (Node*)0 ? "parse" : "small"), form, (String*)0, (String*)0, 0, (String*)0);
             return plain;
+        }
         // A running total (#144): the loop's tokens become
         // `par :scan(op acc) { for … }`, which parScanRewrite turns into
         // blocks; a loop the rewrite does not take stays the loop.
-        if (_parScanAcc != (String*)0)
-            return parAutoScanFor(plain, forPos);
+        if (_parScanAcc != (String*)0) {
+            String* sreds = String.withString(_parScanOp);
+            sreds.appendByte(':');
+            sreds.append(_parScanAcc);
+            u32 implFrom = _parCounter;
+            Node* sc = parAutoScanFor(plain, forPos);
+            if (sc == plain)
+                parAutoTraceLine(traceAt, "serial", String.withCString("scan-refused"), form, (String*)0, (String*)0, 0, (String*)0);
+            else
+                parAutoTraceLine(traceAt, "lifted", String.withCString("scan"), form, (String*)0, sreds, 0, Parser.parAutoImplSpan(implFrom, _parCounter));
+            return sc;
+        }
         // A loop the block form refuses stays the loop: an error the block's
         // parse or its desugaring reports (a capture of self or of an ivar,
         // say) is taken back, and the loop as parsed above is the statement.
@@ -3094,6 +3122,7 @@ class Parser
         if (loop == (Node*)0 || _errors.count() > errMark) {
             parAutoRefused(errMark, warnMark, fatalMark, plainEnd, forTok);
             _parTok = savedParTok;
+            parAutoTraceLine(traceAt, "serial", String.withCString("block-refused"), form, (String*)0, (String*)0, 0, (String*)0);
             return plain;
         }
         // A perfect two-deep nest becomes one block over the W*H grid (the
@@ -3133,9 +3162,37 @@ class Parser
         _parTok = savedParTok;
         if (out == (Node*)0 || _errors.count() > errMark) {
             parAutoRefused(errMark, warnMark, fatalMark, plainEnd, forTok);
+            parAutoTraceLine(traceAt, "serial", String.withCString("block-refused"), form, (String*)0, (String*)0, 0, (String*)0);
             return plain;
         }
+        if (_parAutoTraceOn) {
+            Array* grid = (Array*)frame.get((Hashable*)String.withCString("grid"));
+            String* rl = (String*)0;
+            for (u32 q = 0; q < reds.count(); q++) {
+                Node* r = (Node*)reds.get(q);
+                if (rl == (String*)0) rl = String.withCString("");
+                else rl.appendByte(',');
+                rl.append(r.op());
+                rl.appendByte(':');
+                rl.append(r.name());
+                if (r.num() == 1) rl.appendCString("[]");
+            }
+            parAutoTraceLine(traceAt, "lifted", String.withCString("block"), form, name, rl, grid != (Array*)0 ? grid.count() : 1,
+                             Parser.parAutoImplSpan(_parCounter - 1, _parCounter));
+        }
         return out;
+    }
+
+    // ParImpl numbers [from, to) for XC_PAR_AUTO_TRACE: `n`, `a..b`, or 0.
+    static String* parAutoImplSpan(u32 from, u32 to)
+    {
+        if (to <= from) return (String*)0;
+        String* s = String.withU32(from);
+        if (to - from > 1) {
+            s.appendCString("..");
+            s.append(String.withU32(to - 1));
+        }
+        return s;
     }
 
     // The block form of a loop failed: its errors go, and parsing goes on
@@ -3345,6 +3402,13 @@ class Parser
         return (u32)0;
     }
 
+    // parAutoScan's refusal: the rule, for XC_PAR_AUTO_TRACE.
+    bool parAutoNo(u8* rule)
+    {
+        _parAutoWhy = String.withCString(rule);
+        return false;
+    }
+
     // -Wpar-auto, at the loop the cursor is on: why it stays a loop.
     void parAutoWarnSerial(String* why)
     {
@@ -3390,8 +3454,8 @@ class Parser
     // the loop's variable or a variable the body [bs, be) writes, or that
     // reads memory (a subscript, a member, a call, `*p`) through a name the
     // body stores through, keeps the loop serial. A call in the body is not
-    // taken as a store, as elsewhere in the scan. The reason for -Wpar-auto,
-    // else 0.
+    // taken as a store, as elsewhere in the scan. The reason for -Wpar-auto
+    // (and the rule in _parAutoWhy), else 0.
     String* parAutoBoundWritten(u32 b0, u32 b1, u32 bs, u32 be, String* var)
     {
         Array* names = new Array();
@@ -3412,6 +3476,7 @@ class Parser
             String* nm = parTokValue(i);
             if (isTypeName(nm)) continue;
             if (nm.equals(var)) {
+                _parAutoWhy = String.withCString("bound-write");
                 String* m = String.withCString("its bound reads its loop variable '");
                 m.append(nm);
                 m.appendCString("'");
@@ -3427,6 +3492,7 @@ class Parser
                 if (((String*)names.get(k)).equals(nm)) listed = true;
             if (!listed) continue;
             if (parAutoWritesAt(i)) {
+                _parAutoWhy = String.withCString("bound-write");
                 String* m = String.withCString("its bound reads '");
                 m.append(nm);
                 m.appendCString("', which its body writes");
@@ -3467,6 +3533,7 @@ class Parser
                                       || pv == tokPlusPlus || pv == tokMinusMinus);
             if (pv == tokStar && Parser.parAutoAnyAssignOp(parTokType(i + 1))) stored = true;
             if (stored) {
+                _parAutoWhy = String.withCString("bound-memory");
                 String* m = String.withCString("its bound reads memory through '");
                 m.append(nm);
                 m.appendCString("', which its body may write");
@@ -3550,6 +3617,51 @@ class Parser
         return parAutoGridCap(ibs, ibe, level + 1);
     }
 
+    // XC_PAR_AUTO_TRACE: the line for a loop --par-style=auto looked at, at
+    // `at`: where (file:line, #n for the n-th on the line), the verdict and
+    // the rule that decided it, the loop's form, and for a block its name,
+    // reductions, grid rank and ParImpl number ("-" where there is none). A
+    // loop of the standard library or the prelude is not listed.
+    void parAutoTraceLine(Token* at, u8* verdict, String* rule, String* form, String* name, String* reds, u32 grid, String* impl)
+    {
+        if (!_parAutoTraceOn) return;
+        String* lf = (at != (Token*)0 && at.file() != (String*)0) ? at.file() : String.withCString("?");
+        if (_libFiles != (Set*)0 && _libFiles.contains((Hashable*)lf)) return;
+        u32 cut = 0;
+        for (u32 q = 0; q < lf.byteLength(); q++)
+            if (lf.byteAt(q) == '/') cut = q + 1;
+        String* pos = lf.substringBytes(cut, lf.byteLength() - cut);
+        pos.appendByte(':');
+        pos.append(String.withU32(at != (Token*)0 ? at.line() : 0));
+        if (_parAutoTraceSeen == (Map*)0) _parAutoTraceSeen = new Map();
+        if (_parAutoTrace == (Array*)0) _parAutoTrace = new Array();
+        Number* seen = (Number*)_parAutoTraceSeen.get((Hashable*)pos);
+        u32 nth = seen != (Number*)0 ? seen.asU32() + 1 : 1;
+        _parAutoTraceSeen.set((Hashable*)String.withString(pos), (Object*)Number.with(nth));
+        if (nth > 1) {
+            pos.appendByte('#');
+            pos.append(String.withU32(nth));
+        }
+        String* l = String.withCString("par-auto-trace: ");
+        l.append(pos);
+        l.appendByte(' ');
+        l.appendCString(verdict);
+        l.appendCString(" rule=");
+        l.append(rule != (String*)0 ? rule : String.withCString("?"));
+        l.appendCString(" form=");
+        l.append(form);
+        l.appendCString(" name=");
+        l.append(name != (String*)0 ? name : String.withCString("-"));
+        l.appendCString(" reds=");
+        l.append(reds != (String*)0 ? reds : String.withCString("-"));
+        l.appendCString(" grid=");
+        if (grid == 0) l.appendByte('-');
+        else l.append(String.withU32(grid));
+        l.appendCString(" impl=");
+        l.append(impl != (String*)0 ? impl : String.withCString("-"));
+        _parAutoTrace.add((Object*)l);
+    }
+
     // The scan behind parAutoFor: the cursor is at the `for`. Fills `reds`
     // (nkParReduce nodes) and says whether the loop qualifies.
     bool parAutoScan(Array* reds, u32* goalOut)
@@ -3559,10 +3671,12 @@ class Parser
         *goalOut = _goalNow != (u32)0 ? _goalNow : _goalDefault;
         _parScanAcc = (String*)0;
         _parScanOp = (String*)0;
+        _parAutoWhy = (String*)0;
+        _parAutoForm = String.withCString("for");
         _parAutoGridCap = 3;
-        if (parTokType(at + (u32)1) != (u16)tokLParen) return false;
+        if (parTokType(at + 1) != tokLParen) return parAutoNo("header");
         // Not in the standard library or the prelude (the reference explains).
-        if (_libFiles != (Set*)0 && _libFiles.contains((Hashable*)cur().file())) return false;
+        if (_libFiles != (Set*)0 && _libFiles.contains((Hashable*)cur().file())) return parAutoNo("library");
         // The header: `( T? i in a .. b )` or `( T? i in a ... b )`, with a
         // positive literal `step` or none; or the C-style
         // `( T i = a; i < b; i++ )` with `<=`, `++i`, `i += 1` or
@@ -3584,34 +3698,35 @@ class Parser
                 if (ty == (u16)tokIn && parTokType(i - (u32)1) == (u16)tokIdentifier) { sawIn = true; var = parTokValue(i - (u32)1); }
                 else if (ty == (u16)tokDotDot || ty == (u16)tokEllipsis) sawDots = true;
                 else if (ty == (u16)tokIdentifier && sawDots && Parser._same(parTokValue(i), "step")
-                         && (parTokType(i + (u32)1) != (u16)tokIntLiteral || Parser._same(parTokValue(i + (u32)1), "0"))) return false;
+                         && (parTokType(i + 1) != tokIntLiteral || Parser._same(parTokValue(i + 1), "0"))) return parAutoNo("step");
                 else if (ty == (u16)tokSemicolon) {
                     if (semi1 == (u32)0) semi1 = i;
                     else if (semi2 == (u32)0) semi2 = i;
-                    else return false;
+                    else return parAutoNo("header");
                 }
             }
         }
-        if (pe == (u32)0) return false;
+        if (pe == 0) return parAutoNo("header");
+        if (sawIn) _parAutoForm = String.withCString("range");
         // The bound the loop as written reads before each iteration: after
         // the `<` or `<=`, or after the `..` or `...` up to a `step`.
         u32 bndFrom = 0;
         u32 bndTo = 0;
         if (!sawIn) {
             // C-style: `T i = a` ; `i < b` or `i <= b` ; the step.
-            if (semi1 == (u32)0 || semi2 == (u32)0 || semi1 < at + (u32)3 || parTokType(semi1 - (u32)1) == (u16)tokAssign) return false;
+            if (semi1 == 0 || semi2 == 0 || semi1 < at + 3 || parTokType(semi1 - 1) == tokAssign) return parAutoNo("header");
             u32 eq = (u32)0;
             for (u32 i = at + (u32)2; i < semi1; i = i + (u32)1)
                 if (parTokType(i) == (u16)tokAssign) { eq = i; break; }
-            if (eq == (u32)0 || parTokType(eq - (u32)1) != (u16)tokIdentifier) return false;
+            if (eq == 0 || parTokType(eq - 1) != tokIdentifier) return parAutoNo("header");
             // The loop must declare its variable (`T i = a`): a block's work
             // item gets its own, and `for (i = 0; …)` on an outer `i` left the
             // block with none (both compilers refused the program).
-            if (eq < at + (u32)4) return false;
+            if (eq < at + 4) return parAutoNo("outer-variable");
             var = parTokValue(eq - (u32)1);
             if (parTokType(semi1 + (u32)1) != (u16)tokIdentifier || !parTokValue(semi1 + (u32)1).equals(var)
                 || (parTokType(semi1 + (u32)2) != (u16)tokLess && parTokType(semi1 + (u32)2) != (u16)tokLessEq))
-                return false;
+                return parAutoNo("condition");
             bndFrom = semi1 + 3;
             bndTo = semi2;
             u32 sx = semi2 + (u32)1;
@@ -3627,9 +3742,9 @@ class Parser
             } else if (parTokType(sx) == (u16)tokPlusPlus && parTokType(sx + (u32)1) == (u16)tokIdentifier
                        && parTokValue(sx + (u32)1).equals(var) && sx + (u32)2 == pe)
                 stepOk = true;
-            if (!stepOk) return false;
+            if (!stepOk) return parAutoNo("step");
         } else if (!sawDots || var == (String*)0 || semi1 != (u32)0)
-            return false;
+            return parAutoNo("header");
         else {
             u32 d = 0;
             for (u32 i = at + 1; i < pe; i++) {
@@ -3648,7 +3763,7 @@ class Parser
                 && parTokType(i - (u32)1) == (u16)tokIntLiteral && parTokType(i - (u32)2) == (u16)tokIn
                 && parTokType(i + (u32)1) == (u16)tokIntLiteral) {
                 if (Parser.parLiteralValue(parTokValue(i - (u32)1)) > Parser.parLiteralValue(parTokValue(i + (u32)1)))
-                    return false;
+                    return parAutoNo("descending");
             }
         // The loop's annotations after the header: `serial` keeps the loop as
         // it is, a `goal` is the block's goal over the unit's default.
@@ -3656,7 +3771,7 @@ class Parser
             u32 i = pe + (u32)2;
             while (parTokType(i) == (u16)tokIdentifier) {
                 String* an = parTokValue(i);
-                if (Parser._same(an, "serial")) return false;
+                if (Parser._same(an, "serial")) return parAutoNo("serial");
                 if (Parser._same(an, "goal") && parTokType(i + (u32)1) == (u16)tokLParen
                     && parTokType(i + (u32)2) == (u16)tokIdentifier && parTokType(i + (u32)3) == (u16)tokRParen) {
                     *goalOut = Parser._same(parTokValue(i + (u32)2), "speed") ? (u32)1 : (u32)2;
@@ -3686,19 +3801,19 @@ class Parser
         } else {
             // One statement, to its end (the reference explains).
             u16 first = parTokType(pe + (u32)1);
-            if (first == (u16)tokSemicolon || first == (u16)tokEOF) return false;
+            if (first == tokSemicolon || first == tokEOF) return parAutoNo("body");
             bs = pe + (u32)1;
             u32 end = parAutoStatementEnd(pe + (u32)1, n);
-            if (end == (u32)0) return false;
+            if (end == 0) return parAutoNo("body");
             be = end;
         }
-        if (be == (u32)0) return false;
+        if (be == 0) return parAutoNo("body");
         // A body that reads its function's variadic arguments (va_arg_…,
         // va_start, va_end) stays where it is: a block's body runs in a frame of
         // its own, where the function's va_list is not. As the reference.
         for (u32 t = bs; t < be; t = t + (u32)1)
             if (parTokType(t) == (u16)tokIdentifier && parTokValue(t).hasPrefix(String.withCString("va_")))
-                return false;
+                return parAutoNo("varargs");
         Set* declared = new Set();
         declared.add((Hashable*)var);
         Map* accOps = new Map();
@@ -3730,8 +3845,9 @@ class Parser
             if (ty == (u16)tokLParen || ty == (u16)tokLBracket) pd = pd + (u32)1;
             if (ty == (u16)tokRParen || ty == (u16)tokRBracket) pd = pd - (u32)1;
             if (ty == (u16)tokFor || ty == (u16)tokWhile || ty == (u16)tokSwitch) pendingInner = true;
-            if (ty == (u16)tokReturn || ty == (u16)tokGoto) return false;
-            if (ty == (u16)tokBreak && innerAt.count() == (u32)0) return false;
+            if (ty == tokReturn) return parAutoNo("return");
+            if (ty == tokGoto) return parAutoNo("goto");
+            if (ty == tokBreak && innerAt.count() == 0) return parAutoNo("break");
             // A declaration: its declarators are the body's own names.
             bool declStart = stmtStart || (prev == (u16)tokLParen && parTokType(i - (u32)2) == (u16)tokFor);
             if (declStart && ty != (u16)tokIdentifier || declStart && ty == (u16)tokIdentifier && isTypeName(parTokValue(i))) {
@@ -3763,9 +3879,9 @@ class Parser
             uses.set((Hashable*)name, (Object*)Number.with(c == (Number*)0 ? (u32)1 : c.asU32() + (u32)1));
             u16 next = parTokType(i + (u32)1);
             if (next == (u16)tokIn) { declared.add((Hashable*)name); continue; }
-            if (stmtStart && next == (u16)tokColon) return false;
+            if (stmtStart && next == tokColon) return parAutoNo("label");
             bool own = declared.contains((Hashable*)name);
-            if (prev == (u16)tokAmpersand && next != (u16)tokLBracket && !own) return false;
+            if (prev == tokAmpersand && next != tokLBracket && !own) return parAutoNo("address");
             // `acc++;` as a statement of its own: a `+` reduction.
             if (stmtStart && next == (u16)tokPlusPlus && parTokType(i + (u32)2) == (u16)tokSemicolon && !own
                 && !name.equals(var) && accOps.get((Hashable*)name) == (Object*)0) {
@@ -3774,7 +3890,7 @@ class Parser
                 names.add((Object*)name);
                 continue;
             }
-            if ((next == (u16)tokPlusPlus || next == (u16)tokMinusMinus || prev == (u16)tokPlusPlus || prev == (u16)tokMinusMinus) && !own) return false;
+            if ((next == tokPlusPlus || next == tokMinusMinus || prev == tokPlusPlus || prev == tokMinusMinus) && !own) return parAutoNo("outer-step");
             // `h[k] op= e`, `h[k]++` or `h[k] = h[k] op e`, op one of + | & ^,
             // on an outer name: an array reduction (:reduce(op h[])) when
             // every use of h in the loop is such an update with the one op,
@@ -3796,9 +3912,9 @@ class Parser
                 continue;
             }
             if (stmtStart && parAutoAnyAssignOp(next)) {
-                if (name.equals(var)) return false;
+                if (name.equals(var)) return parAutoNo("iv-write");
                 if (own) continue;
-                if (accOps.get((Hashable*)name) != (Object*)0) return false;
+                if (accOps.get((Hashable*)name) != (Object*)0) return parAutoNo("outer-write");
                 String* sym = (String*)0;
                 u32 want = (u32)1;
                 if (next == (u16)tokPlusAssign) sym = String.withCString("+");
@@ -3825,7 +3941,7 @@ class Parser
                     sym = parAutoMinMax(i, name, be);
                     want = (u32)2;
                 }
-                if (sym == (String*)0) return false;
+                if (sym == (String*)0) return parAutoNo("outer-write");
                 accOps.set((Hashable*)name, (Object*)sym);
                 accWant.set((Hashable*)name, (Object*)Number.with(want));
                 names.add((Object*)name);
@@ -3839,7 +3955,7 @@ class Parser
                     if (tj == (u16)tokLParen || tj == (u16)tokLBracket) d2 = d2 + (u32)1;
                     if (tj == (u16)tokRParen || tj == (u16)tokRBracket) d2 = d2 - (u32)1;
                     if (d2 == (u32)0 && tj == (u16)tokSemicolon) break;
-                    if (d2 == (u32)0 && parAutoAnyAssignOp(tj)) return false;
+                    if (d2 == 0 && parAutoAnyAssignOp(tj)) return parAutoNo("member-write");
                 }
             }
         }
@@ -3850,24 +3966,24 @@ class Parser
             u32 depth2 = (u32)0;
             Map* info = blkLookup(acc, &depth2);
             String* ty = blkTyOf(info);
-            if (ty == (String*)0) return false;
+            if (ty == (String*)0) return parAutoNo("reduction-type");
             bool isInt = Parser._same(ty, "u8") || Parser._same(ty, "i8") || Parser._same(ty, "u16") || Parser._same(ty, "i16")
                   || Parser._same(ty, "u32") || Parser._same(ty, "i32") || Parser._same(ty, "u64") || Parser._same(ty, "i64");
             // A float reduction only under an EXPLICIT speed goal, and only +.
             bool isFloat = (Parser._same(ty, "float") || Parser._same(ty, "double")) && *goalOut == (u32)1
                   && Parser._same((String*)accOps.get((Hashable*)acc), "+");
-            if (!isInt && !isFloat) return false;
+            if (!isInt && !isFloat) return parAutoNo("reduction-type");
             Number* want = (Number*)accWant.get((Hashable*)acc);
             Number* have = (Number*)uses.get((Hashable*)acc);
-            if (have == (Number*)0 || want == (Number*)0) return false;
+            if (have == (Number*)0 || want == (Number*)0) return parAutoNo("reduction-uses");
             if (have.asU32() != want.asU32()) {
                 // A running total (#144): the other uses are stores
                 // `X[i] = acc;`, X an outer array used for nothing else. The
                 // loop becomes a :scan, alone (no other reduction with it).
                 String* op = (String*)accOps.get((Hashable*)acc);
-                if (_scanInside != (u32)0 || _parScanAcc != (String*)0 || Parser._same(op, "*")) return false;
+                if (_scanInside != 0 || _parScanAcc != (String*)0 || Parser._same(op, "*")) return parAutoNo("reduction-uses");
                 u32 stores = parAutoScanStores(bs, be, acc, var, uses, declared);
-                if (stores == (u32)0 || have.asU32() != want.asU32() + stores) return false;
+                if (stores == 0 || have.asU32() != want.asU32() + stores) return parAutoNo("reduction-uses");
                 _parScanAcc = acc;
                 _parScanOp = op;
                 continue;
@@ -3879,7 +3995,7 @@ class Parser
         }
         if (_parScanAcc != (String*)0 && (names.count() != (u32)1 || arrNames.count() != (u32)0)) {
             _parScanAcc = (String*)0;
-            return false;
+            return parAutoNo("scan-alone");
         }
         // The array reductions, after the scalar ones. An array that fails a
         // test is no reduction, and the loop goes on as it would without one.
@@ -3907,7 +4023,7 @@ class Parser
             w.appendCString("'");
             parAutoWarnSerial(w);
             _parScanAcc = (String*)0;
-            return false;
+            return parAutoNo("iv-write");
         }
         String* bw = parAutoBoundWritten(bndFrom, bndTo, bs, be, var);
         if (bw != (String*)0) {
@@ -6309,9 +6425,16 @@ class Parser
         // Par.xc to be imported (the front end parses again).
         if (check((u16)tokWhile) && _parAuto && _loopDepth == (u32)0
             && (_blkFrames.count() == (u32)0
-                || ((Map*)_blkFrames.get(_blkFrames.count() - (u32)1)).get((Hashable*)String.withCString("par")) == (Object*)0)
-            && parAutoWhileToFor())
-            return parAutoFor();
+                || ((Map*)_blkFrames.get(_blkFrames.count() - 1)).get((Hashable*)String.withCString("par")) == (Object*)0)) {
+            Token* wt = cur();
+            _parAutoWhy = (String*)0;
+            if (parAutoWhileToFor()) {
+                _parAutoFromWhile = true;
+                return parAutoFor();
+            }
+            parAutoTraceLine(wt, "serial", _parAutoWhy != (String*)0 ? _parAutoWhy : String.withCString("while-shape"),
+                             String.withCString("while"), (String*)0, (String*)0, 0, (String*)0);
+        }
         if (check((u16)tokWhile))    { parGridEnter("loops", true); _loopDepth = _loopDepth + (u32)1; Node* n = parseWhile(); _loopDepth = _loopDepth - (u32)1; parGridEnter("loops", false); return n; }
         if (check((u16)tokFor)) {
             // --par-style=auto: an outermost loop in plain code may become a par block —

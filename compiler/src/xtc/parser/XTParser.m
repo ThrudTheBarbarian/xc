@@ -2761,9 +2761,17 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
         // Without the par runtime parAutoFor leaves the loop and asks for
         // Par.xc to be imported (the driver parses again).
         if (self.parAuto && ![[self blkFrames].lastObject[@"par"] boolValue] &&
-            [self.blkState[@"loopDepth"] unsignedIntegerValue] == 0 &&
-            [self parAutoWhileToFor])
-            return [self parAutoFor];
+            [self.blkState[@"loopDepth"] unsignedIntegerValue] == 0)
+            {
+            XTSourceLocation* wloc = [self currentLocation];
+            self.parAutoWhy = nil;
+            if ([self parAutoWhileToFor])
+                {
+                self.parAutoFromWhile = YES;
+                return [self parAutoFor];
+                }
+            [self parAutoTraceAt:wloc verdict:@"serial" rule:self.parAutoWhy ?: @"while-shape" form:@"while" name:nil reds:nil grid:0 impl:nil];
+            }
         [self parGridLoop:1];
         [self parAutoLoop:1];
         XTASTNode* n = [self parseWhile];
@@ -3474,6 +3482,13 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
     return 0;
     }
 
+// parAutoScan's refusal: the rule, for XC_PAR_AUTO_TRACE. Mirrored in the port.
+- (BOOL)parAutoNo:(NSString*)rule
+    {
+    self.parAutoWhy = rule;
+    return NO;
+    }
+
 // -Wpar-auto, at the loop the cursor is on: why it stays a loop.
 - (void)parAutoWarnSerial:(NSString*)why
     {
@@ -3522,8 +3537,8 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
 // the loop's variable or a variable the body [bs, be) writes, or that reads
 // memory (a subscript, a member, a call, `*p`) through a name the body stores
 // through, keeps the loop serial. A call in the body is not taken as a store,
-// as elsewhere in the scan. The reason for -Wpar-auto, else nil. Mirrored in
-// the port.
+// as elsewhere in the scan. The reason for -Wpar-auto (and the rule in
+// parAutoWhy), else nil. Mirrored in the port.
 - (nullable NSString*)parAutoBoundFrom:(NSUInteger)b0 to:(NSUInteger)b1 writtenFrom:(NSUInteger)bs to:(NSUInteger)be var:(NSString*)var
     {
     NSMutableArray<NSString*>* names = [NSMutableArray array];
@@ -3550,7 +3565,10 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
         if ([_typeTable isTypeName:nm])
             continue;
         if ([nm isEqualToString:var])
+            {
+            self.parAutoWhy = @"bound-write";
             return [NSString stringWithFormat:@"its bound reads its loop variable '%@'", nm];
+            }
         [names addObject:nm];
         }
     for (NSUInteger i = bs; i < be; i++)
@@ -3561,7 +3579,10 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
         if (![names containsObject:nm])
             continue;
         if ([self parAutoWritesAt:i])
+            {
+            self.parAutoWhy = @"bound-write";
             return [NSString stringWithFormat:@"its bound reads '%@', which its body writes", nm];
+            }
         if (!mem)
             continue;
         // Through the name: a store at the end of its subscripts and members
@@ -3603,7 +3624,10 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
         if (pv == XTTokenStar && parAutoAnyAssignOp([self parTokType:i + 1]))
             stored = YES;
         if (stored)
+            {
+            self.parAutoWhy = @"bound-memory";
             return [NSString stringWithFormat:@"its bound reads memory through '%@', which its body may write", nm];
+            }
         }
     return nil;
     }
@@ -3695,6 +3719,44 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
     return [self parAutoGridCapFrom:ibs to:ibe level:level + 1];
     }
 
+// XC_PAR_AUTO_TRACE: the line for a loop --par-style=auto looked at, at `loc`:
+// where (file:line, #n for the n-th on the line), the verdict and the rule
+// that decided it, the loop's form, and for a block its name, reductions,
+// grid rank and ParImpl number ("-" where there is none). A loop of the
+// standard library or the prelude is not listed. Mirrored in the port.
+- (void)parAutoTraceAt:(XTSourceLocation*)loc verdict:(NSString*)verdict rule:(nullable NSString*)rule form:(NSString*)form
+                  name:(nullable NSString*)name reds:(nullable NSString*)reds grid:(NSUInteger)grid impl:(nullable NSString*)impl
+    {
+    if (!self.parAutoTraceOn)
+        return;
+    NSString* file = loc.filename ?: @"?";
+    if ([self.libraryFiles containsObject:file])
+        return;
+    NSString* pos = [NSString stringWithFormat:@"%@:%lu", file.lastPathComponent, (unsigned long)loc.line];
+    if (!self.parAutoTraceSeen)
+        self.parAutoTraceSeen = [NSMutableDictionary dictionary];
+    if (!_parAutoTrace)
+        _parAutoTrace = [NSMutableArray array];
+    NSUInteger nth = self.parAutoTraceSeen[pos].unsignedIntegerValue + 1;
+    self.parAutoTraceSeen[pos] = @(nth);
+    if (nth > 1)
+        pos = [NSString stringWithFormat:@"%@#%lu", pos, (unsigned long)nth];
+    [_parAutoTrace addObject:[NSString stringWithFormat:@"par-auto-trace: %@ %@ rule=%@ form=%@ name=%@ reds=%@ grid=%@ impl=%@", pos,
+                                                        verdict, rule ?: @"?", form, name ?: @"-", reds ?: @"-",
+                                                        grid ? [NSString stringWithFormat:@"%lu", (unsigned long)grid] : @"-",
+                                                        impl ?: @"-"]];
+    }
+
+// ParImpl numbers [from, to) for XC_PAR_AUTO_TRACE: `n`, `a..b`, or nil.
+static NSString* _Nullable parAutoImplSpan(NSUInteger from, NSUInteger to)
+    {
+    if (to <= from)
+        return nil;
+    if (to - from > 1)
+        return [NSString stringWithFormat:@"%lu..%lu", (unsigned long)from, (unsigned long)(to - 1)];
+    return [NSString stringWithFormat:@"%lu", (unsigned long)from];
+    }
+
 // The scan behind parAutoFor: the cursor is at the `for`. Fills `reds`
 // (op, name pairs) and says whether the loop qualifies.
 - (nullable XTASTNode*)parAutoScanFor:(XTASTNode*)plain at:(NSUInteger)forPos
@@ -3742,14 +3804,16 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
     *goalOut = self.goalNow ?: self.goalDefault;
     self.parScanAcc = nil;
     self.parScanOp = nil;
+    self.parAutoWhy = nil;
+    self.parAutoForm = @"for";
     self.parAutoGridCap = 3;
     if ([self parTokType:at + 1] != XTTokenLParen)
-        return NO;
+        return [self parAutoNo:@"header"];
     // Not in the standard library or the prelude: a loop of the par runtime
     // itself, wrapped and demoted, called the runtime from inside the runtime.
     NSString* file = [self currentToken].location.filename;
     if (file && [self.libraryFiles containsObject:file])
-        return NO;
+        return [self parAutoNo:@"library"];
     // The header: `( T? i in a .. b )` or `( T? i in a ... b )`, with a
     // positive literal `step` or none (the desugaring counts a stride's
     // iterations from 0); or the C-style `( T i = a; i < b; i++ )` with
@@ -3787,17 +3851,19 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
                 sawDots = YES;
             else if (ty == XTTokenIdentifier && sawDots && [[self parTokValue:i] isEqualToString:@"step"] &&
                      ([self parTokType:i + 1] != XTTokenIntLiteral || [[self parTokValue:i + 1] isEqualToString:@"0"]))
-                return NO;
+                return [self parAutoNo:@"step"];
             else if (ty == XTTokenSemicolon)
                 {
                 if (semi1 == 0) semi1 = i;
                 else if (semi2 == 0) semi2 = i;
-                else return NO;
+                else return [self parAutoNo:@"header"];
                 }
             }
         }
     if (pe == 0)
-        return NO;
+        return [self parAutoNo:@"header"];
+    if (sawIn)
+        self.parAutoForm = @"range";
     // The bound the loop as written reads before each iteration: after the
     // `<` or `<=`, or after the `..` or `...` up to a `step`. Mirrored in the port.
     NSUInteger bndFrom = 0, bndTo = 0;
@@ -3805,21 +3871,21 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
         {
         // C-style: `T i = a` ; `i < b` or `i <= b` ; the step.
         if (semi1 == 0 || semi2 == 0 || semi1 < at + 3 || [self parTokType:semi1 - 1] == XTTokenAssign)
-            return NO;
+            return [self parAutoNo:@"header"];
         NSUInteger eq = 0;
         for (NSUInteger i = at + 2; i < semi1; i++)
             if ([self parTokType:i] == XTTokenAssign) { eq = i; break; }
         if (eq == 0 || [self parTokType:eq - 1] != XTTokenIdentifier)
-            return NO;
+            return [self parAutoNo:@"header"];
         // The loop must declare its variable (`T i = a`): a block's work
         // item gets its own, and `for (i = 0; …)` on an outer `i` left the
         // block with none (both compilers refused the program).
         if (eq < at + 4)
-            return NO;
+            return [self parAutoNo:@"outer-variable"];
         var = [self parTokValue:eq - 1];
         if ([self parTokType:semi1 + 1] != XTTokenIdentifier || ![[self parTokValue:semi1 + 1] isEqualToString:var] ||
             ([self parTokType:semi1 + 2] != XTTokenLess && [self parTokType:semi1 + 2] != XTTokenLessEq))
-            return NO;
+            return [self parAutoNo:@"condition"];
         bndFrom = semi1 + 3;
         bndTo = semi2;
         NSUInteger s = semi2 + 1;
@@ -3840,10 +3906,10 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
                  [[self parTokValue:s + 1] isEqualToString:var] && s + 2 == pe)
             stepOk = YES;
         if (!stepOk)
-            return NO;
+            return [self parAutoNo:@"step"];
         }
     else if (!sawDots || !var || semi1 != 0)
-        return NO;
+        return [self parAutoNo:@"header"];
     else
         {
         NSUInteger d = 0;
@@ -3872,7 +3938,7 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
             unsigned long long a0 = strtoull([self parTokValue:i - 1].UTF8String, NULL, 0);
             unsigned long long b0 = strtoull([self parTokValue:i + 1].UTF8String, NULL, 0);
             if (a0 > b0)
-                return NO;
+                return [self parAutoNo:@"descending"];
             }
     // The loop's annotations, `: a, goal(speed), …` after the header: `serial`
     // keeps the loop as it is, and a `goal` is the block's goal, over the
@@ -3884,7 +3950,7 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
             {
             NSString* an = [self parTokValue:i];
             if ([an isEqualToString:@"serial"])
-                return NO;
+                return [self parAutoNo:@"serial"];
             if ([an isEqualToString:@"goal"] && [self parTokType:i + 1] == XTTokenLParen &&
                 [self parTokType:i + 2] == XTTokenIdentifier && [self parTokType:i + 3] == XTTokenRParen)
                 {
@@ -3929,22 +3995,22 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
         // `while (…) S` and `switch (…) {…}` as well as `…;` (from 0.8.1).
         XTTokenType first = [self parTokType:pe + 1];
         if (first == XTTokenSemicolon || first == XTTokenEOF)
-            return NO;
+            return [self parAutoNo:@"body"];
         bs = pe + 1;
         NSUInteger end = [self parAutoStatementEnd:pe + 1 limit:n];
         if (end == 0)
-            return NO;
+            return [self parAutoNo:@"body"];
         be = end;
         }
     if (be == 0)
-        return NO;
+        return [self parAutoNo:@"body"];
     // A body that reads its function's variadic arguments (va_arg_…, va_start,
     // va_end) stays where it is: a block's body runs in a frame of its own,
     // where the function's va_list is not. Even a demoted block runs there,
     // and a varargs loop crashed. Mirrored in the port.
     for (NSUInteger t = bs; t < be; t++)
         if ([self parTokType:t] == XTTokenIdentifier && [[self parTokValue:t] hasPrefix:@"va_"])
-            return NO;
+            return [self parAutoNo:@"varargs"];
     NSMutableSet<NSString*>* declared = [NSMutableSet setWithObject:var];
     NSMutableDictionary<NSString*, NSString*>* accOps = [NSMutableDictionary dictionary];
     NSMutableDictionary<NSString*, NSNumber*>* accWant = [NSMutableDictionary dictionary];
@@ -3986,10 +4052,12 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
             pd--;
         if (ty == XTTokenFor || ty == XTTokenWhile || ty == XTTokenSwitch)
             pendingInner = YES;
-        if (ty == XTTokenReturn || ty == XTTokenGoto)
-            return NO;
+        if (ty == XTTokenReturn)
+            return [self parAutoNo:@"return"];
+        if (ty == XTTokenGoto)
+            return [self parAutoNo:@"goto"];
         if (ty == XTTokenBreak && innerAt.count == 0)
-            return NO;
+            return [self parAutoNo:@"break"];
         // A declaration: its declarators are the body's own names.
         BOOL declStart = stmtStart || (prev == XTTokenLParen && [self parTokType:i - 2] == XTTokenFor);
         if ((declStart && ty != XTTokenIdentifier) ||
@@ -4033,10 +4101,10 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
             continue;
             }
         if (stmtStart && next == XTTokenColon)
-            return NO;
+            return [self parAutoNo:@"label"];
         BOOL own = [declared containsObject:name];
         if (prev == XTTokenAmpersand && next != XTTokenLBracket && !own)
-            return NO;
+            return [self parAutoNo:@"address"];
         // `acc++;` as a statement of its own: a `+` reduction (from 0.8.1).
         if (stmtStart && next == XTTokenPlusPlus && [self parTokType:i + 2] == XTTokenSemicolon && !own &&
             ![name isEqualToString:var] && !accOps[name])
@@ -4047,7 +4115,7 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
             continue;
             }
         if ((next == XTTokenPlusPlus || next == XTTokenMinusMinus || prev == XTTokenPlusPlus || prev == XTTokenMinusMinus) && !own)
-            return NO;
+            return [self parAutoNo:@"outer-step"];
         // `h[k] op= e`, `h[k]++` or `h[k] = h[k] op e`, op one of + | & ^, on
         // an outer name: an array reduction (:reduce(op h[])) when every use
         // of h in the loop is such an update with the one op, and h is an
@@ -4074,11 +4142,11 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
         if (stmtStart && parAutoAnyAssignOp(next))
             {
             if ([name isEqualToString:var])
-                return NO;
+                return [self parAutoNo:@"iv-write"];
             if (own)
                 continue;
             if (accOps[name])
-                return NO;
+                return [self parAutoNo:@"outer-write"];
             NSString* sym = nil;
             NSUInteger want = 1;
             if (next == XTTokenPlusAssign) sym = @"+";
@@ -4108,7 +4176,7 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
                 want = 2;
                 }
             if (!sym)
-                return NO;
+                return [self parAutoNo:@"outer-write"];
             accOps[name] = sym;
             accWant[name] = @(want);
             [names addObject:name];
@@ -4128,7 +4196,7 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
                 if (d2 == 0 && tj == XTTokenSemicolon)
                     break;
                 if (d2 == 0 && parAutoAnyAssignOp(tj))
-                    return NO;
+                    return [self parAutoNo:@"member-write"];
                 }
             }
         }
@@ -4140,7 +4208,7 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
         NSDictionary* info = [self blkLookup:acc depth:&depth2];
         XTType* ty = info[@"type"];
         if (![ty isKindOfClass:[XTType class]])
-            return NO;
+            return [self parAutoNo:@"reduction-type"];
         XTTypeKind k = ty.kind;
         BOOL isInt = k == XTTypeKindU8 || k == XTTypeKindI8 || k == XTTypeKindU16 || k == XTTypeKindI16 ||
                      k == XTTypeKindU32 || k == XTTypeKindI32 || k == XTTypeKindU64 || k == XTTypeKindI64;
@@ -4150,11 +4218,11 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
         BOOL isFloat = (k == XTTypeKindFloat || k == XTTypeKindDouble) && *goalOut == 1 &&
                        [accOps[acc] isEqualToString:@"+"];
         if (!isInt && !isFloat)
-            return NO;
+            return [self parAutoNo:@"reduction-type"];
         NSNumber* want = accWant[acc];
         NSNumber* have = uses[acc];
         if (!have || !want)
-            return NO;
+            return [self parAutoNo:@"reduction-uses"];
         if (have.unsignedIntegerValue != want.unsignedIntegerValue)
             {
             // A running total (#144): the other uses are stores `X[i] = acc;`,
@@ -4162,10 +4230,10 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
             // :scan, alone (no other reduction with it). Mirrored in the port.
             NSString* op = accOps[acc];
             if (self.scanInside || self.parScanAcc || [op isEqualToString:@"*"])
-                return NO;
+                return [self parAutoNo:@"reduction-uses"];
             NSUInteger stores = [self parAutoScanStoresFrom:bs to:be acc:acc var:var uses:uses declared:declared];
             if (stores == 0 || have.unsignedIntegerValue != want.unsignedIntegerValue + stores)
-                return NO;
+                return [self parAutoNo:@"reduction-uses"];
             self.parScanAcc = acc;
             self.parScanOp = op;
             continue;
@@ -4175,7 +4243,7 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
     if (self.parScanAcc && (names.count != 1 || arrNames.count != 0))
         {
         self.parScanAcc = nil;
-        return NO;
+        return [self parAutoNo:@"scan-alone"];
         }
     // The array reductions, after the scalar ones. An array that fails a test
     // is no reduction, and the loop goes on as it would without one.
@@ -4201,7 +4269,7 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
         {
         [self parAutoWarnSerial:[NSString stringWithFormat:@"its body writes its loop variable '%@'", var]];
         self.parScanAcc = nil;
-        return NO;
+        return [self parAutoNo:@"iv-write"];
         }
     NSString* bw = [self parAutoBoundFrom:bndFrom to:bndTo writtenFrom:bs to:be var:var];
     if (bw)
@@ -4792,15 +4860,21 @@ static int64_t parAutoConst(XTASTNode* e)
     {
     NSMutableArray<NSArray<NSString*>*>* reds = [NSMutableArray array];
     NSUInteger goal = 0;
+    BOOL fromWhile = self.parAutoFromWhile;
+    self.parAutoFromWhile = NO;
+    XTSourceLocation* traceAt = [self currentLocation];
     // Without the par runtime the loop stays a loop, and the driver is told:
     // it parses again with Par.xc imported (--par-style=auto imports it).
     BOOL scanned = [self parAutoScan:reds goal:&goal];
+    NSString* form = fromWhile ? @"while" : self.parAutoForm;
+    NSString* why = self.parAutoWhy;
     NSUInteger gridCap = self.parAutoGridCap;
     BOOL haveRuntime = [self.typeTable typeForName:@"ParChunk"] != nil;
     if (scanned && !haveRuntime)
         _parAutoWantsRuntime = YES;
     if (!scanned || !haveRuntime)
         {
+        [self parAutoTraceAt:traceAt verdict:@"serial" rule:scanned ? @"no-runtime" : why form:form name:nil reds:nil grid:0 impl:nil];
         // Not a block: the loops inside it are judged on their own, so the
         // work inside a timing loop (`for (rep in 0..8) { t0 = now; for (i in
         // 0..n) … ; if (rep == 0) first = …; }`) is still found. The loop
@@ -4821,12 +4895,25 @@ static int64_t parAutoConst(XTASTNode* e)
     [self parAutoLoop:-1];
     [self parGridLoop:-1];
     if (!plain || [self parAutoSmall:plain from:forPos to:_pos])
+        {
+        [self parAutoTraceAt:traceAt verdict:@"serial" rule:plain ? @"small" : @"parse" form:form name:nil reds:nil grid:0 impl:nil];
         return plain;
+        }
     // A running total (#144): the loop's tokens become
     // `par :scan(op acc) { for … }`, which parScanRewrite turns into blocks;
     // a loop the rewrite does not take stays the loop. As the port.
     if (self.parScanAcc)
-        return [self parAutoScanFor:plain at:forPos];
+        {
+        NSString* sreds = [NSString stringWithFormat:@"%@:%@", self.parScanOp, self.parScanAcc];
+        NSUInteger implFrom = [self.blkState[@"parCounter"] unsignedIntegerValue];
+        XTASTNode* sc = [self parAutoScanFor:plain at:forPos];
+        if (sc == plain)
+            [self parAutoTraceAt:traceAt verdict:@"serial" rule:@"scan-refused" form:form name:nil reds:nil grid:0 impl:nil];
+        else
+            [self parAutoTraceAt:traceAt verdict:@"lifted" rule:@"scan" form:form name:nil reds:sreds grid:0
+                            impl:parAutoImplSpan(implFrom, [self.blkState[@"parCounter"] unsignedIntegerValue])];
+        return sc;
+        }
     // A loop the block form refuses stays the loop: an error the block's parse
     // or its desugaring reports (a capture of self or of an ivar, say) is
     // taken back, and the loop as parsed above is the statement. A loop of a
@@ -4873,6 +4960,7 @@ static int64_t parAutoConst(XTASTNode* e)
         {
         [self parAutoTakeBack:diagMark at:loc];
         _pos = plainEnd;
+        [self parAutoTraceAt:traceAt verdict:@"serial" rule:@"block-refused" form:form name:nil reds:nil grid:0 impl:nil];
         return plain;
         }
     // A perfect two-deep nest becomes one block over the W*H grid (the
@@ -4902,7 +4990,20 @@ static int64_t parAutoConst(XTASTNode* e)
         {
         [self parAutoTakeBack:diagMark at:loc];
         _pos = plainEnd;
+        [self parAutoTraceAt:traceAt verdict:@"serial" rule:@"block-refused" form:form name:nil reds:nil grid:0 impl:nil];
         return plain;
+        }
+    if (self.parAutoTraceOn)
+        {
+        NSMutableArray<NSString*>* rl = [NSMutableArray array];
+        for (NSArray<NSString*>* r in reds)
+            [rl addObject:[NSString stringWithFormat:@"%@:%@%@", r[0], r[1], r.count > 2 ? @"[]" : @""]];
+        NSArray* grid = frame[@"grid"];
+        NSUInteger pc = [self.blkState[@"parCounter"] unsignedIntegerValue];
+        [self parAutoTraceAt:traceAt verdict:@"lifted" rule:@"block" form:form name:name
+                        reds:rl.count ? [rl componentsJoinedByString:@","] : nil
+                        grid:grid ? grid.count : 1
+                        impl:pc ? parAutoImplSpan(pc - 1, pc) : nil];
         }
     return out;
     }

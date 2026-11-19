@@ -247,12 +247,21 @@ static int XTDumpAST(int argc, const char* argv[])
     NSMutableArray<NSString*>* includes = [NSMutableArray array];
     NSMutableArray<NSString*>* defines = [NSMutableArray array];
     BOOL raw = NO; // --raw: skip preprocessing, parse the file as-is
+    // --par-style=auto: parse as a compile with that style does, loops lifted
+    // where their shape allows; when one is in a file that did not import the
+    // par runtime, the file is read again with Par.xc imported (as the driver).
+    BOOL parAuto = NO;
 
     for (int i = 1; i < argc; i++)
         {
         NSString* a = @(argv[i]);
         if ([a isEqualToString:@"--dump-ast"])
             continue;
+        if ([a isEqualToString:@"--par-style=auto"])
+            {
+            parAuto = YES;
+            continue;
+            }
         if ([a isEqualToString:@"--raw"])
             {
             raw = YES;
@@ -287,6 +296,8 @@ static int XTDumpAST(int argc, const char* argv[])
         return 1;
         }
 
+    BOOL withPar = NO;
+again:;
     XTDiagnosticEngine* diag = [[XTDiagnosticEngine alloc] init];
     NSString* source = nil;
     NSUInteger dumpGoal = 0;            // the file's #goal, as a compile honours it
@@ -302,6 +313,8 @@ static int XTDumpAST(int argc, const char* argv[])
         XTPreprocessor* pp = [[XTPreprocessor alloc] initWithDiagnostics:diag];
         pp.includePaths = includes;
         XTDumpApplyPrelude(pp, includes);
+        if (withPar)
+            pp.autoImport = @"Par.xc";
         for (NSString* d in defines)
             {
             NSRange eq = [d rangeOfString:@"="];
@@ -335,7 +348,13 @@ static int XTDumpAST(int argc, const char* argv[])
                                             diagnostics:diag];
     parser.goalDefault = dumpGoal;
     parser.libraryFiles = dumpLibFiles;
+    parser.parAuto = parAuto;
     XTProgramNode* program = [parser parse];
+    if (parAuto && !raw && !withPar && parser.parAutoWantsRuntime)
+        {
+        withPar = YES;
+        goto again;
+        }
     if (!program)
         {
         fprintf(stderr, "xcc-fe: parse failed for '%s'\n", input.UTF8String);
