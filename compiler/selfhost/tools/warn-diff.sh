@@ -44,7 +44,11 @@ for f in tests/warn/*.xc; do
     [ -n "$PATTERN" ] && [[ "$f" != *"$PATTERN"* ]] && continue
     # A fixture's own flags ride on the same `//xtc-flags:` line the corpus uses.
     FLAGS=$(sed -n 's|^//xtc-flags: *||p' "$f" | head -1)
-    "$XCC" -A arm64 -H . -Wanalyze $FLAGS -o "$WORK/out" "$f" > "$WORK/o.txt" 2> "$WORK/e.txt"
+    # --no-runtime-lib: the runtime's files (Runtime.list) are compiled as
+    # source and analysed with the fixture. A tree with a libRuntime built
+    # would otherwise import them as an interface, which the analyser skips,
+    # and a warning in Par.xc would show in a tree without one only.
+    "$XCC" -A arm64 -H . -Wanalyze --no-runtime-lib $FLAGS -o "$WORK/out" "$f" > "$WORK/o.txt" 2> "$WORK/e.txt"
     rc=$?
     # A warning must NEVER change the exit status, and must never suppress the
     # output — both are hard rules from the design, and both are the kind of
