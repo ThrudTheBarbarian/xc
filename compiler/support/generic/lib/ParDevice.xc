@@ -1766,7 +1766,22 @@ class ParDevice
                 gParOneNow[i] = true;
             return dev;
             }
-        return fastest(i);
+        // Every candidate is timed at a size within a factor of two of n, and
+        // the learned bounds do not cover n: a block whose size grows a little
+        // after auto learned it. The winner's bound now takes in the whole
+        // band the times stand for (the CPU up to twice the size measured,
+        // another winner from half of it), so one record covers every size
+        // in it, and the run is not a measuring one, so a CPU win on one
+        // thread runs on one. Kept measuring, such a block ran on every CPU
+        // thread from then on: 300 to 500 items, one thread 1 us, the lanes
+        // 43 (#461). A split set not yet timed against the best single device
+        // a second time (decide) is run, not learned.
+        i32 winner = fastest(i);
+        if ((winner == (i32)3 || winner == (i32)4) && gParRecheck[i] != (u32)2)
+            return winner;
+        learn(i, proto, winner == (i32)1 ? gParMeasN[i] * (i64)2 : (gParMeasN[i] + (i64)1) / (i64)2, winner);
+        gParMeasuring[i] = false;
+        return winner;
         }
 
     // What a run took, for auto's comparison. Each device's first run of a
