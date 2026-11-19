@@ -3779,15 +3779,44 @@ static NSString* _Nullable parAutoImplSpan(NSUInteger from, NSUInteger to)
     return f;
     }
 
+// An integer literal's value as parAutoScan reads it: decimal, or hex after
+// `0x`, up to the first character that is not a digit of the base. A leading
+// 0 is a decimal digit, as the lexer reads it: the language has no octal.
+// Mirrored in the port (parLiteralValue).
+static unsigned long long parLiteralValue(NSString* t)
+    {
+    const char* s = t.UTF8String;
+    size_t n = strlen(s);
+    size_t i = 0;
+    unsigned base = 10;
+    if (n > 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X'))
+        {
+        base = 16;
+        i = 2;
+        }
+    unsigned long long v = 0;
+    for (; i < n; i++)
+        {
+        char c = s[i];
+        unsigned d = c >= '0' && c <= '9' ? (unsigned)(c - '0')
+                   : c >= 'a' && c <= 'f' ? (unsigned)(c - 'a') + 10
+                   : c >= 'A' && c <= 'F' ? (unsigned)(c - 'A') + 10 : 99;
+        if (d >= base)
+            break;
+        v = v * base + d;
+        }
+    return v;
+    }
+
 // A range `for` with `in` at token `inAt`: its bounds are two integer
-// literals that descend, as parAutoScan reads them (strtoull).
+// literals that descend, as parAutoScan reads them (parLiteralValue).
 - (BOOL)parAutoDescends:(NSUInteger)inAt
     {
     XTTokenType dots = [self parTokType:inAt + 2];
     if ([self parTokType:inAt] != XTTokenIn || [self parTokType:inAt + 1] != XTTokenIntLiteral ||
         (dots != XTTokenDotDot && dots != XTTokenEllipsis) || [self parTokType:inAt + 3] != XTTokenIntLiteral)
         return NO;
-    return strtoull([self parTokValue:inAt + 1].UTF8String, NULL, 0) > strtoull([self parTokValue:inAt + 3].UTF8String, NULL, 0);
+    return parLiteralValue([self parTokValue:inAt + 1]) > parLiteralValue([self parTokValue:inAt + 3]);
     }
 
 // Whether a range's end bound holds the name `step` (a variable, callee or
@@ -4151,8 +4180,8 @@ static BOOL pacFact(NSMutableString* out, NSString* name, XTSrcFact bit, NSUInte
             && [self parTokType:i - 1] == XTTokenIntLiteral && [self parTokType:i - 2] == XTTokenIn
             && [self parTokType:i + 1] == XTTokenIntLiteral)
             {
-            unsigned long long a0 = strtoull([self parTokValue:i - 1].UTF8String, NULL, 0);
-            unsigned long long b0 = strtoull([self parTokValue:i + 1].UTF8String, NULL, 0);
+            unsigned long long a0 = parLiteralValue([self parTokValue:i - 1]);
+            unsigned long long b0 = parLiteralValue([self parTokValue:i + 1]);
             if (a0 > b0)
                 {
                 [self pacNote:XTSrcDesc value:YES];
