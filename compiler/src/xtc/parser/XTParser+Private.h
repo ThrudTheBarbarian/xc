@@ -57,6 +57,10 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, copy, nullable) NSString* parAutoForm;
 @property(nonatomic) NSUInteger parAutoGridCap;
 @property(nonatomic) BOOL parAutoFromWhile;
+// XC_PAR_AUTO_CHECK (parAutoCheck): the facts the last parAutoScan got to, and
+// their values, as XTSrcFact bits.
+@property(nonatomic) NSUInteger pacSeen;
+@property(nonatomic) NSUInteger pacVal;
 @property(nonatomic, strong, nullable) NSMutableDictionary<NSString*, NSNumber*>* parAutoTraceSeen;
 @end
 

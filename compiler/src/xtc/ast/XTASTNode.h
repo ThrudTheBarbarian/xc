@@ -62,6 +62,26 @@ typedef NS_ENUM(NSInteger, XTASTNodeKind) {
 
 @protocol XTASTVisitor;
 
+/****************************************************************************\
+|* Source facts (srcFacts): what the tokens said that the tree no longer
+|* shows. --par-style=auto decides from the tokens; these let a decision made
+|* on the tree come out the same (#338). Nothing reads them yet, apart from
+|* the XC_PAR_AUTO_CHECK=flags comparison. The dump does not print them.
+|* Mirrored in the port (SRC_* in NodeDefs.xc), bit for bit.
+\****************************************************************************/
+typedef NS_OPTIONS(NSUInteger, XTSrcFact) {
+    XTSrcParen = 1 << 0,       // an expression written in parentheses
+    XTSrcPlain = 1 << 1,       // an integer literal spelled as its decimal value
+    XTSrcRange = 1 << 2,       // a `for` written as a range, desugared to C-style
+    XTSrcSerial = 1 << 3,      // a `for` annotated `: serial`
+    XTSrcGoal = 1 << 4,        // a `for` with a `: goal(…)` of its own
+    XTSrcStepBad = 1 << 5,     // a range whose `step` is not followed by an integer literal, or by `0`
+    XTSrcDesc = 1 << 6,        // a range whose bounds are two literals that descend, as the scan reads them
+    XTSrcParenCallee = 1 << 7, // a call whose callee name or member was written in parentheses
+    XTSrcChkCond = 1 << 8,     // XC_PAR_AUTO_CHECK only, never on a node: the C-style condition…
+    XTSrcChkStep = 1 << 9,     // …and step shapes --par-style=auto takes
+};
+
 @interface XTASTNode : NSObject
 
 @property(nonatomic, readonly) XTASTNodeKind nodeKind;
@@ -70,6 +90,10 @@ typedef NS_ENUM(NSInteger, XTASTNodeKind) {
 |* Set by the semantic analyser.
 \****************************************************************************/
 @property(nonatomic, nullable) XTType* resolvedType;
+/****************************************************************************\
+|* Set by the parser: see XTSrcFact.
+\****************************************************************************/
+@property(nonatomic) XTSrcFact srcFacts;
 
 /****************************************************************************\
 |* Designated initialiser for all AST nodes.

@@ -40,3 +40,32 @@
 // On a class declaration only: the class the parser made of a par block. Its
 // bit is NF_IRQ's and NF_GOAL_SPEED's, which are on functions and loops.
 #define NF_PARBLOCK $40000
+
+// Source facts (Node.src()): what the tokens said that the tree no longer
+// shows, kept in a word of their own so no reader of the flags above sees
+// them. --par-style=auto decides from the tokens; these let a decision made
+// on the tree come out the same (#338). Nothing reads them yet, apart from
+// the XC_PAR_AUTO_CHECK=flags comparison. The dump does not print them.
+// An expression written in parentheses.
+#define SRC_PAREN $0001
+// An integer literal spelled as its decimal value (`1`, not `0x1`, `01`, `$1`).
+#define SRC_PLAIN $0002
+// A `for` written as a range (`for (T i in a..b)`), desugared to C-style.
+#define SRC_RANGE $0004
+// A `for` annotated `: serial`.
+#define SRC_SERIAL $0008
+// A `for` with a `: goal(…)` of its own (its goal flags also carry the
+// enclosing goal).
+#define SRC_GOAL $0010
+// A range `for` whose `step` is not followed by an integer literal, or is
+// followed by the literal `0`.
+#define SRC_STEPBAD $0020
+// A range `for` whose bounds are two integer literals that descend, read as
+// --par-style=auto reads their spelling.
+#define SRC_DESC $0040
+// A call whose callee name or member was written in parentheses (`(f)(x)`).
+#define SRC_PARENCALLEE $0080
+// XC_PAR_AUTO_CHECK only, never on a node: the C-style condition and step
+// shapes --par-style=auto takes.
+#define SRC_CHK_COND $0100
+#define SRC_CHK_STEP $0200

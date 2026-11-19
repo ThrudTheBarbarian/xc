@@ -288,6 +288,7 @@ class Node
     // must hold anything `i64`/`u64` can spell; the counts are unaffected.
     i64 _num;
     u32 _flags;
+    u32 _src;     // source facts (SRC_*), apart from the flags: see NodeDefs.xc
     Array* _kids; // of Node@
     u32 _line;
     // The wasm PACKAGE a declaration reconstructed from a library interface
@@ -362,6 +363,7 @@ class Node
         _extra = (String*)0;
         _num = (i64)0;
         _flags = (u32)0;
+        _src = 0;
         _kids = new Array();
         _line = (u32)0;
         _pkg = (String*)0;
@@ -803,6 +805,18 @@ class Node
     bool hasFlag(u32 f)
         {
         return (_flags & f) != (u32)0;
+        }
+    u32 src(void)
+        {
+        return _src;
+        }
+    void addSrc(u32 f)
+        {
+        _src = _src | f;
+        }
+    bool hasSrc(u32 f)
+        {
+        return (_src & f) != 0;
         }
     void setAt(u32 line, u32 col)
         {

@@ -618,6 +618,10 @@ class FeOptions
         // looks at, what it decided and why. As the reference.
         String* trace = Platform.env(String.withCString("XC_PAR_AUTO_TRACE"));
         parser.setParAutoTrace(trace.byteLength() > 0 && !trace.equals(String.withCString("0")));
+        // XC_PAR_AUTO_CHECK=flags: a line on stderr for each loop the scan
+        // reads, comparing the source facts on its node with the tokens
+        // (Parser.parAutoCheck). As the reference.
+        parser.setParAutoCheck(Platform.env(String.withCString("XC_PAR_AUTO_CHECK")).equals(String.withCString("flags")));
         parser.setWebModules(platformOf(o).equals(String.withCString("wasm32")));
         parser.setGoalDefault(pp.goal() != (u32)0 ? pp.goal() : o.goalDefault());
         parser.setLibraryFiles(pp.libraryFiles());

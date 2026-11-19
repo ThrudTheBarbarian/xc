@@ -402,6 +402,24 @@ static XTOpInfo operatorInfo(XTTokenType type)
     }
 
 /****************************************************************************\
+|* An integer literal's token spelled as its decimal value: digits, and no
+|* leading 0 unless it is `0` (XTSrcPlain). Mirrored in the port.
+\****************************************************************************/
+static BOOL parPlainDecimal(NSString* t)
+    {
+    NSUInteger n = t.length;
+    if (n == 0 || (n > 1 && [t characterAtIndex:0] == '0'))
+        return NO;
+    for (NSUInteger q = 0; q < n; q++)
+        {
+        unichar c = [t characterAtIndex:q];
+        if (c < '0' || c > '9')
+            return NO;
+        }
+    return YES;
+    }
+
+/****************************************************************************\
 |* Parse a chain of postfix operations (++, --, [], ., ->, function call)
 |* starting from an already-parsed base expression.
 |* @param base  The base expression to apply postfix operators to.
@@ -532,6 +550,8 @@ static XTOpInfo operatorInfo(XTTokenType type)
             [self match:XTTokenLParen];
             NSArray<XTASTNode*>* args = [self parseArgList];
             [self expect:XTTokenRParen];
+            BOOL parenCallee = (base.srcFacts & XTSrcParen) != 0 &&
+                               ([base isKindOfClass:[XTMemberAccessNode class]] || [base isKindOfClass:[XTIdentifierNode class]]);
             if ([base isKindOfClass:[XTMemberAccessNode class]])
                 {
                 XTMemberAccessNode* ma = (XTMemberAccessNode*)base;
@@ -560,6 +580,8 @@ static XTOpInfo operatorInfo(XTTokenType type)
                 ic.calleeExpr = base;
                 base = [self stampFwd:ic];
                 }
+            if (parenCallee)
+                base.srcFacts |= XTSrcParenCallee;
             }
         else
             {
@@ -607,7 +629,10 @@ static XTOpInfo operatorInfo(XTTokenType type)
     case XTTokenIntLiteral:
         {
         [self advance];
-        return [[XTLiteralIntNode alloc] initWithValue:cur.intValue location:loc];
+        XTLiteralIntNode* lit = [[XTLiteralIntNode alloc] initWithValue:cur.intValue location:loc];
+        if (parPlainDecimal(cur.value))
+            lit.srcFacts |= XTSrcPlain;
+        return lit;
         }
     case XTTokenFloatLiteral:
         {
@@ -756,6 +781,7 @@ static XTOpInfo operatorInfo(XTTokenType type)
 
         XTASTNode* inner = [self parseExpression];
         [self expect:XTTokenRParen];
+        inner.srcFacts |= XTSrcParen;
         return inner;
         }
     case XTTokenDelete:

@@ -34,6 +34,10 @@ NS_ASSUME_NONNULL_BEGIN
 /// driver prints once the parse is final (parAutoTraceLine). Mirrored in the port.
 @property(nonatomic) BOOL parAutoTraceOn;
 @property(nonatomic, readonly, nullable) NSMutableArray<NSString*>* parAutoTrace;
+/// XC_PAR_AUTO_CHECK=flags: a line for each loop the scan reads, comparing the
+/// source facts on its node with the tokens (parAutoCheck), in parAutoTrace.
+/// Mirrored in the port.
+@property(nonatomic) BOOL parAutoCheckOn;
 // wasm32: a module's memory is its own, so a protocol's static members are
 // calls BETWEEN modules (an export of the provider, an import of everyone
 // else) and may pass only numbers, or a buffer and its length.
