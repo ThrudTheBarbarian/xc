@@ -97,7 +97,7 @@ class LiveVec
         while (c < need)
             c = c * 2;
         u32* nv = new u32[c];
-        for (u32 k = 0; k < _n; k = k + 1)
+        for (u32 k = (u32)0; k < _n; k = k + (u32)1)
             nv[k] = _v[k];
         if (_cap > 0)
             delete _v;
@@ -9763,7 +9763,7 @@ class Arm64
         if (b == (IRBlock*)0) return n;
         u32 i = b.bix();
         if (i < n && (IRBlock*)bs.get(i) == b) return i;
-        for (u32 k = 0; k < n; k = k + 1)
+        for (u32 k = (u32)0; k < n; k = k + (u32)1)
             ((IRBlock*)bs.get(k)).setBix(k);
         i = b.bix();
         if (i < n && (IRBlock*)bs.get(i) == b) return i;
@@ -9891,7 +9891,7 @@ class Arm64
         if (nb == 0) return;
 
         Array* blkEnd = new Array();
-        for (u32 i = 0; i < nb; i = i + 1)
+        for (u32 i = (u32)0; i < nb; i = i + (u32)1)
             blkEnd.add((Object*)Number.withI32(0));
         _lvDefBlk = new LiveVec();
         _lvDefPos = new LiveVec();
@@ -9972,11 +9972,11 @@ class Arm64
     void numberBlocks(IRFunc* fn, u32 nb, Array* blkEnd)
     {
         i32 pos = 0;
-        for (u32 bi = 0; bi < nb; bi = bi + 1) {
+        for (u32 bi = (u32)0; bi < nb; bi = bi + (u32)1) {
             IRBlock* b = (IRBlock*)fn.blocks().get(bi);
             _lvDefAt.push(_lvDefs.count());
             _lvUeAt.push(_lvUe.count());
-            for (u32 i = 0; i < b.phis().count(); i = i + 1) {
+            for (u32 i = (u32)0; i < b.phis().count(); i = i + (u32)1) {
                 IRInsn* p = (IRInsn*)b.phis().get(i);
                 if (p.res() != (IRValue*)0) {
                     lvDef(p.res(), bi, pos);
@@ -9984,7 +9984,7 @@ class Arm64
                 }
                 pos = pos + 1;      // a phi's operands are EDGE uses, below
             }
-            for (u32 i = 0; i < b.insns().count(); i = i + 1) {
+            for (u32 i = (u32)0; i < b.insns().count(); i = i + (u32)1) {
                 IRInsn* n = (IRInsn*)b.insns().get(i);
                 noteUses(n, bi, pos);
                 if (emitsCall(n.opc())) _lvCalls.push((u32)pos);
@@ -10007,11 +10007,11 @@ class Arm64
     // Each block's successors, as block indices: succ[succAt[b] .. succAt[b+1]).
     void buildSuccIdx(IRFunc* fn, u32 nb, LiveVec* succ, LiveVec* succAt)
     {
-        for (u32 bi = 0; bi < nb; bi = bi + 1) {
+        for (u32 bi = (u32)0; bi < nb; bi = bi + (u32)1) {
             succAt.push(succ.count());
             IRInsn* t = ((IRBlock*)fn.blocks().get(bi)).term();
             if (t != (IRInsn*)0)
-                for (u32 k = 0; k < t.ops().count(); k = k + 1) {
+                for (u32 k = (u32)0; k < t.ops().count(); k = k + (u32)1) {
                     IROperand* o = (IROperand*)t.ops().get(k);
                     if (o.kind() != (u8)OPK_BLOCK || o.blk() == (IRBlock*)0) continue;
                     u32 si = blockIndexOf(fn, o.blk());
@@ -10028,11 +10028,11 @@ class Arm64
     {
         LiveVec* pbs = new LiveVec();
         LiveVec* xs = new LiveVec();
-        for (u32 si = 0; si < nb; si = si + 1) {
+        for (u32 si = (u32)0; si < nb; si = si + (u32)1) {
             IRBlock* sb = (IRBlock*)fn.blocks().get(si);
-            for (u32 i = 0; i < sb.phis().count(); i = i + 1) {
+            for (u32 i = (u32)0; i < sb.phis().count(); i = i + (u32)1) {
                 IRInsn* phi = (IRInsn*)sb.phis().get(i);
-                for (u32 k = 0; k + 1 < phi.ops().count(); k = k + 2) {
+                for (u32 k = (u32)0; k + 1 < phi.ops().count(); k = k + (u32)2) {
                     IROperand* bo = (IROperand*)phi.ops().get(k);
                     IROperand* vo = (IROperand*)phi.ops().get(k + 1);
                     if (bo.kind() != (u8)OPK_BLOCK || bo.blk() == (IRBlock*)0) continue;
@@ -10046,17 +10046,17 @@ class Arm64
             }
         }
         // A counting sort by predecessor.
-        for (u32 b = 0; b <= nb; b = b + 1)
+        for (u32 b = (u32)0; b <= nb; b = b + (u32)1)
             edgeAt.push(0);
-        for (u32 i = 0; i < pbs.count(); i = i + 1)
+        for (u32 i = (u32)0; i < pbs.count(); i = i + (u32)1)
             edgeAt.set(pbs.get(i) + 1, edgeAt.get(pbs.get(i) + 1) + 1);
-        for (u32 b = 0; b < nb; b = b + 1)
+        for (u32 b = (u32)0; b < nb; b = b + (u32)1)
             edgeAt.set(b + 1, edgeAt.get(b + 1) + edgeAt.get(b));
         LiveVec* fill = new LiveVec();
-        for (u32 b = 0; b < nb; b = b + 1)
+        for (u32 b = (u32)0; b < nb; b = b + (u32)1)
             fill.push(edgeAt.get(b));
         edge.put(pbs.count(), 0);
-        for (u32 i = 0; i < pbs.count(); i = i + 1) {
+        for (u32 i = (u32)0; i < pbs.count(); i = i + (u32)1) {
             u32 pb = pbs.get(i);
             edge.set(fill.get(pb), xs.get(i));
             fill.set(pb, fill.get(pb) + 1);
@@ -10087,7 +10087,7 @@ class Arm64
         u32 total = nb * w + 1;
         u64* lin = new u64[total];
         u64* lout = new u64[total];
-        for (u32 k = 0; k < total; k = k + 1) {
+        for (u32 k = (u32)0; k < total; k = k + (u32)1) {
             lin[k] = 0;
             lout[k] = 0;
         }
@@ -10096,29 +10096,29 @@ class Arm64
         bool changed = true;
         while (changed) {
             changed = false;
-            for (u32 r = nb; r > 0; r = r - 1) {
+            for (u32 r = nb; r > 0; r = r - (u32)1) {
                 u32 bi = r - 1;
-                for (u32 k = 0; k < w; k = k + 1)
+                for (u32 k = (u32)0; k < w; k = k + (u32)1)
                     tOut[k] = 0;
-                for (u32 e = edgeAt.get(bi); e < edgeAt.get(bi + 1); e = e + 1)
+                for (u32 e = edgeAt.get(bi); e < edgeAt.get(bi + 1); e = e + (u32)1)
                     setBit(tOut, edge.get(e));
-                for (u32 s = succAt.get(bi); s < succAt.get(bi + 1); s = s + 1) {
+                for (u32 s = succAt.get(bi); s < succAt.get(bi + 1); s = s + (u32)1) {
                     u32 sb = succ.get(s) * w;
-                    for (u32 k = 0; k < w; k = k + 1)
+                    for (u32 k = (u32)0; k < w; k = k + (u32)1)
                         tOut[k] = tOut[k] | lin[sb + k];
                 }
-                for (u32 k = 0; k < w; k = k + 1)
+                for (u32 k = (u32)0; k < w; k = k + (u32)1)
                     tIn[k] = tOut[k];
-                for (u32 d = _lvDefAt.get(bi); d < _lvDefAt.get(bi + 1); d = d + 1)
+                for (u32 d = _lvDefAt.get(bi); d < _lvDefAt.get(bi + 1); d = d + (u32)1)
                     clearBit(tIn, _lvDefs.get(d));
-                for (u32 u = _lvUeAt.get(bi); u < _lvUeAt.get(bi + 1); u = u + 1)
+                for (u32 u = _lvUeAt.get(bi); u < _lvUeAt.get(bi + 1); u = u + (u32)1)
                     setBit(tIn, _lvUe.get(u));
                 u32 base = bi * w;
                 bool same = true;
-                for (u32 k = 0; k < w && same; k = k + 1)
+                for (u32 k = (u32)0; k < w && same; k = k + (u32)1)
                     if (tOut[k] != lout[base + k] || tIn[k] != lin[base + k]) same = false;
                 if (!same) {
-                    for (u32 k = 0; k < w; k = k + 1) {
+                    for (u32 k = (u32)0; k < w; k = k + (u32)1) {
                         lout[base + k] = tOut[k];
                         lin[base + k] = tIn[k];
                     }
@@ -10138,16 +10138,16 @@ class Arm64
     {
         LiveVec* endBy = new LiveVec();      // number -> 1 + the latest block end it is live out of
         u64* anyOut = new u64[w + 1];
-        for (u32 k = 0; k < w; k = k + 1)
+        for (u32 k = (u32)0; k < w; k = k + (u32)1)
             anyOut[k] = 0;
-        for (u32 bi = 0; bi < nb; bi = bi + 1) {
+        for (u32 bi = (u32)0; bi < nb; bi = bi + (u32)1) {
             i32 be = 2 * ((Number*)blkEnd.get(bi)).asI32() + 2;
             u32 base = bi * w;
-            for (u32 k = 0; k < w; k = k + 1) {
+            for (u32 k = (u32)0; k < w; k = k + (u32)1) {
                 u64 bits = liveOut[base + k];
                 if (bits == (u64)0) continue;
                 anyOut[k] = anyOut[k] | bits;
-                for (u32 j = 0; j < 64; j = j + 1) {
+                for (u32 j = (u32)0; j < 64; j = j + (u32)1) {
                     if (((bits >> (u64)j) & (u64)1) == (u64)0) continue;
                     u32 x = k * 64 + j;
                     u32 cur = endBy.at(x);
@@ -10160,10 +10160,10 @@ class Arm64
         // value the function mentions. The order is that of _start's keys,
         // which nothing reads in order.
         Array* all = new Array();
-        for (u32 k = 0; k < w; k = k + 1) {
+        for (u32 k = (u32)0; k < w; k = k + (u32)1) {
             u64 bits = anyOut[k];
             if (bits == (u64)0) continue;
-            for (u32 j = 0; j < 64; j = j + 1)
+            for (u32 j = (u32)0; j < 64; j = j + (u32)1)
                 if (((bits >> (u64)j) & (u64)1) != (u64)0)
                     all.add(_lvVals.get(k * 64 + j));
         }
@@ -10175,10 +10175,10 @@ class Arm64
         Map* fwdIdx = new Map();
         Map* fwdPhiBlk = new Map();
         _phiOf = new Map();
-        for (u32 bi = 0; bi < fn.blocks().count(); bi = bi + 1) {
+        for (u32 bi = (u32)0; bi < fn.blocks().count(); bi = bi + (u32)1) {
             IRBlock* b = (IRBlock*)fn.blocks().get(bi);
             fwdIdx.set((Hashable*)b, (Object*)Number.withU32(bi));
-            for (u32 q = 0; q < b.phis().count(); q = q + 1) {
+            for (u32 q = (u32)0; q < b.phis().count(); q = q + (u32)1) {
                 IRInsn* pq = (IRInsn*)b.phis().get(q);
                 if (pq.res() == (IRValue*)0) continue;
                 _phiOf.set((Hashable*)pq.res(), (Object*)pq);
@@ -10186,7 +10186,7 @@ class Arm64
             }
         }
         u32 nCalls = _lvCalls.count();
-        for (u32 i = 0; i < all.count(); i = i + 1) {
+        for (u32 i = (u32)0; i < all.count(); i = i + (u32)1) {
             IRValue* v = (IRValue*)all.get(i);
             u32 dp = lvAt(_lvDefPos, v);
             // No def position means a parameter or an entry-live value: its
@@ -10390,7 +10390,7 @@ class Arm64
     // already defined it.
     void noteOperands(IRInsn* n, u32 bi, i32 pos)
     {
-        for (u32 k = 0; k < n.ops().count(); k = k + 1) {
+        for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1) {
             IROperand* o = (IROperand*)n.ops().get(k);
             if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0) continue;
             u32 x = lvIndex(o.val());
@@ -11215,14 +11215,14 @@ class Arm64
             if (chosen >= nCaller && !hasStr(_savedRegs, reg))
                 _savedRegs.add((Object*)reg);
         }
-        for (u32 r = 0; r < ivl.count(); r = r + 1)
+        for (u32 r = (u32)0; r < ivl.count(); r = r + (u32)1)
             ((LiveVec*)ivl.get(r)).release();
     }
 
     // Does [s, e] meet any of the start, end pairs in iv?
     static bool overlapsAny(LiveVec* iv, i32 s, i32 e)
     {
-        for (u32 k = 0; k + 1 < iv.count(); k = k + 2)
+        for (u32 k = (u32)0; k + 1 < iv.count(); k = k + (u32)2)
             if (s <= (i32)iv.get(k + 1) && (i32)iv.get(k) <= e) return true;
         return false;
     }
@@ -11392,7 +11392,7 @@ class Arm64
                         ks = _start.allKeys();
                         st = new LiveVec();
                         en = new LiveVec();
-                        for (u32 q = 0; q < ks.count(); q = q + 1) {
+                        for (u32 q = (u32)0; q < ks.count(); q = q + (u32)1) {
                             st.push((u32)startOf((IRValue*)ks.get(q)));
                             en.push((u32)endOf((IRValue*)ks.get(q)));
                         }
