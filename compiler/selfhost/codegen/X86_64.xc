@@ -3118,10 +3118,12 @@ class X86_64
         Map* hi = new Map();
         Array* blkStart = new Array();
         Array* blkEnd = new Array();
+        Map* blkIdx = new Map();   // block -> index, for the back-edge test below (#331)
         i32 pos = (i32)0;
         for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
             {
             IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            blkIdx.set((Hashable*)bb, (Object*)Number.with(b));
             blkStart.add((Object*)Number.withI32(pos));
             pos = touchList(bb.phis(), vecVals, classes, lo, hi, pos);
             pos = touchList(bb.insns(), vecVals, classes, lo, hi, pos);
@@ -3143,7 +3145,8 @@ class X86_64
                 IROperand* o = (IROperand*)t.ops().get(k);
                 if (o.kind() != (u8)OPK_BLOCK || o.blk() == (IRBlock*)0)
                     continue;
-                i32 tgt = blockIndexOf(fn, o.blk());
+                Object* ti = blkIdx.get((Hashable*)o.blk());
+                i32 tgt = ti == (Object*)0 ? (i32)-1 : (i32)((Number*)ti).asU32();
                 if (tgt < (i32)0 || (u32)tgt > bi)
                     continue;
                 i32 loopStart = ((Number*)blkStart.get((u32)tgt)).asI32();
@@ -3678,14 +3681,6 @@ class X86_64
             lo.set((Hashable*)cls, (Object*)Number.withI32(pos));
         if (pos > ((Number*)hi.get((Hashable*)cls)).asI32())
             hi.set((Hashable*)cls, (Object*)Number.withI32(pos));
-        }
-
-    i32 blockIndexOf(IRFunc* fn, IRBlock* b)
-        {
-        for (u32 i = (u32)0; i < fn.blocks().count(); i = i + (u32)1)
-            if ((IRBlock*)fn.blocks().get(i) == b)
-                return (i32)i;
-        return (i32)-1;
         }
 
     static void sortByStart(Array* a, Map* key)

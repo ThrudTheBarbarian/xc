@@ -294,6 +294,11 @@ class BitSet
         _succ = new Array();
         _liveIn = new Array();
         _liveOut = new Array();
+        // Each block's index, once (#331): blockIndexOf scanned the block list
+        // for every edge and phi operand, quadratic in a function's blocks.
+        _blkIdx = new Map();
+        for (u32 i = (u32)0; i < _nb; i = i + (u32)1)
+            _blkIdx.set((Hashable*)_fn.blocks().get(i), (Object*)Number.with(i));
         for (u32 i = (u32)0; i < _nb; i = i + (u32)1)
             {
             _defSet.add((Object*)BitSet.withCapacity(_nv));
@@ -462,12 +467,12 @@ class BitSet
             }
         }
 
+    Map* _blkIdx;   // IRBlock -> its index in _fn.blocks()
+
     i32 blockIndexOf(IRBlock* b)
         {
-        for (u32 i = (u32)0; i < _nb; i = i + (u32)1)
-            if ((IRBlock*)_fn.blocks().get(i) == b)
-                return (i32)i;
-        return (i32)-1;
+        Object* o = _blkIdx.get((Hashable*)b);
+        return o == (Object*)0 ? (i32)-1 : (i32)((Number*)o).asU32();
         }
 
     // A phi operand is a use on the PREDECESSOR's edge, which is what makes the
