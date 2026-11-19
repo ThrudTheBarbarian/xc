@@ -689,6 +689,29 @@ String* stripLeadingUnderscore(String* asmText)
     return out;
 }
 
+// Whether an object or archive names a symbol of xcc's runtime: `_xtc_`
+// (the allocator, ARC, the classes' helpers) or `__xt_` (the stack guard, the
+// threads), with Mach-O's extra underscore or ELF's without; what an xcc -c
+// object always does and a C or Objective-C one never does. The bytes are
+// searched, not the symbol table: a string that happens to hold the text
+// only keeps the runtime the image's own, as before. A file that cannot be
+// read counts as one that names it.
+bool namesRuntime(String* path)
+{
+    Data* data = Files.readData(path);
+    if (data == (Data*)0) return true;
+    u8* b = data.bytes();
+    u32 n = data.length();
+    for (u32 i = (u32)0; i + (u32)5 <= n; i = i + (u32)1) {
+        if (b[i] != (u8)'_') continue;
+        if (b[i + (u32)1] == (u8)'x' && b[i + (u32)2] == (u8)'t' && b[i + (u32)3] == (u8)'c' && b[i + (u32)4] == (u8)'_')
+            return true;
+        if (b[i + (u32)1] == (u8)'_' && b[i + (u32)2] == (u8)'x' && b[i + (u32)3] == (u8)'t' && b[i + (u32)4] == (u8)'_')
+            return true;
+    }
+    return false;
+}
+
 // libRuntime (owner, 2026-11-03): the runtime's files, prebuilt per target
 // as one shared library, at <support>/runtime-lib/<row>/libRuntime.<ext>
 // (lib/xc/runtime-lib/... in an install). Building it (--emit-runtime): the
@@ -725,14 +748,18 @@ void resolveRuntimeLib(DriverOptions* d)
     // archive ships, which must not name this tree's libRuntime.
     if (Platform.env(String.withCString("XCC_NO_RUNTIME_LIB")).equals(String.withCString("1"))) return;
     if (d.noRuntimeLib() || d.caps().staticLink() || d.targetRow() == (TargetRow*)0) return;
-    // An image that links objects or archives (-Wl,x.o, -Xlinker liby.a,
+    // An image that links an xcc object or archive (-Wl,x.o, -Xlinker liby.a,
     // $XTC_LDFLAGS) keeps the runtime its own, as before: an xcc -c object
     // reads the canary guard and the runtime's data directly, which the
-    // rewrite of the program's text cannot reach. As the reference.
+    // rewrite of the program's text cannot reach. One that names none of the
+    // runtime's symbols (a C or Objective-C shim) does not decide it: a
+    // library that kept its own runtime for such a shim gave its clients a
+    // second span table, and their par blocks ran serially (#453). As the
+    // reference.
     Array* li = d.linkInputs();
     for (u32 i = (u32)0; li != (Array*)0 && i < li.count(); i = i + (u32)1) {
         String* t = (String*)li.get(i);
-        if (t.hasSuffix(String.withCString(".o")) || t.hasSuffix(String.withCString(".a"))) return;
+        if ((t.hasSuffix(String.withCString(".o")) || t.hasSuffix(String.withCString(".a"))) && namesRuntime(t)) return;
     }
     // An xc file's x86-64 -c object is compiled without it: it carries the
     // classes it uses and reads the guard directly, so the dynamic and the

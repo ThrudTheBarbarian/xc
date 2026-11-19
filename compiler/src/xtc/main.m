@@ -215,14 +215,31 @@ static NSString *resolveSupportRoot(const char *argv0, XTCommandLineOptions *opt
 // not -static, not the build of libRuntime itself). Absolute: the runpath and
 // LC_RPATH are read wherever the program runs. nil = none.
 static NSArray<NSString *> *appendLinkerFlags(XTCommandLineOptions *opts, BOOL directLd);
+// Whether an object or archive names a symbol of xcc's runtime (`_xtc_`, or
+// `__xt_`): an xcc -c object always does, a C or Objective-C one never does.
+// The bytes are searched: a string holding the text only keeps the runtime
+// the image's own. A file that cannot be read counts as one that names it.
+// As the port's.
+static BOOL namesRuntime(NSString *path) {
+    NSData *data = [NSData dataWithContentsOfFile:path];
+    if (!data) return YES;
+    const unsigned char *b = data.bytes;
+    for (NSUInteger i = 0; i + 5 <= data.length; i++) {
+        if (b[i] != '_') continue;
+        if (!memcmp(b + i + 1, "xtc_", 4) || !memcmp(b + i + 1, "_xt_", 4)) return YES;
+    }
+    return NO;
+}
 static NSString *runtimeLibFile(const char *argv0, XTCommandLineOptions *opts) {
     XTTarget *row = opts.effectiveTarget;
     if (opts.emitRuntime || opts.noRuntimeLib || opts.staticLink || !row) return nil;
-    // An image that links objects or archives keeps the runtime its own: an
-    // xcc -c object reads the canary guard and the runtime's data directly,
-    // which the rewrite of the program's text cannot reach. As the port.
-    for (NSString *t in appendLinkerFlags(opts, NO))
-        if ([t hasSuffix:@".o"] || [t hasSuffix:@".a"]) return nil;
+    // An image that links an xcc object or archive keeps the runtime its own:
+    // an xcc -c object reads the canary guard and the runtime's data directly,
+    // which the rewrite of the program's text cannot reach. One that names
+    // none of the runtime's symbols (a C or Objective-C shim) does not decide
+    // it (#453). As the port.
+    for (NSString *t in appendLinkerFlags(opts, YES))
+        if (([t hasSuffix:@".o"] || [t hasSuffix:@".a"]) && namesRuntime(t)) return nil;
     // An x86-64 -c object is compiled without it: it carries the classes it
     // uses, so the dynamic and the -static object link can both take it. As
     // the port.

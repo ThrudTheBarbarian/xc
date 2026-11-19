@@ -6,7 +6,10 @@
 #   2. A lifted loop, a written par block and plain programs each link the
 #      tree's libRuntime and print what a --no-runtime-lib build of the same
 #      source prints; the lifted one compiles in under half the time.
-#   3. A link that brings an object (-Wl,x.o) keeps its runtime its own.
+#   3. A link that brings an xcc object (-Wl,x.o) keeps its runtime its own;
+#      one that brings a C object or archive takes the library, and so does a
+#      library linked with a C archive, whose clients then share one runtime
+#      with it (#453: its own copy kept their arrays' spans from par).
 #
 # Needs the target's libRuntime built in this tree; says so and passes when
 # it is not (the gate builds it first).
@@ -72,7 +75,8 @@ for f in lifted vec_map_iota par_device_default addr_of_ivar; do
     fi
 done
 
-# 3. An object on the link line: the image keeps its own runtime.
+# 3. Objects and archives on the link line: an xcc object keeps the image's
+# runtime its own; a C one takes the library.
 cat > "$W/obj.c" <<'EOF'
 int seven(void) { return 7; }
 EOF
@@ -86,9 +90,75 @@ i32 main(void)
     return 0;
     }
 EOF
-    "$XC" -q -O2 -H . "-Wl,$W/obj.o" -o "$W/useobj" "$W/useobj.xc" || { echo "FAIL runtime-lib: the object link"; fail=1; }
-    [ -x "$W/useobj" ] && [ "$(needs "$W/useobj")" = 0 ] || { echo "FAIL runtime-lib: an object link took libRuntime"; fail=1; }
-    [ -x "$W/useobj" ] && [ "$("$W/useobj")" = 7 ] || { echo "FAIL runtime-lib: the object link printed '$("$W/useobj" 2>&1)'"; fail=1; }
+    "$XC" -q -O2 -H . "-Wl,$W/obj.o" -o "$W/useobj" "$W/useobj.xc" || { echo "FAIL runtime-lib: the C object link"; fail=1; }
+    [ -x "$W/useobj" ] && [ "$(needs "$W/useobj")" -ge 1 ] || { echo "FAIL runtime-lib: a C object link did not take libRuntime"; fail=1; }
+    [ -x "$W/useobj" ] && [ "$("$W/useobj")" = 7 ] || { echo "FAIL runtime-lib: the C object link printed '$("$W/useobj" 2>&1)'"; fail=1; }
+    cat > "$W/xseven.xc" <<'EOF'
+#import "Foundation.xc"
+i32 seven(void)
+    {
+    String* s = String.withCString("seven");
+    return (i32)s.byteLength() + (i32)2;
+    }
+EOF
+    if "$XC" -q -O2 -H . -c -o "$W/xseven.o" "$W/xseven.xc"; then
+        "$XC" -q -O2 -H . "-Wl,$W/xseven.o" -o "$W/usexobj" "$W/useobj.xc" || { echo "FAIL runtime-lib: the xcc object link"; fail=1; }
+        [ -x "$W/usexobj" ] && [ "$(needs "$W/usexobj")" = 0 ] || { echo "FAIL runtime-lib: an xcc object link took libRuntime"; fail=1; }
+    else
+        echo "FAIL runtime-lib: xcc -c"; fail=1
+    fi
+fi
+
+# A library linked with a C archive and a par block of its own: it takes the
+# library and carries no par runtime, its client's par blocks bind to
+# libRuntime, and the client sizes an array the way a program on its own does.
+if [ "$PLAT" = osx ] && command -v clang > /dev/null && clang -c -O2 -o "$W/shim.o" "$W/obj.c" 2>/dev/null \
+   && ar rcs "$W/libshim.a" "$W/shim.o"; then
+    cat > "$W/ShimLib.xc" <<'EOF'
+#import "Foundation.xc"
+#import "Par.xc"
+extern i32 seven(void);
+class ShimLib : Object
+    {
+    static i32 lucky(void) { return seven(); }
+    static float total(float* xs, u32 n)
+        {
+        float s = 0.0;
+        par libsum :device(cpu) :reduce(+ s)
+            {
+            for (u32 i in 0..n)
+                s = s + xs[i];
+            }
+        return s;
+        }
+    }
+EOF
+    cat > "$W/shimclient.xc" <<'EOF'
+#use <ShimLib>
+#import "Stdio.xc"
+#import "Par.xc"
+#define N 1000000
+i32 main(void)
+    {
+    simd: float* a = new float[N];
+    for (u32 i in 0..N)
+        a[i] = 1.0;
+    Stdio.printf("%d %.1f %ld\n", ShimLib.lucky(), (double)ShimLib.total(a, (u32)1000),
+                 Par.spanOf((pointer)((u64)a + (u64)4096), (i64)4, true));
+    return 0;
+    }
+EOF
+    mkdir -p "$W/shim"
+    if "$XC" -q -O2 -H . --emit-lib "-Wl,$W/libshim.a" -o "$W/shim/libShimLib.dylib" "$W/ShimLib.xc" \
+       && "$XC" -q -O2 -H . -L "$W/shim" -o "$W/shim/shimclient" "$W/shimclient.xc"; then
+        [ "$(needs "$W/shim/libShimLib.dylib")" -ge 1 ] || { echo "FAIL runtime-lib: a library with a C archive did not take libRuntime"; fail=1; }
+        nm -gU "$W/shim/libShimLib.dylib" | grep -q 'Par\$run' && { echo "FAIL runtime-lib: the library exports the par runtime"; fail=1; }
+        nm -m "$W/shim/shimclient" | grep 'Par\$run' | grep -q 'from libRuntime' || { echo "FAIL runtime-lib: the client's par blocks do not bind to libRuntime"; fail=1; }
+        out=$("$W/shim/shimclient" 2>&1)
+        [ "$out" = "7 1000.0 3995904" ] || { echo "FAIL runtime-lib: the library's client printed '$out'"; fail=1; }
+    else
+        echo "FAIL runtime-lib: the library with a C archive, or its client, does not build"; fail=1
+    fi
 fi
 [ $fail = 0 ] && echo "runtime-lib: ok"
 exit $fail
