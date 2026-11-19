@@ -5476,25 +5476,37 @@ class X86_64
         return (Array*)0;
         }
 
+    // reach[h]: the furthest line candidate h's checks read. A rewrite changes
+    // line i or the line after it (r, the lowest index touched); a candidate
+    // that never read as far as r fails again exactly as before, so the scan
+    // resumes at the first one that did, instead of at the top (#331; the
+    // reach[] of peepholeCopyProp, bug 621). Same rewrites, same order.
     Array* peepholeFallthroughLines(Array* lines)
         {
+        u32 n0 = lines.count();
+        u32* reach = new u32[n0 + (u32)1];
+        u32 start = (u32)0;
         bool again = true;
         while (again)
             {
             again = false;
-            for (u32 i = (u32)0; i < lines.count() && !again; i = i + (u32)1)
+            u32 r = (u32)0;
+            for (u32 i = start; i < lines.count() && !again; i = i + (u32)1)
                 {
+                reach[i] = i;
                 String* t = ((String*)lines.get(i)).trimmed();
                 String* tgt = ftJmpTarget(t);
                 if (tgt != (String*)0)
                     {
                     i32 j = ftNextReal(lines, i);
+                    reach[i] = j < (i32)0 ? lines.count() : (u32)j;
                     if (j < (i32)0)
                         continue;
                     String* lb = ftLabelOf((String*)lines.get((u32)j));
                     if (lb != (String*)0 && lb.equals(tgt))
                         {
                         lines.removeAt(i);
+                        r = i;
                         again = true;
                         }
                     continue;
@@ -5512,12 +5524,14 @@ class X86_64
                     continue;
                 String* LT = t.substringFromByte(sp).trimmed();
                 i32 j = ftNextReal(lines, i);
+                reach[i] = j < (i32)0 ? lines.count() : (u32)j;
                 if (j < (i32)0)
                     continue;
                 String* LF = ftJmpTarget(((String*)lines.get((u32)j)).trimmed());
                 if (LF == (String*)0)
                     continue;
                 i32 k = ftNextReal(lines, (u32)j);
+                reach[i] = k < (i32)0 ? lines.count() : (u32)k;
                 if (k < (i32)0)
                     continue;
                 String* nextLbl = ftLabelOf((String*)lines.get((u32)k));
@@ -5526,6 +5540,7 @@ class X86_64
                 if (nextLbl.equals(LF))
                     {
                     lines.removeAt((u32)j);
+                    r = (u32)j;
                     again = true;
                     continue;
                     }
@@ -5537,10 +5552,22 @@ class X86_64
                     nl.append(LF);
                     lines.set(i, (Object*)nl);
                     lines.removeAt((u32)j);
+                    r = i;
                     again = true;
                     }
                 }
+            if (again)
+                {
+                start = r;
+                for (u32 h = (u32)0; h < r; h = h + (u32)1)
+                    if (reach[h] >= r)
+                        {
+                        start = h;
+                        h = r;
+                        }
+                }
             }
+        delete reach;
         return lines;
         }
 
