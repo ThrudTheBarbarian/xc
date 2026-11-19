@@ -211,7 +211,8 @@ daemon "$L/xcd4.log" XCD_HOME="$L/home1" XC_PAR_REPORT=1 XC_PAR_DIE_AFTER=1 -- -
 XCD4=$XPID
 mkdir -p "$L/st_die"
 # The daemon on the queue for certain (XC_PAR_WORKERS names it, with the CPU
-# to take its tiles back), dying after its first: with XC_PAR=all and two
+# to take its tiles back), running its first tile and dropping the connection,
+# unanswered, on its second (so a tile is always in flight): with XC_PAR=all and two
 # tiles to live it was sometimes handed too few to die, so nothing was
 # re-issued (gate 4310).
 XCC_SETTINGS_DIR="$L/st_die" XC_PAR_REMOTE=127.0.0.1:$PORT4 XC_PAR_WORKERS=remote,cpu XC_PAR_REPORT=1 "$L/$f" > "$L/die.out" 2>&1
