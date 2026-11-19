@@ -347,11 +347,17 @@ class IfaceWrite
             if (!IfaceWrite.hasBody(m)) continue;
             if (!m.hasFlag((u32)NF_FINAL) && !m.hasFlag((u32)NF_STATIC)) continue;
             if (ms.byteLength() > (u32)0) ms.appendCString(", ");
-            ms.appendCString("{\"final\": true, ");
             String* one = new String();
             IfaceWrite.method(one, m, c.name());
-            // method() writes a whole record; "final" goes in after its brace.
-            ms.append(one.substringFromByte((u32)1));
+            // method() writes a whole record, with "final" when the method is
+            // final (#393). A static one is published as final too: "final"
+            // goes in after its brace, once.
+            if (m.hasFlag((u32)NF_FINAL)) {
+                ms.append(one);
+            } else {
+                ms.appendCString("{\"final\": true, ");
+                ms.append(one.substringFromByte((u32)1));
+            }
         }
         if (ms.byteLength() == (u32)0) return;
         if (cats.byteLength() > (u32)0) cats.appendCString(", ");
