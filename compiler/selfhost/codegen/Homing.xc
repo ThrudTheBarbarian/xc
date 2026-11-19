@@ -944,40 +944,56 @@ class BitSet
             }
         }
 
+    // The same insertion sort and the same order as before, on keys
+    // read once per value (#331): the comparator (keyLess, below) read three
+    // boxed arrays and a map for both sides of every comparison.
     void sortByUses(Array* a)
         {
-        for (u32 i = (u32)1; i < a.count(); i = i + (u32)1)
+        u32 n = a.count();
+        if (n < (u32)2)
+            return;
+        u64* wt = new u64[n];
+        u64* ln = new u64[n];
+        u32* rk = new u32[n];
+        for (u32 i = (u32)0; i < n; i = i + (u32)1)
+            {
+            Number* v = (Number*)a.get(i);
+            wt[i] = (u64)((Number*)_weight.get(v.asU32())).asU32();
+            ln[i] = (u64)(((Number*)_end.get(v.asU32())).asU32() - ((Number*)_start.get(v.asU32())).asU32()) + (u64)1;
+            Object* r = _rank.get((Hashable*)v);
+            rk[i] = r == (Object*)0 ? v.asU32() + (u32)1000000 : ((Number*)r).asU32();
+            }
+        for (u32 i = (u32)1; i < n; i = i + (u32)1)
             {
             u32 j = i;
-            while (j > (u32)0 && lessThan((Number*)a.get(j), (Number*)a.get(j - (u32)1)))
+            while (j > (u32)0 && keyLess(wt[j], ln[j], rk[j], wt[j - (u32)1], ln[j - (u32)1], rk[j - (u32)1]))
                 {
                 Object* t = a.get(j - (u32)1);
                 a.set(j - (u32)1, a.get(j));
                 a.set(j, t);
+                u64 tw = wt[j - (u32)1]; wt[j - (u32)1] = wt[j]; wt[j] = tw;
+                u64 tl = ln[j - (u32)1]; ln[j - (u32)1] = ln[j]; ln[j] = tl;
+                u32 tr = rk[j - (u32)1]; rk[j - (u32)1] = rk[j]; rk[j] = tr;
                 j = j - (u32)1;
                 }
             }
+        delete wt;
+        delete ln;
+        delete rk;
         }
 
     // Densest first: loop-weighted uses (see weights) per unit of live range,
     // compared cross-multiplied so it stays in integers. Raw use count let
     // values that live across a whole loop body take every register and left
     // the loop's short-lived temporaries — the ones on its critical path — in
-    // stack slots. Mirrors the original.
-    bool lessThan(Number* a, Number* b)
+    // stack slots. Mirrors the original. On keys sortByUses reads once:
+    // weight, live length, rank.
+    static bool keyLess(u64 ua, u64 la, u32 ka, u64 ub, u64 lb, u32 kb)
         {
-        u32 ua = ((Number*)_weight.get(a.asU32())).asU32();
-        u32 ub = ((Number*)_weight.get(b.asU32())).asU32();
-        u64 la = (u64)(((Number*)_end.get(a.asU32())).asU32() - ((Number*)_start.get(a.asU32())).asU32()) + (u64)1;
-        u64 lb = (u64)(((Number*)_end.get(b.asU32())).asU32() - ((Number*)_start.get(b.asU32())).asU32()) + (u64)1;
-        u64 da = (u64)ua * lb;
-        u64 db = (u64)ub * la;
+        u64 da = ua * lb;
+        u64 db = ub * la;
         if (da != db)
             return da > db;
-        Object* ra = _rank.get((Hashable*)a);
-        Object* rb = _rank.get((Hashable*)b);
-        u32 ka = ra == (Object*)0 ? a.asU32() + (u32)1000000 : ((Number*)ra).asU32();
-        u32 kb = rb == (Object*)0 ? b.asU32() + (u32)1000000 : ((Number*)rb).asU32();
         return ka < kb;
         }
 
