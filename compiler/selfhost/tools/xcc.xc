@@ -7210,6 +7210,7 @@ void envUsage(void)
     diag.add((Object*)String.withCString("XC_PAR_PROPOSE|=report|outline: report or outline the loops par would take"));
     diag.add((Object*)String.withCString("XC_PAR_OUTLINE_TRACE|Why a block has no GPU form (=ir: the outliner's functions)"));
     diag.add((Object*)String.withCString("XC_PAR_OUTLINE_DUMP|=<path>: the module after outlining"));
+    diag.add((Object*)String.withCString("XC_PAR_AUTO_TRACE|=1: a line on stderr for each loop --par-style=auto looks at, and what it decided"));
     diag.add((Object*)String.withCString("XTIR_OPT_STOP_AFTER|=<pass>: stop the optimiser after that pass"));
     diag.add((Object*)String.withCString("XC_OPT_CAPS|Say when a capped run-until-settled loop stopped at its cap"));
     diag.add((Object*)String.withCString("XC_OPT_VERIFY|Check every cached optimiser analysis against a fresh build; stop on a difference"));
