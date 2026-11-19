@@ -6136,7 +6136,9 @@ static NSString* scCombine(NSString* op, NSString* r, NSString* v)
     while ([self check:XTTokenIdentifier])
         {
         XTToken* tok = [self advance];
-        NSString* annotName = tok.value.lowercaseString;
+        // Lower case only, as documented and as the port and the auto scan
+        // read them: `: Serial` is an unknown annotation.
+        NSString* annotName = tok.value;
         if ([annotName isEqualToString:@"unroll"])
             {
             annots |= 1;
@@ -6144,15 +6146,12 @@ static NSString* scCombine(NSString* op, NSString* r, NSString* v)
         else if ([annotName isEqualToString:@"serial"])
             {
             // --par-style=auto leaves this loop alone (parAutoScan reads it from
-            // the tokens); otherwise it means nothing.
-            annots |= 8;
-            if ([tok.value isEqualToString:@"serial"])
-                annots |= 32;    // as the scan spells it (XTSrcSerial)
+            // the tokens); otherwise it means nothing. 32: XTSrcSerial.
+            annots |= 8 | 32;
             }
         else if ([annotName isEqualToString:@"goal"])
             {
-            if ([tok.value isEqualToString:@"goal"])
-                annots |= 16;    // as the scan spells it (XTSrcGoal)
+            annots |= 16; // written on the loop (XTSrcGoal)
             [self expect:XTTokenLParen];
             XTToken* g = [self check:XTTokenIdentifier] ? [self advance] : nil;
             if ([g.value isEqualToString:@"speed"])
