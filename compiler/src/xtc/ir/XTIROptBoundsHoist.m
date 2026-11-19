@@ -125,21 +125,9 @@ static NSString* symName(XTIRModule* mod, XTIROperand* o)
                     continue;
                 return NO;
                 }
-            case XTIROpStoreVolatile:
-            case XTIROpCallIndirect:
-            case XTIROpCallCloaked:
-            case XTIROpCallBanked:
-            case XTIROpCallBankedIndirect:
-            case XTIROpMemSet:
-            case XTIROpMemCopy:
-            case XTIROpRelease:
-            case XTIROpWeakRegister:
-            case XTIROpWeakUnregister:
-            case XTIROpVTblDispatch:
-            case XTIROpProtoDispatch:
-            case XTIROpAsm:
-                return NO;
             default:
+                if (XTIROpcodeMayWriteMemory(n.opcode))
+                    return NO;
                 continue;
                 }
             }
@@ -490,29 +478,8 @@ static BOOL pureOp(XTIROpcode op)
     if (in1 == in2)
         return NO;
     for (XTIRInsn* n in H.instructions)
-        switch (n.opcode)
-            {
-        case XTIROpStore:
-        case XTIROpStoreVolatile:
-        case XTIROpLoadVolatile:
-        case XTIROpCall:
-        case XTIROpCallIndirect:
-        case XTIROpCallCloaked:
-        case XTIROpCallBanked:
-        case XTIROpCallBankedIndirect:
-        case XTIROpMemSet:
-        case XTIROpMemCopy:
-        case XTIROpRetain:
-        case XTIROpRelease:
-        case XTIROpWeakRegister:
-        case XTIROpWeakUnregister:
-        case XTIROpVTblDispatch:
-        case XTIROpProtoDispatch:
-        case XTIROpAsm:
+        if (XTIROpcodeMayWriteMemory(n.opcode) || n.opcode == XTIROpLoadVolatile)
             return NO;
-        default:
-            break;
-            }
     return YES;
     }
 

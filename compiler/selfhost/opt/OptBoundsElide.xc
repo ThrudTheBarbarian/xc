@@ -194,7 +194,7 @@
                         continue;
                     return false;
                     }
-                if (IROp.has(oc, OPF_CALL) || self.lrcWritesMemory(oc))
+                if (self.mayWriteMemory(oc))
                     return false;
                 }
             }
@@ -486,7 +486,7 @@
         for (u32 i = (u32)0; i < H.insns().count(); i = i + (u32)1)
             {
             u16 oc = ((IRInsn*)H.insns().get(i)).opc();
-            if (self.lrcWritesMemory(oc) || IROp.has(oc, OPF_CALL) || oc == opLoadVolatile)
+            if (self.mayWriteMemory(oc) || oc == opLoadVolatile)
                 return false;
             }
         return true;

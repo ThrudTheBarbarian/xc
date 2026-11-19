@@ -215,6 +215,19 @@ BOOL XTIROpcodeIsTerminator(XTIROpcode op);
 /// Returns YES for opcodes that take/return a memory token.
 BOOL XTIROpcodeTouchesMemory(XTIROpcode op);
 
+/// Returns YES for opcodes that may write memory: every store (vector and
+/// aggregate ones too), every call and dispatch, the ARC and weak ops, Asm,
+/// VaStart and VaArg.
+BOOL XTIROpcodeMayWriteMemory(XTIROpcode op);
+
+/// Returns YES for opcodes that run code a pass cannot see: every call, direct
+/// or not, and a method dispatch.
+BOOL XTIROpcodeCallsOut(XTIROpcode op);
+
+/// Returns YES for opcodes that clobber the caller-saved registers: the calls,
+/// the dispatches, and the ops the back ends make into calls (the homing list).
+BOOL XTIROpcodeClobbersCallerSaved(XTIROpcode op);
+
 /// Opcodes whose instruction carries a predicate a copy must keep: the
 /// compares' operator, FpToSI / FpToUI's XTIRConvUnchecked (C's casts), and
 /// FAdd / FSub's XTIRFpContract (a copy of a fused add fuses too, as in the

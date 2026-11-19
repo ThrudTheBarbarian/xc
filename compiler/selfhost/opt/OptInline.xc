@@ -470,7 +470,7 @@
                 // a check (Checked.xc) inlines as a compare with a cold trap.
                 if (callsTrap((IRInsn*)bb.insns().get(i)))
                     continue;
-                if (isCallOp(oc) || oc == opVTblDispatch || oc == opProtoDispatch)
+                if (self.isDirectCallOp(oc) || oc == opVTblDispatch || oc == opProtoDispatch)
                     return (IRFunc*)0;
                 }
             }

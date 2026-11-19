@@ -39,26 +39,11 @@ static BOOL apBlocks(XTIRModule* mod, XTIRInsn* n)
         {
     case XTIROpRetain:
         return NO;    // another count going up frees nothing
-    case XTIROpStore:
-    case XTIROpStoreVolatile:
     case XTIROpLoadVolatile:
-    case XTIROpCall:
-    case XTIROpCallIndirect:
-    case XTIROpCallBanked:
-    case XTIROpCallBankedIndirect:
-    case XTIROpCallCloaked:
-    case XTIROpMemSet:
-    case XTIROpMemCopy:
-    case XTIROpRelease:
-    case XTIROpWeakRegister:
-    case XTIROpWeakUnregister:
-    case XTIROpVTblDispatch:
-    case XTIROpProtoDispatch:
-    case XTIROpAsm:
     case XTIROpReturn:
         return YES;
     default:
-        return NO;
+        return XTIROpcodeMayWriteMemory(n.opcode);
         }
     }
 

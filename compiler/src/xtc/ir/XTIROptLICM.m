@@ -36,33 +36,13 @@
 // loads in that loop non-invariant.
 static BOOL writesMemory(XTIROpcode op)
     {
-    switch (op)
-        {
-    case XTIROpStore:
-    case XTIROpStoreVolatile:
-    case XTIROpLoadVolatile:
-    case XTIROpCall:
-    case XTIROpCallBanked:
-    case XTIROpCallCloaked:
-    case XTIROpMemSet:
-    case XTIROpMemCopy:
-    case XTIROpRetain:
-    case XTIROpRelease:
-    case XTIROpWeakRegister:
-    case XTIROpWeakUnregister:
-    case XTIROpVTblDispatch:
-    case XTIROpProtoDispatch:
-    case XTIROpAsm:
-        return YES;
-    default:
-        return NO;
-        }
+    return XTIROpcodeMayWriteMemory(op) || op == XTIROpLoadVolatile;
     }
 
+// Clobbers the caller-saved registers, the vector ones among them.
 static BOOL licmIsCall(XTIROpcode op)
     {
-    return op == XTIROpCall || op == XTIROpCallBanked || op == XTIROpCallCloaked ||
-           op == XTIROpVTblDispatch || op == XTIROpProtoDispatch;
+    return XTIROpcodeClobbersCallerSaved(op);
     }
 
 // A pure, speculation-safe op (no memory result, no side effect, no trap).

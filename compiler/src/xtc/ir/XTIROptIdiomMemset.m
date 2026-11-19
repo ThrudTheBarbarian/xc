@@ -305,17 +305,13 @@ static BOOL constOf(XTIROperand* op, NSDictionary<NSNumber*, XTIRInsn*>* defOf, 
                     }
                 store = insn;
                 break;
-            case XTIROpLoad:
-            case XTIROpLoadVolatile:
-            case XTIROpCall:
-            case XTIROpCallBanked:
-            case XTIROpCallCloaked:
-            case XTIROpMemCopy:
-            case XTIROpMemSet:
-                bodyOK = NO;
-                break;
             default:
-                break; // AddrOf / ElementAddr / Const / Add(iv) — pure
+                // Any other memory op, and any call or dispatch: the MemSet
+                // that replaces the loop would drop it. What is left is
+                // AddrOf / ElementAddr / Const / Add(iv), all pure.
+                if (XTIROpcodeTouchesMemory(insn.opcode) || XTIROpcodeMayWriteMemory(insn.opcode))
+                    bodyOK = NO;
+                break;
                 }
             if (!bodyOK)
                 break;

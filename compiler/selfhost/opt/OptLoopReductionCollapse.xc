@@ -411,7 +411,7 @@
                 if (hasBlock(L.body(), bb))
                     continue;
                 for (u32 k = (u32)0; k < bb.insns().count(); k = k + (u32)1)
-                    if (lrcWritesMemory(((IRInsn*)bb.insns().get(k)).opc()))
+                    if (self.mayWriteMemory(((IRInsn*)bb.insns().get(k)).opc()))
                         return false;
                 }
 
@@ -521,7 +521,7 @@
                 bool isStore = n.isOp(opStore) || n.isOp(opStoreVolatile) || n.isOp(opVStore);
                 if (!isLoad && !isStore)
                     {
-                    if (lrcWritesMemory(n.opc()))
+                    if (self.mayWriteMemory(n.opc()))
                         return false; // side effect
                     continue;
                     }
@@ -575,7 +575,7 @@
             for (u32 k = (u32)0; k < bb.insns().count(); k = k + (u32)1)
                 {
                 u16 oc = ((IRInsn*)bb.insns().get(k)).opc();
-                if (lrcWritesMemory(oc) || oc == opLoadVolatile)
+                if (self.mayWriteMemory(oc) || oc == opLoadVolatile)
                     return false;
                 }
             }

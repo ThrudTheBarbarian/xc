@@ -149,18 +149,7 @@ static NSArray<XTIRBlock*>* successors(XTIRBlock* b)
 
 static BOOL isCallOpcode(XTIROpcode op)
     {
-    switch (op)
-        {
-    case XTIROpCall:
-    case XTIROpCallBanked:
-    case XTIROpCallCloaked:
-    case XTIROpCallIndirect:
-    case XTIROpVTblDispatch:
-    case XTIROpProtoDispatch:
-        return YES;
-    default:
-        return NO;
-        }
+    return XTIROpcodeCallsOut(op);
     }
 
 // Body op that makes unrolling unsafe. Plain scalar Load/Store are always

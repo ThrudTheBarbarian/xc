@@ -479,10 +479,9 @@
         return out;
         }
 
-    // CallIndirect but not CallBankedIndirect.
     final bool unrollIsCall(u16 oc)
         {
-        return IROp.has(oc, OPF_CALL_DIRECT | OPF_DISPATCH) || oc == opCallIndirect;
+        return self.callsOut(oc);
         }
 
     // A body op that makes unrolling unsafe. Plain scalar Load/Store are always

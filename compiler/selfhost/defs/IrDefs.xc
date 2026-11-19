@@ -16,7 +16,7 @@
 #define OPF_PURE $0001        // a value computation that cannot trap: speculatable's list
 #define OPF_TRAPS $0002       // a value computation that may trap: the divides and remainders, and FDiv
 #define OPF_MEM $0004         // takes and returns a memory token: touchesMemory's list
-#define OPF_WRITES $0008      // writes memory: lrcWritesMemory's list
+#define OPF_WRITES $0008      // may write memory: every store, call and dispatch, Invoke, the ARC and weak ops, Asm, VaStart, VaArg
 #define OPF_CALL $0010        // Call, CallCloaked, CallBanked, CallIndirect, CallBankedIndirect
 #define OPF_CALL_DIRECT $0020 // a call to a named function: Call, CallBanked, CallCloaked
 #define OPF_DISPATCH $0040    // a method call through a table: VTblDispatch, ProtoDispatch

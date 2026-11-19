@@ -329,14 +329,15 @@
         return IROp.has(oc, OPF_TERM) && oc != opInvoke && oc != opResume;
         }
 
-    // Not the indirect calls.
+    // Clobbers the caller-saved registers: every call and dispatch, and the
+    // ops the back ends make into calls (the homing list).
     final bool licmIsCall(u16 oc)
         {
-        return IROp.has(oc, OPF_CALL_DIRECT | OPF_DISPATCH);
+        return IROp.has(oc, OPF_CLOBBERS);
         }
 
     final bool licmWritesMemory(u16 oc)
         {
-        return self.lrcWritesMemory(oc) || oc == opLoadVolatile;
+        return self.mayWriteMemory(oc) || oc == opLoadVolatile;
         }
     }

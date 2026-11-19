@@ -111,7 +111,8 @@ static NSSet<XTIRInsn*>* _Nullable selfBracket(XTIRFunction* fn)
 
     // ARC-inert fixpoint: a function is inert until proven otherwise. Skipping
     // its own bracket (net-zero on its receiver), it must contain no Release, no
-    // virtual dispatch, and call only inert known functions.
+    // call it cannot see (a dispatch, a call through a pointer), and call only
+    // inert known functions.
     NSMutableSet<XTIRFunction*>* notInert = [NSMutableSet set];
     BOOL changed = YES;
     while (changed)
@@ -130,7 +131,9 @@ static NSSet<XTIRInsn*>* _Nullable selfBracket(XTIRFunction* fn)
                     if (bracket && [bracket containsObject:insn])
                         continue;
                     XTIROpcode op = insn.opcode;
-                    if (op == XTIROpRelease || op == XTIROpVTblDispatch || op == XTIROpProtoDispatch)
+                    if (op == XTIROpRelease || op == XTIROpAutorelease
+                        || (XTIROpcodeCallsOut(op) && op != XTIROpCall && op != XTIROpCallBanked
+                            && op != XTIROpCallCloaked))
                         {
                         bad = YES;
                         break;

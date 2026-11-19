@@ -214,7 +214,7 @@
 
     final bool callIsSelf(IRModule* m, IRInsn* n, IRFunc* fn)
         {
-        if (!self.isCallOp(n.opc()) || n.ops().count() < 2)
+        if (!self.isDirectCallOp(n.opc()) || n.ops().count() < 2)
             return false;
         IROperand* callee = (IROperand*)n.ops().get((u32)0);
         if (callee.kind() != (u8)OPK_SYM || callee.name() == 0)

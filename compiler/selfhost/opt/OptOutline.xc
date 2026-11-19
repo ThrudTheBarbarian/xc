@@ -493,7 +493,7 @@
                 if (oc == opAddrOf && n.res() != (IRValue*)0
                     && self.aeUsersOf(f, n.res()).count() == (u32)0)
                     continue;
-                if (lrcWritesMemory(oc) || (oc == opLoad || oc == opLoadVolatile) || oc == opAddrOf)
+                if (self.mayWriteMemory(oc) || (oc == opLoad || oc == opLoadVolatile) || oc == opAddrOf)
                     return false;
                 }
             }
@@ -4028,7 +4028,7 @@
                         return ppNo("a store not at [i]");
                     ppNoteKey(_ppBase, addr, _ppAtIv, st);
                     }
-                else if (lrcWritesMemory(oc) || (oc == opLoad || oc == opLoadVolatile))
+                else if (self.mayWriteMemory(oc) || (oc == opLoad || oc == opLoadVolatile))
                     {
                     String* what = String.withString(n.op());
                     if (oc == opCall && n.ops().count() > 0

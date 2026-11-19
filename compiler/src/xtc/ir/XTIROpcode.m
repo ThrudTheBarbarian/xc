@@ -56,3 +56,61 @@ BOOL XTIROpcodeTouchesMemory(XTIROpcode op)
         return NO;
         }
     }
+
+BOOL XTIROpcodeMayWriteMemory(XTIROpcode op)
+    {
+    switch (op)
+        {
+    case XTIROpStore:
+    case XTIROpStoreVolatile:
+    case XTIROpMemCopy:
+    case XTIROpMemSet:
+    case XTIROpAggStore:
+    case XTIROpVStore:
+    case XTIROpRetain:
+    case XTIROpRelease:
+    case XTIROpAutorelease:
+    case XTIROpWeakRegister:
+    case XTIROpWeakUnregister:
+    case XTIROpAsm:
+    case XTIROpVaStart:
+    case XTIROpVaArg:
+        return YES;
+    default:
+        return XTIROpcodeCallsOut(op);
+        }
+    }
+
+BOOL XTIROpcodeCallsOut(XTIROpcode op)
+    {
+    switch (op)
+        {
+    case XTIROpCall:
+    case XTIROpCallIndirect:
+    case XTIROpCallCloaked:
+    case XTIROpCallBanked:
+    case XTIROpCallBankedIndirect:
+    case XTIROpVTblDispatch:
+    case XTIROpProtoDispatch:
+        return YES;
+    default:
+        return NO;
+        }
+    }
+
+BOOL XTIROpcodeClobbersCallerSaved(XTIROpcode op)
+    {
+    switch (op)
+        {
+    case XTIROpMemCopy:
+    case XTIROpMemSet:
+    case XTIROpRelease:
+    case XTIROpAutorelease:
+    case XTIROpWeakRegister:
+    case XTIROpWeakUnregister:
+    case XTIROpWeakLoad:
+        return YES;
+    default:
+        return XTIROpcodeCallsOut(op);
+        }
+    }

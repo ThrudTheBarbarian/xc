@@ -2586,11 +2586,19 @@ class BeFact : Object
         return defOf;
         }
 
-    // A call to a named function: Call, CallBanked, CallCloaked. IRInsn.isCall
-    // also takes the indirect calls.
-    bool isCallOp(u16 oc)
+    // A call to a named function: Call, CallBanked, CallCloaked. Only for
+    // "which function does this call?"; callsOut answers "does this run code
+    // the pass cannot see?".
+    bool isDirectCallOp(u16 oc)
         {
         return IROp.has(oc, OPF_CALL_DIRECT);
+        }
+
+    // Runs code the pass cannot see: every call, direct or not, a method
+    // dispatch, and Invoke.
+    bool callsOut(u16 oc)
+        {
+        return IROp.has(oc, OPF_CALL | OPF_DISPATCH) || oc == opInvoke;
         }
 
     bool hasInsn(Array* ns, IRInsn* n)
@@ -3570,9 +3578,9 @@ class BeFact : Object
         return ps == (Array*)0 ? new Array() : ps;
         }
 
-    // Leaves out the indirect calls, Autorelease, AggStore and VStore; the
-    // callers that need those add them.
-    bool lrcWritesMemory(u16 oc)
+    // May write memory: the stores (vector and aggregate ones too), every call
+    // and dispatch, the ARC and weak-reference ops, Asm and the va_list ops.
+    bool mayWriteMemory(u16 oc)
         {
         return IROp.has(oc, OPF_WRITES);
         }

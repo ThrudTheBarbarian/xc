@@ -296,7 +296,9 @@
                 store = n;
                 continue;
                 }
-            if (oc == opStoreVolatile || oc == opLoad || oc == opLoadVolatile || oc == opMemCopy || oc == opMemSet || self.isCallOp(oc))
+            // Any other memory op, and any call or dispatch: the MemSet that
+            // replaces the loop would drop it.
+            if (IROp.has(oc, OPF_MEM) || self.mayWriteMemory(oc))
                 return (IRInsn*)0;
             }
         return store;

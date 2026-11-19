@@ -113,9 +113,9 @@
         return bracket;
         }
 
-    // Inert = releases nothing, dispatches nothing it cannot see, and calls only
-    // functions that are themselves inert. Its own bracket does not count: it is
-    // net zero on the receiver.
+    // Inert = releases nothing, makes no call it cannot see (a dispatch, a call
+    // through a pointer), and calls only functions that are themselves inert.
+    // Its own bracket does not count: it is net zero on the receiver.
     final bool isInert(IRModule* m, IRFunc* fn, Array* bracket, Array* notInert)
         {
         for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
@@ -127,10 +127,13 @@
                 if (bracket != 0 && self.hasInsn(bracket, n))
                     continue;
                 u16 oc = n.opc();
-                if (oc == opRelease || oc == opVTblDispatch || oc == opProtoDispatch)
+                if (oc == opRelease || oc == opAutorelease)
                     return false;
-                if (!self.isCallOp(oc))
+                if (!self.callsOut(oc))
                     continue;
+                // A dispatch or an indirect call runs code this cannot see.
+                if (!self.isDirectCallOp(oc))
+                    return false;
                 if (n.ops().count() < (u32)1)
                     return false;
                 IROperand* c = (IROperand*)n.ops().get((u32)0);
@@ -374,9 +377,7 @@
             if (c.kind() == (u8)OPK_SYM && IRRuntime.isRuntime(c.name()))
                 return false;
             }
-        // Every call, an indirect one too (lrcWritesMemory leaves those out).
-        return self.lrcWritesMemory(oc) || IROp.has(oc, OPF_CALL)
-            || oc == opLoadVolatile || oc == opReturn;
+        return self.mayWriteMemory(oc) || oc == opLoadVolatile || oc == opReturn;
         }
 
     // Is v the retained value x, through casts?

@@ -337,26 +337,7 @@ static BOOL defConeReaches(XTIRValueId startVid, NSSet<NSNumber*>* taboo,
 
 static BOOL insnWritesMemory(XTIROpcode op)
     {
-    switch (op)
-        {
-    case XTIROpStore:
-    case XTIROpStoreVolatile:
-    case XTIROpCall:
-    case XTIROpCallBanked:
-    case XTIROpCallCloaked:
-    case XTIROpMemSet:
-    case XTIROpMemCopy:
-    case XTIROpRetain:
-    case XTIROpRelease:
-    case XTIROpWeakRegister:
-    case XTIROpWeakUnregister:
-    case XTIROpVTblDispatch:
-    case XTIROpProtoDispatch:
-    case XTIROpAsm:
-        return YES;
-    default:
-        return NO;
-        }
+    return XTIROpcodeMayWriteMemory(op);
     }
 
 // The base symbol a memory address ultimately roots at — an `AddrOf @sym`,
@@ -659,27 +640,8 @@ static NSNumber* lrcAddrBaseSym(XTIROperand* addr,
     // outer body needs the invariant-inner-loop hoist first — a later increment).
     for (NSNumber* bn in O.body)
         for (XTIRInsn* insn in blocks[bn.unsignedIntegerValue].instructions)
-            switch (insn.opcode)
-                {
-            case XTIROpStore:
-            case XTIROpStoreVolatile:
-            case XTIROpLoadVolatile:
-            case XTIROpCall:
-            case XTIROpCallBanked:
-            case XTIROpCallCloaked:
-            case XTIROpMemSet:
-            case XTIROpMemCopy:
-            case XTIROpRetain:
-            case XTIROpRelease:
-            case XTIROpWeakRegister:
-            case XTIROpWeakUnregister:
-            case XTIROpVTblDispatch:
-            case XTIROpProtoDispatch:
-            case XTIROpAsm:
+            if (insnWritesMemory(insn.opcode) || insn.opcode == XTIROpLoadVolatile)
                 return NO;
-            default:
-                break;
-                }
 
     // Classify the outer header phis: exactly one induction variable (counted,
     // const trip) + exactly one integer accumulator. Anything else ⇒ bail.
