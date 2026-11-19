@@ -378,6 +378,8 @@ class ParFnChunk : ParChunk
     // in the record, 16-31 the accumulator's; 32-33 the element's size as
     // log2, 34 signed, 35 float; 36-37 the accumulator's size as log2, 38
     // signed, 39 float; 40-43 the operator (1 +, 2 |, 3 &, 4 ^, 5 min, 6 max).
+    // Bit 39 is not read: a float element's accumulator has the element's
+    // type, so bit 35 decides.
     static void fixRange(u8* off, i64 from, i64 to, i64 code)
         {
         u8* base = *(u8**)(pointer)(off + (code & (i64)65535));
@@ -387,7 +389,6 @@ class ParFnChunk : ParChunk
         bool efl = ((code >> (i64)35) & (i64)1) != (i64)0;
         u32 asz = (u32)1 << (u32)((code >> (i64)36) & (i64)3);
         bool asg = ((code >> (i64)38) & (i64)1) != (i64)0;
-        bool afl = ((code >> (i64)39) & (i64)1) != (i64)0;
         u32 op = (u32)((code >> (i64)40) & (i64)15);
         if (efl)
             {
