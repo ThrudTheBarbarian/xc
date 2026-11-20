@@ -4316,6 +4316,16 @@ class Sema
                     promoteFormatAt(n, (u32)2);
                     }
                 }
+            // Log's format methods the same (#336): bare `error("%d", v)`
+            // under `use Log` printed an i64's low 32 bits and was not
+            // checked, where Log.error fitted the format to it.
+            else if (_isOp(cls.name(), "Log")
+                     && (_isOp(n.name(), "error") || _isOp(n.name(), "warning") || _isOp(n.name(), "info")))
+                {
+                rewriteFormatAt(n, (u32)0);
+                checkFormatAt(n, (u32)0, useFormatCallNameIn(n.name(), "Log", n.name()));
+                promoteFormatAt(n, (u32)0);
+                }
             return;
             }
         // Nothing matched. An unresolved call is an ERROR, and an error still
@@ -5819,6 +5829,18 @@ class Sema
         String* s = String.withString(callee);
         s.appendCString(" (Stdio.");
         s.appendCString(method);
+        s.appendCString(" via use)");
+        return s;
+        }
+
+    // "error (Log.error via use)"
+    String* useFormatCallNameIn(String* callee, string owner, String* method)
+        {
+        String* s = String.withString(callee);
+        s.appendCString(" (");
+        s.appendCString(owner);
+        s.appendCString(".");
+        s.append(method);
         s.appendCString(" via use)");
         return s;
         }
