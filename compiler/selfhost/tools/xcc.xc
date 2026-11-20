@@ -2269,7 +2269,7 @@ String* cPathTargetFlags(DriverOptions* d, bool cxx)
     // arm64 Linux: atomics inline (-mno-outline-atomics). Outlined, they are
     // calls to __aarch64_ldadd4_acq_rel and its kin, which only GCC's static
     // libgcc.a defines, and xcc's link takes the shared libgcc_s.
-    String* atom = a.equals(String.withCString("arm64-linux")) ? String.withCString(" -mno-outline-atomics") : String.withCString("");
+    String* atom = (rowCpu(d, "arm64") && rowOs(d, "linux")) ? String.withCString(" -mno-outline-atomics") : String.withCString("");
     if (a.equals(host))
         return atom;
     // The row's clang target (the target table); its C headers from a root
@@ -2283,19 +2283,10 @@ String* cPathTargetFlags(DriverOptions* d, bool cxx)
         Stdio.error(String.withFormat("xcc: error: a C program builds for the host or for x86_64, win64 and arm64-linux; not for '%s'\n", a.cString()));
         return (String*)0;
     }
-    if (triple.hasPrefix(String.withCString("x86_64-linux")) && cxx) {
-        // C++ links the target's libstdc++, so its headers: a glibc root
-        // (usr/include copied from an x86-64 Linux machine), as arm64's.
-        rootVar = String.withCString("XTC_X86_64_LINUX_ROOT");
-        root = String.withCString("/opt/clang/linux/x86_64-linux-gnu");
-    } else if (triple.hasPrefix(String.withCString("x86_64-linux"))) {
-        rootVar = String.withCString("XTC_MUSL_ROOT");
-        root = String.withCString("/opt/clang/linux/x86_64-linux-musl");
-    } else if (triple.hasPrefix(String.withCString("aarch64-linux"))) {
-        rootVar = String.withCString("XTC_ARM64_LINUX_ROOT");
-        root = String.withCString("/opt/clang/linux/aarch64-linux-gnu");
-    } else
-        root = String.withCString("/opt/clang/win64/x86_64-w64-mingw32");
+    // The row's header root and the variable that overrides it; C++ has its
+    // own (it links the target's libstdc++).
+    root = cxx ? row.cxxRoot() : row.cRoot();
+    rootVar = cxx ? row.cxxRootVar() : row.cRootVar();
     if (rootVar != (String*)0) {
         String* env = Platform.env(rootVar);
         if (env != 0 && env.byteLength() > (u32)0) root = env;

@@ -52,6 +52,13 @@ class TargetRow
     bool _itableAlways; // protocol calls always go through it (else: a library build or an import)
     bool _nativeVarargs; // a variadic's arguments ride the C ABI, not the pack buffer
     bool _threads;      // a par block has threads to run on (else it runs serially)
+    // A C program built for the row off its host (cTriple): the root of that
+    // target's C headers, and the variable that overrides it; a C++ program's,
+    // which links the target's libstdc++. 0 where the row has no cTriple.
+    String* _cRoot;
+    String* _cRootVar;
+    String* _cxxRoot;
+    String* _cxxRootVar;
 
     void init(void)
         {
@@ -99,6 +106,37 @@ class TargetRow
     bool itableAlways(void) { return _itableAlways; }
     bool nativeVarargs(void) { return _nativeVarargs; }
     bool threads(void) { return _threads; }
+    String* cRoot(void) { return _cRoot; }
+    String* cRootVar(void) { return _cRootVar; }
+    String* cxxRoot(void) { return _cxxRoot; }
+    String* cxxRootVar(void) { return _cxxRootVar; }
+
+    // The C header roots, from the clang target: musl's for x86-64 Linux
+    // (glibc's for C++, which links libstdc++), glibc's (usr/include, copied
+    // from an arm64 Linux machine) for arm64 Linux, mingw's for win64.
+    void setCRoots(void)
+        {
+        String* t = _cTriple;
+        if (t.hasPrefix(String.withCString("x86_64-linux")))
+            {
+            _cRoot = String.withCString("/opt/clang/linux/x86_64-linux-musl");
+            _cRootVar = String.withCString("XTC_MUSL_ROOT");
+            _cxxRoot = String.withCString("/opt/clang/linux/x86_64-linux-gnu");
+            _cxxRootVar = String.withCString("XTC_X86_64_LINUX_ROOT");
+            }
+        else if (t.hasPrefix(String.withCString("aarch64-linux")))
+            {
+            _cRoot = String.withCString("/opt/clang/linux/aarch64-linux-gnu");
+            _cRootVar = String.withCString("XTC_ARM64_LINUX_ROOT");
+            _cxxRoot = _cRoot;
+            _cxxRootVar = _cRootVar;
+            }
+        else if (t.byteLength() > (u32)0)
+            {
+            _cRoot = String.withCString("/opt/clang/win64/x86_64-w64-mingw32");
+            _cxxRoot = _cRoot;
+            }
+        }
 
     // The layout and dispatch columns, from the back end: every row on one back
     // end shares them, so they are written once per back end, here, rather
@@ -171,6 +209,7 @@ class TargetRow
         r._compact = compact;
         r._aliases = TargetRow.words(String.withCString(aliases));
         r.setLayout();
+        r.setCRoots();
         return r;
         }
 

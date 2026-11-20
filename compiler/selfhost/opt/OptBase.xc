@@ -257,6 +257,19 @@ class OptProfile
     static OptProfile* forTarget(String* t)
         {
         OptProfile* p = new OptProfile();
+        // `t` is a target row's back-end key (the driver passes row.backend();
+        // the tools name one), so the profile is chosen once here, per back
+        // end, not by a list of platforms at each field (#332). `xt` is the
+        // tools' older spelling of xt6502. A key no back end has matches no
+        // group, as before. Each field below says which groups it is on for.
+        String* be = t.equals(String.withCString("xt")) ? String.withCString("xt6502") : t;
+        bool arm64 = be.equals(String.withCString("arm64"));
+        bool x86 = be.equals(String.withCString("x86_64")) || be.equals(String.withCString("win64"));
+        bool wide = arm64 || x86; // the 64-bit hosts
+        bool arm9 = be.equals(String.withCString("arm9"));
+        bool wasm = be.equals(String.withCString("wasm32"));
+        bool m68k = be.equals(String.withCString("atarist"));
+        bool xt = be.equals(String.withCString("xt6502"));
         // Tier-1 is on everywhere; Tier-2 (accumulator recursion) only where the
         // campaign measured a win — an in-order core, where the call overhead is
         // not hidden.
@@ -268,33 +281,29 @@ class OptProfile
         // fields stay values. Measured under Node over eight benchmarks: 13.9%
         // faster for eighteen bytes of module, almost all of it struct_copy,
         // which goes 2.8x. private:docs/bugs/238.
-        p._inlineAggParams = t.equals(String.withCString("arm64"))
-                          || t.equals(String.withCString("x86_64"))
-                          || t.equals(String.withCString("win64"))
-                          || t.equals(String.withCString("wasm32"));
+        p._inlineAggParams = wide || wasm;
         p._initGuardElim = true;
-        p._ptr64 = t.equals(String.withCString("arm64")) || t.equals(String.withCString("x86_64"))
-                || t.equals(String.withCString("win64"));
+        p._ptr64 = wide;
         // The 6502 and the 68000 backends do not lower MemSet, so the idiom
         // stays a loop there.
         // arm9 leaves the reduction collapse OFF: its trip-1 rewrite and
         // reduction-nest surgery mis-lower there (see the target profile).
         // wasm32 keeps the base-profile NO (§9: measure under a real engine
         // before turning loop surgery on).
-        p._reductionCollapse = !(t.equals(String.withCString("arm9")) || t.equals(String.withCString("wasm32")));
+        p._reductionCollapse = !(arm9 || wasm);
         // NEON on arm9/arm64, SSE on x86_64, v128 on wasm32 (W4); the 6502
         // and the 68000 have no vector unit and their profiles say so.
-        p._vectorize = t.equals(String.withCString("arm9")) || t.equals(String.withCString("arm64")) || t.equals(String.withCString("x86_64")) || t.equals(String.withCString("win64")) || t.equals(String.withCString("wasm32"));
+        p._vectorize = arm9 || wide || wasm;
         // umull/umull2 + uzp2 build the high half of a 32x32 lane product
         // and ushr does the post-shift, so constant division vectorises on
         // arm64. The other vectorising back ends have no lowering yet, and
         // the pass leaves those loops scalar rather than emitting an opcode
         // they would drop.
-        p._highMul = t.equals(String.withCString("arm64")) || t.equals(String.withCString("x86_64")) || t.equals(String.withCString("win64"));
+        p._highMul = wide;
         // ushr on arm64, psrlw/psrld/psrlq on x86. Separate from _highMul
         // because a back end can have the lane shift without the widening
         // multiply the magic divide needs.
-        p._laneShift = t.equals(String.withCString("arm64")) || t.equals(String.withCString("x86_64")) || t.equals(String.withCString("win64"));
+        p._laneShift = wide;
         // The lane-index vector is a 16-byte read-only global loaded with the
         // VLoad the back end already has, so this needs no instruction
         // selection of its own — only somewhere to put the constant.
@@ -302,26 +311,25 @@ class OptProfile
         // The float lane compare and the int-to-float lane conversion the
         // escape-time loops need: fcm*/scvtf on arm64, cmpps/cvtdq2ps on x86.
         p._escapeVec = p._laneShift;
-        p._escapeJam = t.equals(String.withCString("arm64")) ? (u32)4
-                     : (t.equals(String.withCString("x86_64")) || t.equals(String.withCString("win64"))) ? (u32)2 : (u32)1;
+        p._escapeJam = arm64 ? (u32)4 : x86 ? (u32)2 : (u32)1;
         // FLOAT reductions (a reassociation): only where the back end lowers
         // VDiv/VSqrt and a float VReduceAdd — arm64 and x86-64/win64. The
         // vectoriser also requires the source to grant it (see floatRedux).
-        p._floatReduce = t.equals(String.withCString("arm64")) || t.equals(String.withCString("x86_64")) || t.equals(String.withCString("win64"));
-        p._orderedFloat = t.equals(String.withCString("arm64"));
+        p._floatReduce = wide;
+        p._orderedFloat = arm64;
         // bsl/bit/bif and shl+usra on arm64. x86 would need AVX-512's
         // vpternlogd/vprold for a gain, and its AVX2 copies cannot use them.
-        p._bitSelect = t.equals(String.withCString("arm64"));
+        p._bitSelect = arm64;
         // AVX-512 has both as one instruction (vpternlogd 0xCA, vprold); the
         // AVX2 and SSE copies do not, so x86 combines 64-byte functions only.
-        p._bitSelect512 = t.equals(String.withCString("x86_64")) || t.equals(String.withCString("win64"));
-        p._memsetIdiom = !(t.equals(String.withCString("xt")) || t.equals(String.withCString("xt6502")) || t.equals(String.withCString("atarist")));
+        p._bitSelect512 = x86;
+        p._memsetIdiom = !(xt || m68k);
         // The 6502 does NOT hoist: an eager init at entry costs it more than
         // the guard it saves.
-        p._initGuardHoist = !(t.equals(String.withCString("xt")) || t.equals(String.withCString("xt6502")));
-        if (t.equals(String.withCString("xt")) || t.equals(String.withCString("xt6502")) || t.equals(String.withCString("atarist")))
+        p._initGuardHoist = !xt;
+        if (xt || m68k)
             p._accumRecursion = true;
-        if (t.equals(String.withCString("arm9")))
+        if (arm9)
             {
             p._nativeVarargs = true;
             p._sqrtIntrinsic = true;
@@ -329,13 +337,13 @@ class OptProfile
             }
         // arm64 also uses the native AAPCS va_list (bug 179), so VaStart/VaArg
         // stay abstract for the backend and the pack-buffer expand is skipped.
-        if (t.equals(String.withCString("arm64")))
+        if (arm64)
             p._nativeVarargs = true;
         // arm64, x86_64 and win64 (which uses the x86_64 profile) have a
         // hardware sqrt; the 6502 and the 68000 do not, and their profiles say
         // so — the pass is a no-op there rather than a different lowering.
         // f32.sqrt/f64.sqrt; f64.mul is IEEE
-        if (t.equals(String.withCString("arm64")) || t.equals(String.withCString("x86_64")) || t.equals(String.withCString("win64")) || t.equals(String.withCString("wasm32")))
+        if (wide || wasm)
             {
             p._sqrtIntrinsic = true;
             p._powSquare = true;
@@ -345,21 +353,21 @@ class OptProfile
         // moderate set; arm64 and x86_64/win64 the large one, and only arm64
         // opts into unrolling CALL bodies (frame-gated, since each clone
         // allocates fresh value ids and those size its stack frame).
-        if (t.equals(String.withCString("atarist")) || t.equals(String.withCString("arm9")))
+        if (m68k || arm9)
             {
             p._unrollMaxTrip = (u32)16;
             p._unrollMaxBody = (u32)32;
             p._unrollBudget = (u32)4096;
             p._unrollMultiCarried = true;
             }
-        if (t.equals(String.withCString("arm64")) || t.equals(String.withCString("x86_64")) || t.equals(String.withCString("win64")))
+        if (wide)
             {
             p._unrollMaxTrip = (u32)32;
             p._unrollMaxBody = (u32)64;
             p._unrollBudget = (u32)8192;
             p._unrollMultiCarried = true;
             }
-        if (t.equals(String.withCString("arm64")))
+        if (arm64)
             {
             // A fully unrolled loop is ONE basic block, and every value it
             // computes is live inside it. matrix_mul's k loop is trip 32 over
@@ -387,17 +395,17 @@ class OptProfile
         // x86-64 profile, so it takes this too. Leaving it out also turned off
         // the cross-block CSE that reads the same knob, and every win64 build
         // differed from the reference (bug 251).
-        if (t.equals(String.withCString("x86_64")) || t.equals(String.withCString("win64")))
+        if (x86)
             p._hoistLocalAddr = true;
         // x86-64 fuses no plain multiply-add (only :goal(speed) code, owner
         // 2026-10-26), so a product by 2 is cheaper as a sum, and a negated
         // product added to something is a subtraction. arm64 fuses both into
         // one instruction already and keeps them.
-        if (t.equals(String.withCString("x86_64")) || t.equals(String.withCString("win64")))
+        if (x86)
             p._floatMulToAdd = true;
         // wasm32: modest caps between the 6502's 4/8 and arm64's 32/64 —
         // code size is download size (XTIRWasm32TargetProfile).
-        if (t.equals(String.withCString("wasm32")))
+        if (wasm)
             {
             p._unrollMaxTrip = (u32)8;
             p._unrollMaxBody = (u32)24;
@@ -409,7 +417,7 @@ class OptProfile
         // ZP walking pointer plus per-iteration advance costs more than the
         // index arithmetic it replaces — so it stays off there.
         // wasm32: pointer-IV OFF until measured under a real engine (§9).
-        p._pointerIV = !(t.equals(String.withCString("xt")) || t.equals(String.withCString("xt6502")) || t.equals(String.withCString("wasm32")));
+        p._pointerIV = !(xt || wasm);
         // Variable-trip partial unrolling is kernel-dependent on the 68000 —
         // the extra live values an unrolled body carries spill — so it stays
         // off there as well as on the 6502.
@@ -418,18 +426,18 @@ class OptProfile
         // (int_accum -45%, mem_copy -37%, hash_mix -35%). The engine does not
         // unroll for us, and a loop whose trip count it cannot see pays the
         // branch every iteration. private:docs/bugs/238.
-        p._unrollVarTrip = t.equals(String.withCString("arm64")) || t.equals(String.withCString("arm9")) || t.equals(String.withCString("x86_64")) || t.equals(String.withCString("win64")) || t.equals(String.withCString("wasm32"));
+        p._unrollVarTrip = wide || arm9 || wasm;
         // A loop of several independent vector chains (v = v*k + c per chain)
         // unrolls on arm64, the copies regrouped chain by chain: each copy's
         // fmla then writes a register other than its multiplicand, two
         // instructions a step instead of three (#8: 8 chains on a Pi 5,
         // 42.5 GFLOPS bound by the moves).
-        p._unrollChains = t.equals(String.withCString("arm64"));
+        p._unrollChains = arm64;
         // Float Selects back to branches where an arm computes (#22: faster on
         // a Pi 5 and an M4 Max, OptSelectBranch.xc).
-        p._selectBranch = t.equals(String.withCString("arm64"));
+        p._selectBranch = arm64;
         // Guarded devirtualisation on the 64-bit targets (OptDevirt).
-        p._devirtualise = t.equals(String.withCString("arm64")) || t.equals(String.withCString("x86_64")) || t.equals(String.withCString("win64"));
+        p._devirtualise = wide;
         // LICM is on for every live target, and so now is the global-address
         // hoist. It was off on wasm32 because a data address IS an i32 const —
         // true, and it still pays, just not in the column that was watched:
@@ -442,15 +450,15 @@ class OptProfile
         // Narrowing the induction variable pays where the compare and the
         // increment get cheaper at a smaller width — the 8-bit and the 16-bit
         // targets. The 32-bit ones already compare at their natural width.
-        p._narrowIV = t.equals(String.withCString("xt")) || t.equals(String.withCString("xt6502")) || t.equals(String.withCString("atarist"));
+        p._narrowIV = xt || m68k;
         // Every live target rotates except the 6502.
-        p._loopRotate = !(t.equals(String.withCString("xt")) || t.equals(String.withCString("xt6502")));
+        p._loopRotate = !xt;
         // A test that is a short-circuit chain rotates on x86-64; on arm64
         // where the target row says (rotateChain: not on Apple's cores, where
         // the unrotated loop is as fast, measured on an M4 Max and an M3 Max;
         // on the Pi 5 sort_small's insertion loop goes 4.50 s -> 3.54 s, its
         // exit copies in an out-of-line stub).
-        p._loopRotateChain = t.equals(String.withCString("x86_64")) || t.equals(String.withCString("win64"));
+        p._loopRotateChain = x86;
         return p;
         }
 
