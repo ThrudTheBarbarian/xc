@@ -1351,6 +1351,15 @@ static BOOL gEmitsWGSL = NO;
     XTIRModule* kvmod = nil;
     if (kmod && vtrips >= 2 && printedModule.length <= (NSUInteger)64 << 20)
         kvmod = [self kernelModuleFrom:module printed:&printedModule trips:vtrips changed:&vchanged];
+    else if (kmod && vtrips >= 2)
+        {
+        // Skipping it looks the same from outside as a module with no escape
+        // loop; XC_OPT_CAPS says so (#334), as the optimiser's caps do.
+        const char* caps = getenv("XC_OPT_CAPS");
+        if (caps && *caps)
+            fprintf(stderr, "xcc: note: the GPU escape-trip kernel variants were skipped: the kernel module's text is %lu MB, past 64 MB\n",
+                    (unsigned long)(printedModule.length >> 20));
+        }
     NSMutableDictionary<NSString*, XTIRFunction*>* kvfns = [NSMutableDictionary dictionary];
     for (XTIRFunction* g in kvmod.functions)
         if ([vchanged containsObject:g.name])

@@ -2206,6 +2206,18 @@
             }
         _kvMod = (IRModule*)0;
         _kvFns = new Map();
+        bool kvBig = kmod != (IRModule*)0 && _kvTrips >= (u32)2 && _kPrinted != (String*)0
+            && _kPrinted.byteLength() > ((u32)64 << (u32)20);
+        if (kvBig)
+            {
+            // Skipping them looks the same from outside as a module with no
+            // escape loop; XC_OPT_CAPS says so (#334), as the optimiser's
+            // caps do. As the reference.
+            u8* caps = _xt_getenv("XC_OPT_CAPS");
+            if (caps != (u8*)0 && caps[0] != (u8)0)
+                Stdio.error(String.withFormat("xcc: note: the GPU escape-trip kernel variants were skipped: the kernel module's text is %u MB, past 64 MB\n",
+                                              _kPrinted.byteLength() >> (u32)20));
+            }
         if (kmod != (IRModule*)0 && _kvTrips >= (u32)2 && _kPrinted != (String*)0
             && _kPrinted.byteLength() <= ((u32)64 << (u32)20))
             {
