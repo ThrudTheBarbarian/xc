@@ -4609,6 +4609,11 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
                 return 1;
             }
             [args addObjectsFromArray:opts.inputFiles];
+            // The C-runtime pool last, as the source link and the LTO object
+            // link above have it: without it the objects' C calls resolved to
+            // other thunks, and the PE differed from the one the source link
+            // and the other driver write.
+            for (NSString *a in win64Libc(support) ?: @[]) [args addObject:a];
             [args addObjectsFromArray:@[@"-import",
                 @"kernel32.dll:ExitProcess,GetStdHandle,WriteFile,VirtualAlloc,"
                 @"GetSystemTimeAsFileTime,Sleep"]];
