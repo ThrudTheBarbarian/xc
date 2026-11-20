@@ -10579,6 +10579,19 @@ static const NSUInteger kVarargSlotBytes = 8;
     }
 
 // Each target of `(a, b) = …` takes its field of the call's aggregate.
+// A tuple target that is an auto-zeroing slot (`weak:T@`, or a `^`) is linked
+// to its new referent the way a plain assignment links it, or the slot never
+// auto-zeroes. The values of a multi-return call are +1: a weak slot owns
+// nothing, so the value is released after the register, as the weak
+// assignment does.
+- (void)relinkWeakTupleTarget:(NSString*)name value:(XTIRValue*)val
+    {
+    [self emitWeakLocalRegisterNamed:name value:val rhsNode:nil];
+    XTType* ty = self.pinnedLocalASTType[name];
+    if (ty && [self astTypeIsWeakClassPointer:ty])
+        [self emitRelease:val];
+    }
+
 - (void)bindTupleTargetsOf:(XTTupleAssignNode*)node from:(XTIRValue*)aggResult aggType:(XTIRType*)aggRetType
     {
     // Extract each field and assign to the corresponding target.
@@ -10618,7 +10631,10 @@ static const NSUInteger kVarargSlotBytes = 8;
                 XTIRType* pptrTy = nil;
                 XTIRValue* addr = [self pinnedAddr:pl name:vd.varName outType:&pptrTy];
                 if (addr)
+                    {
                     [self emitStore:addr value:fieldVal];
+                    [self relinkWeakTupleTarget:vd.varName value:fieldVal];
+                    }
                 continue;
                 }
             self.locals[vd.varName] = fieldVal;
@@ -10649,6 +10665,7 @@ static const NSUInteger kVarargSlotBytes = 8;
                             [self emitRelease:oldV];
                             }
                         [self emitStore:addr value:fieldVal];
+                        [self relinkWeakTupleTarget:idn.identName value:fieldVal];
                         }
                     continue;
                     }

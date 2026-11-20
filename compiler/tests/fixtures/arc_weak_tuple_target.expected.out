@@ -1,0 +1,2 @@
+T1 live=1 w=set k=5
+T1 after: live=0 w=null

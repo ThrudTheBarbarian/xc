@@ -9567,6 +9567,7 @@ class ClassInfo
             if (dp != 0)
                 {
                 storeThrough(pinAddrNamed(dp, t.name()), fv);
+                tupleWeakRelink(dp, t.name(), t.op(), fv);
                 return;
                 }
             _locals.set((Hashable*)t.name(), (Object*)fv);
@@ -9592,15 +9593,43 @@ class ClassInfo
                 return;
                 }
             IRValue* addr = pinAddrNamed(p, t.name());
-            if (hasName(_strongLocals, t.name()))
+            // A weak slot owns nothing, so it has no old value to release —
+            // and its payload is not zeroed at the declaration, so at -O0 the
+            // release read frame litter (SIGBUS). As the reference, whose
+            // strong locals never include a weak one.
+            if (hasName(_strongLocals, t.name()) && !hasName(_weakLocals, t.name()))
                 refOp(String.withCString("Release"),
                       loadThrough(addr, (String*)_pinAst.get((Hashable*)t.name())));
             storeThrough(addr, fv);
+            tupleWeakRelink(p, t.name(), (String*)_pinAst.get((Hashable*)t.name()), fv);
             return;
             }
         if (hasName(_strongLocals, t.name()))
             refOp(String.withCString("Release"), (IRValue*)existing);
         _locals.set((Hashable*)t.name(), (Object*)fv);
+        }
+
+    // A tuple target that is an auto-zeroing slot (`weak:T@`, or a `^`) is
+    // linked to its new referent the way a plain assignment links it, or the
+    // slot never auto-zeroes (and its link words were left as the store found
+    // them). The values of a multi-return call are +1: a weak slot owns
+    // nothing, so the value is released after the register, as the weak
+    // assignment does. As the reference (emitWeakLocalRegisterNamed).
+    void tupleWeakRelink(IRPinned* p, String* name, String* pty, IRValue* fv)
+        {
+        if (pty == (String*)0)
+            return;
+        if (isBoundSig(stripQual(pty)))
+            {
+            registerBoundPair(pinAddrNamed(p, name), fv, pty);
+            return;
+            }
+        if (!isWeakClassPtr(pty))
+            return;
+        IRValue* slotA = pinAddrNamed(p, name);
+        weakOp(String.withCString("WeakUnregister"), slotA, (IRValue*)0);
+        weakOp(String.withCString("WeakRegister"), slotA, fv);
+        refOp(String.withCString("Release"), fv);
         }
 
     // A declaration either writes a frame slot or binds an SSA name. Which
