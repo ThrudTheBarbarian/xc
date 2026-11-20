@@ -5199,10 +5199,8 @@ class Parser
             return;
         }
         if (kind == 1) {
-            // A written par block: its header as written, then its body.
-            Array* head = (Array*)e.get(3);
-            for (u32 i = 0; i < head.count(); i++)
-                plTokS(((Token*)head.get(i)).type(), ((Token*)head.get(i)).value());
+            // A written par block: its header, then its body.
+            plParHead((Array*)e.get(3));
             plStmt(body);
             return;
         }
@@ -5218,6 +5216,44 @@ class Parser
         }
         plTok(tokRParen, ")");
         plStmt(body);
+    }
+
+    // A written par block's header from what parsePar read: `par`, its name,
+    // and each decorator with what it took: a :reduce's operator, name and
+    // `[]` (from its reduction), a :grid's sizes, and the words of the rest.
+    void plParHead(Array* head)
+    {
+        plTok(tokIdentifier, "par");
+        String* name = (String*)head.get(0);
+        if (name.byteLength() > 0) plTokS(tokIdentifier, name);
+        for (u32 i = 1; i < head.count(); i++) {
+            Array* d = (Array*)head.get(i);
+            String* dec = (String*)d.get(0);
+            plTok(tokColon, ":");
+            plTokS(tokIdentifier, dec);
+            if (Parser._same(dec, "__scanpass")) continue;
+            plTok(tokLParen, "(");
+            if (Parser._same(dec, "reduce")) {
+                Node* r = (Node*)d.get(1);
+                plTokS(Parser.plOpTok(r.op()), r.op());
+                plTokS(tokIdentifier, r.name());
+                if (r.num() == 1) {
+                    plTok(tokLBracket, "[");
+                    plTok(tokRBracket, "]");
+                }
+            } else if (Parser._same(dec, "grid")) {
+                for (u32 j = 1; j < d.count(); j++) {
+                    if (j > 1) plTok(tokComma, ",");
+                    plExpr((Node*)d.get(j));
+                }
+            } else {
+                for (u32 j = 1; j < d.count(); j++) {
+                    if (j > 1) plTok(tokComma, ",");
+                    plTokS(tokIdentifier, (String*)d.get(j));
+                }
+            }
+            plTok(tokRParen, ")");
+        }
     }
 
     // `while (v < B) { …; v++; }` from the `for` the parser made of it:
@@ -6920,13 +6956,16 @@ class Parser
         if (scanned) return sc;
         _parTok = cur();
         Token* parAt = _parTok; // a nested `par` in the body moves _parTok
-        u32 parFrom = _pos;
         advance(); // 'par'
         Node* p = mk((u16)nkPar);
         if (check((u16)tokIdentifier)) {
             p.setName(cur().value());
             advance();
         }
+        // The header as parsed, for the recogniser's walk (plSiteWalk): the
+        // name, then each decorator with what it took.
+        Array* head = (Array*)0;
+        if (_parAuto) head = Array.with((Object*)(p.name() != (String*)0 ? p.name() : String.withCString("")));
         // The block's goal: its own, else the goal of the loop or block it
         // sits in, else the file's #goal or -fgoal=, else speed.
         u32 inherited = _goalNow != (u32)0 ? _goalNow : _goalDefault;
@@ -6961,6 +7000,11 @@ class Parser
                     _errorAt(String.withCString("':grid' takes a width and a height, and optionally a depth: :grid(w, h) or :grid(w, h, d)"), parTokNode(decTok));
                     return (Node*)0;
                 }
+                if (head != (Array*)0) {
+                    Array* d = Array.with((Object*)dec);
+                    d.addAll(grid);
+                    head.add((Object*)d);
+                }
                 continue;
             }
             // :device(cpu|gpu|gpus|all|auto): the developer's DEFAULT device
@@ -6992,6 +7036,7 @@ class Parser
                 advance();
                 device = code;
                 if (expect((u16)tokRParen) == (Token*)0) return (Node*)0;
+                if (head != (Array*)0) head.add((Object*)Array.with((Object*)dec, (Object*)dv));
                 continue;
             }
             // :goal(speed) (the default) or :goal(accuracy): what the
@@ -7014,12 +7059,14 @@ class Parser
                 if (g.equals(String.withCString("accuracy"))) flags = flags | (u32)1;
                 else flags = flags & ~(u32)1;
                 expect((u16)tokRParen);
+                if (head != (Array*)0) head.add((Object*)Array.with((Object*)dec, (Object*)g));
                 continue;
             }
             // :constant(a, b): a hint, never a change of meaning (the
             // reference explains); the CPU path ignores it.
             if (dec.equals(String.withCString("constant"))) {
                 expect((u16)tokLParen);
+                u32 from = constants.count();
                 for (;;) {
                     if (!check((u16)tokIdentifier)) {
                         _error(String.withCString("Expected identifier"));
@@ -7031,16 +7078,23 @@ class Parser
                     advance();
                 }
                 expect((u16)tokRParen);
+                if (head != (Array*)0) {
+                    Array* d = Array.with((Object*)dec);
+                    d.addAll(constants.subarray(from, constants.count() - from));
+                    head.add((Object*)d);
+                }
                 continue;
             }
             // :__scanpass: a block a :scan was made into (parScanExpand);
             // its chunks own disjoint slices.
             if (dec.equals(String.withCString("__scanpass"))) {
                 scanPass = true;
+                if (head != (Array*)0) head.add((Object*)Array.with((Object*)dec));
                 continue;
             }
             // :scan(…) here: parScanWritten has already said what is wrong.
             if (dec.equals(String.withCString("scan"))) {
+                if (head != (Array*)0) head.add((Object*)Array.with((Object*)dec));
                 if (check((u16)tokLParen)) {
                     i32 d = (i32)1;
                     advance();
@@ -7091,6 +7145,7 @@ class Parser
             }
             expect((u16)tokRParen);
             p.add(r);
+            if (head != (Array*)0) head.add((Object*)Array.with((Object*)dec, (Object*)r));
         }
         p.setFlags(flags);
         if (!check((u16)tokLBrace)) {
@@ -7131,10 +7186,6 @@ class Parser
         blkPushScope();
         u32 savedGoal = _goalNow;
         _goalNow = (flags & (u32)1) != (u32)0 ? (u32)2 : (u32)1;
-        // The header as written, for the recogniser's walk (plSiteWalk).
-        // TODO(#338): removed in part C step 4–6, when a written par is copied
-        // from its tree.
-        Array* head = _parAuto ? _tokens.subarray(parFrom, _pos - parFrom) : (Array*)0;
         u32 spliced = _scanSpliced;
         Node* body = parseBlock();
         _goalNow = savedGoal;

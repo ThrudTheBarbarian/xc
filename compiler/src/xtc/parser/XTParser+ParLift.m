@@ -795,6 +795,51 @@ static NSString* plAddrRoot(XTASTNode* _Nullable e)
     [self plBody:f.body];
     }
 
+// A written par block's header from what parsePar read: `par`, its name, and
+// each decorator with what it took: a :reduce's operator, name and `[]`, a
+// :grid's sizes, and the words of the rest. As the port.
+- (void)plParHead:(NSArray*)head
+    {
+    [self plTok:XTTokenIdentifier value:@"par"];
+    if ([head[0] length] > 0)
+        [self plTok:XTTokenIdentifier value:head[0]];
+    for (NSUInteger i = 1; i < head.count; i++)
+        {
+        NSArray* d = head[i];
+        NSString* dec = d[0];
+        [self plTok:XTTokenColon value:@":"];
+        [self plTok:XTTokenIdentifier value:dec];
+        if ([dec isEqualToString:@"__scanpass"])
+            continue;
+        [self plTok:XTTokenLParen value:@"("];
+        if ([dec isEqualToString:@"reduce"])
+            {
+            NSString* op = d[1];
+            XTTokenType t = [op isEqualToString:@"+"] ? XTTokenPlus : [op isEqualToString:@"*"] ? XTTokenStar
+                          : [op isEqualToString:@"&"] ? XTTokenAmpersand : [op isEqualToString:@"|"] ? XTTokenPipe
+                          : [op isEqualToString:@"^"] ? XTTokenCaret : XTTokenIdentifier;
+            [self plTok:t value:op];
+            [self plTok:XTTokenIdentifier value:d[2]];
+            if (d.count > 3)
+                {
+                [self plTok:XTTokenLBracket value:@"["];
+                [self plTok:XTTokenRBracket value:@"]"];
+                }
+            }
+        else
+            for (NSUInteger j = 1; j < d.count; j++)
+                {
+                if (j > 1)
+                    [self plTok:XTTokenComma value:@","];
+                if ([d[j] isKindOfClass:[XTASTNode class]])
+                    [self plExpr:d[j]];
+                else
+                    [self plTok:XTTokenIdentifier value:d[j]];
+                }
+        [self plTok:XTTokenRParen value:@")"];
+        }
+    }
+
 // A site the parser recorded: a block literal (0), a written par block (1),
 // a lifted loop (2), a counted `while` it rewrote to a `for` (3), or the
 // block of that `for` and its `if` where the `while` stood alone (4), as
@@ -815,9 +860,8 @@ static NSString* plAddrRoot(XTASTNode* _Nullable e)
         }
     if (kind == 1)
         {
-        // A written par block: its header as written, then its body.
-        for (XTToken* t in e[@"head"])
-            [self plTok:t.type value:t.value ?: @""];
+        // A written par block: its header, then its body.
+        [self plParHead:e[@"head"]];
         [self plStmt:e[@"body"]];
         return;
         }

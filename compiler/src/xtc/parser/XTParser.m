@@ -6132,7 +6132,6 @@ static NSString* scCombine(NSString* op, NSString* r, NSString* v)
     if (scanned)
         return sc;
     XTSourceLocation* loc = [self currentLocation];
-    NSUInteger parAt = _pos;
     [self advance]; // consume 'par'
     NSString* name = nil;
     if ([self check:XTTokenIdentifier])
@@ -6140,6 +6139,9 @@ static NSString* scCombine(NSString* op, NSString* r, NSString* v)
         name = [self currentToken].value;
         [self advance];
         }
+    // The header as parsed, for the recogniser's walk (plSite): the name, then
+    // each decorator with what it took.
+    NSMutableArray* head = self.parAuto ? [NSMutableArray arrayWithObject:name ?: @""] : nil;
     NSMutableArray<NSArray<NSString*>*>* reductions = [NSMutableArray array];
     NSMutableArray<NSString*>* constants = [NSMutableArray array];   // :constant(a, b): captured arrays the GPU reads as constants
     // :goal(speed) (the default) or :goal(accuracy): its own, else the goal of
@@ -6185,6 +6187,7 @@ static NSString* scCombine(NSString* op, NSString* r, NSString* v)
                                      at:dec.location];
                 return nil;
                 }
+            [head addObject:[@[ dec.value ] arrayByAddingObjectsFromArray:grid]];
             continue;
             }
         if ([dec.value isEqualToString:@"device"])
@@ -6209,6 +6212,7 @@ static NSString* scCombine(NSString* op, NSString* r, NSString* v)
             device = codes[d.value].integerValue;
             if (![self expect:XTTokenRParen])
                 return nil;
+            [head addObject:@[ dec.value, d.value ]];
             continue;
             }
         if ([dec.value isEqualToString:@"goal"])
@@ -6227,6 +6231,7 @@ static NSString* scCombine(NSString* op, NSString* r, NSString* v)
             accuracy = [g.value isEqualToString:@"accuracy"];
             if (![self expect:XTTokenRParen])
                 return nil;
+            [head addObject:@[ dec.value, g.value ]];
             continue;
             }
         // :constant(a, b): the named captured arrays are read-only data the
@@ -6236,6 +6241,7 @@ static NSString* scCombine(NSString* op, NSString* r, NSString* v)
             {
             if (![self expect:XTTokenLParen])
                 return nil;
+            NSUInteger from = constants.count;
             for (;;)
                 {
                 XTToken* nm = [self expect:XTTokenIdentifier];
@@ -6248,6 +6254,7 @@ static NSString* scCombine(NSString* op, NSString* r, NSString* v)
                 }
             if (![self expect:XTTokenRParen])
                 return nil;
+            [head addObject:[@[ dec.value ] arrayByAddingObjectsFromArray:[constants subarrayWithRange:NSMakeRange(from, constants.count - from)]]];
             continue;
             }
         // :__scanpass: a block a :scan was made into (parScanExpand);
@@ -6255,11 +6262,13 @@ static NSString* scCombine(NSString* op, NSString* r, NSString* v)
         if ([dec.value isEqualToString:@"__scanpass"])
             {
             scanPass = YES;
+            [head addObject:@[ dec.value ]];
             continue;
             }
         // :scan(…) here: parScanWritten has already said what is wrong.
         if ([dec.value isEqualToString:@"scan"])
             {
+            [head addObject:@[ dec.value ]];
             if ([self check:XTTokenLParen])
                 {
                 NSInteger d = 1;
@@ -6324,6 +6333,7 @@ static NSString* scCombine(NSString* op, NSString* r, NSString* v)
         if (!var)
             return nil;
         [reductions addObject:isArray ? @[ op, var.value, @"[]" ] : @[ op, var.value ]];
+        [head addObject:[@[ dec.value ] arrayByAddingObjectsFromArray:reductions.lastObject]];
         }
     if (![self checkBlockOpen])
         {
@@ -6356,10 +6366,6 @@ static NSString* scCombine(NSString* op, NSString* r, NSString* v)
     [self blkPushScope];
     NSUInteger savedGoal = self.goalNow;
     self.goalNow = accuracy ? 2 : 1;
-    // The header as written, for the recogniser's walk (plSite).
-    // TODO(#338): removed in part C step 4–6, when a written par is copied
-    // from its tree.
-    NSArray<XTToken*>* head = self.parAuto ? [_tokens subarrayWithRange:NSMakeRange(parAt, _pos - parAt)] : nil;
     NSUInteger spliced = self.scanSpliced;
     XTBlockNode* body = (XTBlockNode*)[self parseBlock];
     self.goalNow = savedGoal;
