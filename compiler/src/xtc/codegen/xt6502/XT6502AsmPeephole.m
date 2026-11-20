@@ -85,6 +85,69 @@ static void splitInsn(NSString* line, NSString** outOp, NSString** outOperand)
 // loop-index slot of for-in and the Y-side of (+d,SP),Y indirection.
 // ─────────────────────────────────────────────────────────────────────
 
+// ── Inline asm is the user's ─────────────────────────────────────────────
+//
+// The back end brackets an asm body with `; inline asm` and `; end inline asm`.
+// optimise takes each body out before the rules run, leaving the opening
+// marker, and puts it back after; the closing marker goes with it. The marker
+// is a barrier to every rule: the asm may read any slot, flag or register, so
+// no store before it is dead, no load before it is redundant, and no jump or
+// compare is dropped across it. Mirrored in the port (hideAsm/restoreAsm).
+static BOOL isAsmMark(NSString* line)
+    {
+    return [[line stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]]
+        isEqualToString:@"; inline asm"];
+    }
+
+static NSString* hideAsm(NSString* text, NSMutableArray<NSArray<NSString*>*>* bodies)
+    {
+    NSMutableArray<NSString*>* out = [NSMutableArray array];
+    NSMutableArray<NSString*>* body = nil;
+    NSCharacterSet* ws = [NSCharacterSet whitespaceCharacterSet];
+    for (NSString* ln in [text componentsSeparatedByString:@"\n"])
+        {
+        if (body)
+            {
+            if (![[ln stringByTrimmingCharactersInSet:ws] isEqualToString:@"; end inline asm"])
+                {
+                [body addObject:ln];
+                continue;
+                }
+            [bodies addObject:body];
+            body = nil;
+            continue;
+            }
+        if (isAsmMark(ln))
+            body = [NSMutableArray array];
+        [out addObject:ln];
+        }
+    if (body)
+        [bodies addObject:body]; // unterminated: to the end
+    return [out componentsJoinedByString:@"\n"];
+    }
+
+// The rules' text with each body back after its opening marker, or nil when a
+// marker went missing on the way.
+static NSString* restoreAsm(NSString* text, NSArray<NSArray<NSString*>*>* bodies)
+    {
+    NSMutableArray<NSString*>* out = [NSMutableArray array];
+    NSUInteger k = 0;
+    for (NSString* ln in [text componentsSeparatedByString:@"\n"])
+        {
+        [out addObject:ln];
+        if (isAsmMark(ln))
+            {
+            if (k >= bodies.count)
+                return nil;
+            [out addObjectsFromArray:bodies[k]];
+            k++;
+            }
+        }
+    if (k != bodies.count)
+        return nil;
+    return [out componentsJoinedByString:@"\n"];
+    }
+
 static NSString* applyRedundantReload(NSString* asmText)
     {
     NSArray<NSString*>* lines = [asmText componentsSeparatedByString:@"\n"];
@@ -144,6 +207,11 @@ static NSString* applyRedundantReload(NSString* asmText)
                 for (NSUInteger j = i + 1; j < n; j++)
                     {
                     XTLineKind kk = classifyLine(lines[j]);
+                    if (kk == XTLineComment && isAsmMark(lines[j]))
+                        {
+                        drop = NO; // the asm may read the flags
+                        break;
+                        }
                     if (kk == XTLineBlank || kk == XTLineComment)
                         continue;
                     if (kk == XTLineInsn)
@@ -229,7 +297,7 @@ static NSString* applyJmpToNextLabel(NSString* asmText)
         while (j < lines.count)
             {
             XTLineKind k = classifyLine(lines[j]);
-            if (k == XTLineBlank || k == XTLineComment)
+            if (k == XTLineBlank || (k == XTLineComment && !isAsmMark(lines[j])))
                 {
                 j++;
                 continue;
@@ -434,6 +502,8 @@ static NSString* applyICmpBranchFusion(NSString* asmText)
             {
             NSString* raw = lines[j];
             XTLineKind k = classifyLine(raw);
+            if (k == XTLineComment && isAsmMark(raw))
+                break;
             if (k == XTLineBlank || k == XTLineComment)
                 {
                 j--;
@@ -644,6 +714,8 @@ static NSString* applyDeadStore(NSString* asmText)
         for (NSUInteger j = i + 1; j < n; j++)
             {
             XTLineKind kk = classifyLine(lines[j]);
+            if (kk == XTLineComment && isAsmMark(lines[j]))
+                break; // the asm may read the slot
             if (kk == XTLineBlank || kk == XTLineComment)
                 continue;
             if (kk != XTLineInsn)
@@ -695,7 +767,9 @@ static NSString* applyDeadStore(NSString* asmText)
     // Iterate to fixed point — rule 2 can expose new rule 1 patterns
     // (a dropped JMP can put a STA + LDA next to each other across
     // what used to be a block boundary) and vice versa.
-    NSString* cur = asmText;
+    NSMutableArray<NSArray<NSString*>*>* asmBodies = [NSMutableArray array];
+    BOOL hasAsm = [asmText rangeOfString:@"    ; inline asm\n"].location != NSNotFound;
+    NSString* cur = hasAsm ? hideAsm(asmText, asmBodies) : asmText;
     for (int hop = 0; hop < 8; hop++)
         {
         NSString* prev = cur;
@@ -712,6 +786,8 @@ static NSString* applyDeadStore(NSString* asmText)
         if ([cur isEqualToString:prev])
             break;
         }
+    if (hasAsm)
+        cur = restoreAsm(cur, asmBodies) ?: asmText;
     return cur;
     }
 

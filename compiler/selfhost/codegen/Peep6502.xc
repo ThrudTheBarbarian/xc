@@ -199,6 +199,69 @@ class Peep6502
         return eq(op, "JMP") || eq(op, "JSR") || eq(op, "RTS") || eq(op, "RTI") || eq(op, "BRK") || eq(op, "BEQ") || eq(op, "BNE") || eq(op, "BMI") || eq(op, "BPL") || eq(op, "BCC") || eq(op, "BCS") || eq(op, "BVC") || eq(op, "BVS") || eq(op, "BRA") || eq(op, "PHA") || eq(op, "PLA") || eq(op, "PSH") || eq(op, "PLL") || eq(op, "TXS") || eq(op, "TSX") || eq(op, "ADD");
         }
 
+    // ── Inline asm is the user's ─────────────────────────────────────────
+    //
+    // The back end brackets an asm body with `; inline asm` and `; end inline
+    // asm`. optimise takes each body out before the rules run, leaving the
+    // opening marker, and puts it back after; the closing marker goes with it.
+    // The marker is a barrier to every rule: the asm may read any slot, flag
+    // or register, so no store before it is dead, no load before it is
+    // redundant, and no jump or compare is dropped across it.
+    static bool isAsmMark(String* line)
+        {
+        return eq(trimOf(line), "; inline asm");
+        }
+
+    static Array* hideAsm(Array* lines, Array* bodies)
+        {
+        Array* out = new Array();
+        Array* body = (Array*)0;
+        for (u32 i = 0; i < lines.count(); i++)
+            {
+            String* ln = (String*)lines.get(i);
+            if (body != (Array*)0)
+                {
+                if (!eq(trimOf(ln), "; end inline asm"))
+                    {
+                    body.add((Object*)ln);
+                    continue;
+                    }
+                bodies.add((Object*)body);
+                body = (Array*)0;
+                continue;
+                }
+            if (isAsmMark(ln))
+                body = new Array();
+            out.add((Object*)ln);
+            }
+        if (body != (Array*)0)
+            bodies.add((Object*)body);  // unterminated: to the end
+        return out;
+        }
+
+    // The rules' lines with each body back after its opening marker, or 0
+    // when a marker went missing on the way.
+    static Array* restoreAsm(Array* lines, Array* bodies)
+        {
+        Array* out = new Array();
+        u32 k = 0;
+        for (u32 i = 0; i < lines.count(); i++)
+            {
+            String* ln = (String*)lines.get(i);
+            out.add((Object*)ln);
+            if (isAsmMark(ln))
+                {
+                if (k >= bodies.count())
+                    return (Array*)0;
+                out.addAll((Array*)bodies.get(k));
+                k++;
+                }
+            }
+        if (k != bodies.count())
+            return (Array*)0;
+        return out;
+        }
+
     // ── Rule 1: redundant reload elimination ─────────────────────────────
     //
     //     STA +N,SP
@@ -246,6 +309,11 @@ class Peep6502
                 for (u32 j = i + (u32)1; j < n; j = j + (u32)1)
                     {
                     u8 kk = classify((String*)lines.get(j));
+                    if (kk == LK_COMMENT && isAsmMark((String*)lines.get(j)))
+                        {
+                        drop = false; // the asm may read the flags
+                        break;
+                        }
                     if (kk == (u8)LK_BLANK || kk == (u8)LK_COMMENT)
                         continue;
                     if (kk == (u8)LK_INSN)
@@ -298,7 +366,7 @@ class Peep6502
             while (j < n)
                 {
                 u8 k = classify((String*)lines.get(j));
-                if (k == (u8)LK_BLANK || k == (u8)LK_COMMENT)
+                if (k == (u8)LK_BLANK || (k == (u8)LK_COMMENT && !isAsmMark((String*)lines.get(j))))
                     {
                     j = j + (u32)1;
                     continue;
@@ -419,6 +487,8 @@ class Peep6502
             for (u32 j = i + (u32)1; j < n; j = j + (u32)1)
                 {
                 u8 kk = classify((String*)lines.get(j));
+                if (kk == LK_COMMENT && isAsmMark((String*)lines.get(j)))
+                    break; // the asm may read the slot
                 if (kk == (u8)LK_BLANK || kk == (u8)LK_COMMENT)
                     continue;
                 if (kk != (u8)LK_INSN)
@@ -569,6 +639,8 @@ class Peep6502
                 {
                 String* raw = (String*)lines.get((u32)j);
                 u8 k = classify(raw);
+                if (k == LK_COMMENT && isAsmMark(raw))
+                    break;
                 if (k == (u8)LK_BLANK || k == (u8)LK_COMMENT)
                     {
                     j = j - (i32)1;
@@ -673,7 +745,10 @@ class Peep6502
         if (level == (u32)0 || asmText.byteLength() == (u32)0)
             return asmText;
         _memo = new Map();
-        Array* cur = splitLines(asmText);
+        Array* orig = splitLines(asmText);
+        Array* asmBodies = new Array();
+        bool hasAsm = asmText.contains(String.withCString("    ; inline asm\n"));
+        Array* cur = hasAsm ? hideAsm(orig, asmBodies) : orig;
         for (u32 hop = (u32)0; hop < (u32)8; hop = hop + (u32)1)
             {
             Array* prev = cur;
@@ -688,6 +763,12 @@ class Peep6502
             cur = jmpToNextLabel(cur);
             if (sameLines(cur, prev))
                 break;
+            }
+        if (hasAsm)
+            {
+            cur = restoreAsm(cur, asmBodies);
+            if (cur == (Array*)0)
+                cur = splitLines(asmText);
             }
         _memo = (Map*)0;
         // No rule writes a line with a newline in it, so passing the lines
