@@ -28,6 +28,10 @@
 #define ARM9_PHI_WIDE 1
 #define ARM9_PHI_AGG 2
 
+// A line's frame access, for the spill peephole.
+#define A9_STR 1
+#define A9_LDR 2
+
 class Arm9
     {
     IRModule* _m;
@@ -261,73 +265,96 @@ class Arm9
         return true;
         }
 
+    // Each line's frame access is parsed once, into kind (A9_STR, A9_LDR or
+    // 0), register and offset, and both scans read those records (#333). Once
+    // a line has made the frame unclean, the scans that decide cleanliness
+    // stop running.
     String* peepholeSpills(String* text)
         {
         Array* lines = text.splitOnByte((u8)'\n');
+        u32 n = lines.count();
         bool clean = true;
         Map* loads = new Map();
+        u8* kind = new u8[n + 1];
+        Array* regs = new Array();
+        Array* offs = new Array();
+        String* none = String.withCString("");
         String* m = String.withCString("");
         String* r = String.withCString("");
         String* o = String.withCString("");
 
-        for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1)
+        for (u32 i = 0; i < n; i++)
             {
             String* ln = (String*)lines.get(i);
             String* t = ln.trimmed();
             if (t.contains(String.withCString("@ inline asm")))
+                {
+                delete kind;
                 return text;
-            bool addSub = t.hasPrefix(String.withCString("add ")) || t.hasPrefix(String.withCString("add\t")) || t.hasPrefix(String.withCString("sub ")) || t.hasPrefix(String.withCString("sub\t"));
-            if (addSub && !t.contains(String.withCString("sub\tsp,")) && !t.contains(String.withCString("add\tsp,")) && !t.hasPrefix(String.withCString("add sp,")) && !t.hasPrefix(String.withCString("sub sp,")) && t.contains(String.withCString(", sp")))
-                clean = false;
-            if (t.hasPrefix(String.withCString("ldm")) || t.hasPrefix(String.withCString("stm")))
-                clean = false;
-            // `mov Rd, sp` is the SAME materialisation as `add Rd, sp, #0` —
-            // emitAlu shortcuts a zero offset to a mov, which is what an
-            // AddrOf of the frame's FIRST slot (a leaf's aggregate parameter)
-            // produces. Mirrors the reference's rule (struct_byval T1 on arm9).
-            bool movp = t.hasPrefix(String.withCString("mov ")) || t.hasPrefix(String.withCString("mov\t"));
-            if (movp && (t.hasSuffix(String.withCString(", sp")) || t.contains(String.withCString(", sp @"))))
-                clean = false;
-            // NOTE: a call no longer disqualifies the whole function — the
-            // outgoing-argument area is a property of the OFFSET, honoured at
-            // the dead-store decision below.
+                }
             bool parsed = a9SpParse(ln, m, r, o);
-            if (!parsed && t.contains(String.withCString("[sp")))
-                clean = false;
-            if (parsed && m.equals(String.withCString("ldr")))
+            kind[i] = 0;
+            if (parsed)
+                {
+                kind[i] = m.equals(String.withCString("ldr")) ? A9_LDR : A9_STR;
+                regs.add((Object*)String.withString(r));
+                offs.add((Object*)String.withString(o));
+                }
+            else
+                {
+                regs.add((Object*)none);
+                offs.add((Object*)none);
+                }
+            if (clean)
+                {
+                bool addSub = t.hasPrefix(String.withCString("add ")) || t.hasPrefix(String.withCString("add\t")) || t.hasPrefix(String.withCString("sub ")) || t.hasPrefix(String.withCString("sub\t"));
+                if (addSub && !t.contains(String.withCString("sub\tsp,")) && !t.contains(String.withCString("add\tsp,")) && !t.hasPrefix(String.withCString("add sp,")) && !t.hasPrefix(String.withCString("sub sp,")) && t.contains(String.withCString(", sp")))
+                    clean = false;
+                if (t.hasPrefix(String.withCString("ldm")) || t.hasPrefix(String.withCString("stm")))
+                    clean = false;
+                // `mov Rd, sp` is the SAME materialisation as `add Rd, sp, #0` —
+                // emitAlu shortcuts a zero offset to a mov, which is what an
+                // AddrOf of the frame's FIRST slot (a leaf's aggregate parameter)
+                // produces. Mirrors the reference's rule (struct_byval T1 on arm9).
+                bool movp = t.hasPrefix(String.withCString("mov ")) || t.hasPrefix(String.withCString("mov\t"));
+                if (movp && (t.hasSuffix(String.withCString(", sp")) || t.contains(String.withCString(", sp @"))))
+                    clean = false;
+                // NOTE: a call no longer disqualifies the whole function — the
+                // outgoing-argument area is a property of the OFFSET, honoured at
+                // the dead-store decision below.
+                if (!parsed && t.contains(String.withCString("[sp")))
+                    clean = false;
+                }
+            if (parsed && kind[i] == A9_LDR)
                 {
                 Object* cur = loads.get((Hashable*)o);
-                u32 n = cur == (Object*)0 ? (u32)0 : ((Number*)cur).asU32();
-                loads.set((Hashable*)String.withCString(o.cString()), (Object*)Number.withU32(n + (u32)1));
+                u32 cn = cur == (Object*)0 ? 0 : ((Number*)cur).asU32();
+                loads.set((Hashable*)offs.get(i), (Object*)Number.withU32(cn + 1));
                 }
             }
 
         String* out = String.withCString("");
-        u32 i = (u32)0;
-        while (i < lines.count())
+        u32 i = 0;
+        while (i < n)
             {
             String* ln = (String*)lines.get(i);
-            String* sm = String.withCString("");
-            String* sr = String.withCString("");
-            String* so = String.withCString("");
-            bool isStore = a9SpParse(ln, sm, sr, so) && sm.equals(String.withCString("str"));
-            if (isStore)
+            if (kind[i] == A9_STR)
                 {
+                String* sr = (String*)regs.get(i);
+                String* so = (String*)offs.get(i);
                 Object* lc = loads.get((Hashable*)so);
-                u32 nl = lc == (Object*)0 ? (u32)0 : ((Number*)lc).asU32();
-                if (clean && nl == (u32)0 && Arm9.offValue(so) >= _outArgBytes)
+                u32 nl = lc == (Object*)0 ? 0 : ((Number*)lc).asU32();
+                if (clean && nl == 0 && Arm9.offValue(so) >= _outArgBytes)
                     {
-                    i = i + (u32)1;
+                    i++;
                     continue;
                     }
-                if (i + (u32)1 < lines.count())
+                if (i + 1 < n && kind[i + 1] == A9_LDR)
                     {
-                    String* lm = String.withCString("");
-                    String* lr = String.withCString("");
-                    String* lo = String.withCString("");
-                    if (a9SpParse((String*)lines.get(i + (u32)1), lm, lr, lo) && lm.equals(String.withCString("ldr")) && lo.equals(so) && sr.hasPrefix(String.withCString("r")) && lr.hasPrefix(String.withCString("r")))
+                    String* lr = (String*)regs.get(i + 1);
+                    if (((String*)offs.get(i + 1)).equals(so) && sr.hasPrefix(String.withCString("r")) && lr.hasPrefix(String.withCString("r")))
                         {
-                        bool dropStore = clean && nl == (u32)1 && Arm9.offValue(so) >= _outArgBytes;
+                        bool dropStore = clean && nl == 1 && Arm9.offValue(so) >= _outArgBytes;
                         if (!dropStore)
                             {
                             out.append(ln);
@@ -335,16 +362,17 @@ class Arm9
                             }
                         if (!lr.equals(sr))
                             out.appendFormat("\tmov\t%s, %s\n", lr.cString(), sr.cString());
-                        i = i + (u32)2;
+                        i = i + 2;
                         continue;
                         }
                     }
                 }
             out.append(ln);
-            if (i + (u32)1 < lines.count())
+            if (i + 1 < n)
                 out.appendCString("\n");
-            i = i + (u32)1;
+            i++;
             }
+        delete kind;
         return out;
         }
 
