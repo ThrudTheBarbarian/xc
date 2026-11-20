@@ -187,6 +187,36 @@ class CgCommon
         return t != (String*)0 && t.hasPrefix(String.withCString("I"));
     }
 
+    // A value's compile-time constant through the ZExt/SExt/Trunc the lowering
+    // wraps a narrowed literal in, each conversion APPLIED at its result type
+    // (#308): `(i32)(i8)300` is 44, where returning the Const's 300 made the
+    // magic-number division divide by the wrong constant at -O0/-O1. `defOf`
+    // maps a value to its defining instruction; the arm64 and x86-64 back ends
+    // each pass their own.
+    static bool constThrough(Map* defOf, IRValue* v, i64* out, u32 depth)
+    {
+        if (defOf == (Map*)0 || v == (IRValue*)0 || depth >= (u32)8) return false;
+        IRInsn* d = (IRInsn*)defOf.get((Hashable*)v);
+        if (d == (IRInsn*)0 || d.ops().count() < (u32)1 || d.res() == (IRValue*)0) return false;
+        IROperand* a0 = (IROperand*)d.ops().get((u32)0);
+        String* rt = d.res().ty();
+        if (d.isOp(opConst)) {
+            if (a0.kind() != (u8)OPK_IMMI) return false;
+            *out = fitConst((i64)a0.imm(), rt, constSigned(rt));
+            return true;
+        }
+        bool sx = d.isOp(opSExt);
+        bool zx = d.isOp(opZExt);
+        if (!(sx || zx || d.isOp(opTrunc)) || a0.kind() != OPK_USE) return false;
+        i64 s = (i64)0;
+        if (!constThrough(defOf, a0.val(), &s, depth + (u32)1)) return false;
+        // An extension reads its source at the source's width: sign bits for
+        // SExt, zero bits for ZExt, whatever the source's own signedness.
+        if (sx || zx) s = fitConst(s, a0.val().ty(), sx);
+        *out = fitConst(s, rt, constSigned(rt));
+        return true;
+    }
+
     static bool insnNames(IRInsn* n, String* want)
     {
         for (u32 i = (u32)0; i < n.ops().count(); i = i + (u32)1) {
