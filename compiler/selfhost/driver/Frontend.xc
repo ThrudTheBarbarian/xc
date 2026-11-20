@@ -854,10 +854,10 @@ class FeOptions
             String* cat = raw.substringBytes((u32)0, tab);
             if (o.warningSuppressed(cat))
                 continue;
-            String* line = raw.substringBytes(tab + (u32)1,
-                                              raw.byteLength() - tab - (u32)1);
-            line.appendByte((u8)'\n');
-            Frontend.holdEarly(early, line, false);
+            // With its source line and a caret under the column, as an
+            // error is and as the reference prints every warning (#336).
+            Frontend.holdEarly(early, raw.substringBytes(tab + (u32)1,
+                                                         raw.byteLength() - tab - (u32)1), true);
             }
         if (parser.errors().count() > (u32)0)
             {
@@ -1051,10 +1051,8 @@ class FeOptions
             String* cat = raw.substringBytes((u32)0, tab);
             if (o.warningSuppressed(cat))
                 continue;
-            String* line = raw.substringBytes(tab + (u32)1,
-                                              raw.byteLength() - tab - (u32)1);
-            line.appendByte((u8)'\n');
-            Stdio.error(line);
+            Frontend.printDiagnostic(raw.substringBytes(tab + (u32)1,
+                                                        raw.byteLength() - tab - (u32)1));
             }
         // Same for SEMANTIC errors, and for the same reason.
         if (sema.errors().count() > (u32)0)
@@ -1320,9 +1318,7 @@ class FeOptions
                 tab = tab + (u32)1;
             if (o.warningSuppressed(raw.substringBytes((u32)0, tab)))
                 continue;
-            String* line = raw.substringBytes(tab + (u32)1, raw.byteLength() - tab - (u32)1);
-            line.appendByte((u8)'\n');
-            Stdio.error(line);
+            Frontend.printDiagnostic(raw.substringBytes(tab + (u32)1, raw.byteLength() - tab - (u32)1));
             }
         if (lower.errors().count() > (u32)0)
             {

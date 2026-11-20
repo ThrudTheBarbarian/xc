@@ -2244,9 +2244,17 @@ static BOOL XTIsErasedKeyType(XTType* t)
                     // Without this the two spellings DISAGREED at runtime —
                     // bare printed a u32's low 16 bits where explicit
                     // upgraded to the full value (finding #8).
-                    if ([bestClass isEqualToString:@"Stdio"] &&
+                    // Log's format methods the same (#336): bare `error("%d", v)`
+                    // under `use Log` printed an i64's low 32 bits and was not
+                    // checked, where Log.error fitted the format to it.
+                    BOOL useLogFmt = [bestClass isEqualToString:@"Log"] &&
+                        ([bestM.methodName isEqualToString:@"error"] ||
+                         [bestM.methodName isEqualToString:@"warning"] ||
+                         [bestM.methodName isEqualToString:@"info"]);
+                    if (useLogFmt ||
+                        ([bestClass isEqualToString:@"Stdio"] &&
                         ([bestM.methodName isEqualToString:@"printf"] ||
-                         [bestM.methodName isEqualToString:@"printfAt"]))
+                         [bestM.methodName isEqualToString:@"printfAt"])))
                         {
                         NSUInteger fmtIdx =
                             [bestM.methodName isEqualToString:@"printfAt"] ? 2 : 0;
@@ -2255,8 +2263,8 @@ static BOOL XTIsErasedKeyType(XTType* t)
                                           forwards:node.forwardsVarargs
                                           location:node.location
                                           callName:[NSString stringWithFormat:
-                                                                 @"%@ (Stdio.%@ via use)",
-                                                                 node.calleeName, bestM.methodName]];
+                                                                 @"%@ (%@.%@ via use)",
+                                                                 node.calleeName, bestClass, bestM.methodName]];
                         if (node.arguments.count > fmtIdx &&
                             [node.arguments[fmtIdx] isKindOfClass:[XTLiteralStringNode class]])
                             {
@@ -2285,8 +2293,8 @@ static BOOL XTIsErasedKeyType(XTType* t)
                                          firstVaIdx:fmtIdx + 1
                                            location:node.location
                                            callName:[NSString stringWithFormat:
-                                                                  @"%@ (Stdio.%@ via use)",
-                                                                  node.calleeName, bestM.methodName]];
+                                                                  @"%@ (%@.%@ via use)",
+                                                                  node.calleeName, bestClass, bestM.methodName]];
                             }
                         NSArray* promoted = [self promotedFormatArguments:node.arguments
                                                                firstVaIdx:fmtIdx + 1];

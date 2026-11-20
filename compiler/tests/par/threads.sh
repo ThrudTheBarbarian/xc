@@ -38,6 +38,11 @@ for src in tests/fixtures/par_*.xc; do
     # expects a warning (a block kept on the CPU on purpose) names it in an
     # `//xtc-warn: <text>` line, and only that line is let through.
     sed -n 's|^//xtc-warn: *||p' "$src" > "$WORK/$name.want"
+    # A warning prints as an error does: its message, then the source line
+    # and a caret under the column. The message is what is matched; the
+    # source and caret lines under it go with it.
+    awk '{ l[NR] = $0 } END { for (i = 1; i <= NR; i++) { s = l[i]; gsub(/\033\[[0-9;]*m/, "", s); if (s ~ /^ *\^ *$/) { d[i] = 1; d[i - 1] = 1 } } for (i = 1; i <= NR; i++) if (!d[i]) print l[i] }' \
+        "$WORK/$name.err" > "$WORK/$name.rest" && mv "$WORK/$name.rest" "$WORK/$name.err"
     if [ -s "$WORK/$name.want" ]; then
         grep -v -F -f "$WORK/$name.want" "$WORK/$name.err" > "$WORK/$name.rest" || true
         mv "$WORK/$name.rest" "$WORK/$name.err"
