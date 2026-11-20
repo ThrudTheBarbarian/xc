@@ -4179,6 +4179,18 @@ BOOL pacIsOne(XTASTNode* _Nullable e)
             return [self parAutoNo:@"goto"];
         if (ty == XTTokenBreak && innerAt.count == 0)
             return [self parAutoNo:@"break"];
+        // Taking the address of an outer variable, or of an element or member
+        // of one (`&c`, `&c[k]`, `&s.f`, `&*p`): what the address reaches may
+        // be written, by a call say, from every item at once. A bitwise `&`
+        // is no address-of. Mirrored in the port.
+        NSString* addrOf = ty == XTTokenAmpersand ? self.plAddrs[@(i)] : nil;
+        if (addrOf && ![declared containsObject:addrOf])
+            {
+            [self parAutoWarnSerial:addrOf.length ? [NSString stringWithFormat:@"its body takes the address of '%@'", addrOf]
+                                                  : @"its body takes an address"];
+            self.parScanAcc = nil;
+            return [self parAutoNo:@"address"];
+            }
         // A declaration: its declarators are the body's own names.
         BOOL declStart = stmtStart || (prev == XTTokenLParen && [self parTokType:i - 2] == XTTokenFor);
         if ((declStart && ty != XTTokenIdentifier) ||
@@ -4229,8 +4241,6 @@ BOOL pacIsOne(XTASTNode* _Nullable e)
         if (stmtStart && next == XTTokenColon)
             return [self parAutoNo:@"label"];
         BOOL own = [declared containsObject:name];
-        if (prev == XTTokenAmpersand && next != XTTokenLBracket && !own)
-            return [self parAutoNo:@"address"];
         // `acc++;` as a statement of its own: a `+` reduction (from 0.8.1).
         if (stmtStart && next == XTTokenPlusPlus && [self parTokType:i + 2] == XTTokenSemicolon && !own &&
             ![name isEqualToString:var] && !accOps[name])

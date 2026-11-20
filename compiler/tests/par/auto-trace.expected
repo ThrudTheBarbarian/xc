@@ -1,3 +1,14 @@
+par-auto-trace: par_auto_address.xc:34 serial rule=address form=for name=- reds=- grid=- impl=-
+par-auto-trace: par_auto_address.xc:38 serial rule=address form=range name=- reds=- grid=- impl=-
+par-auto-trace: par_auto_address.xc:41 serial rule=address form=range name=- reds=- grid=- impl=-
+par-auto-trace: par_auto_address.xc:44 serial rule=address form=range name=- reds=- grid=- impl=-
+par-auto-trace: par_auto_address.xc:46 lifted rule=block form=range name=par_auto_address.xc:46 reds=- grid=1 impl=0
+par-auto-trace: par_auto_address.xc:51 lifted rule=block form=range name=par_auto_address.xc:51 reds=- grid=1 impl=1
+par-auto-trace: par_auto_address.xc:53 lifted rule=block form=range name=par_auto_address.xc:53 reds=- grid=1 impl=2
+par-auto-trace: par_auto_address.xc:55 lifted rule=block form=range name=par_auto_address.xc:55 reds=- grid=1 impl=3
+par-auto-trace: par_auto_address.xc:63 lifted rule=block form=range name=par_auto_address.xc:63 reds=+:s1 grid=1 impl=4
+par-auto-trace: par_auto_address.xc:65 lifted rule=block form=range name=par_auto_address.xc:65 reds=+:s2 grid=1 impl=5
+par-auto-trace: par_auto_address.xc:67 lifted rule=block form=range name=par_auto_address.xc:67 reds=+:s3 grid=1 impl=6
 par-auto-trace: par_auto_array_reduce.xc:22 lifted rule=block form=range name=par_auto_array_reduce.xc:22 reds=- grid=1 impl=0
 par-auto-trace: par_auto_array_reduce.xc:28 serial rule=small form=range name=- reds=- grid=- impl=-
 par-auto-trace: par_auto_array_reduce.xc:33 lifted rule=block form=range name=par_auto_array_reduce.xc:33 reds=+:hist[] grid=1 impl=1
