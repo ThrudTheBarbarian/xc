@@ -215,6 +215,7 @@ NSString* _Nullable parUpdateKey(XTASTNode* _Nullable target, XTAssignOp aop, XT
 - (void)blkBareCallCheck:(NSString*)name at:(XTSourceLocation*)loc;
 - (void)blkCaptureError:(NSUInteger)which name:(NSString*)name at:(XTSourceLocation*)loc;
 - (BOOL)blkIsIvar:(NSString*)name;
+- (BOOL)blkIsLaterIvar:(NSString*)name;
 - (NSMutableDictionary*)blkBases;
 @end
 
