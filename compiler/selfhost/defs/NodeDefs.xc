@@ -43,9 +43,8 @@
 
 // Source facts (Node.src()): what the tokens said that the tree no longer
 // shows, kept in a word of their own so no reader of the flags above sees
-// them. --par-style=auto decides from the tokens; these let a decision made
-// on the tree come out the same (#338). Nothing reads them yet, apart from
-// XC_PAR_AUTO_CHECK (flags and frame). The dump does not print them.
+// them. --par-style=auto's recogniser reads them, so its decisions on the
+// tree are those the tokens gave (#338). The dump does not print them.
 // An expression written in parentheses.
 #define SRC_PAREN $0001
 // An integer literal spelled as its decimal value (`1`, not `0x1`, `01`, `$1`).
@@ -65,10 +64,6 @@
 #define SRC_DESC $0040
 // A call whose callee name or member was written in parentheses (`(f)(x)`).
 #define SRC_PARENCALLEE $0080
-// XC_PAR_AUTO_CHECK only, never on a node: the C-style condition and step
-// shapes --par-style=auto takes.
-#define SRC_CHK_COND $0100
-#define SRC_CHK_STEP $0200
 // A node the parser made rather than read, which the par frame walk passes
 // over: a name it used no binding for (a type keyword as a receiver, `par.x`
 // in a grid), or a statement it added beside a declaration.

@@ -745,8 +745,8 @@ are never wrapped. It must also have no `break` of its own, `return`, `goto` or 
 incremented, taken by address or written through a member. A float
 reduction is left alone (its sum would reassociate across the items) unless
 the goal is speed, as is any other write to an outer variable. The decision
-is made before parsing, from the loop's tokens, so it is the same in every
-build.
+is made from the loop as written, once it is parsed, so it is the same in
+every build.
 
 A loop that updates an outer array through an index read from data, as
 `h[k] += e`, `h[k]++` or `h[k] = h[k] + e` with `+`, `|`, `&` or `^`, becomes a
@@ -793,7 +793,7 @@ count no longer limits the work items: `for (i in 0..480) for (j in 0..640)
 it is, run serially by each work item. A loop inside a block literal is
 wrapped like any other; a loop inside a written `par` block is left alone.
 
-What the tokens cannot tell, the compiler's `par` checks decide afterwards —
+What the loop's form cannot tell, the compiler's `par` checks decide afterwards —
 whether the items are independent (a scan, `b[i] = b[i - 1] + …`, is not)
 and whether a GPU could run the body. A written `par` block that fails is an
 error; an automatic one is **demoted to a serial run** instead, so the program

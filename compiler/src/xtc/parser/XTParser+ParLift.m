@@ -2,11 +2,10 @@
 |* XTParser+ParLift.m
 |*
 |* The --par-style=auto recogniser (#338): whether a loop becomes a par
-|* block, decided from its tree once it is parsed, beside the token scan
-|* (parAutoScan) that still decides. It makes the scan's decisions: the
-|* verdict, the rule that kept a loop serial, the loop's form, its
-|* reductions, a running total, the grid levels a nest may take, and the
-|* small-loop test.
+|* block, decided from its tree once it is parsed (parAutoFor): the verdict,
+|* the rule that kept a loop serial, the loop's form, its reductions, a
+|* running total, the grid levels a nest may take, and the small-loop test.
+|* Its decisions are those the token scan made before it.
 |*
 |* The header is read from the tree and the source facts the parser put on
 |* it (SRC_RANGE, SRC_SERIAL, SRC_GOAL, SRC_STEPBAD, SRC_DESC, and
@@ -14,14 +13,11 @@
 |* read the token before or after a name, so a walk of the tree rebuilds the
 |* loop's tokens in source order (plEmit), with the parentheses SRC_PAREN
 |* records and each declaration's names, and the body's rules run on them
-|* (parAutoScanBodyAfter, shared with the scan). A block literal, a nested
+|* (parAutoScanBodyAfter). A block literal, a nested
 |* par block, a loop lifted inside the loop, and a counted `while` the
 |* parser rewrote are read through the sites the parser recorded for them,
-|* as they were written.
-|*
-|* XC_PAR_AUTO_CHECK=recog prints, for each loop the scan reads, a line
-|* comparing the two: "same", or "differ" and each field that does.
-|* Mirrored in the port (Parser.xc, the recogniser section).
+|* as they were written. Mirrored in the port (Parser.xc, the recogniser
+|* section).
 \****************************************************************************/
 #import "XTParser+Private.h"
 
@@ -1040,12 +1036,9 @@ static BOOL plStepOk(XTASTNode* _Nullable st, NSString* var)
     s[@"tokens"] = self.tokens;
     s[@"pos"] = @(self.pos);
     if (self.parAutoWhy) s[@"why"] = self.parAutoWhy;
-    if (self.parAutoForm) s[@"form"] = self.parAutoForm;
     s[@"cap"] = @(self.parAutoGridCap);
     if (self.parScanAcc) s[@"acc"] = self.parScanAcc;
     if (self.parScanOp) s[@"op"] = self.parScanOp;
-    s[@"seen"] = @(self.pacSeen);
-    s[@"val"] = @(self.pacVal);
     return s;
     }
 
@@ -1054,12 +1047,9 @@ static BOOL plStepOk(XTASTNode* _Nullable st, NSString* var)
     self.tokens = s[@"tokens"];
     self.pos = [s[@"pos"] unsignedIntegerValue];
     self.parAutoWhy = s[@"why"];
-    self.parAutoForm = s[@"form"];
     self.parAutoGridCap = [s[@"cap"] unsignedIntegerValue];
     self.parScanAcc = s[@"acc"];
     self.parScanOp = s[@"op"];
-    self.pacSeen = [s[@"seen"] unsignedIntegerValue];
-    self.pacVal = [s[@"val"] unsignedIntegerValue];
     self.plStream = NO;
     self.plToks = nil;
     self.plDecls = nil;
@@ -1202,104 +1192,6 @@ static BOOL plStepOk(XTASTNode* _Nullable st, NSString* var)
         }
     [self plStateRestore:saved];
     return v;
-    }
-
-// The recogniser on a `while` the scan left alone (or on the `while` a
-// rewritten `for` was, `inc` its increment's spelling): whether the counted
-// form takes it, and the rule when it does not.
-- (NSDictionary*)plRecogniseWhile:(nullable XTASTNode*)n inc:(NSInteger)inc at:(XTSourceLocation*)loc
-    {
-    NSDictionary* saved = [self plStateSave];
-    self.plLoc = loc;
-    [self plBegin];
-    if ([n isKindOfClass:[XTForCStyleNode class]])
-        [self plWhileFrom:n inc:inc];
-    else
-        [self plStmt:n];
-    self.tokens = self.plToks;
-    self.pos = 0;
-    self.plStream = YES;
-    self.parAutoWhy = nil;
-    BOOL ok = [self parAutoWhileShape];
-    NSString* why = self.parAutoWhy;
-    [self plStateRestore:saved];
-    return @{ @"lift" : @(ok), @"rule" : ok ? @"-" : (why ?: @"while-shape") };
-    }
-
-static NSString* plField(NSDictionary* d, NSString* k)
-    {
-    id x = d[k];
-    if (!x)
-        return @"-";
-    if ([x isKindOfClass:[NSNumber class]])
-        return [x stringValue];
-    return [x length] ? x : @"-";
-    }
-
-// XC_PAR_AUTO_CHECK=recog: the line for the loop at `loc`, the scan's
-// verdict against the recogniser's, field by field.
-- (void)plCompare:(NSDictionary*)scan recog:(NSDictionary*)recog at:(XTSourceLocation*)loc
-    {
-    NSString* file = loc.filename ?: @"?";
-    if ([self.libraryFiles containsObject:file])
-        return;
-    NSMutableString* out = [NSMutableString string];
-    BOOL same = YES;
-    for (NSString* k in @[ @"lift", @"rule", @"form", @"reds", @"grid", @"scan", @"goal", @"small", @"while" ])
-        {
-        NSString* a = plField(scan, k);
-        NSString* b = plField(recog, k);
-        [out appendFormat:@" %@=%@", k, a];
-        if (![a isEqualToString:b])
-            {
-            [out appendFormat:@"/%@!", b];
-            same = NO;
-            }
-        }
-    [self parAutoAddLine:[NSString stringWithFormat:@"par-auto-check: %@:%lu:%lu recog %@%@", file.lastPathComponent,
-                                                    (unsigned long)loc.line, (unsigned long)loc.column,
-                                                    same ? @"same" : @"differ", out]];
-    }
-
-// XC_PAR_AUTO_CHECK=recog: the scan's verdict `scan` against the
-// recogniser's `r` on `plain`, whose tokens are [from, to).
-- (void)plCheckVerdict:(nullable NSMutableDictionary*)scan
-                 recog:(NSMutableDictionary*)r
-                 plain:(nullable XTASTNode*)plain
-                    at:(XTSourceLocation*)loc
-             fromWhile:(BOOL)fromWhile
-                   inc:(NSInteger)inc
-                  from:(NSUInteger)from
-                    to:(NSUInteger)to
-    {
-    if (!self.parAutoRecogOn || !scan)
-        return;
-    if ([scan[@"lift"] boolValue] && plain)
-        scan[@"small"] = @([self parAutoSmall:plain from:from to:to]);
-    if (fromWhile)
-        {
-        // The `while` it was, too: the counted form must take it.
-        NSDictionary* w = [self plRecogniseWhile:plain inc:inc at:loc];
-        if (![w[@"lift"] boolValue])
-            r[@"while"] = w[@"rule"];
-        }
-    [self plCompare:scan recog:r at:loc];
-    }
-
-- (void)plCheckWhile:(nullable XTASTNode*)w at:(XTSourceLocation*)loc why:(NSString*)why
-    {
-    if (!self.parAutoRecogOn)
-        return;
-    NSDictionary* r = [self plRecogniseWhile:w inc:0 at:loc];
-    NSMutableDictionary* scan = [NSMutableDictionary dictionary];
-    scan[@"lift"] = @NO;
-    scan[@"rule"] = why;
-    scan[@"form"] = @"while";
-    NSMutableDictionary* recog = [NSMutableDictionary dictionary];
-    recog[@"lift"] = r[@"lift"];
-    recog[@"rule"] = [r[@"lift"] boolValue] ? @"-" : r[@"rule"];
-    recog[@"form"] = @"while";
-    [self plCompare:scan recog:recog at:loc];
     }
 
 // A site for the walk: kind as plSite reads it.

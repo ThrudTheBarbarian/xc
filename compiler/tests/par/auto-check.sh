@@ -1,20 +1,19 @@
 #!/bin/bash
-# auto-check.sh — XC_PAR_AUTO_CHECK=flags,recog over the par_auto fixtures and the
-# header spellings below: for each loop the --par-style=auto scan reads, the
-# source facts the parser put on the loop's node (range syntax, `: serial`, a
+# auto-check.sh — the --par-style=auto recogniser's verdicts on the header
+# spellings and the loops below, against an expected list
+# (tests/par/auto-check.expected): XC_PAR_AUTO_TRACE=1 gives one line for each
+# loop, with its verdict, the rule that decided it, its form, and for a block
+# its name, reductions, grid rank and ParImpl number. The header loops read
+# the source facts the parser puts on a loop (range syntax, `: serial`, a
 # `: goal` of its own, a range step that is not a plain literal, literal
-# bounds that descend, and the condition and step shapes the tree gives with
-# its parentheses and literal spellings) must agree with what the scan saw in
-# the tokens. With XC_PAR_AUTO_CHECK=recog as well, the recogniser's verdict
-# on each loop, read from its tree, must be the scan's: lift or serial, the
-# rule, the form, the reductions, a running total, the grid levels, the goal
-# and the small-loop test, over the same files and the loops below that
-# exercise the rules the scan reads from the token beside a name. A line
-# that says "differ" fails. The check must not change the output: the
-# assembly is compared with it on and off.
+# bounds that descend, and the condition and step spellings); the others
+# exercise each rule the recogniser reads from the token beside a name, and
+# the loops it reads through a site. The trace must not change the output:
+# the assembly is compared with it on and off.
 #
 #   bash tests/par/auto-check.sh                   # bin/<plat>/xcc-xc
 #   XC=path/to/xcc bash tests/par/auto-check.sh
+#   UPDATE=1 bash tests/par/auto-check.sh          # rewrite the expected list
 set -u
 export XC_PAR_REMOTE=none
 cd "$(dirname "$0")/../.." || exit 2
@@ -79,8 +78,8 @@ i32 main(void)
 }
 XC
 
-# For recog: loops that exercise each rule the scan reads from the token
-# before or after a name, and the ones the recogniser reads through a site.
+# Loops that exercise each rule the recogniser reads from the token before or
+# after a name, and the ones it reads through a site.
 cat > "$W/recog.xc" <<'XC'
 #import "Stdio.xc"
 #import "Par.xc"
@@ -175,35 +174,26 @@ i32 main(void)
 }
 XC
 
+EXPECTED=tests/par/auto-check.expected
 fail=0
 : > "$W/got"
-for src in tests/fixtures/par_auto_*.xc "$W/headers.xc" "$W/recog.xc"; do
+for src in "$W/headers.xc" "$W/recog.xc"; do
     name=$(basename "$src" .xc)
-    if ! XC_PAR_AUTO_CHECK=flags,recog "$XC" -q -H . -A x86_64 -O2 -S -o "$W/$name.on.s" "$src" > "$W/$name.err" 2>&1; then
+    if ! XC_PAR_AUTO_TRACE=1 "$XC" -q -H . -A x86_64 -O2 -S -o "$W/$name.on.s" "$src" > "$W/$name.err" 2>&1; then
         echo "FAIL $name: does not build"; sed 's/^/    /' "$W/$name.err" | head -5
         fail=1; continue
     fi
-    grep '^par-auto-check: ' "$W/$name.err" >> "$W/got"
+    grep '^par-auto-trace: ' "$W/$name.err" >> "$W/got"
     "$XC" -q -H . -A x86_64 -O2 -S -o "$W/$name.off.s" "$src" > /dev/null 2>&1
-    cmp -s "$W/$name.on.s" "$W/$name.off.s" || { echo "FAIL $name: the check changed the assembly"; fail=1; }
+    cmp -s "$W/$name.on.s" "$W/$name.off.s" || { echo "FAIL $name: the trace changed the assembly"; fail=1; }
 done
-if grep -v ' recog ' "$W/got" | grep -q ' differ'; then
-    echo "FAIL auto-check: source facts and tokens disagree:"; grep -v ' recog ' "$W/got" | grep ' differ' | head -20
+if [ "${UPDATE:-0}" = 1 ]; then
+    cp "$W/got" "$EXPECTED"
+    echo "auto-check: wrote $EXPECTED ($(wc -l < "$EXPECTED") loops)"
+elif ! cmp -s "$W/got" "$EXPECTED"; then
+    echo "FAIL auto-check: the verdicts differ from $EXPECTED:"
+    diff "$EXPECTED" "$W/got" | head -40
     fail=1
 fi
-if grep ' recog ' "$W/got" | grep -q ' differ'; then
-    echo "FAIL auto-check: the recogniser and the scan disagree:"; grep ' recog ' "$W/got" | grep ' differ' | head -20
-    fail=1
-fi
-# Each fact is seen set at least once, so a flag the parser stopped setting shows.
-for f in range=1 serial=1 goal=1 stepbad=1 desc=1 cond=1 cond=0 step=1 step=0; do
-    grep -q " $f" "$W/got" || { echo "FAIL auto-check: no loop with $f"; fail=1; }
-done
-# Each rule the recog loops are there for is met at least once.
-for f in rule=label rule=address rule=outer-step rule=break rule=reduction-uses rule=outer-write rule=iv-write \
-         rule=bound-write rule=bound-memory rule=while-shape reds=+:acc reds=min:m scan=+:acc2 grid=1 small=1 \
-         form=while; do
-    grep ' recog ' "$W/got" | grep -q " $f" || { echo "FAIL auto-check: no recog loop with $f"; fail=1; }
-done
-echo "--- par auto-check: $(wc -l < "$W/got") loops, $(grep -c ' differ' "$W/got") differ ---"
+echo "--- par auto-check: $(wc -l < "$W/got") loops, $(grep -c ' lifted ' "$W/got") lifted ---"
 [ $fail = 0 ]

@@ -1188,7 +1188,7 @@ static BOOL parSameIndex(XTASTNode* a, XTASTNode* b)
 /****************************************************************************\
 |* Whether t is an array op can reduce into (:reduce(op t[])): one dimension
 |* of integers, of a size known when the program is built, op one of + | & ^.
-|* parAutoScan asks before it lifts a loop with an array reduction.
+|* The recogniser asks before it lifts a loop with an array reduction.
 \****************************************************************************/
 - (BOOL)parArrReducible:(nullable XTType*)t op:(NSString*)op
     {

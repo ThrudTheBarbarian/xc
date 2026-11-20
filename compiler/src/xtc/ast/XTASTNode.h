@@ -64,9 +64,8 @@ typedef NS_ENUM(NSInteger, XTASTNodeKind) {
 
 /****************************************************************************\
 |* Source facts (srcFacts): what the tokens said that the tree no longer
-|* shows. --par-style=auto decides from the tokens; these let a decision made
-|* on the tree come out the same (#338). Nothing reads them yet, apart from
-|* XC_PAR_AUTO_CHECK (flags and frame). The dump does not print them.
+|* shows. --par-style=auto's recogniser reads them, so its decisions on the
+|* tree are those the tokens gave (#338). The dump does not print them.
 |* Mirrored in the port (SRC_* in NodeDefs.xc), bit for bit.
 \****************************************************************************/
 typedef NS_OPTIONS(NSUInteger, XTSrcFact) {
@@ -76,10 +75,8 @@ typedef NS_OPTIONS(NSUInteger, XTSrcFact) {
     XTSrcSerial = 1 << 3,      // a `for` annotated `: serial`
     XTSrcGoal = 1 << 4,        // a `for` with a `: goal(…)` of its own
     XTSrcStepBad = 1 << 5,     // a range whose `step` is not followed by an integer literal, or by `0`
-    XTSrcDesc = 1 << 6,        // a range whose bounds are two literals that descend, as the scan reads them
+    XTSrcDesc = 1 << 6,        // a range whose bounds are two literals that descend, as the parser reads them
     XTSrcParenCallee = 1 << 7, // a call whose callee name or member was written in parentheses
-    XTSrcChkCond = 1 << 8,     // XC_PAR_AUTO_CHECK only, never on a node: the C-style condition…
-    XTSrcChkStep = 1 << 9,     // …and step shapes --par-style=auto takes
     XTSrcSynth = 1 << 10,      // made by the parser, not read: the par frame walk passes over it
     XTSrcCalled = 1 << 11,     // `b(…)` made into `b.invoke(…)` (a block binding, or a literal calling itself)
     XTSrcAnnot = 1 << 12,      // a loop with an annotation the parser does not know (it warns and drops it);

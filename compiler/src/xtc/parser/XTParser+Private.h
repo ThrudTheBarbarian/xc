@@ -47,20 +47,15 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic) BOOL scanQuiet;
 // Parsing what parScanRewrite made: its own loops (the short-range one) are not scans again.
 @property(nonatomic) NSUInteger scanInside;
-// parAutoScan found a running total (#144): its variable and operator.
+// The recogniser found a running total (#144): its variable and operator.
 @property(nonatomic, copy, nullable) NSString* parScanAcc;
 @property(nonatomic, copy, nullable) NSString* parScanOp;
-// XC_PAR_AUTO_TRACE (parAutoTraceLine): the rule that kept the loop parAutoScan
-// last read serial, that loop's header ("for" or "range"), the grid levels its
-// nest may take (parAutoGridCap), and whether parAutoFor's loop was a `while`.
+// XC_PAR_AUTO_TRACE (parAutoTraceLine): the rule that kept the loop the
+// recogniser last read serial, the grid levels its nest may take
+// (parAutoGridCap), and whether parAutoFor's loop was a `while`.
 @property(nonatomic, copy, nullable) NSString* parAutoWhy;
-@property(nonatomic, copy, nullable) NSString* parAutoForm;
 @property(nonatomic) NSUInteger parAutoGridCap;
 @property(nonatomic) BOOL parAutoFromWhile;
-// XC_PAR_AUTO_CHECK (parAutoCheck): the facts the last parAutoScan got to, and
-// their values, as XTSrcFact bits.
-@property(nonatomic) NSUInteger pacSeen;
-@property(nonatomic) NSUInteger pacVal;
 // parAutoFor (as the port): decisions made on the loop depth so far, the
 // parAutoFor calls open, and the names parAutoLabels counted, in order.
 @property(nonatomic) NSUInteger parAutoDepthReads;
@@ -91,8 +86,6 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic) NSInteger plWhileInc;
 @property(nonatomic) BOOL plSkipWhileIf;
 @property(nonatomic) NSUInteger plLits;
-// The recogniser's verdict decides: it gives the -Wpar-auto warnings.
-@property(nonatomic) BOOL plWarn;
 // The counted `while` parAutoWhileShape took: where the `while`, the `)`
 // closing its condition, the `}` closing its body and its increment are, and
 // its counter with its type (parseAutoWhile, parAutoWhileToks).
@@ -136,19 +129,10 @@ void parAutoGoals(XTASTNode* n, NSInteger g);
 // The --par-style=auto recogniser (XTParser+ParLift.m).
 @interface XTParser (ParLift)
 - (NSDictionary*)plRecogniseFor:(nullable XTASTNode*)loop at:(XTSourceLocation*)loc;
-- (void)plCheckVerdict:(nullable NSMutableDictionary*)scan
-                 recog:(NSMutableDictionary*)r
-                 plain:(nullable XTASTNode*)plain
-                    at:(XTSourceLocation*)loc
-             fromWhile:(BOOL)fromWhile
-                   inc:(NSInteger)inc
-                  from:(NSUInteger)from
-                    to:(NSUInteger)to;
-- (void)plCheckWhile:(nullable XTASTNode*)w at:(XTSourceLocation*)loc why:(NSString*)why;
 - (void)plRegister:(nullable XTASTNode*)site entry:(NSDictionary*)e;
 @end
 
-// XTParser.m: what the scan and the recogniser share.
+// XTParser.m: the body rules the recogniser runs on its walk's tokens.
 @interface XTParser ()
 - (BOOL)parAutoScanBodyAfter:(NSUInteger)pe
                          var:(NSString*)var
@@ -158,7 +142,6 @@ void parAutoGoals(XTASTNode* n, NSInteger g);
                         goal:(NSUInteger*)goalOut;
 - (BOOL)parAutoWhileShape;
 - (BOOL)parAutoSmall:(XTASTNode*)loop from:(NSUInteger)from to:(NSUInteger)to;
-- (void)parAutoAddLine:(NSString*)line;
 @end
 BOOL pacStepInBound(XTASTNode* _Nullable e);
 XTASTNode* _Nullable pacFirstKid(XTASTNode* e);
