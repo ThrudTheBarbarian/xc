@@ -273,16 +273,16 @@ class Arm64
             bool hasAsm = emitted.contains(String.withCString("    // inline asm\n"));
             // The text passes take and give lines: split once here, joined
             // once after (#333).
-            Array* pl = linesOf(hasAsm ? hideAsm(emitted, asmBodies) : emitted);
+            Array* pl = linesOf(emitted);
+            if (hasAsm) pl = hideAsm(pl, asmBodies);
             _parseMemo = new Map();
             if (_parseNone == (Array*)0)
                 _parseNone = new Array();
             pl = peepholeFallthroughLines(peepholeUsraLines(peepholeRedundantCmpLines(peepholeAndsFoldLines(
                     peepholeCopyPropLines(peepholeRedundantReloadsLines(peepholeSpillsLines(pl)))))));
             _parseMemo = (Map*)0;
-            String* pp = joinLines(pl);
-            if (hasAsm) pp = restoreAsm(pp, asmBodies, emitted);
-            module.append(tbzInRange(elideLeafFrame(expandStagedSlots(pp))));
+            if (hasAsm) pl = restoreAsm(pl, asmBodies, emitted);
+            module.append(joinLines(tbzInRange(elideLeafFrame(expandStagedSlots(pl)))));
             _out = module;
         }
         // The SME matrix kernels the module calls (idiom-matmul), and the state
@@ -6073,9 +6073,8 @@ class Arm64
     // flags; peepholeSpills keeps every store in a function with a body
     // (#305). The slot passes after the chain (expandStagedSlots,
     // elideLeafFrame, tbzInRange) see the restored text.
-    static String* hideAsm(String* text, Array* bodies)
+    static Array* hideAsm(Array* lines, Array* bodies)
     {
-        Array* lines = linesOf(text);
         Array* out = new Array();
         Array* body = (Array*)0;
         for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1) {
@@ -6090,27 +6089,26 @@ class Arm64
             out.add((Object*)ln);
         }
         if (body != (Array*)0) bodies.add((Object*)body);    // unterminated: to the end
-        return joinLines(out);
+        return out;
     }
 
-    // The peepholed text with each body back after its opening marker; the
+    // The peepholed lines with each body back after its opening marker; the
     // text as emitted (`orig`) when a marker went missing on the way.
-    static String* restoreAsm(String* text, Array* bodies, String* orig)
+    static Array* restoreAsm(Array* lines, Array* bodies, String* orig)
     {
-        Array* lines = linesOf(text);
         Array* out = new Array();
         u32 k = (u32)0;
         for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1) {
             String* ln = (String*)lines.get(i);
             out.add((Object*)ln);
             if (ln.trimmed().equals(String.withCString("// inline asm"))) {
-                if (k >= bodies.count()) return orig;
+                if (k >= bodies.count()) return linesOf(orig);
                 out.addAll((Array*)bodies.get(k));
                 k = k + (u32)1;
             }
         }
-        if (k != bodies.count()) return orig;
-        return joinLines(out);
+        if (k != bodies.count()) return linesOf(orig);
+        return out;
     }
 
     // The base register a writeback address writes: `[xN, #i]!` (pre-index)
@@ -6188,9 +6186,8 @@ class Arm64
     // spMemForOff emits every slot access sp-relative so the peepholes can see
     // it; anything still out of range is staged here, AFTER they have run, so a
     // forwarded or dropped access never pays for the address materialisation.
-    String* expandStagedSlots(String* text)
+    Array* expandStagedSlots(Array* lines)
     {
-        Array* lines = linesOf(text);
         Array* out = new Array();
         // Two exclusions, and neither can be a running on/off flag: block
         // bodies are laid out in declaration order, so a loop body often sits
@@ -6275,7 +6272,7 @@ class Arm64
             }
             out.add((Object*)ln);
         }
-        return joinLines(out);
+        return out;
     }
 
     // Same physical register, whatever view names it: writing `w16` zeroes the
@@ -7223,10 +7220,9 @@ class Arm64
             || m.equals(String.withCString("smc"));
     }
 
-    String* elideLeafFrame(String* text)
+    Array* elideLeafFrame(Array* lines)
     {
-        if (_msFns != (Array*)0) return text;
-        Array* lines = linesOf(text);
+        if (_msFns != (Array*)0) return lines;
         String* pre = String.withCString("stp x29, x30, [sp, #-");
         i32 pro = (i32)-1;
         String* size = (String*)0;
@@ -7238,9 +7234,9 @@ class Arm64
                 break;
             }
         }
-        if (pro < (i32)0 || (u32)pro + (u32)1 >= lines.count()) return text;
+        if (pro < (i32)0 || (u32)pro + (u32)1 >= lines.count()) return lines;
         if (!((String*)lines.get((u32)pro + (u32)1)).trimmed().equals(String.withCString("mov x29, sp")))
-            return text;
+            return lines;
         String* epi = String.withCString("ldp x29, x30, [sp], #");
         epi.append(size);
         Array* kept = new Array();
@@ -7253,11 +7249,11 @@ class Arm64
             u32 tb = t.indexOfByte((u8)'\t');
             if (tb < sp) sp = tb;
             String* mnem = sp == (u32)$FFFF_FFFF ? t : t.substringBytes((u32)0, sp);
-            if (isCallMnemonic(mnem)) return text;
-            if (namesFrameReg(t)) return text;
+            if (isCallMnemonic(mnem)) return lines;
+            if (namesFrameReg(t)) return lines;
             kept.add((Object*)ln);
         }
-        return joinLines(kept);
+        return kept;
     }
 
     // After a rewrite the scan steps back two real lines rather than starting
@@ -7402,11 +7398,16 @@ class Arm64
         return (u32)0;
     }
 
-    String* tbzInRange(String* text)
+    Array* tbzInRange(Array* lines)
     {
-        if (!text.contains(String.withCString("tbz ")) && !text.contains(String.withCString("tbnz ")))
-            return text;
-        Array* lines = linesOf(text);
+        String* tbz = String.withCString("tbz ");
+        String* tbnz = String.withCString("tbnz ");
+        bool any = false;
+        for (u32 i = 0; i < lines.count() && !any; i++) {
+            String* ln = (String*)lines.get(i);
+            any = ln.contains(tbz) || ln.contains(tbnz);
+        }
+        if (!any) return lines;
         Map* at = new Map();
         Array* off = new Array();
         u32 pos = (u32)0;
@@ -7446,7 +7447,7 @@ class Arm64
             }
             out.add((Object*)ln);
         }
-        return joinLines(out);
+        return out;
     }
 
     static i32 nextRealLine(Array* lines, u32 i)
