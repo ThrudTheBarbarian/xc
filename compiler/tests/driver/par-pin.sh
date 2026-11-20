@@ -5,8 +5,11 @@
 # thread, pinned for the run only, has 2-5 back. XC_PAR_PIN=0 leaves every
 # thread on 2-5. Unpinned, a 32-thread Zen 5 now and then ran two threads on
 # one CPU and an even block's time jumped by half (#32).
-#     bash tests/driver/par-pin.sh        (needs a Linux host with 6+ CPUs:
-#                                          native, or XTC_X86_64_HOST)
+# The lanes start after the CPU the calling thread runs on (#460), so each
+# set is run with the program started on each of its CPUs in turn (the
+# fixture's argument): the lane the direct path leaves idle, on that CPU, was
+# found still holding the whole set now and then (#506). A set with gaps pins
+# the same way, and a set smaller than the lanes pins none of them.
 cd "$(dirname "$0")/../.."
 XC="${XC:-bin/osx/xcc-xc}"
 W=$(mktemp -d /tmp/par-pin.XXXX)
@@ -30,7 +33,14 @@ else
     RD=$W; R=$W/pin
 fi
 E="XC_PAR=cpu XC_PAR_THREADS=4 XC_SETTINGS_DIR=$RD/settings"
-out=$(RUN "$E taskset -c 2,3,4,5 $R; echo ---; XC_PAR_PIN=0 $E taskset -c 2,3,4,5 $R; [ $RD = $W ] || rm -rf $RD")
-want=$'2\n2-5\n3\n4\n5\nsum 12288\n---\n2-5\n2-5\n2-5\n2-5\n2-5\nsum 12288'
+C=""; want=""
+for start in 2 3 4 5 2 3 4 5 2 3 4 5; do
+    C="$C $E taskset -c 2,3,4,5 $R $start;"; want="$want"$'2\n2-5\n3\n4\n5\nsum 12288\n'
+done
+for start in 0 2 3 5 0 2 3 5; do
+    C="$C $E taskset -c 0,2,3,5 $R $start;"; want="$want"$'0\n0,2-3,5\n2\n3\n5\nsum 12288\n'
+done
+out=$(RUN "$C $E taskset -c 2,3,4 $R 3; echo ---; XC_PAR_PIN=0 $E taskset -c 2,3,4,5 $R; [ $RD = $W ] || rm -rf $RD")
+want="$want"$'2-4\n2-4\n2-4\n2-4\n2-4\nsum 12288\n---\n2-5\n2-5\n2-5\n2-5\n2-5\nsum 12288'
 if [ "$out" = "$want" ]; then echo "par-pin: ok"; exit 0; fi
 echo "FAIL par-pin: wanted one CPU a lane (then, with XC_PAR_PIN=0, none pinned), got:"; echo "$out" | sed 's/^/    /'; exit 1
