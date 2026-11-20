@@ -158,6 +158,9 @@ int32_t _xt_file_read(int32_t h, uint8_t* buf, uint32_t n)
     if (h < 0 || h >= XT_MAX_FILES || !xt_files[h])
         return -1;
     size_t got = fread(buf, 1, (size_t)n, xt_files[h]);
+    // A failed read is -1, not an empty one (a directory on macOS, #476).
+    if (got == 0 && ferror(xt_files[h]))
+        return -1;
     return (int32_t)got;
     }
 

@@ -3218,30 +3218,44 @@ LBB78_6:
 __xt_file_read:                         ; @_xt_file_read
 	.cfi_startproc
 ; %bb.0:
-	cmp	w0, #7
-	b.hi	LBB79_3
-; %bb.1:
-Lloh167:
-	adrp	x8, _xt_files@PAGE
-Lloh168:
-	add	x8, x8, _xt_files@PAGEOFF
-	ldr	x3, [x8, w0, uxtw #3]
-	cbz	x3, LBB79_3
-; %bb.2:
-	stp	x29, x30, [sp, #-16]!           ; 16-byte Folded Spill
-	.cfi_def_cfa_offset 16
+	stp	x22, x21, [sp, #-48]!           ; 16-byte Folded Spill
+	stp	x20, x19, [sp, #16]             ; 16-byte Folded Spill
+	stp	x29, x30, [sp, #32]             ; 16-byte Folded Spill
+	.cfi_def_cfa_offset 48
 	.cfi_offset w30, -8
 	.cfi_offset w29, -16
+	.cfi_offset w19, -24
+	.cfi_offset w20, -32
+	.cfi_offset w21, -40
+	.cfi_offset w22, -48
+	cmp	w0, #7
+	b.hi	LBB79_4
+; %bb.1:
+Lloh167:
+	adrp	x20, _xt_files@PAGE
+Lloh168:
+	add	x20, x20, _xt_files@PAGEOFF
+	ldr	x3, [x20, w0, uxtw #3]
+	cbz	x3, LBB79_4
+; %bb.2:
+	mov	x21, x0
 	mov	w2, w2
 	mov	x0, x1
 	mov	w1, #1                          ; =0x1
 	bl	_fread
-	ldp	x29, x30, [sp], #16             ; 16-byte Folded Reload
-                                        ; kill: def $w0 killed $w0 killed $x0
-	ret
-LBB79_3:
-	mov	w0, #-1                         ; =0xffffffff
-                                        ; kill: def $w0 killed $w0 killed $x0
+	mov	x19, x0
+	cbnz	x0, LBB79_5
+; %bb.3:
+	ldr	x0, [x20, w21, uxtw #3]
+	bl	_ferror
+	cbz	w0, LBB79_5
+LBB79_4:
+	mov	w19, #-1                        ; =0xffffffff
+LBB79_5:
+	mov	x0, x19
+	ldp	x29, x30, [sp, #32]             ; 16-byte Folded Reload
+	ldp	x20, x19, [sp, #16]             ; 16-byte Folded Reload
+	ldp	x22, x21, [sp], #48             ; 16-byte Folded Reload
 	ret
 	.loh AdrpAdd	Lloh167, Lloh168
 	.cfi_endproc

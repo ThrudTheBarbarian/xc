@@ -2924,25 +2924,33 @@ _xt_file_open:                          // @_xt_file_open
 	.type	_xt_file_read,@function
 _xt_file_read:                          // @_xt_file_read
 // %bb.0:
+	stp	x30, x21, [sp, #-32]!           // 16-byte Folded Spill
 	cmp	w0, #7
-	b.hi	.Lrt_BB79_3
+	stp	x20, x19, [sp, #16]             // 16-byte Folded Spill
+	b.hi	.Lrt_BB79_4
 // %bb.1:
-	adrp	x8, xt_files
-	add	x8, x8, :lo12:xt_files
-	ldr	x3, [x8, w0, uxtw #3]
-	cbz	x3, .Lrt_BB79_3
+	adrp	x20, xt_files
+	add	x20, x20, :lo12:xt_files
+	ldr	x3, [x20, w0, uxtw #3]
+	cbz	x3, .Lrt_BB79_4
 // %bb.2:
-	str	x30, [sp, #-16]!                // 8-byte Folded Spill
+	mov	w21, w0
 	mov	w2, w2
 	mov	x0, x1
 	mov	w1, #1                          // =0x1
 	bl	fread
-	ldr	x30, [sp], #16                  // 8-byte Folded Reload
-                                        // kill: def $w0 killed $w0 killed $x0
-	ret
-.Lrt_BB79_3:
-	mov	w0, #-1                         // =0xffffffff
-                                        // kill: def $w0 killed $w0 killed $x0
+	mov	x19, x0
+	cbnz	x0, .Lrt_BB79_5
+// %bb.3:
+	ldr	x0, [x20, w21, uxtw #3]
+	bl	ferror
+	cbz	w0, .Lrt_BB79_5
+.Lrt_BB79_4:
+	mov	w19, #-1                        // =0xffffffff
+.Lrt_BB79_5:
+	mov	w0, w19
+	ldp	x20, x19, [sp, #16]             // 16-byte Folded Reload
+	ldp	x30, x21, [sp], #32             // 16-byte Folded Reload
 	ret
 .Lrt_func_end79:
 	.size	_xt_file_read, .Lrt_func_end79-_xt_file_read

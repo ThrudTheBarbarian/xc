@@ -441,7 +441,10 @@ void *_xtc_bank(uint8_t type,uint8_t idx){if(type>1)return 0;if(!_xtc_bank_regio
 #define XT_MAX_FILES 8
 static FILE *xt_files[XT_MAX_FILES];
 int32_t _xt_file_open(const char *path,const char *mode){for(int i=0;i<XT_MAX_FILES;i++){if(xt_files[i])continue;FILE*f=fopen(path,mode);if(!f)return -1;xt_files[i]=f;return i;}return -1;}
-int32_t _xt_file_read(int32_t h,uint8_t *buf,uint32_t n){if(h<0||h>=XT_MAX_FILES||!xt_files[h])return -1;return (int32_t)fread(buf,1,(size_t)n,xt_files[h]);}
+// A read that fails is -1, not 0: fopen opens a directory on macOS and fread
+// then reads nothing with the error set, which looked like an empty file
+// (Files.readText gave "" where Linux gives null, #476).
+int32_t _xt_file_read(int32_t h,uint8_t *buf,uint32_t n){if(h<0||h>=XT_MAX_FILES||!xt_files[h])return -1;size_t got=fread(buf,1,(size_t)n,xt_files[h]);if(got==0&&ferror(xt_files[h]))return -1;return (int32_t)got;}
 int32_t _xt_file_write(int32_t h,const uint8_t *buf,uint32_t n){if(h<0||h>=XT_MAX_FILES||!xt_files[h])return -1;return (int32_t)fwrite(buf,1,(size_t)n,xt_files[h]);}
 void _xt_file_close(int32_t h){if(h<0||h>=XT_MAX_FILES||!xt_files[h])return;fclose(xt_files[h]);xt_files[h]=0;}
 int32_t _xt_file_size(const char *path){FILE*f=fopen(path,"rb");if(!f)return -1;if(fseek(f,0,SEEK_END)!=0){fclose(f);return -1;}long n=ftell(f);fclose(f);return (n<0)?-1:(int32_t)n;}
