@@ -891,4 +891,75 @@ class Node
         {
         return _kids.count();
         }
+
+    // A copy of the tree from here down: every field, the kids copied in
+    // turn. --par-style=auto builds a lifted loop's block from a copy of the
+    // loop as parsed, which stays the fallback (#338).
+    Node* deepCopy(void)
+        {
+        Node* n = new Node();
+        n._kind = _kind;
+        n._fileId = _fileId;
+        n._name = _name;
+        n._op = _op;
+        n._extra = _extra;
+        n._num = _num;
+        n._flags = _flags;
+        n._src = _src;
+        n._line = _line;
+        n._col = _col;
+        n._pkg = _pkg;
+        n._islots = _islots;
+        n._isyms = _isyms;
+        n._stmtFileId = _stmtFileId;
+        n._stmtLine = _stmtLine;
+        n._stmtCol = _stmtCol;
+        n._ty = _ty;
+        n._sym = _sym;
+        n._cls = _cls;
+        n._vslot = _vslot;
+        n._autoSuper = _autoSuper;
+        n._indirect = _indirect;
+        n._boundCall = _boundCall;
+        n._nilLit = _nilLit;
+        n._calleeTy = _calleeTy;
+        n._setter = _setter;
+        n._setterCls = _setterCls;
+        n._getter = _getter;
+        n._getterCls = _getterCls;
+        n._bound = _bound;
+        n._boundCls = _boundCls;
+        n._boundSlot = _boundSlot;
+        n._boundProto = _boundProto;
+        n._boundPIdx = _boundPIdx;
+        n._proto = _proto;
+        n._protoIdx = _protoIdx;
+        n._slots = _slots;
+        n._symSlots = _symSlots;
+        n._slotSyms = _slotSyms;
+        n._vslots = _vslots;
+        n._since = _since;
+        n._category = _category;
+        n._catHost = _catHost;
+        n._usedByNew = _usedByNew;
+        n._heapRecv = _heapRecv;
+        n._stackRecv = _stackRecv;
+        for (u32 i = 0; i < _kids.count(); i++) : serial
+            n._kids.add((Object*)((Node*)_kids.get(i)).deepCopy());
+        return n;
+        }
+
+    // This node made into a bare name of `kind`, with no kids: what `self.f`
+    // in a lifted loop's copy becomes (Parser.pfwSelfIvar).
+    void becomeNamed(u16 kind, String* name)
+        {
+        _kind = kind;
+        _name = name;
+        _op = (String*)0;
+        _extra = (String*)0;
+        _num = 0;
+        _flags = 0;
+        _src = 0;
+        _kids = new Array();
+        }
     }

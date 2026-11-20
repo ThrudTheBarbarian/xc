@@ -14,11 +14,164 @@
 |* body counts toward the uses, and the names its site passes in are uses at
 |* the site. What cannot be captured is still said where it is used
 |* (blkNoteIdentifierUse, blkNoteBareCall), among the parse's other errors.
+|*
+|* A lifted loop's block is built from a copy of the loop as parsed
+|* (parAutoFor), not from a second parse in the block's frame, so the walk of
+|* that copy (pfwAuto) does what the frame did to the parse: it says what the
+|* block cannot capture, in the order the parse said it, and reads `self.f` as
+|* the ivar f (pfwSelfIvar).
 |* Mirrored in the port (Parser.xc, parFrameWalk).
 \****************************************************************************/
+#import <objc/runtime.h>
 #import "XTParser+Private.h"
 
 NS_ASSUME_NONNULL_BEGIN
+
+/****************************************************************************\
+|* A lifted loop's copy: every node and the case, label and catch records in
+|* it copied ivar by ivar, the arrays that hold them copied (mutable), and
+|* everything else (names, types, locations) shared. The port's
+|* Node.deepCopy.
+\****************************************************************************/
+static BOOL pfwTreeObject(id v)
+    {
+    return [v isKindOfClass:[XTASTNode class]] || [v isKindOfClass:[XTSwitchCase class]] ||
+           [v isKindOfClass:[XTCaseLabel class]] || [v isKindOfClass:[XTCatchClause class]];
+    }
+
+static id _Nullable pfwCopyValue(id _Nullable v);
+
+static id pfwCopyObject(id src)
+    {
+    Class cls = object_getClass(src);
+    id dst = [cls alloc];
+    for (Class c = cls; c && c != [NSObject class]; c = class_getSuperclass(c))
+        {
+        unsigned int count = 0;
+        Ivar* ivars = class_copyIvarList(c, &count);
+        for (unsigned int i = 0; i < count; i++)
+            {
+            const char* enc = ivar_getTypeEncoding(ivars[i]);
+            if (enc && enc[0] == '@')
+                object_setIvarWithStrongDefault(dst, ivars[i], pfwCopyValue(object_getIvar(src, ivars[i])));
+            else if (enc)
+                {
+                NSUInteger size = 0;
+                NSGetSizeAndAlignment(enc, &size, NULL);
+                ptrdiff_t off = ivar_getOffset(ivars[i]);
+                memcpy((char*)(__bridge void*)dst + off, (const char*)(__bridge void*)src + off, size);
+                }
+            }
+        free(ivars);
+        }
+    return dst;
+    }
+
+static id _Nullable pfwCopyValue(id _Nullable v)
+    {
+    if (!v)
+        return nil;
+    if (pfwTreeObject(v))
+        return pfwCopyObject(v);
+    if ([v isKindOfClass:[NSArray class]])
+        {
+        NSMutableArray* a = [NSMutableArray arrayWithCapacity:((NSArray*)v).count];
+        for (id e in (NSArray*)v)
+            [a addObject:pfwCopyValue(e)];
+        return a;
+        }
+    return v;
+    }
+
+XTASTNode* XTASTDeepCopy(XTASTNode* n)
+    {
+    return pfwCopyValue(n);
+    }
+
+// Each node, record or array an object's ivars hold, for `f`.
+static void pfwEachIvar(id obj, void (^f)(Ivar iv, id val))
+    {
+    for (Class c = object_getClass(obj); c && c != [NSObject class]; c = class_getSuperclass(c))
+        {
+        unsigned int count = 0;
+        Ivar* ivars = class_copyIvarList(c, &count);
+        for (unsigned int i = 0; i < count; i++)
+            {
+            const char* enc = ivar_getTypeEncoding(ivars[i]);
+            if (!enc || enc[0] != '@')
+                continue;
+            id val = object_getIvar(obj, ivars[i]);
+            if (val && (pfwTreeObject(val) || [val isKindOfClass:[NSArray class]]))
+                f(ivars[i], val);
+            }
+        free(ivars);
+        }
+    }
+
+// `old` replaced by `rep` where the tree under `obj` holds it. Whether it was.
+static BOOL pfwReplace(id obj, id old, id rep)
+    {
+    __block BOOL done = NO;
+    pfwEachIvar(obj, ^(Ivar iv, id val) {
+        if (done)
+            return;
+        if (val == old)
+            {
+            object_setIvarWithStrongDefault(obj, iv, rep);
+            done = YES;
+            return;
+            }
+        if ([val isKindOfClass:[NSArray class]])
+            {
+            NSMutableArray* a = (NSMutableArray*)val;
+            for (NSUInteger k = 0; k < a.count && !done; k++)
+                {
+                if (a[k] == old)
+                    {
+                    a[k] = rep;
+                    done = YES;
+                    }
+                else if (pfwTreeObject(a[k]))
+                    done = pfwReplace(a[k], old, rep);
+                }
+            return;
+            }
+        done = pfwReplace(val, old, rep);
+    });
+    return done;
+    }
+
+/****************************************************************************\
+|* The goals of a lifted loop's copy, as a parse in the block's frame read
+|* them: a loop without a goal of its own takes `g`, the goal around it, the
+|* block's for the lifted loop, and a C-style loop with one of its own passes
+|* that on to its body (parseFor, parseWhile). As the port.
+\****************************************************************************/
+void parAutoGoals(XTASTNode* n, NSInteger g)
+    {
+    if ([n isKindOfClass:[XTForCStyleNode class]])
+        {
+        XTForCStyleNode* f = (XTForCStyleNode*)n;
+        if ((f.srcFacts & XTSrcGoal) && f.goal != 0)
+            g = f.goal;
+        else
+            f.goal = g;
+        }
+    else if ([n isKindOfClass:[XTWhileNode class]])
+        ((XTWhileNode*)n).goal = g;
+    else if ([n isKindOfClass:[XTForInNode class]])
+        ((XTForInNode*)n).goal = g;
+    pfwEachIvar(n, ^(Ivar iv, id val) {
+        if ([val isKindOfClass:[NSArray class]])
+            {
+            for (id e in (NSArray*)val)
+                if (pfwTreeObject(e))
+                    parAutoGoals(e, g);
+            }
+        else
+            parAutoGoals(val, g);
+    });
+    }
 
 @implementation XTParser (ParFrame)
 
@@ -107,6 +260,16 @@ NS_ASSUME_NONNULL_BEGIN
         }
     if (n.srcFacts & XTSrcSynth)
         return;
+    if (self.pfwAuto && [n isKindOfClass:[XTMemberAccessNode class]])
+        {
+        XTIdentifierNode* f = [self pfwSelfIvar:(XTMemberAccessNode*)n];
+        if (f)
+            {
+            pfwReplace(self.pfwRoot, n, f);
+            [self pfwUse:f.identName];
+            return;
+            }
+        }
     NSDictionary* site = self.pfwSites ? [self.pfwSites objectForKey:n] : nil;
     if (site)
         {
@@ -261,6 +424,8 @@ NS_ASSUME_NONNULL_BEGIN
         NSUInteger depth = 0;
         if (!asName && [self blkLookup:callee depth:&depth])
             [self pfwUse:callee];
+        else if (!asName && self.pfwAuto && self.pfwTop)
+            [self blkBareCallCheck:callee at:c.location];
         return;
         }
     if ([n isKindOfClass:[XTMethodCallExprNode class]])
@@ -445,6 +610,8 @@ NS_ASSUME_NONNULL_BEGIN
     NSDictionary* info = [self blkLookup:name depth:&foundDepth];
     if (!info)
         {
+        if (self.pfwAuto && ([name isEqualToString:@"self"] || [self blkIsIvar:name]))
+            [self blkCaptureError:0 name:name at:[self currentLocation]];
         NSMutableArray* outer = self.pfw[@"outer"];
         if (!outer)
             self.pfw[@"outer"] = outer = [NSMutableArray array];
@@ -454,10 +621,21 @@ NS_ASSUME_NONNULL_BEGIN
         }
     if (foundDepth >= [self.pfw[@"depth"] unsignedIntegerValue])
         return;
+    id ty = info[@"type"];
+    if (self.pfwAuto && ty == [NSNull null])
+        {
+        [self blkCaptureError:1 name:name at:[self currentLocation]];
+        return;
+        }
+    // The frame is not on the stack: any frame there is one the loop sits in.
+    if (self.pfwAuto && [info[@"wb"] boolValue] && [self blkFrames].count > 0)
+        {
+        [self blkCaptureError:2 name:name at:[self currentLocation]];
+        return;
+        }
     NSMutableArray* names = self.pfw[@"names"];
     if ([names containsObject:name])
         return;
-    id ty = info[@"type"];
     if (ty == [NSNull null])
         return;
     if ([info[@"wb"] boolValue])
@@ -472,6 +650,26 @@ NS_ASSUME_NONNULL_BEGIN
     self.pfw[@"types"][name] = ty;
     if (info[@"base"])
         self.pfw[@"bases"][name] = info[@"base"];
+    }
+
+/****************************************************************************\
+|* `self.f` in a lifted loop's copy, `f` this class's own ivar binding where
+|* it is read: the name f at the `self`, as the parse in the block's frame
+|* read it (parSelfIvar), else nil.
+\****************************************************************************/
+- (nullable XTIdentifierNode*)pfwSelfIvar:(XTMemberAccessNode*)m
+    {
+    if (m.isArrow || ![m.base isKindOfClass:[XTIdentifierNode class]] || (m.base.srcFacts & XTSrcParen))
+        return nil;
+    if (![((XTIdentifierNode*)m.base).identName isEqualToString:@"self"])
+        return nil;
+    NSString* f = m.memberName;
+    if ([f isEqualToString:@"release"] || [f isEqualToString:@"retain"] || [f isEqualToString:@"delete"])
+        return nil;
+    NSDictionary* info = [self blkLookup:f depth:NULL];
+    if (![info[@"ivar"] boolValue])
+        return nil;
+    return [[XTIdentifierNode alloc] initWithName:f location:m.base.location];
     }
 
 // `par.x` … in a `par :grid` body, which the parser reads as these names.

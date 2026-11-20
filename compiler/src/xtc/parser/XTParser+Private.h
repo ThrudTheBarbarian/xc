@@ -69,6 +69,10 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic) BOOL pfwTop;
 @property(nonatomic, strong, nullable) NSMapTable* pfwSites;
 @property(nonatomic, strong, nullable) NSMutableArray<NSString*>* pfwNoted;
+// Walking a lifted loop's copy (parAutoFor): the copy, which `self.f` is
+// rewritten in (pfwSelfIvar).
+@property(nonatomic) BOOL pfwAuto;
+@property(nonatomic, strong, nullable) XTASTNode* pfwRoot;
 // The --par-style=auto recogniser (XTParser+ParLift.m): the tokens its walk
 // rebuilds and the names each declaration there declares (by the index of
 // its first token), the location they carry, whether the scan's body rules
@@ -117,6 +121,11 @@ NS_ASSUME_NONNULL_BEGIN
 - (NSMutableDictionary*)parFrameWalk:(XTASTNode*)body frame:(NSDictionary*)frame;
 - (void)parFrameFill:(NSMutableDictionary*)frame body:(nullable XTASTNode*)body;
 @end
+
+// A lifted loop's copy (XTParser+ParFrame.m): the tree copied, and the goals
+// a parse in the block's frame gives its loops.
+XTASTNode* XTASTDeepCopy(XTASTNode* n);
+void parAutoGoals(XTASTNode* n, NSInteger g);
 
 // The --par-style=auto recogniser (XTParser+ParLift.m).
 @interface XTParser (ParLift)
@@ -202,6 +211,9 @@ NSString* _Nullable parUpdateKey(XTASTNode* _Nullable target, XTAssignOp aop, XT
 - (void)blkAddIvarName:(NSString*)name;
 - (void)blkScanMethodNames;
 - (void)blkNoteBareCall:(NSString*)name at:(XTSourceLocation*)loc;
+- (void)blkBareCallCheck:(NSString*)name at:(XTSourceLocation*)loc;
+- (void)blkCaptureError:(NSUInteger)which name:(NSString*)name at:(XTSourceLocation*)loc;
+- (BOOL)blkIsIvar:(NSString*)name;
 - (NSMutableDictionary*)blkBases;
 @end
 

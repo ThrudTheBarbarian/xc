@@ -302,8 +302,14 @@ class Parser
     // and the loop stays a loop. As the reference (blkNoteBareCall).
     void blkNoteBareCall(Node* callee)
     {
-        String* name = callee.name();
         if (_blkFrames.count() == 0) return;
+        blkBareCallCheck(callee);
+    }
+
+    // blkNoteBareCall's test and error, inside a frame.
+    void blkBareCallCheck(Node* callee)
+    {
+        String* name = callee.name();
         if (blkLookup(name, (u32*)0) != 0 || !blkIsMethod(name)) return;
         _errorAt(String.withFormat("a block cannot call the method '%s': it needs 'self', and a block cannot capture 'self' (v1 captures locals and parameters only) — copy it into a local first, e.g. `auto me = self;` outside the block", name.cString()), callee);
     }
@@ -361,9 +367,8 @@ class Parser
         u32 foundDepth = (u32)0;
         Map* info = blkLookup(name, &foundDepth);
         if (info == 0) {
-            if (Parser._same(name, "self") || blkIsIvar(name)) {
-                _error(String.withFormat("a block cannot capture '%s' (v1 captures locals and parameters only) — copy it into a local first, e.g. `auto me = self;` outside the block", name.cString()));
-            }
+            if (Parser._same(name, "self") || blkIsIvar(name))
+                _error(Parser.blkSelfMsg(name));
             return;
         }
         if (foundDepth >= literalDepth) return;
@@ -373,14 +378,14 @@ class Parser
                 if (((String*)names.get(i)).equals(name)) return;
         String* ty = blkTyOf(info);
         if (Parser._same(ty, "auto")) {
-            _error(String.withFormat("cannot capture '%s': it was declared `auto`, and a capture needs the declared type at this point — give it an explicit type", name.cString()));
+            _error(Parser.blkAutoMsg(name));
             return;
         }
         // v2 (task #29): write-back captures reach the enclosing FRAME, so
         // they do not compose through nested literals.
         if (info.get((Hashable*)String.withCString("wb")) != 0) {
             if (_blkFrames.count() > (u32)1) {
-                _error(String.withFormat("a `block:` capture of '%s' inside a nested block is not supported (v2) — write-back reaches the enclosing FRAME, and here the enclosing scope is itself a block", name.cString()));
+                _error(Parser.blkWbMsg(name));
                 return;
             }
             if (isPar) return;
@@ -389,6 +394,21 @@ class Parser
         if (isPar) return;
         names.add((Object*)name);
         ((Map*)frame.get((Hashable*)String.withCString("types"))).set((Hashable*)name, (Object*)ty);
+    }
+
+    // blkNoteUse's errors, which the walk of a lifted loop's copy also says
+    // (pfwUse).
+    static String* blkSelfMsg(String* name)
+    {
+        return String.withFormat("a block cannot capture '%s' (v1 captures locals and parameters only) — copy it into a local first, e.g. `auto me = self;` outside the block", name.cString());
+    }
+    static String* blkAutoMsg(String* name)
+    {
+        return String.withFormat("cannot capture '%s': it was declared `auto`, and a capture needs the declared type at this point — give it an explicit type", name.cString());
+    }
+    static String* blkWbMsg(String* name)
+    {
+        return String.withFormat("a `block:` capture of '%s' inside a nested block is not supported (v2) — write-back reaches the enclosing FRAME, and here the enclosing scope is itself a block", name.cString());
     }
 
     // ── Blocks: the gate + the type header ───────────────────────
@@ -3352,6 +3372,11 @@ class Parser
         // block, and a small loop stays that loop. Then the same tokens
         // again, as the block. As the reference.
         u32 forPos = _pos;
+        u32 blkAt = _blkCounter;
+        u32 parAt = _parCounter;
+        u32 seqAt = _scanSeq;
+        u32 plainErr = _errors.count();
+        u32 plainWarn = _warnings.count();
         parGridEnter("loops", true);
         _loopDepth = _loopDepth + (u32)1;
         Node* plain = fromWhile ? parseAutoWhile(wv, wvt, wInc, wIncLen) : parseFor();
@@ -3402,17 +3427,30 @@ class Parser
                 parAutoTraceLine(traceAt, "lifted", String.withCString("scan"), form, (String*)0, sreds, 0, Parser.parAutoImplSpan(implFrom, _parCounter));
             return sc;
         }
-        // A loop the block form refuses stays the loop: an error the block's
-        // parse or its desugaring reports (a capture of self or of an ivar,
-        // say) is taken back, and the loop as parsed above is the statement.
-        // A loop of a method that reads self.n failed to compile (UXKit had
-        // 25). As the reference.
+        // A loop whose body holds a block literal or a written par block
+        // stays the loop. As the reference.
         u32 plainEnd = _pos;
+        Token* forTok = (Token*)_tokens.get(forPos);
+        if (_blkCounter != blkAt || _parCounter != parAt || _scanSeq != seqAt) {
+            warnAt(String.withCString("par-auto"), String.withCString("this loop runs serially, not as a 'par' block (--par-style): its body holds a block"), forTok);
+            parAutoTraceLine(traceAt, "serial", String.withCString("body-block"), form, (String*)0, (String*)0, 0, (String*)0);
+            if (fromWhile) plRegister(plain, 3, plain, (Array*)0, whileInc);
+            return plain;
+        }
+        // A loop the block form refuses stays the loop: an error the loop's
+        // parse, the walk of its copy or its desugaring reports (a capture of
+        // self or of an ivar, say) is taken back, and the loop as parsed above
+        // is the statement. A loop of a method that reads self.n failed to
+        // compile (UXKit had 25). As the reference.
         u32 errMark = _errors.count();
         u32 warnMark = _warnings.count();
         bool fatalMark = _fatal;
-        _pos = forPos;
-        Token* forTok = cur();
+        if (errMark > plainErr) {
+            parAutoRefusedWhy((String*)_errors.get(plainErr), forTok);
+            parAutoTraceLine(traceAt, "serial", String.withCString("block-refused"), form, (String*)0, (String*)0, 0, (String*)0);
+            if (fromWhile) plRegister(plain, 3, plain, (Array*)0, whileInc);
+            return plain;
+        }
         Map* frame = new Map();
         frame.set((Hashable*)String.withCString("plain"), (Object*)plain);
         frame.set((Hashable*)String.withCString("depth"), (Object*)Number.with(_blkScopes.count()));
@@ -3434,27 +3472,28 @@ class Parser
         frame.set((Hashable*)String.withCString("auto"), (Object*)Number.with((u32)1));
         Token* savedParTok = _parTok;
         _parTok = forTok;
-        _blkFrames.add((Object*)frame);
-        blkPushScope();
-        parGridEnter("loops", true);
-        _loopDepth = _loopDepth + (u32)1;
-        u32 savedGoal = _goalNow;
-        _goalNow = goal == (u32)2 ? (u32)2 : (u32)1;
-        Node* loop = fromWhile ? parseAutoWhile(wv, wvt, wInc, wIncLen) : parseFor();
-        _goalNow = savedGoal;
-        _loopDepth = _loopDepth - (u32)1;
-        parGridEnter("loops", false);
-        blkPopScope();
-        _blkFrames.removeAt(_blkFrames.count() - (u32)1);
-        if (loop == (Node*)0 || _errors.count() > errMark) {
+        // The block's loop: a copy of the loop as parsed, with the goals the
+        // block's own gives it, and its frame from the walk of the copy, which
+        // also says what the block cannot capture and reads `self.f` as the
+        // ivar (pfwSelfIvar), as a parse in the block's frame did.
+        Node* loop = plain.deepCopy();
+        parAutoGoals(loop, goal == 2 ? 2 : 1);
+        _pfwAuto = true;
+        _pfwTokFrom = forPos;
+        _pfwTokTo = plainEnd;
+        parFrameFill(frame, loop);
+        _pfwAuto = false;
+        if (_errors.count() > errMark) {
             parAutoRefused(errMark, warnMark, fatalMark, plainEnd, forTok);
             _parTok = savedParTok;
             parAutoTraceLine(traceAt, "serial", String.withCString("block-refused"), form, (String*)0, (String*)0, 0, (String*)0);
             if (fromWhile) plRegister(plain, 3, plain, (Array*)0, whileInc);
             return plain;
         }
-        // The block's frame, from the loop's tree.
-        parFrameFill(frame, loop);
+        // The warnings the loop's parse gave, again: the block's parse gave
+        // them a second time.
+        for (u32 i = plainWarn; i < warnMark; i++) : serial
+            _warnings.add(_warnings.get(i));
         // A perfect two-deep nest becomes one block over the W*H grid (the
         // reference explains).
         Token* savedMkAt0 = _mkAt;
@@ -3586,21 +3625,38 @@ class Parser
     // the first error the block form reported. As the reference.
     void parAutoRefused(u32 errMark, u32 warnMark, bool fatalMark, u32 plainEnd, Token* forTok)
     {
-        String* why = (String*)0;
-        if (_errors.count() > errMark) {
-            String* e = (String*)_errors.get(errMark);
-            u32 at = e.byteIndexOf(String.withCString("error: "));
-            if (at != String.notFound())
-                why = e.substringFromByte(at + (u32)7);
-        }
+        String* e = _errors.count() > errMark ? (String*)_errors.get(errMark) : (String*)0;
         while (_warnings.count() > warnMark)
             _warnings.removeAt(_warnings.count() - (u32)1);
         parAutoTakeBack(errMark, fatalMark, plainEnd);
-        if (why != (String*)0) {
-            String* w = String.withCString("this loop runs serially, not as a 'par' block (--par-style): its block form is refused: ");
-            w.append(why);
-            warnAt(String.withCString("par-auto"), w, forTok);
+        parAutoRefusedWhy(e, forTok);
+    }
+
+    // -Wpar-auto's line for a block form refused with the error `e`.
+    void parAutoRefusedWhy(String* e, Token* forTok)
+    {
+        if (e == (String*)0) return;
+        u32 at = e.byteIndexOf(String.withCString("error: "));
+        if (at == String.notFound()) return;
+        String* w = String.withCString("this loop runs serially, not as a 'par' block (--par-style): its block form is refused: ");
+        w.append(e.substringFromByte(at + 7));
+        warnAt(String.withCString("par-auto"), w, forTok);
+    }
+
+    // The goals of a lifted loop's copy, as a parse in the block's frame read
+    // them: a loop without a goal of its own takes `g`, the goal around it,
+    // the block's for the lifted loop, and a C-style loop with one of its
+    // own passes that on to its body (parseFor, parseWhile).
+    void parAutoGoals(Node* n, u32 g)
+    {
+        u16 k = n.kind();
+        if (k == nkForCStyle && n.hasSrc(SRC_GOAL) && (n.hasFlag(NF_GOAL_SPEED) || n.hasFlag(NF_GOAL_ACCURACY)))
+            g = n.hasFlag(NF_GOAL_SPEED) ? 1 : 2;
+        else if (k == nkForCStyle || k == nkWhile || k == nkForIn) {
+            n.setFlags(n.flags() & $FFF3FFFF);
+            goalFlags(n, g);
         }
+        for (u32 i = 0; i < n.kidCount(); i++) parAutoGoals(n.kid(i), g);
     }
 
     u16 parTokType(u32 i)
@@ -4078,10 +4134,19 @@ class Parser
     // counts toward the uses, and the names its site passes in are uses at
     // the site. What cannot be captured is still said where it is used
     // (blkNoteUse, blkNoteBareCall), among the parse's other errors.
+    //
+    // A lifted loop's block is built from a copy of the loop as parsed
+    // (parAutoFor), not from a second parse in the block's frame, so the walk
+    // of that copy (_pfwAuto) does what the frame did to the parse: it says
+    // what the block cannot capture, in the order the parse said it, and
+    // reads `self.f` as the ivar f (pfwSelfIvar).
     Map*   _pfw;        // the frame the walk fills
     bool   _pfwTop;     // at the body's own level, not in a literal or nested block
     Array* _pfwSites;   // pfwRegister's entries
     Array* _pfwNoted;   // the names parDesugar's site notes, for pfwRegister
+    bool   _pfwAuto;    // walking a lifted loop's copy
+    u32    _pfwTokFrom; // …whose tokens are [_pfwTokFrom, _pfwTokTo)
+    u32    _pfwTokTo;
 
     static Object* pfwGet(Map* m, string k)
     {
@@ -4160,6 +4225,10 @@ class Parser
             return;
         }
         if (n.hasSrc(SRC_SYNTH)) return;
+        if (k == nkMember && _pfwAuto && pfwSelfIvar(n)) {
+            pfwUse(n.name());
+            return;
+        }
         if (_pfwSites != (Array*)0 && (k == nkMethodCall || k == nkBlock)) {
             Array* site = pfwSite(n);
             if (site != (Array*)0) {
@@ -4254,6 +4323,7 @@ class Parser
             if (named && n.hasSrc(SRC_PARENCALLEE)) pfwUse(n.name());
             for (u32 i = 0; i < argc; i++) pfwNode(n.kid(i));
             if (named && blkLookup(n.name(), (u32*)0) != (Map*)0) pfwUse(n.name());
+            else if (named && _pfwAuto && _pfwTop) blkBareCallCheck(n);
             return;
         }
         if (k == nkMethodCall && n.hasSrc(SRC_CALLED) && n.kidCount() > 0) {
@@ -4319,6 +4389,8 @@ class Parser
         u32 foundDepth = 0;
         Map* info = blkLookup(name, &foundDepth);
         if (info == (Map*)0) {
+            if (_pfwAuto && (Parser._same(name, "self") || blkIsIvar(name)))
+                _error(Parser.blkSelfMsg(name));
             Array* outer = (Array*)pfwGet(_pfw, "outer");
             if (outer == (Array*)0) {
                 outer = new Array();
@@ -4330,10 +4402,20 @@ class Parser
             return;
         }
         if (foundDepth >= ((Number*)pfwGet(_pfw, "depth")).asU32()) return;
+        String* ty = blkTyOf(info);
+        if (_pfwAuto && Parser._same(ty, "auto")) {
+            _error(Parser.blkAutoMsg(name));
+            return;
+        }
+        // The frame is not on the stack: any frame there is one the loop
+        // sits in.
+        if (_pfwAuto && info.get((Hashable*)String.withCString("wb")) != (Object*)0 && _blkFrames.count() > 0) {
+            _error(Parser.blkWbMsg(name));
+            return;
+        }
         Array* names = (Array*)pfwGet(_pfw, "names");
         for (u32 i = 0; i < names.count(); i++)
             if (((String*)names.get(i)).equals(name)) return;
-        String* ty = blkTyOf(info);
         if (Parser._same(ty, "auto")) return;
         if (info.get((Hashable*)String.withCString("wb")) != (Object*)0) {
             // The frame itself is off the stack by now: any frame left is
@@ -4343,6 +4425,36 @@ class Parser
         }
         names.add((Object*)name);
         ((Map*)pfwGet(_pfw, "types")).set((Hashable*)name, (Object*)ty);
+    }
+
+    // `self.f` in a lifted loop's copy, `f` this class's own ivar binding
+    // where it is read: made the name f, at the token after the `.`, as the
+    // parse in the block's frame read it (parSelfIvar). Whether it was.
+    bool pfwSelfIvar(Node* n)
+    {
+        if (n.hasFlag(NF_ARROW) || n.kidCount() != 1) return false;
+        Node* b = n.kid(0);
+        if (b.kind() != nkIdent || !Parser._same(b.name(), "self") || b.hasSrc(SRC_PAREN)) return false;
+        String* f = n.name();
+        if (Parser._same(f, "release") || Parser._same(f, "retain") || Parser._same(f, "delete")) return false;
+        Map* info = blkLookup(f, (u32*)0);
+        if (info == (Map*)0 || info.get((Hashable*)String.withCString("ivar")) == (Object*)0) return false;
+        u32 fileId = n.fileId();
+        u32 line = n.line();
+        u32 col = n.col();
+        for (u32 i = _pfwTokFrom; i + 1 < _pfwTokTo; i++) {
+            Token* t = (Token*)_tokens.get(i);
+            if (t.type() == tokDot && t.fileId() == n.fileId() && t.line() == n.line() && t.col() == n.col()) {
+                Token* ft = (Token*)_tokens.get(i + 1);
+                fileId = ft.fileId();
+                line = ft.line();
+                col = ft.col();
+                break;
+            }
+        }
+        n.becomeNamed(nkIdent, f);
+        n.setPos(fileId, line, col);
+        return true;
     }
 
     // `par.x` … in a `par :grid` body, which the parser reads as these names.

@@ -79,8 +79,8 @@ par-auto-trace: par_auto_nest3.xc:21 serial rule=small form=range name=- reds=- 
 par-auto-trace: par_auto_simd.xc:23 serial rule=outer-write form=range name=- reds=- grid=- impl=-
 par-auto-trace: par_auto_simd.xc:37 lifted rule=block form=range name=par_auto_simd.xc:37 reds=- grid=1 impl=0
 par-auto-trace: par_auto_simd.xc:42 serial rule=small form=range name=- reds=- grid=- impl=-
-par-auto-trace: par_auto_simd.xc:44 lifted rule=block form=range name=par_auto_simd.xc:44 reds=- grid=1 impl=3
-par-auto-trace: par_auto_simd.xc:59 lifted rule=block form=range name=par_auto_simd.xc:59 reds=+:bad,+:sum grid=1 impl=5
+par-auto-trace: par_auto_simd.xc:44 serial rule=body-block form=range name=- reds=- grid=- impl=-
+par-auto-trace: par_auto_simd.xc:59 lifted rule=block form=range name=par_auto_simd.xc:59 reds=+:bad,+:sum grid=1 impl=3
 par-auto-trace: par_auto_simd.xc:69 serial rule=small form=range name=- reds=- grid=- impl=-
 par-auto-trace: par_auto_while_field.xc:19 serial rule=while-shape form=while name=- reds=- grid=- impl=-
 par-auto-trace: par_auto_while_field.xc:25 serial rule=while-shape form=while name=- reds=- grid=- impl=-

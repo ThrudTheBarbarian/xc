@@ -5445,6 +5445,10 @@ static int64_t parAutoConst(XTASTNode* e)
     // and a small loop stays that loop. Then the same tokens again, as the
     // block. As the port.
     NSUInteger forPos = _pos;
+    NSUInteger blkAt = [self.blkState[@"counter"] unsignedIntegerValue];
+    NSUInteger parAt = [self.blkState[@"parCounter"] unsignedIntegerValue];
+    NSUInteger seqAt = self.scanSeq;
+    NSUInteger plainDiag = _diagnostics.diagnostics.count;
     [self parGridLoop:1];
     [self parAutoLoop:1];
     XTASTNode* plain = fromWhile ? [self parseAutoWhile:wv type:wvt inc:wInc length:wIncLen] : [self parseFor];
@@ -5504,15 +5508,37 @@ static int64_t parAutoConst(XTASTNode* e)
                             impl:parAutoImplSpan(implFrom, [self.blkState[@"parCounter"] unsignedIntegerValue])];
         return sc;
         }
-    // A loop the block form refuses stays the loop: an error the block's parse
-    // or its desugaring reports (a capture of self or of an ivar, say) is
-    // taken back, and the loop as parsed above is the statement. A loop of a
-    // method that reads self.n failed to compile (UXKit had 25). As the port.
+    // A loop whose body holds a block literal or a written par block stays
+    // the loop. As the port.
     NSUInteger plainEnd = _pos;
+    XTSourceLocation* loc = _tokens[forPos].location;
+    if ([self.blkState[@"counter"] unsignedIntegerValue] != blkAt ||
+        [self.blkState[@"parCounter"] unsignedIntegerValue] != parAt || self.scanSeq != seqAt)
+        {
+        [_diagnostics emitWarning:@"this loop runs serially, not as a 'par' block (--par-style): its body holds a block"
+                         category:XTWarnParAuto
+                               at:loc];
+        [self parAutoTraceAt:traceAt verdict:@"serial" rule:@"body-block" form:form name:nil reds:nil grid:0 impl:nil];
+        if (fromWhile)
+            [self plRegister:plain entry:plEntry];
+        return plain;
+        }
+    // A loop the block form refuses stays the loop: an error the loop's
+    // parse, the walk of its copy or its desugaring reports (a capture of self
+    // or of an ivar, say) is taken back, and the loop as parsed above is the
+    // statement. A loop of a method that reads self.n failed to compile (UXKit
+    // had 25). As the port.
     NSUInteger diagMark = _diagnostics.diagnostics.count;
     NSUInteger errMark = _diagnostics.errorCount;
-    _pos = forPos;
-    XTSourceLocation* loc = [self currentLocation];
+    for (NSUInteger k = plainDiag; k < diagMark; k++)
+        if (_diagnostics.diagnostics[k].level == XTDiagnosticLevelError)
+            {
+            [self parAutoRefusedWhy:_diagnostics.diagnostics[k].message at:loc];
+            [self parAutoTraceAt:traceAt verdict:@"serial" rule:@"block-refused" form:form name:nil reds:nil grid:0 impl:nil];
+            if (fromWhile)
+                [self plRegister:plain entry:plEntry];
+            return plain;
+            }
     NSMutableDictionary* frame = [NSMutableDictionary dictionary];
     frame[@"plain"] = plain;
     frame[@"depth"] = @([self blkScopes].count);
@@ -5534,19 +5560,18 @@ static int64_t parAutoConst(XTASTNode* e)
     if (goal != 2)
         frame[@"fast"] = @YES;
     frame[@"auto"] = @YES;
-    [[self blkFrames] addObject:frame];
-    [self blkPushScope];
-    [self parGridLoop:1];
-    [self parAutoLoop:1];
-    NSUInteger savedGoal = self.goalNow;
-    self.goalNow = goal == 2 ? 2 : 1;
-    XTASTNode* loop = fromWhile ? [self parseAutoWhile:wv type:wvt inc:wInc length:wIncLen] : [self parseFor];
-    self.goalNow = savedGoal;
-    [self parAutoLoop:-1];
-    [self parGridLoop:-1];
-    [self blkPopScope];
-    [[self blkFrames] removeLastObject];
-    if (!loop || _diagnostics.errorCount > errMark)
+    // The block's loop: a copy of the loop as parsed, with the goals the
+    // block's own gives it, and its frame from the walk of the copy, which
+    // also says what the block cannot capture and reads `self.f` as the ivar
+    // (pfwSelfIvar), as a parse in the block's frame did. As the port.
+    XTASTNode* loop = XTASTDeepCopy(plain);
+    parAutoGoals(loop, goal == 2 ? 2 : 1);
+    self.pfwAuto = YES;
+    self.pfwRoot = loop;
+    [self parFrameFill:frame body:loop];
+    self.pfwAuto = NO;
+    self.pfwRoot = nil;
+    if (_diagnostics.errorCount > errMark)
         {
         [self parAutoTakeBack:diagMark at:loc];
         _pos = plainEnd;
@@ -5555,8 +5580,16 @@ static int64_t parAutoConst(XTASTNode* e)
             [self plRegister:plain entry:plEntry];
         return plain;
         }
-    // The block's frame, from the loop's tree.
-    [self parFrameFill:frame body:loop];
+    // The warnings the loop's parse gave, again: the block's parse gave them a
+    // second time.
+    for (NSUInteger k = plainDiag; k < diagMark; k++)
+        {
+        XTDiagnostic* d = _diagnostics.diagnostics[k];
+        if (d.level == XTDiagnosticLevelWarning)
+            [_diagnostics emitWarning:d.message at:d.location];
+        else if (d.level == XTDiagnosticLevelNote)
+            [_diagnostics emitNote:d.message at:d.location];
+        }
     // A perfect two-deep nest becomes one block over the W*H grid (the
     // :grid form): W*H work items in one dispatch rather than H items each
     // running W serially, which matters when H is small.
@@ -5620,6 +5653,12 @@ static int64_t parAutoConst(XTASTNode* e)
         if (all[k].level == XTDiagnosticLevelError)
             why = all[k].message;
     [_diagnostics truncateToCount:diagMark];
+    [self parAutoRefusedWhy:why at:loc];
+    }
+
+// -Wpar-auto's line for a block form refused with the error `why`. As the port.
+- (void)parAutoRefusedWhy:(nullable NSString*)why at:(XTSourceLocation*)loc
+    {
     if (why)
         [_diagnostics emitWarning:[NSString stringWithFormat:@"this loop runs serially, not as a 'par' block (--par-style): "
                                                              @"its block form is refused: %@", why]

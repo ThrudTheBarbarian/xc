@@ -311,7 +311,14 @@ NS_ASSUME_NONNULL_BEGIN
 \****************************************************************************/
 - (void)blkNoteBareCall:(NSString*)name at:(XTSourceLocation*)loc
     {
-    if (![self blkFrames].count || [self blkLookup:name depth:NULL] || ![self blkIsMethod:name])
+    if ([self blkFrames].count)
+        [self blkBareCallCheck:name at:loc];
+    }
+
+// blkNoteBareCall's test and error, inside a frame.
+- (void)blkBareCallCheck:(NSString*)name at:(XTSourceLocation*)loc
+    {
+    if ([self blkLookup:name depth:NULL] || ![self blkIsMethod:name])
         return;
     [self.diagnostics emitError:[NSString stringWithFormat:
                                               @"a block cannot call the method '%@': it needs 'self', and a block "
@@ -468,6 +475,32 @@ NS_ASSUME_NONNULL_BEGIN
 |* for one, this only says at once what cannot be captured, where the
 |* error belongs among the parse's others.
 \****************************************************************************/
+/****************************************************************************\
+|* blkNoteIdentifierUse's errors, which the walk of a lifted loop's copy also
+|* says (pfwUse): 0 self or an ivar, 1 a name declared `auto`, 2 a `block:`
+|* capture inside a nested block. As the port.
+\****************************************************************************/
+- (void)blkCaptureError:(NSUInteger)which name:(NSString*)name at:(XTSourceLocation*)loc
+    {
+    NSString* msg = nil;
+    if (which == 0)
+        msg = [NSString stringWithFormat:@"a block cannot capture '%@' (v1 captures locals and "
+                                         @"parameters only) — copy it into a local first, e.g. "
+                                         @"`auto me = self;` outside the block",
+                                         name];
+    else if (which == 1)
+        msg = [NSString stringWithFormat:@"cannot capture '%@': it was declared `auto`, and a capture "
+                                         @"needs the declared type at this point — give it an explicit "
+                                         @"type",
+                                         name];
+    else
+        msg = [NSString stringWithFormat:@"a `block:` capture of '%@' inside a nested block is not "
+                                         @"supported (v2) — write-back reaches the enclosing FRAME, "
+                                         @"and here the enclosing scope is itself a block",
+                                         name];
+    [self.diagnostics emitError:msg at:loc];
+    }
+
 - (void)blkNoteIdentifierUse:(NSString*)name at:(XTSourceLocation*)loc
     {
     NSMutableArray* frames = [self blkFrames];
@@ -484,14 +517,7 @@ NS_ASSUME_NONNULL_BEGIN
         // are the v1 restriction — say so rather than letting sema emit
         // "Undefined identifier" from inside a class the user never wrote.
         if ([name isEqualToString:@"self"] || [self blkIsIvar:name])
-            {
-            [self.diagnostics emitError:[NSString stringWithFormat:
-                                                      @"a block cannot capture '%@' (v1 captures locals and "
-                                                      @"parameters only) — copy it into a local first, e.g. "
-                                                      @"`auto me = self;` outside the block",
-                                                      name]
-                                     at:loc];
-            }
+            [self blkCaptureError:0 name:name at:loc];
         return;
         }
     if (foundDepth >= literalDepth)
@@ -502,12 +528,7 @@ NS_ASSUME_NONNULL_BEGIN
     id ty = info[@"type"];
     if (ty == [NSNull null])
         {
-        [self.diagnostics emitError:[NSString stringWithFormat:
-                                                  @"cannot capture '%@': it was declared `auto`, and a capture "
-                                                  @"needs the declared type at this point — give it an explicit "
-                                                  @"type",
-                                                  name]
-                                 at:loc];
+        [self blkCaptureError:1 name:name at:loc];
         return;
         }
     // v2 (task #29): a `block:`-marked binding captures with write-back —
@@ -519,12 +540,7 @@ NS_ASSUME_NONNULL_BEGIN
         {
         if ([self blkFrames].count > 1)
             {
-            [self.diagnostics emitError:[NSString stringWithFormat:
-                                                      @"a `block:` capture of '%@' inside a nested block is not "
-                                                      @"supported (v2) — write-back reaches the enclosing FRAME, "
-                                                      @"and here the enclosing scope is itself a block",
-                                                      name]
-                                     at:loc];
+            [self blkCaptureError:2 name:name at:loc];
             return;
             }
         if (isPar)
