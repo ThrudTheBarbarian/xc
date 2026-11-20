@@ -6275,7 +6275,9 @@ void emitModule(DriverOptions* d, IRModule* mod)
     // own frame and is built with different flags — so it is concatenated only
     // when asked for. An ordinary build links none of it.
     String* checked = (String*)0;
-    if (d.fe().boundsReport()) {
+    // A row with no checked runtime (arm64 Linux, Android) takes its checks
+    // from Checked.xc instead, as the reference does: nothing to link (#475).
+    if (d.fe().boundsReport() && d.targetRow().checkedRuntime().byteLength() > (u32)0) {
         checked = readRuntime(d.fe(), d.targetRow().checkedRuntime());
         if (checked == 0) {
             Stdio.printf("xcc: error: -fbounds-check needs %s in the support tree\n", d.targetRow().checkedRuntime().cString());
@@ -6782,7 +6784,7 @@ bool externalArm64(DriverOptions* d, String* prog)
     Array* files = new Array();
     files.add((Object*)supportPath(d, "arm64/runtime", row.crt()));
     files.add((Object*)supportPath(d, "arm64/runtime", row.runtime()));
-    if (d.fe().boundsReport())
+    if (d.fe().boundsReport() && row.checkedRuntime().byteLength() > (u32)0)
         files.add((Object*)supportPath(d, "arm64/runtime", row.checkedRuntime()));
     if (isIos(d))
         files.add((Object*)supportPath(d, "ios/runtime",

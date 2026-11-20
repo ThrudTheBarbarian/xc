@@ -2247,7 +2247,8 @@ static int linkArm64Executable(const char *argv0, XTCommandLineOptions *opts,
         // built with different flags (frame pointers, -O0), and linked ONLY
         // here — an ordinary build carries none of it.
         NSString *chksrc = @"";
-        if (opts.boundsReport) {
+        // A row with no checked runtime takes its checks from Checked.xc (#475).
+        if (opts.boundsReport && opts.effectiveTarget.checkedRuntime.length) {
             NSString *chk = [support stringByAppendingPathComponent:
                              [@"arm64/runtime" stringByAppendingPathComponent:opts.effectiveTarget.checkedRuntime]];
             chksrc = [NSString stringWithContentsOfFile:chk
@@ -2384,7 +2385,7 @@ static NSArray<NSString *> *_Nullable arm64ClangRuntime(XTCommandLineOptions *op
     NSMutableArray<NSString *> *want = [NSMutableArray array];
     if (!forLibrary) [want addObject:@"arm64/runtime/crt-macos.s"];
     [want addObject:@"arm64/runtime/rt-macos.s"];
-    if (opts.boundsReport)
+    if (opts.boundsReport && opts.effectiveTarget.checkedRuntime.length)
         [want addObject:[@"arm64/runtime" stringByAppendingPathComponent:opts.effectiveTarget.checkedRuntime]];
     if (opts.applePlatform)
         [want addObject:[opts.applePlatform isEqualToString:@"ios-sim"]
