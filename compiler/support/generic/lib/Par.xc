@@ -315,7 +315,7 @@ class ParFnChunk : ParChunk
                 return;
 #endif
             ParDevice.ranClear((ParChunk*)c);
-            ParDevice.ranAdd((ParChunk*)c, String.withCString("cpu"));
+            ParDevice.ranAdd((ParChunk*)c, String.withCString("serial"));
 #if !(ARCH_6502 || ARCH_m68k)
             _xt_atomic_store_i32((pointer)&gParActive, (i32)0);
 #endif
@@ -610,7 +610,7 @@ class Par
             proto.lo = lo;
             proto.hi = hi;
             proto.run();
-            ParDevice.ranAdd(proto, String.withCString("cpu"));
+            ParDevice.ranAdd(proto, String.withCString("serial"));
             return;
             }
         // Two captured arrays that overlap, one written, run serially too
@@ -623,7 +623,7 @@ class Par
             proto.lo = lo;
             proto.hi = hi;
             proto.run();
-            ParDevice.ranAdd(proto, String.withCString("cpu"));
+            ParDevice.ranAdd(proto, String.withCString("serial"));
             return;
             }
         if (ParDevice.bufferOverlap(proto, proto.gpuSource(), lo, hi))
@@ -633,7 +633,7 @@ class Par
             proto.lo = lo;
             proto.hi = hi;
             proto.run();
-            ParDevice.ranAdd(proto, String.withCString("cpu"));
+            ParDevice.ranAdd(proto, String.withCString("serial"));
             return;
             }
 #if (ARCH_arm64 && !OS_ios) || ARCH_x86_64 || ARCH_wasm32
@@ -842,8 +842,13 @@ class Par
 
     // The hardware the block's last run used, as its runtimes name it: "cpu",
     // "metal:…", "cuda:…", "vulkan:…", "remote:…" — several when the run was
-    // split across devices; empty when it has not run. By the block's name,
-    // as Par.device takes it: its source name, or file:line (a lifted loop
+    // split across devices; empty when it has not run. "serial" when the
+    // runtime ran it item after item on the calling thread because running
+    // it on the pool could change its answer (#462): two of its arrays
+    // overlap and one is written, or --par-style=auto could not prove its
+    // loop independent. A CPU run on one thread (XC_PAR_THREADS=1, auto's
+    // one-thread choice, fewer items than threads) is "cpu". By the block's
+    // name, as Par.device takes it: its source name, or file:line (a lifted loop
     // too). Float results can differ in their last bits from one device to
     // another; integer results never do.
     static Array* ranOn(u8* block)

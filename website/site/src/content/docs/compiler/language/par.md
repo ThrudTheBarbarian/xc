@@ -667,7 +667,12 @@ always are. What it does promise is that you can tell which device made a
 result. `Par.ranOn` names the hardware a block's last run used, as the runtimes
 name it: `cpu`, then `metal:`, `cuda:`, `vulkan:` or `remote:` and the device.
 It is a list, because a run can be split across devices, the GPU and the CPU's
-lanes together or several GPUs; it is empty until the block has run.
+lanes together or several GPUs; it is empty until the block has run. It is
+`serial` when the runtime ran it item after item on the calling thread because
+running it on the threads could change its answer: two of the block's arrays
+overlap and one is written, or `--par-style=auto` could not prove its loop
+independent. A CPU run on one thread, whatever the reason, is `cpu`, so a
+program prints the same at every thread count.
 
 ```c
 par frame { … }
