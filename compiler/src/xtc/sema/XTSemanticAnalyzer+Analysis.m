@@ -2060,10 +2060,20 @@
             // match wins — once we've recorded one override for the
             // ancestor's label, further matches against deeper
             // ancestors don't add new information.
+            // The slot belongs to the TOPMOST ancestor with a matching
+            // signature: a chain of three overrides is one slot. Rooting the
+            // nearest one made the middle class's method a second root with a
+            // slot of its own, and which of its two slots it published then
+            // depended on how its class name sorted (#425).
+            XTClassDeclNode* rootCls = nil;
+            XTMethodDeclNode* rootM = nil;
+            BOOL refused = NO;
             for (XTClassDeclNode* a = cls.parentClass; a != nil; a = a.parentClass)
                 {
                 XTMethodDeclNode* match = [self methodIn:a matching:child];
-                if (match)
+                if (!match)
+                    continue;
+                if (!rootCls)
                     {
                     // §4.3b: a chain-dispatched method that arrived through an
                     // interface cannot be overridden here — the iface does not
@@ -2083,14 +2093,19 @@
                                                                   @"category (separate-compilation §4.3b)",
                                                                   a.className, match.methodName]
                                                  at:child.location];
+                        refused = YES;
                         break;
                         }
-                    NSString* key = match.mangledName ?: match.methodName;
-                    NSString* label = [NSString stringWithFormat:@"_cls_%@_%@",
-                                                                 a.className, key];
-                    [self.overriddenMethodLabels addObject:label];
-                    break;
                     }
+                rootCls = a;
+                rootM = match;
+                }
+            if (rootCls && !refused)
+                {
+                NSString* key = rootM.mangledName ?: rootM.methodName;
+                NSString* label = [NSString stringWithFormat:@"_cls_%@_%@",
+                                                             rootCls.className, key];
+                [self.overriddenMethodLabels addObject:label];
                 }
             }
         }

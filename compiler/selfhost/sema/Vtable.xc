@@ -416,10 +416,15 @@ class Vtable
                 Node* child = cls.kid(j);
                 if (child.kind() != (u16)nkMethodDecl)
                     continue;
-                // Walk up: the FIRST ancestor with a matching signature owns the
-                // slot, and the walk stops there — a chain of three overrides is
-                // one slot, not two.
+                // Walk up to the TOPMOST ancestor with a matching signature: it
+                // owns the slot, so a chain of three overrides is one slot.
+                // Stopping at the nearest made the middle class's method a
+                // second root with a slot of its own, and which of its two
+                // slots it published depended on how its class name sorted
+                // (#425). As the reference.
                 Node* a = parentRespectingCycles(classes, cls);
+                Node* rootCls = (Node*)0;
+                Node* rootM = (Node*)0;
                 u32 guard = (u32)0;
                 // parentRespectingCycles severs a loop, so the class count
                 // bounds the chain (#334; it was a cap of 64).
@@ -428,15 +433,14 @@ class Vtable
                     Node* match = Vtable.matching(a, child);
                     if (match != 0)
                         {
-                        Vtable.addOnce(outLabels, seen, Vtable.label(a.name(), match));
-                        a = (Node*)0;
+                        rootCls = a;
+                        rootM = match;
                         }
-                    else
-                        {
-                        a = parentRespectingCycles(classes, a);
-                        }
+                    a = parentRespectingCycles(classes, a);
                     guard = guard + (u32)1;
                     }
+                if (rootCls != (Node*)0)
+                    Vtable.addOnce(outLabels, seen, Vtable.label(rootCls.name(), rootM));
                 }
             }
         Vtable.sortStrings(outLabels);
