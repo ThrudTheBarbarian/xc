@@ -73,7 +73,7 @@ NS_ASSUME_NONNULL_BEGIN
 // rebuilds and the names each declaration there declares (by the index of
 // its first token), the location they carry, whether the scan's body rules
 // are reading them (plStream), the sites the parser recorded for the walk,
-// and the increment of the last `while` parAutoWhileToFor rewrote (1 `v++`,
+// and the increment of the last `while` parAutoWhileShape took (1 `v++`,
 // 2 `++v`, 3 `v += 1`, 4 `v = v + 1`).
 @property(nonatomic, strong, nullable) NSMutableArray<XTToken*>* plToks;
 @property(nonatomic, strong, nullable) NSMutableDictionary<NSNumber*, NSArray<NSString*>*>* plDecls;
@@ -83,6 +83,24 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic) NSInteger plWhileInc;
 @property(nonatomic) BOOL plSkipWhileIf;
 @property(nonatomic) NSUInteger plLits;
+// The counted `while` parAutoWhileShape took: where the `while`, the `)`
+// closing its condition, the `}` closing its body and its increment are, and
+// its counter with its type (parseAutoWhile, parAutoWhileToks).
+@property(nonatomic) NSUInteger pwAt;
+@property(nonatomic) NSUInteger pwPe;
+@property(nonatomic) NSUInteger pwBe;
+@property(nonatomic) NSUInteger pwInc;
+@property(nonatomic) XTTokenType pwTt;
+@property(nonatomic, strong, nullable) XTType* pwVt;
+@property(nonatomic, copy, nullable) NSString* pwV;
+// The `if (v < B) v = B;` such a `while` leaves after its `for`, which the
+// next parseStatement returns (parAutoWhileIf): the counter, B's tokens with
+// the `)` after them, the comparison and the `while`'s location.
+@property(nonatomic) BOOL pwPending;
+@property(nonatomic, copy, nullable) NSString* pwPendV;
+@property(nonatomic, strong, nullable) NSArray<XTToken*>* pwPendBound;
+@property(nonatomic, strong, nullable) XTToken* pwPendCmp;
+@property(nonatomic, strong, nullable) XTSourceLocation* pwPendLoc;
 @end
 
 // The par frame walk (XTParser+ParFrame.m).
@@ -112,7 +130,7 @@ NS_ASSUME_NONNULL_BEGIN
                           to:(NSUInteger)bndTo
                         reds:(NSMutableArray<NSArray<NSString*>*>*)reds
                         goal:(NSUInteger*)goalOut;
-- (BOOL)parAutoWhileToFor;
+- (BOOL)parAutoWhileShape;
 - (BOOL)parAutoSmall:(XTASTNode*)loop from:(NSUInteger)from to:(NSUInteger)to;
 - (void)parAutoAddLine:(NSString*)line;
 @end

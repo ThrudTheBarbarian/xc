@@ -2674,7 +2674,7 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
     [self blkPushScope]; // task #26
     NSMutableArray<XTASTNode*>* stmts = [NSMutableArray array];
 
-    while (![self checkBlockClose] && ![self check:XTTokenEOF] && !_diagnostics.hasFatalError)
+    while ((self.pwPending || (![self checkBlockClose] && ![self check:XTTokenEOF])) && !_diagnostics.hasFatalError)
         {
         XTASTNode* stmt = [self parseStatement];
         if (stmt)
@@ -2736,6 +2736,8 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
 \****************************************************************************/
 - (nullable XTASTNode*)parseStatement
     {
+    if (self.pwPending)
+        return [self parAutoWhileIf];
     XTToken* cur = [self currentToken];
 
     // `par` is a CONTEXTUAL keyword — library code uses it as a name
@@ -2757,7 +2759,7 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
     case XTTokenWhile:
         {
         // --par-style=auto: a counted while loop becomes the `for` it amounts to,
-        // which parAutoFor then takes or leaves (parAutoWhileToFor).
+        // which parAutoFor then takes or leaves (parAutoWhileShape).
         // Without the par runtime parAutoFor leaves the loop and asks for
         // Par.xc to be imported (the driver parses again).
         if (self.parAuto && ![[self blkFrames].lastObject[@"par"] boolValue] &&
@@ -2765,10 +2767,20 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
             {
             XTSourceLocation* wloc = [self currentLocation];
             self.parAutoWhy = nil;
-            if ([self parAutoWhileToFor])
+            if ([self parAutoWhileShape])
                 {
                 self.parAutoFromWhile = YES;
-                return [self parAutoFor];
+                NSUInteger at = self.pwAt, pe = self.pwPe;
+                NSArray<XTToken*>* bound = [_tokens subarrayWithRange:NSMakeRange(at + 4, pe + 1 - (at + 4))];
+                NSString* v = self.pwV;
+                XTToken* cmp = _tokens[at + 3];
+                XTASTNode* f = [self parAutoFor];
+                self.pwPending = YES;
+                self.pwPendV = v;
+                self.pwPendBound = bound;
+                self.pwPendCmp = cmp;
+                self.pwPendLoc = wloc;
+                return f;
                 }
             NSString* wwhy = self.parAutoWhy ?: @"while-shape";
             [self parAutoTraceAt:wloc verdict:@"serial" rule:wwhy form:@"while" name:nil reds:nil grid:0 impl:nil];
@@ -3255,7 +3267,9 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
     [self expect:XTTokenRParen];
     XTASTNode* thenBlock = [self checkBlockOpen] ? [self parseBlock] : [self parseStatement];
     XTASTNode* elseBlock = nil;
-    if ([self match:XTTokenElse])
+    // An `else` after a counted `while` belongs to the `if` that follows the
+    // `while`'s `for` (parAutoWhileIf).
+    if (!self.pwPending && [self match:XTTokenElse])
         {
         elseBlock = [self check:XTTokenIf] ? [self parseIf] : ([self checkBlockOpen] ? [self parseBlock] : [self parseStatement]);
         }
@@ -4952,14 +4966,15 @@ static XTForCStyleNode* _Nullable parAutoAscending(XTASTNode* node, XTVariableDe
 |* --par-style=auto's `while` form: `while (v < B) { …; v++; }`, v a local of an
 |* integer type, B names and integer literals only, the increment the body's
 |* last statement and v written nowhere else, no break, continue, return or
-|* goto. The tokens become
+|* goto. It is parsed as
 |*     for (T __autopar_w = v; __autopar_w < B; __autopar_w += 1)
 |*         { T v = __autopar_w; …the body without the increment… }
 |*     if (v < B) v = B;            (<= B: v = B + 1)
-|* — the loop's own iterations with v's final value after it — and the
-|* parser goes on at the `for`. YES when it rewrote. Mirrored in the port.
+|* — the loop's own iterations with v's final value after it. YES when the
+|* `while` at _pos has the shape; it notes where its parts are (pwAt…) for
+|* parseAutoWhile and parAutoWhileToks. Mirrored in the port.
 \****************************************************************************/
-- (BOOL)parAutoWhileToFor
+- (BOOL)parAutoWhileShape
     {
     NSUInteger at = _pos, n = _tokens.count;
     if ([self parTokType:at + 1] != XTTokenLParen || [self parTokType:at + 2] != XTTokenIdentifier)
@@ -5069,6 +5084,31 @@ static XTForCStyleNode* _Nullable parAutoAscending(XTASTNode* node, XTVariableDe
     NSNumber* tt = vt ? kw[vt.displayName] : nil;
     if (!tt)
         return NO;
+    self.pwAt = at;
+    self.pwPe = pe;
+    self.pwBe = be;
+    self.pwInc = inc;
+    self.pwTt = tt.integerValue;
+    self.pwVt = vt;
+    self.pwV = v;
+    self.plWhileInc = incForm;
+    return YES;
+    }
+
+// The `for` parAutoWhileShape's loop amounts to, as tokens, for the token
+// scan to read (parAutoScan) and for a running total's `par :scan` rewrite
+// (parAutoScanFor):
+//     for (T __autopar_w = v; __autopar_w < B; __autopar_w += 1)
+//         { T v = __autopar_w; …the body without the increment… }
+// With `withIf`, the `if (v < B) v = B;` after it too. The parse builds the
+// same as a tree (parseAutoWhile). Mirrored in the port.
+- (NSArray<XTToken*>*)parAutoWhileToks:(BOOL)withIf
+    {
+    NSUInteger at = self.pwAt, pe = self.pwPe, inc = self.pwInc;
+    NSString* v = self.pwV;
+    XTType* vt = self.pwVt;
+    XTTokenType tt = self.pwTt;
+    XTTokenType cmp = [self parTokType:at + 3];
     XTSourceLocation* loc = ((XTToken*)_tokens[at]).location;
     NSString* w = @"__autopar_w";
     XTToken* (^T)(XTTokenType, NSString*) = ^XTToken*(XTTokenType ty, NSString* val) {
@@ -5080,28 +5120,158 @@ static XTForCStyleNode* _Nullable parAutoAscending(XTASTNode* node, XTVariableDe
     };
     NSArray* bound = [_tokens subarrayWithRange:NSMakeRange(at + 4, pe - (at + 4))];
     NSMutableArray* out = [NSMutableArray array];
-    [out addObjectsFromArray:@[ T(XTTokenFor, @"for"), T(XTTokenLParen, @"("), T(tt.integerValue, vt.displayName),
+    [out addObjectsFromArray:@[ T(XTTokenFor, @"for"), T(XTTokenLParen, @"("), T(tt, vt.displayName),
                                 T(XTTokenIdentifier, w), T(XTTokenAssign, @"="), T(XTTokenIdentifier, v),
                                 T(XTTokenSemicolon, @";"), T(XTTokenIdentifier, w), _tokens[at + 3] ]];
     [out addObjectsFromArray:bound];
     [out addObjectsFromArray:@[ T(XTTokenSemicolon, @";"), T(XTTokenIdentifier, w), T(XTTokenPlusAssign, @"+="), I(1),
-                                T(XTTokenRParen, @")"), T(XTTokenLBrace, @"{"), T(tt.integerValue, vt.displayName),
+                                T(XTTokenRParen, @")"), T(XTTokenLBrace, @"{"), T(tt, vt.displayName),
                                 T(XTTokenIdentifier, v), T(XTTokenAssign, @"="), T(XTTokenIdentifier, w),
                                 T(XTTokenSemicolon, @";") ]];
     [out addObjectsFromArray:[_tokens subarrayWithRange:NSMakeRange(pe + 2, inc - (pe + 2))]];
-    [out addObjectsFromArray:@[ T(XTTokenRBrace, @"}"), T(XTTokenIf, @"if"), T(XTTokenLParen, @"("),
-                                T(XTTokenIdentifier, v), _tokens[at + 3] ]];
+    [out addObject:T(XTTokenRBrace, @"}")];
+    if (!withIf)
+        return out;
+    [out addObjectsFromArray:@[ T(XTTokenIf, @"if"), T(XTTokenLParen, @"("), T(XTTokenIdentifier, v), _tokens[at + 3] ]];
     [out addObjectsFromArray:bound];
     [out addObjectsFromArray:@[ T(XTTokenRParen, @")"), T(XTTokenIdentifier, v), T(XTTokenAssign, @"=") ]];
     [out addObjectsFromArray:bound];
     if (cmp == XTTokenLessEq)
         [out addObjectsFromArray:@[ T(XTTokenPlus, @"+"), I(1) ]];
     [out addObject:T(XTTokenSemicolon, @";")];
-    NSMutableArray<XTToken*>* spliced = [_tokens mutableCopy];
-    [spliced replaceObjectsInRange:NSMakeRange(at, be + 1 - at) withObjectsFromArray:out];
-    _tokens = spliced;
-    self.plWhileInc = incForm;
-    return YES;
+    return out;
+    }
+
+// The token stream with the `while` at pwAt replaced by parAutoWhileToks:
+// what the scan reads.
+- (NSArray<XTToken*>*)parAutoWhileStream:(BOOL)withIf
+    {
+    NSMutableArray<XTToken*>* s = [_tokens mutableCopy];
+    [s replaceObjectsInRange:NSMakeRange(self.pwAt, self.pwBe + 1 - self.pwAt) withObjectsFromArray:[self parAutoWhileToks:withIf]];
+    return s;
+    }
+
+// A name read at a made token, as parsePrimary reads one.
+- (XTIdentifierNode*)pwIdent:(NSString*)name at:(XTSourceLocation*)loc
+    {
+    [self blkNoteIdentifierUse:name at:loc];
+    return [[XTIdentifierNode alloc] initWithName:name location:loc];
+    }
+
+// The literal 1 at a made token.
+- (XTLiteralIntNode*)pwOneAt:(XTSourceLocation*)loc
+    {
+    XTLiteralIntNode* one = [[XTLiteralIntNode alloc] initWithValue:1 location:loc];
+    one.srcFacts |= XTSrcPlain;
+    return one;
+    }
+
+/****************************************************************************\
+|* The `while` at _pos, which parAutoWhileShape took (`v`, `vt` its counter
+|* and type, `incTok` and `incLen` its increment statement), parsed as the
+|* `for` parAutoWhileToks spells: the nodes, locations and bindings that
+|* `for`'s tokens give, the made parts at the `while`. The `if` after it
+|* comes from the next parseStatement (pwPending). Mirrored in the port.
+\****************************************************************************/
+- (nullable XTASTNode*)parseAutoWhile:(NSString*)v type:(XTType*)vt inc:(XTToken*)incTok length:(NSUInteger)incLen
+    {
+    XTSourceLocation* loc = [self currentLocation];
+    NSString* w = @"__autopar_w";
+    [self advance]; // `while`
+    [self expect:XTTokenLParen];
+    [self advance]; // v
+    XTType* t = [_typeTable scalarTypeForKeyword:vt.displayName] ?: [_typeTable typeForName:vt.displayName] ?: [XTType u8Type];
+    // T __autopar_w = v;
+    self.lastBlockDeclName = nil;
+    _lastTypeIsOutlet = NO;
+    XTASTNode* init = [[XTVariableDeclNode alloc] initWithName:w type:t initialiser:[self pwIdent:v at:loc] location:loc];
+    [self blkPushScope];
+    [self blkBind:w type:t];
+    // __autopar_w < B
+    XTASTNode* left = [self pwIdent:w at:loc];
+    XTToken* op = [self advance];
+    XTASTNode* right = [self parseExprWithMinPrec:[self rhsMinPrecAfter:op.type]];
+    XTASTNode* cond = [self buildBinaryExpr:op left:left right:right];
+    [self expect:XTTokenRParen];
+    // __autopar_w += 1
+    XTASTNode* incrLhs = [self pwIdent:w at:loc];
+    XTASTNode* incr = [[XTAssignExprNode alloc] initWithOp:XTAssignOpAdd lhs:incrLhs rhs:[self pwOneAt:loc] location:loc];
+    NSUInteger goal = [self loopGoal:0];
+    NSUInteger savedGoal = self.goalNow;
+    self.goalNow = goal;
+    // { T v = __autopar_w; …the body up to the increment… }
+    [self advance]; // `{`
+    [self blkPushScope];
+    NSMutableArray<XTASTNode*>* stmts = [NSMutableArray array];
+    self.lastTypeIsBlockWb = NO;
+    self.lastBlockDeclName = nil;
+    _lastTypeIsOutlet = NO;
+    XTVariableDeclNode* decl = [[XTVariableDeclNode alloc] initWithName:v type:t initialiser:[self pwIdent:w at:loc] location:loc];
+    decl.nameLocation = loc;
+    decl.isOutlet = NO;
+    [stmts addObject:decl];
+    [self blkBind:v type:t];
+    [self blkMarkHoldsWb:v fromInit:decl.initialiser];
+    while ([self currentToken] != incTok && ![self checkBlockClose] && ![self check:XTTokenEOF] && !_diagnostics.hasFatalError)
+        {
+        XTASTNode* stmt = [self parseStatement];
+        if (stmt)
+            [stmts addObject:stmt];
+        }
+    if ([self currentToken] == incTok)
+        for (NSUInteger i = 0; i < incLen; i++)
+            [self advance];
+    [self expectBlockClose];
+    [self blkPopScope];
+    XTASTNode* body = [[XTBlockNode alloc] initWithStatements:stmts location:loc];
+    self.goalNow = savedGoal;
+    [self blkPopScope];
+    XTForCStyleNode* node = [[XTForCStyleNode alloc] initWithLoopInit:init condition:cond increment:incr body:body location:loc];
+    node.forceUnroll = NO;
+    node.goal = goal;
+    node.srcFacts |= [self parAutoLoopFacts:0];
+    return node;
+    }
+
+/****************************************************************************\
+|* The `if (v < B) v = B;` (`<= B`: `v = B + 1`) a counted `while` leaves
+|* after its `for` (parseAutoWhile): the statement parseStatement returns
+|* next, wherever that is, with B read again from its own tokens. Mirrored
+|* in the port.
+\****************************************************************************/
+- (nullable XTASTNode*)pwBound:(int)minPrec
+    {
+    NSArray<XTToken*>* savedToks = _tokens;
+    NSUInteger savedPos = _pos;
+    _tokens = self.pwPendBound;
+    _pos = 0;
+    XTASTNode* e = [self parseExprWithMinPrec:minPrec];
+    _tokens = savedToks;
+    _pos = savedPos;
+    return e;
+    }
+
+- (nullable XTASTNode*)parAutoWhileIf
+    {
+    self.pwPending = NO;
+    XTSourceLocation* loc = self.pwPendLoc;
+    NSString* v = self.pwPendV;
+    XTToken* cmp = self.pwPendCmp;
+    XTASTNode* left = [self pwIdent:v at:loc];
+    XTASTNode* right = [self pwBound:[self rhsMinPrecAfter:cmp.type]];
+    XTASTNode* condition = [self buildBinaryExpr:cmp left:left right:right];
+    XTASTNode* lhs = [self pwIdent:v at:loc];
+    XTASTNode* rhs = [self pwBound:[self rhsMinPrecAfter:XTTokenAssign]];
+    if (cmp.type == XTTokenLessEq)
+        rhs = [[XTBinaryExprNode alloc] initWithOp:XTBinaryOpAdd left:rhs right:[self pwOneAt:loc] location:loc];
+    if ([self blkIsWbValue:rhs])
+        [self blkMarkHoldsWb:v fromInit:rhs];
+    XTASTNode* assign = [[XTAssignExprNode alloc] initWithOp:XTAssignOpAssign lhs:lhs rhs:rhs location:loc];
+    XTASTNode* thenBlock = [[XTExpressionStatementNode alloc] initWithExpression:assign location:loc];
+    XTASTNode* elseBlock = nil;
+    if ([self match:XTTokenElse])
+        elseBlock = [self check:XTTokenIf] ? [self parseIf] : ([self checkBlockOpen] ? [self parseBlock] : [self parseStatement]);
+    return [[XTIfNode alloc] initWithCondition:condition thenBlock:thenBlock elseBlock:elseBlock location:loc];
     }
 
 // A constant bound (literals, casts, + - *): its value, or -1. As the port's
@@ -5171,9 +5341,33 @@ static int64_t parAutoConst(XTASTNode* e)
     BOOL fromWhile = self.parAutoFromWhile;
     self.parAutoFromWhile = NO;
     XTSourceLocation* traceAt = [self currentLocation];
+    // A counted `while` (parAutoWhileShape): the scan reads the `for` it
+    // amounts to, as tokens; the parses below build that `for` from the
+    // `while` (parseAutoWhile).
+    NSString* wv = nil;
+    XTType* wvt = nil;
+    XTToken* wInc = nil;
+    NSUInteger wIncLen = 0;
+    NSArray<XTToken*>* wToks = nil;
+    NSArray<XTToken*>* realToks = _tokens;
+    NSUInteger realPos = _pos;
+    if (fromWhile)
+        {
+        wv = self.pwV;
+        wvt = self.pwVt;
+        wInc = _tokens[self.pwInc];
+        wIncLen = self.plWhileInc == 4 ? 6 : self.plWhileInc == 3 ? 4 : 3;
+        wToks = [self parAutoWhileToks:NO];
+        _tokens = [self parAutoWhileStream:YES];
+        }
     // Without the par runtime the loop stays a loop, and the driver is told:
     // it parses again with Par.xc imported (--par-style=auto imports it).
     BOOL scanned = [self parAutoScan:reds goal:&goal];
+    if (fromWhile)
+        {
+        _tokens = realToks;
+        _pos = realPos;
+        }
     NSUInteger pacSeen = self.pacSeen;
     NSUInteger pacVal = self.pacVal;
     NSString* form = fromWhile ? @"while" : self.parAutoForm;
@@ -5214,7 +5408,7 @@ static int64_t parAutoConst(XTASTNode* e)
         // depth stays where it was for that reason.
         NSUInteger forAt = _pos;
         [self parGridLoop:1];
-        XTASTNode* plain = [self parseFor];
+        XTASTNode* plain = fromWhile ? [self parseAutoWhile:wv type:wvt inc:wInc length:wIncLen] : [self parseFor];
         [self parGridLoop:-1];
         [self parAutoCheck:plain at:traceAt seen:pacSeen val:pacVal];
         if (scanV)
@@ -5235,7 +5429,7 @@ static int64_t parAutoConst(XTASTNode* e)
     NSUInteger forPos = _pos;
     [self parGridLoop:1];
     [self parAutoLoop:1];
-    XTASTNode* plain = [self parseFor];
+    XTASTNode* plain = fromWhile ? [self parseAutoWhile:wv type:wvt inc:wInc length:wIncLen] : [self parseFor];
     [self parAutoLoop:-1];
     [self parGridLoop:-1];
     [self parAutoCheck:plain at:traceAt seen:pacSeen val:pacVal];
@@ -5265,7 +5459,24 @@ static int64_t parAutoConst(XTASTNode* e)
         {
         NSString* sreds = [NSString stringWithFormat:@"%@:%@", self.parScanOp, self.parScanAcc];
         NSUInteger implFrom = [self.blkState[@"parCounter"] unsignedIntegerValue];
+        // The rewrite reads the loop's tokens: a `while` gives way to its
+        // `for`'s, and comes back when the rewrite does not take it.
+        NSArray<XTToken*>* kept = nil;
+        NSUInteger wEnd = _pos;
+        if (fromWhile)
+            {
+            kept = _tokens;
+            NSMutableArray<XTToken*>* spliced = [_tokens mutableCopy];
+            [spliced replaceObjectsInRange:NSMakeRange(forPos, wEnd - forPos) withObjectsFromArray:wToks];
+            _tokens = spliced;
+            _pos = forPos + wToks.count;
+            }
         XTASTNode* sc = [self parAutoScanFor:plain at:forPos];
+        if (kept && sc == plain)
+            {
+            _tokens = kept;
+            _pos = wEnd;
+            }
         if (sc != plain || fromWhile)
             [self plRegister:sc entry:plEntry];
         if (sc == plain)
@@ -5311,7 +5522,7 @@ static int64_t parAutoConst(XTASTNode* e)
     [self parAutoLoop:1];
     NSUInteger savedGoal = self.goalNow;
     self.goalNow = goal == 2 ? 2 : 1;
-    XTASTNode* loop = [self parseFor];
+    XTASTNode* loop = fromWhile ? [self parseAutoWhile:wv type:wvt inc:wInc length:wIncLen] : [self parseFor];
     self.goalNow = savedGoal;
     [self parAutoLoop:-1];
     [self parGridLoop:-1];
@@ -6144,9 +6355,9 @@ static NSString* scCombine(NSString* op, NSString* r, NSString* v)
     BOOL haveOpenArm = NO;
     XTSourceLocation* armLoc = nil;
 
-    while (![self checkBlockClose] && ![self check:XTTokenEOF] && !_diagnostics.hasFatalError)
+    while ((self.pwPending || (![self checkBlockClose] && ![self check:XTTokenEOF])) && !_diagnostics.hasFatalError)
         {
-        if ([self check:XTTokenCase] || [self check:XTTokenDefault])
+        if (!self.pwPending && ([self check:XTTokenCase] || [self check:XTTokenDefault]))
             {
             // If the current arm has accumulated body statements, close
             // it before opening a new one — a `case`/`default` after

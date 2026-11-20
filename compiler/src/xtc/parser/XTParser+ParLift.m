@@ -1212,7 +1212,7 @@ static BOOL plStepOk(XTASTNode* _Nullable st, NSString* var)
     self.pos = 0;
     self.plStream = YES;
     self.parAutoWhy = nil;
-    BOOL ok = [self parAutoWhileToFor];
+    BOOL ok = [self parAutoWhileShape];
     NSString* why = self.parAutoWhy;
     [self plStateRestore:saved];
     return @{ @"lift" : @(ok), @"rule" : ok ? @"-" : (why ?: @"while-shape") };

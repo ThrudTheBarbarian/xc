@@ -60,6 +60,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 - (nullable XTASTNode*)parseExpression;
 - (nullable XTASTNode*)parseExprWithMinPrec:(int)minPrec;
+- (int)rhsMinPrecAfter:(XTTokenType)t;
 - (XTAssignOp)assignOpFromToken:(XTToken*)tok;
 - (XTASTNode*)buildBinaryExpr:(XTToken*)op left:(XTASTNode*)left right:(XTASTNode*)right;
 - (nullable XTASTNode*)parseUnary;

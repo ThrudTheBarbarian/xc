@@ -194,6 +194,13 @@ static XTOpInfo operatorInfo(XTTokenType type)
     return lhs;
     }
 
+// The precedence the right operand of the operator `t` is parsed at.
+- (int)rhsMinPrecAfter:(XTTokenType)t
+    {
+    XTOpInfo info = operatorInfo(t);
+    return info.rightAssoc ? info.prec : info.prec + 1;
+    }
+
 /****************************************************************************\
 |* Map an assignment token type to its corresponding XTAssignOp enum value.
 |* @param tok  The assignment operator token.

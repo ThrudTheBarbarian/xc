@@ -1047,7 +1047,7 @@ class Parser
     String* _parAutoWhy;       // the rule that kept the loop parAutoScan last read serial
     String* _parAutoForm;      // that loop's header: "for" (C-style) or "range"
     u32     _parAutoGridCap;   // the grid levels its nest may take (parAutoGridCap)
-    bool    _parAutoFromWhile; // parAutoFor's loop was a `while` (parAutoWhileToFor)
+    bool    _parAutoFromWhile; // parAutoFor's loop was a `while` (parAutoWhileShape)
     void setParAutoTrace(bool b) { _parAutoTraceOn = b; }
     // XC_PAR_AUTO_CHECK=flags: each loop parAutoScan reads, the source facts
     // the parser put on its node against what the scan saw in the tokens
@@ -2675,11 +2675,12 @@ class Parser
         // !_fatal mirrors the original's hasFatalError guard: after a parse
         // error the statement loop stops consuming, so an error file's dump
         // truncates at the same statement in both compilers (task #36).
-        while (!closeBlockAhead() && !check((u16)tokEOF) && !_fatal) {
+        while ((_pwPending || (!closeBlockAhead() && !check(tokEOF))) && !_fatal) {
             u32 before = _pos;
+            bool made = _pwPending;
             Node* s = parseStatement();
             if (s != 0) b.add(s);
-            if (_pos == before) advance();
+            if (_pos == before && !made) advance();
         }
         blkPopScope();                               // blocks (task #26)
         closeBlock();
@@ -2688,6 +2689,7 @@ class Parser
 
     Node* parseStatement(void)
     {
+        if (_pwPending) return pwTakePending();
         Token* stmtTok = cur();
         Node* stmtNode = parseStatementInner();
         if (stmtNode != 0 && stmtNode.line() == (u32)0)
@@ -2823,12 +2825,21 @@ class Parser
         return body;
     }
 
-    // --par-style=auto's `while` form (the reference's parAutoWhileToFor explains):
-    // `while (v < B) { …; v++; }` becomes, in the token stream,
+    // --par-style=auto's `while` form (the reference's parAutoWhileShape explains):
+    // `while (v < B) { …; v++; }` is parsed as
     //     for (T __autopar_w = v; __autopar_w < B; __autopar_w += 1)
     //         { T v = __autopar_w; …the body without the increment… }
     //     if (v < B) v = B;            (<= B: v = B + 1)
-    bool parAutoWhileToFor(void)
+    // Whether the `while` at _pos has that shape; it notes where its parts
+    // are (_pwAt…) for parseAutoWhile and parAutoWhileToks.
+    u32     _pwAt;          // the `while`
+    u32     _pwPe;          // the `)` closing its condition
+    u32     _pwBe;          // the `}` closing its body
+    u32     _pwInc;         // the increment's first token
+    u16     _pwTt;          // v's type, as a token type and its spelling
+    String* _pwVt;
+    String* _pwV;           // the counter
+    bool parAutoWhileShape(void)
     {
         u32 at = _pos;
         u32 n = _tokens.count();
@@ -2927,6 +2938,33 @@ class Parser
             else if (Parser._same(vt, "i64")) { tt = (u16)tokI64; known = true; }
         }
         if (!known) return false;
+        _pwAt = at;
+        _pwPe = pe;
+        _pwBe = be;
+        _pwInc = inc;
+        _pwTt = tt;
+        _pwVt = vt;
+        _pwV = v;
+        _plWhileInc = incForm;
+        return true;
+    }
+
+    // The `for` parAutoWhileShape's loop amounts to, as tokens, for the token
+    // scan to read (parAutoScan) and for a running total's `par :scan`
+    // rewrite (parAutoScanFor):
+    //     for (T __autopar_w = v; __autopar_w < B; __autopar_w += 1)
+    //         { T v = __autopar_w; …the body without the increment… }
+    // With `withIf`, the `if (v < B) v = B;` after it too. The parse builds
+    // the same as a tree (parseAutoWhile).
+    Array* parAutoWhileToks(bool withIf)
+    {
+        u32 at = _pwAt;
+        u32 pe = _pwPe;
+        u32 inc = _pwInc;
+        u16 tt = _pwTt;
+        String* vt = _pwVt;
+        String* v = _pwV;
+        u16 cmp = parTokType(at + 3);
         Token* w0 = (Token*)_tokens.get(at);
         String* w = String.withCString("__autopar_w");
         Array* bound = _tokens.subarray(at + (u32)4, pe - (at + (u32)4));
@@ -2954,6 +2992,7 @@ class Parser
         out.add((Object*)parSynTok((u16)tokSemicolon, String.withCString(";"), w0));
         out.addAll(_tokens.subarray(pe + (u32)2, inc - (pe + (u32)2)));
         out.add((Object*)parSynTok((u16)tokRBrace, String.withCString("}"), w0));
+        if (!withIf) return out;
         out.add((Object*)parSynTok((u16)tokIf, String.withCString("if"), w0));
         out.add((Object*)parSynTok((u16)tokLParen, String.withCString("("), w0));
         out.add((Object*)parSynTok((u16)tokIdentifier, v, w0));
@@ -2968,10 +3007,200 @@ class Parser
             out.add((Object*)parSynInt((i64)1, w0));
         }
         out.add((Object*)parSynTok((u16)tokSemicolon, String.withCString(";"), w0));
-        _tokens.removeRange(at, be + (u32)1 - at);
-        _tokens.insertAll(at, out);
-        _plWhileInc = incForm;
-        return true;
+        return out;
+    }
+
+    // The token stream with the `while` at _pwAt replaced by
+    // parAutoWhileToks: what the scan reads.
+    Array* parAutoWhileStream(bool withIf)
+    {
+        Array* s = _tokens.subarray(0, _pwAt);
+        s.addAll(parAutoWhileToks(withIf));
+        s.addAll(_tokens.subarray(_pwBe + 1, _tokens.count() - (_pwBe + 1)));
+        return s;
+    }
+
+    // The `while` at _pos, which parAutoWhileShape took (`v`, `vt` its
+    // counter and type, `incTok` and `incLen` its increment statement),
+    // parsed as the `for` parAutoWhileToks spells: the nodes, positions and
+    // bindings that `for`'s tokens give, the made parts at the `while`. The
+    // `if` after it comes from the next parseStatement (_pwPending).
+    Node* parseAutoWhile(String* v, String* vt, Token* incTok, u32 incLen)
+    {
+        Token* w0 = cur();
+        Token* realAt = _mkAt;
+        Token* madeAt = realAt != (Token*)0 ? realAt : w0;
+        String* w = String.withCString("__autopar_w");
+        advance();                                  // `while`
+        expect(tokLParen);
+        advance();                                  // v
+        _mkAt = madeAt;
+        _lastBlkName = (String*)0;
+        _lastTypeIsOutlet = false;
+        Node* n = mk(nkForCStyle);
+        Node* initMark = mk(nkMarkerInit);
+        // T __autopar_w = v;
+        Node* iv = pwDecl(w, vt, v, w0);
+        initMark.add(iv);
+        n.add(initMark);
+        Node* condMark = mk(nkMarkerCond);
+        Node* lhs = pwIdent(w);
+        Token* opTok = advance();
+        Node* c = mk(nkBinary);
+        c.setPos(opTok.fileId(), opTok.line(), opTok.col());
+        c.setOp(opTok.value());
+        c.add(lhs);
+        _mkAt = realAt;
+        c.add(parseExprMinPrec(precOf(opTok.type()) + 1));
+        _mkAt = madeAt;
+        condMark.add(c);
+        n.add(condMark);
+        expect(tokRParen);
+        // __autopar_w += 1
+        Node* stepMark = mk(nkMarkerStep);
+        Node* step = mk(nkAssign);
+        step.setPos(w0.fileId(), w0.line(), w0.col());
+        step.setOp(String.withCString("+="));
+        step.add(pwIdent(w));
+        step.add(pwOne());
+        stepMark.add(step);
+        n.add(stepMark);
+        u32 goal = loopGoal(0);
+        loopAnnotationFlags(n, 0, goal);
+        u32 savedGoal = _goalNow;
+        _goalNow = goal;
+        // { T v = __autopar_w; …the body up to the increment… }
+        Node* b = mk(nkBlock);
+        openBlock();
+        blkPushScope();
+        _lastBlkName = (String*)0;
+        _lastTypeIsOutlet = false;
+        b.add(pwDecl(v, vt, w, w0));
+        _mkAt = realAt;
+        while (cur() != incTok && !closeBlockAhead() && !check(tokEOF) && !_fatal) {
+            u32 before = _pos;
+            Node* st = parseStatement();
+            if (st != 0) b.add(st);
+            if (_pos == before) advance();
+        }
+        if (cur() == incTok)
+            for (u32 i = 0; i < incLen; i++) advance();
+        blkPopScope();
+        closeBlock();
+        n.add(b);
+        _goalNow = savedGoal;
+        return n;
+    }
+
+    // A name read at a made token: as parsePrimary reads one.
+    Node* pwIdent(String* name)
+    {
+        blkNoteUse(name);
+        return mkNamed(nkIdent, name);
+    }
+    // The literal 1 at a made token.
+    Node* pwOne(void)
+    {
+        Node* one = mk(nkInt);
+        one.setNum(1);
+        one.addSrc(SRC_PLAIN);
+        return one;
+    }
+    // `T name = from;` made at `at`, as parseVarDeclStatement and
+    // parseStatement build and bind it.
+    Node* pwDecl(String* name, String* ty, String* from, Token* at)
+    {
+        _lastBlkWb = false;
+        Array* params = _lastBlkParams;
+        Node* d = mkNamed(nkVariableDecl, name);
+        String* dty = String.withString(ty);
+        d.setOp(dty);
+        d.setFlags(0);
+        d.add(pwIdent(from));
+        blkBind(name, dty, params);
+        blkMarkHoldsWb(name, d.kid(0));
+        d.setStmtPos(at.fileId(), at.line(), at.col());
+        return d;
+    }
+
+    // The `if (v < B) v = B;` (`<= B`: `v = B + 1`) a counted `while` leaves
+    // after its `for` (parseAutoWhile): the statement parseStatement returns
+    // next, wherever that is, with B read again from its own tokens.
+    bool    _pwPending;
+    String* _pwPendV;
+    Array*  _pwPendBound;   // B's tokens and the `)` after them
+    Token*  _pwPendCmp;     // the `<` or `<=`
+    Token*  _pwPendAt;      // the `while`
+
+    void pwSetPending(String* v, Array* bound, Token* cmp, Token* at)
+    {
+        _pwPending = true;
+        _pwPendV = v;
+        _pwPendBound = bound;
+        _pwPendCmp = cmp;
+        _pwPendAt = at;
+    }
+
+    // B, parsed from its tokens at `minPrec`.
+    Node* pwBound(i16 minPrec)
+    {
+        Array* savedToks = _tokens;
+        u32 savedPos = _pos;
+        _tokens = _pwPendBound;
+        _pos = 0;
+        Node* e = parseExprMinPrec(minPrec);
+        _tokens = savedToks;
+        _pos = savedPos;
+        return e;
+    }
+
+    Node* pwTakePending(void)
+    {
+        _pwPending = false;
+        Token* w0 = _pwPendAt;
+        String* v = _pwPendV;
+        Token* realAt = _mkAt;
+        Token* madeAt = realAt != (Token*)0 ? realAt : w0;
+        _mkAt = madeAt;
+        Node* n = mk(nkIf);
+        Node* c = mk(nkBinary);
+        Node* lhs = pwIdent(v);
+        c.setPos(_pwPendCmp.fileId(), _pwPendCmp.line(), _pwPendCmp.col());
+        c.setOp(_pwPendCmp.value());
+        c.add(lhs);
+        _mkAt = realAt;
+        c.add(pwBound(precOf(_pwPendCmp.type()) + 1));
+        _mkAt = madeAt;
+        n.add(c);
+        Node* a = mk(nkAssign);
+        Node* to = pwIdent(v);
+        a.setPos(w0.fileId(), w0.line(), w0.col());
+        a.setOp(String.withCString("="));
+        _mkAt = realAt;
+        Node* rhs = pwBound(precOf(tokAssign));
+        _mkAt = madeAt;
+        if (_pwPendCmp.type() == tokLessEq) {
+            Node* sum = mk(nkBinary);
+            sum.setPos(w0.fileId(), w0.line(), w0.col());
+            sum.setOp(String.withCString("+"));
+            sum.add(rhs);
+            sum.add(pwOne());
+            rhs = sum;
+        }
+        if (blkIsWbValue(rhs)) blkMarkHoldsWb(v, rhs);
+        a.add(to);
+        a.add(rhs);
+        // The statement node sits at the token after its `;`: the one after
+        // the loop.
+        _mkAt = realAt;
+        Node* st = mk(nkExprStatement);
+        st.add(a);
+        if (st.line() == 0) st.setPos(w0.fileId(), w0.line(), w0.col());
+        st.setStmtPos(w0.fileId(), w0.line(), w0.col());
+        n.add(st);
+        if (match(tokElse)) n.add(parseBlockOrStatement());
+        n.setStmtPos(w0.fileId(), w0.line(), w0.col());
+        return n;
     }
 
     // A type keyword a cast in a bound may name (the reference asks the
@@ -3034,9 +3263,31 @@ class Parser
         bool fromWhile = _parAutoFromWhile;
         _parAutoFromWhile = false;
         Token* traceAt = cur();
+        // A counted `while` (parAutoWhileShape): the scan reads the `for` it
+        // amounts to, as tokens; the parses below build that `for` from the
+        // `while` (parseAutoWhile).
+        String* wv = (String*)0;
+        String* wvt = (String*)0;
+        Token* wInc = (Token*)0;
+        u32 wIncLen = 0;
+        Array* wToks = (Array*)0;
+        Array* realToks = _tokens;
+        u32 realPos = _pos;
+        if (fromWhile) {
+            wv = _pwV;
+            wvt = _pwVt;
+            wInc = (Token*)_tokens.get(_pwInc);
+            wIncLen = _plWhileInc == 4 ? 6 : _plWhileInc == 3 ? 4 : 3;
+            wToks = parAutoWhileToks(false);
+            _tokens = parAutoWhileStream(true);
+        }
         // Without the par runtime the loop stays a loop, and the front end is
         // told: it parses again with Par.xc imported (--par-style=auto imports it).
         bool scanned = parAutoScan(reds, &goal);
+        if (fromWhile) {
+            _tokens = realToks;
+            _pos = realPos;
+        }
         u32 pacSeen = _pacSeen;
         u32 pacVal = _pacVal;
         String* form = fromWhile ? String.withCString("while") : _parAutoForm;
@@ -3067,7 +3318,7 @@ class Parser
             // work inside a timing loop), so the loop depth stays put.
             u32 forAt = _pos;
             parGridEnter("loops", true);
-            Node* plain = parseFor();
+            Node* plain = fromWhile ? parseAutoWhile(wv, wvt, wInc, wIncLen) : parseFor();
             parGridEnter("loops", false);
             parAutoCheck(plain, traceAt, pacSeen, pacVal);
             if (scanV != (Map*)0) {
@@ -3086,7 +3337,7 @@ class Parser
         u32 forPos = _pos;
         parGridEnter("loops", true);
         _loopDepth = _loopDepth + (u32)1;
-        Node* plain = parseFor();
+        Node* plain = fromWhile ? parseAutoWhile(wv, wvt, wInc, wIncLen) : parseFor();
         _loopDepth = _loopDepth - (u32)1;
         parGridEnter("loops", false);
         parAutoCheck(plain, traceAt, pacSeen, pacVal);
@@ -3112,7 +3363,21 @@ class Parser
             sreds.appendByte(':');
             sreds.append(_parScanAcc);
             u32 implFrom = _parCounter;
+            // The rewrite reads the loop's tokens: a `while` gives way to its
+            // `for`'s, and comes back when the rewrite does not take it.
+            Array* kept = (Array*)0;
+            u32 wEnd = _pos;
+            if (fromWhile) {
+                kept = _tokens.subarray(0, _tokens.count());
+                _tokens.removeRange(forPos, wEnd - forPos);
+                _tokens.insertAll(forPos, wToks);
+                _pos = forPos + wToks.count();
+            }
             Node* sc = parAutoScanFor(plain, forPos);
+            if (kept != (Array*)0 && sc == plain) {
+                _tokens = kept;
+                _pos = wEnd;
+            }
             if (sc != plain || fromWhile) plRegister(sc, plKind, plain, (Array*)0, whileInc);
             if (sc == plain)
                 parAutoTraceLine(traceAt, "serial", String.withCString("scan-refused"), form, (String*)0, (String*)0, 0, (String*)0);
@@ -3158,7 +3423,7 @@ class Parser
         _loopDepth = _loopDepth + (u32)1;
         u32 savedGoal = _goalNow;
         _goalNow = goal == (u32)2 ? (u32)2 : (u32)1;
-        Node* loop = parseFor();
+        Node* loop = fromWhile ? parseAutoWhile(wv, wvt, wInc, wIncLen) : parseFor();
         _goalNow = savedGoal;
         _loopDepth = _loopDepth - (u32)1;
         parGridEnter("loops", false);
@@ -4148,7 +4413,7 @@ class Parser
     Token*  _plAt;          // the place the walk's tokens carry
     bool    _plStream;      // the scan's body rules are reading the walk's tokens
     Array*  _plSites;       // [site, kind, plain or body, params, increment]
-    u32     _plWhileInc;    // parAutoWhileToFor's last increment: 1 v++, 2 ++v, 3 v += 1, 4 v = v + 1
+    u32     _plWhileInc;    // parAutoWhileShape's last increment: 1 v++, 2 ++v, 3 v += 1, 4 v = v + 1
     bool    _plSkipWhileIf; // the next statement is the `if` a rewritten `while` left
     u32     _plLits;        // literals not spelled as their value, so far
     void setParAutoRecog(bool b) { _parAutoRecogOn = b; }
@@ -5156,7 +5421,7 @@ class Parser
         _pos = 0;
         _plStream = true;
         _parAutoWhy = (String*)0;
-        bool ok = parAutoWhileToFor();
+        bool ok = parAutoWhileShape();
         String* why = _parAutoWhy;
         plStateRestore(saved);
         if (ok) return (String*)0;
@@ -8093,7 +8358,7 @@ class Parser
             return parsePar();
         if (check((u16)tokIf))       return parseIf();
         // --par-style=auto: a counted while loop becomes the `for` it amounts to,
-        // which parAutoFor then takes or leaves (parAutoWhileToFor).
+        // which parAutoFor then takes or leaves (parAutoWhileShape).
         // Without the par runtime parAutoFor leaves the loop and asks for
         // Par.xc to be imported (the front end parses again).
         if (check((u16)tokWhile) && _parAuto && _loopDepth == (u32)0
@@ -8101,9 +8366,14 @@ class Parser
                 || ((Map*)_blkFrames.get(_blkFrames.count() - 1)).get((Hashable*)String.withCString("par")) == (Object*)0)) {
             Token* wt = cur();
             _parAutoWhy = (String*)0;
-            if (parAutoWhileToFor()) {
+            if (parAutoWhileShape()) {
                 _parAutoFromWhile = true;
-                return parAutoFor();
+                Array* bound = _tokens.subarray(_pwAt + 4, _pwPe + 1 - (_pwAt + 4));
+                String* v = _pwV;
+                Token* cmp = (Token*)_tokens.get(_pwAt + 3);
+                Node* f = parAutoFor();
+                pwSetPending(v, bound, cmp, wt);
+                return f;
             }
             String* wwhy = _parAutoWhy != (String*)0 ? _parAutoWhy : String.withCString("while-shape");
             parAutoTraceLine(wt, "serial", wwhy, String.withCString("while"), (String*)0, (String*)0, 0, (String*)0);
@@ -8498,7 +8768,9 @@ class Parser
         n.add(parseExpression());
         expect((u16)tokRParen);
         n.add(parseBlockOrStatement());
-        if (match((u16)tokElse)) n.add(parseBlockOrStatement());
+        // An `else` after a counted `while` belongs to the `if` that follows
+        // the `while`'s `for` (pwTakePending).
+        if (!_pwPending && match(tokElse)) n.add(parseBlockOrStatement());
         return n;
     }
 
@@ -8838,8 +9110,8 @@ class Parser
         if (openBlock()) {
             Node* current = (Node*)0;
             bool caseHasBody = false;
-            while (!closeBlockAhead() && !check((u16)tokEOF) && !_fatal) {
-                if (check((u16)tokCase) || check((u16)tokDefault)) {
+            while ((_pwPending || (!closeBlockAhead() && !check(tokEOF))) && !_fatal) {
+                if (!_pwPending && (check(tokCase) || check(tokDefault))) {
                     bool isDefault = check((u16)tokDefault);
                     advance();
                     // `case 1: case 2: body` is ONE case with two labels —
@@ -8883,12 +9155,13 @@ class Parser
                     continue;
                 }
                 u32 before = _pos;
+                bool made = _pwPending;
                 Node* s = parseStatement();
                 if (s != 0) {
                     if (current != 0) { current.add(s); caseHasBody = true; }
                     else                n.add(s);
                 }
-                if (_pos == before) advance();
+                if (_pos == before && !made) advance();
             }
             closeBlock();
         }
