@@ -2678,7 +2678,7 @@ class Parser
         while ((_pwPending || (!closeBlockAhead() && !check(tokEOF))) && !_fatal) {
             u32 before = _pos;
             bool made = _pwPending;
-            Node* s = parseStatement();
+            Node* s = parseListStatement();
             if (s != 0) b.add(s);
             if (_pos == before && !made) advance();
         }
@@ -2687,11 +2687,23 @@ class Parser
         return b;
     }
 
+    // A statement of a braced block or a case body: a counted `while` there
+    // leaves its `if (v < B) v = B;` as the statement after it
+    // (parseStatementInner).
+    bool _pwInList;
+    Node* parseListStatement(void)
+    {
+        _pwInList = true;
+        return parseStatement();
+    }
+
     Node* parseStatement(void)
     {
+        bool inList = _pwInList;
+        _pwInList = false;
         if (_pwPending) return pwTakePending();
         Token* stmtTok = cur();
-        Node* stmtNode = parseStatementInner();
+        Node* stmtNode = parseStatementInner(inList);
         if (stmtNode != 0 && stmtNode.line() == (u32)0)
             stmtNode.setPos(stmtTok.fileId(), stmtTok.line(), stmtTok.col());
         // -g: the statement's own start, where the reference puts it.
@@ -3024,7 +3036,9 @@ class Parser
     // counter and type, `incTok` and `incLen` its increment statement),
     // parsed as the `for` parAutoWhileToks spells: the nodes, positions and
     // bindings that `for`'s tokens give, the made parts at the `while`. The
-    // `if` after it comes from the next parseStatement (_pwPending).
+    // `if` after it is the next statement of the block, or goes with it in a
+    // block where the `while` was a lone statement (_pwPending,
+    // parseStatementInner).
     Node* parseAutoWhile(String* v, String* vt, Token* incTok, u32 incLen)
     {
         Token* w0 = cur();
@@ -3077,11 +3091,12 @@ class Parser
         _lastTypeIsOutlet = false;
         b.add(pwDecl(v, vt, w, w0));
         _mkAt = realAt;
-        while (cur() != incTok && !closeBlockAhead() && !check(tokEOF) && !_fatal) {
+        while ((_pwPending || (cur() != incTok && !closeBlockAhead() && !check(tokEOF))) && !_fatal) {
             u32 before = _pos;
-            Node* st = parseStatement();
+            bool made = _pwPending;
+            Node* st = parseListStatement();
             if (st != 0) b.add(st);
-            if (_pos == before) advance();
+            if (_pos == before && !made) advance();
         }
         if (cur() == incTok)
             for (u32 i = 0; i < incLen; i++) advance();
@@ -3124,8 +3139,9 @@ class Parser
     }
 
     // The `if (v < B) v = B;` (`<= B`: `v = B + 1`) a counted `while` leaves
-    // after its `for` (parseAutoWhile): the statement parseStatement returns
-    // next, wherever that is, with B read again from its own tokens.
+    // after its `for` (parseAutoWhile), with B read again from its own
+    // tokens: the next statement of the block, or the second statement of the
+    // block parseStatementInner makes for a lone `while`.
     bool    _pwPending;
     String* _pwPendV;
     Array*  _pwPendBound;   // B's tokens and the `)` after them
@@ -3198,7 +3214,6 @@ class Parser
         if (st.line() == 0) st.setPos(w0.fileId(), w0.line(), w0.col());
         st.setStmtPos(w0.fileId(), w0.line(), w0.col());
         n.add(st);
-        if (match(tokElse)) n.add(parseBlockOrStatement());
         n.setStmtPos(w0.fileId(), w0.line(), w0.col());
         return n;
     }
@@ -4809,8 +4824,7 @@ class Parser
     {
         for (u32 i = from; i < n.kidCount(); i++) {
             if (_plSkipWhileIf) {
-                // The `if (v < B) v = B;` a rewritten `while` left after it
-                // (or after the statement it was the body of).
+                // The `if (v < B) v = B;` a rewritten `while` left after it.
                 _plSkipWhileIf = false;
                 continue;
             }
@@ -4914,8 +4928,9 @@ class Parser
     }
 
     // A site the parser recorded: a block literal (0), a written par block
-    // (1), a lifted loop (2), a counted `while` it rewrote to a `for` (3),
-    // as written.
+    // (1), a lifted loop (2), a counted `while` it rewrote to a `for` (3), or
+    // the block of that `for` and its `if` where the `while` stood alone
+    // (4), as written.
     void plSiteWalk(Array* e)
     {
         u32 kind = ((Number*)e.get(1)).asU32();
@@ -4924,9 +4939,9 @@ class Parser
             plStmt(body);
             return;
         }
-        if (kind == 3) {
+        if (kind == 3 || kind == 4) {
             plWhileFrom(body, ((Number*)e.get(4)).asU32());
-            _plSkipWhileIf = true;
+            _plSkipWhileIf = kind == 3;
             return;
         }
         if (kind == 1) {
@@ -8345,7 +8360,7 @@ class Parser
         return outer;
     }
 
-    Node* parseStatementInner(void)
+    Node* parseStatementInner(bool inList)
     {
         // `par` is a CONTEXTUAL keyword — library code uses it as a name
         // (`u32* par = …; par[i] = …`) — so it starts a block only when what
@@ -8373,7 +8388,19 @@ class Parser
                 Token* cmp = (Token*)_tokens.get(_pwAt + 3);
                 Node* f = parAutoFor();
                 pwSetPending(v, bound, cmp, wt);
-                return f;
+                if (inList) return f;
+                // The body of an if, else or loop: the `for` and its `if`
+                // are one statement, a block, which the walk reads as the
+                // `while` (plSiteWalk).
+                Node* g = pwTakePending();
+                Node* one = mk(nkBlock);
+                one.setPos(wt.fileId(), wt.line(), wt.col());
+                if (f != (Node*)0) one.add(f);
+                one.add(g);
+                Array* site = plSite(f);
+                if (site != (Array*)0)
+                    plRegister(one, 4, (Node*)site.get(2), (Array*)0, ((Number*)site.get(4)).asU32());
+                return one;
             }
             String* wwhy = _parAutoWhy != (String*)0 ? _parAutoWhy : String.withCString("while-shape");
             parAutoTraceLine(wt, "serial", wwhy, String.withCString("while"), (String*)0, (String*)0, 0, (String*)0);
@@ -8768,9 +8795,7 @@ class Parser
         n.add(parseExpression());
         expect((u16)tokRParen);
         n.add(parseBlockOrStatement());
-        // An `else` after a counted `while` belongs to the `if` that follows
-        // the `while`'s `for` (pwTakePending).
-        if (!_pwPending && match(tokElse)) n.add(parseBlockOrStatement());
+        if (match(tokElse)) n.add(parseBlockOrStatement());
         return n;
     }
 
@@ -9156,7 +9181,7 @@ class Parser
                 }
                 u32 before = _pos;
                 bool made = _pwPending;
-                Node* s = parseStatement();
+                Node* s = parseListStatement();
                 if (s != 0) {
                     if (current != 0) { current.add(s); caseHasBody = true; }
                     else                n.add(s);

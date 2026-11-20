@@ -538,8 +538,7 @@ static NSString* plAssignSpelling(XTAssignOp op, XTTokenType* t)
         {
         if (self.plSkipWhileIf)
             {
-            // The `if (v < B) v = B;` a rewritten `while` left after it (or
-            // after the statement it was the body of).
+            // The `if (v < B) v = B;` a rewritten `while` left after it.
             self.plSkipWhileIf = NO;
             continue;
             }
@@ -655,7 +654,9 @@ static NSString* plAssignSpelling(XTAssignOp op, XTTokenType* t)
     }
 
 // A site the parser recorded: a block literal (0), a written par block (1),
-// a lifted loop (2), a counted `while` it rewrote to a `for` (3), as written.
+// a lifted loop (2), a counted `while` it rewrote to a `for` (3), or the
+// block of that `for` and its `if` where the `while` stood alone (4), as
+// written.
 - (void)plSite:(NSDictionary*)e
     {
     NSInteger kind = [e[@"kind"] integerValue];
@@ -664,10 +665,10 @@ static NSString* plAssignSpelling(XTAssignOp op, XTTokenType* t)
         [self plStmt:e[@"plain"]];
         return;
         }
-    if (kind == 3)
+    if (kind == 3 || kind == 4)
         {
         [self plWhileFrom:e[@"plain"] inc:[e[@"inc"] integerValue]];
-        self.plSkipWhileIf = YES;
+        self.plSkipWhileIf = kind == 3;
         return;
         }
     if (kind == 1)

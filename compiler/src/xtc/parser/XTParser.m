@@ -2676,7 +2676,7 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
 
     while ((self.pwPending || (![self checkBlockClose] && ![self check:XTTokenEOF])) && !_diagnostics.hasFatalError)
         {
-        XTASTNode* stmt = [self parseStatement];
+        XTASTNode* stmt = [self parseListStatement];
         if (stmt)
             [stmts addObject:stmt];
         }
@@ -2728,6 +2728,14 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
         }
     }
 
+// A statement of a braced block or a case body: a counted `while` there
+// leaves its `if (v < B) v = B;` as the statement after it (parseStatement).
+- (nullable XTASTNode*)parseListStatement
+    {
+    self.pwInList = YES;
+    return [self parseStatement];
+    }
+
 /****************************************************************************\
 |* Parse a single statement: if, while, for, return, break, continue, asm,
 |* block, typedef, struct, enum, variable declaration, tuple assignment,
@@ -2736,6 +2744,8 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
 \****************************************************************************/
 - (nullable XTASTNode*)parseStatement
     {
+    BOOL inList = self.pwInList;
+    self.pwInList = NO;
     if (self.pwPending)
         return [self parAutoWhileIf];
     XTToken* cur = [self currentToken];
@@ -2780,7 +2790,17 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
                 self.pwPendBound = bound;
                 self.pwPendCmp = cmp;
                 self.pwPendLoc = wloc;
-                return f;
+                if (inList)
+                    return f;
+                // The body of an if, else or loop: the `for` and its `if`
+                // are one statement, a block, which the walk reads as the
+                // `while` (plSite).
+                XTASTNode* g = [self parAutoWhileIf];
+                XTBlockNode* one = [[XTBlockNode alloc] initWithStatements:f ? @[ f, g ] : @[ g ] location:wloc];
+                NSDictionary* site = [self.plSites objectForKey:f];
+                if (site)
+                    [self plRegister:one entry:@{ @"kind" : @4, @"plain" : site[@"plain"], @"inc" : site[@"inc"] }];
+                return one;
                 }
             NSString* wwhy = self.parAutoWhy ?: @"while-shape";
             [self parAutoTraceAt:wloc verdict:@"serial" rule:wwhy form:@"while" name:nil reds:nil grid:0 impl:nil];
@@ -3267,9 +3287,7 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
     [self expect:XTTokenRParen];
     XTASTNode* thenBlock = [self checkBlockOpen] ? [self parseBlock] : [self parseStatement];
     XTASTNode* elseBlock = nil;
-    // An `else` after a counted `while` belongs to the `if` that follows the
-    // `while`'s `for` (parAutoWhileIf).
-    if (!self.pwPending && [self match:XTTokenElse])
+    if ([self match:XTTokenElse])
         {
         elseBlock = [self check:XTTokenIf] ? [self parseIf] : ([self checkBlockOpen] ? [self parseBlock] : [self parseStatement]);
         }
@@ -5171,7 +5189,9 @@ static XTForCStyleNode* _Nullable parAutoAscending(XTASTNode* node, XTVariableDe
 |* and type, `incTok` and `incLen` its increment statement), parsed as the
 |* `for` parAutoWhileToks spells: the nodes, locations and bindings that
 |* `for`'s tokens give, the made parts at the `while`. The `if` after it
-|* comes from the next parseStatement (pwPending). Mirrored in the port.
+|* comes from the next statement of the block, or is put with it in a
+|* block where the `while` was a lone statement (pwPending, parseStatement).
+|* Mirrored in the port.
 \****************************************************************************/
 - (nullable XTASTNode*)parseAutoWhile:(NSString*)v type:(XTType*)vt inc:(XTToken*)incTok length:(NSUInteger)incLen
     {
@@ -5212,9 +5232,10 @@ static XTForCStyleNode* _Nullable parAutoAscending(XTASTNode* node, XTVariableDe
     [stmts addObject:decl];
     [self blkBind:v type:t];
     [self blkMarkHoldsWb:v fromInit:decl.initialiser];
-    while ([self currentToken] != incTok && ![self checkBlockClose] && ![self check:XTTokenEOF] && !_diagnostics.hasFatalError)
+    while ((self.pwPending || ([self currentToken] != incTok && ![self checkBlockClose] && ![self check:XTTokenEOF]))
+           && !_diagnostics.hasFatalError)
         {
-        XTASTNode* stmt = [self parseStatement];
+        XTASTNode* stmt = [self parseListStatement];
         if (stmt)
             [stmts addObject:stmt];
         }
@@ -5235,9 +5256,9 @@ static XTForCStyleNode* _Nullable parAutoAscending(XTASTNode* node, XTVariableDe
 
 /****************************************************************************\
 |* The `if (v < B) v = B;` (`<= B`: `v = B + 1`) a counted `while` leaves
-|* after its `for` (parseAutoWhile): the statement parseStatement returns
-|* next, wherever that is, with B read again from its own tokens. Mirrored
-|* in the port.
+|* after its `for` (parseAutoWhile), with B read again from its own tokens:
+|* the next statement of the block, or the second statement of the block
+|* parseStatement makes for a lone `while`. Mirrored in the port.
 \****************************************************************************/
 - (nullable XTASTNode*)pwBound:(int)minPrec
     {
@@ -5268,10 +5289,7 @@ static XTForCStyleNode* _Nullable parAutoAscending(XTASTNode* node, XTVariableDe
         [self blkMarkHoldsWb:v fromInit:rhs];
     XTASTNode* assign = [[XTAssignExprNode alloc] initWithOp:XTAssignOpAssign lhs:lhs rhs:rhs location:loc];
     XTASTNode* thenBlock = [[XTExpressionStatementNode alloc] initWithExpression:assign location:loc];
-    XTASTNode* elseBlock = nil;
-    if ([self match:XTTokenElse])
-        elseBlock = [self check:XTTokenIf] ? [self parseIf] : ([self checkBlockOpen] ? [self parseBlock] : [self parseStatement]);
-    return [[XTIfNode alloc] initWithCondition:condition thenBlock:thenBlock elseBlock:elseBlock location:loc];
+    return [[XTIfNode alloc] initWithCondition:condition thenBlock:thenBlock elseBlock:nil location:loc];
     }
 
 // A constant bound (literals, casts, + - *): its value, or -1. As the port's
@@ -6431,7 +6449,7 @@ static NSString* scCombine(NSString* op, NSString* r, NSString* v)
             (void)[self parseStatement];
             continue;
             }
-        XTASTNode* stmt = [self parseStatement];
+        XTASTNode* stmt = [self parseListStatement];
         if (stmt)
             [pendingBody addObject:stmt];
         }

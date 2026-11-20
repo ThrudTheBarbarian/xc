@@ -86,6 +86,14 @@ par-auto-trace: par_auto_while_field.xc:19 serial rule=while-shape form=while na
 par-auto-trace: par_auto_while_field.xc:25 serial rule=while-shape form=while name=- reds=- grid=- impl=-
 par-auto-trace: par_auto_while_field.xc:32 lifted rule=block form=for name=par_auto_while_field.xc:32 reds=+:s grid=1 impl=0
 par-auto-trace: par_auto_while_field.xc:36 lifted rule=block form=for name=par_auto_while_field.xc:36 reds=+:t grid=1 impl=1
+par-auto-trace: par_auto_while_if_else.xc:20 lifted rule=block form=while name=par_auto_while_if_else.xc:20 reds=- grid=1 impl=0
+par-auto-trace: par_auto_while_if_else.xc:29 lifted rule=block form=while name=par_auto_while_if_else.xc:29 reds=- grid=1 impl=1
+par-auto-trace: par_auto_while_if_else.xc:31 lifted rule=block form=for name=par_auto_while_if_else.xc:31 reds=+:s grid=1 impl=2
+par-auto-trace: par_auto_while_if_else.xc:41 lifted rule=block form=while name=par_auto_while_if_else.xc:41 reds=+:x grid=1 impl=3
+par-auto-trace: par_auto_while_if_else.xc:51 serial rule=reduction-uses form=for name=- reds=- grid=- impl=-
+par-auto-trace: par_auto_while_if_else.xc:51#2 lifted rule=block form=while name=par_auto_while_if_else.xc:51 reds=+:s grid=1 impl=4
+par-auto-trace: par_auto_while_if_else.xc:61 serial rule=reduction-uses form=while name=- reds=- grid=- impl=-
+par-auto-trace: par_auto_while_if_else.xc:61#2 lifted rule=block form=while name=par_auto_while_if_else.xc:61 reds=+:t grid=1 impl=5
 par-auto-trace: par_auto_while.xc:14 lifted rule=block form=while name=par_auto_while.xc:14 reds=- grid=1 impl=0
 par-auto-trace: par_auto_while.xc:21 lifted rule=block form=while name=par_auto_while.xc:21 reds=+:sum grid=1 impl=1
 par-auto-trace: par_auto_while.xc:28 lifted rule=block form=while name=par_auto_while.xc:28 reds=+:none grid=1 impl=2

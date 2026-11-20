@@ -93,9 +93,12 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic) XTTokenType pwTt;
 @property(nonatomic, strong, nullable) XTType* pwVt;
 @property(nonatomic, copy, nullable) NSString* pwV;
-// The `if (v < B) v = B;` such a `while` leaves after its `for`, which the
-// next parseStatement returns (parAutoWhileIf): the counter, B's tokens with
-// the `)` after them, the comparison and the `while`'s location.
+// The `if (v < B) v = B;` such a `while` leaves after its `for` (parAutoWhileIf):
+// the counter, B's tokens with the `)` after them, the comparison and the
+// `while`'s location. In a braced block or a case body (pwInList, set by
+// parseListStatement) it is the next statement; elsewhere it goes with the
+// `for` in a block.
+@property(nonatomic) BOOL pwInList;
 @property(nonatomic) BOOL pwPending;
 @property(nonatomic, copy, nullable) NSString* pwPendV;
 @property(nonatomic, strong, nullable) NSArray<XTToken*>* pwPendBound;
@@ -217,6 +220,7 @@ NSString* _Nullable parUpdateKey(XTASTNode* _Nullable target, XTAssignOp aop, XT
 - (nullable XTType*)parseType;
 - (nullable XTType*)parseTypeOrAuto;
 - (nullable XTASTNode*)parseStatement;
+- (nullable XTASTNode*)parseListStatement;
 - (nullable XTASTNode*)parseDeclOrStatement;
 - (nullable XTASTNode*)parseSubscriptIndex;
 - (nullable XTBlockNode*)parseBlock;

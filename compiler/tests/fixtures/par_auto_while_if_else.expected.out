@@ -1,0 +1,8 @@
+then c=0: v=0 x=7
+then c=1: v=200000 x=0
+then array c=0: v=0 x=9 s=0
+then array c=1: v=200000 x=0 s=59999700000
+else c=0: w=50 x=100
+else c=1: w=0 x=1
+for body: v=10 s=45
+nested: i=4 j=10 t=10
