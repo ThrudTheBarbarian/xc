@@ -25,6 +25,15 @@
 #import <objc/runtime.h>
 #import "XTParser+Private.h"
 
+// Store an object into an ivar, retaining it as a strong reference. Apple's
+// runtime needs the StrongDefault form for ivars without ownership metadata;
+// the GNUstep runtime's object_setIvar already honours each ivar's ownership.
+#if defined(__APPLE__)
+#define pfwSetIvar(o, iv, v) object_setIvarWithStrongDefault((o), (iv), (v))
+#else
+#define pfwSetIvar(o, iv, v) object_setIvar((o), (iv), (v))
+#endif
+
 NS_ASSUME_NONNULL_BEGIN
 
 /****************************************************************************\
@@ -53,7 +62,7 @@ static id pfwCopyObject(id src)
             {
             const char* enc = ivar_getTypeEncoding(ivars[i]);
             if (enc && enc[0] == '@')
-                object_setIvarWithStrongDefault(dst, ivars[i], pfwCopyValue(object_getIvar(src, ivars[i])));
+                pfwSetIvar(dst, ivars[i], pfwCopyValue(object_getIvar(src, ivars[i])));
             else if (enc)
                 {
                 NSUInteger size = 0;
@@ -117,7 +126,7 @@ static BOOL pfwReplace(id obj, id old, id rep)
             return;
         if (val == old)
             {
-            object_setIvarWithStrongDefault(obj, iv, rep);
+            pfwSetIvar(obj, iv, rep);
             done = YES;
             return;
             }
