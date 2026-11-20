@@ -375,6 +375,7 @@
     // The maths intrinsics, by the callee's name, as precise Metal functions (§7).
     final String* mslIntrinsic(String* callee)
         {
+        if (!self.parIsMathCallee(callee)) return (String*)0;
         String* m = callee;
         if (m.hasPrefix(String.withCString("Math$"))) m = m.substringBytes((u32)5, m.byteLength() - (u32)5);
         String* cut = String.withCString("");

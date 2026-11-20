@@ -72,6 +72,22 @@ static NSSet<NSString*>* allowedExternals(void)
     return s;
     }
 
+BOOL XTIRParIsMathCallee(NSString* callee)
+    {
+    if ([callee hasPrefix:@"Math$"] || [callee hasPrefix:@"_xm_"])
+        return YES;
+    static NSSet<NSString*>* c;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        c = [NSSet setWithArray:@[
+            @"sqrt", @"sqrtf", @"sin", @"sinf", @"cos", @"cosf", @"exp", @"expf",
+            @"log", @"logf", @"pow", @"powf", @"floor", @"floorf", @"fma", @"fmaf",
+            @"fabs", @"fabsf", @"abs"
+        ]];
+    });
+    return [c containsObject:callee];
+    }
+
 // The maths intrinsics (par-blocks.md §2), as Math's methods: allowed by name
 // without looking inside, because each target implements them its own way (in
 // assembly on the 6502 and the 68000) and a GPU has every one natively.

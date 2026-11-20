@@ -15437,10 +15437,29 @@ class ClassInfo
 
     String* ptxS(string c) { return String.withCString(c); }
 
+    // Is a call to this callee one of the maths a GPU has built in? Only when
+    // it is spelled as one: Math's methods, the _xm_ helpers, or a C maths
+    // library name. As the reference (XTIRParIsMathCallee).
+    bool parIsMathCallee(String* callee)
+        {
+        if (callee.hasPrefix(ptxS("Math$")) || callee.hasPrefix(ptxS("_xm_")))
+            return true;
+        String* c = callee;
+        return c.equals(ptxS("sqrt")) || c.equals(ptxS("sqrtf")) || c.equals(ptxS("sin")) || c.equals(ptxS("sinf"))
+            || c.equals(ptxS("cos")) || c.equals(ptxS("cosf")) || c.equals(ptxS("exp")) || c.equals(ptxS("expf"))
+            || c.equals(ptxS("log")) || c.equals(ptxS("logf")) || c.equals(ptxS("pow")) || c.equals(ptxS("powf"))
+            || c.equals(ptxS("floor")) || c.equals(ptxS("floorf")) || c.equals(ptxS("fma")) || c.equals(ptxS("fmaf"))
+            || c.equals(ptxS("fabs")) || c.equals(ptxS("fabsf")) || c.equals(ptxS("abs"));
+        }
+
     // The callee's maths name, as mslIntrinsic reads it: Math$ and _xm_ off,
     // an overload's __ tail off, a trailing f off.
     String* ptxMathName(String* callee)
         {
+        // A function of the program spelled like a maths name is the
+        // program's (#336: a kernel called Metal's max in its place).
+        if (!parIsMathCallee(callee))
+            return ptxS("");
         String* m = callee;
         if (m.hasPrefix(ptxS("Math$"))) m = m.substringBytes((u32)5, m.byteLength() - (u32)5);
         String* cut = ptxS("");

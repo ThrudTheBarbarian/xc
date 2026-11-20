@@ -43,4 +43,10 @@ XTIRType* _Nullable XTParWordOf(XTIRType* _Nullable t);
 // array was left as it was, when one is worth a warning, else nil.
 NSString* _Nullable XTParWordStructs(XTIRFunction* f);
 
+// Is a call to this callee one of the maths a GPU has built in? Only when it
+// is spelled as one: Math's methods, the _xm_ helpers, or a C maths library
+// name. A function of the program called `max` is the program's (#336: a
+// kernel called Metal's max in its place).
+BOOL XTIRParIsMathCallee(NSString* callee);
+
 NS_ASSUME_NONNULL_END

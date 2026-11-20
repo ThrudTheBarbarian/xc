@@ -338,6 +338,9 @@ static NSArray<NSNumber*>* spvString(NSString* s)
 
 static NSString* spvBareName(NSString* callee)
     {
+    // A function of the program spelled like a maths name is not one.
+    if (!XTIRParIsMathCallee(callee))
+        return @"";
     NSString* m = callee;
     if ([m hasPrefix:@"Math$"])
         m = [m substringFromIndex:5];

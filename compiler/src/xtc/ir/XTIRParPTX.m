@@ -1030,8 +1030,9 @@ static NSString* ptxNarrowFix(XTIRType* t, NSString* r)
                 [args addObject:e];
                 [argTypes addObject:at];
                 }
-            // The precise maths PTX has as instructions.
-            NSString* m = callee;
+            // The precise maths PTX has as instructions. A function of the
+            // program spelled like one is not (XTIRParIsMathCallee).
+            NSString* m = XTIRParIsMathCallee(callee) ? callee : @"";
             if ([m hasPrefix:@"Math$"])
                 m = [m substringFromIndex:5];
             NSRange cut = [m rangeOfString:@"__"];

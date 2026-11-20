@@ -37,6 +37,9 @@ static const uint32_t kWgExit = 0xffffffffu;
 
 static NSString* wgBareName(NSString* callee)
     {
+    // A function of the program spelled like a maths name is not one.
+    if (!XTIRParIsMathCallee(callee))
+        return @"";
     NSString* m = callee;
     if ([m hasPrefix:@"Math$"])
         m = [m substringFromIndex:5];

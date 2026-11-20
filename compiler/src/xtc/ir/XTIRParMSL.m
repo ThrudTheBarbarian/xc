@@ -147,6 +147,8 @@ static NSString* shownName(NSString* irName)
 // The maths a GPU has only approximately (NVIDIA), by its bare name.
 static BOOL isTranscendental(NSString* callee)
     {
+    if (!XTIRParIsMathCallee(callee))
+        return NO;
     NSString* m = callee;
     if ([m hasPrefix:@"Math$"])
         m = [m substringFromIndex:5];
@@ -1219,6 +1221,8 @@ static NSString* arrFn(unichar c)
 // The maths intrinsics, by the callee's name, as precise Metal functions (§7).
 static NSString* intrinsicFor(NSString* callee)
     {
+    if (!XTIRParIsMathCallee(callee))
+        return nil;
     NSString* m = callee;
     if ([m hasPrefix:@"Math$"])
         m = [m substringFromIndex:5];
