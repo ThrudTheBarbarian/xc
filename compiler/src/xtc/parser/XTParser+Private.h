@@ -61,7 +61,11 @@ NS_ASSUME_NONNULL_BEGIN
 // their values, as XTSrcFact bits.
 @property(nonatomic) NSUInteger pacSeen;
 @property(nonatomic) NSUInteger pacVal;
-@property(nonatomic, strong, nullable) NSMutableDictionary<NSString*, NSNumber*>* parAutoTraceSeen;
+// parAutoFor (as the port): decisions made on the loop depth so far, the
+// parAutoFor calls open, and the names parAutoLabels counted, in order.
+@property(nonatomic) NSUInteger parAutoDepthReads;
+@property(nonatomic) NSUInteger parAutoNest;
+@property(nonatomic, strong, nullable) NSMutableArray<NSString*>* parAutoLabelLog;
 // The par frame walk (XTParser+ParFrame.m): the frame it fills, whether it is
 // at the body's own level, the sites the parser registered for it, and the
 // names parDesugarBody's site notes, for pfwRegister.
@@ -87,6 +91,8 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic) NSInteger plWhileInc;
 @property(nonatomic) BOOL plSkipWhileIf;
 @property(nonatomic) NSUInteger plLits;
+// The recogniser's verdict decides: it gives the -Wpar-auto warnings.
+@property(nonatomic) BOOL plWarn;
 // The counted `while` parAutoWhileShape took: where the `while`, the `)`
 // closing its condition, the `}` closing its body and its increment are, and
 // its counter with its type (parseAutoWhile, parAutoWhileToks).
@@ -129,7 +135,15 @@ void parAutoGoals(XTASTNode* n, NSInteger g);
 
 // The --par-style=auto recogniser (XTParser+ParLift.m).
 @interface XTParser (ParLift)
-- (void)plCheckFor:(nullable XTASTNode*)plain at:(XTSourceLocation*)loc scan:(NSDictionary*)scan fromWhile:(BOOL)fromWhile;
+- (NSDictionary*)plRecogniseFor:(nullable XTASTNode*)loop at:(XTSourceLocation*)loc;
+- (void)plCheckVerdict:(nullable NSMutableDictionary*)scan
+                 recog:(NSMutableDictionary*)r
+                 plain:(nullable XTASTNode*)plain
+                    at:(XTSourceLocation*)loc
+             fromWhile:(BOOL)fromWhile
+                   inc:(NSInteger)inc
+                  from:(NSUInteger)from
+                    to:(NSUInteger)to;
 - (void)plCheckWhile:(nullable XTASTNode*)w at:(XTSourceLocation*)loc why:(NSString*)why;
 - (void)plRegister:(nullable XTASTNode*)site entry:(NSDictionary*)e;
 @end
@@ -192,6 +206,7 @@ NSString* _Nullable parUpdateKey(XTASTNode* _Nullable target, XTAssignOp aop, XT
 - (BOOL)blkIsWbValue:(nullable XTASTNode*)e;
 - (void)blkMarkHoldsWb:(NSString*)name fromInit:(nullable XTASTNode*)init;
 - (NSMutableArray*)blkFrames;
+- (NSMutableArray*)blkClasses;
 - (BOOL)parArrReducible:(nullable XTType*)t op:(NSString*)op;
 - (nullable XTASTNode*)parGridMemberAt:(XTSourceLocation*)loc;
 - (void)parGridLoop:(int)delta;

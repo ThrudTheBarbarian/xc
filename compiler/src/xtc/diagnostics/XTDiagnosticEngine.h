@@ -218,6 +218,19 @@ NSArray<NSString*>* XTWarningCategoryAllNames(void);
 \****************************************************************************/
 - (void)truncateToCount:(NSUInteger)count;
 
+/****************************************************************************\
+|* As truncateToCount:, with the fatal flag set back to `fatal` (the parser
+|* taking back a parse of a loop it parses again: --par-style=auto).
+\****************************************************************************/
+- (void)truncateToCount:(NSUInteger)count fatal:(BOOL)fatal;
+
+/****************************************************************************\
+|* Move every diagnostic from index `from` on to index `to` (to <= from),
+|* keeping their order: a loop's -Wpar-auto warnings go before the
+|* diagnostics of its body.
+\****************************************************************************/
+- (void)moveDiagnosticsFrom:(NSUInteger)from to:(NSUInteger)to;
+
 @end
 
 NS_ASSUME_NONNULL_END

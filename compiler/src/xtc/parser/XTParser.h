@@ -33,6 +33,7 @@ NS_ASSUME_NONNULL_BEGIN
 /// XC_PAR_AUTO_TRACE: a line for each loop --par-style=auto looks at, which the
 /// driver prints once the parse is final (parAutoTraceLine). Mirrored in the port.
 @property(nonatomic) BOOL parAutoTraceOn;
+/// The lines in order; a trace line's `#n` is given here (see the getter).
 @property(nonatomic, readonly, nullable) NSMutableArray<NSString*>* parAutoTrace;
 /// XC_PAR_AUTO_CHECK=flags: a line for each loop the scan reads, comparing the
 /// source facts on its node with the tokens (parAutoCheck), in parAutoTrace.

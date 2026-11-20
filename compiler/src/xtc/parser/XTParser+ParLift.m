@@ -1192,6 +1192,13 @@ static BOOL plStepOk(XTASTNode* _Nullable st, NSString* var)
         if (self.parScanAcc)
             v[@"scan"] = [NSString stringWithFormat:@"%@:%@", self.parScanOp, self.parScanAcc];
         v[@"small"] = @([self parAutoSmall:f from:0 to:toks.count]);
+        // What parAutoFor builds the block from.
+        v[@"redList"] = reds;
+        if (self.parScanAcc)
+            {
+            v[@"scanAcc"] = self.parScanAcc;
+            v[@"scanOp"] = self.parScanOp;
+            }
         }
     [self plStateRestore:saved];
     return v;
@@ -1254,15 +1261,25 @@ static NSString* plField(NSDictionary* d, NSString* k)
                                                     same ? @"same" : @"differ", out]];
     }
 
-- (void)plCheckFor:(nullable XTASTNode*)plain at:(XTSourceLocation*)loc scan:(NSDictionary*)scan fromWhile:(BOOL)fromWhile
+// XC_PAR_AUTO_CHECK=recog: the scan's verdict `scan` against the
+// recogniser's `r` on `plain`, whose tokens are [from, to).
+- (void)plCheckVerdict:(nullable NSMutableDictionary*)scan
+                 recog:(NSMutableDictionary*)r
+                 plain:(nullable XTASTNode*)plain
+                    at:(XTSourceLocation*)loc
+             fromWhile:(BOOL)fromWhile
+                   inc:(NSInteger)inc
+                  from:(NSUInteger)from
+                    to:(NSUInteger)to
     {
-    if (!self.parAutoRecogOn)
+    if (!self.parAutoRecogOn || !scan)
         return;
-    NSMutableDictionary* r = [[self plRecogniseFor:plain at:loc] mutableCopy];
+    if ([scan[@"lift"] boolValue] && plain)
+        scan[@"small"] = @([self parAutoSmall:plain from:from to:to]);
     if (fromWhile)
         {
         // The `while` it was, too: the counted form must take it.
-        NSDictionary* w = [self plRecogniseWhile:plain inc:self.plWhileInc at:loc];
+        NSDictionary* w = [self plRecogniseWhile:plain inc:inc at:loc];
         if (![w[@"lift"] boolValue])
             r[@"while"] = w[@"rule"];
         }
@@ -1288,7 +1305,7 @@ static NSString* plField(NSDictionary* d, NSString* k)
 // A site for the walk: kind as plSite reads it.
 - (void)plRegister:(nullable XTASTNode*)site entry:(NSDictionary*)e
     {
-    if (!site || !self.parAutoRecogOn)
+    if (!site || !self.parAuto)
         return;
     if (!self.plSites)
         self.plSites = [NSMapTable mapTableWithKeyOptions:NSPointerFunctionsStrongMemory | NSPointerFunctionsObjectPointerPersonality

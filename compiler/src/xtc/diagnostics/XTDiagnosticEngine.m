@@ -458,4 +458,20 @@ NSArray<NSString*>* XTWarningCategoryAllNames(void)
     _fatalFlag = NO;
     }
 
+- (void)truncateToCount:(NSUInteger)count fatal:(BOOL)fatal
+    {
+    [self truncateToCount:count];
+    _fatalFlag = fatal;
+    }
+
+- (void)moveDiagnosticsFrom:(NSUInteger)from to:(NSUInteger)to
+    {
+    if (from >= _mutableDiagnostics.count || to >= from)
+        return;
+    NSRange tail = NSMakeRange(from, _mutableDiagnostics.count - from);
+    NSArray<XTDiagnostic*>* moved = [_mutableDiagnostics subarrayWithRange:tail];
+    [_mutableDiagnostics removeObjectsInRange:tail];
+    [_mutableDiagnostics insertObjects:moved atIndexes:[NSIndexSet indexSetWithIndexesInRange:NSMakeRange(to, moved.count)]];
+    }
+
 @end

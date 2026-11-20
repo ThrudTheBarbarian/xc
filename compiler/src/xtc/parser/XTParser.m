@@ -6,6 +6,8 @@ static NSSet<NSString*>* sCReservedWords = nil;
 
 @implementation XTParser
 
+@synthesize parAutoTrace = _parAutoTrace;
+
 /****************************************************************************\
 |* One-time class setup: populate the set of C reserved words that may
 |* not be used as variable names in xtc source.
@@ -2771,6 +2773,10 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
         return [self parseIf];
     case XTTokenWhile:
         {
+        // A loop that --par-style=auto looks at because no loop is open: the
+        // loop around it, parsed again as a block's, would see one (parAutoFor).
+        if (self.parAuto && [self.blkState[@"loopDepth"] unsignedIntegerValue] == 0)
+            self.parAutoDepthReads++;
         // --par-style=auto: a counted while loop becomes the `for` it amounts to,
         // which parAutoFor then takes or leaves (parAutoWhileShape).
         // Without the par runtime parAutoFor leaves the loop and asks for
@@ -2824,6 +2830,8 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
         }
     case XTTokenFor:
         {
+        if (self.parAuto && [self.blkState[@"loopDepth"] unsignedIntegerValue] == 0)
+            self.parAutoDepthReads++;
         // --par-style=auto: an outermost loop in plain code may become a par block —
         // inside a block literal too (its captures are captured again), but
         // not inside a par body, which is a block already.
@@ -3533,7 +3541,7 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
 // -Wpar-auto, at the loop the cursor is on: why it stays a loop.
 - (void)parAutoWarnSerial:(NSString*)why
     {
-    if (self.plStream)
+    if (self.plStream && !self.plWarn)
         return;
     [_diagnostics emitWarning:[@"this loop runs serially, not as a 'par' block (--par-style): " stringByAppendingString:why]
                      category:XTWarnParAuto
@@ -3776,18 +3784,162 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
     if ([self.libraryFiles containsObject:file])
         return;
     NSString* pos = [NSString stringWithFormat:@"%@:%lu", file.lastPathComponent, (unsigned long)loc.line];
-    if (!self.parAutoTraceSeen)
-        self.parAutoTraceSeen = [NSMutableDictionary dictionary];
     if (!_parAutoTrace)
         _parAutoTrace = [NSMutableArray array];
-    NSUInteger nth = self.parAutoTraceSeen[pos].unsignedIntegerValue + 1;
-    self.parAutoTraceSeen[pos] = @(nth);
-    if (nth > 1)
-        pos = [NSString stringWithFormat:@"%@#%lu", pos, (unsigned long)nth];
-    [_parAutoTrace addObject:[NSString stringWithFormat:@"par-auto-trace: %@ %@ rule=%@ form=%@ name=%@ reds=%@ grid=%@ impl=%@", pos,
+    [_parAutoTrace addObject:[NSString stringWithFormat:@"par-auto-trace: %@\t%@ rule=%@ form=%@ name=%@ reds=%@ grid=%@ impl=%@", pos,
                                                         verdict, rule ?: @"?", form, name ?: @"-", reds ?: @"-",
                                                         grid ? [NSString stringWithFormat:@"%lu", (unsigned long)grid] : @"-",
                                                         impl ?: @"-"]];
+    }
+
+// The lines in order. A trace line is kept as `file:line`, a tab and the
+// rest, and the n-th line at a place (n > 1) is named `file:line#n` here, so
+// a loop's line can go where the loop starts after the lines of the loops
+// inside it (parAutoFor). As the port.
+- (nullable NSMutableArray<NSString*>*)parAutoTrace
+    {
+    if (!_parAutoTrace)
+        return nil;
+    NSMutableArray<NSString*>* out = [NSMutableArray array];
+    NSMutableDictionary<NSString*, NSNumber*>* seen = [NSMutableDictionary dictionary];
+    NSString* pre = @"par-auto-trace: ";
+    for (NSString* l in _parAutoTrace)
+        {
+        NSRange tab = [l rangeOfString:@"\t"];
+        if (![l hasPrefix:pre] || tab.location == NSNotFound)
+            {
+            [out addObject:l];
+            continue;
+            }
+        NSString* pos = [l substringWithRange:NSMakeRange(pre.length, tab.location - pre.length)];
+        NSUInteger nth = seen[pos].unsignedIntegerValue + 1;
+        seen[pos] = @(nth);
+        NSString* at = nth > 1 ? [NSString stringWithFormat:@"%@#%lu", pos, (unsigned long)nth] : pos;
+        [out addObject:[NSString stringWithFormat:@"%@%@ %@", pre, at, [l substringFromIndex:tab.location + 1]]];
+        }
+    return out;
+    }
+
+// Move a's entries from `from` on to index `to` (to <= from). As the port.
+static void parAutoMoveTail(NSMutableArray* _Nullable a, NSUInteger from, NSUInteger to)
+    {
+    if (!a || from >= a.count || to >= from)
+        return;
+    NSArray* tail = [a subarrayWithRange:NSMakeRange(from, a.count - from)];
+    [a removeObjectsInRange:NSMakeRange(from, a.count - from)];
+    [a insertObjects:tail atIndexes:[NSIndexSet indexSetWithIndexesInRange:NSMakeRange(to, tail.count)]];
+    }
+
+// XC_PAR_AUTO_CHECK: the token scan on the loop at the cursor, for its
+// verdict and the source facts it read (parAutoScan); its warnings are the
+// recogniser's to give. As the port.
+- (NSMutableDictionary*)parAutoScanCheck:(BOOL)fromWhile
+    {
+    NSArray<XTToken*>* realToks = _tokens;
+    NSUInteger realPos = _pos;
+    NSUInteger diagAt = _diagnostics.diagnostics.count;
+    BOOL fatalAt = _diagnostics.hasFatalError;
+    if (fromWhile)
+        _tokens = [self parAutoWhileStream:YES];
+    NSMutableArray<NSArray<NSString*>*>* reds = [NSMutableArray array];
+    NSUInteger goal = 0;
+    BOOL scanned = [self parAutoScan:reds goal:&goal];
+    _tokens = realToks;
+    _pos = realPos;
+    [_diagnostics truncateToCount:diagAt fatal:fatalAt];
+    NSMutableDictionary* s = [NSMutableDictionary dictionary];
+    s[@"lift"] = @(scanned);
+    s[@"form"] = fromWhile ? @"while" : self.parAutoForm;
+    if (!scanned)
+        s[@"rule"] = self.parAutoWhy ?: @"?";
+    else
+        {
+        NSMutableArray<NSString*>* rl = [NSMutableArray array];
+        for (NSArray<NSString*>* r in reds)
+            [rl addObject:[NSString stringWithFormat:@"%@:%@%@", r[0], r[1], r.count > 2 ? @"[]" : @""]];
+        s[@"reds"] = [rl componentsJoinedByString:@","];
+        s[@"grid"] = @(self.parAutoGridCap);
+        s[@"goal"] = @(goal);
+        if (self.parScanAcc)
+            s[@"scan"] = [NSString stringWithFormat:@"%@:%@", self.parScanOp, self.parScanAcc];
+        }
+    self.parScanAcc = nil;
+    self.parScanOp = nil;
+    return s;
+    }
+
+// What a parse of a loop changes that parAutoRollback puts back: the cursor
+// and the tokens (a rewrite copies them), the diagnostics and the trace, the
+// block, ParImpl, :scan and lifted-loop numbers, the classes made, the
+// runtime request, the `if` a counted `while` leaves, and what the last
+// declaration noted. As the port.
+- (NSDictionary*)parAutoMark
+    {
+    NSMutableDictionary* m = [NSMutableDictionary dictionary];
+    m[@"tokens"] = _tokens;
+    m[@"pos"] = @(_pos);
+    m[@"diag"] = @(_diagnostics.diagnostics.count);
+    m[@"fatal"] = @(_diagnostics.hasFatalError);
+    m[@"trace"] = @(_parAutoTrace.count);
+    m[@"wants"] = @(_parAutoWantsRuntime);
+    m[@"blk"] = self.blkState[@"counter"] ?: @0;
+    m[@"par"] = self.blkState[@"parCounter"] ?: @0;
+    m[@"seq"] = @(self.scanSeq);
+    m[@"auto"] = self.blkState[@"parAutoCounter"] ?: @0;
+    m[@"labels"] = @(self.parAutoLabelLog.count);
+    m[@"classes"] = @([self blkClasses].count);
+    m[@"pw"] = @(self.pwPending);
+    if (self.pwPendV) m[@"pwV"] = self.pwPendV;
+    if (self.pwPendBound) m[@"pwBound"] = self.pwPendBound;
+    if (self.pwPendCmp) m[@"pwCmp"] = self.pwPendCmp;
+    if (self.pwPendLoc) m[@"pwLoc"] = self.pwPendLoc;
+    if (self.lastBlockDeclName) m[@"lastName"] = self.lastBlockDeclName;
+    if (self.lastBlockBaseName) m[@"lastBase"] = self.lastBlockBaseName;
+    if (self.lastBlockParams) m[@"lastParams"] = self.lastBlockParams;
+    if (self.lastBlockRet) m[@"lastRet"] = self.lastBlockRet;
+    m[@"lastWb"] = @(self.lastTypeIsBlockWb);
+    m[@"outlet"] = @(self.lastTypeIsOutlet);
+    m[@"vararg"] = @(self.sawVarargForward);
+    return m;
+    }
+
+- (void)parAutoRollback:(NSDictionary*)m
+    {
+    _tokens = m[@"tokens"];
+    _pos = [m[@"pos"] unsignedIntegerValue];
+    [_diagnostics truncateToCount:[m[@"diag"] unsignedIntegerValue] fatal:[m[@"fatal"] boolValue]];
+    NSUInteger trace = [m[@"trace"] unsignedIntegerValue];
+    if (_parAutoTrace.count > trace)
+        [_parAutoTrace removeObjectsInRange:NSMakeRange(trace, _parAutoTrace.count - trace)];
+    _parAutoWantsRuntime = [m[@"wants"] boolValue];
+    self.blkState[@"counter"] = m[@"blk"];
+    self.blkState[@"parCounter"] = m[@"par"];
+    self.scanSeq = [m[@"seq"] unsignedIntegerValue];
+    self.blkState[@"parAutoCounter"] = m[@"auto"];
+    NSUInteger labels = [m[@"labels"] unsignedIntegerValue];
+    NSMutableDictionary<NSString*, NSNumber*>* counts = self.blkState[@"parAutoLabels"];
+    while (self.parAutoLabelLog.count > labels)
+        {
+        NSString* name = self.parAutoLabelLog.lastObject;
+        [self.parAutoLabelLog removeLastObject];
+        counts[name] = @(counts[name].unsignedIntegerValue - 1);
+        }
+    NSMutableArray* classes = [self blkClasses];
+    NSUInteger nc = [m[@"classes"] unsignedIntegerValue];
+    if (classes.count > nc)
+        [classes removeObjectsInRange:NSMakeRange(nc, classes.count - nc)];
+    self.pwPending = [m[@"pw"] boolValue];
+    self.pwPendV = m[@"pwV"];
+    self.pwPendBound = m[@"pwBound"];
+    self.pwPendCmp = m[@"pwCmp"];
+    self.pwPendLoc = m[@"pwLoc"];
+    self.lastBlockDeclName = m[@"lastName"];
+    self.lastBlockBaseName = m[@"lastBase"];
+    self.lastBlockParams = m[@"lastParams"];
+    self.lastBlockRet = m[@"lastRet"];
+    self.lastTypeIsBlockWb = [m[@"lastWb"] boolValue];
+    self.lastTypeIsOutlet = [m[@"outlet"] boolValue];
+    self.sawVarargForward = [m[@"vararg"] boolValue];
     }
 
 // A line for the driver to print with the trace (XC_PAR_AUTO_CHECK).
@@ -5355,122 +5507,119 @@ static int64_t parAutoConst(XTASTNode* e)
     return YES;
     }
 
+// --par-style=auto on the loop at the cursor. The site table the recogniser
+// reads holds the sites of the outermost loop being parsed. As the port.
 - (nullable XTASTNode*)parAutoFor
     {
-    NSMutableArray<NSArray<NSString*>*>* reds = [NSMutableArray array];
-    NSUInteger goal = 0;
+    if (self.parAutoNest == 0)
+        self.plSites = nil;
+    self.parAutoNest++;
+    XTASTNode* out = [self parAutoForAt];
+    self.parAutoNest--;
+    return out;
+    }
+
+// The loop is parsed as it stands, with each loop inside it looked at on its
+// own, and the recogniser reads its tree (plRecogniseFor). A loop that stays a
+// loop keeps that parse; its trace line and its -Wpar-auto warnings go where
+// it starts, before those of the loops inside it. A loop that becomes a block
+// is parsed as the block's loop, nothing in it lifted: the parse is taken
+// back and the loop parsed again where the first parse looked at a loop
+// inside it or read the loop depth, so the block, its numbers and its
+// diagnostics are those of the one parse. As the port.
+- (nullable XTASTNode*)parAutoForAt
+    {
     BOOL fromWhile = self.parAutoFromWhile;
     self.parAutoFromWhile = NO;
     XTSourceLocation* traceAt = [self currentLocation];
-    // A counted `while` (parAutoWhileShape): the scan reads the `for` it
-    // amounts to, as tokens; the parses below build that `for` from the
-    // `while` (parseAutoWhile).
+    // A counted `while` (parAutoWhileShape): the parses below build its `for`
+    // from the `while` (parseAutoWhile).
     NSString* wv = nil;
     XTType* wvt = nil;
     XTToken* wInc = nil;
     NSUInteger wIncLen = 0;
     NSArray<XTToken*>* wToks = nil;
-    NSArray<XTToken*>* realToks = _tokens;
-    NSUInteger realPos = _pos;
+    NSInteger whileInc = self.plWhileInc;
     if (fromWhile)
         {
         wv = self.pwV;
         wvt = self.pwVt;
         wInc = _tokens[self.pwInc];
-        wIncLen = self.plWhileInc == 4 ? 6 : self.plWhileInc == 3 ? 4 : 3;
+        wIncLen = whileInc == 4 ? 6 : whileInc == 3 ? 4 : 3;
         wToks = [self parAutoWhileToks:NO];
-        _tokens = [self parAutoWhileStream:YES];
         }
-    // Without the par runtime the loop stays a loop, and the driver is told:
-    // it parses again with Par.xc imported (--par-style=auto imports it).
-    BOOL scanned = [self parAutoScan:reds goal:&goal];
-    if (fromWhile)
-        {
-        _tokens = realToks;
-        _pos = realPos;
-        }
-    NSUInteger pacSeen = self.pacSeen;
-    NSUInteger pacVal = self.pacVal;
-    NSString* form = fromWhile ? @"while" : self.parAutoForm;
-    NSString* why = self.parAutoWhy;
-    NSUInteger gridCap = self.parAutoGridCap;
-    BOOL haveRuntime = [self.typeTable typeForName:@"ParChunk"] != nil;
-    NSInteger whileInc = self.plWhileInc;
-    // XC_PAR_AUTO_CHECK=recog: the scan's verdict, for the recogniser's to be
-    // compared with once the loop is parsed (XTParser+ParLift.m).
+    // XC_PAR_AUTO_CHECK: the token scan's verdict, for the recogniser's to be
+    // compared with once the loop is parsed.
     NSMutableDictionary* scanV = nil;
-    if (self.parAutoRecogOn)
+    NSUInteger pacSeen = 0, pacVal = 0;
+    if (self.parAutoRecogOn || self.parAutoCheckOn)
         {
-        scanV = [NSMutableDictionary dictionary];
-        scanV[@"lift"] = @(scanned);
-        scanV[@"form"] = form;
-        if (!scanned)
-            scanV[@"rule"] = why ?: @"?";
-        else
-            {
-            NSMutableArray<NSString*>* rl = [NSMutableArray array];
-            for (NSArray<NSString*>* r in reds)
-                [rl addObject:[NSString stringWithFormat:@"%@:%@%@", r[0], r[1], r.count > 2 ? @"[]" : @""]];
-            scanV[@"reds"] = [rl componentsJoinedByString:@","];
-            scanV[@"grid"] = @(gridCap);
-            scanV[@"goal"] = @(goal);
-            if (self.parScanAcc)
-                scanV[@"scan"] = [NSString stringWithFormat:@"%@:%@", self.parScanOp, self.parScanAcc];
-            }
+        scanV = [self parAutoScanCheck:fromWhile];
+        pacSeen = self.pacSeen;
+        pacVal = self.pacVal;
         }
-    if (scanned && !haveRuntime)
-        _parAutoWantsRuntime = YES;
-    if (!scanned || !haveRuntime)
-        {
-        [self parAutoTraceAt:traceAt verdict:@"serial" rule:scanned ? @"no-runtime" : why form:form name:nil reds:nil grid:0 impl:nil];
-        // Not a block: the loops inside it are judged on their own, so the
-        // work inside a timing loop (`for (rep in 0..8) { t0 = now; for (i in
-        // 0..n) … ; if (rep == 0) first = …; }`) is still found. The loop
-        // depth stays where it was for that reason.
-        NSUInteger forAt = _pos;
-        [self parGridLoop:1];
-        XTASTNode* plain = fromWhile ? [self parseAutoWhile:wv type:wvt inc:wInc length:wIncLen] : [self parseFor];
-        [self parGridLoop:-1];
-        [self parAutoCheck:plain at:traceAt seen:pacSeen val:pacVal];
-        if (scanV)
-            {
-            if (scanned && plain)
-                scanV[@"small"] = @([self parAutoSmall:plain from:forAt to:_pos]);
-            self.plWhileInc = whileInc;
-            [self plCheckFor:plain at:traceAt scan:scanV fromWhile:fromWhile];
-            if (fromWhile)
-                [self plRegister:plain entry:@{ @"kind" : @3, @"plain" : plain, @"inc" : @(whileInc) }];
-            }
-        return plain;
-        }
-    // The loop as written first, as --par-style=cpu parses it (nothing in it
-    // lifted): the site falls back to it when par-check demotes the block,
-    // and a small loop stays that loop. Then the same tokens again, as the
-    // block. As the port.
+    NSDictionary* mark = [self parAutoMark];
     NSUInteger forPos = _pos;
     NSUInteger blkAt = [self.blkState[@"counter"] unsignedIntegerValue];
     NSUInteger parAt = [self.blkState[@"parCounter"] unsignedIntegerValue];
     NSUInteger seqAt = self.scanSeq;
     NSUInteger plainDiag = _diagnostics.diagnostics.count;
+    NSUInteger traceMark = _parAutoTrace.count;
+    NSUInteger depthReads = self.parAutoDepthReads;
     [self parGridLoop:1];
-    [self parAutoLoop:1];
     XTASTNode* plain = fromWhile ? [self parseAutoWhile:wv type:wvt inc:wInc length:wIncLen] : [self parseFor];
-    [self parAutoLoop:-1];
     [self parGridLoop:-1];
-    [self parAutoCheck:plain at:traceAt seen:pacSeen val:pacVal];
-    if (scanV)
+    NSUInteger plainEnd0 = _pos;
+    // The verdict, with the -Wpar-auto warnings of a loop that stays a loop
+    // before the diagnostics of its parse.
+    NSUInteger recDiag = _diagnostics.diagnostics.count;
+    self.plWarn = YES;
+    NSMutableDictionary* v = [[self plRecogniseFor:plain at:traceAt] mutableCopy];
+    self.plWarn = NO;
+    [_diagnostics moveDiagnosticsFrom:recDiag to:plainDiag];
+    BOOL lift = [v[@"lift"] boolValue];
+    NSString* form = fromWhile ? @"while" : v[@"form"];
+    // Without the par runtime the loop stays a loop, and the driver is told:
+    // it parses again with Par.xc imported (--par-style=auto imports it).
+    BOOL haveRuntime = [self.typeTable typeForName:@"ParChunk"] != nil;
+    if (lift && !haveRuntime)
+        _parAutoWantsRuntime = YES;
+    if (!lift || !haveRuntime)
         {
-        if (plain)
-            scanV[@"small"] = @([self parAutoSmall:plain from:forPos to:_pos]);
-        self.plWhileInc = whileInc;
-        [self plCheckFor:plain at:traceAt scan:scanV fromWhile:fromWhile];
+        NSUInteger tm = _parAutoTrace.count;
+        [self parAutoTraceAt:traceAt verdict:@"serial" rule:lift ? @"no-runtime" : v[@"rule"] form:form name:nil reds:nil grid:0 impl:nil];
+        parAutoMoveTail(_parAutoTrace, tm, traceMark);
+        [self parAutoCheck:plain at:traceAt seen:pacSeen val:pacVal];
+        [self plCheckVerdict:scanV recog:v plain:plain at:traceAt fromWhile:fromWhile inc:whileInc from:forPos to:plainEnd0];
+        if (fromWhile && plain)
+            [self plRegister:plain entry:@{ @"kind" : @3, @"plain" : plain, @"inc" : @(whileInc) }];
+        return plain;
         }
+    // The block's loop, parsed as --par-style=cpu parses it (nothing in it
+    // lifted): the site falls back to it when par-check demotes the block,
+    // and a small loop stays that loop.
+    if (self.parAutoDepthReads != depthReads)
+        {
+        [self parAutoRollback:mark];
+        [self parGridLoop:1];
+        [self parAutoLoop:1];
+        plain = fromWhile ? [self parseAutoWhile:wv type:wvt inc:wInc length:wIncLen] : [self parseFor];
+        [self parAutoLoop:-1];
+        [self parGridLoop:-1];
+        }
+    [self parAutoCheck:plain at:traceAt seen:pacSeen val:pacVal];
+    [self plCheckVerdict:scanV recog:v plain:plain at:traceAt fromWhile:fromWhile inc:whileInc from:forPos to:_pos];
+    NSArray<NSArray<NSString*>*>* reds = v[@"redList"] ?: @[];
+    NSUInteger goal = [v[@"goal"] unsignedIntegerValue];
+    NSUInteger gridCap = [v[@"grid"] unsignedIntegerValue];
+    self.parScanAcc = v[@"scanAcc"];
+    self.parScanOp = v[@"scanOp"];
     // The site the walk reads in place of what this returns (plSites): the
     // loop as written, or the `while` it was.
     NSDictionary* plEntry = plain ? (fromWhile ? @{ @"kind" : @3, @"plain" : plain, @"inc" : @(whileInc) }
                                                : @{ @"kind" : @2, @"plain" : plain })
                                   : nil;
-    if (!plain || [self parAutoSmall:plain from:forPos to:_pos])
+    if (!plain || [v[@"small"] boolValue])
         {
         [self parAutoTraceAt:traceAt verdict:@"serial" rule:plain ? @"small" : @"parse" form:form name:nil reds:nil grid:0 impl:nil];
         if (fromWhile && plain)
@@ -5613,6 +5762,9 @@ static int64_t parAutoConst(XTASTNode* e)
         }
     NSUInteger nth = labels[name].unsignedIntegerValue + 1;
     labels[name] = @(nth);
+    if (!self.parAutoLabelLog)
+        self.parAutoLabelLog = [NSMutableArray array];
+    [self.parAutoLabelLog addObject:name];
     if (nth > 1)
         name = [NSString stringWithFormat:@"%@#%lu", name, (unsigned long)nth];
     NSMutableArray* savedNoted = self.pfwNoted;
@@ -6324,6 +6476,7 @@ static NSString* scCombine(NSString* op, NSString* r, NSString* v)
     frame[@"written"] = [NSMutableSet set];
     // In main, outside every loop and block literal: it runs once per program
     // run (runsOnce, for the probe's report).
+    self.parAutoDepthReads++;
     if ([self.blkState[@"fn"] isEqual:@"main"] && [self.blkState[@"loopDepth"] unsignedIntegerValue] == 0 && [self blkFrames].count == 0)
         frame[@"once"] = @YES;
     if (grid)
@@ -6339,7 +6492,7 @@ static NSString* scCombine(NSString* op, NSString* r, NSString* v)
     // The header as written, for the recogniser's walk (plSite).
     // TODO(#338): removed in part C step 4–6, when a written par is copied
     // from its tree.
-    NSArray<XTToken*>* head = self.parAutoRecogOn ? [_tokens subarrayWithRange:NSMakeRange(parAt, _pos - parAt)] : nil;
+    NSArray<XTToken*>* head = self.parAuto ? [_tokens subarrayWithRange:NSMakeRange(parAt, _pos - parAt)] : nil;
     XTBlockNode* body = (XTBlockNode*)[self parseBlock];
     self.goalNow = savedGoal;
     [self blkPopScope];
