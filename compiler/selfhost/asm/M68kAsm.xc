@@ -18,6 +18,7 @@
 // overflow.
 
 #import "Foundation.xc"
+#import <SortStable>
 #import <GasString>
 
 #import "M68kAsmDefs.xc"
@@ -1911,16 +1912,7 @@ class M68kMn
 
     static void sortNumbers(Array* a)
         {
-        for (u32 i = (u32)1; i < a.count(); i = i + (u32)1)
-            {
-            Object* v = a.get(i);
-            u32 j = i;
-            while (j > (u32)0 && ((Number*)a.get(j - (u32)1)).asU32() > ((Number*)v).asU32())
-                {
-                a.set(j, a.get(j - (u32)1));
-                j = j - (u32)1;
-                }
-            a.set(j, v);
-            }
+        // Stable and n log n (#335): ties keep their order.
+        SortStable.byU32(a, a);
         }
     }

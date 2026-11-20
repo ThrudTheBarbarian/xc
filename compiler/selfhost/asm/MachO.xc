@@ -14,6 +14,7 @@
 // no 64-bit integer write a 64-bit object format without arithmetic gymnastics.
 
 #import "Foundation.xc"
+#import <SortStable>
 #import <MachOObject>
 #import "MachOObjectDefs.xc"
 #import <Arm64Asm>
@@ -1473,14 +1474,6 @@ class MachOSha256
         b.appendByte((u8)((v >> (u32)24) & (u32)$FF));
         }
 
-    static bool hasName(Array* a, String* n)
-        {
-        for (u32 i = (u32)0; a != (Array*)0 && i < a.count(); i = i + (u32)1)
-            if (((String*)a.get(i)).equals(n))
-                return true;
-        return false;
-        }
-
     // Byte order of the name, what `compare:` gives and what makes the file
     // reproducible. The library's quicksort, not an insertion sort: an object
     // with tens of thousands of symbols spent minutes here. Equal names are
@@ -2757,17 +2750,8 @@ class MachOSha256
 
     static void sortNumbers(Array* a)
         {
-        for (u32 i = (u32)1; i < a.count(); i = i + (u32)1)
-            {
-            Object* v = a.get(i);
-            u32 j = i;
-            while (j > (u32)0 && ((Number*)a.get(j - (u32)1)).asU32() > ((Number*)v).asU32())
-                {
-                a.set(j, a.get(j - (u32)1));
-                j = j - (u32)1;
-                }
-            a.set(j, v);
-            }
+        // Stable and n log n (#335): ties keep their order.
+        SortStable.byU32(a, a);
         }
 
     // ── The image ────────────────────────────────────────────────────────
@@ -3593,17 +3577,11 @@ class MachOSha256
 
     static void sortBindsByOffset(Array* binds)
         {
-        for (u32 i = (u32)1; i < binds.count(); i = i + (u32)1)
-            {
-            Arm64Fixup* f = (Arm64Fixup*)binds.get(i);
-            u32 j = i;
-            while (j > (u32)0 && ((Arm64Fixup*)binds.get(j - (u32)1)).offset() > f.offset())
-                {
-                binds.set(j, binds.get(j - (u32)1));
-                j = j - (u32)1;
-                }
-            binds.set(j, (Object*)f);
-            }
+        // Stable and n log n (#335): ties keep their order.
+        Array* keys = new Array();
+        for (u32 i = (u32)0; i < binds.count(); i = i + (u32)1)
+            keys.add((Object*)Number.withU32(((Arm64Fixup*)binds.get(i)).offset()));
+        SortStable.byU32(binds, keys);
         }
 
     // Defined symbols first, then the undefined imports. Defined names go in

@@ -252,14 +252,19 @@ class Elf32DynRel
         // define. Each gets a veneer, and the veneer's word is what the loader
         // resolves.
         Array* imports = new Array();
+        Map* symIdx = Elf32.symIndex(syms);
+        Map* importSeen = new Map();
         for (u32 i = (u32)0; i < relocs.count(); i = i + (u32)1)
             {
             AsmReloc* r = (AsmReloc*)relocs.get(i);
-            AsmSymbol* sy = Elf32.findSym(syms, r.symbol());
+            AsmSymbol* sy = (AsmSymbol*)symIdx.get((Hashable*)r.symbol());
             if (sy != (AsmSymbol*)0 && sy.section() != (u32)0)
                 continue;
-            if (!Elf32.hasString(imports, r.symbol()))
+            if (importSeen.get((Hashable*)r.symbol()) == (Object*)0)
+                {
+                importSeen.set((Hashable*)r.symbol(), (Object*)r.symbol());
                 imports.add((Object*)r.symbol());
+                }
             }
         u32 veneerBase = align4(textBase + codeSize);
         u32 textSize = (veneerBase - textBase) + imports.count() * (u32)VENEER_SZ;
@@ -609,16 +614,19 @@ class Elf32DynRel
                      u32 textBase, u32 dataBase, u32 bssBase, Array* imports,
                      u32 veneerBase, Array* dynRel)
         {
+        Map* symIdx = Elf32.symIndex(syms);
+        Map* importIdx = Elf32.stringIndex(imports);
         for (u32 i = (u32)0; i < relocs.count(); i = i + (u32)1)
             {
             AsmReloc* r = (AsmReloc*)relocs.get(i);
-            AsmSymbol* sy = Elf32.findSym(syms, r.symbol());
+            AsmSymbol* sy = (AsmSymbol*)symIdx.get((Hashable*)r.symbol());
             Data* sec = r.section() == (u32)1 ? textOut : dataOut;
             u32 base = r.section() == (u32)1 ? textBase : dataBase;
             u32 target = (u32)0;
             if (sy == (AsmSymbol*)0 || sy.section() == (u32)0)
                 {
-                u32 imp = Elf32.indexOfString(imports, r.symbol());
+                Object* impNum = importIdx.get((Hashable*)r.symbol());
+                u32 imp = impNum != (Object*)0 ? ((Number*)impNum).asU32() : (u32)$FFFF_FFFF;
                 if (imp == (u32)$FFFF_FFFF)
                     {
                     _failed = true;
@@ -677,15 +685,29 @@ class Elf32DynRel
         blob.appendByte((u8)0);
         }
 
-    static AsmSymbol* findSym(Array* syms, String* name)
+    // The symbols by name, the first of a name winning, as a scan from the
+    // front found them; built once per pass instead of a scan per
+    // relocation (#335).
+    static Map* symIndex(Array* syms)
         {
+        Map* m = new Map();
         for (u32 i = (u32)0; i < syms.count(); i = i + (u32)1)
             {
             AsmSymbol* s = (AsmSymbol*)syms.get(i);
-            if (s.name() != (String*)0 && s.name().equals(name))
-                return s;
+            if (s.name() != (String*)0 && m.get((Hashable*)s.name()) == (Object*)0)
+                m.set((Hashable*)s.name(), (Object*)s);
             }
-        return (AsmSymbol*)0;
+        return m;
+        }
+
+    // Each string's first position.
+    static Map* stringIndex(Array* a)
+        {
+        Map* m = new Map();
+        for (u32 i = (u32)0; i < a.count(); i = i + (u32)1)
+            if (m.get((Hashable*)a.get(i)) == (Object*)0)
+                m.set((Hashable*)a.get(i), (Object*)Number.withU32(i));
+        return m;
         }
 
     static bool hasString(Array* a, String* s)
