@@ -223,8 +223,10 @@ class Parser
 
     bool blkIsIvar(String* name)
     {
+        // Bounded by the number of classes, which a cycle cannot outrun, not
+        // by 64 hops (#334: an ivar 70 classes up was "undefined").
         String* cls = _blkCurClass;
-        for (u32 hop = (u32)0; cls != (String*)0 && hop < (u32)64; hop = hop + (u32)1) {
+        for (u32 hop = (u32)0; cls != (String*)0 && hop <= _blkClassParent.count(); hop = hop + (u32)1) {
             Set* own = (Set*)_blkClassIvars.get((Hashable*)cls);
             if (own != (Set*)0 && own.contains((Hashable*)name)) return true;
             cls = (String*)_blkClassParent.get((Hashable*)cls);
@@ -284,7 +286,7 @@ class Parser
     bool blkIsMethod(String* name)
     {
         String* cls = _blkCurClass;
-        for (u32 hop = 0; cls != (String*)0 && hop < 64; hop = hop + 1) {
+        for (u32 hop = (u32)0; cls != (String*)0 && hop <= _blkClassParent.count(); hop = hop + (u32)1) {
             Set* own = (Set*)_blkClassMethods.get((Hashable*)cls);
             if (own != (Set*)0 && own.contains((Hashable*)name)) return true;
             cls = (String*)_blkClassParent.get((Hashable*)cls);
@@ -2423,7 +2425,7 @@ class Parser
     {
         u32 i = (u32)1;
         u32 depth = (u32)1;
-        while (i < (u32)64) {
+        while (true) {
             u16 t = peek(i).type();
             if (t == (u16)tokEOF) return false;
             if (t == (u16)tokLParen) depth = depth + (u32)1;
@@ -8508,7 +8510,9 @@ class Parser
         u32 i = (u32)1;
         u32 depth = (u32)1;
         bool sawComma = false;
-        while (i < (u32)64) {
+        // To the closing paren, however many targets (#334: 33 or more were
+        // refused), as the reference.
+        while (true) {
             u16 t = peek(i).type();
             if (t == (u16)tokEOF || t == (u16)tokSemicolon) return false;
             if (t == (u16)tokLParen) depth = depth + (u32)1;
@@ -8568,7 +8572,7 @@ class Parser
         u32 depth = (u32)1;
         u32 i = (u32)2;
         bool sawTopComma = false;
-        while (i < (u32)256) {
+        while (true) {
             u16 t = peek(i).type();
             if (t == (u16)tokLParen) depth = depth + (u32)1;
             else if (t == (u16)tokRParen) {
@@ -9791,7 +9795,7 @@ class Parser
             while (isPointerSigil(peek(j).type())) j = j + (u32)1;
             if (peek(j).type() != (u16)tokLParen) return false;
             u32 depth = (u32)0;
-            while (j < (u32)4096) {
+            while (true) {
                 u16 tt = peek(j).type();
                 if (tt == (u16)tokLParen) depth = depth + (u32)1;
                 if (tt == (u16)tokRParen) {

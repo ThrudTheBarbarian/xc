@@ -215,12 +215,14 @@ NS_ASSUME_NONNULL_BEGIN
     [own addObject:name];
     }
 
+// Bounded by the number of classes, which a cycle cannot outrun, not by 64
+// hops (#334).
 - (BOOL)blkIsIvar:(NSString*)name
     {
     NSDictionary* all = self.blkState[@"classIvars"];
     NSDictionary* parents = self.blkState[@"classParents"];
     NSString* cls = self.blkState[@"curClass"];
-    for (NSUInteger hop = 0; cls && hop < 64; hop++)
+    for (NSUInteger hop = 0; cls && hop <= parents.count; hop++)
         {
         if ([all[cls] containsObject:name])
             return YES;
@@ -290,7 +292,7 @@ NS_ASSUME_NONNULL_BEGIN
     NSDictionary* all = self.blkState[@"classMethods"];
     NSDictionary* parents = self.blkState[@"classParents"];
     NSString* cls = self.blkState[@"curClass"];
-    for (NSUInteger hop = 0; cls && hop < 64; hop++)
+    for (NSUInteger hop = 0; cls && hop <= parents.count; hop++)
         {
         if ([all[cls] containsObject:name])
             return YES;
