@@ -312,30 +312,19 @@ typedef NS_ENUM(uint8_t, XT6502KnownAddrKind) {
     return -1;
 }
 
-// A function is a "leaf" iff it issues no call of any kind. Leaf
-// functions are never re-entered, so their spills can be static
-// main-RAM slots (STACK-ABI §11.3). Non-leaf functions need a
-// per-invocation software-stack frame — that's task #57.
+// A function is a "leaf" iff it issues no call of any kind: every call
+// form and dispatch, as XTIROpcodeCallsOut answers it (#444: a banked or
+// cloaked call counted as none, so a recursive :banked method was a leaf
+// and its address-taken locals sat in static slots its own recursion
+// overwrote). Leaf functions are never re-entered, so their spills can be
+// static main-RAM slots (STACK-ABI §11.3). Non-leaf functions need a
+// per-invocation software-stack frame.
 + (BOOL)functionIsLeaf:(XTIRFunction *)fn {
     for (XTIRBlock *block in fn.blocks) {
-        for (XTIRInsn *insn in block.instructions) {
-            switch (insn.opcode) {
-                case XTIROpCall:
-                case XTIROpCallIndirect:
-                case XTIROpVTblDispatch:
-                    return NO;
-                default: break;
-            }
-        }
-        if (block.terminator) {
-            switch (block.terminator.opcode) {
-                case XTIROpCall:
-                case XTIROpCallIndirect:
-                case XTIROpVTblDispatch:
-                    return NO;
-                default: break;
-            }
-        }
+        for (XTIRInsn *insn in block.instructions)
+            if (XTIROpcodeCallsOut(insn.opcode)) return NO;
+        if (block.terminator && XTIROpcodeCallsOut(block.terminator.opcode))
+            return NO;
     }
     return YES;
 }
@@ -738,9 +727,7 @@ typedef NS_ENUM(uint8_t, XT6502KnownAddrKind) {
         if (b.terminator) [rev addObject:b.terminator];
         for (XTIRInsn *insn in b.instructions.reverseObjectEnumerator) [rev addObject:insn];
         for (XTIRInsn *insn in rev) {
-            BOOL isCall = (insn.opcode == XTIROpCall
-                           || insn.opcode == XTIROpCallIndirect
-                           || insn.opcode == XTIROpVTblDispatch);
+            BOOL isCall = XTIROpcodeCallsOut(insn.opcode);
             if (isCall) {
                 NSInteger rvid = insn.result ? (NSInteger)insn.result.valueId : -1;
                 NSMutableSet<NSNumber *> *held = [live mutableCopy];

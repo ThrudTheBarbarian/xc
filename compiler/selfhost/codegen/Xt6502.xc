@@ -305,7 +305,10 @@ class Xt6502
 
     // A LEAF function issues no call of any kind, so it is never re-entered and
     // its spills can be static main-RAM slots. A non-leaf needs a
-    // per-invocation software-stack frame.
+    // per-invocation software-stack frame. "Any kind" is every call form and
+    // dispatch (#444: a banked or cloaked call counted as none, so a recursive
+    // :banked method was a leaf and its own recursion overwrote the static
+    // slots of its address-taken locals). The call save sets use the same test.
     static bool functionIsLeaf(IRFunc* fn)
     {
         for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1) {
@@ -319,9 +322,7 @@ class Xt6502
 
     static bool isCallOp(u16 op)
     {
-        return op == opCall
-            || op == opCallIndirect
-            || op == opVTblDispatch;
+        return IROp.has(op, OPF_CALL | OPF_DISPATCH);
     }
 
     // ── Frame-slot allocation ────────────────────────────────────────────
