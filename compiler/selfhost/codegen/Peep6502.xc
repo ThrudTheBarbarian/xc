@@ -49,6 +49,18 @@ class Peep6502
         return o;
         }
 
+    static bool sameLines(Array* a, Array* b)
+        {
+        if (a == b)
+            return true;
+        if (a.count() != b.count())
+            return false;
+        for (u32 i = (u32)0; i < a.count(); i = i + (u32)1)
+            if (!((String*)a.get(i)).equals((String*)b.get(i)))
+                return false;
+        return true;
+        }
+
     static bool isSpace(u8 c)
         {
         return c == (u8)' ' || c == (u8)'\t' || c == (u8)'\r';
@@ -65,9 +77,8 @@ class Peep6502
         return line.substringBytes(a, b - a);
         }
 
-    static u8 classify(String* line)
+    static u8 classifyRaw(String* line, String* t)
         {
-        String* t = trimmed(line);
         if (t.byteLength() == (u32)0)
             return (u8)LK_BLANK;
         if (t.byteAt((u32)0) == (u8)';')
@@ -93,27 +104,74 @@ class Peep6502
 
     // The opcode is the first token; the operand is the rest, trimmed. Both
     // are "" when absent.
-    static String* opOf(String* line)
+    static String* opOfTrimmed(String* t)
         {
-        String* t = trimmed(line);
         for (u32 i = (u32)0; i < t.byteLength(); i = i + (u32)1)
             if (isSpace(t.byteAt(i)))
                 return t.substringBytes((u32)0, i);
         return t;
         }
 
-    static String* operandOf(String* line)
+    static String* operandOfTrimmed(String* t)
         {
-        String* t = trimmed(line);
         for (u32 i = (u32)0; i < t.byteLength(); i = i + (u32)1)
             if (isSpace(t.byteAt(i)))
                 return trimmed(t.substringFromByte(i));
         return String.withCString("");
         }
 
+    // Every rule asks the same four questions of the same lines on every hop
+    // (#333: a quarter of an xt6502 -O2 compile went on re-trimming them).
+    // Each distinct line is parsed once per optimise() into [kind, opcode,
+    // operand, trimmed text]; the answers are read-only.
+    static Map* _memo;
+
+    static Array* parsed(String* line)
+        {
+        if (_memo == (Map*)0)
+            _memo = new Map();
+        Object* got = _memo.get((Hashable*)line);
+        if (got != (Object*)0)
+            return (Array*)got;
+        String* t = trimmed(line);
+        Array* r = new Array();
+        r.add((Object*)Number.withU32((u32)classifyRaw(line, t)));
+        r.add((Object*)opOfTrimmed(t));
+        r.add((Object*)operandOfTrimmed(t));
+        r.add((Object*)t);
+        _memo.set((Hashable*)line, (Object*)r);
+        return r;
+        }
+
+    static u8 classify(String* line)
+        {
+        return (u8)((Number*)parsed(line).get((u32)0)).asU32();
+        }
+
+    static String* opOf(String* line)
+        {
+        return (String*)parsed(line).get((u32)1);
+        }
+
+    static String* operandOf(String* line)
+        {
+        return (String*)parsed(line).get((u32)2);
+        }
+
+    static String* trimOf(String* line)
+        {
+        return (String*)parsed(line).get((u32)3);
+        }
+
+    // Byte comparison with a literal, without building a String for it.
     static bool eq(String* a, string b)
         {
-        return a.equals(String.withCString(b));
+        u8* p = (u8*)b;
+        u32 n = a.byteLength();
+        for (u32 i = (u32)0; i < n; i = i + (u32)1)
+            if (p[i] == (u8)0 || a.byteAt(i) != p[i])
+                return false;
+        return p[n] == (u8)0;
         }
 
     static bool isFlagBranch(String* op)
@@ -149,9 +207,8 @@ class Peep6502
     // Safety: the LDA sets Z/N and STA does not, so a reload immediately
     // before a flag-reading branch SUPPLIES the flags that branch tests.
     // Dropping it there miscompiled a loop bound into an infinite loop.
-    static String* redundantReload(String* text)
+    static Array* redundantReload(Array* lines)
         {
-        Array* lines = splitLines(text);
         u32 n = lines.count();
         Array* out = new Array();
         String* prevOp = (String*)0;
@@ -208,13 +265,13 @@ class Peep6502
                 }
             // If dropped, prev stays the STA, so `STA / LDA / LDA` collapses.
             }
-        return joinLines(out);
+        return out;
         }
 
     // ── Rule 2: JMP-to-next-label elimination ────────────────────────────
     static String* labelNameOrNull(String* line)
         {
-        String* t = trimmed(line);
+        String* t = trimOf(line);
         if (t.byteLength() == (u32)0)
             return (String*)0;
         if (t.byteAt(t.byteLength() - (u32)1) != (u8)':')
@@ -222,9 +279,8 @@ class Peep6502
         return trimmed(t.substringBytes((u32)0, t.byteLength() - (u32)1));
         }
 
-    static String* jmpToNextLabel(String* text)
+    static Array* jmpToNextLabel(Array* lines)
         {
-        Array* lines = splitLines(text);
         u32 n = lines.count();
         Array* drop = new Array();
         for (u32 i = (u32)0; i < n; i = i + (u32)1)
@@ -259,18 +315,17 @@ class Peep6502
                 }
             }
         if (!any)
-            return text;
+            return lines;
         Array* out = new Array();
         for (u32 i = (u32)0; i < n; i = i + (u32)1)
             if (((Number*)drop.get(i)).asU32() == (u32)0)
                 out.add(lines.get(i));
-        return joinLines(out);
+        return out;
         }
 
     // ── Rule 4: duplicate consecutive store elimination ──────────────────
-    static String* duplicateStore(String* text)
+    static Array* duplicateStore(Array* lines)
         {
-        Array* lines = splitLines(text);
         Array* out = new Array();
         String* prevTrim = (String*)0;
         bool prevWasStore = false;
@@ -287,14 +342,14 @@ class Peep6502
                 }
             String* op = opOf(line);
             bool isStore = isStoreOp(op);
-            String* t = trimmed(line);
+            String* t = trimOf(line);
             if (isStore && prevWasStore && prevTrim != (String*)0 && t.equals(prevTrim))
                 continue; // identical consecutive store
             out.add((Object*)line);
             prevTrim = t;
             prevWasStore = isStore;
             }
-        return joinLines(out);
+        return out;
         }
 
     // ── Rule: dead SP-frame store elimination ────────────────────────────
@@ -341,9 +396,8 @@ class Peep6502
         return v;
         }
 
-    static String* deadStore(String* text)
+    static Array* deadStore(Array* lines)
         {
-        Array* lines = splitLines(text);
         u32 n = lines.count();
         Array* drop = new Array();
         for (u32 i = (u32)0; i < n; i = i + (u32)1)
@@ -399,12 +453,12 @@ class Peep6502
                 }
             }
         if (!any)
-            return text;
+            return lines;
         Array* out = new Array();
         for (u32 i = (u32)0; i < n; i = i + (u32)1)
             if (((Number*)drop.get(i)).asU32() == (u32)0)
                 out.add(lines.get(i));
-        return joinLines(out);
+        return out;
         }
 
     // ── Rule 3: ICmp + CondBranch fusion ─────────────────────────────────
@@ -420,9 +474,8 @@ class Peep6502
     // way the inner conditional branches are retargeted at the right side and
     // the whole tail collapses to one JMP. Branches to .Licmp<N>_done are the
     // multi-word compare's own merge point and are LEFT ALONE.
-    static String* icmpBranchFusion(String* text)
+    static Array* icmpBranchFusion(Array* lines)
         {
-        Array* lines = splitLines(text);
         u32 n = lines.count();
         Array* drop = new Array();
         Array* rewrite = new Array();
@@ -434,7 +487,7 @@ class Peep6502
         bool any = false;
         for (u32 i = (u32)0; i + (u32)6 < n; i = i + (u32)1)
             {
-            String* t = trimmed((String*)lines.get(i));
+            String* t = trimOf((String*)lines.get(i));
             String* nidx = storeLabelIndex(t);
             if (nidx == (String*)0)
                 continue;
@@ -447,10 +500,10 @@ class Peep6502
             String* setRef = labelFor(nidx, "_set");
             String* storeRef = labelFor(nidx, "_store");
 
-            String* la0 = trimmed((String*)lines.get(i - (u32)4));
-            String* bra = trimmed((String*)lines.get(i - (u32)3));
-            String* kind = trimmed((String*)lines.get(i - (u32)2));
-            String* la1 = trimmed((String*)lines.get(i - (u32)1));
+            String* la0 = trimOf((String*)lines.get(i - (u32)4));
+            String* bra = trimOf((String*)lines.get(i - (u32)3));
+            String* kind = trimOf((String*)lines.get(i - (u32)2));
+            String* la1 = trimOf((String*)lines.get(i - (u32)1));
 
             bool isFlip = kind.equals(flipLabel);
             bool isSet = kind.equals(setLabel);
@@ -476,11 +529,11 @@ class Peep6502
 
             if (i + (u32)5 >= n)
                 continue;
-            String* staLine = trimmed((String*)lines.get(i + (u32)1));
-            String* beqLine = trimmed((String*)lines.get(i + (u32)2));
-            String* jmpT = trimmed((String*)lines.get(i + (u32)3));
-            String* cbskLbl = trimmed((String*)lines.get(i + (u32)4));
-            String* jmpF = trimmed((String*)lines.get(i + (u32)5));
+            String* staLine = trimOf((String*)lines.get(i + (u32)1));
+            String* beqLine = trimOf((String*)lines.get(i + (u32)2));
+            String* jmpT = trimOf((String*)lines.get(i + (u32)3));
+            String* cbskLbl = trimOf((String*)lines.get(i + (u32)4));
+            String* jmpF = trimOf((String*)lines.get(i + (u32)5));
 
             if (!staLine.hasPrefix(String.withCString("STA ")))
                 continue;
@@ -565,7 +618,7 @@ class Peep6502
             any = true;
             }
         if (!any)
-            return text;
+            return lines;
         Array* out = new Array();
         for (u32 i = (u32)0; i < n; i = i + (u32)1)
             {
@@ -574,7 +627,7 @@ class Peep6502
             Object* r = rewrite.get(i);
             out.add(r != (Object*)0 ? r : lines.get(i));
             }
-        return joinLines(out);
+        return out;
         }
 
     // `.Licmp<N>_store:` -> "<N>", else null.
@@ -619,10 +672,11 @@ class Peep6502
         {
         if (level == (u32)0 || asmText.byteLength() == (u32)0)
             return asmText;
-        String* cur = asmText;
+        _memo = new Map();
+        Array* cur = splitLines(asmText);
         for (u32 hop = (u32)0; hop < (u32)8; hop = hop + (u32)1)
             {
-            String* prev = cur;
+            Array* prev = cur;
             cur = icmpBranchFusion(cur);
             // (The constant-immediate fold is gone (#333): its gate, a slot
             // named exactly twice in the module, never held across the xt6502
@@ -632,9 +686,13 @@ class Peep6502
             cur = duplicateStore(cur);
             cur = deadStore(cur);
             cur = jmpToNextLabel(cur);
-            if (cur.equals(prev))
+            if (sameLines(cur, prev))
                 break;
             }
-        return cur;
+        _memo = (Map*)0;
+        // No rule writes a line with a newline in it, so passing the lines
+        // from rule to rule is the same as joining and re-splitting the text
+        // between them, as the reference does.
+        return joinLines(cur);
         }
     }
