@@ -810,6 +810,13 @@ static BOOL parPlainDecimal(NSString* t)
         }
     case XTTokenIdentifier:
         {
+        // A bound of a running total, where the scan's made code has its
+        // marker (parScanExpand).
+        if (self.scanSplice && ([cur.value isEqualToString:@"__XC_SCAN_A__"] || [cur.value isEqualToString:@"__XC_SCAN_B__"]))
+            {
+            [self advance];
+            return XTASTDeepCopy(self.scanSplice[[cur.value isEqualToString:@"__XC_SCAN_A__"] ? @"A" : @"B"]);
+            }
         // Blocks (task #26): `block [name] RET(params) { body }` in
         // expression position is a literal; it desugars here to the
         // impl class's `mk(…)` call. Gated narrowly — see

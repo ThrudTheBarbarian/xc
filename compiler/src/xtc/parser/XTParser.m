@@ -2688,6 +2688,8 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
 
     while ((self.pwPending || (![self checkBlockClose] && ![self check:XTTokenEOF])) && !_diagnostics.hasFatalError)
         {
+        if (self.scanSplice && !self.pwPending && [self check:XTTokenIdentifier] && [self scSplice:stmts])
+            continue;
         XTASTNode* stmt = [self parseListStatement];
         if (stmt)
             [stmts addObject:stmt];
@@ -4040,41 +4042,54 @@ BOOL pacIsOne(XTASTNode* _Nullable e)
            ((XTLiteralIntNode*)e).intValue == 1;
     }
 
-// The scan behind parAutoFor: the cursor is at the `for`. Fills `reds`
-// (op, name pairs) and says whether the loop qualifies.
-- (nullable XTASTNode*)parAutoScanFor:(XTASTNode*)plain at:(NSUInteger)forPos
+// A running total under --par-style=auto (#144): the loop's tree as the
+// `par :scan(op acc) { loop }` block the scan expansion makes of it
+// (parScanExpand), with the tests a written :scan's tokens get, read from
+// the tree: a range `for` with a type, no step or annotation, and a braced
+// body (XTSrcScanForm), acc a local of an integer or floating type (a
+// floating one with +), and a body that only updates and stores acc
+// (scBodyOk). The loop's parse said its diagnostics once; the expansion
+// takes its body twice, and says them again for each. A loop the scan does
+// not take, or whose expansion reports an error, stays the loop, and the
+// expansion's diagnostics go. As the port.
+- (nullable XTASTNode*)parAutoScanFor:(XTASTNode*)plain at:(NSUInteger)forPos end:(NSUInteger)plainEnd diag:(NSUInteger)diagFrom
     {
-    NSUInteger plainEnd = _pos;
+    NSString* op = self.parScanOp;
+    NSString* acc = self.parScanAcc;
+    self.parScanAcc = nil;
+    XTForCStyleNode* f = [plain isKindOfClass:[XTForCStyleNode class]] ? (XTForCStyleNode*)plain : nil;
+    XTVariableDeclNode* d = [f.loopInit isKindOfClass:[XTVariableDeclNode class]] ? (XTVariableDeclNode*)f.loopInit : nil;
+    XTBinaryExprNode* c = [f.condition isKindOfClass:[XTBinaryExprNode class]] ? (XTBinaryExprNode*)f.condition : nil;
+    XTBlockNode* body = [f.body isKindOfClass:[XTBlockNode class]] ? (XTBlockNode*)f.body : nil;
+    NSString* ity = d.declaredType.displayName;
+    if (!(plain.srcFacts & XTSrcScanForm) || !d || !d.initialiser || !c || !body || !ity || !scIntType(ity))
+        return plain;
+    NSUInteger dd = 0;
+    NSDictionary* info = [self blkLookup:acc depth:&dd];
+    XTType* atyT = [info[@"type"] isKindOfClass:[XTType class]] ? info[@"type"] : nil;
+    NSString* aty = atyT.displayName;
+    BOOL isFloat = [aty isEqualToString:@"float"] || [aty isEqualToString:@"double"];
+    if (!aty || (!isFloat && !scIntType(aty)) || (isFloat && ![op isEqualToString:@"+"]))
+        return plain;
+    NSMutableArray<NSString*>* outs = [NSMutableArray array];
+    XTToken* ft = _tokens[forPos];
+    self.scanQuiet = YES;
+    BOOL ok = [self scBodyOk:body at:ft.location acc:acc op:op var:d.varName scan:ft outs:outs];
+    self.scanQuiet = NO;
+    if (!ok || (isFloat && (self.goalNow ?: self.goalDefault) == 2))
+        return plain;
+    NSDictionary* s = @{
+        @"op" : op, @"acc" : acc, @"aty" : aty, @"ity" : ity, @"iv" : d.varName,
+        @"incl" : @(c.op == XTBinaryOpLe), @"A" : d.initialiser, @"B" : c.right,
+        @"BODY" : body, @"outs" : outs, @"goals" : @[], @"loc" : ft.location, @"toks" : _tokens,
+        @"bo" : @([self parScanBrace:body from:forPos to:plainEnd]),
+        @"diags" : [_diagnostics.diagnostics subarrayWithRange:NSMakeRange(diagFrom, _diagnostics.diagnostics.count - diagFrom)]
+    };
     NSUInteger diagMark = _diagnostics.diagnostics.count;
     NSUInteger errMark = _diagnostics.errorCount;
-    NSArray<XTToken*>* saved = [_tokens copy];
-    XTSourceLocation* loc = ((XTToken*)_tokens[forPos]).location;
-    XTToken* (^T)(XTTokenType, NSString*) = ^XTToken*(XTTokenType ty, NSString* val) {
-      return [[XTToken alloc] initWithType:ty value:val location:loc];
-    };
-    NSString* op = self.parScanOp;
-    XTTokenType ot = [op isEqualToString:@"+"] ? XTTokenPlus : [op isEqualToString:@"|"] ? XTTokenPipe
-                   : [op isEqualToString:@"&"] ? XTTokenAmpersand : [op isEqualToString:@"^"] ? XTTokenCaret : XTTokenIdentifier;
-    NSArray* head = @[ T(XTTokenIdentifier, @"par"), T(XTTokenColon, @":"), T(XTTokenIdentifier, @"scan"), T(XTTokenLParen, @"("),
-                       T(ot, op), T(XTTokenIdentifier, self.parScanAcc), T(XTTokenRParen, @")"), T(XTTokenLBrace, @"{") ];
-    NSMutableArray<XTToken*>* spliced = [_tokens mutableCopy];
-    [spliced insertObject:T(XTTokenRBrace, @"}") atIndex:plainEnd];
-    [spliced insertObjects:head atIndexes:[NSIndexSet indexSetWithIndexesInRange:NSMakeRange(forPos, head.count)]];
-    _tokens = spliced;
-    _pos = forPos;
-    self.scanQuiet = YES;
-    BOOL ok = [self parScanRewrite];
-    self.scanQuiet = NO;
-    self.parScanAcc = nil;
-    if (ok)
-        {
-        self.scanInside++;
-        XTASTNode* s = [self parseStatement];
-        self.scanInside--;
-        if (s && _diagnostics.errorCount == errMark)
-            return s;
-        }
-    _tokens = saved;
+    XTASTNode* out = [self parScanExpand:s];
+    if (out && _diagnostics.errorCount == errMark)
+        return out;
     [_diagnostics truncateToCount:diagMark];
     _pos = plainEnd;
     return plain;
@@ -4919,7 +4934,7 @@ static XTForCStyleNode* _Nullable parAutoAscending(XTASTNode* node, XTVariableDe
 |*     if (v < B) v = B;            (<= B: v = B + 1)
 |* — the loop's own iterations with v's final value after it. YES when the
 |* `while` at _pos has the shape; it notes where its parts are (pwAt…) for
-|* parseAutoWhile and parAutoWhileToks. Mirrored in the port.
+|* parseAutoWhile. Mirrored in the port.
 \****************************************************************************/
 - (BOOL)parAutoWhileShape
     {
@@ -5033,59 +5048,11 @@ static XTForCStyleNode* _Nullable parAutoAscending(XTASTNode* node, XTVariableDe
         return NO;
     self.pwAt = at;
     self.pwPe = pe;
-    self.pwBe = be;
     self.pwInc = inc;
-    self.pwTt = tt.integerValue;
     self.pwVt = vt;
     self.pwV = v;
     self.plWhileInc = incForm;
     return YES;
-    }
-
-// The `for` parAutoWhileShape's loop amounts to, as tokens, for a running
-// total's `par :scan` rewrite (parAutoScanFor):
-//     for (T __autopar_w = v; __autopar_w < B; __autopar_w += 1)
-//         { T v = __autopar_w; …the body without the increment… }
-// With `withIf`, the `if (v < B) v = B;` after it too. The parse builds the
-// same as a tree (parseAutoWhile). Mirrored in the port.
-- (NSArray<XTToken*>*)parAutoWhileToks:(BOOL)withIf
-    {
-    NSUInteger at = self.pwAt, pe = self.pwPe, inc = self.pwInc;
-    NSString* v = self.pwV;
-    XTType* vt = self.pwVt;
-    XTTokenType tt = self.pwTt;
-    XTTokenType cmp = [self parTokType:at + 3];
-    XTSourceLocation* loc = ((XTToken*)_tokens[at]).location;
-    NSString* w = @"__autopar_w";
-    XTToken* (^T)(XTTokenType, NSString*) = ^XTToken*(XTTokenType ty, NSString* val) {
-      return [[XTToken alloc] initWithType:ty value:val location:loc];
-    };
-    XTToken* (^I)(int64_t) = ^XTToken*(int64_t x) {
-      return [[XTToken alloc] initWithType:XTTokenIntLiteral value:[NSString stringWithFormat:@"%lld", (long long)x]
-                                  intValue:x location:loc];
-    };
-    NSArray* bound = [_tokens subarrayWithRange:NSMakeRange(at + 4, pe - (at + 4))];
-    NSMutableArray* out = [NSMutableArray array];
-    [out addObjectsFromArray:@[ T(XTTokenFor, @"for"), T(XTTokenLParen, @"("), T(tt, vt.displayName),
-                                T(XTTokenIdentifier, w), T(XTTokenAssign, @"="), T(XTTokenIdentifier, v),
-                                T(XTTokenSemicolon, @";"), T(XTTokenIdentifier, w), _tokens[at + 3] ]];
-    [out addObjectsFromArray:bound];
-    [out addObjectsFromArray:@[ T(XTTokenSemicolon, @";"), T(XTTokenIdentifier, w), T(XTTokenPlusAssign, @"+="), I(1),
-                                T(XTTokenRParen, @")"), T(XTTokenLBrace, @"{"), T(tt, vt.displayName),
-                                T(XTTokenIdentifier, v), T(XTTokenAssign, @"="), T(XTTokenIdentifier, w),
-                                T(XTTokenSemicolon, @";") ]];
-    [out addObjectsFromArray:[_tokens subarrayWithRange:NSMakeRange(pe + 2, inc - (pe + 2))]];
-    [out addObject:T(XTTokenRBrace, @"}")];
-    if (!withIf)
-        return out;
-    [out addObjectsFromArray:@[ T(XTTokenIf, @"if"), T(XTTokenLParen, @"("), T(XTTokenIdentifier, v), _tokens[at + 3] ]];
-    [out addObjectsFromArray:bound];
-    [out addObjectsFromArray:@[ T(XTTokenRParen, @")"), T(XTTokenIdentifier, v), T(XTTokenAssign, @"=") ]];
-    [out addObjectsFromArray:bound];
-    if (cmp == XTTokenLessEq)
-        [out addObjectsFromArray:@[ T(XTTokenPlus, @"+"), I(1) ]];
-    [out addObject:T(XTTokenSemicolon, @";")];
-    return out;
     }
 
 // A name read at a made token, as parsePrimary reads one.
@@ -5106,8 +5073,11 @@ static XTForCStyleNode* _Nullable parAutoAscending(XTASTNode* node, XTVariableDe
 /****************************************************************************\
 |* The `while` at _pos, which parAutoWhileShape took (`v`, `vt` its counter
 |* and type, `incTok` and `incLen` its increment statement), parsed as the
-|* `for` parAutoWhileToks spells: the nodes, locations and bindings that
-|* `for`'s tokens give, the made parts at the `while`. The `if` after it
+|* `for`
+|*     for (T __autopar_w = v; __autopar_w < B; __autopar_w += 1)
+|*         { T v = __autopar_w; …the body without the increment… }
+|* with the nodes, locations and bindings those tokens would give, the made
+|* parts at the `while`. The `if` after it
 |* comes from the next statement of the block, or is put with it in a
 |* block where the `while` was a lone statement (pwPending, parseStatement).
 |* Mirrored in the port.
@@ -5302,7 +5272,6 @@ static int64_t parAutoConst(XTASTNode* e)
     XTType* wvt = nil;
     XTToken* wInc = nil;
     NSUInteger wIncLen = 0;
-    NSArray<XTToken*>* wToks = nil;
     NSInteger whileInc = self.plWhileInc;
     if (fromWhile)
         {
@@ -5310,7 +5279,6 @@ static int64_t parAutoConst(XTASTNode* e)
         wvt = self.pwVt;
         wInc = _tokens[self.pwInc];
         wIncLen = whileInc == 4 ? 6 : whileInc == 3 ? 4 : 3;
-        wToks = [self parAutoWhileToks:NO];
         }
     NSDictionary* mark = [self parAutoMark];
     NSUInteger forPos = _pos;
@@ -5373,31 +5341,20 @@ static int64_t parAutoConst(XTASTNode* e)
             [self plRegister:plain entry:plEntry];
         return plain;
         }
-    // A running total (#144): the loop's tokens become
-    // `par :scan(op acc) { for … }`, which parScanRewrite turns into blocks;
-    // a loop the rewrite does not take stays the loop. As the port.
-    if (self.parScanAcc)
+    // A loop whose body holds a block literal or a written par block stays
+    // the loop. As the port.
+    NSUInteger plainEnd = _pos;
+    XTSourceLocation* loc = _tokens[forPos].location;
+    BOOL holdsBlock = [self.blkState[@"counter"] unsignedIntegerValue] != blkAt ||
+                      [self.blkState[@"parCounter"] unsignedIntegerValue] != parAt || self.scanSeq != seqAt;
+    // A running total (#144): the loop's tree becomes a `par :scan(op acc)`
+    // block (parAutoScanFor); a loop the scan does not take stays the loop.
+    // As the port.
+    if (self.parScanAcc && !holdsBlock)
         {
         NSString* sreds = [NSString stringWithFormat:@"%@:%@", self.parScanOp, self.parScanAcc];
         NSUInteger implFrom = [self.blkState[@"parCounter"] unsignedIntegerValue];
-        // The rewrite reads the loop's tokens: a `while` gives way to its
-        // `for`'s, and comes back when the rewrite does not take it.
-        NSArray<XTToken*>* kept = nil;
-        NSUInteger wEnd = _pos;
-        if (fromWhile)
-            {
-            kept = _tokens;
-            NSMutableArray<XTToken*>* spliced = [_tokens mutableCopy];
-            [spliced replaceObjectsInRange:NSMakeRange(forPos, wEnd - forPos) withObjectsFromArray:wToks];
-            _tokens = spliced;
-            _pos = forPos + wToks.count;
-            }
-        XTASTNode* sc = [self parAutoScanFor:plain at:forPos];
-        if (kept && sc == plain)
-            {
-            _tokens = kept;
-            _pos = wEnd;
-            }
+        XTASTNode* sc = [self parAutoScanFor:plain at:forPos end:plainEnd diag:plainDiag];
         if (sc != plain || fromWhile)
             [self plRegister:sc entry:plEntry];
         if (sc == plain)
@@ -5407,12 +5364,7 @@ static int64_t parAutoConst(XTASTNode* e)
                             impl:parAutoImplSpan(implFrom, [self.blkState[@"parCounter"] unsignedIntegerValue])];
         return sc;
         }
-    // A loop whose body holds a block literal or a written par block stays
-    // the loop. As the port.
-    NSUInteger plainEnd = _pos;
-    XTSourceLocation* loc = _tokens[forPos].location;
-    if ([self.blkState[@"counter"] unsignedIntegerValue] != blkAt ||
-        [self.blkState[@"parCounter"] unsignedIntegerValue] != parAt || self.scanSeq != seqAt)
+    if (holdsBlock)
         {
         [_diagnostics emitWarning:@"this loop runs serially, not as a 'par' block (--par-style): its body holds a block"
                          category:XTWarnParAuto
@@ -5668,8 +5620,18 @@ static NSString* scCombine(NSString* op, NSString* r, NSString* v)
     return [NSString stringWithFormat:@"%@ = %@ %@ %@;", r, r, op, v];
     }
 
-- (BOOL)parScanRewrite
+// A written `par [name] :scan(op acc) [:goal(…)] { for (T i in a..b) { … } }`
+// at `par`: its header read, the loop parsed (as a block's loop is, nothing
+// in it lifted) and its body checked from the tree (scBodyOk), then expanded
+// (parScanExpand). *handled is NO, with the cursor still at `par`, when there
+// is no :scan or it is refused: the error is said, and parsePar parses the
+// block as written, its :scan skipped. The loop's parse is taken back first,
+// so the refusal comes before what that parse says. A loop whose body holds
+// a block literal or a par block is refused: the expansion takes the body
+// twice. As the port.
+- (nullable XTASTNode*)parScanWritten:(BOOL*)handled
     {
+    *handled = NO;
     NSUInteger at = _pos;
     XTToken* pt = _tokens[at];
     NSUInteger k = at + 1;
@@ -5678,7 +5640,8 @@ static NSString* scCombine(NSString* op, NSString* r, NSString* v)
         name = [self parTokValue:k++];
     NSString *op = nil, *acc = nil;
     NSUInteger s0 = 0, s1 = 0;
-    NSMutableArray* goal = [NSMutableArray array];
+    NSMutableArray<NSString*>* goals = [NSMutableArray array];
+    BOOL goalsOk = YES;
     BOOL other = NO;
     while ([self parTokType:k] == XTTokenColon && [self parTokType:k + 1] == XTTokenIdentifier)
         {
@@ -5687,7 +5650,7 @@ static NSString* scCombine(NSString* op, NSString* r, NSString* v)
             {
             NSUInteger c = [self scClose:dEnd];
             if (c == 0)
-                return NO;
+                return nil;
             dEnd = c + 1;
             }
         NSString* dn = [self parTokValue:d0 + 1];
@@ -5711,35 +5674,37 @@ static NSString* scCombine(NSString* op, NSString* r, NSString* v)
                 acc = [self parTokValue:q + 1];
             }
         else if ([dn isEqualToString:@"goal"])
-            [goal addObjectsFromArray:[_tokens subarrayWithRange:NSMakeRange(d0, dEnd - d0)]];
+            {
+            // `:goal(speed)` or `:goal(accuracy)`; anything else is parsePar's
+            // to report.
+            NSString* g = dEnd == d0 + 5 && [self parTokType:d0 + 3] == XTTokenIdentifier ? [self parTokValue:d0 + 3] : nil;
+            if ([g isEqualToString:@"speed"] || [g isEqualToString:@"accuracy"])
+                [goals addObject:g];
+            else
+                goalsOk = NO;
+            }
         else
             other = YES;
         k = dEnd;
         }
     if (s1 == 0)
-        return NO;
+        return nil;
     XTToken* st = _tokens[s0 + 1];
-    // The block then parses on as written, its :scan(…) skipped.
-    // For --par-style=auto (quiet) the loop stays a loop.
-    void (^fail)(NSString*, XTToken*) = ^(NSString* msg, XTToken* t) {
-      if (!self.scanQuiet)
-          [self->_diagnostics emitError:msg at:t.location];
-    };
     if (!acc)
         {
-        fail(@"':scan' wants an operator (+ | & ^ min max) and a variable: :scan(+ total)", st);
-        return NO;
+        [self scFail:@"':scan' wants an operator (+ | & ^ min max) and a variable: :scan(+ total)" at:st.location];
+        return nil;
         }
     if (other)
         {
-        fail(@"':scan' combines only with ':goal'", st);
-        return NO;
+        [self scFail:@"':scan' combines only with ':goal'" at:st.location];
+        return nil;
         }
     NSString* shape = @"a ':scan' block is one loop: par :scan(+ acc) { for (T i in a..b) { … } }";
     if ([self parTokType:k] != XTTokenLBrace)
         {
-        fail(shape, st);
-        return NO;
+        [self scFail:shape at:st.location];
+        return nil;
         }
     NSUInteger be = [self scClose:k];
     NSUInteger f = k + 1;
@@ -5748,7 +5713,6 @@ static NSString* scCombine(NSString* op, NSString* r, NSString* v)
               scIntType([self parTokValue:f + 2]);
     NSUInteger fc = ok ? [self scClose:f + 1] : 0;
     NSUInteger rg = 0;
-    BOOL incl = NO;
     if (fc != 0)
         {
         NSInteger d = 0;
@@ -5762,7 +5726,6 @@ static NSString* scCombine(NSString* op, NSString* r, NSString* v)
             else if (d == 0 && (t == XTTokenDotDot || t == XTTokenEllipsis))
                 {
                 rg = q;
-                incl = t == XTTokenEllipsis;
                 break;
                 }
             }
@@ -5771,11 +5734,9 @@ static NSString* scCombine(NSString* op, NSString* r, NSString* v)
     NSUInteger bc = rg != 0 && [self parTokType:bo] == XTTokenLBrace ? [self scClose:bo] : 0;
     if (rg == 0 || rg == f + 5 || rg + 1 == fc || bc == 0 || bc + 1 != be)
         {
-        fail(shape, st);
-        return NO;
+        [self scFail:shape at:st.location];
+        return nil;
         }
-    NSString* ity = [self parTokValue:f + 2];
-    NSString* iv = [self parTokValue:f + 3];
     NSUInteger dd = 0;
     NSDictionary* info = [self blkLookup:acc depth:&dd];
     XTType* atyT = [info[@"type"] isKindOfClass:[XTType class]] ? info[@"type"] : nil;
@@ -5783,23 +5744,134 @@ static NSString* scCombine(NSString* op, NSString* r, NSString* v)
     BOOL isFloat = [aty isEqualToString:@"float"] || [aty isEqualToString:@"double"];
     if (!aty || (!isFloat && !scIntType(aty)))
         {
-        fail([NSString stringWithFormat:@"':scan' wants '%@' to be a local variable of an integer or floating type", acc], st);
-        return NO;
+        [self scFail:[NSString stringWithFormat:@"':scan' wants '%@' to be a local variable of an integer or floating type", acc] at:st.location];
+        return nil;
         }
     if (isFloat && ![op isEqualToString:@"+"])
         {
-        fail(@"a floating-point ':scan' takes only +", st);
-        return NO;
+        [self scFail:@"a floating-point ':scan' takes only +" at:st.location];
+        return nil;
         }
-    BOOL mm = [op isEqualToString:@"min"] || [op isEqualToString:@"max"];
+    if (!goalsOk)
+        return nil;
+    // The loop, parsed as a block's loop is.
+    NSDictionary* mark = [self parAutoMark];
+    NSUInteger d0 = _diagnostics.diagnostics.count;
+    NSUInteger blkAt = [self.blkState[@"counter"] unsignedIntegerValue];
+    NSUInteger parAt = [self.blkState[@"parCounter"] unsignedIntegerValue];
+    NSUInteger seqAt = self.scanSeq;
+    _pos = f;
+    [self parGridLoop:1];
+    [self parAutoLoop:1];
+    XTASTNode* loop = [self parseFor];
+    [self parAutoLoop:-1];
+    [self parGridLoop:-1];
+    NSUInteger d1 = _diagnostics.diagnostics.count;
+    XTForCStyleNode* fl = [loop isKindOfClass:[XTForCStyleNode class]] ? (XTForCStyleNode*)loop : nil;
+    XTVariableDeclNode* d = [fl.loopInit isKindOfClass:[XTVariableDeclNode class]] ? (XTVariableDeclNode*)fl.loopInit : nil;
+    XTBinaryExprNode* c = [fl.condition isKindOfClass:[XTBinaryExprNode class]] ? (XTBinaryExprNode*)fl.condition : nil;
+    XTBlockNode* body = [fl.body isKindOfClass:[XTBlockNode class]] ? (XTBlockNode*)fl.body : nil;
+    if (!d || !d.initialiser || !c || !body)
+        {
+        // The loop did not parse: parsePar parses the block as written.
+        [self parAutoRollback:mark];
+        return nil;
+        }
+    // The body: acc updated and stored only.
     NSMutableArray<NSString*>* outs = [NSMutableArray array];
+    self.scFailMsg = nil;
+    BOOL refused = ![self scBodyOk:body at:pt.location acc:acc op:op var:d.varName scan:st outs:outs];
+    if (!refused && ([self.blkState[@"counter"] unsignedIntegerValue] != blkAt ||
+                     [self.blkState[@"parCounter"] unsignedIntegerValue] != parAt || self.scanSeq != seqAt))
+        {
+        [self scFail:@"a ':scan' loop's body holds no block literal or 'par' block" at:st.location];
+        refused = YES;
+        }
+    if (refused)
+        {
+        NSString* msg = self.scFailMsg;
+        XTSourceLocation* where = self.scFailLoc;
+        [self parAutoRollback:mark];
+        if (msg)
+            [_diagnostics emitError:msg at:where];
+        return nil;
+        }
+    *handled = YES;
+    // The loop's parse is taken back: the expansion parses the body as
+    // written where it runs as the loop, and its diagnostics are said again
+    // where it is put in as the chunks' body (scSplice).
+    NSArray<XTDiagnostic*>* diags = [_diagnostics.diagnostics subarrayWithRange:NSMakeRange(d0, d1 - d0)];
+    [self parAutoRollback:mark];
+    // The goal: the block's own :goal, else the inherited one.
+    BOOL accuracy = (self.goalNow ?: self.goalDefault) == 2;
+    for (NSString* g in goals)
+        accuracy = [g isEqualToString:@"accuracy"];
+    if (isFloat && accuracy)
+        {
+        // Serial: the loop as written, in a block of its own at `par`, parsed
+        // where it is.
+        _pos = f;
+        [self blkPushScope];
+        self.scanInside++;
+        XTASTNode* one = [self parseListStatement];
+        self.scanInside--;
+        [self blkPopScope];
+        _pos = be + 1;
+        return [[XTBlockNode alloc] initWithStatements:one ? @[ one ] : @[] location:pt.location];
+        }
+    NSMutableDictionary* s = [NSMutableDictionary dictionary];
+    if (name)
+        s[@"name"] = name;
+    [s addEntriesFromDictionary:@{
+        @"op" : op, @"acc" : acc, @"aty" : aty, @"ity" : [self parTokValue:f + 2], @"iv" : d.varName,
+        @"incl" : @(c.op == XTBinaryOpLe), @"A" : d.initialiser, @"B" : c.right,
+        @"BODY" : body, @"outs" : outs, @"goals" : goals, @"loc" : pt.location, @"toks" : _tokens, @"bo" : @(bo),
+        @"diags" : diags
+    }];
+    XTASTNode* out = [self parScanExpand:s];
+    _pos = be + 1;
+    return out;
+    }
+
+// The block then parses on as written, its :scan(…) skipped; for
+// --par-style=auto (quiet) the loop stays a loop. The refusal is kept for
+// parScanWritten.
+- (void)scFail:(NSString*)msg at:(XTSourceLocation*)loc
+    {
+    self.scFailMsg = msg;
+    self.scFailLoc = loc;
+    if (!self.scanQuiet)
+        [_diagnostics emitError:msg at:loc];
+    }
+
+// In a :scan loop's body, from its tree: acc only updated (acc += e, acc =
+// acc + e, acc++, and the `if (e < acc) acc = e;` and `if (e > acc) acc =
+// e;` forms for min and max) and stored (a[i] = acc;), the output arrays
+// (outs) used nowhere else, and no break, return or goto. The body's tokens
+// come from the walk (plScanToks) and are read as the scan read the source. The refusal is said at the name or keyword it is
+// about. As the port.
+- (BOOL)scBodyOk:(XTBlockNode*)tree at:(XTSourceLocation*)at acc:(NSString*)acc op:(NSString*)op var:(NSString*)iv
+            scan:(XTToken*)st outs:(NSMutableArray<NSString*>*)outs
+    {
+    NSArray<XTToken*>* toks = [self plScanToks:tree at:at];
+    NSArray<XTToken*>* keep = _tokens;
+    _tokens = toks;
+    BOOL ok = [self scBodyFrom:0 to:toks.count - 1 acc:acc op:op var:iv scan:st outs:outs];
+    _tokens = keep;
+    return ok;
+    }
+
+- (BOOL)scBodyFrom:(NSUInteger)bo to:(NSUInteger)bc acc:(NSString*)acc op:(NSString*)op var:(NSString*)iv
+              scan:(XTToken*)st outs:(NSMutableArray<NSString*>*)outs
+    {
+    BOOL mm = [op isEqualToString:@"min"] || [op isEqualToString:@"max"];
     NSUInteger updates = 0;
     for (NSUInteger q = bo + 1; q < bc; q++)
         {
         XTTokenType t = [self parTokType:q];
         if (t == XTTokenBreak || t == XTTokenReturn || t == XTTokenGoto)
             {
-            fail(@"a ':scan' loop has no break, return or goto", _tokens[q]);
+            [self scFail:@"a ':scan' loop has no break, return or goto" at:_tokens[q].location];
             return NO;
             }
         if (t != XTTokenIdentifier || ![[self parTokValue:q] isEqualToString:acc])
@@ -5866,8 +5938,8 @@ static NSString* scCombine(NSString* op, NSString* r, NSString* v)
             {
             NSString* upd = mm ? [NSString stringWithFormat:@": if (e %@ %@) %@ = e;", [op isEqualToString:@"min"] ? @"<" : @">", acc, acc]
                                : [NSString stringWithFormat:@" %@= e", op];
-            fail([NSString stringWithFormat:@"in a ':scan' loop '%@' may only be updated (%@%@) and stored (a[i] = %@;)", acc, acc, upd, acc],
-                 _tokens[q]);
+            [self scFail:[NSString stringWithFormat:@"in a ':scan' loop '%@' may only be updated (%@%@) and stored (a[i] = %@;)", acc, acc, upd, acc]
+                      at:_tokens[q].location];
             return NO;
             }
         updates++;
@@ -5875,9 +5947,9 @@ static NSString* scCombine(NSString* op, NSString* r, NSString* v)
         }
     if (updates == 0 || outs.count == 0)
         {
-        fail(updates == 0 ? @"a ':scan' loop updates its variable"
-                          : [NSString stringWithFormat:@"a ':scan' loop stores its running value (a[i] = %@;); with no store it is a :reduce", acc],
-             st);
+        [self scFail:updates == 0 ? @"a ':scan' loop updates its variable"
+                                  : [NSString stringWithFormat:@"a ':scan' loop stores its running value (a[i] = %@;); with no store it is a :reduce", acc]
+                  at:st.location];
         return NO;
         }
     for (NSUInteger q = bo + 1; q < bc; q++)
@@ -5892,31 +5964,42 @@ static NSString* scCombine(NSString* op, NSString* r, NSString* v)
             [[self parTokValue:q + 5] isEqualToString:acc] && [self parTokType:q + 6] == XTTokenSemicolon)
             continue;
         NSString* X = [self parTokValue:q];
-        fail([NSString stringWithFormat:@"a ':scan' loop's output array '%@' is only stored, by %@[i] = %@;", X, X, acc], _tokens[q]);
+        [self scFail:[NSString stringWithFormat:@"a ':scan' loop's output array '%@' is only stored, by %@[i] = %@;", X, X, acc] at:_tokens[q].location];
         return NO;
         }
-    BOOL accuracy = (self.goalNow ?: self.goalDefault) == 2;
-    for (XTToken* g in goal)
-        {
-        if (g.type == XTTokenIdentifier && [g.value isEqualToString:@"accuracy"])
-            accuracy = YES;
-        if (g.type == XTTokenIdentifier && [g.value isEqualToString:@"speed"])
-            accuracy = NO;
-        }
-    XTSourceLocation* loc = pt.location;
-    NSMutableArray* out = [NSMutableArray array];
-    if (isFloat && accuracy)
-        {
-        [out addObject:[[XTToken alloc] initWithType:XTTokenLBrace value:@"{" location:loc]];
-        [out addObjectsFromArray:[_tokens subarrayWithRange:NSMakeRange(f, be - f)]];
-        [out addObject:[[XTToken alloc] initWithType:XTTokenRBrace value:@"}" location:loc]];
-        NSMutableArray<XTToken*>* spliced = [_tokens mutableCopy];
-        [spliced replaceObjectsInRange:NSMakeRange(at, be + 1 - at) withObjectsFromArray:out];
-        _tokens = spliced;
-        return YES;
-        }
+    return YES;
+    }
+
+// The blocks of a running total, from its parts (s: the loop's type,
+// variable, bounds and body as trees, the operator, acc and its type, the
+// output arrays, the block's name and goals, and the place everything made
+// stands), as pieces a par block already has: a block over 256 chunks (each
+// runs its slice serially with its own accumulator from the operator's
+// identity, stores the per-item values and records its total), a serial
+// scan of the totals from acc (acc ends as the overall total), and a block
+// over the chunks that combines each chunk's offset into its slice of every
+// array the loop stored acc into. A range under 65536 items runs as the
+// loop, over the same bounds. The made code is parsed from source, every
+// token at the `par`, with the loop's own parts put in as trees where its
+// markers stand (scSplice, parsePrimary): the bounds, the body as written
+// (__XC_SCAN_PLAIN__), and the body with acc as the chunk's own accumulator
+// and the block's goal (__XC_SCAN_BODY__). As the port.
+- (nullable XTASTNode*)parScanExpand:(NSDictionary*)s
+    {
+    NSString* name = s[@"name"];
+    NSString* op = s[@"op"];
+    NSString* acc = s[@"acc"];
+    NSString* A = s[@"aty"];
+    NSString* T = s[@"ity"];
+    NSString* iv = s[@"iv"];
+    NSArray<NSString*>* outs = s[@"outs"];
+    XTSourceLocation* loc = s[@"loc"];
+    BOOL incl = [s[@"incl"] boolValue];
+    BOOL mm = [op isEqualToString:@"min"] || [op isEqualToString:@"max"];
+    NSMutableString* goal = [NSMutableString string];
+    for (NSString* g in s[@"goals"])
+        [goal appendFormat:@":goal(%@) ", g];
     NSUInteger n = ++self.scanSeq;
-    NSString *T = ity, *A = aty;
     NSMutableString* src = [NSMutableString string];
     [src appendFormat:@"{ %@ __xs_a%lu = (__XC_SCAN_A__); %@ __xs_e%lu = (__XC_SCAN_B__)%@;\n", T, (unsigned long)n, T, (unsigned long)n,
                       incl ? @" + 1" : @""];
@@ -5929,9 +6012,9 @@ static NSString* scCombine(NSString* op, NSString* r, NSString* v)
     NSString* lohi = [NSString stringWithFormat:@"%@ __xs_lo = __xs_a%lu + (%@)(__xs_n%lu * (u64)__xs_c / (u64)256); "
                                                  "%@ __xs_hi = __xs_a%lu + (%@)(__xs_n%lu * (u64)(__xs_c + (u32)1) / (u64)256);\n",
                                                 T, (unsigned long)n, T, (unsigned long)n, T, (unsigned long)n, T, (unsigned long)n];
-    [src appendFormat:@"par %@ :device(cpu) :__scanpass __XC_SCAN_GOAL__ { for (u32 __xs_c in 0..256) {\n", name ?: @""];
+    [src appendFormat:@"par %@ :device(cpu) :__scanpass %@{ for (u32 __xs_c in 0..256) {\n", name ?: @"", goal];
     [src appendString:lohi];
-    [src appendFormat:@"%@ __xs_s = %@;\n", A, scIdentity(op, aty)];
+    [src appendFormat:@"%@ __xs_s = %@;\n", A, scIdentity(op, A)];
     [src appendFormat:@"for (%@ %@ in __xs_lo..__xs_hi) { __XC_SCAN_BODY__ }\n", T, iv];
     [src appendFormat:@"__xs_t%lu[__xs_c] = __xs_s; } }\n", (unsigned long)n];
     [src appendFormat:@"%@ __xs_r%lu = %@;\n", A, (unsigned long)n, acc];
@@ -5939,7 +6022,7 @@ static NSString* scCombine(NSString* op, NSString* r, NSString* v)
     [src appendFormat:@"for (u32 __xs_c in 0..256) { %@ __xs_v = __xs_t%lu[__xs_c]; __xs_t%lu[__xs_c] = __xs_r%lu; %@ }\n", A, (unsigned long)n,
                       (unsigned long)n, (unsigned long)n, scCombine(op, rn, @"__xs_v")];
     NSString* name2 = name ? [name stringByAppendingString:@"_offsets"] : @"";
-    [src appendFormat:@"par %@ :device(cpu) :__scanpass __XC_SCAN_GOAL__ { for (u32 __xs_c in 0..256) {\n", name2];
+    [src appendFormat:@"par %@ :device(cpu) :__scanpass %@{ for (u32 __xs_c in 0..256) {\n", name2, goal];
     [src appendString:lohi];
     [src appendFormat:@"%@ __xs_o = __xs_t%lu[__xs_c];\n", A, (unsigned long)n];
     [src appendFormat:@"for (%@ %@ in __xs_lo..__xs_hi) {", T, iv];
@@ -5952,65 +6035,102 @@ static NSString* scCombine(NSString* op, NSString* r, NSString* v)
         }
     [src appendString:@" } } }\n"];
     [src appendFormat:@"%@ = __xs_r%lu; } }\n", acc, (unsigned long)n];
+    // Lexed, every token at the `par`.
     XTLexer* lexer = [[XTLexer alloc] initWithSource:src filename:@"<scan>" diagnostics:_diagnostics];
+    NSMutableArray<XTToken*>* out = [NSMutableArray array];
     for (XTToken* g in [lexer tokenise])
         {
-        if (g.type == XTTokenEOF)
-            break;
-        if (g.type == XTTokenIdentifier && [g.value isEqualToString:@"__XC_SCAN_A__"])
-            {
-            [out addObjectsFromArray:[_tokens subarrayWithRange:NSMakeRange(f + 5, rg - (f + 5))]];
-            continue;
-            }
-        if (g.type == XTTokenIdentifier && [g.value isEqualToString:@"__XC_SCAN_B__"])
-            {
-            [out addObjectsFromArray:[_tokens subarrayWithRange:NSMakeRange(rg + 1, fc - (rg + 1))]];
-            continue;
-            }
-        if (g.type == XTTokenIdentifier && [g.value isEqualToString:@"__XC_SCAN_GOAL__"])
-            {
-            [out addObjectsFromArray:goal];
-            continue;
-            }
-        if (g.type == XTTokenIdentifier && [g.value isEqualToString:@"__XC_SCAN_PLAIN__"])
-            {
-            [out addObjectsFromArray:[_tokens subarrayWithRange:NSMakeRange(bo + 1, bc - (bo + 1))]];
-            continue;
-            }
-        if (g.type == XTTokenIdentifier && [g.value isEqualToString:@"__XC_SCAN_BODY__"])
-            {
-            for (NSUInteger q = bo + 1; q < bc; q++)
-                {
-                XTToken* b = _tokens[q];
-                XTTokenType pv = [self parTokType:q - 1];
-                if (b.type == XTTokenIdentifier && [b.value isEqualToString:acc] && pv != XTTokenDot && pv != XTTokenArrow)
-                    [out addObject:[[XTToken alloc] initWithType:XTTokenIdentifier value:@"__xs_s" location:b.location]];
-                else
-                    [out addObject:b];
-                }
-            continue;
-            }
         if (g.type == XTTokenIntLiteral)
             [out addObject:[[XTToken alloc] initWithType:g.type value:g.value intValue:g.intValue location:loc]];
         else
             [out addObject:[[XTToken alloc] initWithType:g.type value:g.value location:loc]];
+        if (g.type == XTTokenEOF)
+            break;
         }
-    NSMutableArray<XTToken*>* spliced = [_tokens mutableCopy];
-        [spliced replaceObjectsInRange:NSMakeRange(at, be + 1 - at) withObjectsFromArray:out];
-        _tokens = spliced;
+    NSArray<XTToken*>* savedToks = _tokens;
+    NSUInteger savedPos = _pos;
+    NSDictionary* savedSplice = self.scanSplice;
+    self.scanSplice = s;
+    _tokens = out;
+    _pos = 0;
+    self.scanInside++;
+    XTASTNode* made = [self parseStatement];
+    self.scanInside--;
+    _tokens = savedToks;
+    _pos = savedPos;
+    self.scanSplice = savedSplice;
+    return made;
+    }
+
+// At a marker of the scan's made code where statements go, into `stmts`:
+// the loop's body parsed where it is written, as the loop the short range
+// runs (__XC_SCAN_PLAIN__: the loops in it are looked at by --par-style=auto
+// there); or a copy of the body as parsed, with acc as `__xs_s` and the
+// block's goal on its loops (parAutoGoals), as the chunks' body
+// (__XC_SCAN_BODY__), whose parse's diagnostics are said again. Whether
+// there was one. As the port.
+- (BOOL)scSplice:(NSMutableArray<XTASTNode*>*)stmts
+    {
+    NSString* v = [self currentToken].value;
+    BOOL chunk = [v isEqualToString:@"__XC_SCAN_BODY__"];
+    if (!chunk && ![v isEqualToString:@"__XC_SCAN_PLAIN__"])
+        return NO;
+    [self advance];
+    NSDictionary* s = self.scanSplice;
+    if (!chunk)
+        {
+        NSArray<XTToken*>* savedToks = _tokens;
+        NSUInteger savedPos = _pos;
+        _tokens = s[@"toks"];
+        _pos = [s[@"bo"] unsignedIntegerValue] + 1;
+        while ((self.pwPending || (![self checkBlockClose] && ![self check:XTTokenEOF])) && !_diagnostics.hasFatalError)
+            {
+            XTASTNode* stmt = [self parseListStatement];
+            if (stmt)
+                [stmts addObject:stmt];
+            }
+        _tokens = savedToks;
+        _pos = savedPos;
+        return YES;
+        }
+    XTBlockNode* c = (XTBlockNode*)XTASTDeepCopy(s[@"BODY"]);
+    XTASTRename(c, s[@"acc"], @"__xs_s");
+    parAutoGoals(c, self.goalNow == 2 ? 2 : 1);
+    self.scanSpliced++;
+    [stmts addObjectsFromArray:c.statements];
+    for (XTDiagnostic* d in s[@"diags"])
+        {
+        if (d.level == XTDiagnosticLevelError)
+            [_diagnostics emitError:d.message at:d.location];
+        else if (d.level == XTDiagnosticLevelWarning)
+            [_diagnostics emitWarning:d.message at:d.location];
+        else if (d.level == XTDiagnosticLevelNote)
+            [_diagnostics emitNote:d.message at:d.location];
+        }
     return YES;
+    }
+
+// The token index of the `{` that opens a loop's braced body, in the loop's
+// tokens [from, to). As the port.
+- (NSUInteger)parScanBrace:(XTASTNode*)body from:(NSUInteger)from to:(NSUInteger)to
+    {
+    for (NSUInteger i = from; i < to; i++)
+        {
+        XTToken* t = _tokens[i];
+        if (t.type == XTTokenLBrace && t.location.line == body.location.line && t.location.column == body.location.column &&
+            [t.location.filename isEqualToString:body.location.filename])
+            return i;
+        }
+    return to;
     }
 
 - (nullable XTASTNode*)parsePar
     {
-    // :scan (#144): rewritten into plain blocks first.
-    if ([self parScanRewrite])
-        {
-        self.scanInside++;
-        XTASTNode* sc = [self parseStatement];
-        self.scanInside--;
+    // :scan (#144): made into plain blocks (parScanWritten).
+    BOOL scanned = NO;
+    XTASTNode* sc = [self parScanWritten:&scanned];
+    if (scanned)
         return sc;
-        }
     XTSourceLocation* loc = [self currentLocation];
     NSUInteger parAt = _pos;
     [self advance]; // consume 'par'
@@ -6130,14 +6250,14 @@ static NSString* scCombine(NSString* op, NSString* r, NSString* v)
                 return nil;
             continue;
             }
-        // :__scanpass: a block a :scan was rewritten into (parScanRewrite);
+        // :__scanpass: a block a :scan was made into (parScanExpand);
         // its chunks own disjoint slices.
         if ([dec.value isEqualToString:@"__scanpass"])
             {
             scanPass = YES;
             continue;
             }
-        // :scan(…) here: parScanRewrite has already said what is wrong.
+        // :scan(…) here: parScanWritten has already said what is wrong.
         if ([dec.value isEqualToString:@"scan"])
             {
             if ([self check:XTTokenLParen])
@@ -6240,14 +6360,27 @@ static NSString* scCombine(NSString* op, NSString* r, NSString* v)
     // TODO(#338): removed in part C step 4–6, when a written par is copied
     // from its tree.
     NSArray<XTToken*>* head = self.parAuto ? [_tokens subarrayWithRange:NSMakeRange(parAt, _pos - parAt)] : nil;
+    NSUInteger spliced = self.scanSpliced;
     XTBlockNode* body = (XTBlockNode*)[self parseBlock];
     self.goalNow = savedGoal;
     [self blkPopScope];
     [[self blkFrames] removeLastObject];
     if (!body)
         return nil;
-    // The block's frame, from the body's tree.
+    // The block's frame, from the body's tree. A running total's body put in
+    // by the scan expansion (scSplice) was parsed outside the frame: the walk
+    // says what it cannot capture and reads `self.f` as the ivar, as for a
+    // lifted loop's copy.
+    BOOL pfwAuto = self.pfwAuto;
+    XTASTNode* pfwRoot = self.pfwRoot;
+    if (self.scanSpliced != spliced)
+        {
+        self.pfwAuto = YES;
+        self.pfwRoot = body;
+        }
     [self parFrameFill:frame body:body];
+    self.pfwAuto = pfwAuto;
+    self.pfwRoot = pfwRoot;
     // The speed goal lets the GPU use its fast maths (approximate sin, cos,
     // exp, ln and pow); the CPU path is the same for both goals. The
     // desugaring marks the block's GPU placeholder with it.
@@ -6540,8 +6673,8 @@ static NSString* scCombine(NSString* op, NSString* r, NSString* v)
             int64_t stepValue = 0;
             BOOL stepExplicit = NO;
             BOOL stepBad = NO;
-            if ([self check:XTTokenIdentifier] &&
-                [[self currentToken].value isEqualToString:@"step"])
+            BOOL stepped = [self check:XTTokenIdentifier] && [[self currentToken].value isEqualToString:@"step"];
+            if (stepped)
                 {
                 [self advance]; // consume `step`
                 stepBad = ![self check:XTTokenIntLiteral] || [[self currentToken].value isEqualToString:@"0"];
@@ -6579,6 +6712,7 @@ static NSString* scCombine(NSString* op, NSString* r, NSString* v)
                 stepExplicit = YES;
                 }
             [self expect:XTTokenRParen];
+            BOOL annotated = [self check:XTTokenColon];
             NSUInteger rangeAnnots = [self parseLoopAnnotations];
             NSUInteger rangeGoal = [self loopGoal:rangeAnnots];
             // The loop variable is a local of the body: a block literal or a
@@ -6588,7 +6722,8 @@ static NSString* scCombine(NSString* op, NSString* r, NSString* v)
                 [self blkBind:loopVarName.value type:loopType];
             NSUInteger savedGoal = self.goalNow;
             self.goalNow = rangeGoal;
-            XTASTNode* body = [self checkBlockOpen] ? [self parseBlock] : [self parseStatement];
+            BOOL braced = [self checkBlockOpen];
+            XTASTNode* body = braced ? [self parseBlock] : [self parseStatement];
             self.goalNow = savedGoal;
             [self blkPopScope];
 
@@ -6716,6 +6851,8 @@ static NSString* scCombine(NSString* op, NSString* r, NSString* v)
                 rangeNode.srcFacts |= XTSrcStepBad;
             if ([self parAutoDescends:inAt])
                 rangeNode.srcFacts |= XTSrcDesc;
+            if (loopType && !stepped && !annotated && braced)
+                rangeNode.srcFacts |= XTSrcScanForm;
             return rangeNode;
             }
 

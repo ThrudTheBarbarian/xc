@@ -64,6 +64,9 @@
 #define SRC_DESC $0040
 // A call whose callee name or member was written in parentheses (`(f)(x)`).
 #define SRC_PARENCALLEE $0080
+// A range `for` in the form a :scan takes: written with a type, without a
+// `step` or an annotation, its body braced.
+#define SRC_SCANFORM $0100
 // A node the parser made rather than read, which the par frame walk passes
 // over: a name it used no binding for (a type keyword as a receiver, `par.x`
 // in a grid), or a statement it added beside a declaration.

@@ -41,12 +41,19 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, strong, nullable) XTType* lastBlockRet;
 // v2: the declaration just parsed carried the `block:` write-back qualifier.
 @property(nonatomic) BOOL lastTypeIsBlockWb;
-// :scan blocks rewritten so far (#144): their generated names' suffix.
+// :scan blocks made so far (#144): their generated names' suffix.
 @property(nonatomic) NSUInteger scanSeq;
-// parScanRewrite for --par-style=auto: a loop that does not fit stays a loop, unreported.
+// A :scan for --par-style=auto: a loop that does not fit stays a loop, unreported.
 @property(nonatomic) BOOL scanQuiet;
-// Parsing what parScanRewrite made: its own loops (the short-range one) are not scans again.
+// Parsing what parScanExpand made: its own loops (the short-range one) are not scans again.
 @property(nonatomic) NSUInteger scanInside;
+// The scan expansion: its parts while its made code is parsed
+// (parScanExpand), the bodies it has put in (scSplice), and the last
+// refusal (scFail).
+@property(nonatomic, strong, nullable) NSDictionary* scanSplice;
+@property(nonatomic) NSUInteger scanSpliced;
+@property(nonatomic, copy, nullable) NSString* scFailMsg;
+@property(nonatomic, strong, nullable) XTSourceLocation* scFailLoc;
 // The recogniser found a running total (#144): its variable and operator.
 @property(nonatomic, copy, nullable) NSString* parScanAcc;
 @property(nonatomic, copy, nullable) NSString* parScanOp;
@@ -93,14 +100,15 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic) NSInteger plWhileInc;
 @property(nonatomic) BOOL plSkipWhileIf;
 @property(nonatomic) NSUInteger plLits;
+// The walk for a :scan body (scBodyOk): names, break, return and goto at
+// their place, literals as spelt.
+@property(nonatomic) BOOL plExact;
 // The counted `while` parAutoWhileShape took: where the `while`, the `)`
-// closing its condition, the `}` closing its body and its increment are, and
-// its counter with its type (parseAutoWhile, parAutoWhileToks).
+// closing its condition and its increment are, and
+// its counter with its type (parseAutoWhile).
 @property(nonatomic) NSUInteger pwAt;
 @property(nonatomic) NSUInteger pwPe;
-@property(nonatomic) NSUInteger pwBe;
 @property(nonatomic) NSUInteger pwInc;
-@property(nonatomic) XTTokenType pwTt;
 @property(nonatomic, strong, nullable) XTType* pwVt;
 @property(nonatomic, copy, nullable) NSString* pwV;
 // The `if (v < B) v = B;` such a `while` leaves after its `for` (parAutoWhileIf):
@@ -131,12 +139,14 @@ NS_ASSUME_NONNULL_BEGIN
 // A lifted loop's copy (XTParser+ParFrame.m): the tree copied, and the goals
 // a parse in the block's frame gives its loops.
 XTASTNode* XTASTDeepCopy(XTASTNode* n);
+void XTASTRename(XTASTNode* n, NSString* from, NSString* to);
 void parAutoGoals(XTASTNode* n, NSInteger g);
 
 // The --par-style=auto recogniser (XTParser+ParLift.m).
 @interface XTParser (ParLift)
 - (NSDictionary*)plRecogniseFor:(nullable XTASTNode*)loop at:(XTSourceLocation*)loc;
 - (void)plRegister:(nullable XTASTNode*)site entry:(NSDictionary*)e;
+- (NSArray<XTToken*>*)plScanToks:(XTASTNode*)body at:(XTSourceLocation*)loc;
 @end
 
 // XTParser.m: the body rules the recogniser runs on its walk's tokens.

@@ -117,6 +117,27 @@ static void pfwEachIvar(id obj, void (^f)(Ivar iv, id val))
         }
     }
 
+// Each name `from` in the tree under `obj` made `to`.
+static void pfwRename(id obj, NSString* from, NSString* to)
+    {
+    if ([obj isKindOfClass:[XTIdentifierNode class]] && [((XTIdentifierNode*)obj).identName isEqualToString:from])
+        pfwSetIvar(obj, class_getInstanceVariable([XTIdentifierNode class], "_identName"), to);
+    pfwEachIvar(obj, ^(Ivar iv, id val) {
+      (void)iv;
+      if (pfwTreeObject(val))
+          pfwRename(val, from, to);
+      else
+          for (id e in (NSArray*)val)
+              if (pfwTreeObject(e))
+                  pfwRename(e, from, to);
+    });
+    }
+
+void XTASTRename(XTASTNode* n, NSString* from, NSString* to)
+    {
+    pfwRename(n, [from copy], [to copy]);
+    }
+
 // `old` replaced by `rep` where the tree under `obj` holds it. Whether it was.
 static BOOL pfwReplace(id obj, id old, id rep)
     {

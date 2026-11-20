@@ -699,6 +699,10 @@ class Node
         _stmtLine = l;
         _stmtCol = c;
         }
+    u32 stmtFileId(void)
+        {
+        return _stmtFileId;
+        }
     u32 stmtLine(void)
         {
         return _stmtLine;

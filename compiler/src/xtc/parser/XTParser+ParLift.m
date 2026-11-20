@@ -37,6 +37,12 @@ NS_ASSUME_NONNULL_BEGIN
     [self plTok:t value:@""];
     }
 
+// A token at `loc` (plExact).
+- (void)plTok:(XTTokenType)t value:(NSString*)v at:(XTSourceLocation*)loc
+    {
+    [self.plToks addObject:[[XTToken alloc] initWithType:t value:v location:loc]];
+    }
+
 // A type keyword's token type, or XTTokenEOF.
 static XTTokenType plKeyword(NSString* w)
     {
@@ -357,7 +363,14 @@ static NSString* plAddrRoot(XTASTNode* _Nullable e)
     {
     if ([e isKindOfClass:[XTIdentifierNode class]])
         {
+        NSUInteger at = self.plToks.count;
         [self plName:((XTIdentifierNode*)e).identName synth:(e.srcFacts & XTSrcSynth) != 0];
+        if (self.plExact && self.plToks.count == at + 1)
+            {
+            XTToken* t = self.plToks[at];
+            [self.plToks removeObjectAtIndex:at];
+            [self plTok:t.type value:t.value at:e.location];
+            }
         return;
         }
     if ([e isKindOfClass:[XTLiteralIntNode class]])
@@ -367,6 +380,8 @@ static NSString* plAddrRoot(XTASTNode* _Nullable e)
             [self plTok:XTTokenNil value:@"nil"];
         else if (e.srcFacts & XTSrcPlain)
             [self plTok:XTTokenIntLiteral value:[NSString stringWithFormat:@"%lld", (long long)l.intValue]];
+        else if (self.plExact)
+            [self plTok:XTTokenIntLiteral value:[NSString stringWithFormat:@"#=%lld", (long long)l.intValue]];
         else
             {
             // Equal to no other literal: only a decimal spelling is known.
@@ -377,7 +392,18 @@ static NSString* plAddrRoot(XTASTNode* _Nullable e)
         }
     if ([e isKindOfClass:[XTLiteralFloatNode class]])
         {
-        [self plTok:XTTokenFloatLiteral value:@"0.0"];
+        if (self.plExact)
+            {
+            // The literal's encoded bytes, as the dump spells them.
+            NSData* fd = ((XTLiteralFloatNode*)e).floatData;
+            NSMutableString* hex = [NSMutableString string];
+            const unsigned char* fb = fd.bytes;
+            for (NSUInteger i = 0; i < fd.length; i++)
+                [hex appendFormat:@"%02X", fb[i]];
+            [self plTok:XTTokenFloatLiteral value:hex.length ? hex : @"-"];
+            }
+        else
+            [self plTok:XTTokenFloatLiteral value:@"0.0"];
         return;
         }
     if ([e isKindOfClass:[XTLiteralStringNode class]])
@@ -948,14 +974,20 @@ static NSString* plAddrRoot(XTASTNode* _Nullable e)
         }
     if ([n isKindOfClass:[XTReturnNode class]])
         {
-        [self plTok:XTTokenReturn value:@"return"];
+        if (self.plExact)
+            [self plTok:XTTokenReturn value:@"return" at:n.location];
+        else
+            [self plTok:XTTokenReturn value:@"return"];
         [self plExprs:((XTReturnNode*)n).values];
         [self plTok:XTTokenSemicolon value:@";"];
         return;
         }
     if ([n isKindOfClass:[XTBreakNode class]])
         {
-        [self plTok:XTTokenBreak value:@"break"];
+        if (self.plExact)
+            [self plTok:XTTokenBreak value:@"break" at:n.location];
+        else
+            [self plTok:XTTokenBreak value:@"break"];
         [self plTok:XTTokenSemicolon value:@";"];
         return;
         }
@@ -967,7 +999,10 @@ static NSString* plAddrRoot(XTASTNode* _Nullable e)
         }
     if ([n isKindOfClass:[XTGotoNode class]])
         {
-        [self plTok:XTTokenGoto value:@"goto"];
+        if (self.plExact)
+            [self plTok:XTTokenGoto value:@"goto" at:n.location];
+        else
+            [self plTok:XTTokenGoto value:@"goto"];
         [self plTok:XTTokenIdentifier value:((XTGotoNode*)n).targetLabel];
         [self plTok:XTTokenSemicolon value:@";"];
         return;
@@ -1150,6 +1185,21 @@ static BOOL plStepOk(XTASTNode* _Nullable st, NSString* var)
     self.plArgs = [NSMutableDictionary dictionary];
     self.plLits = 0;
     self.plSkipWhileIf = NO;
+    }
+
+// A :scan body's tokens (scBodyOk): its walk, each name and each break,
+// return and goto at its place in the source, each literal as spelt.
+- (NSArray<XTToken*>*)plScanToks:(XTASTNode*)body at:(XTSourceLocation*)loc
+    {
+    NSDictionary* saved = [self plStateSave];
+    [self plBegin];
+    self.plLoc = loc;
+    self.plExact = YES;
+    [self plStmt:body];
+    self.plExact = NO;
+    NSArray<XTToken*>* toks = self.plToks;
+    [self plStateRestore:saved];
+    return toks;
     }
 
 - (NSDictionary*)plStateSave

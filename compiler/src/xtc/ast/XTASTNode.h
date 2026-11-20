@@ -77,6 +77,7 @@ typedef NS_OPTIONS(NSUInteger, XTSrcFact) {
     XTSrcStepBad = 1 << 5,     // a range whose `step` is not followed by an integer literal, or by `0`
     XTSrcDesc = 1 << 6,        // a range whose bounds are two literals that descend, as the parser reads them
     XTSrcParenCallee = 1 << 7, // a call whose callee name or member was written in parentheses
+    XTSrcScanForm = 1 << 8,    // a range `for` in a :scan's form: a type, no `step` or annotation, a braced body
     XTSrcSynth = 1 << 10,      // made by the parser, not read: the par frame walk passes over it
     XTSrcCalled = 1 << 11,     // `b(…)` made into `b.invoke(…)` (a block binding, or a literal calling itself)
     XTSrcAnnot = 1 << 12,      // a loop with an annotation the parser does not know (it warns and drops it);
