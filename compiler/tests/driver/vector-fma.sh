@@ -1,13 +1,14 @@
 #!/bin/bash
-# vector-fma.sh — vectorised loops fuse multiply-adds as scalar code does
+# vector-fma.sh — vectorised loops fuse multiply-adds only under :goal(speed)
 # (2026-10-29)
 #
 # Three float loops, c + a*b, c - a*b and a*b - c, over values whose product
 # needs more than a float's precision (a = 1 + 2^-12, so a*a = 1 + 2^-11 +
-# 2^-24): fused, the 2^-24 survives the add; split, it rounds away. On arm64,
-# which fuses scalar products everywhere, the vectorised loops at -O2 must give
-# the scalar -O0 answer, as fmla / fmls / fmls+fneg. On x86-64 the same loops
-# under :goal(speed) are vfmadd / vfmsub / vfnmadd in the avx2 and avx512
+# 2^-24): fused, the 2^-24 survives the add; split, it rounds away. On arm64
+# the plain loops (accuracy, and --par-style=cpu so none is lifted into a
+# speed block) are vectorised unfused at -O2 and give the -O0 answer; under
+# :goal(speed) they are fmla / fmls / fmls+fneg and give the fused answer. On
+# x86-64 the speed loops are vfmadd / vfmsub / vfnmadd in the avx2 and avx512
 # copies, and give the fused answer on a host with FMA (XTC_X86_HOST, or here
 # on an x86-64 machine).
 #
@@ -46,16 +47,21 @@ sub2 0.000488340854645 0.000488340854645'
 prog 'for (u32 i = 0; i < n; i = i + 1)' > "$W/v.xc"
 prog 'for (u32 i in 0..n) :goal(speed)' > "$W/s.xc"
 msg=""
-# arm64: -O2's vector loops against -O0's scalar ones.
-"$XC" -q -A arm64 -O2 -S -o "$W/v.s" "$W/v.xc" || { echo "FAIL: does not build for arm64"; exit 1; }
+# arm64: the plain loops' vector code is unfused, the speed loops' fused.
+"$XC" -q -A arm64 -O2 --par-style=cpu -S -o "$W/v.s" "$W/v.xc" || { echo "FAIL: does not build for arm64"; exit 1; }
+grep -qE 'fmul[[:space:]]+v[0-9]+\.4s' "$W/v.s" || { echo "FAIL vector-fma (arm64): the plain loops are not vectorised"; fail=1; }
+! grep -qE 'fml[as][[:space:]]+v[0-9]+\.4s' "$W/v.s" || { echo "FAIL vector-fma (arm64): the plain loops fuse"; fail=1; }
+"$XC" -q -A arm64 -O2 -S -o "$W/sa.s" "$W/s.xc" || { echo "FAIL: does not build for arm64"; exit 1; }
 for f in 'fmla[[:space:]]+v[0-9]+\.4s' 'fmls[[:space:]]+v[0-9]+\.4s' 'fneg[[:space:]]+v[0-9]+\.4s'; do
-    grep -qE "$f" "$W/v.s" || { echo "FAIL vector-fma (arm64): no ${f%%\[*} in the vector loops"; fail=1; }
+    grep -qE "$f" "$W/sa.s" || { echo "FAIL vector-fma (arm64): no ${f%%\[*} in the speed loops"; fail=1; }
 done
 if [ "$(uname -m)" = arm64 ]; then
-    "$XC" -q -O0 -o "$W/v0" "$W/v.xc" && "$XC" -q -O2 -o "$W/v2" "$W/v.xc" || { echo "FAIL: does not link"; exit 1; }
-    o0=$("$W/v0"); o2=$("$W/v2")
-    [ "$o0" = "$FUSED" ] || { echo "FAIL vector-fma (arm64 -O0): the scalar loops do not fuse"; printf '%s\n' "$o0"; fail=1; }
-    [ "$o2" = "$o0" ] || { echo "FAIL vector-fma (arm64 -O2): the vector loops round differently from scalar"; printf '%s\n' "$o2"; fail=1; }
+    "$XC" -q -O0 --par-style=cpu -o "$W/v0" "$W/v.xc" && "$XC" -q -O2 --par-style=cpu -o "$W/v2" "$W/v.xc" \
+        && "$XC" -q -O2 -o "$W/s2" "$W/s.xc" || { echo "FAIL: does not link"; exit 1; }
+    o0=$("$W/v0"); o2=$("$W/v2"); s2=$("$W/s2")
+    [ "$o0" != "$FUSED" ] || { echo "FAIL vector-fma (arm64 -O0): the plain loops fuse"; printf '%s\n' "$o0"; fail=1; }
+    [ "$o2" = "$o0" ] || { echo "FAIL vector-fma (arm64 -O2): the plain vector loops round differently from scalar"; printf '%s\n' "$o2"; fail=1; }
+    [ "$s2" = "$FUSED" ] || { echo "FAIL vector-fma (arm64 -O2): the speed loops do not fuse"; printf '%s\n' "$s2"; fail=1; }
     msg="arm64 run"
 fi
 # x86-64: the speed loops' avx2 and avx512 copies.

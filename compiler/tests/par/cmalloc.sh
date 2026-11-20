@@ -40,7 +40,12 @@ fi
 awk 'BEGIN { for (i = 0; i < 200000; i++) printf "%c", 97 + i % 26; printf "\n" }' > "$W/line.txt"
 clang -O2 -w -o "$W/rt.ref" $D/roundtrip.c -L"$W" -lfree -Wl,-rpath,"$W" || { echo "FAIL cmalloc: clang does not build roundtrip.c"; exit 1; }
 want=$("$W/rt.ref" "$W/line.txt" "$LIB")
-"$XC" -q -O2 -H . -o "$W/rt" $D/roundtrip.c -L"$W" -lfree > "$W/rt.b" 2>&1 || { echo "FAIL cmalloc: roundtrip.c does not build"; head -5 "$W/rt.b"; exit 1; }
+# Built as an object, then linked: roundtrip lifts no loop, and a whole-program
+# build that lifts none drops the runtime and its heap (#278); an object keeps
+# them, so the link turns the heap on.
+"$XC" -q -O2 -H . -c -o "$W/rt.o" $D/roundtrip.c > "$W/rt.b" 2>&1 \
+    && "$XC" -q -O2 -H . -o "$W/rt" "$W/rt.o" -L"$W" -lfree >> "$W/rt.b" 2>&1 \
+    || { echo "FAIL cmalloc: roundtrip.c does not build"; head -5 "$W/rt.b"; exit 1; }
 got=$("$W/rt" "$W/line.txt" "$LIB" 2>&1)
 if [ "$got" = "$want" ]; then echo "  ok: roundtrip gives clang's answer"
 else echo "  FAIL: roundtrip gives"; echo "$got" | sed 's/^/    /'; echo "  clang's:"; echo "$want" | sed 's/^/    /'; fail=1; fi

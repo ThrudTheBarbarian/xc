@@ -80,7 +80,7 @@ if command -v clang >/dev/null 2>&1 && command -v objdump >/dev/null 2>&1; then
             echo "FAIL float-sr: no avx2 copy of main to inspect"; fail=1
         else
             ! grep -q 'vdivss' "$W/g.dis" || { echo "FAIL float-sr: the avx2 copy still divides by 256"; fail=1; }
-            grep -qE 'vsubss[[:space:]]+(xmm[0-9]+), xmm[0-9]+, \1$' "$W/g.dis" \
+            grep -qE 'vsubss[[:space:]]+(xmm[0-9]+), ?xmm[0-9]+, ?\1$' "$W/g.dis" \
                 || { echo "FAIL float-sr: no in-place vsubss: the select's 0 - 2v goes through a scratch"; fail=1; }
             msg="$msg, gradient code"
         fi

@@ -18,6 +18,9 @@ REF=${REF:-$ROOT/bin/$PLAT/xcc}
 XC=${XC:-$ROOT/bin/$PLAT/xcc-xc}
 W=$(mktemp -d); trap 'rm -rf "${W:?}"' EXIT
 fail=0
+# The programs are arm64 Mach-O: otool reads their load commands on macOS,
+# llvm-otool elsewhere.
+OTOOL=$(command -v otool || command -v llvm-otool) || { echo "FAIL thirdparty-roots: no otool or llvm-otool"; exit 1; }
 cat > "$W/Foo.xc" <<'XC'
 #import "Stdio.xc"
 class Foo { i32 twice(i32 x) { return x * 2; } }
@@ -37,7 +40,7 @@ for which in ref xc; do
     cp "$W/libFoo.dylib" "$I/3p/acme/arm64/"
     ( cd "$W" && env -u XCC_3P -u XCC_HOME -u XTC_HOME "$I/bin/xcc" -q -A arm64 -o "$W/use-$which" "$W/use.xc" ) > "$W/err-$which" 2>&1 \
         || { echo "FAIL thirdparty-roots ($which): the install does not look in its own 3p: $(head -c 200 "$W/err-$which")"; fail=1; continue; }
-    otool -l "$W/use-$which" 2>/dev/null | grep -q "$I/3p/acme/arm64" \
+    "$OTOOL" -l "$W/use-$which" 2>/dev/null | grep -q "$I/3p/acme/arm64" \
         || { echo "FAIL thirdparty-roots ($which): no runpath to the install's 3p"; fail=1; }
 done
 # `xcc --print-3p-dir` names the install's own tree, absolute (2026-10-31: a
@@ -59,7 +62,7 @@ for which in ref xc; do
     cp "$W/libFoo.dylib" "$W/$which/compilers/3p/acme/arm64/"
     ( cd "$W" && env -u XCC_3P -u XCC_HOME -u XTC_HOME "$I/bin/xcc" -q -A arm64 -o "$W/use2-$which" "$W/use.xc" ) > "$W/err2-$which" 2>&1 \
         || { echo "FAIL thirdparty-roots ($which): a vendor in two roots: $(head -c 200 "$W/err2-$which")"; fail=1; continue; }
-    otool -l "$W/use2-$which" 2>/dev/null | grep -q "$I/3p/acme/arm64" \
+    "$OTOOL" -l "$W/use2-$which" 2>/dev/null | grep -q "$I/3p/acme/arm64" \
         || { echo "FAIL thirdparty-roots ($which): a vendor in two roots did not take the install's own copy"; fail=1; }
 done
 [ $fail = 0 ] && echo "thirdparty-roots: ok"
