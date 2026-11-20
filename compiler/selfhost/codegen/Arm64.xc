@@ -1768,7 +1768,7 @@ class Arm64
         if (dv.kind() == (u8)OPK_IMMI) return dv.imm();
         if (dv.kind() != (u8)OPK_USE) return (i64)0;
         i64 c = (i64)0;
-        return constThrough(dv.val(), &c, (u32)0) ? c : (i64)0;
+        return CgCommon.constThrough(_defOf, dv.val(), &c, (u32)0) ? c : (i64)0;
     }
 
     // A 64-bit pattern into an x-register: movz, then movk for each non-zero
@@ -1832,34 +1832,6 @@ class Arm64
             _out.appendFormat("    msub %s, %s, x17, %s\n", dst.cString(), q.cString(), x.cString());
         }
         storeReg(dst, n.res());
-    }
-
-    // A value's compile-time constant through the ZExt/SExt/Trunc the lowering
-    // wraps a narrowed literal in, each conversion APPLIED at its result type
-    // (#308): `(i32)(i8)300` is 44, where returning the Const's 300 made the
-    // magic-number division divide by the wrong constant at -O0/-O1.
-    bool constThrough(IRValue* v, i64* out, u32 depth)
-    {
-        if (v == (IRValue*)0 || depth >= (u32)8) return false;
-        IRInsn* d = (IRInsn*)_defOf.get((Hashable*)v);
-        if (d == (IRInsn*)0 || d.ops().count() < (u32)1 || d.res() == (IRValue*)0) return false;
-        IROperand* a0 = (IROperand*)d.ops().get((u32)0);
-        String* rt = d.res().ty();
-        if (d.isOp(opConst)) {
-            if (a0.kind() != (u8)OPK_IMMI) return false;
-            *out = CgCommon.fitConst((i64)a0.imm(), rt, CgCommon.constSigned(rt));
-            return true;
-        }
-        bool sx = d.isOp(opSExt);
-        bool zx = d.isOp(opZExt);
-        if (!(sx || zx || d.isOp(opTrunc)) || a0.kind() != OPK_USE) return false;
-        i64 s = (i64)0;
-        if (!constThrough(a0.val(), &s, depth + (u32)1)) return false;
-        // An extension reads its source at the source's width: sign bits for
-        // SExt, zero bits for ZExt, whatever the source's own signedness.
-        if (sx || zx) s = CgCommon.fitConst(s, a0.val().ty(), sx);
-        *out = CgCommon.fitConst(s, rt, CgCommon.constSigned(rt));
-        return true;
     }
 
     void emitUnary(IRInsn* n, String* mnem)
@@ -7871,7 +7843,7 @@ class Arm64
         if (idx.kind() == (u8)OPK_IMMI) { *out = idx.imm(); return true; }
         if (idx.kind() != (u8)OPK_USE) return false;
         i64 c = (i64)0;
-        if (!constThrough(idx.val(), &c, (u32)0)) return false;
+        if (!CgCommon.constThrough(_defOf, idx.val(), &c, (u32)0)) return false;
         *out = (i32)c;
         return true;
     }

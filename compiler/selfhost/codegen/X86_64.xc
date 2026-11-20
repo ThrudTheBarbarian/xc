@@ -1265,39 +1265,11 @@ class X86_64
         if (op.kind() != (u8)OPK_USE || op.val() == (IRValue*)0)
             return false;
         i64 c = (i64)0;
-        if (!constThrough(op.val(), &c, (u32)0))
+        if (!CgCommon.constThrough(_defOf, op.val(), &c, (u32)0))
             return false;
         *out = c;
         return true;
         }
-
-    // A value's compile-time constant through the ZExt/SExt/Trunc the lowering
-    // wraps a narrowed literal in, each conversion APPLIED at its result type
-    // (#308): `(i32)(i8)300` is 44, where returning the Const's 300 made the
-    // magic-number division divide by the wrong constant at -O0/-O1.
-    bool constThrough(IRValue* v, i64* out, u32 depth)
-    {
-        if (v == (IRValue*)0 || depth >= (u32)8) return false;
-        IRInsn* d = defInsnFor(v);
-        if (d == (IRInsn*)0 || d.ops().count() < (u32)1 || d.res() == (IRValue*)0) return false;
-        IROperand* a0 = (IROperand*)d.ops().get((u32)0);
-        String* rt = d.res().ty();
-        if (d.isOp(opConst)) {
-            if (a0.kind() != (u8)OPK_IMMI) return false;
-            *out = CgCommon.fitConst((i64)a0.imm(), rt, CgCommon.constSigned(rt));
-            return true;
-        }
-        bool sx = d.isOp(opSExt);
-        bool zx = d.isOp(opZExt);
-        if (!(sx || zx || d.isOp(opTrunc)) || a0.kind() != OPK_USE) return false;
-        i64 s = (i64)0;
-        if (!constThrough(a0.val(), &s, depth + (u32)1)) return false;
-        // An extension reads its source at the source's width: sign bits for
-        // SExt, zero bits for ZExt, whatever the source's own signedness.
-        if (sx || zx) s = CgCommon.fitConst(s, a0.val().ty(), sx);
-        *out = CgCommon.fitConst(s, rt, CgCommon.constSigned(rt));
-        return true;
-    }
 
     Map* _defOf;
 
