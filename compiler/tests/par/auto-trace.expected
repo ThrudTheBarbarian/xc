@@ -60,6 +60,10 @@ par-auto-trace: par_auto_iv_write.xc:41 lifted rule=block form=range name=par_au
 par-auto-trace: par_auto_iv_write.xc:43 lifted rule=block form=range name=par_auto_iv_write.xc:43 reds=+:sb grid=1 impl=2
 par-auto-trace: par_auto_iv_write.xc:45 lifted rule=block form=range name=par_auto_iv_write.xc:45 reds=+:nc grid=1 impl=3
 par-auto-trace: par_auto_iv_write.xc:47 lifted rule=block form=range name=par_auto_iv_write.xc:47 reds=+:ng grid=1 impl=4
+par-auto-trace: par_auto_later_ivar.xc:16 serial rule=block-refused form=for name=- reds=- grid=- impl=-
+par-auto-trace: par_auto_later_ivar.xc:22 serial rule=block-refused form=for name=- reds=- grid=- impl=-
+par-auto-trace: par_auto_later_ivar.xc:37 lifted rule=block form=for name=par_auto_later_ivar.xc:37 reds=- grid=1 impl=0
+par-auto-trace: par_auto_later_ivar.xc:48 lifted rule=block form=for name=par_auto_later_ivar.xc:48 reds=+:t grid=1 impl=1
 par-auto-trace: par_auto_leading_zero.xc:12 serial rule=descending form=range name=- reds=- grid=- impl=-
 par-auto-trace: par_auto_leading_zero.xc:14 serial rule=descending form=range name=- reds=- grid=- impl=-
 par-auto-trace: par_auto_library_names.xc:44 serial rule=block-refused form=range name=- reds=- grid=- impl=-
