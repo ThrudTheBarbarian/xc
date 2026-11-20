@@ -218,6 +218,28 @@ static NSString* plAssignSpelling(XTAssignOp op, XTTokenType* t)
         [self plTok:XTTokenIdentifier value:name];
     }
 
+// The variable an address-of takes the address of, or of an element or
+// member of: through subscripts, members, casts and `*` to a name; else @"".
+static NSString* plAddrRoot(XTASTNode* _Nullable e)
+    {
+    while (e)
+        {
+        if ([e isKindOfClass:[XTIdentifierNode class]])
+            return ((XTIdentifierNode*)e).identName;
+        if ([e isKindOfClass:[XTSubscriptExprNode class]])
+            e = ((XTSubscriptExprNode*)e).base;
+        else if ([e isKindOfClass:[XTMemberAccessNode class]])
+            e = ((XTMemberAccessNode*)e).base;
+        else if ([e isKindOfClass:[XTCastExprNode class]])
+            e = ((XTCastExprNode*)e).operand;
+        else if ([e isKindOfClass:[XTUnaryExprNode class]] && ((XTUnaryExprNode*)e).op == XTUnaryOpDeref)
+            e = ((XTUnaryExprNode*)e).operand;
+        else
+            break;
+        }
+    return @"";
+    }
+
 - (void)plExpr:(nullable XTASTNode*)e
     {
     if (!e)
@@ -297,7 +319,10 @@ static NSString* plAssignSpelling(XTAssignOp op, XTTokenType* t)
         case XTUnaryOpNeg: [self plTok:XTTokenMinus value:@"-"]; break;
         case XTUnaryOpBitNot: [self plTok:XTTokenTilde value:@"~"]; break;
         case XTUnaryOpLogNot: [self plTok:XTTokenBang value:@"!"]; break;
-        case XTUnaryOpAddrOf: [self plTok:XTTokenAmpersand value:@"&"]; break;
+        case XTUnaryOpAddrOf:
+            self.plAddrs[@(self.plToks.count)] = plAddrRoot(u.operand);
+            [self plTok:XTTokenAmpersand value:@"&"];
+            break;
         case XTUnaryOpDeref: [self plTok:XTTokenStar value:@"*"]; break;
         case XTUnaryOpPreInc: [self plTok:XTTokenPlusPlus value:@"++"]; break;
         case XTUnaryOpPreDec: [self plTok:XTTokenMinusMinus value:@"--"]; break;
@@ -1026,6 +1051,7 @@ static BOOL plStepOk(XTASTNode* _Nullable st, NSString* var)
     {
     self.plToks = [NSMutableArray array];
     self.plDecls = [NSMutableDictionary dictionary];
+    self.plAddrs = [NSMutableDictionary dictionary];
     self.plLits = 0;
     self.plSkipWhileIf = NO;
     }
@@ -1053,6 +1079,7 @@ static BOOL plStepOk(XTASTNode* _Nullable st, NSString* var)
     self.plStream = NO;
     self.plToks = nil;
     self.plDecls = nil;
+    self.plAddrs = nil;
     }
 
 // The recogniser's verdict on `loop`, a `for` as parsed (the loop as
@@ -1094,6 +1121,7 @@ static BOOL plStepOk(XTASTNode* _Nullable st, NSString* var)
     [self plFor:f marks:marks];
     NSArray<XTToken*>* toks = self.plToks;
     NSDictionary* decls = self.plDecls;
+    NSDictionary* addrs = self.plAddrs;
     self.plToks = nil;
     NSString* var = nil;
     NSUInteger bndFrom = 0, bndTo = 0;
@@ -1161,6 +1189,7 @@ static BOOL plStepOk(XTASTNode* _Nullable st, NSString* var)
     self.pos = 0;
     self.plStream = YES;
     self.plDecls = [decls mutableCopy];
+    self.plAddrs = [addrs mutableCopy];
     self.parAutoWhy = nil;
     self.parAutoGridCap = 3;
     self.parScanAcc = nil;

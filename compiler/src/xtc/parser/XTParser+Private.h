@@ -80,6 +80,9 @@ NS_ASSUME_NONNULL_BEGIN
 // 2 `++v`, 3 `v += 1`, 4 `v = v + 1`).
 @property(nonatomic, strong, nullable) NSMutableArray<XTToken*>* plToks;
 @property(nonatomic, strong, nullable) NSMutableDictionary<NSNumber*, NSArray<NSString*>*>* plDecls;
+// The index of an address-of's `&` among those tokens -> the variable it
+// takes the address of, or of an element or member of, else @"" (plAddrRoot).
+@property(nonatomic, strong, nullable) NSMutableDictionary<NSNumber*, NSString*>* plAddrs;
 @property(nonatomic, strong, nullable) XTSourceLocation* plLoc;
 @property(nonatomic) BOOL plStream;
 @property(nonatomic, strong, nullable) NSMapTable* plSites;

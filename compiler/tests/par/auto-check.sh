@@ -116,7 +116,7 @@ i32 main(void)
     u32 q = 0;
     // A statement starts after `)`, so a cast's operand counts: `acc++;`.
     for (u32 i = 0; i < n; i++) { u32 y = (u32)acc++; b[i] = y; }
-    // `expr & name` takes the name's address unless `[` follows.
+    // A bitwise `&` takes no address, before a name or an element.
     for (u32 i = 0; i < n; i++) b[i] = a[i] & mask;
     for (u32 i = 0; i < n; i++) b[i] = a[i] & a[0];
     // `++` next to a name that is not the body's own, a member's too.
@@ -167,6 +167,10 @@ i32 main(void)
     for (u32 i = 0; i < n; i++) : Unroll b[i] = b[i] + 1;
     // A written par block in a loop.
     for (u32 r = 0; r < 3; r++) { par :reduce(+ acc) { for (u32 i in 0..4096) acc = acc + a[i]; } }
+    // An address-of an outer name, element or member; of the body's own.
+    for (u32 i = 0; i < n; i++) { u32* p = &b[i]; *p = i; }
+    for (u32 i = 0; i < n; i++) { u32* p = &gs.v; b[i] = *p; }
+    for (u32 i = 0; i < n; i++) { u32 t = i; u32* p = &t; b[i] = *p; }
     K* k = new K();
     k.run();
     Stdio.printf("%u %u %u %d %u %u %u %u\n", acc, acc2, m, sacc, serial, total, q, b[5]);

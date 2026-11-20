@@ -4580,6 +4580,7 @@ class Parser
     // (XTParser+ParLift.m).
     Array*  _plToks;        // the walk's tokens
     Map*    _plDecls;       // the index of a declaration's first token -> its names
+    Map*    _plAddrs;       // the index of an address-of's `&` -> the variable it names, or ""
     Token*  _plAt;          // the place the walk's tokens carry
     bool    _plStream;      // the scan's body rules are reading the walk's tokens
     Array*  _plSites;       // [site, kind, plain or body, params, increment]
@@ -4750,6 +4751,20 @@ class Parser
         return (Array*)0;
     }
 
+    // The variable an address-of takes the address of, or of an element or
+    // member of: through subscripts, members, casts and `*` to a name; else "".
+    static String* plAddrRoot(Node* e)
+    {
+        while (e != (Node*)0) {
+            u16 k = e.kind();
+            if (k == nkIdent) return e.name();
+            bool through = k == nkSubscript || k == nkMember || k == nkCast || (k == nkUnary && Parser._same(e.op(), "*"));
+            if (!through || e.kidCount() == 0) break;
+            e = e.kid(0);
+        }
+        return String.withCString("");
+    }
+
     void plExpr(Node* e)
     {
         if (e == (Node*)0) return;
@@ -4807,6 +4822,7 @@ class Parser
         }
         if (k == nkUnary) {
             String* op = e.op();
+            if (Parser._same(op, "&")) _plAddrs.set((Hashable*)String.withU32(_plToks.count()), (Object*)Parser.plAddrRoot(e.kid(0)));
             if (Parser._same(op, "<")) plTok(tokLess, "<");
             else plTokS(Parser.plOpTok(op), op);
             plExpr(e.kid(0));
@@ -5423,6 +5439,7 @@ class Parser
         _plStream = false;
         _plToks = (Array*)0;
         _plDecls = (Map*)0;
+        _plAddrs = (Map*)0;
     }
 
     void plBegin(Token* at)
@@ -5430,6 +5447,7 @@ class Parser
         _plAt = at;
         _plToks = new Array();
         _plDecls = new Map();
+        _plAddrs = new Map();
         _plLits = 0;
         _plSkipWhileIf = false;
     }
@@ -5474,6 +5492,7 @@ class Parser
         plFor(loop, marks);
         Array* toks = _plToks;
         Map* decls = _plDecls;
+        Map* addrs = _plAddrs;
         String* var = (String*)0;
         u32 bndFrom = 0;
         u32 bndTo = 0;
@@ -5530,6 +5549,7 @@ class Parser
         _pos = 0;
         _plStream = true;
         _plDecls = decls;
+        _plAddrs = addrs;
         _parAutoWhy = (String*)0;
         _parAutoGridCap = 3;
         _parScanAcc = (String*)0;
@@ -5722,6 +5742,22 @@ class Parser
             if (ty == tokReturn) return parAutoNo("return");
             if (ty == tokGoto) return parAutoNo("goto");
             if (ty == tokBreak && innerAt.count() == 0) return parAutoNo("break");
+            // Taking the address of an outer variable, or of an element or
+            // member of one (`&c`, `&c[k]`, `&s.f`, `&*p`): what the address
+            // reaches may be written, by a call say, from every item at once.
+            // A bitwise `&` is no address-of.
+            String* addrOf = ty == tokAmpersand && _plAddrs != (Map*)0 ? (String*)_plAddrs.get((Hashable*)String.withU32(i)) : (String*)0;
+            if (addrOf != (String*)0 && !declared.contains((Hashable*)addrOf)) {
+                String* w = String.withCString("its body takes an address");
+                if (addrOf.byteLength() > 0) {
+                    w = String.withCString("its body takes the address of '");
+                    w.append(addrOf);
+                    w.appendCString("'");
+                }
+                parAutoWarnSerial(w);
+                _parScanAcc = (String*)0;
+                return parAutoNo("address");
+            }
             // A declaration: its declarators are the body's own names.
             bool declStart = stmtStart || (prev == (u16)tokLParen && parTokType(i - (u32)2) == (u16)tokFor);
             if (declStart && ty != (u16)tokIdentifier || declStart && ty == (u16)tokIdentifier && isTypeName(parTokValue(i))) {
@@ -5765,7 +5801,6 @@ class Parser
             if (next == (u16)tokIn) { declared.add((Hashable*)name); continue; }
             if (stmtStart && next == tokColon) return parAutoNo("label");
             bool own = declared.contains((Hashable*)name);
-            if (prev == tokAmpersand && next != tokLBracket && !own) return parAutoNo("address");
             // `acc++;` as a statement of its own: a `+` reduction.
             if (stmtStart && next == (u16)tokPlusPlus && parTokType(i + (u32)2) == (u16)tokSemicolon && !own
                 && !name.equals(var) && accOps.get((Hashable*)name) == (Object*)0) {
