@@ -353,10 +353,18 @@ static BOOL pureHoistable(XTIRInsn* insn)
                                                   : @(insn.memoryResult.valueId)];
                 [blocks[bn.unsignedIntegerValue].instructions removeObjectIdenticalTo:insn];
                 }
+            // The round goes on to the next loop (#334), which reads where each
+            // value is defined: the hoisted ones now are in the preheader.
+            NSUInteger pi = [blocks indexOfObjectIdenticalTo:preheader];
             for (XTIRInsn* insn in hoist)
+                {
                 [preheader.instructions addObject:insn];
+                if (insn.result)
+                    defBlk[@(insn.result.valueId)] = @(pi);
+                if (insn.memoryResult)
+                    defBlk[@(insn.memoryResult.valueId)] = @(pi);
+                }
             changed = YES;
-            return YES; // CFG facts (defBlk) are now stale — recompute next pass
             }
         }
     return changed;

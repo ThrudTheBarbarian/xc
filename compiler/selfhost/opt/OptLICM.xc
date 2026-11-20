@@ -24,8 +24,12 @@
     // Termination is structural: each hoist moves instructions to the
     // preheader, which strictly dominates the header — strictly closer to the
     // entry in the dominator tree — so an instruction only ever moves toward
-    // the root and can never re-enter a block it left. The 32-round cap is a
-    // backstop, not the argument.
+    // the root and can never re-enter a block it left. A round visits every
+    // loop (#334: it stopped at the first loop that moved anything, so a
+    // function with more than 32 such loops left the rest unhoisted); rounds
+    // repeat while one moves something, because a hoist into a preheader that
+    // sits inside another loop can make more of that loop invariant. The
+    // 32-round cap is a backstop, not the argument.
     final void licm(IRModule* m)
         {
         if (!_profile.licm())
@@ -91,6 +95,7 @@
                 }
             }
 
+        bool any = false;
         for (u32 li = (u32)0; li < fn.blocks().count(); li = li + (u32)1)
             {
             IRBlock* latch = (IRBlock*)fn.blocks().get(li);
@@ -106,10 +111,10 @@
                 if (!dom.dominates(H, latch))
                     continue;
                 if (licmLoop(fn, H, latch, dom, preds, defOf, defBlk))
-                    return true;
+                    any = true;
                 }
             }
-        return false;
+        return any;
         }
 
     final bool licmLoop(IRFunc* fn, IRBlock* H, IRBlock* latch,
@@ -263,7 +268,16 @@
         // In dependency order, before the preheader's terminator (which the
         // block holds separately, so appending is enough).
         for (u32 i = (u32)0; i < hoist.count(); i = i + (u32)1)
-            pre.insns().add(hoist.get(i));
+            {
+            IRInsn* n = (IRInsn*)hoist.get(i);
+            pre.insns().add((Object*)n);
+            // The round goes on to the next loop, which reads where each value
+            // is defined: these now are in the preheader.
+            if (n.res() != (IRValue*)0)
+                defBlk.set((Hashable*)n.res(), (Object*)pre);
+            if (n.memRes() != (IRValue*)0)
+                defBlk.set((Hashable*)n.memRes(), (Object*)pre);
+            }
         return true;
         }
 
