@@ -562,143 +562,6 @@ static NSString* applyDuplicateStore(NSString* asmText)
     }
 
 // ─────────────────────────────────────────────────────────────────────
-// Rule 5: constant-immediate fold into CMP/ADC/SBC.
-//
-// The backend lowers a const-typed IR operand by emitting:
-//     LDA #$<imm>
-//     STA <slot>
-// and the comparison/arithmetic then reads the value back from <slot>:
-//     LDA <other>
-//     CMP <slot>     ← could just be CMP #$<imm>
-//
-// When the slot's ONLY use between the storing STA and a single
-// CMP/ADC/SBC reference is that one read, the slot is a one-shot
-// scratch and the literal can be folded directly into the CMP/ADC/SBC.
-//
-// Conservative shape we match here:
-//
-//   LDA #$<imm>            (anchor1, "the literal load")
-//   STA <slot>             (anchor2, "the spill")
-//   <one or more lines that DO NOT touch <slot> AND DO NOT clobber A
-//    in a way that would change the original LDA's value … but the next
-//    CMP/ADC/SBC uses a DIFFERENT operand anyway, so the LDA chain
-//    ending at <other> is fine>
-//   LDA <other>            (anchor3, "load the LHS")
-//   <CMP|ADC|SBC> <slot>   (anchor4, "the immediate consumer") → fold
-//
-// Simplified: walk through the asm and find the 4-line tight pattern:
-//   LDA #$<imm>
-//   STA <slot>
-//   LDA <other>
-//   <CMP|ADC|SBC> <slot>
-//
-// Rewrite to:
-//   LDA <other>
-//   <CMP|ADC|SBC> #$<imm>
-//
-// 4 instructions → 2. The conservative tight version misses cases where
-// other code sits between STA and LDA, but the new-IR backend emits
-// them adjacent for ICmp/Add/Sub. Bigger fold windows can come later.
-//
-// Safety: the fold preserves Z/N/C flags after the comparison (CMP #X
-// and CMP <slot containing X> produce identical flags) and A value
-// (CMP doesn't change A; the LDA <other> is the same).
-// ─────────────────────────────────────────────────────────────────────
-
-static NSString* applyConstFold(NSString* asmText)
-    {
-    NSArray<NSString*>* lines = [asmText componentsSeparatedByString:@"\n"];
-    NSUInteger n = lines.count;
-    NSMutableIndexSet* drop = [NSMutableIndexSet indexSet];
-    NSMutableDictionary<NSNumber*, NSString*>* rewrite = [NSMutableDictionary dictionary];
-
-    // How many instruction lines reference each operand string. Dropping the
-    // `STA <slot>` is only safe when the slot's value is consumed exactly
-    // once — by the CMP/ADC/SBC at i+3. If the same slot is read anywhere
-    // else (e.g. the backend copies a multi-byte compare's constant to a
-    // second slot, so the const slot is also read by that copy), removing
-    // its store leaves the other reader with garbage. So gate the fold on
-    // the slot appearing exactly twice in the whole function: the store and
-    // the one consumer. (A const-operand fold elsewhere can shift the slot
-    // layout so this pattern matches a non-one-shot slot — without this
-    // check that miscompiled a signed 16-bit compare into an infinite loop.)
-    NSCountedSet<NSString*>* opUses = [NSCountedSet set];
-    for (NSString* line in lines)
-        {
-        if (classifyLine(line) != XTLineInsn)
-            continue;
-        NSString *o = nil, *od = nil;
-        splitInsn(line, &o, &od);
-        if (od.length)
-            [opUses addObject:od];
-        }
-
-    for (NSUInteger i = 0; i + 3 < n; i++)
-        {
-        if (classifyLine(lines[i]) != XTLineInsn)
-            continue;
-        if (classifyLine(lines[i + 1]) != XTLineInsn)
-            continue;
-        if (classifyLine(lines[i + 2]) != XTLineInsn)
-            continue;
-        if (classifyLine(lines[i + 3]) != XTLineInsn)
-            continue;
-
-        NSString *op0 = nil, *opd0 = nil, *op1 = nil, *opd1 = nil, *op2 = nil, *opd2 = nil, *op3 = nil, *opd3 = nil;
-        splitInsn(lines[i], &op0, &opd0);
-        splitInsn(lines[i + 1], &op1, &opd1);
-        splitInsn(lines[i + 2], &op2, &opd2);
-        splitInsn(lines[i + 3], &op3, &opd3);
-
-        if (![op0 isEqualToString:@"LDA"])
-            continue;
-        if (![opd0 hasPrefix:@"#$"])
-            continue;
-        if (![op1 isEqualToString:@"STA"])
-            continue;
-        if (![op2 isEqualToString:@"LDA"])
-            continue;
-        // Don't fold if the LDA at i+2 reloads the same slot — that
-        // means the value is still being used through the slot.
-        if ([opd2 isEqualToString:opd1])
-            continue;
-        if (![op3 isEqualToString:@"CMP"] &&
-            ![op3 isEqualToString:@"ADC"] &&
-            ![op3 isEqualToString:@"SBC"])
-            continue;
-        if (![opd3 isEqualToString:opd1])
-            continue; // must consume the slot
-        // The slot must be a one-shot: written here, read only at i+3.
-        // opd1 appears at i+1 (STA) and i+3 (consume) = 2 uses; any more
-        // means another instruction reads the slot, so dropping the store
-        // would corrupt it.
-        if ([opUses countForObject:opd1] != 2)
-            continue;
-
-        // Match. Drop the two anchor lines and rewrite the last to
-        // immediate form. Keep the LDA <other>.
-        [drop addIndex:i];     // LDA #$<imm>
-        [drop addIndex:i + 1]; // STA <slot>
-        // i+2: LDA <other> — keep
-        // i+3: rewrite to CMP/ADC/SBC #$<imm>
-        rewrite[@(i + 3)] = [NSString stringWithFormat:@"    %@ %@", op3, opd0];
-        }
-
-    if (drop.count == 0)
-        return asmText;
-
-    NSMutableArray<NSString*>* out = [NSMutableArray arrayWithCapacity:n];
-    for (NSUInteger i = 0; i < n; i++)
-        {
-        if ([drop containsIndex:i])
-            continue;
-        NSString* r = rewrite[@(i)];
-        [out addObject:r ?: lines[i]];
-        }
-    return [out componentsJoinedByString:@"\n"];
-    }
-
-// ─────────────────────────────────────────────────────────────────────
 // Rule: dead SP-frame store elimination.
 //
 //     STA +N,SP        ← dead: overwritten before any read
@@ -837,7 +700,11 @@ static NSString* applyDeadStore(NSString* asmText)
         {
         NSString* prev = cur;
         cur = applyICmpBranchFusion(cur);
-        cur = applyConstFold(cur);
+        // (The constant-immediate fold, LDA #imm / STA slot / LDA x / CMP slot,
+        // is gone (#333): its gate, a slot named exactly twice in the module,
+        // never held across the xt6502 corpus, so it folded nothing, and a
+        // looser gate miscompiles when the slot is read under another
+        // spelling (+N+1,SP after a push, an SP-indirect deref).)
         cur = applyRedundantReload(cur);
         cur = applyDuplicateStore(cur);
         cur = applyDeadStore(cur);

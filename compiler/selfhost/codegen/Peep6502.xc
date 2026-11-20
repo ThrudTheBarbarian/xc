@@ -297,98 +297,6 @@ class Peep6502
         return joinLines(out);
         }
 
-    // ── Rule 5: constant-immediate fold into CMP/ADC/SBC ─────────────────
-    //
-    //   LDA #$<imm> / STA <slot> / LDA <other> / CMP <slot>
-    //     ->          LDA <other> / CMP #$<imm>
-    //
-    // Gated on the slot being a ONE-SHOT: exactly two operand mentions in the
-    // whole text (the store and the single consumer). Without that gate a
-    // const fold elsewhere can shift the slot layout so this matches a slot
-    // something else still reads, which miscompiled a signed 16-bit compare
-    // into an infinite loop.
-    static String* constFold(String* text)
-        {
-        Array* lines = splitLines(text);
-        u32 n = lines.count();
-        Map* uses = new Map();
-        for (u32 i = (u32)0; i < n; i = i + (u32)1)
-            {
-            String* line = (String*)lines.get(i);
-            if (classify(line) != (u8)LK_INSN)
-                continue;
-            String* od = operandOf(line);
-            if (od.byteLength() == (u32)0)
-                continue;
-            Object* c = uses.get((Hashable*)od);
-            u32 v = c == (Object*)0 ? (u32)0 : ((Number*)c).asU32();
-            uses.set((Hashable*)od, (Object*)Number.with(v + (u32)1));
-            }
-        Array* drop = new Array();
-        Array* rewrite = new Array();
-        for (u32 i = (u32)0; i < n; i = i + (u32)1)
-            {
-            drop.add((Object*)Number.with((u32)0));
-            rewrite.add((Object*)0);
-            }
-        bool any = false;
-        for (u32 i = (u32)0; i + (u32)3 < n; i = i + (u32)1)
-            {
-            if (classify((String*)lines.get(i)) != (u8)LK_INSN)
-                continue;
-            if (classify((String*)lines.get(i + (u32)1)) != (u8)LK_INSN)
-                continue;
-            if (classify((String*)lines.get(i + (u32)2)) != (u8)LK_INSN)
-                continue;
-            if (classify((String*)lines.get(i + (u32)3)) != (u8)LK_INSN)
-                continue;
-            String* op0 = opOf((String*)lines.get(i));
-            String* od0 = operandOf((String*)lines.get(i));
-            String* op1 = opOf((String*)lines.get(i + (u32)1));
-            String* od1 = operandOf((String*)lines.get(i + (u32)1));
-            String* op2 = opOf((String*)lines.get(i + (u32)2));
-            String* od2 = operandOf((String*)lines.get(i + (u32)2));
-            String* op3 = opOf((String*)lines.get(i + (u32)3));
-            String* od3 = operandOf((String*)lines.get(i + (u32)3));
-            if (!eq(op0, "LDA"))
-                continue;
-            if (!od0.hasPrefix(String.withCString("#$")))
-                continue;
-            if (!eq(op1, "STA"))
-                continue;
-            if (!eq(op2, "LDA"))
-                continue;
-            if (od2.equals(od1))
-                continue; // reloads the slot: still live
-            if (!eq(op3, "CMP") && !eq(op3, "ADC") && !eq(op3, "SBC"))
-                continue;
-            if (!od3.equals(od1))
-                continue; // must consume the slot
-            Object* c = uses.get((Hashable*)od1);
-            if (c == (Object*)0 || ((Number*)c).asU32() != (u32)2)
-                continue;
-            drop.set(i, (Object*)Number.with((u32)1));
-            drop.set(i + (u32)1, (Object*)Number.with((u32)1));
-            String* r = String.withCString("    ");
-            r.append(op3);
-            r.appendCString(" ");
-            r.append(od0);
-            rewrite.set(i + (u32)3, (Object*)r);
-            any = true;
-            }
-        if (!any)
-            return text;
-        Array* out = new Array();
-        for (u32 i = (u32)0; i < n; i = i + (u32)1)
-            {
-            if (((Number*)drop.get(i)).asU32() != (u32)0)
-                continue;
-            Object* r = rewrite.get(i);
-            out.add(r != (Object*)0 ? r : lines.get(i));
-            }
-        return joinLines(out);
-        }
-
     // ── Rule: dead SP-frame store elimination ────────────────────────────
     //
     // A store to +N,SP is dead when a later store OVERWRITES the identical
@@ -716,7 +624,10 @@ class Peep6502
             {
             String* prev = cur;
             cur = icmpBranchFusion(cur);
-            cur = constFold(cur);
+            // (The constant-immediate fold is gone (#333): its gate, a slot
+            // named exactly twice in the module, never held across the xt6502
+            // corpus, so it folded nothing, and a looser gate miscompiles when
+            // the slot is read under another spelling. As the reference.)
             cur = redundantReload(cur);
             cur = duplicateStore(cur);
             cur = deadStore(cur);
