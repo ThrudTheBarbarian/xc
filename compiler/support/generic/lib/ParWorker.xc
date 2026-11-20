@@ -269,6 +269,8 @@ class ParCpuLane : Object
     i32 _cpu;           // the CPU it is pinned to (Linux), or -1
     Thread* _thread;
     Sem* _go;
+    Sem* _ready;        // posted once the lane has pinned itself, or tried to
+    bool _pinFailed;    // sched_setaffinity refused the lane's CPU
     Atomic* _done;      // 1 once the tile's chunk has run
     bool _busy;         // the queue's side: a tile is in the lane
     bool _quit;
@@ -282,6 +284,7 @@ class ParCpuLane : Object
     void start(void)
         {
         _go = Sem.withCount((i32)0);
+        _ready = Sem.withCount(0);
         _done = Atomic.withValue((i32)0);
         _thread = Thread.spawn(&self.loop);
         }
@@ -298,9 +301,14 @@ class ParCpuLane : Object
             for (u32 i = (u32)0; i < (u32)128; i = i + (u32)1)
                 mask[i] = (u8)0;
             mask[_cpu / (i32)8] = (u8)((u32)1 << (u32)(_cpu % (i32)8));
-            sched_setaffinity((i32)0, (u64)128, &mask[0]);
+            _pinFailed = sched_setaffinity(0, 128, &mask[0]) != 0;
             }
 #endif
+        // The lanes are made only once every lane has its CPU: a lane the
+        // direct path leaves idle (it has one lane more than it uses) might
+        // otherwise not have run yet, still holding the whole set, when the
+        // run was over.
+        _ready.post();
         while (true)
             {
             _go.wait();
@@ -430,6 +438,15 @@ class ParCpuLanes
                 lane.start();
                 gParLanes.add((Object*)lane);
                 }
+            for (u32 j = 0; j < gParLanes.count(); j = j + 1)
+                {
+                ParCpuLane* lane = (ParCpuLane*)gParLanes.get(j);
+                lane._ready.wait();
+                if (lane._pinFailed && ParDevice.reporting())
+                    Log.info("par: lane %u could not be pinned to CPU %d; it runs on any allowed CPU", j, lane._cpu);
+                }
+            if (gParLanesFirstCpu >= 0 && ParDevice.reporting())
+                Log.info("par: the calling thread on CPU %d, its %d lanes on the CPUs after it", gParLanesFirstCpu, n);
             }
         return gParLanes;
         }
