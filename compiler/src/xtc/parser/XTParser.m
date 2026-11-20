@@ -2555,6 +2555,9 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
             if ([self check:XTTokenShiftRight])
                 {
                 XTToken* sh = [self currentToken];
+                // In a copy: a stream that is parsed again still reads `>>`
+                // there, and the tokens may be a rewrite's immutable array.
+                _tokens = [_tokens mutableCopy];
                 [(NSMutableArray*)_tokens replaceObjectAtIndex:_pos
                                                     withObject:[XTToken tokenWithType:XTTokenGreater
                                                                                 value:@">"

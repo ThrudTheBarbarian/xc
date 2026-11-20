@@ -38,6 +38,9 @@ par-auto-trace: par_auto_corpus.xc:24 serial rule=outer-write form=range name=- 
 par-auto-trace: par_auto_fnptr.xc:15 lifted rule=block form=for name=par_auto_fnptr.xc:15 reds=+:acc grid=1 impl=0
 par-auto-trace: par_auto_fnptr.xc:24 lifted rule=block form=for name=par_auto_fnptr.xc:24 reds=+:acc grid=1 impl=1
 par-auto-trace: par_auto_fnptr.xc:34 lifted rule=block form=for name=par_auto_fnptr.xc:34 reds=+:acc grid=1 impl=2
+par-auto-trace: par_auto_gtgt.xc:15 lifted rule=block form=for name=par_auto_gtgt.xc:15 reds=- grid=1 impl=0
+par-auto-trace: par_auto_gtgt.xc:16 lifted rule=block form=for name=par_auto_gtgt.xc:16 reds=- grid=1 impl=1
+par-auto-trace: par_auto_gtgt.xc:18 serial rule=scan-refused form=for name=- reds=- grid=- impl=-
 par-auto-trace: par_auto_iv_write.xc:22 serial rule=iv-write form=for name=- reds=- grid=- impl=-
 par-auto-trace: par_auto_iv_write.xc:26 serial rule=iv-write form=range name=- reds=- grid=- impl=-
 par-auto-trace: par_auto_iv_write.xc:30 serial rule=iv-write form=for name=- reds=- grid=- impl=-

@@ -1734,6 +1734,9 @@ class Parser
                 // list — confined to this loop, never a lexer rule.
                 if (check((u16)tokShiftRight)) {
                     Token* sh = cur();
+                    // In a copy: a stream that is parsed again (the copy of a
+                    // loop --par-style=auto lifts) still reads `>>` there.
+                    _tokens = _tokens.subarray(0, _tokens.count());
                     _tokens.replaceAt(_pos, (Object*)Token.with((u16)tokGreater,
                                       String.withCString(">"), sh.line(), sh.col()));
                 } else if (!match((u16)tokGreater)) {
@@ -5972,6 +5975,7 @@ class Parser
                     for (u32 w = 0; w < walked.count(); w++)
                         declared.add((Hashable*)walked.get(w));
                 u32 save = _pos;
+                Array* saveToks = _tokens;
                 _pos = i;
                 // The reference's test: a type keyword, or a declared type name.
                 if (!_plStream && (isTypeKeywordToken(curType()) || (check(tokIdentifier) && isTypeName(cur().value())))) {
@@ -5991,6 +5995,9 @@ class Parser
                         j = j + (u32)1;
                     }
                 }
+                // The parse reads the loop's tokens as written: a `>>` the
+                // type spelling split stays one token there (#499).
+                _tokens = saveToks;
                 _pos = save;
             }
             if (ty != (u16)tokIdentifier) continue;
