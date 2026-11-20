@@ -24,6 +24,7 @@
 // written.
 
 #import "Foundation.xc"
+#import <SortStable>
 #import <X86Asm>
 #import "X86AsmDefs.xc"
 #import <CoffObject>
@@ -150,17 +151,8 @@ class Pe
     // `.globl` stays STATIC. Mirrors XTPEWriter's objectFromText.
     static void sortStrings(Array* a)
         {
-        for (u32 i = (u32)1; i < a.count(); i = i + (u32)1)
-            {
-            Object* v = a.get(i);
-            u32 j = i;
-            while (j > (u32)0 && ((String*)a.get(j - (u32)1)).compare((String*)v) > (i8)0)
-                {
-                a.set(j, a.get(j - (u32)1));
-                j = j - (u32)1;
-                }
-            a.set(j, v);
-            }
+        // Stable and n log n (#335): ties keep their order.
+        SortStable.byString(a);
         }
     // The next object's unwind entries (`.seh_proc` … `.seh_endproc`, C/C++
     // input): written as its .xdata and .pdata. None, and the object is as
@@ -623,6 +615,12 @@ class Pe
         _stubSym = new Array();
         _nImports = (u32)0;
         _exportAs = new Map();
+        // Which DLL lists a name, and the entry that names it, indexed once:
+        // the first DLL (in order) with a matching entry, and its first such
+        // entry, as a walk of every list per fixup found them (#335).
+        Map* importOwner = new Map();
+        Map* importEntry = new Map();
+        Pe.indexImports(importSyms, importOwner, importEntry);
         for (u32 i = (u32)0; i < fixups.count(); i = i + (u32)1)
             {
             X86Fixup* f = (X86Fixup*)fixups.get(i);
@@ -638,7 +636,8 @@ class Pe
                 continue;
             if (_iatIndex.get((Hashable*)want) != (Object*)0)
                 continue;
-            i32 owner = ownerOf(importDlls, importSyms, want);
+            Object* ownerNum = importOwner.get((Hashable*)want);
+            i32 owner = ownerNum != (Object*)0 ? (i32)((Number*)ownerNum).asU32() : (i32)-1;
             if (owner < (i32)0)
                 {
                 failWith(String.withCString("undefined symbol — it is neither defined here nor listed as a DLL import"),
@@ -656,7 +655,7 @@ class Pe
                 return;
                 }
             String* dll = (String*)importDlls.get((u32)owner);
-            String* ent = entryFor((Array*)importSyms.get((u32)owner), want);
+            String* ent = (String*)importEntry.get((Hashable*)want);
             if (ent != (String*)0 && ent.byteLength() > want.byteLength())
                 _exportAs.set((Hashable*)want, (Object*)ent.substringFromByte(want.byteLength() + (u32)1));
             // One descriptor per DLL, matched case-INSENSITIVELY: Windows loads
@@ -717,27 +716,32 @@ class Pe
         {
         return n != (String*)0 && n.hasPrefix(String.withCString("__imp_")) ? n.substringFromByte((u32)6) : (String*)0;
         }
-    // The import entry naming `name`: the name itself, or `name=export`
-    // when the symbol binds to a DLL export of another name (an import
-    // library's alias, close -> _close). Nil when the list has neither.
-    static String* entryFor(Array* a, String* name)
+    // The import lists indexed by the names they import. An entry names
+    // `name` itself, or `name=export` when the symbol binds to a DLL export of
+    // another name (an import library's alias, close -> _close), so it is
+    // filed under the whole entry and under each prefix that ends at an `=`.
+    // The first DLL to list a name, and its first entry for it, win.
+    static void indexImports(Array* syms, Map* owner, Map* entry)
         {
-        for (u32 i = (u32)0; i < a.count(); i = i + (u32)1)
+        for (u32 i = (u32)0; i < syms.count(); i = i + (u32)1)
             {
-            String* e = (String*)a.get(i);
-            if (e.equals(name))
-                return e;
-            if (e.byteLength() > name.byteLength() && e.byteAt(name.byteLength()) == (u8)'=' && e.hasPrefix(name))
-                return e;
+            Array* list = (Array*)syms.get(i);
+            for (u32 k = (u32)0; k < list.count(); k = k + (u32)1)
+                {
+                String* e = (String*)list.get(k);
+                for (u32 c = (u32)0; c <= e.byteLength(); c = c + (u32)1)
+                    {
+                    if (c < e.byteLength() && e.byteAt(c) != (u8)'=')
+                        continue;
+                    String* key = c == e.byteLength() ? e : e.substringBytes((u32)0, c);
+                    if (owner.get((Hashable*)key) == (Object*)0)
+                        {
+                        owner.set((Hashable*)key, (Object*)Number.withU32(i));
+                        entry.set((Hashable*)key, (Object*)e);
+                        }
+                    }
+                }
             }
-        return (String*)0;
-        }
-    static i32 ownerOf(Array* dlls, Array* syms, String* name)
-        {
-        for (u32 i = (u32)0; i < dlls.count(); i = i + (u32)1)
-            if (entryFor((Array*)syms.get(i), name) != (String*)0)
-                return (i32)i;
-        return (i32)-1;
         }
 
     // The name an import is looked up by in its DLL.
@@ -747,29 +751,11 @@ class Pe
         return e != (String*)0 ? e : sym;
         }
 
-    static i32 indexOfString(Array* a, String* s)
-        {
-        for (u32 i = (u32)0; i < a.count(); i = i + (u32)1)
-            if (((String*)a.get(i)).equals(s))
-                return (i32)i;
-        return (i32)-1;
-        }
-
     // Offsets in ascending order (the base-relocation blocks are per page).
     static void sortU32(Array* a)
         {
-        for (u32 i = (u32)1; i < a.count(); i = i + (u32)1)
-            {
-            Object* v = a.get(i);
-            u32 key = ((Number*)v).asU32();
-            u32 j = i;
-            while (j > (u32)0 && ((Number*)a.get(j - (u32)1)).asU32() > key)
-                {
-                a.set(j, a.get(j - (u32)1));
-                j = j - (u32)1;
-                }
-            a.set(j, v);
-            }
+        // Stable and n log n (#335): ties keep their order.
+        SortStable.byU32(a, a);
         }
 
     // ── Layout ───────────────────────────────────────────────────────────
