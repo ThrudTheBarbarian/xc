@@ -2,7 +2,10 @@
 // par_pin_cpus.xc — after a par block has run on the CPU, each thread's
 // allowed CPUs (Linux: /proc/self/task/*/status), sorted, one line a thread:
 // pinned, every lane holds one CPU of the process's set and the calling
-// thread has its own set back (tests/driver/par-pin.sh).
+// thread has its own set back (tests/driver/par-pin.sh). With a CPU as its
+// argument, the program first moves onto that CPU alone and then takes its
+// set back, so the calling thread starts its first block on that CPU and the
+// lanes are pinned from there (#460, #506).
 #import "Stdio.xc"
 #import "Par.xc"
 #import "Files.xc"
@@ -10,8 +13,29 @@
 
 #define N 4096
 
-i32 main(void)
+#if OS_linux
+i32 sched_getaffinity(i32 pid, u64 size, u8* mask);
+i32 sched_setaffinity(i32 pid, u64 size, u8* mask);
+#endif
+
+i32 main(i32 argc, u8** argv)
     {
+#if OS_linux
+    if (argc > 1)
+        {
+        i32 start = 0;
+        for (u8* p = argv[1]; *p >= '0' && *p <= '9'; p = p + 1)
+            start = start * 10 + (*p - '0');
+        u8 saved[128];
+        u8 one[128];
+        sched_getaffinity(0, 128, &saved[0]);
+        for (u32 i = 0; i < 128; i = i + 1)
+            one[i] = 0;
+        one[start / 8] = 1 << (start % 8);
+        sched_setaffinity(0, 128, &one[0]);
+        sched_setaffinity(0, 128, &saved[0]);
+        }
+#endif
     u32* out = new u32[N];
     par pin
         {
