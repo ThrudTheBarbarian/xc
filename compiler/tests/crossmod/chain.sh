@@ -130,6 +130,12 @@ check() {
 
 for spec in arm64:.dylib x86_64:.so win64:.dll arm9:.so wasm32:; do
     a=${spec%%:*}; x=${spec#*:}
+    # arm9's standard library calls the sysroot's libc (snprintf and co), so
+    # without one the first library cannot build.
+    if [ "$a" = arm9 ] && [ ! -d "${XTC_ARM9_SYSROOT:-/nonexistent}" ]; then
+        echo "SKIP  arm9: skipped (no arm9 sysroot: set \$XTC_ARM9_SYSROOT)"
+        continue
+    fi
     before=$fail
     check "$a" "$x"
     [ $fail = $before ] && echo "PASS  $a: Sub's slot map, and the two compilers agree"
@@ -141,7 +147,7 @@ done
 # to sit in .data unlabelled and nothing ran them. Running it needs the
 # library in the loader's romfs (tests/crossmod/run.sh rebuilds that), so
 # here it is built by both compilers, compared, and read.
-if [ -n "${XTC_ARM9_SYSROOT:-}" ]; then
+if [ -d "${XTC_ARM9_SYSROOT:-/nonexistent}" ]; then
     before=$fail
     RE=$(command -v arm-none-eabi-readelf || command -v llvm-readelf || command -v readelf)
     for c in xcc xcc-xc; do
