@@ -1954,14 +1954,33 @@ class ParRemote
         }
 
     // XC_PAR_REMOTE=host[:port],host[:port],…: a worker per entry. An entry
-    // `mdns` is every daemon on this subnet that answers within 300 ms and
-    // is of the pool XC_PAR_POOL names (none when unset) and this xcc
+    // `mdns` is every daemon on this subnet that answers the browse and is
+    // of the pool XC_PAR_POOL names (none when unset) and this xcc
     // version. With no XC_PAR_REMOTE, discovery runs only when XC_PAR_POOL
     // names a pool (the security review, 2026-10-21: discovery on by default
     // sent a program's data to whatever daemon answered on the subnet; naming
     // the pool is the one-line opt-in). The program browses once, at its
     // first par run; `XC_PAR_REMOTE=none` and a forced XC_PAR=cpu turn it
     // off. A daemon never browses for its peers.
+    // How long the mDNS browse listens, in ms: 300 at least, the old fixed
+    // window, so a browse finds every daemon it found before and takes no
+    // longer when they answer at once; then until 200 ms pass with no
+    // answer, which covers the spread of a busy machine's answers; and
+    // XC_PAR_MDNS_WAIT at most, default 2000, the cost of a browse that no
+    // daemon answers.
+    static i32 mdnsWait(void)
+        {
+        String* v = Platform.env(String.withCString("XC_PAR_MDNS_WAIT"));
+        i32 n = 0;
+        for (u32 i = (u32)0; i < v.byteLength(); i = i + (u32)1)
+            {
+            u8 c = v.byteAt(i);
+            if (c < (u8)'0' || c > (u8)'9' || n > 60000)
+                return 2000;
+            n = n * 10 + (i32)(c - (u8)'0');
+            }
+        return n > 0 && n <= 60000 ? n : 2000;
+        }
     static bool _off;
     static void noRemotes(void)
         {
@@ -1994,7 +2013,7 @@ class ParRemote
             if (entry.equals(String.withCString("mdns")))
                 {
                 String* pool = Platform.env(String.withCString("XC_PAR_POOL"));
-                Array* found = Mdns.browse(pool.cString(), PAR_CACHE_VER, (i32)300);
+                Array* found = Mdns.browse(pool.cString(), PAR_CACHE_VER, 300, 200, ParRemote.mdnsWait());
                 if (ParDevice.reporting())
                     Log.info("par: mdns: %u daemon(s) of pool '%s' on this subnet", found.count(), pool.cString());
                 for (u32 i = (u32)0; i < found.count(); i = i + (u32)1)

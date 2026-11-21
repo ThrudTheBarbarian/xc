@@ -7187,6 +7187,7 @@ void envUsage(void)
     settings.add((Object*)String.withCString("XCC_DEBUG_DIR|Roots for separate debug files (colon-separated; /usr/lib/debug)"));
     settings.add((Object*)String.withCString("XCC_NO_RUNTIME_LIB|=1: as --no-runtime-lib"));
     settings.add((Object*)String.withCString("XC_PAR_REMOTE|A remote GPU worker: programs carry every GPU kernel form"));
+    settings.add((Object*)String.withCString("XC_PAR_MDNS_WAIT|=<ms>: the longest a program's mDNS search for daemons listens (2000)"));
     settings.add((Object*)String.withCString("XC_LANGUAGES|A language table file, replacing the built-in rows"));
     settings.add((Object*)String.withCString("XCC_SIGN_PASSPHRASE|The passphrase of the --sign key"));
     settings.add((Object*)String.withCString("XCC_SIGN_CA_FILE|The CA bundle --sign's HTTPS requests trust"));

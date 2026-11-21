@@ -67,7 +67,9 @@ class MonPoller : Object
             if (now - lastBrowse > (i64)5000000)
                 {
                 lastBrowse = now;
-                Array* found = Mdns.browse(gPool.cString(), PAR_CACHE_VER, (i32)300);
+                // 300 ms each time: a daemon missed now is found five
+                // seconds later.
+                Array* found = Mdns.browse(gPool.cString(), PAR_CACHE_VER, 300, 200, 300);
                 for (u32 i = (u32)0; i < found.count(); i = i + (u32)1)
                     {
                     MdnsService* svc = (MdnsService*)found.get(i);

@@ -53,11 +53,12 @@ daemon() {
     case " $* " in *" -no-mdns "*) ;; *) seen "$log" 'xcd: advertising' 30 $XPID ;; esac
     return 0
 }
-# A program browsing for daemons (XC_PAR_REMOTE=mdns) waits 300 ms for their
-# answers, the runtime's own figure; a responder thread a loaded host has not
-# scheduled in that time is missed. A run that found no daemon at all is run
-# again, up to five times: what these cases check is which daemons a program
-# takes, not how fast they answer.
+# A program browsing for daemons (XC_PAR_REMOTE=mdns) listens until no
+# daemon has answered for a moment, and while none has, up to
+# XC_PAR_MDNS_WAIT ms; the browsing runs here allow 3000 ms, for a loaded
+# host. A run that found no daemon at all is still run again, up to five
+# times: what these cases check is which daemons a program takes, not how
+# fast they answer.
 browse() {
     local out=$1 i
     shift
@@ -170,8 +171,8 @@ PORT3=$((PORT + 2))
 daemon "$L/xcd3.log" XCD_HOME="$L/home1" XC_PAR_REPORT=1 XC_PAR_MACHINE=gate-other-machine -- -port $PORT3 -pool gate
 XCD3=$XPID
 mkdir -p "$L/st_mdns" "$L/st_mdns2"
-browse "$L/mdns.out" env XCC_SETTINGS_DIR="$L/st_mdns" XC_PAR_REMOTE=mdns XC_PAR_POOL=gate XC_PAR=all XC_PAR_REPORT=1 "$L/$f"
-XCC_SETTINGS_DIR="$L/st_mdns2" XC_PAR_REMOTE=mdns XC_PAR_POOL=other XC_PAR=all XC_PAR_REPORT=1 "$L/$f" > "$L/mdns2.out" 2>&1
+browse "$L/mdns.out" env XCC_SETTINGS_DIR="$L/st_mdns" XC_PAR_MDNS_WAIT=3000 XC_PAR_REMOTE=mdns XC_PAR_POOL=gate XC_PAR=all XC_PAR_REPORT=1 "$L/$f"
+XCC_SETTINGS_DIR="$L/st_mdns2" XC_PAR_MDNS_WAIT=3000 XC_PAR_REMOTE=mdns XC_PAR_POOL=other XC_PAR=all XC_PAR_REPORT=1 "$L/$f" > "$L/mdns2.out" 2>&1
 # Neither XC_PAR_REMOTE nor XC_PAR_POOL: no discovery at all (it used to be
 # on by default, which sent a program's data to whatever answered).
 mkdir -p "$L/st_mdns3"
@@ -193,7 +194,7 @@ PORTOWN=$((PORT + 11))
 daemon "$L/xcd_own.log" XCD_HOME="$L/home1" XC_PAR_REPORT=1 -- -port $PORTOWN -pool own
 XCDOWN=$XPID
 mkdir -p "$L/st_own"
-browse "$L/own.out" env XCC_SETTINGS_DIR="$L/st_own" XC_PAR_REMOTE=mdns XC_PAR_POOL=own XC_PAR=all XC_PAR_REPORT=1 "$L/$f"
+browse "$L/own.out" env XCC_SETTINGS_DIR="$L/st_own" XC_PAR_MDNS_WAIT=3000 XC_PAR_REMOTE=mdns XC_PAR_POOL=own XC_PAR=all XC_PAR_REPORT=1 "$L/$f"
 # (The program connects to learn the daemon's machine, so it logs the worker
 # before it leaves it out: the daemon's own log says whether it took a block.)
 if grep -v '^par:' "$L/own.out" | diff -q - "tests/fixtures/$f.expected.out" > /dev/null && ! grep -q 'taken' "$L/xcd_own.log" \

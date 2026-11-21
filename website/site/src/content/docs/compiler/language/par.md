@@ -951,8 +951,11 @@ A daemon advertises itself on its subnet (multicast DNS, as `_xcd._tcp`),
 and `xcd -pool NAME` names the pool it belongs to, so projects on one network
 keep separate host sets. A program looks for daemons only when asked to:
 with `XC_PAR_POOL` set (and no `XC_PAR_REMOTE`), at its first `par` run it
-asks the subnet once, waits a moment, and takes every daemon that answered,
-of that pool and of its own xcc version. With neither set it uses no remote
+asks the subnet once and takes every daemon that answered, of that pool and
+of its own xcc version. It listens for at least 300 ms, and stops once no
+such daemon has answered for 200 ms; while none has answered it listens on, up to
+`XC_PAR_MDNS_WAIT` milliseconds (2000 by default), so a busy machine's daemon
+is not missed. With neither set it uses no remote
 daemon at all, so a program does not send its data to whatever answers on
 the network unless it was told to. A daemon on the program's own machine is left out, since
 its devices are the program's already; named by address, it is still taken.

@@ -204,6 +204,7 @@ empty value is the same as an unset one.
 |---|---|---|---|
 | `XC_PAR_REMOTE` | `host[:port],…`, `mdns`, or `none` | none, unless `XC_PAR_POOL` is set | the xcd daemons the program may send tiles to; `mdns` finds them on the local network |
 | `XC_PAR_POOL` | a pool name | unset | finds the daemons of that pool by mDNS; setting it alone turns discovery on |
+| `XC_PAR_MDNS_WAIT` | milliseconds, `1`–`60000` | `2000` | the longest the mDNS search listens. It listens at least 300 ms, then stops 200 ms after the last answer from a daemon of its pool; while none has answered it goes on to this limit |
 | `XC_PAR_SECRET` | the pool's secret | none | proves to the daemons that the program belongs to the pool |
 | `XC_PAR_VERIFY` | `0`, `all` | checks a sample | how many of a remote daemon's tiles are checked on the CPU (exact integer blocks only); a mismatch drops the daemon |
 | `XC_TLS_LIB` | a file path | beside the program, then the toolchain, then the system | the TLS library for connections to daemons |

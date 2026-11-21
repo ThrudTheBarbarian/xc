@@ -460,9 +460,15 @@ class Mdns
         }
 
     // ── Browsing ───────────────────────────────────────────────────────
-    // The daemons on this subnet that answer within ms, of the given pool
-    // ("" for those with none) and this xcc version: MdnsService each.
-    static Array* browse(u8* pool, u8* version, i32 ms)
+    // The daemons on this subnet that answer, of the given pool ("" for
+    // those with none) and this xcc version: MdnsService each. A browse
+    // listens for `first` ms at least. Past that it stops once no daemon has
+    // answered for `quiet` ms; while none has answered at all it listens on,
+    // and it never listens longer than `most` ms. A fixed window missed the
+    // daemon of a loaded machine, whose answer came late (#421). Only the
+    // answers of daemons it takes count: another pool's daemon answering
+    // says nothing about when this pool's will.
+    static Array* browse(u8* pool, u8* version, i32 first, i32 quiet, i32 most)
         {
         Array* found = new Array();
         MdnsSocket* s = MdnsSocket.open(false);
@@ -475,12 +481,22 @@ class Mdns
         group[3] = (u8)251;
         Data* q = Mdns.query();
         s.send(q.bytes(), q.length(), &group[0], (u16)MDNS_PORT);
-        i64 until = ParDevice.nowUs() / (i64)1000 + (i64)ms;
+        i64 start = ParDevice.nowUs() / (i64)1000;
+        i64 last = (i64)-1;          // when the latest daemon's answer came
         u8 buf[1500];
         u8 ip[4];
         u16 port = (u16)0;
         while (true)
             {
+            i64 until = start + (i64)most;
+            if (last >= (i64)0)
+                {
+                i64 settled = last + (i64)quiet;
+                if (settled < start + (i64)first)
+                    settled = start + (i64)first;
+                if (settled < until)
+                    until = settled;
+                }
             i64 left = until - ParDevice.nowUs() / (i64)1000;
             if (left <= (i64)0)
                 break;
@@ -490,11 +506,12 @@ class Mdns
             MdnsService* svc = Mdns.parseAnswer(&buf[0], (u32)n, &ip[0], version);
             if (ParDevice.reporting())
                 {
-                Log.info("par: mdns: %d bytes from %s:%u, %s", n, Mdns.dotted(&ip[0]).cString(), (u32)port,
-                         svc == (MdnsService*)0 ? "not a daemon's answer" : "a daemon");
+                Log.info("par: mdns: %d bytes from %s:%u after %ld ms, %s", n, Mdns.dotted(&ip[0]).cString(), (u32)port,
+                         ParDevice.nowUs() / (i64)1000 - start, svc == (MdnsService*)0 ? "not a daemon's answer" : "a daemon");
                 }
             if (svc == (MdnsService*)0 || !svc.pool.equals(String.withCString(pool)))
                 continue;
+            last = ParDevice.nowUs() / (i64)1000;
             bool seen = false;
             for (u32 i = (u32)0; i < found.count(); i = i + (u32)1)
                 {
@@ -506,6 +523,8 @@ class Mdns
                 found.add((Object*)svc);
             }
         s.close();
+        if (ParDevice.reporting())
+            Log.info("par: mdns: listened %ld ms", ParDevice.nowUs() / (i64)1000 - start);
         return found;
         }
     }
