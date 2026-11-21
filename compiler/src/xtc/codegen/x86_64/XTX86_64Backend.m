@@ -1092,6 +1092,70 @@ static NSArray<NSString *> *XTAsmStatements(NSString *text) {
     }
 
 
+// ── Inline asm is the user's ────────────────────────────────────────────
+//
+// emitInsn brackets an asm body with `# inline asm` and `# end inline asm`.
+// The text peepholes never see the body: XTX86HideAsm takes each body out into
+// `bodies`, leaving the two markers side by side, and XTX86RestoreAsm puts them
+// back. Each pass takes a marker as a barrier: the asm may read or write any
+// register, slot or flag, so no copy is propagated past it, no jump or compare
+// is dropped across it, and no block holding one is copied. withVzeroupper
+// leaves the body as written. Mirrored in the port (x86HideAsm/x86RestoreAsm).
+static BOOL XTX86IsAsmMark(NSString* t)
+    {
+    return [t isEqualToString:@"# inline asm"] || [t isEqualToString:@"# end inline asm"];
+    }
+
+static NSString* XTX86HideAsm(NSString* text, NSMutableArray<NSArray<NSString*>*>* bodies)
+    {
+    NSMutableArray<NSString*>* out = [NSMutableArray array];
+    NSMutableArray<NSString*>* body = nil;
+    NSCharacterSet* ws = [NSCharacterSet whitespaceCharacterSet];
+    for (NSString* ln in [text componentsSeparatedByString:@"\n"])
+        {
+        NSString* t = [ln stringByTrimmingCharactersInSet:ws];
+        if (body)
+            {
+            if (![t isEqualToString:@"# end inline asm"])
+                {
+                [body addObject:ln];
+                continue;
+                }
+            [bodies addObject:body];
+            body = nil;
+            }
+        else if ([t isEqualToString:@"# inline asm"])
+            body = [NSMutableArray array];
+        [out addObject:ln];
+        }
+    if (body)
+        [bodies addObject:body]; // unterminated: to the end
+    return [out componentsJoinedByString:@"\n"];
+    }
+
+// The peepholed text with each body back after its opening marker; the text as
+// emitted (`orig`) when a marker went missing on the way.
+static NSString* XTX86RestoreAsm(NSString* text, NSArray<NSArray<NSString*>*>* bodies, NSString* orig)
+    {
+    NSMutableArray<NSString*>* out = [NSMutableArray array];
+    NSUInteger k = 0;
+    NSCharacterSet* ws = [NSCharacterSet whitespaceCharacterSet];
+    for (NSString* ln in [text componentsSeparatedByString:@"\n"])
+        {
+        [out addObject:ln];
+        if ([[ln stringByTrimmingCharactersInSet:ws] isEqualToString:@"# inline asm"])
+            {
+            if (k >= bodies.count)
+                return orig;
+            [out addObjectsFromArray:bodies[k]];
+            k++;
+            }
+        }
+    if (k != bodies.count)
+        return orig;
+    return [out componentsJoinedByString:@"\n"];
+    }
+
 // ── lea peephole ────────────────────────────────────────────────────────
 // Two rewrites over a function's finished text (the port's peepholeLea):
 //
@@ -1164,7 +1228,7 @@ static BOOL x86LeaFlagsRead(NSArray<NSString*>* lines, NSUInteger from)
     for (NSUInteger j = from; j < lines.count && j < from + 64; j++)
         {
         NSString* t = [lines[j] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
-        if ([t hasSuffix:@":"])
+        if ([t hasSuffix:@":"] || XTX86IsAsmMark(t))
             return YES;
         if (t.length == 0 || [t hasPrefix:@"."] || [t hasPrefix:@"#"])
             continue;
@@ -1398,10 +1462,22 @@ static BOOL x86LeaFlagsRead(NSArray<NSString*>* lines, NSUInteger from)
         return text;
     NSMutableString* out = [NSMutableString stringWithCapacity:text.length + 256];
     NSArray<NSString*>* lines = [text componentsSeparatedByString:@"\n"];
+    BOOL inAsm = NO;
     for (NSUInteger li = 0; li < lines.count; li++)
         {
         NSString* line = lines[li];
         NSString* t = [line stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+        // An inline-asm body as written.
+        if ([t isEqualToString:@"# inline asm"])
+            inAsm = YES;
+        else if ([t isEqualToString:@"# end inline asm"])
+            inAsm = NO;
+        if (inAsm || XTX86IsAsmMark(t))
+            {
+            [out appendString:line];
+            [out appendString:@"\n"];
+            continue;
+            }
         BOOL exitInsn = [t hasPrefix:@"call\t"] || [t hasPrefix:@"call "] || [t isEqualToString:@"ret"]
                         || ([t hasPrefix:@"jmp\t"] && ![t hasPrefix:@"jmp\t."]);
         if (exitInsn)
@@ -1467,7 +1543,8 @@ static BOOL x86LeaFlagsRead(NSArray<NSString*>* lines, NSUInteger from)
 + (BOOL)readsFlags:(NSString*)t
 {
     return ([t hasPrefix:@"j"] && ![t hasPrefix:@"jmp"]) || [t hasPrefix:@"set"] || [t hasPrefix:@"cmov"] ||
-           [t hasPrefix:@"adc"] || [t hasPrefix:@"sbb"] || [t hasPrefix:@"rcl"] || [t hasPrefix:@"rcr"];
+           [t hasPrefix:@"adc"] || [t hasPrefix:@"sbb"] || [t hasPrefix:@"rcl"] || [t hasPrefix:@"rcr"] ||
+           XTX86IsAsmMark(t);
 }
 + (NSString*)peepholeFlags:(NSString*)text
 {
@@ -1484,6 +1561,8 @@ static BOOL x86LeaFlagsRead(NSArray<NSString*>* lines, NSUInteger from)
       for (NSUInteger j = from; j < lines.count; j++)
           {
           NSString* u = [lines[j] stringByTrimmingCharactersInSet:ws];
+          if (XTX86IsAsmMark(u))
+              return u;
           if (!u.length || [u hasPrefix:@"#"] || [u hasPrefix:@"."] || [u hasSuffix:@":"])
               continue;
           return u;
@@ -1572,6 +1651,8 @@ enum { TAILDUP_MAX = 6 };
             for (; j < lines.count; j++)
                 {
                 NSString* u = [lines[j] stringByTrimmingCharactersInSet:ws];
+                if (XTX86IsAsmMark(u))
+                    break;
                 if (!u.length || [u hasPrefix:@"#"])
                     continue;
                 if ([u hasPrefix:@".loc"])
@@ -1632,7 +1713,7 @@ enum { TAILDUP_MAX = 6 };
           {
           NSString* t = [lines[j] stringByTrimmingCharactersInSet:
                             [NSCharacterSet whitespaceCharacterSet]];
-          if (!t.length || [t hasPrefix:@".p2align"] || [t hasPrefix:@"#"])
+          if (!t.length || [t hasPrefix:@".p2align"] || ([t hasPrefix:@"#"] && !XTX86IsAsmMark(t)))
               continue;
           return (NSInteger)j;
           }
@@ -2078,7 +2159,16 @@ static BOOL x86IsShift(NSString* m)
                 touch(j);
                 NSArray* jo = parse(lines[j], &jm);
                 if (!jo)
+                    {
+                    // the asm may read it
+                    if (XTX86IsAsmMark([lines[j] stringByTrimmingCharactersInSet:
+                                                     [NSCharacterSet whitespaceCharacterSet]]))
+                        {
+                        dead = NO;
+                        break;
+                        }
                     continue; // label/directive/blank
+                    }
                 // hidden rax/rdx use → assume live
                 if (x86ImplicitClobber(jm))
                     {
@@ -2336,7 +2426,13 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
             // peepholeLea again after the tail copies: a copied block that
             // starts with `mov r, r` can land after a 32-bit write of r (the
             // port explains).
-            [out appendString:[self withVzeroupper:[self peepholeLea:[self peepholeTailDup:[self peepholeFlags:[self peepholeFallthrough:[self peepholeLea:[self peepholeCopyProp:fbuf]]]]]] avx:fn.simdLevel != nil]];
+            // An inline-asm body is the user's: out of the peepholes' sight.
+            NSMutableArray<NSArray<NSString*>*>* asmBodies = [NSMutableArray array];
+            BOOL hasAsm = [fbuf rangeOfString:@"\t# inline asm\n"].location != NSNotFound;
+            NSString* pp = [self peepholeLea:[self peepholeTailDup:[self peepholeFlags:[self peepholeFallthrough:[self peepholeLea:[self peepholeCopyProp:hasAsm ? XTX86HideAsm(fbuf, asmBodies) : fbuf]]]]]];
+            if (hasAsm)
+                pp = XTX86RestoreAsm(pp, asmBodies, fbuf);
+            [out appendString:[self withVzeroupper:pp avx:fn.simdLevel != nil]];
             }
         }
     // The matrix kernels the module calls (idiom-matmul): `_auto` is dispatched
@@ -7636,6 +7732,7 @@ static BOOL xtConstThrough(XTIRValueId v, XTIRInsn* (^defOf)(XTIRValueId), int d
             if (t.length)
                 [out appendFormat:@"\t%@\n", t];
             }
+        [out appendString:@"\t# end inline asm\n"];
         return;
         }
 

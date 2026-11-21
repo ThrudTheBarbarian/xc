@@ -4099,6 +4099,8 @@ class Xt6502
             if (l.byteLength() == (u32)0) continue;
             _out.appendFormat("    %s\n", l.cString());
         }
+        // Where the body ends, for the asm-text peephole, which drops this line.
+        _out.appendCString("    ; end inline asm\n");
     }
 
     // `{{XTLOCAL:<vid>}}` — a whole pinned local: its ZP byte, or its spill

@@ -3615,6 +3615,8 @@ static NSString *padLeft(NSString *s, NSUInteger width) {
                 if (line.length == 0) continue;
                 [ctx.out appendFormat:@"    %@\n", line];
             }
+            // Where the body ends, for the asm-text peephole, which drops this line.
+            [ctx.out appendString:@"    ; end inline asm\n"];
             break;
         }
 

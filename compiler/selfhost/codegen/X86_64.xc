@@ -506,9 +506,17 @@ class X86_64
             // peepholeLea again after the tail copies: a copied block that starts
             // with `mov r, r` can land after a 32-bit write of r, which the first
             // pass never saw side by side.
-            Array* fl = _out.splitOnByte((u8)'\n');
+            // An inline-asm body is the user's: out of the peepholes' sight.
+            String* emitted = _out;
+            bool hasAsm = _hasAsm && emitted.contains(String.withCString("\t# inline asm\n"));
+            Array* asmBodies = new Array();
+            Array* fl = emitted.splitOnByte((u8)'\n');
+            if (hasAsm)
+                fl = x86HideAsm(fl, asmBodies);
             fl = peepholeFallthroughLines(peepholeLeaLines(peepholeCopyPropLines(fl)));
             fl = peepholeLeaLines(peepholeTailDupLines(peepholeFlagsLines(fl)));
+            if (hasAsm)
+                fl = x86RestoreAsm(fl, asmBodies, emitted);
             module.append(withVzeroupper(x86JoinLines(fl), fn.simdLevel() != (String*)0));
             _out = module;
             }
@@ -4506,6 +4514,7 @@ class X86_64
             if (t.byteLength() > (u32)0)
                 _out.appendFormat("\t%s\n", t.cString());
             }
+        _out.appendCString("\t# end inline asm\n");
         }
 
     String* resolveAsmLocals(String* text)
@@ -4555,6 +4564,70 @@ class X86_64
         for (u32 i = (u32)0; i < bytes.count(); i = i + (u32)1)
             o.appendByte((u8)((Number*)bytes.get(i)).asU32());
         return o;
+        }
+
+    // ── Inline asm is the user's ─────────────────────────────────────────
+    //
+    // emitAsm brackets an asm body with `# inline asm` and `# end inline asm`.
+    // The text peepholes never see the body: x86HideAsm takes each body out
+    // into `bodies`, leaving the two markers side by side, and x86RestoreAsm
+    // puts them back. Each pass takes a marker as a barrier: the asm may read
+    // or write any register, slot or flag, so no copy is propagated past it,
+    // no jump or compare is dropped across it, and no block holding one is
+    // copied. withVzeroupper leaves the body as written.
+    static bool isAsmMark(String* t)
+        {
+        return t.equals(String.withCString("# inline asm")) || t.equals(String.withCString("# end inline asm"));
+        }
+
+    static Array* x86HideAsm(Array* lines, Array* bodies)
+        {
+        Array* out = new Array();
+        Array* body = (Array*)0;
+        for (u32 i = 0; i < lines.count(); i++)
+            {
+            String* ln = (String*)lines.get(i);
+            String* t = ln.trimmed();
+            if (body != (Array*)0)
+                {
+                if (!t.equals(String.withCString("# end inline asm")))
+                    {
+                    body.add((Object*)ln);
+                    continue;
+                    }
+                bodies.add((Object*)body);
+                body = (Array*)0;
+                }
+            else if (t.equals(String.withCString("# inline asm")))
+                body = new Array();
+            out.add((Object*)ln);
+            }
+        if (body != (Array*)0)
+            bodies.add((Object*)body);  // unterminated: to the end
+        return out;
+        }
+
+    // The peepholed lines with each body back after its opening marker; the
+    // text as emitted (`orig`) when a marker went missing on the way.
+    static Array* x86RestoreAsm(Array* lines, Array* bodies, String* orig)
+        {
+        Array* out = new Array();
+        u32 k = 0;
+        for (u32 i = 0; i < lines.count(); i++)
+            {
+            String* ln = (String*)lines.get(i);
+            out.add((Object*)ln);
+            if (ln.trimmed().equals(String.withCString("# inline asm")))
+                {
+                if (k >= bodies.count())
+                    return orig.splitOnByte((u8)'\n');
+                out.addAll((Array*)bodies.get(k));
+                k++;
+                }
+            }
+        if (k != bodies.count())
+            return orig.splitOnByte((u8)'\n');
+        return out;
         }
 
     // ── Copy-propagation peephole ────────────────────────────────────────
@@ -4853,7 +4926,7 @@ class X86_64
         for (u32 j = from; j < lines.count() && j < from + (u32)64; j = j + (u32)1)
             {
             String* t = ((String*)lines.get(j)).trimmed();
-            if (t.hasSuffix(String.withCString(":")))
+            if (t.hasSuffix(String.withCString(":")) || isAsmMark(t))
                 return true;
             if (t.byteLength() == (u32)0 || t.hasPrefix(String.withCString(".")) || t.hasPrefix(String.withCString("#")))
                 continue;
@@ -5006,7 +5079,7 @@ class X86_64
                 continue;
             if (t.hasPrefix(String.withCString(".p2align")))
                 continue;
-            if (t.hasPrefix(String.withCString("#")))
+            if (t.hasPrefix(String.withCString("#")) && !isAsmMark(t))
                 continue;
             return (i32)j;
             }
@@ -5042,10 +5115,22 @@ class X86_64
             return text;
         Array* lines = text.splitOnByte((u8)'\n');
         String* out = String.withCString("");
+        bool inAsm = false;
         for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1)
             {
             String* line = (String*)lines.get(i);
             String* t = line.trimmed();
+            // An inline-asm body as written.
+            if (t.equals(String.withCString("# inline asm")))
+                inAsm = true;
+            else if (t.equals(String.withCString("# end inline asm")))
+                inAsm = false;
+            if (inAsm || isAsmMark(t))
+                {
+                out.append(line);
+                out.appendCString("\n");
+                continue;
+                }
             bool exitInsn = t.hasPrefix(String.withCString("call\t")) || t.hasPrefix(String.withCString("call "))
                             || t.equals(String.withCString("ret"))
                             || (t.hasPrefix(String.withCString("jmp\t")) && !t.hasPrefix(String.withCString("jmp\t.")));
@@ -5261,7 +5346,7 @@ class X86_64
         {
         return (t.hasPrefix(String.withCString("j")) && !t.hasPrefix(String.withCString("jmp"))) || t.hasPrefix(String.withCString("set"))
             || t.hasPrefix(String.withCString("cmov")) || t.hasPrefix(String.withCString("adc")) || t.hasPrefix(String.withCString("sbb"))
-            || t.hasPrefix(String.withCString("rcl")) || t.hasPrefix(String.withCString("rcr"));
+            || t.hasPrefix(String.withCString("rcl")) || t.hasPrefix(String.withCString("rcr")) || isAsmMark(t);
         }
 
     // The first instruction at or after line from, past blanks, directives
@@ -5271,6 +5356,8 @@ class X86_64
         for (u32 j = from; j < lines.count(); j = j + (u32)1)
             {
             String* u = ((String*)lines.get(j)).trimmed();
+            if (isAsmMark(u))
+                return u;
             if (u.byteLength() == (u32)0 || u.hasPrefix(String.withCString("#")) || u.hasPrefix(String.withCString("."))
                 || u.byteAt(u.byteLength() - (u32)1) == (u8)':')
                 continue;
@@ -5408,6 +5495,8 @@ class X86_64
         for (u32 j = li + (u32)1; j < lines.count(); j = j + (u32)1)
             {
             String* u = ((String*)lines.get(j)).trimmed();
+            if (isAsmMark(u))
+                return (Array*)0;
             if (u.byteLength() == (u32)0 || u.hasPrefix(String.withCString("#")))
                 continue;
             if (u.hasPrefix(String.withCString(".loc")))
@@ -5708,7 +5797,11 @@ class X86_64
             Array* jo = parseLine((String*)lines.get(j));
             jm = takeMnem(jo);
             if (jo == (Array*)0)
+                {
+                if (isAsmMark(((String*)lines.get(j)).trimmed()))
+                    return false; // the asm may read it
                 continue; // a label, directive or blank
+                }
             if (implicitClobber(jm))
                 return false; // a hidden use: assume live
             if (mentionsAny((String*)lines.get(j), dviews))
