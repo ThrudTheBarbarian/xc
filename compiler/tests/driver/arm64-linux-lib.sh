@@ -54,9 +54,13 @@ msg="code"
 H=${XTC_LINUX_ARM64_HOST:-}
 if [ $fail = 0 ] && [ -n "$H" ]; then
     SSHO="-o BatchMode=yes -o LogLevel=ERROR"
-    ssh $SSHO "$H" 'rm -rf a64lib && mkdir a64lib' && scp $SSHO -q "$W/x/use" "$W/x/libAdder.so" "$H:a64lib/" \
+    # A private directory on the host, removed on exit: fixed names in the home
+    # directory collide between gate legs that share the host.
+    RD=$(ssh $SSHO "$H" 'mktemp -d /tmp/xc-a64lib.XXXXXX') || { echo "FAIL: no scratch dir on $H"; exit 1; }
+    trap 'rm -rf "$W"; ssh -o BatchMode=yes "$H" "rm -rf $RD" 2>/dev/null' EXIT
+    ssh $SSHO "$H" "cd $RD && "'rm -rf a64lib && mkdir a64lib' && scp $SSHO -q "$W/x/use" "$W/x/libAdder.so" "$H:$RD/a64lib/" \
         || { echo "FAIL: copy to the host"; exit 1; }
-    out=$(ssh $SSHO "$H" 'cd a64lib && ./use a; echo "rc=$?"; cd && rm -rf a64lib')
+    out=$(ssh $SSHO "$H" "cd $RD && "'cd a64lib && ./use a; echo "rc=$?"; cd && rm -rf a64lib')
     [ "$out" = "adder 43
 rc=0" ] || { echo "FAIL arm64-linux-lib: on the host it printed: $out"; fail=1; }
     msg="code and run"

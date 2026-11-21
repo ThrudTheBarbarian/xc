@@ -73,8 +73,12 @@ if [ "$(uname -m)" = x86_64 ] && [ "$PLAT" = linux ]; then
 elif [ -n "$H" ]; then
     "$XC" -q -A x86_64 -O2 -o "$W/fma" "$W/fma.xc" || { echo "FAIL: does not build for x86-64"; exit 1; }
     SSHO="-o BatchMode=yes -o LogLevel=ERROR"
-    scp $SSHO -q "$W/fma" "$H:fma-speed.bin" || { echo "FAIL: copy to $H"; exit 1; }
-    run() { ssh $SSHO "$H" "XC_SIMD=$1 ./fma-speed.bin 2>/dev/null"; }
+    # A private directory on the host, removed on exit: fixed names in the home
+    # directory collide between gate legs that share the host.
+    RD=$(ssh $SSHO "$H" 'mktemp -d /tmp/xc-fmaspeed.XXXXXX') || { echo "FAIL: no scratch dir on $H"; exit 1; }
+    trap 'rm -rf "$W"; ssh -o BatchMode=yes "$H" "rm -rf $RD" 2>/dev/null' EXIT
+    scp $SSHO -q "$W/fma" "$H:$RD/fma-speed.bin" || { echo "FAIL: copy to $H"; exit 1; }
+    run() { ssh $SSHO "$H" "cd $RD && XC_SIMD=$1 ./fma-speed.bin 2>/dev/null"; }
 fi
 a=$(run avx2); b=$(run base)
 if [ -n "$a" ] && [ -n "$b" ]; then
@@ -84,6 +88,6 @@ if [ -n "$a" ] && [ -n "$b" ]; then
 else
     msg="not run (no x86-64 host)"
 fi
-[ -n "$H" ] && ssh -o BatchMode=yes -o LogLevel=ERROR "$H" 'rm -f fma-speed.bin' 2>/dev/null
+[ -n "$H" ] && ssh -o BatchMode=yes -o LogLevel=ERROR "$H" "cd $RD && "'rm -f fma-speed.bin' 2>/dev/null
 [ $fail = 0 ] && echo "fma-speed: ok ($fused fused in the speed loop, none in the plain one; $msg)"
 exit $fail

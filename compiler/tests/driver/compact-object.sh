@@ -51,7 +51,11 @@ H=${XTC_LINUX_ARM64_HOST:-}
 if [ -n "$H" ]; then
     SSHO="-o BatchMode=yes -o LogLevel=ERROR"
     "$XC" -q -O2 -A arm64-linux -o "$W/pa" "$F" > "$W/e" 2>&1 || { echo "FAIL compact-object: no arm64 Linux build: $(head -c 200 "$W/e")"; exit 1; }
-    scp $SSHO -q "$W/pa" "$H:compact-object.bin" && ssh $SSHO "$H" './compact-object.bin; rm -f compact-object.bin' > "$W/outa" 2>&1
+    # A private directory on the host, removed on exit: fixed names in the home
+    # directory collide between gate legs that share the host.
+    RD=$(ssh $SSHO "$H" 'mktemp -d /tmp/xc-compactobj.XXXXXX') || { echo "FAIL: no scratch dir on $H"; exit 1; }
+    trap 'rm -rf "$W"; ssh -o BatchMode=yes "$H" "rm -rf $RD" 2>/dev/null' EXIT
+    scp $SSHO -q "$W/pa" "$H:$RD/compact-object.bin" && ssh $SSHO "$H" "cd $RD && "'./compact-object.bin; rm -f compact-object.bin' > "$W/outa" 2>&1
     cmp -s "$W/outa" "$E" || { echo "FAIL compact-object: on $H it prints: $(head -c 300 "$W/outa")"; fail=1; }
 fi
 [ $fail = 0 ] && echo "compact-object: ok"

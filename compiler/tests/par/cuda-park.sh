@@ -31,8 +31,12 @@ check() {  # label, output file, 1 when the host has an NVIDIA card (CUDA must b
 }
 if [ -n "$WH" ]; then
     "$XC" -q --par-style=cpu -A win64 -O2 -H . -o "$W/pab.exe" tests/fixtures/par_alternate_blocks.xc || { echo "FAIL cuda-park: build"; exit 1; }
-    scp $SSHO -q "$W/pab.exe" "$WH:cuda-park.exe" || { echo "FAIL cuda-park: copy"; exit 1; }
-    ssh $SSHO "$WH" '$env:XC_PAR="gpu"; $env:XC_PAR_REPORT="1"; .\cuda-park.exe 2>&1; Remove-Item cuda-park.exe' \
+    # A directory of its own on the host, removed after: fixed names in the
+    # home directory collide between gate legs that share the host.
+    WD="xc-cudapark-$$-$RANDOM"
+    ssh $SSHO "$WH" "New-Item -ItemType Directory $WD | Out-Null" || { echo "FAIL cuda-park: no scratch dir on $WH"; exit 1; }
+    scp $SSHO -q "$W/pab.exe" "$WH:$WD/cuda-park.exe" || { echo "FAIL cuda-park: copy"; exit 1; }
+    ssh $SSHO "$WH" "cd $WD; "'$env:XC_PAR="gpu"; $env:XC_PAR_REPORT="1"; .\cuda-park.exe 2>&1; '"cd ..; Remove-Item -Recurse -Force $WD" \
         | tr -d '\r' > "$W/out" 2>&1
     check "$WH" "$W/out"
 fi
@@ -40,8 +44,9 @@ if [ -n "$LH" ]; then
     # Its runtime compiled in: the program runs on another machine, which has
     # no copy of this tree's libRuntime.
     "$XC" -q --par-style=cpu --no-runtime-lib -A x86_64 -O2 -H . -o "$W/pab" tests/fixtures/par_alternate_blocks.xc || { echo "FAIL cuda-park: x86-64 build"; exit 1; }
-    scp $SSHO -q "$W/pab" "$LH:cuda-park.bin" || { echo "FAIL cuda-park: copy to $LH"; exit 1; }
-    ssh $SSHO "$LH" 'XC_PAR=gpu XC_PAR_REPORT=1 ./cuda-park.bin 2>&1; rm -f cuda-park.bin' > "$W/lout" 2>&1
+    RD=$(ssh $SSHO "$LH" 'mktemp -d /tmp/xc-cudapark.XXXXXX') || { echo "FAIL cuda-park: no scratch dir on $LH"; exit 1; }
+    scp $SSHO -q "$W/pab" "$LH:$RD/cuda-park.bin" || { echo "FAIL cuda-park: copy to $LH"; exit 1; }
+    ssh $SSHO "$LH" "cd $RD && "'XC_PAR=gpu XC_PAR_REPORT=1 ./cuda-park.bin 2>&1; '"cd / && rm -rf $RD" > "$W/lout" 2>&1
     nv=0; ssh $SSHO "$LH" 'nvidia-smi -L' 2>/dev/null | grep -q '^GPU ' && nv=1
     check "$LH" "$W/lout" $nv
 fi

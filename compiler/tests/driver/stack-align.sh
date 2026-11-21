@@ -56,8 +56,12 @@ if [ "$(uname -m)" = x86_64 ] && [ "$PLAT" = linux ]; then
 elif [ -n "$H" ]; then
     "$XC" -q -A x86_64 -O2 -o "$W/al" "$W/al.xc" || { echo "FAIL: does not build for x86-64"; exit 1; }
     SSHO="-o BatchMode=yes -o LogLevel=ERROR"
-    scp $SSHO -q "$W/al" "$H:stack-align.bin" || { echo "FAIL: copy to $H"; exit 1; }
-    run() { ssh $SSHO "$H" 'for i in 1 2 3 4 5 6 7 8; do ./stack-align.bin; done; rm -f stack-align.bin'; }
+    # A private directory on the host, removed on exit: fixed names in the home
+    # directory collide between gate legs that share the host.
+    RD=$(ssh $SSHO "$H" 'mktemp -d /tmp/xc-stackalign.XXXXXX') || { echo "FAIL: no scratch dir on $H"; exit 1; }
+    trap 'rm -rf "$W"; ssh -o BatchMode=yes "$H" "rm -rf $RD" 2>/dev/null' EXIT
+    scp $SSHO -q "$W/al" "$H:$RD/stack-align.bin" || { echo "FAIL: copy to $H"; exit 1; }
+    run() { ssh $SSHO "$H" "cd $RD && "'for i in 1 2 3 4 5 6 7 8; do ./stack-align.bin; done; rm -f stack-align.bin'; }
 fi
 out=$(run)
 if [ -n "$out" ]; then

@@ -44,7 +44,7 @@ cat > "$W/run.bat" <<'BAT'
 @echo off
 setlocal enabledelayedexpansion
 set XTC=%USERPROFILE%\xtc\build\bin\xtc.exe
-cd %USERPROFILE%\wincorpus
+cd /d %~dp0
 set pass=0& set fail=0& set build=0
 for %%f in (*.xc) do (
   %XTC% -A win64 --self-host -q -H %USERPROFILE%\xtc "%%f" -o "%%~nf.exe" 2>nul
@@ -59,7 +59,10 @@ echo === wincorpus: !pass! pass, !fail! diff, !build! buildfail ===
 BAT
 
 tar czf "$W/wc.tgz" -C "$W" . 2>/dev/null
-scp -q "$W/wc.tgz" "$WHOST:wc.tgz" || { echo "wincorpus: scp failed"; exit 1; }
-ssh "$WHOST" 'cd %USERPROFILE% && (if exist wincorpus rmdir /s /q wincorpus) & mkdir wincorpus & cd wincorpus & tar xzf ..\wc.tgz' >/dev/null 2>&1
-ssh "$WHOST" 'cd %USERPROFILE% && wincorpus\run.bat' 2>/dev/null | tr -d '\r' | grep -E "wincorpus:|DIFF|BUILDFAIL"
-ssh "$WHOST" 'rmdir /s /q %USERPROFILE%\wincorpus & del %USERPROFILE%\wc.tgz' >/dev/null 2>&1
+# Names of this run's own in the Windows home directory, removed after: fixed
+# ones collide between gate legs that share the host.
+N="xc-wincorpus-$$"
+scp -q "$W/wc.tgz" "$WHOST:$N.tgz" || { echo "wincorpus: scp failed"; exit 1; }
+ssh "$WHOST" "cd %USERPROFILE% && mkdir $N & cd $N & tar xzf ..\\$N.tgz" >/dev/null 2>&1
+ssh "$WHOST" "cd %USERPROFILE% && $N\\run.bat" 2>/dev/null | tr -d '\r' | grep -E "wincorpus:|DIFF|BUILDFAIL"
+ssh "$WHOST" "rmdir /s /q %USERPROFILE%\\$N & del %USERPROFILE%\\$N.tgz" >/dev/null 2>&1

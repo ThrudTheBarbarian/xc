@@ -22,8 +22,12 @@ WH=${XTC_WIN64_HOST:-}
 if [ -n "$WH" ]; then
     SSHO="-o BatchMode=yes -o LogLevel=ERROR"
     "$XC" -q -A win64 -O2 -H . -o "$W/p.exe" "$F" || { echo "FAIL simd-watch-threads: win64 build"; exit 1; }
-    scp $SSHO -q "$W/p.exe" "$WH:swt.exe" || { echo "FAIL simd-watch-threads: copy"; exit 1; }
-    got=$(ssh $SSHO "$WH" '$env:XC_PAR="cpu"; .\swt.exe; "rc=$LASTEXITCODE"; Remove-Item swt.exe' | tr -d '\r' | tr '\n' ' ')
+    # A directory of its own on the host, removed after: fixed names in the
+    # home directory collide between gate legs that share the host.
+    WD="xc-swt-$$-$RANDOM"
+    ssh $SSHO "$WH" "New-Item -ItemType Directory $WD | Out-Null" || { echo "FAIL simd-watch-threads: no scratch dir"; exit 1; }
+    scp $SSHO -q "$W/p.exe" "$WH:$WD/swt.exe" || { echo "FAIL simd-watch-threads: copy"; exit 1; }
+    got=$(ssh $SSHO "$WH" "cd $WD; "'$env:XC_PAR="cpu"; .\swt.exe; "rc=$LASTEXITCODE"; '"cd ..; Remove-Item -Recurse -Force $WD" | tr -d '\r' | tr '\n' ' ')
     [ "$got" = "$WANT rc=0 " ] || { echo "FAIL simd-watch-threads: win64 gives '$got'"; fail=1; }
 fi
 [ $fail = 0 ] && echo "simd-watch-threads: ok"

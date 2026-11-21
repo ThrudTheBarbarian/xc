@@ -86,9 +86,13 @@ if [ -n "$H" ] && [ "$(uname -m)" != x86_64 ]; then
     "$XC" -q -A x86_64 -O2 -o "$W/ha.x" "$W/ha.xc" || { echo "FAIL: does not build for x86-64"; exit 1; }
     "$XC" -q -A x86_64 -O2 -fbounds-check -o "$W/oob.x" "$W/oob.xc" || { echo "FAIL: the bounds-checked program does not build for x86-64"; exit 1; }
     SSHO="-o BatchMode=yes -o LogLevel=ERROR"
-    scp $SSHO -q "$W/ha.x" "$H:heap-align.bin" && scp $SSHO -q "$W/oob.x" "$H:heap-align-oob.bin" || { echo "FAIL: copy to $H"; exit 1; }
-    check x86_64 "$(ssh $SSHO "$H" './heap-align.bin')"
-    err=$(ssh $SSHO "$H" './heap-align-oob.bin 2>&1 >/dev/null; s=$?; rm -f heap-align.bin heap-align-oob.bin; exit $s'); st=$?; oobcheck x86_64 $st "$err"
+    # A private directory on the host, removed on exit: fixed names in the home
+    # directory collide between gate legs that share the host.
+    RD=$(ssh $SSHO "$H" 'mktemp -d /tmp/xc-heapalign.XXXXXX') || { echo "FAIL: no scratch dir on $H"; exit 1; }
+    trap 'rm -rf "$W"; ssh -o BatchMode=yes "$H" "rm -rf $RD" 2>/dev/null' EXIT
+    scp $SSHO -q "$W/ha.x" "$H:$RD/heap-align.bin" && scp $SSHO -q "$W/oob.x" "$H:$RD/heap-align-oob.bin" || { echo "FAIL: copy to $H"; exit 1; }
+    check x86_64 "$(ssh $SSHO "$H" "cd $RD && "'./heap-align.bin')"
+    err=$(ssh $SSHO "$H" "cd $RD && "'./heap-align-oob.bin 2>&1 >/dev/null; s=$?; rm -f heap-align.bin heap-align-oob.bin; exit $s'); st=$?; oobcheck x86_64 $st "$err"
     msg="$msg and x86_64"
 fi
 [ $fail = 0 ] && echo "heap-align: ok ($msg)"

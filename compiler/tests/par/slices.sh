@@ -26,8 +26,12 @@ WH=${XTC_WIN64_HOST:-}
 if [ -n "$WH" ]; then
     SSHO="-o BatchMode=yes -o LogLevel=ERROR"
     "$XC" -q -A win64 -O2 -H . -o "$W/p.exe" "$F" || { echo "FAIL slices: win64 build"; exit 1; }
-    scp $SSHO -q "$W/p.exe" "$WH:slices.exe" || { echo "FAIL slices: copy"; exit 1; }
-    ssh $SSHO "$WH" '$env:XC_PAR="gpu"; $env:XC_PAR_REPORT="1"; .\slices.exe 2>&1; Remove-Item slices.exe' \
+    # A directory of its own on the host, removed after: fixed names in the
+    # home directory collide between gate legs that share the host.
+    WD="xc-slices-$$-$RANDOM"
+    ssh $SSHO "$WH" "New-Item -ItemType Directory $WD | Out-Null" || { echo "FAIL slices: no scratch dir on $WH"; exit 1; }
+    scp $SSHO -q "$W/p.exe" "$WH:$WD/slices.exe" || { echo "FAIL slices: copy"; exit 1; }
+    ssh $SSHO "$WH" "cd $WD; "'$env:XC_PAR="gpu"; $env:XC_PAR_REPORT="1"; .\slices.exe 2>&1; '"cd ..; Remove-Item -Recurse -Force $WD" \
         | tr -d '\r' > "$W/out" 2>&1
     if grep -q 'par: CUDA device' "$W/out"; then
         got=$(grep -E '^[0-9.]+ [0-9.]+$' "$W/out" | tail -1)
@@ -41,8 +45,9 @@ if [ -n "$LH" ]; then
     SSHO="-o BatchMode=yes -o LogLevel=ERROR"
     # Its runtime compiled in: it runs on another machine (no libRuntime there).
     "$XC" -q --no-runtime-lib -A x86_64 -O2 -H . -o "$W/p.lx" "$F" || { echo "FAIL slices: x86-64 build"; exit 1; }
-    scp $SSHO -q "$W/p.lx" "$LH:slices.bin" || { echo "FAIL slices: copy to $LH"; exit 1; }
-    ssh $SSHO "$LH" 'XC_PAR=gpu XC_PAR_REPORT=1 ./slices.bin 2>&1; rm -f slices.bin' > "$W/lout" 2>&1
+    RD=$(ssh $SSHO "$LH" 'mktemp -d /tmp/xc-slices.XXXXXX') || { echo "FAIL slices: no scratch dir on $LH"; exit 1; }
+    scp $SSHO -q "$W/p.lx" "$LH:$RD/slices.bin" || { echo "FAIL slices: copy to $LH"; exit 1; }
+    ssh $SSHO "$LH" "cd $RD && "'XC_PAR=gpu XC_PAR_REPORT=1 ./slices.bin 2>&1; '"cd / && rm -rf $RD" > "$W/lout" 2>&1
     if grep -q 'par: CUDA device' "$W/lout"; then
         got=$(grep -E '^[0-9.]+ [0-9.]+$' "$W/lout" | tail -1)
         [ "$got" = "$WANT" ] || { echo "FAIL slices: CUDA on Linux gives '$got'"; fail=1; }

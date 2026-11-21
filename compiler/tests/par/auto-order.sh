@@ -79,8 +79,12 @@ if [ -n "$H" ]; then
     SSHO="-o BatchMode=yes -o LogLevel=ERROR"
     # Its runtime compiled in: it runs on another machine (no libRuntime there).
     "$XC" -q -O2 --no-runtime-lib -A arm64-linux -o "$W/order-a" "$W/order.xc" > "$W/e" 2>&1 || { echo "FAIL auto-order: no arm64 Linux build: $(head -c 200 "$W/e")"; exit 1; }
-    scp $SSHO -q "$W/order-a" "$H:auto-order.bin" || { echo "FAIL: copy to the host"; exit 1; }
-    ssh $SSHO "$H" 'rm -rf auto-order.st && mkdir auto-order.st && XCC_SETTINGS_DIR=auto-order.st XC_PAR=auto XC_PAR_REPORT=1 ./auto-order.bin 2>&1; rm -rf auto-order.bin auto-order.st' > "$W/ra"
+    # A private directory on the host, removed on exit: fixed names in the home
+    # directory collide between gate legs that share the host.
+    RD=$(ssh $SSHO "$H" 'mktemp -d /tmp/xc-autoorder.XXXXXX') || { echo "FAIL: no scratch dir on $H"; exit 1; }
+    trap 'rm -rf "$W"; ssh -o BatchMode=yes "$H" "rm -rf $RD" 2>/dev/null' EXIT
+    scp $SSHO -q "$W/order-a" "$H:$RD/auto-order.bin" || { echo "FAIL: copy to the host"; exit 1; }
+    ssh $SSHO "$H" "cd $RD && "'rm -rf auto-order.st && mkdir auto-order.st && XCC_SETTINGS_DIR=auto-order.st XC_PAR=auto XC_PAR_REPORT=1 ./auto-order.bin 2>&1; rm -rf auto-order.bin auto-order.st' > "$W/ra"
     check "$W/ra" "$H" || fail=1
 fi
 exit $fail

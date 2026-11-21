@@ -46,8 +46,12 @@ msg="code"
 H=${XTC_LINUX_ARM64_HOST:-}
 if [ $fail = 0 ] && [ -n "$H" ]; then
     SSHO="-o BatchMode=yes -o LogLevel=ERROR"
-    scp $SSHO -q "$W/x" "$H:arm64-linux.bin" || { echo "FAIL: copy to the host"; exit 1; }
-    out=$(ssh $SSHO "$H" './arm64-linux.bin a b; echo "rc=$?"; rm -f arm64-linux.bin')
+    # A private directory on the host, removed on exit: fixed names in the home
+    # directory collide between gate legs that share the host.
+    RD=$(ssh $SSHO "$H" 'mktemp -d /tmp/xc-a64linux.XXXXXX') || { echo "FAIL: no scratch dir on $H"; exit 1; }
+    trap 'rm -rf "$W"; ssh -o BatchMode=yes "$H" "rm -rf $RD" 2>/dev/null' EXIT
+    scp $SSHO -q "$W/x" "$H:$RD/arm64-linux.bin" || { echo "FAIL: copy to the host"; exit 1; }
+    out=$(ssh $SSHO "$H" "cd $RD && "'./arm64-linux.bin a b; echo "rc=$?"; rm -f arm64-linux.bin')
     [ "$out" = "arm64-linux 42 3 4.50
 rc=0" ] || { echo "FAIL arm64-linux: on the host it printed: $out"; fail=1; }
     msg="code and run"

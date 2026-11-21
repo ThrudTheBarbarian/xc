@@ -267,9 +267,12 @@ if [ -x "$XC" ] && reach "$H"; then
     SSHO="-o BatchMode=yes -o LogLevel=ERROR -o ConnectTimeout=10"
     if plugin "$W/plx" "-A x86_64" so so; then
         cp support/runtime-lib/x86_64-linux/libRuntime.so "$W/plx/"
-        tar -C "$W/plx" -czf "$W/plx.tgz" . && scp $SSHO -q "$W/plx.tgz" "$H:vtbl-plugin.tgz" \
+        # A private directory on the host, removed after: a fixed one in the
+        # home directory collides between gate legs that share the host.
+        RD=$(ssh $SSHO "$H" 'mktemp -d /tmp/xc-vtblplugin.XXXXXX') \
+            && tar -C "$W/plx" -czf "$W/plx.tgz" . && scp $SSHO -q "$W/plx.tgz" "$H:$RD/plugin.tgz" \
             || bad "plugin: copy to the Linux host"
-        got=$(ssh $SSHO "$H" 'mkdir -p vtbl-plugin && cd vtbl-plugin && tar xzf ../vtbl-plugin.tgz && XCC_PLUGIN_STORE=$PWD/store LD_LIBRARY_PATH=. ./host tri 2>&1; cd && rm -rf vtbl-plugin vtbl-plugin.tgz')
+        got=$(ssh $SSHO "$H" "cd $RD && "'tar xzf plugin.tgz && XCC_PLUGIN_STORE=$PWD/store LD_LIBRARY_PATH=. ./host tri 2>&1; '"cd / && rm -rf $RD")
         [ "$got" = "$want_pl" ] || bad "plugin on the Linux host: '$got'"
     else
         bad "plugin build for x86-64: $(head -c 300 "$W/e")"

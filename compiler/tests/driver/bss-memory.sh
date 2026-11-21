@@ -58,9 +58,12 @@ peak_mb() {
 }
 
 SSHO="-o BatchMode=yes -o LogLevel=ERROR"
-remote() { # host binary
-    scp $SSHO -q "$2" "$1:bss-memory.bin" || { echo "copy to $1 failed"; return; }
-    ssh $SSHO "$1" './bss-memory.bin; rm -f bss-memory.bin'
+remote() { # host binary — in a private directory on the host, removed after:
+    # fixed names in the home directory collide between gate legs sharing it.
+    local rd
+    rd=$(ssh $SSHO "$1" 'mktemp -d /tmp/xc-bssmem.XXXXXX') || { echo "no scratch dir on $1"; return; }
+    scp $SSHO -q "$2" "$1:$rd/bss-memory.bin" || { echo "copy to $1 failed"; ssh $SSHO "$1" "rm -rf $rd"; return; }
+    ssh $SSHO "$1" "$rd/bss-memory.bin; cd / && rm -rf $rd"
 }
 
 ran=""

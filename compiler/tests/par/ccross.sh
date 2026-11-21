@@ -55,8 +55,12 @@ if [ -f "$A/usr/include/stdio.h" ]; then
     grep -q "XTC_ARM64_LINUX_ROOT" "$W/ban" || { echo "FAIL arm64-linux: the refusal does not name XTC_ARM64_LINUX_ROOT:"; head -2 "$W/ban"; fail=1; }
     H=${XTC_LINUX_ARM64_HOST:-}
     if [ -f "$W/pa" ] && [ -n "$H" ]; then
-        scp -o BatchMode=yes -q "$W/pa" "$H:ccross.bin" \
-            && got=$(ssh -o BatchMode=yes "$H" './ccross.bin; rm -f ccross.bin') \
+        # A private directory on the host, removed on exit: fixed names in the home
+        # directory collide between gate legs that share the host.
+        RD=$(ssh -o BatchMode=yes "$H" 'mktemp -d /tmp/xc-ccross.XXXXXX') || { echo "FAIL: no scratch dir on $H"; exit 1; }
+        trap 'rm -rf "$W"; ssh -o BatchMode=yes "$H" "rm -rf $RD" 2>/dev/null' EXIT
+        scp -o BatchMode=yes -q "$W/pa" "$H:$RD/ccross.bin" \
+            && got=$(ssh -o BatchMode=yes "$H" "cd $RD && "'./ccross.bin; rm -f ccross.bin') \
             && [ "$got" = "4193280.0" ] || { echo "FAIL arm64-linux: gives '${got:-nothing}' on the host"; fail=1; }
     fi
 else

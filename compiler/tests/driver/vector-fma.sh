@@ -78,8 +78,12 @@ if [ "$(uname -m)" = x86_64 ] || [ -n "$H" ]; then
     if [ "$(uname -m)" = x86_64 ]; then
         run=$("$W/s.x")
     else
-        scp $SSHO -q "$W/s.x" "$H:vector-fma.bin" || { echo "FAIL: copy to $H"; exit 1; }
-        run=$(ssh $SSHO "$H" './vector-fma.bin; rm -f vector-fma.bin')
+        # A private directory on the host, removed on exit: fixed names in the home
+        # directory collide between gate legs that share the host.
+        RD=$(ssh $SSHO "$H" 'mktemp -d /tmp/xc-vectorfma.XXXXXX') || { echo "FAIL: no scratch dir on $H"; exit 1; }
+        trap 'rm -rf "$W"; ssh -o BatchMode=yes "$H" "rm -rf $RD" 2>/dev/null' EXIT
+        scp $SSHO -q "$W/s.x" "$H:$RD/vector-fma.bin" || { echo "FAIL: copy to $H"; exit 1; }
+        run=$(ssh $SSHO "$H" "cd $RD && "'./vector-fma.bin; rm -f vector-fma.bin')
     fi
     if grep -qw fma /proc/cpuinfo 2>/dev/null || [ -n "$H" ]; then
         [ "$run" = "$FUSED" ] || { echo "FAIL vector-fma (x86-64 run): the speed loops do not fuse"; printf '%s\n' "$run"; fail=1; }

@@ -32,20 +32,23 @@ class Acc { i32 total; void init(void){total=0;} void add(i32 n){total=total+n;}
 void main(void){ Acc@ a = new Acc(); for (i32 i=(i32)1; i<=(i32)8; i=i+(i32)1){ a.add(i*i); } Stdio.printf("sum-of-squares=%d\n", a.get()); }'
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 printf '%s\n' "$PROG" > "$TMP/cm.xc"
-scp -q "$TMP/cm.xc" "$WHOST:cm.xc" 2>/dev/null || { echo "crossmatrix-win: scp failed"; exit 1; }
+# Names of this run's own in the Windows home directory, removed after: fixed
+# ones collide between gate legs that share the host.
+N="xc-cm-$$"
+scp -q "$TMP/cm.xc" "$WHOST:$N.xc" 2>/dev/null || { echo "crossmatrix-win: scp failed"; exit 1; }
 
 # Build all three targets ON Windows.
-ssh "$WHOST" 'cd %USERPROFILE%\xtc\build\bin && xtc.exe -A win64  --self-host -q -H %USERPROFILE%\xtc %USERPROFILE%\cm.xc -o %USERPROFILE%\cm.exe   2>nul & xtc.exe -A arm64  --self-host -q -H %USERPROFILE%\xtc %USERPROFILE%\cm.xc -o %USERPROFILE%\cm.macho 2>nul & xtc.exe -A x86_64 --self-host -q -H %USERPROFILE%\xtc %USERPROFILE%\cm.xc -o %USERPROFILE%\cm.elf   2>nul' >/dev/null 2>&1
+ssh "$WHOST" "cd %USERPROFILE%\\xtc\\build\\bin && xtc.exe -A win64  --self-host -q -H %USERPROFILE%\\xtc %USERPROFILE%\\$N.xc -o %USERPROFILE%\\$N.exe   2>nul & xtc.exe -A arm64  --self-host -q -H %USERPROFILE%\\xtc %USERPROFILE%\\$N.xc -o %USERPROFILE%\\$N.macho 2>nul & xtc.exe -A x86_64 --self-host -q -H %USERPROFILE%\\xtc %USERPROFILE%\\$N.xc -o %USERPROFILE%\\$N.elf   2>nul" >/dev/null 2>&1
 
 fail=0
 report() { printf '  %-36s' "$1"; [ "$2" = "$EXPECT" ] && echo "ok" || { echo "FAIL (got '$2')"; fail=1; }; }
 
 # Windows → Windows: run on the Windows host.
-got=$(ssh "$WHOST" 'cd %USERPROFILE% && cm.exe' 2>/dev/null | tr -d '\r')
+got=$(ssh "$WHOST" "cd %USERPROFILE% && $N.exe" 2>/dev/null | tr -d '\r')
 report "Windows builds+runs → Windows" "$got"
 
 # Windows → macOS: pull the Mach-O here and run natively.
-if scp -q "$WHOST:cm.macho" "$TMP/cm.macho" 2>/dev/null; then
+if scp -q "$WHOST:$N.macho" "$TMP/cm.macho" 2>/dev/null; then
     chmod +x "$TMP/cm.macho"
     report "Windows builds → macOS (run here)" "$("$TMP/cm.macho" 2>/dev/null | tr -d '\r')"
 else printf '  %-36s' "Windows builds → macOS"; echo "SKIP (scp)"; fi
@@ -53,7 +56,7 @@ else printf '  %-36s' "Windows builds → macOS"; echo "SKIP (scp)"; fi
 # Windows → Linux: pull the ELF here, push to the Linux host, run.
 # In a private directory on the Linux host, removed after: a binary run from
 # /tmp itself would load whatever libRuntime another run left there.
-if scp -q "$WHOST:cm.elf" "$TMP/cm.elf" 2>/dev/null && \
+if scp -q "$WHOST:$N.elf" "$TMP/cm.elf" 2>/dev/null && \
    ssh -o BatchMode=yes -o ConnectTimeout=5 "$LHOST" true 2>/dev/null && \
    LRD=$(ssh "$LHOST" 'mktemp -d /tmp/xc-cmwin.XXXXXX' 2>/dev/null) && \
    scp -q "$TMP/cm.elf" "$LHOST:$LRD/cm-win.elf" 2>/dev/null; then
@@ -61,7 +64,7 @@ if scp -q "$WHOST:cm.elf" "$TMP/cm.elf" 2>/dev/null && \
            "$(ssh "$LHOST" "chmod +x $LRD/cm-win.elf && $LRD/cm-win.elf; rm -rf $LRD" 2>/dev/null | tr -d '\r')"
 else printf '  %-36s' "Windows builds → Linux"; echo "SKIP (no Linux host)"; fi
 
-ssh "$WHOST" 'del %USERPROFILE%\cm.xc %USERPROFILE%\cm.exe %USERPROFILE%\cm.macho %USERPROFILE%\cm.elf 2>nul' >/dev/null 2>&1
+ssh "$WHOST" "del %USERPROFILE%\\$N.xc %USERPROFILE%\\$N.exe %USERPROFILE%\\$N.macho %USERPROFILE%\\$N.elf 2>nul" >/dev/null 2>&1
 echo
 [ $fail = 0 ] && echo "crossmatrix-win: the Windows-hosted compiler produces working mac/linux/win binaries" \
               || echo "crossmatrix-win: FAILURES"

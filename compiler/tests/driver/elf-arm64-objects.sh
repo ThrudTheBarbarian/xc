@@ -78,13 +78,17 @@ msg="code"
 H=${XTC_LINUX_ARM64_HOST:-}
 if [ $fail = 0 ] && [ -n "$H" ]; then
     SSHO="-o BatchMode=yes -o LogLevel=ERROR"
-    scp $SSHO -q "$W/p" "$H:elf-arm64-objects.bin" || { echo "FAIL: copy to the host"; exit 1; }
-    out=$(ssh $SSHO "$H" './elf-arm64-objects.bin a; echo "rc=$?"; rm -f elf-arm64-objects.bin')
+    # A private directory on the host, removed on exit: fixed names in the home
+    # directory collide between gate legs that share the host.
+    RD=$(ssh $SSHO "$H" 'mktemp -d /tmp/xc-elfa64obj.XXXXXX') || { echo "FAIL: no scratch dir on $H"; exit 1; }
+    trap 'rm -rf "$W"; ssh -o BatchMode=yes "$H" "rm -rf $RD" 2>/dev/null' EXIT
+    scp $SSHO -q "$W/p" "$H:$RD/elf-arm64-objects.bin" || { echo "FAIL: copy to the host"; exit 1; }
+    out=$(ssh $SSHO "$H" "cd $RD && "'./elf-arm64-objects.bin a; echo "rc=$?"; rm -f elf-arm64-objects.bin')
     [ "$out" = "c says 48 42
 rc=0" ] || { echo "FAIL elf-arm64-objects: on the host it printed: $out"; fail=1; }
-    ssh $SSHO "$H" 'rm -rf eao && mkdir eao' && scp $SSHO -q "$W/qx" "$W/sl/libcsub.so" "$H:eao/" \
+    ssh $SSHO "$H" "cd $RD && "'rm -rf eao && mkdir eao' && scp $SSHO -q "$W/qx" "$W/sl/libcsub.so" "$H:$RD/eao/" \
         || { echo "FAIL: copy to the host"; exit 1; }
-    out=$(ssh $SSHO "$H" 'cd eao && ./qx a; echo "rc=$?"; cd && rm -rf eao')
+    out=$(ssh $SSHO "$H" "cd $RD && "'cd eao && ./qx a; echo "rc=$?"; cd && rm -rf eao')
     [ "$out" = "c subtracts 42
 rc=0" ] || { echo "FAIL elf-arm64-objects: -lcsub on the host printed: $out"; fail=1; }
     msg="code and run"

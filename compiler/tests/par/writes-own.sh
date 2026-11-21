@@ -77,13 +77,16 @@ WH=${XTC_WIN64_HOST:-}
 if [ -n "$WH" ]; then
     SSHO="-o BatchMode=yes -o LogLevel=ERROR"
     "$XC" -q -A win64 -O2 -H . -o "$W/p.exe" "$F" || { echo "FAIL writes-own: no win64 build"; exit 1; }
-    if scp $SSHO -q "$W/p.exe" "$WH:writes-own.exe"; then
+    # A directory of its own on the host, removed after: fixed names in the
+    # home directory collide between gate legs that share the host.
+    WD="xc-writesown-$$-$RANDOM"
+    if ssh $SSHO "$WH" "New-Item -ItemType Directory $WD | Out-Null" && scp $SSHO -q "$W/p.exe" "$WH:$WD/writes-own.exe"; then
         for g in cuda vulkan; do
-            out=$(ssh $SSHO "$WH" "\$env:XC_PAR=\"gpu\"; \$env:XC_PAR_REPORT=\"1\"; \$env:XC_PAR_GPU=\"$g\"; .\\writes-own.exe 2>&1" | tr -d '\r')
+            out=$(ssh $SSHO "$WH" "cd $WD; \$env:XC_PAR=\"gpu\"; \$env:XC_PAR_REPORT=\"1\"; \$env:XC_PAR_GPU=\"$g\"; .\\writes-own.exe 2>&1" | tr -d '\r')
             check "$g" "$out"
         done
-        ssh $SSHO "$WH" 'Remove-Item writes-own.exe' > /dev/null 2>&1
     fi
+    ssh $SSHO "$WH" "Remove-Item -Recurse -Force $WD" > /dev/null 2>&1
 fi
 [ $fail = 0 ] && echo "writes-own: ok"
 exit $fail

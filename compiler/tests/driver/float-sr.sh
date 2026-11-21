@@ -92,8 +92,12 @@ H=${XTC_X86_HOST:-}
 if [ -n "$H" ] && [ "$(uname -m)" != x86_64 ]; then
     "$XC" -q -A x86_64 -O2 -o "$W/fs.x" "$W/fs.xc" || { echo "FAIL: does not build for x86-64"; exit 1; }
     SSHO="-o BatchMode=yes -o LogLevel=ERROR"
-    scp $SSHO -q "$W/fs.x" "$H:float-sr.bin" || { echo "FAIL: copy to $H"; exit 1; }
-    check x86_64 "$(ssh $SSHO "$H" './float-sr.bin; rm -f float-sr.bin')"
+    # A private directory on the host, removed on exit: fixed names in the home
+    # directory collide between gate legs that share the host.
+    RD=$(ssh $SSHO "$H" 'mktemp -d /tmp/xc-floatsr.XXXXXX') || { echo "FAIL: no scratch dir on $H"; exit 1; }
+    trap 'rm -rf "$W"; ssh -o BatchMode=yes "$H" "rm -rf $RD" 2>/dev/null' EXIT
+    scp $SSHO -q "$W/fs.x" "$H:$RD/float-sr.bin" || { echo "FAIL: copy to $H"; exit 1; }
+    check x86_64 "$(ssh $SSHO "$H" "cd $RD && "'./float-sr.bin; rm -f float-sr.bin')"
     msg="$msg and x86_64"
 fi
 [ $fail = 0 ] && echo "float-sr: ok ($msg)"
