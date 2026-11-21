@@ -161,9 +161,10 @@
         IRBlock* entry = (IRBlock*)fn.blocks().get((u32)0);
         if (a == entry)
             return true;
-        Array* seen = new Array();
+        // The blocks reached, as a set (#331: a list, searched per edge).
+        Map* seen = new Map();
         Array* work = new Array();
-        seen.add((Object*)entry);
+        seen.set((Hashable*)entry, (Object*)entry);
         work.add((Object*)entry);
         while (work.count() > (u32)0)
             {
@@ -178,13 +179,13 @@
                 IROperand* o = (IROperand*)n.term().ops().get(q);
                 if (o.kind() != (u8)OPK_BLOCK || o.blk() == (IRBlock*)0)
                     continue;
-                if (hasBlock(seen, o.blk()))
+                if (seen.get((Hashable*)o.blk()) != (Object*)0)
                     continue;
-                seen.add((Object*)o.blk());
+                seen.set((Hashable*)o.blk(), (Object*)o.blk());
                 work.add((Object*)o.blk());
                 }
             }
-        return !self.hasBlock(seen, b);
+        return seen.get((Hashable*)b) == (Object*)0;
         }
 
     final void chHoistMulImms(IRFunc* fn)

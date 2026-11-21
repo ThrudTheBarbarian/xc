@@ -2089,7 +2089,7 @@ class BeFact : Object
     Map* _dvFn;
     Map* _dvLay;           // a receiver type's class (the module itself: none),
     Map* _dvCand;          // and a slot and type's candidates
-    Array* _dvDone;        // devirtualise: the sites already rewritten (each keeps its dispatch)
+    Map* _dvDone;          // devirtualise: the sites already rewritten (each keeps its dispatch), as a set
     u32 _dvSeq;            // its block names' counter
     IRModule* _dvModule;
 

@@ -219,31 +219,46 @@
         return true;
         }
 
-    // Is block index bi inside a loop: a branch from a block at or after it
-    // back to one at or before it.
-    final bool dvInLoop(IRFunc* fn, u32 bi)
+    // Which block indices are inside a loop: bi is when a branch from a block
+    // at or after it goes back to one at or before it. One pass for the whole
+    // function (#331; it was a scan of the blocks after bi, and of the blocks
+    // up to bi per target, for every dispatch site): the earliest block each
+    // terminator reaches, then the earliest reached from bi onwards.
+    final Array* dvLoopFlags(IRFunc* fn)
         {
-        for (u32 u = bi; u < fn.blocks().count(); u = u + (u32)1)
+        u32 n = fn.blocks().count();
+        Map* index = new Map();
+        for (u32 i = (u32)0; i < n; i = i + (u32)1)
+            if (index.get((Hashable*)fn.blocks().get(i)) == (Object*)0)
+                index.set((Hashable*)fn.blocks().get(i), (Object*)Number.withU32(i));
+        Array* flags = new Array();
+        for (u32 i = (u32)0; i < n; i = i + (u32)1)
+            flags.add((Object*)0);
+        u32 reach = n; // the earliest block reached from here on; n: none
+        u32 u = n;
+        while (u > (u32)0)
             {
+            u = u - (u32)1;
             IRInsn* t = ((IRBlock*)fn.blocks().get(u)).term();
-            if (t == (IRInsn*)0)
-                continue;
-            for (u32 k = (u32)0; k < t.ops().count(); k = k + (u32)1)
+            for (u32 k = (u32)0; t != (IRInsn*)0 && k < t.ops().count(); k = k + (u32)1)
                 {
                 IROperand* o = (IROperand*)t.ops().get(k);
                 if (o.kind() != (u8)OPK_BLOCK || o.blk() == (IRBlock*)0)
                     continue;
-                for (u32 h = (u32)0; h <= bi; h = h + (u32)1)
-                    if ((IRBlock*)fn.blocks().get(h) == o.blk())
-                        return true;
+                Object* at = index.get((Hashable*)o.blk());
+                if (at != (Object*)0 && ((Number*)at).asU32() < reach)
+                    reach = ((Number*)at).asU32();
                 }
+            if (reach <= u)
+                flags.set(u, (Object*)Number.withU32((u32)1));
             }
-        return false;
+        return flags;
         }
 
     // The first suitable site in fn, rewritten; false when there is none.
     final bool dvOne(IRModule* m, IRFunc* fn)
         {
+        Array* inLoop = (Array*)0; // dvLoopFlags, made when first needed
         for (u32 bi = (u32)0; bi < fn.blocks().count(); bi = bi + (u32)1)
             {
             IRBlock* B = (IRBlock*)fn.blocks().get(bi);
@@ -252,7 +267,7 @@
                 IRInsn* d = (IRInsn*)B.insns().get(i);
                 if (!d.isOp(opVTblDispatch) || d.ops().count() < 3)
                     continue;
-                if (_dvDone != (Array*)0 && _dvDone.contains((Object*)d))
+                if (_dvDone != (Map*)0 && _dvDone.get((Hashable*)d) != (Object*)0)
                     continue;
                 if (d.memRes() == (IRValue*)0)
                     continue;
@@ -261,14 +276,16 @@
                 IROperand* mo = (IROperand*)d.ops().get(d.ops().count() - (u32)1);
                 if (so.kind() != (u8)OPK_IMMI || ro.kind() != (u8)OPK_USE || mo.kind() != (u8)OPK_USE)
                     continue;
-                if (!dvInLoop(fn, bi))
+                if (inLoop == (Array*)0)
+                    inLoop = dvLoopFlags(fn);
+                if (inLoop.get(bi) == (Object*)0)
                     continue;
                 Array* cands = dvCandidates(m, (i64)so.imm(), ro.val().ty());
                 if (cands.count() == (u32)0)
                     continue;
                 _dvModule = m;
-                if (_dvDone == (Array*)0)
-                    _dvDone = new Array();
+                if (_dvDone == (Map*)0)
+                    _dvDone = new Map();
                 // A receiver that does not change in the loop: the test goes
                 // before the loop, and each class gets a copy of the loop with
                 // a direct call (no test, no call left to stop the unroller).
@@ -314,9 +331,9 @@
 
     final void dvApply(IRFunc* fn, IRBlock* B, u32 bi, u32 i, IRInsn* d, Array* cands)
         {
-        if (_dvDone == (Array*)0)
-            _dvDone = new Array();
-        _dvDone.add((Object*)d);
+        if (_dvDone == (Map*)0)
+            _dvDone = new Map();
+        _dvDone.set((Hashable*)d, (Object*)d);
         _dvSeq = _dvSeq + (u32)1;
         String* base = String.withCString("");
         base.appendFormat("%s_dv%lu", B.name().cString(), _dvSeq);
@@ -605,7 +622,7 @@
             }
         if (memP == (IROperand*)0)
             return false;
-        _dvDone.add((Object*)d);
+        _dvDone.set((Hashable*)d, (Object*)d);
         _dvSeq = _dvSeq + (u32)1;
         // The loop's blocks in layout order.
         Array* body = new Array();
@@ -879,7 +896,7 @@
                         continue;
                         }
                     IRInsn* nc = dvCloneInsn(n, vmap, bmap);
-                    _dvDone.add((Object*)nc);
+                    _dvDone.set((Hashable*)nc, (Object*)nc);
                     nb.add(nc);
                     continue;
                     }
