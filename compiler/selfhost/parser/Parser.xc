@@ -95,6 +95,7 @@ class Parser
     Map*    _blkClassIvars; // class -> Set of its own ivar names (capture error)
     Map*    _blkClassParent; // class -> parent class
     Map*    _blkClassMethods; // class -> Set of its method names (bare-call error)
+    Map*    _blkClassIvarNames; // class -> Set of the ivar names its body declares (blkScanMethods)
     String* _blkCurClass;   // the class being parsed, or 0
     u32     _blkCounter;
     String* _lastBlkName;
@@ -130,6 +131,7 @@ class Parser
         _blkClassIvars = new Map();
         _blkClassParent = new Map();
         _blkClassMethods = new Map();
+        _blkClassIvarNames = new Map();
         _blkCurClass = (String*)0;
         _blkCounter = (u32)0;
         _lastBlkName = (String*)0;
@@ -242,6 +244,10 @@ class Parser
     // the one being parsed counts too: at the body's own level, a name
     // followed by `(` that is not in an ivar's initialiser, not after `.` or
     // `:`, and not `since`. As the reference (blkScanMethodNames).
+    // The same walk reads the names of the class's ivars, those declared
+    // after the method being parsed among them (blkIsLaterIvar): at the body's
+    // own level, outside type arguments and initialisers, a name that is not a
+    // type, not after `.`, `:` or `<`, and followed by `;`, `,`, `=` or `[`.
     void blkScanMethods(void)
     {
         if (_blkCurClass == (String*)0) return;
@@ -250,9 +256,16 @@ class Parser
             own = new Set();
             _blkClassMethods.set((Hashable*)String.withString(_blkCurClass), (Object*)own);
         }
+        Set* ivars = (Set*)_blkClassIvarNames.get((Hashable*)_blkCurClass);
+        if (ivars == (Set*)0) {
+            ivars = new Set();
+            _blkClassIvarNames.set((Hashable*)String.withString(_blkCurClass), (Object*)ivars);
+        }
         u32 braces = 0;
         u32 parens = 0;
+        u32 angles = 0;
         bool inInit = false;
+        bool ivInit = false;
         u16 prev = (u16)tokEOF;
         u32 i = 0;
         while (true) {
@@ -264,25 +277,52 @@ class Parser
             } else if (ty == (u16)tokRBrace) {
                 if (braces == 0) break;
                 braces = braces - 1;
-                if (braces == 0) inInit = false;
+                if (braces == 0) {
+                    inInit = false;
+                    ivInit = false;
+                }
             } else if (braces == 0) {
+                if (parens == 0 && !ivInit) {
+                    if (ty == tokLess) angles = angles + 1;
+                    else if (ty == tokGreater && angles > 0) angles = angles - 1;
+                    else if (ty == tokShiftRight) angles = angles > 2 ? angles - 2 : 0;
+                    else if (ty == tokSemicolon) angles = 0;
+                }
+                if (parens == 0 && ty == tokComma && angles == 0) ivInit = false;
                 if (ty == (u16)tokLParen) {
                     parens = parens + 1;
                 } else if (ty == (u16)tokRParen && parens > 0) {
                     parens = parens - 1;
                 } else if (parens == 0 && ty == (u16)tokAssign) {
                     inInit = true;
+                    ivInit = true;
                 } else if (parens == 0 && ty == (u16)tokSemicolon) {
                     inInit = false;
+                    ivInit = false;
                 } else if (parens == 0 && ty == (u16)tokIdentifier && !inInit
                            && prev != (u16)tokDot && prev != (u16)tokColon
                            && peek(i + 1).type() == (u16)tokLParen && !Parser._same(t.value(), "since")) {
                     own.add((Hashable*)String.withString(t.value()));
                 }
+                if (parens == 0 && angles == 0 && !ivInit && ty == tokIdentifier
+                    && prev != tokDot && prev != tokColon && prev != tokLess && !isTypeName(t.value())) {
+                    u16 nx = peek(i + 1).type();
+                    if (nx == tokSemicolon || nx == tokComma || nx == tokAssign || nx == tokLBracket)
+                        ivars.add((Hashable*)String.withString(t.value()));
+                }
             }
             prev = ty;
             i = i + 1;
         }
+    }
+
+    // An ivar of the class being parsed that the parse has not reached yet:
+    // its body declares it (blkScanMethods), and no binding names it.
+    bool blkIsLaterIvar(String* name)
+    {
+        if (_blkCurClass == (String*)0) return false;
+        Set* ivars = (Set*)_blkClassIvarNames.get((Hashable*)_blkCurClass);
+        return ivars != (Set*)0 && ivars.contains((Hashable*)name) && blkLookup(name, (u32*)0) == (Map*)0;
     }
 
     // A method of the class being parsed or of a parent (blkScanMethods).
@@ -408,6 +448,10 @@ class Parser
     static String* blkAutoMsg(String* name)
     {
         return String.withFormat("cannot capture '%s': it was declared `auto`, and a capture needs the declared type at this point — give it an explicit type", name.cString());
+    }
+    static String* blkLaterIvarMsg(String* name)
+    {
+        return String.withFormat("a block cannot capture '%s' here: the class declares it further down, and a capture needs its declaration first — declare it above this method", name.cString());
     }
     static String* blkWbMsg(String* name)
     {
@@ -4436,6 +4480,8 @@ class Parser
         if (info == (Map*)0) {
             if (_pfwAuto && (Parser._same(name, "self") || blkIsIvar(name)))
                 _error(Parser.blkSelfMsg(name));
+            else if (_pfwAuto && blkIsLaterIvar(name))
+                _error(Parser.blkLaterIvarMsg(name));
             Array* outer = (Array*)pfwGet(_pfw, "outer");
             if (outer == (Array*)0) {
                 outer = new Array();
@@ -4580,6 +4626,7 @@ class Parser
     // (XTParser+ParLift.m).
     Array*  _plToks;        // the walk's tokens
     Map*    _plDecls;       // the index of a declaration's first token -> its names
+    Map*    _plAddrs;       // the index of an address-of's `&` -> the variable it names, or ""
     Token*  _plAt;          // the place the walk's tokens carry
     bool    _plStream;      // the scan's body rules are reading the walk's tokens
     Array*  _plSites;       // [site, kind, plain or body, params, increment]
@@ -4750,6 +4797,20 @@ class Parser
         return (Array*)0;
     }
 
+    // The variable an address-of takes the address of, or of an element or
+    // member of: through subscripts, members, casts and `*` to a name; else "".
+    static String* plAddrRoot(Node* e)
+    {
+        while (e != (Node*)0) {
+            u16 k = e.kind();
+            if (k == nkIdent) return e.name();
+            bool through = k == nkSubscript || k == nkMember || k == nkCast || (k == nkUnary && Parser._same(e.op(), "*"));
+            if (!through || e.kidCount() == 0) break;
+            e = e.kid(0);
+        }
+        return String.withCString("");
+    }
+
     void plExpr(Node* e)
     {
         if (e == (Node*)0) return;
@@ -4807,6 +4868,7 @@ class Parser
         }
         if (k == nkUnary) {
             String* op = e.op();
+            if (Parser._same(op, "&")) _plAddrs.set((Hashable*)String.withU32(_plToks.count()), (Object*)Parser.plAddrRoot(e.kid(0)));
             if (Parser._same(op, "<")) plTok(tokLess, "<");
             else plTokS(Parser.plOpTok(op), op);
             plExpr(e.kid(0));
@@ -5423,6 +5485,7 @@ class Parser
         _plStream = false;
         _plToks = (Array*)0;
         _plDecls = (Map*)0;
+        _plAddrs = (Map*)0;
     }
 
     void plBegin(Token* at)
@@ -5430,6 +5493,7 @@ class Parser
         _plAt = at;
         _plToks = new Array();
         _plDecls = new Map();
+        _plAddrs = new Map();
         _plLits = 0;
         _plSkipWhileIf = false;
     }
@@ -5474,6 +5538,7 @@ class Parser
         plFor(loop, marks);
         Array* toks = _plToks;
         Map* decls = _plDecls;
+        Map* addrs = _plAddrs;
         String* var = (String*)0;
         u32 bndFrom = 0;
         u32 bndTo = 0;
@@ -5530,6 +5595,7 @@ class Parser
         _pos = 0;
         _plStream = true;
         _plDecls = decls;
+        _plAddrs = addrs;
         _parAutoWhy = (String*)0;
         _parAutoGridCap = 3;
         _parScanAcc = (String*)0;
@@ -5722,6 +5788,22 @@ class Parser
             if (ty == tokReturn) return parAutoNo("return");
             if (ty == tokGoto) return parAutoNo("goto");
             if (ty == tokBreak && innerAt.count() == 0) return parAutoNo("break");
+            // Taking the address of an outer variable, or of an element or
+            // member of one (`&c`, `&c[k]`, `&s.f`, `&*p`): what the address
+            // reaches may be written, by a call say, from every item at once.
+            // A bitwise `&` is no address-of.
+            String* addrOf = ty == tokAmpersand && _plAddrs != (Map*)0 ? (String*)_plAddrs.get((Hashable*)String.withU32(i)) : (String*)0;
+            if (addrOf != (String*)0 && !declared.contains((Hashable*)addrOf)) {
+                String* w = String.withCString("its body takes an address");
+                if (addrOf.byteLength() > 0) {
+                    w = String.withCString("its body takes the address of '");
+                    w.append(addrOf);
+                    w.appendCString("'");
+                }
+                parAutoWarnSerial(w);
+                _parScanAcc = (String*)0;
+                return parAutoNo("address");
+            }
             // A declaration: its declarators are the body's own names.
             bool declStart = stmtStart || (prev == (u16)tokLParen && parTokType(i - (u32)2) == (u16)tokFor);
             if (declStart && ty != (u16)tokIdentifier || declStart && ty == (u16)tokIdentifier && isTypeName(parTokValue(i))) {
@@ -5765,7 +5847,6 @@ class Parser
             if (next == (u16)tokIn) { declared.add((Hashable*)name); continue; }
             if (stmtStart && next == tokColon) return parAutoNo("label");
             bool own = declared.contains((Hashable*)name);
-            if (prev == tokAmpersand && next != tokLBracket && !own) return parAutoNo("address");
             // `acc++;` as a statement of its own: a `+` reduction.
             if (stmtStart && next == (u16)tokPlusPlus && parTokType(i + (u32)2) == (u16)tokSemicolon && !own
                 && !name.equals(var) && accOps.get((Hashable*)name) == (Object*)0) {

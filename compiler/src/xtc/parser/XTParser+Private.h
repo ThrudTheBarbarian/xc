@@ -80,6 +80,9 @@ NS_ASSUME_NONNULL_BEGIN
 // 2 `++v`, 3 `v += 1`, 4 `v = v + 1`).
 @property(nonatomic, strong, nullable) NSMutableArray<XTToken*>* plToks;
 @property(nonatomic, strong, nullable) NSMutableDictionary<NSNumber*, NSArray<NSString*>*>* plDecls;
+// The index of an address-of's `&` among those tokens -> the variable it
+// takes the address of, or of an element or member of, else @"" (plAddrRoot).
+@property(nonatomic, strong, nullable) NSMutableDictionary<NSNumber*, NSString*>* plAddrs;
 @property(nonatomic, strong, nullable) XTSourceLocation* plLoc;
 @property(nonatomic) BOOL plStream;
 @property(nonatomic, strong, nullable) NSMapTable* plSites;
@@ -212,6 +215,7 @@ NSString* _Nullable parUpdateKey(XTASTNode* _Nullable target, XTAssignOp aop, XT
 - (void)blkBareCallCheck:(NSString*)name at:(XTSourceLocation*)loc;
 - (void)blkCaptureError:(NSUInteger)which name:(NSString*)name at:(XTSourceLocation*)loc;
 - (BOOL)blkIsIvar:(NSString*)name;
+- (BOOL)blkIsLaterIvar:(NSString*)name;
 - (NSMutableDictionary*)blkBases;
 @end
 

@@ -237,7 +237,11 @@ NS_ASSUME_NONNULL_BEGIN
 |* parsed counts too: at the body's own level, a name followed by `(` that is
 |* not in an ivar's initialiser, not after `.` or `:`, and not `since`. A bare
 |* call to one of them, or to a parent's, means `self.m(…)`, which a block
-|* cannot make (blkNoteBareCall). Mirrored in the port (blkScanMethods).
+|* cannot make (blkNoteBareCall). The same walk reads the names of the class's
+|* ivars, those declared after the method being parsed among them
+|* (blkIsLaterIvar): at the body's own level, outside type arguments and
+|* initialisers, a name that is not a type, not after `.`, `:` or `<`, and
+|* followed by `;`, `,`, `=` or `[`. Mirrored in the port (blkScanMethods).
 \****************************************************************************/
 - (void)blkScanMethodNames
     {
@@ -250,8 +254,14 @@ NS_ASSUME_NONNULL_BEGIN
     NSMutableSet* own = all[cls];
     if (!own)
         all[cls] = own = [NSMutableSet set];
-    NSInteger braces = 0, parens = 0;
-    BOOL inInit = NO;
+    NSMutableDictionary* allIvars = self.blkState[@"classIvarNames"];
+    if (!allIvars)
+        self.blkState[@"classIvarNames"] = allIvars = [NSMutableDictionary dictionary];
+    NSMutableSet* ivars = allIvars[cls];
+    if (!ivars)
+        allIvars[cls] = ivars = [NSMutableSet set];
+    NSInteger braces = 0, parens = 0, angles = 0;
+    BOOL inInit = NO, ivInit = NO;
     XTTokenType prev = XTTokenEOF;
     for (NSUInteger i = 0;; i++)
         {
@@ -266,24 +276,52 @@ NS_ASSUME_NONNULL_BEGIN
             if (braces == 0)
                 break;
             if (--braces == 0)
-                inInit = NO;
+                inInit = ivInit = NO;
             }
         else if (braces == 0)
             {
+            if (parens == 0 && !ivInit)
+                {
+                if (ty == XTTokenLess)
+                    angles++;
+                else if (ty == XTTokenGreater && angles > 0)
+                    angles--;
+                else if (ty == XTTokenShiftRight)
+                    angles = angles > 2 ? angles - 2 : 0;
+                else if (ty == XTTokenSemicolon)
+                    angles = 0;
+                }
+            if (parens == 0 && ty == XTTokenComma && angles == 0)
+                ivInit = NO;
             if (ty == XTTokenLParen)
                 parens++;
             else if (ty == XTTokenRParen && parens > 0)
                 parens--;
             else if (parens == 0 && ty == XTTokenAssign)
-                inInit = YES;
+                inInit = ivInit = YES;
             else if (parens == 0 && ty == XTTokenSemicolon)
-                inInit = NO;
+                inInit = ivInit = NO;
             else if (parens == 0 && ty == XTTokenIdentifier && !inInit && prev != XTTokenDot && prev != XTTokenColon &&
                      [self peekToken:i + 1].type == XTTokenLParen && ![t.value isEqualToString:@"since"])
                 [own addObject:t.value];
+            if (parens == 0 && angles == 0 && !ivInit && ty == XTTokenIdentifier && prev != XTTokenDot &&
+                prev != XTTokenColon && prev != XTTokenLess && ![self.typeTable isTypeName:t.value])
+                {
+                XTTokenType nx = [self peekToken:i + 1].type;
+                if (nx == XTTokenSemicolon || nx == XTTokenComma || nx == XTTokenAssign || nx == XTTokenLBracket)
+                    [ivars addObject:t.value];
+                }
             }
         prev = ty;
         }
+    }
+
+// An ivar of the class being parsed that the parse has not reached yet: its
+// body declares it (blkScanMethodNames), and no binding names it.
+- (BOOL)blkIsLaterIvar:(NSString*)name
+    {
+    NSString* cls = self.blkState[@"curClass"];
+    return cls && [self.blkState[@"classIvarNames"][cls] containsObject:name] && ![self blkLookup:name depth:NULL];
     }
 
 // A method of the class being parsed or of a parent (blkScanMethodNames).
@@ -478,7 +516,8 @@ NS_ASSUME_NONNULL_BEGIN
 /****************************************************************************\
 |* blkNoteIdentifierUse's errors, which the walk of a lifted loop's copy also
 |* says (pfwUse): 0 self or an ivar, 1 a name declared `auto`, 2 a `block:`
-|* capture inside a nested block. As the port.
+|* capture inside a nested block, 3 an ivar the class declares further down
+|* (pfwUse only). As the port.
 \****************************************************************************/
 - (void)blkCaptureError:(NSUInteger)which name:(NSString*)name at:(XTSourceLocation*)loc
     {
@@ -492,6 +531,11 @@ NS_ASSUME_NONNULL_BEGIN
         msg = [NSString stringWithFormat:@"cannot capture '%@': it was declared `auto`, and a capture "
                                          @"needs the declared type at this point — give it an explicit "
                                          @"type",
+                                         name];
+    else if (which == 3)
+        msg = [NSString stringWithFormat:@"a block cannot capture '%@' here: the class declares it further "
+                                         @"down, and a capture needs its declaration first — declare it "
+                                         @"above this method",
                                          name];
     else
         msg = [NSString stringWithFormat:@"a `block:` capture of '%@' inside a nested block is not "

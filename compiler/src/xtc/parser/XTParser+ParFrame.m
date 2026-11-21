@@ -621,6 +621,8 @@ void parAutoGoals(XTASTNode* n, NSInteger g)
         {
         if (self.pfwAuto && ([name isEqualToString:@"self"] || [self blkIsIvar:name]))
             [self blkCaptureError:0 name:name at:[self currentLocation]];
+        else if (self.pfwAuto && [self blkIsLaterIvar:name])
+            [self blkCaptureError:3 name:name at:[self currentLocation]];
         NSMutableArray* outer = self.pfw[@"outer"];
         if (!outer)
             self.pfw[@"outer"] = outer = [NSMutableArray array];

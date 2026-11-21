@@ -741,8 +741,12 @@ and integer reductions — `acc = acc + e` or `acc += e` with `+`, `*`, `&`,
 `if (e < acc) acc = e;` (any of `<`, `>`, `<=`, `>=`, `acc` on either side,
 the same `e` twice and no `else`), `acc` an integer local used nowhere else
 in the body — and is in the program's own files: loops in the standard library
-are never wrapped. It must also have no `break` of its own, `return`, `goto` or label, and no outer name
-incremented, taken by address or written through a member. A float
+are never wrapped. It must also have no `break` of its own, `return`, `goto` or label, no outer name
+incremented or written through a member, and take no address of an outer
+variable or of an element or member of one (`&c`, `&c[k]`, `&s.f`): a call
+may write through it. A loop in a method that names an instance variable the
+class declares further down stays a loop: a block captures an instance
+variable from its declaration. A float
 reduction is left alone (its sum would reassociate across the items) unless
 the goal is speed, as is any other write to an outer variable. The decision
 is made from the loop as written, once it is parsed, so it is the same in
