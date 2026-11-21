@@ -18,6 +18,8 @@
 // overflow.
 
 #import "Foundation.xc"
+#import <NumLit>
+#import "NumLitDefs.xc"
 #import <SortStable>
 #import <GasString>
 
@@ -272,51 +274,15 @@ class M68kMn
         String* s = s0.trimmed();
         if (s.byteLength() == (u32)0)
             return (i32)0;
-        i32 sign = (i32)1;
-        if (s.hasPrefix(String.withCString("-")))
-            {
-            sign = (i32)-1;
-            s = s.substringFromByte((u32)1);
-            }
-        else if (s.hasPrefix(String.withCString("+")))
-            s = s.substringFromByte((u32)1);
-        u32 base = (u32)10;
-        if (s.hasPrefix(String.withCString("$")))
-            {
-            base = (u32)16;
-            s = s.substringFromByte((u32)1);
-            }
-        else if (s.hasPrefix(String.withCString("0x")) || s.hasPrefix(String.withCString("0X")))
-            {
-            base = (u32)16;
-            s = s.substringFromByte((u32)2);
-            }
-        else if (s.hasPrefix(String.withCString("%")))
-            {
-            base = (u32)2;
-            s = s.substringFromByte((u32)1);
-            }
-        if (s.byteLength() == (u32)0)
+        // A sign, `$`/`0x` hex, `%` binary or decimal, all of the operand
+        // (NumLit, #336); 32-bit.
+        u64 mag = (u64)0;
+        bool neg = false;
+        u32 end = (u32)0;
+        if (NumLit.scan(s, (u32)0, (u32)(NUM_DOLLAR | NUM_PERCENT), &mag, &neg, &end) == (u32)0 || end != s.byteLength())
             return (i32)0;
-        u32 v = (u32)0;
-        for (u32 i = (u32)0; i < s.byteLength(); i = i + (u32)1)
-            {
-            u8 c = s.byteAt(i);
-            u32 d;
-            if (c >= (u8)'0' && c <= (u8)'9')
-                d = (u32)(c - (u8)'0');
-            else if (base == (u32)16 && c >= (u8)'a' && c <= (u8)'f')
-                d = (u32)(c - (u8)'a') + (u32)10;
-            else if (base == (u32)16 && c >= (u8)'A' && c <= (u8)'F')
-                d = (u32)(c - (u8)'A') + (u32)10;
-            else
-                return (i32)0;
-            if (d >= base)
-                return (i32)0;
-            v = v * base + d;
-            }
         _numOk = true;
-        return sign * (i32)v;
+        return (i32)(u32)(neg ? (u64)0 - mag : mag);
         }
 
     // Returns the register number, or -1. `_regIsAddr` says which file.

@@ -17,6 +17,8 @@
 // the same reason.
 
 #import "Foundation.xc"
+#import <NumLit>
+#import "NumLitDefs.xc"
 
 // Immediate styles — the WImm enum of the original, same numbering.
 #import "WasmDefs.xc"
@@ -395,45 +397,14 @@ class WasmBuf
         u32 n = t.byteLength();
         while (i < n && (t.byteAt(i) == (u8)' ' || t.byteAt(i) == (u8)9))
             i = i + (u32)1;
+        // As far as it reads (NumLit, #336).
+        u64 mag = (u64)0;
         bool neg = false;
-        if (i < n && t.byteAt(i) == (u8)'-')
-            {
-            neg = true;
-            i = i + (u32)1;
-            }
-        else if (i < n && t.byteAt(i) == (u8)'+')
-            i = i + (u32)1;
-        u64 base = (u64)10;
-        if (i + (u32)1 < n && t.byteAt(i) == (u8)'0' && (t.byteAt(i + (u32)1) == (u8)'x' || t.byteAt(i + (u32)1) == (u8)'X'))
-            {
-            base = (u64)16;
-            i = i + (u32)2;
-            }
-        else if (i < n && t.byteAt(i) == (u8)'0')
-            {
-            base = (u64)8;
-            }
-        u64 v = (u64)0;
-        while (i < n)
-            {
-            u8 c = t.byteAt(i);
-            u32 d;
-            if (c >= (u8)'0' && c <= (u8)'9')
-                d = (u32)(c - (u8)'0');
-            else if (c >= (u8)'a' && c <= (u8)'f')
-                d = (u32)(c - (u8)'a') + (u32)10;
-            else if (c >= (u8)'A' && c <= (u8)'F')
-                d = (u32)(c - (u8)'A') + (u32)10;
-            else
-                break;
-            if ((u64)d >= base)
-                break;
-            v = v * base + (u64)d;
-            i = i + (u32)1;
-            }
+        u32 end = (u32)0;
+        NumLit.scan(t, i, (u32)NUM_OCTAL, &mag, &neg, &end);
         if (neg)
-            return (i64)0 - (i64)v;
-        return (i64)v;
+            return (i64)0 - (i64)mag;
+        return (i64)mag;
         }
 
     // ── Hex-float (C `%a`) to double bits — exact for the dialect's ≤14

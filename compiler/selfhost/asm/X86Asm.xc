@@ -18,6 +18,7 @@
 // does not.
 
 #import "Foundation.xc"
+#import <NumLit>
 #import <DwarfWriter>
 #import <SectionBytes>
 #import <GasString>
@@ -768,73 +769,17 @@ class X86Mn
         String* s = s0.trimmed();
         if (s.byteLength() == (u32)0)
             return (i32)0;
+        // A sign, `0x` hex or decimal, all of the operand (NumLit, #336); the
+        // value 64-bit, its high half in _numHi.
+        u64 mag = (u64)0;
         bool neg = false;
-        if (s.hasPrefix(String.withCString("-")))
-            {
-            neg = true;
-            s = s.substringFromByte((u32)1);
-            }
-        else if (s.hasPrefix(String.withCString("+")))
-            s = s.substringFromByte((u32)1);
-        u32 base = (u32)10;
-        if (s.hasPrefix(String.withCString("0x")) || s.hasPrefix(String.withCString("0X")))
-            {
-            base = (u32)16;
-            s = s.substringFromByte((u32)2);
-            }
-        if (s.byteLength() == (u32)0)
+        u32 end = (u32)0;
+        if (NumLit.scan(s, (u32)0, (u32)0, &mag, &neg, &end) == (u32)0 || end != s.byteLength())
             return (i32)0;
-        u32 lo = (u32)0;
-        u32 hi = (u32)0;
-        for (u32 i = (u32)0; i < s.byteLength(); i = i + (u32)1)
-            {
-            u8 c = s.byteAt(i);
-            u32 d;
-            if (c >= (u8)'0' && c <= (u8)'9')
-                d = (u32)(c - (u8)'0');
-            else if (base == (u32)16 && c >= (u8)'a' && c <= (u8)'f')
-                d = (u32)(c - (u8)'a') + (u32)10;
-            else if (base == (u32)16 && c >= (u8)'A' && c <= (u8)'F')
-                d = (u32)(c - (u8)'A') + (u32)10;
-            else
-                return (i32)0;
-            // (hi:lo) = (hi:lo) * base + d, with the carry out of the low half
-            // made explicit — a shift-and-add would lose it.
-            u32 lo0 = lo;
-            u32 newLo = lo * base;
-            u32 carry = mulCarry(lo0, base);
-            hi = hi * base + carry;
-            u32 sum = newLo + d;
-            if (sum < newLo)
-                hi = hi + (u32)1;
-            lo = sum;
-            }
-        if (neg)
-            {
-            // Two's complement across both halves.
-            u32 nlo = ~lo + (u32)1;
-            u32 nhi = ~hi;
-            if (nlo == (u32)0)
-                nhi = nhi + (u32)1;
-            lo = nlo;
-            hi = nhi;
-            }
-        _numHi = hi;
+        u64 v = neg ? (u64)0 - mag : mag;
+        _numHi = (u32)(v >> (u64)32);
         _numOk = true;
-        return (i32)lo;
-        }
-
-    // The high 32 bits of a 32x32 product, computed in 16-bit halves so nothing
-    // overflows on the way.
-    static u32 mulCarry(u32 a, u32 b)
-        {
-        u32 al = a & (u32)$FFFF;
-        u32 ah = a >> (u32)16;
-        u32 bl = b & (u32)$FFFF;
-        u32 bh = b >> (u32)16;
-        u32 mid = ah * bl + ((al * bl) >> (u32)16);
-        u32 mid2 = al * bh + (mid & (u32)$FFFF);
-        return ah * bh + (mid >> (u32)16) + (mid2 >> (u32)16);
+        return (i32)(u32)v;
         }
 
     // ── Operands ─────────────────────────────────────────────────────────

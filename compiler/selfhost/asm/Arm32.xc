@@ -26,6 +26,8 @@
 //   push/pop          cond 100 P U S W L Rn register_list
 
 #import "Foundation.xc"
+#import <NumLit>
+#import "NumLitDefs.xc"
 #import <GasString>
 
 // One entry in the object's symbol table.
@@ -1344,40 +1346,12 @@ class AsmSymbol
     static u32 immediateValue(String* t)
         {
         u32 i = (t.byteLength() > (u32)0 && t.byteAt((u32)0) == (u8)'#') ? (u32)1 : (u32)0;
+        // A `-`, `0x`/`$` hex or decimal, as far as it reads (NumLit, #336).
+        u64 mag = (u64)0;
         bool neg = false;
-        if (i < t.byteLength() && t.byteAt(i) == (u8)'-')
-            {
-            neg = true;
-            i = i + (u32)1;
-            }
-        u32 v = (u32)0;
-        bool hex = false;
-        if (i + (u32)1 < t.byteLength() && t.byteAt(i) == (u8)'0' && (t.byteAt(i + (u32)1) == (u8)'x' || t.byteAt(i + (u32)1) == (u8)'X'))
-            {
-            hex = true;
-            i = i + (u32)2;
-            }
-        else if (i < t.byteLength() && t.byteAt(i) == (u8)'$')
-            {
-            hex = true;
-            i = i + (u32)1;
-            }
-        while (i < t.byteLength())
-            {
-            u8 c = t.byteAt(i);
-            u32 d = (u32)16;
-            if (c >= (u8)'0' && c <= (u8)'9')
-                d = (u32)(c - (u8)'0');
-            else if (hex && c >= (u8)'a' && c <= (u8)'f')
-                d = (u32)(c - (u8)'a') + (u32)10;
-            else if (hex && c >= (u8)'A' && c <= (u8)'F')
-                d = (u32)(c - (u8)'A') + (u32)10;
-            else
-                break;
-            v = hex ? (v * (u32)16 + d) : (v * (u32)10 + d);
-            i = i + (u32)1;
-            }
-        return neg ? (u32)0 - v : v;
+        u32 end = (u32)0;
+        NumLit.scan(t, i, (u32)(NUM_DOLLAR | NUM_NOPLUS), &mag, &neg, &end);
+        return neg ? (u32)0 - (u32)mag : (u32)mag;
         }
 
     // ── Encoding one instruction ─────────────────────────────────────────
