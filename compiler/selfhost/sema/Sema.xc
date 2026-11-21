@@ -3736,6 +3736,15 @@ class Sema
         //
         // n.op() rather than the `op` local: that one is declared inside the
         // constant-fold block above and is out of scope here.
+        //
+        // An array operand of `+` or `-` decays first (#516), so `b + 1` is a
+        // pointer and `b - p` a pointer difference.
+        if (_isOp(n.op(), "+") || _isOp(n.op(), "-"))
+            {
+            String* lt0 = lt;
+            lt = Types.arithmeticDecay(lt, rt);
+            rt = Types.arithmeticDecay(rt, lt0);
+            }
         String* r = Types.widen(lt, rt);
         if (_isOp(n.op(), "-") && Types.isPointer(lt) && Types.isPointer(rt))
             r = _ptrW >= (u32)8   ? String.withCString("i64")

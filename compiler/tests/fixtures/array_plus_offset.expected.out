@@ -1,0 +1,13 @@
+global argument ok
+global initialiser ok
+integer on the left ok
+chained offsets ok
+variable offset ok
+dereference ok
+subscript of the sum ok
+pointer minus array ok
+array minus pointer ok
+local array ok
+struct field array ok
+u16 array ok
+u8 array ok

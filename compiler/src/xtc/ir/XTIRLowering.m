@@ -4552,10 +4552,12 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
     // of the same type. The verifier's §12.2 type-match check
     // rejects an Add with a Ptr and an integer operand, so this
     // branch has to fire BEFORE the standard widen-then-Add path.
+    // An ARRAY operand takes part as the pointer to its element that sema
+    // decayed it to (#516).
     if (node.op == XTBinaryOpAdd || node.op == XTBinaryOpSub)
         {
-        XTType* lt = node.left.resolvedType;
-        XTType* rt = node.right.resolvedType;
+        XTType* lt = [XTType arithmeticDecay:node.left.resolvedType other:node.right.resolvedType];
+        XTType* rt = [XTType arithmeticDecay:node.right.resolvedType other:node.left.resolvedType];
         BOOL lptr = (lt && lt.kind == XTTypeKindPointer);
         BOOL rptr = (rt && rt.kind == XTTypeKindPointer);
         if (lptr || rptr)
@@ -4764,14 +4766,34 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
     return rv;
     }
 
+// An array operand of pointer arithmetic: its lowered value is the array's
+// address, typed as whatever the array lowers to. The Bitcast retypes it as
+// the pointer to the element that sema decayed it to, as `(u32*)b` does, so
+// the ElementAddr strides by one element (#516). Any other operand passes
+// through.
+- (nullable XTIRValue*)arrayOperand:(nullable XTIRValue*)v
+                               type:(nullable XTType*)ast
+                            decayed:(nullable XTType*)decayed
+                                 at:(XTSourceLocation*)loc
+    {
+    if (!v || !ast || !decayed || ast == decayed || !v.type || v.type.kind != XTIRTypeKindPtr)
+        return v;
+    XTIRType* dstIR = [self irTypeForASTType:decayed at:loc];
+    if (!dstIR)
+        return v;
+    return [self emitInsnOpcode:XTIROpBitcast
+                         result:dstIR
+                       operands:@[ [XTIROperand useWithValueId:v.valueId] ]];
+    }
+
 // Lower `p + N` / `N + p` / `p - N` to ElementAddr. The pointer
 // operand stays as the base; the integer is the scaled index. For
 // subtraction, negate the index first so ElementAddr's "scale +
 // add" form still applies.
 - (nullable XTIRValue*)lowerPtrArithmetic:(XTBinaryExprNode*)node
     {
-    XTType* lt = node.left.resolvedType;
-    XTType* rt = node.right.resolvedType;
+    XTType* lt = [XTType arithmeticDecay:node.left.resolvedType other:node.right.resolvedType];
+    XTType* rt = [XTType arithmeticDecay:node.right.resolvedType other:node.left.resolvedType];
     BOOL lptr = (lt && lt.kind == XTTypeKindPointer);
     BOOL rptr = (rt && rt.kind == XTTypeKindPointer);
 
@@ -4787,10 +4809,10 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
     // `p - q` is as legal as `q - p` and one of them is negative.
     if (lptr && rptr)
         {
-        XTIRValue* lv = [self lowerExpression:node.left];
+        XTIRValue* lv = [self arrayOperand:[self lowerExpression:node.left] type:node.left.resolvedType decayed:lt at:node.location];
         if (!lv)
             return nil;
-        XTIRValue* rv = [self lowerExpression:node.right];
+        XTIRValue* rv = [self arrayOperand:[self lowerExpression:node.right] type:node.right.resolvedType decayed:rt at:node.location];
         if (!rv)
             return nil;
         // The ptrdiff type, and it must be the one SEMA chose — pointer-width,
@@ -4839,7 +4861,10 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
     XTASTNode* ptrSide = lptr ? node.left : node.right;
     XTASTNode* idxSide = lptr ? node.right : node.left;
 
-    XTIRValue* ptrVal = [self lowerExpression:ptrSide];
+    XTIRValue* ptrVal = [self arrayOperand:[self lowerExpression:ptrSide]
+                                      type:ptrSide.resolvedType
+                                   decayed:(lptr ? lt : rt)
+                                        at:node.location];
     if (!ptrVal)
         return nil;
     XTIRValue* idxVal = [self lowerExpression:idxSide];
