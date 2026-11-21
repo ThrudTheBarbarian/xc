@@ -2093,6 +2093,15 @@
         // compilers owe each other requires them to make the SAME choice, not a
         // FIXED one — both asking the target's width agree perfectly. The port
         // now gets the width the same way lowering already did.
+        //
+        // An array operand of `+` or `-` decays first (#516), so `b + 1` is a
+        // pointer and `b - p` a pointer difference.
+        if (node.op == XTBinaryOpAdd || node.op == XTBinaryOpSub)
+            {
+            XTType* lt0 = lt;
+            lt = [XTType arithmeticDecay:lt other:rt];
+            rt = [XTType arithmeticDecay:rt other:lt0];
+            }
         if (node.op == XTBinaryOpSub && lt && rt && lt.kind == XTTypeKindPointer && rt.kind == XTTypeKindPointer)
             {
             NSUInteger pw = [XTPointerType heapPointerWidth];

@@ -203,6 +203,13 @@ typedef NS_ENUM(NSInteger, XTTypeKind) {
 \****************************************************************************/
 + (XTType*)widenType:(XTType*)a with:(XTType*)b;
 
+/****************************************************************************\
+|* The type an operand of `+` or `-` takes part as: a one-dimensional array
+|* decays to a pointer to its element when the other operand is an integer, a
+|* pointer or such an array. Any other type is returned unchanged.
+\****************************************************************************/
++ (XTType*)arithmeticDecay:(XTType*)t other:(XTType*)other;
+
 @end
 
 NS_ASSUME_NONNULL_END

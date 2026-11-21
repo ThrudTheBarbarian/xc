@@ -1,5 +1,6 @@
 #import "XTType.h"
 #import "XTPointerType.h"
+#import "XTArrayType.h"
 
 @interface XTType ()
 @property(nonatomic, readwrite) XTTypeKind kind;
@@ -296,6 +297,36 @@ static BOOL sFloatIsIEEE = NO;
     if (self.isInteger && other.isFloating)
         return YES;
     return NO;
+    }
+
+/****************************************************************************\
+|* YES for an array whose element is not itself an array.
+\****************************************************************************/
++ (BOOL)isOneDimArray:(XTType*)t
+    {
+    return t.kind == XTTypeKindArray && [t isKindOfClass:[XTArrayType class]]
+           && ((XTArrayType*)t).elementType.kind != XTTypeKindArray;
+    }
+
+/****************************************************************************\
+|* An ARRAY operand of `+` or `-` decays to a pointer to its element, as a C
+|* array does: `b + 1` is `&b[1]` and `b - p` is a pointer difference. Without
+|* this the array met the integer in widenType:with: by byte width, the sum
+|* was typed as the array, and lowering added the array's address to the
+|* integer as a narrow value (#516). One dimension only, where the element is
+|* not itself an array; the other operand must be an integer, a pointer or
+|* such an array.
+|* @param t      The operand's type.
+|* @param other  The other operand's type.
+|* @return The pointer to t's element, or t unchanged.
+\****************************************************************************/
++ (XTType*)arithmeticDecay:(XTType*)t other:(XTType*)other
+    {
+    if (!t || !other || ![self isOneDimArray:t])
+        return t;
+    if (!other.isInteger && other.kind != XTTypeKindPointer && ![self isOneDimArray:other])
+        return t;
+    return [XTPointerType pointerToType:((XTArrayType*)t).elementType];
     }
 
 /****************************************************************************\
