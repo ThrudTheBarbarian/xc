@@ -22,6 +22,7 @@
 // time, not by us.
 
 #import "Foundation.xc"
+#import <ElfDyn>
 #import <SortStable>
 #import <Arm64Asm>
 #import <SectionBytes>
@@ -666,22 +667,6 @@ class ElfArm64
         SortStable.byString(a);
         }
 
-    // The SysV ELF hash DT_HASH requires — unchanged since 1995 and specified
-    // byte for byte in the gABI, so it is written out rather than looked up.
-    static u32 elfHash(String* name)
-        {
-        u32 h = (u32)0;
-        for (u32 i = (u32)0; i < name.byteLength(); i = i + (u32)1)
-            {
-            h = (h << (u32)4) + (u32)name.byteAt(i);
-            u32 g = h & (u32)$F000_0000;
-            if (g != (u32)0)
-                h = h ^ (g >> (u32)24);
-            h = h & ~g;
-            }
-        return h;
-        }
-
     // ── instruction-field patching ───────────────────────────────────────
     // AArch64 relocations do not overwrite a whole word the way x86's disp32
     // does; each splices a field into an already-encoded instruction. Read,
@@ -888,32 +873,20 @@ class ElfArm64
 
         u32 nsym = (u32)1 + exports.count() + imports.count() + wordImports.count();
 
-        Array* symOrder = new Array();
-        symOrder.add((Object*)String.withCString(""));
-        for (u32 i = (u32)0; i < exports.count(); i = i + (u32)1)
-            symOrder.add(exports.get(i));
-        for (u32 i = (u32)0; i < imports.count(); i = i + (u32)1)
-            symOrder.add(imports.get(i));
-        for (u32 i = (u32)0; i < wordImports.count(); i = i + (u32)1)
-            symOrder.add(wordImports.get(i));
-
-        Data* dynstr = new Data();
+        Array* symOrder = ElfDyn.symbolOrder(exports, imports, wordImports);
         Map* strOff = new Map();
-        dynstr.appendByte((u8)0); // index 0 = ""
-        for (u32 i = (u32)1; i < symOrder.count(); i = i + (u32)1)
-            internStr(dynstr, strOff, (String*)symOrder.get(i));
+        Data* dynstr = ElfDyn.stringTable(symOrder, strOff);
         u32 sonameOff = (u32)0;
         if (!isExec && soname != (String*)0 && soname.byteLength() > (u32)0)
-            sonameOff = internStr(dynstr, strOff, soname);
+            sonameOff = ElfDyn.intern(dynstr, strOff, soname);
         Array* neededOff = new Array();
         if (needed != (Array*)0)
             for (u32 i = (u32)0; i < needed.count(); i = i + (u32)1)
                 neededOff.add((Object*)Number.withU32(
-                    internStr(dynstr, strOff, (String*)needed.get(i))));
-        u32 runpathOff = _runpath != (String*)0 ? internStr(dynstr, strOff, _runpath) : (u32)0;
+                    ElfDyn.intern(dynstr, strOff, (String*)needed.get(i))));
+        u32 runpathOff = _runpath != (String*)0 ? ElfDyn.intern(dynstr, strOff, _runpath) : (u32)0;
 
-        u32 nbucket = nsym < (u32)4 ? (u32)1 : nsym / (u32)4 + (u32)1;
-        u32 hashSz = ((u32)2 + nbucket + nsym) * (u32)4;
+        u32 hashSz = ElfDyn.hashSize(nsym);
         // The constructor array cannot be longer than the data it sits in.
         u32 miLen = modInitLength <= dataIn.length() ? modInitLength : (u32)0;
         u32 nDyn = (u32)8 + (isExec ? (u32)0 : (u32)1) + (_runpath != (String*)0 ? (u32)1 : (u32)0)
@@ -1145,7 +1118,7 @@ class ElfArm64
             // An import named only by data words may be either: STT_NOTYPE.
             bool wordOnly = !isNull && off == (Object*)0 && i >= (u32)1 + exports.count() + imports.count();
             u32 stt = wordOnly ? (u32)0 : (inData ? (u32)1 : (u32)2);
-            p32(isNull ? (u32)0 : lookupStr(strOff, n));
+            p32(isNull ? (u32)0 : ElfDyn.lookup(strOff, n));
             p8(isNull ? (u32)0 : ((u32)1 << (u32)4) | stt);
             p8((u32)0);
             p16((isNull || off == (Object*)0) ? (u32)0 : (u32)1); // st_shndx
@@ -1158,26 +1131,7 @@ class ElfArm64
         _out.append(dynstr);
 
         padTo(hashOff);
-            {
-            Array* bucket = new Array();
-            Array* chain = new Array();
-            for (u32 i = (u32)0; i < nbucket; i = i + (u32)1)
-                bucket.add((Object*)Number.withU32((u32)0));
-            for (u32 i = (u32)0; i < nsym; i = i + (u32)1)
-                chain.add((Object*)Number.withU32((u32)0));
-            for (u32 i = (u32)1; i < symOrder.count(); i = i + (u32)1)
-                {
-                u32 b = elfHash((String*)symOrder.get(i)) % nbucket;
-                chain.set(i, bucket.get(b)); // push onto the chain
-                bucket.set(b, (Object*)Number.withU32(i));
-                }
-            p32(nbucket);
-            p32(nsym);
-            for (u32 i = (u32)0; i < nbucket; i = i + (u32)1)
-                p32(((Number*)bucket.get(i)).asU32());
-            for (u32 i = (u32)0; i < nsym; i = i + (u32)1)
-                p32(((Number*)chain.get(i)).asU32());
-            }
+        _out.append(ElfDyn.hashTable(symOrder));
 
         padTo(relaOff);
         // R_AARCH64_RELATIVE, or R_AARCH64_ABS64 against an import
@@ -1263,12 +1217,12 @@ class ElfArm64
         Data* shstr = new Data();
         Map* shOff = new Map();
         shstr.appendByte((u8)0);
-        u32 nDynamic = internStr(shstr, shOff, String.withCString(".dynamic"));
-        u32 nDynstr = internStr(shstr, shOff, String.withCString(".dynstr"));
-        u32 nShstrtab = internStr(shstr, shOff, String.withCString(".shstrtab"));
+        u32 nDynamic = ElfDyn.intern(shstr, shOff, String.withCString(".dynamic"));
+        u32 nDynstr = ElfDyn.intern(shstr, shOff, String.withCString(".dynstr"));
+        u32 nShstrtab = ElfDyn.intern(shstr, shOff, String.withCString(".shstrtab"));
         // A library's interface (bug 460): not loaded, so it goes after the
         // data with the other non-allocated contents and moves no address.
-        u32 nIface = hasIface ? internStr(shstr, shOff, String.withCString(".xtc.iface")) : (u32)0;
+        u32 nIface = hasIface ? ElfDyn.intern(shstr, shOff, String.withCString(".xtc.iface")) : (u32)0;
         u32 ifaceOff = _out.length();
         for (u32 i = (u32)0; hasIface && i < iface.count(); i = i + (u32)1)
             p8(((Number*)iface.get(i)).asU32());
@@ -1388,22 +1342,4 @@ class ElfArm64
         b.appendLE(w, (u32)4);
         }
 
-    static u32 internStr(Data* blob, Map* off, String* s)
-        {
-        Object* have = off.get((Hashable*)s);
-        if (have != (Object*)0)
-            return ((Number*)have).asU32();
-        u32 at = blob.length();
-        off.set((Hashable*)s, (Object*)Number.withU32(at));
-        for (u32 i = (u32)0; i < s.byteLength(); i = i + (u32)1)
-            blob.appendByte(s.byteAt(i));
-        blob.appendByte((u8)0);
-        return at;
-        }
-
-    static u32 lookupStr(Map* off, String* s)
-        {
-        Object* have = off.get((Hashable*)s);
-        return have == (Object*)0 ? (u32)0 : ((Number*)have).asU32();
-        }
     }

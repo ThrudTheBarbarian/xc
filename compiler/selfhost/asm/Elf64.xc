@@ -13,6 +13,7 @@
 // than repeating a zero at forty call sites.
 
 #import "Foundation.xc"
+#import <ElfDyn>
 #import <SortStable>
 #import <X86Asm>
 #import <SectionBytes>
@@ -839,33 +840,21 @@ class ElfSharedInfo
         u32 thunkOff = text.length(); // thunks are appended to .text
         u32 nsym = (u32)1 + exports.count() + imports.count() + wordImports.count();
 
-        Array* symOrder = new Array();
-        symOrder.add((Object*)String.withCString(""));
-        for (u32 i = (u32)0; i < exports.count(); i = i + (u32)1)
-            symOrder.add(exports.get(i));
-        for (u32 i = (u32)0; i < imports.count(); i = i + (u32)1)
-            symOrder.add(imports.get(i));
-        for (u32 i = (u32)0; i < wordImports.count(); i = i + (u32)1)
-            symOrder.add(wordImports.get(i));
-
-        Data* dynstr = new Data();
+        Array* symOrder = ElfDyn.symbolOrder(exports, imports, wordImports);
         Map* strOff = new Map();
-        dynstr.appendByte((u8)0); // index 0 = ""
-        for (u32 i = (u32)1; i < symOrder.count(); i = i + (u32)1)
-            Elf64.internStr(dynstr, strOff, (String*)symOrder.get(i));
+        Data* dynstr = ElfDyn.stringTable(symOrder, strOff);
         u32 sonameOff = (u32)0;
         if (soname != (String*)0 && soname.byteLength() > (u32)0)
-            sonameOff = Elf64.internStr(dynstr, strOff, soname);
+            sonameOff = ElfDyn.intern(dynstr, strOff, soname);
         Array* neededOff = new Array();
         if (needed != (Array*)0)
             for (u32 i = (u32)0; i < needed.count(); i = i + (u32)1)
                 neededOff.add((Object*)Number.withU32(
-                    Elf64.internStr(dynstr, strOff, (String*)needed.get(i))));
+                    ElfDyn.intern(dynstr, strOff, (String*)needed.get(i))));
         bool hasRunpath = runpath != (String*)0 && runpath.byteLength() > (u32)0;
-        u32 runpathOff = hasRunpath ? Elf64.internStr(dynstr, strOff, runpath) : (u32)0;
+        u32 runpathOff = hasRunpath ? ElfDyn.intern(dynstr, strOff, runpath) : (u32)0;
 
-        u32 nbucket = nsym < (u32)4 ? (u32)1 : nsym / (u32)4 + (u32)1;
-        u32 hashSz = ((u32)2 + nbucket + nsym) * (u32)4;
+        u32 hashSz = ElfDyn.hashSize(nsym);
         // A library's init entry (bug 470): libinit-linux.s lays out one
         // pointer between __xt_init_array_start and __xt_init_array_end, the
         // function that registers the library's constructor table with the
@@ -1097,7 +1086,7 @@ class ElfSharedInfo
                                             : (!isNull && Elf64.inSet(dataImportsSet, n));
             bool wordOnly = !isNull && off == (Object*)0 && i >= (u32)1 + exports.count() + imports.count();
             u32 stt = wordOnly ? (u32)STT_NOTYPE : (inData ? (u32)STT_OBJECT : (u32)STT_FUNC);
-            p32(isNull ? (u32)0 : Elf64.lookupStr(strOff, n));
+            p32(isNull ? (u32)0 : ElfDyn.lookup(strOff, n));
             p8(isNull ? (u32)0 : (((u32)STB_GLOBAL << (u32)4) | stt));
             p8((u32)0);
             bool isAbs = off != (Object*)0 && Elf64.inSet(absSet, n);
@@ -1114,24 +1103,7 @@ class ElfSharedInfo
         _out.append(dynstr);
 
         padTo(hashOff);
-        Array* bucket = new Array();
-        Array* chain = new Array();
-        for (u32 i = (u32)0; i < nbucket; i = i + (u32)1)
-            bucket.add((Object*)Number.withU32((u32)0));
-        for (u32 i = (u32)0; i < nsym; i = i + (u32)1)
-            chain.add((Object*)Number.withU32((u32)0));
-        for (u32 i = (u32)1; i < symOrder.count(); i = i + (u32)1)
-            {
-            u32 b = Elf64.elfHash((String*)symOrder.get(i)) % nbucket;
-            chain.set(i, bucket.get(b)); // push onto the chain
-            bucket.set(b, (Object*)Number.withU32(i));
-            }
-        p32(nbucket);
-        p32(nsym);
-        for (u32 i = (u32)0; i < nbucket; i = i + (u32)1)
-            p32(((Number*)bucket.get(i)).asU32());
-        for (u32 i = (u32)0; i < nsym; i = i + (u32)1)
-            p32(((Number*)chain.get(i)).asU32());
+        _out.append(ElfDyn.hashTable(symOrder));
 
         padTo(relaOff);
         // R_X86_64_RELATIVE, or R_X86_64_64 against an import
@@ -1306,7 +1278,7 @@ class ElfSharedInfo
         shstr.appendByte((u8)0);
         Map* shName = new Map();
         for (u32 i = (u32)1; i < names.count(); i = i + (u32)1)
-            Elf64.internStr(shstr, shName, (String*)names.get(i));
+            ElfDyn.intern(shstr, shName, (String*)names.get(i));
         u32 shstrOff = _out.length();
         _out.append(shstr);
 
@@ -1318,45 +1290,45 @@ class ElfSharedInfo
         shdrE((u32)0, (u32)0, (u32)0, (u32)0, (u32)0, (u32)0, (u32)0, (u32)0, (u32)0, (u32)0);
         // sh_link of .dynsym is its string table; sh_info the first global
         // index — everything we export is global, so that is 1.
-        shdrE(Elf64.lookupStr(shName, (String*)names.get((u32)1)), (u32)11, (u32)2,
+        shdrE(ElfDyn.lookup(shName, (String*)names.get((u32)1)), (u32)11, (u32)2,
               symOffB, symOffB, nsym * (u32)SYM_SZ, (u32)2, (u32)1, (u32)8, (u32)SYM_SZ);
-        shdrE(Elf64.lookupStr(shName, (String*)names.get((u32)2)), (u32)3, (u32)2,
+        shdrE(ElfDyn.lookup(shName, (String*)names.get((u32)2)), (u32)3, (u32)2,
               strOffB, strOffB, dynstr.length(), (u32)0, (u32)0, (u32)1, (u32)0);
-        shdrE(Elf64.lookupStr(shName, (String*)names.get((u32)3)), (u32)5, (u32)2,
+        shdrE(ElfDyn.lookup(shName, (String*)names.get((u32)3)), (u32)5, (u32)2,
               hashOff, hashOff, hashSz, (u32)1, (u32)0, (u32)8, (u32)4);
-        shdrE(Elf64.lookupStr(shName, (String*)names.get((u32)4)), (u32)4, (u32)2,
+        shdrE(ElfDyn.lookup(shName, (String*)names.get((u32)4)), (u32)4, (u32)2,
               relaOff, relaOff, nRela * (u32)RELA_SZ, (u32)1, (u32)0, (u32)8, (u32)RELA_SZ);
-        shdrE(Elf64.lookupStr(shName, (String*)names.get((u32)5)), (u32)1, (u32)6,
+        shdrE(ElfDyn.lookup(shName, (String*)names.get((u32)5)), (u32)1, (u32)6,
               textOff, textOff, textLen, (u32)0, (u32)0, (u32)16, (u32)0);
-        shdrE(Elf64.lookupStr(shName, (String*)names.get((u32)6)), (u32)1, (u32)3,
+        shdrE(ElfDyn.lookup(shName, (String*)names.get((u32)6)), (u32)1, (u32)3,
               dataAddr, dataAddr, dataFileSz, (u32)0, (u32)0, (u32)16, (u32)0);
         // .bss (SHT_NOBITS) describes the trailing zero run: .data holds only
         // the bytes in the file, so its header no longer counts bytes past the
         // file (the x86-64 half of 642). Emitted only when there are such bytes.
         u32 bssSz = data.length() > dataFileSz ? data.length() - dataFileSz : (u32)0;
         if (bssSz > (u32)0)
-            shdrE(Elf64.lookupStr(shName, (String*)names.get((u32)7)), (u32)8, (u32)3,
+            shdrE(ElfDyn.lookup(shName, (String*)names.get((u32)7)), (u32)8, (u32)3,
                   dataAddr + dataFileSz, dataAddr + dataFileSz, bssSz, (u32)0, (u32)0, (u32)16, (u32)0);
         // The shdr CALL ORDER is the section index, so .bss (index 7 here) shifts
         // the rest by one: .got is 8, .dynamic 9, .symtab 10, .strtab 11.
-        shdrE(Elf64.lookupStr(shName, (String*)names.get((u32)8)), (u32)1, (u32)3,
+        shdrE(ElfDyn.lookup(shName, (String*)names.get((u32)8)), (u32)1, (u32)3,
               gotOff, gotOff, ngot * (u32)8, (u32)0, (u32)0, (u32)8, (u32)8);
-        shdrE(Elf64.lookupStr(shName, (String*)names.get((u32)9)), (u32)6, (u32)3,
+        shdrE(ElfDyn.lookup(shName, (String*)names.get((u32)9)), (u32)6, (u32)3,
               dynOff, dynOff, nDyn * (u32)DYN_SZ, (u32)2, (u32)0, (u32)8, (u32)DYN_SZ);
         u32 strtabIdx = (u32)11;
-        shdrE(Elf64.lookupStr(shName, (String*)names.get((u32)10)), (u32)2, (u32)0,
+        shdrE(ElfDyn.lookup(shName, (String*)names.get((u32)10)), (u32)2, (u32)0,
               (u32)0, symtabOff, symtab.length(), strtabIdx, (u32)1, (u32)8, (u32)SYM_SZ);
-        shdrE(Elf64.lookupStr(shName, (String*)names.get((u32)11)), (u32)3, (u32)0,
+        shdrE(ElfDyn.lookup(shName, (String*)names.get((u32)11)), (u32)3, (u32)0,
               (u32)0, strtabOff, strtab.length(), (u32)0, (u32)0, (u32)1, (u32)0);
         if (hasIface)
-            shdrE(Elf64.lookupStr(shName, (String*)names.get((u32)12)), (u32)1, (u32)0,
+            shdrE(ElfDyn.lookup(shName, (String*)names.get((u32)12)), (u32)1, (u32)0,
                   (u32)0, ifaceOff, iface.count(), (u32)0, (u32)0, (u32)1, (u32)0);
         if (dwarf != (DwarfWriter*)0)
             for (u32 k = (u32)0; k < (u32)5; k = k + (u32)1)
-                shdrE(Elf64.lookupStr(shName, (String*)names.get(dwarfIdx + k)), (u32)1, (u32)0,
+                shdrE(ElfDyn.lookup(shName, (String*)names.get(dwarfIdx + k)), (u32)1, (u32)0,
                       (u32)0, ((Number*)dwarfOffs.get(k)).asU32(), dwarf.section(k).length(),
                       (u32)0, (u32)0, (u32)1, (u32)0);
-        shdrE(Elf64.lookupStr(shName, (String*)names.get(shstrIdx)), (u32)3, (u32)0,
+        shdrE(ElfDyn.lookup(shName, (String*)names.get(shstrIdx)), (u32)3, (u32)0,
               (u32)0, shstrOff, shstr.length(), (u32)0, (u32)0, (u32)1, (u32)0);
 
         // Patch the header fields that could only be known at the end.
@@ -1433,41 +1405,6 @@ class ElfSharedInfo
         {
         _out.setByteAt(at, (u8)(v & (u32)$FF));
         _out.setByteAt(at + (u32)1, (u8)((v >> (u32)8) & (u32)$FF));
-        }
-
-    // The SysV ELF hash DT_HASH requires — unchanged since 1995 and specified
-    // byte for byte in the gABI, so it is written out rather than looked up.
-    static u32 elfHash(String* name)
-        {
-        u32 h = (u32)0;
-        for (u32 i = (u32)0; i < name.byteLength(); i = i + (u32)1)
-            {
-            h = (h << (u32)4) + (u32)name.byteAt(i);
-            u32 g = h & (u32)$F000_0000;
-            if (g != (u32)0)
-                h = h ^ (g >> (u32)24);
-            h = h & ~g;
-            }
-        return h;
-        }
-
-    static u32 internStr(Data* blob, Map* off, String* s)
-        {
-        Object* have = off.get((Hashable*)s);
-        if (have != (Object*)0)
-            return ((Number*)have).asU32();
-        u32 at = blob.length();
-        off.set((Hashable*)s, (Object*)Number.withU32(at));
-        for (u32 i = (u32)0; i < s.byteLength(); i = i + (u32)1)
-            blob.appendByte(s.byteAt(i));
-        blob.appendByte((u8)0);
-        return at;
-        }
-
-    static u32 lookupStr(Map* off, String* s)
-        {
-        Object* have = off.get((Hashable*)s);
-        return have == (Object*)0 ? (u32)0 : ((Number*)have).asU32();
         }
 
     // ── ET_REL: the object `-c` writes ───────────────────────────────────
