@@ -1678,7 +1678,14 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
 
     if ([self check:XTTokenLParen])
         {
-        // Function declaration
+        // Function declaration. A top-level function's result type, for the
+        // --par-style=auto recogniser's call arguments (parAutoPointerArg).
+        if (topLevel && types.count && nameTok.value)
+            {
+            if (!self.blkState[@"topFnRet"])
+                self.blkState[@"topFnRet"] = [NSMutableDictionary dictionary];
+            self.blkState[@"topFnRet"][nameTok.value] = types.firstObject;
+            }
         return [self parseFunctionDeclWithReturnTypes:types name:nameTok.value location:loc];
         }
 
@@ -4073,6 +4080,104 @@ BOOL pacIsOne(XTASTNode* _Nullable e)
     return plain;
     }
 
+// A pointer to numbers or to structs, or an array of them, once `strip`
+// elements are read through it: what a call may write through. A class
+// instance, collection, block or function pointer is none (a block that
+// captures one is refused on its own). Mirrored in the port.
+BOOL parAutoPointsToData(XTType* _Nullable t, NSUInteger strip)
+    {
+    for (NSUInteger k = 0; k < strip && t; k++)
+        {
+        if ([t isKindOfClass:[XTArrayType class]])
+            t = ((XTArrayType*)t).elementType;
+        else if ([t isKindOfClass:[XTPointerType class]])
+            t = ((XTPointerType*)t).pointeeType;
+        else
+            return NO;
+        }
+    NSUInteger layers = 0;
+    while ([t isKindOfClass:[XTArrayType class]] || [t isKindOfClass:[XTPointerType class]])
+        {
+        t = [t isKindOfClass:[XTArrayType class]] ? ((XTArrayType*)t).elementType : ((XTPointerType*)t).pointeeType;
+        layers++;
+        }
+    if (layers == 0 || !t)
+        return NO;
+    switch (t.kind)
+        {
+        case XTTypeKindI8: case XTTypeKindU8: case XTTypeKindI16: case XTTypeKindU16:
+        case XTTypeKindI32: case XTTypeKindU32: case XTTypeKindI64: case XTTypeKindU64:
+        case XTTypeKindBool: case XTTypeKindFloat: case XTTypeKindDouble: case XTTypeKindVoid:
+        case XTTypeKindStruct:
+            return YES;
+        default:
+            return NO;
+        }
+    }
+
+// A value whose pointer-ness the parser cannot tell, once `strip` elements
+// are read through it: a type it does not know (`auto`, none) or a struct
+// passed by value, which may hold a pointer. Mirrored in the port.
+static BOOL parAutoTypeUnknown(XTType* _Nullable t, NSUInteger strip)
+    {
+    if (!t)
+        return YES;
+    for (NSUInteger k = 0; k < strip; k++)
+        {
+        if ([t isKindOfClass:[XTArrayType class]])
+            t = ((XTArrayType*)t).elementType;
+        else if ([t isKindOfClass:[XTPointerType class]])
+            t = ((XTPointerType*)t).pointeeType;
+        else
+            return NO;
+        }
+    return !t || t.kind == XTTypeKindAuto || t.kind == XTTypeKindStruct;
+    }
+
+// The outer variable a call argument may pass a pointer from (plArgs: its
+// roots, each marked with `[]` per element, `.` per member and `!` for a cast
+// to a pointer, `()` for a call's result), "" for a member of no name, "()"
+// for a call's result, else nil: a pointer to numbers or structs, a member,
+// a cast to a pointer, a call's result or a name whose type the parser
+// cannot see. An element's value, a number and the body's own names are
+// none. Mirrored in the port.
+- (nullable NSString*)parAutoPointerArg:(NSString*)roots declared:(NSSet<NSString*>*)declared
+    {
+    NSCharacterSet* marks = [NSCharacterSet characterSetWithCharactersInString:@"[.!("];
+    for (NSString* r in [roots componentsSeparatedByString:@","])
+        {
+        NSRange m = [r rangeOfCharacterFromSet:marks];
+        NSString* name = m.location == NSNotFound ? r : [r substringToIndex:m.location];
+        NSString* tail = m.location == NSNotFound ? @"" : [r substringFromIndex:m.location];
+        if (name.length && [tail rangeOfString:@"("].location == NSNotFound && [declared containsObject:name])
+            continue;
+        // A call's result: a top-level function's declared result when it
+        // is known and no pointer, else what the call may hand back.
+        if ([tail rangeOfString:@"("].location != NSNotFound)
+            {
+            // A name the scopes bind (a local, a parameter, a capture or an
+            // ivar) is no top-level function, whatever its spelling.
+            BOOL bound = [declared containsObject:name] || [self blkLookup:name depth:NULL] != nil;
+            XTType* rt = name.length && !bound && [tail isEqualToString:@"()"] ? self.blkState[@"topFnRet"][name] : nil;
+            if (![rt isKindOfClass:[XTType class]] || parAutoPointsToData(rt, 0) || parAutoTypeUnknown(rt, 0))
+                return @"()";
+            continue;
+            }
+        if ([tail rangeOfString:@"."].location != NSNotFound || [tail rangeOfString:@"!"].location != NSNotFound)
+            return name;
+        NSUInteger strip = tail.length / 2;
+        NSDictionary* info = [self blkLookup:name depth:NULL];
+        XTType* t = info[@"type"];
+        if (![t isKindOfClass:[XTType class]])
+            t = info ? nil : self.blkState[@"topVars"][name];
+        if (![t isKindOfClass:[XTType class]])
+            t = nil;
+        if (parAutoPointsToData(t, strip) || parAutoTypeUnknown(t, strip))
+            return name;
+        }
+    return nil;
+    }
+
 // The body of the loop whose header ends at token pe, for the recogniser on
 // the tokens its walk rebuilt (XTParser+ParLift.m):
 // the body's tokens, its names and their uses, its reductions, and the
@@ -4190,6 +4295,24 @@ BOOL pacIsOne(XTASTNode* _Nullable e)
                                                   : @"its body takes an address"];
             self.parScanAcc = nil;
             return [self parAutoNo:@"address"];
+            }
+        // An outer array or pointer passed to a call, as itself, at an offset,
+        // or as a pointer element of one (`f(c)`, `f(p + k)`, `f(rows[i])`),
+        // or a value the parser cannot tell from one (`f(s.p)`, `f(g())`, a
+        // name of no known type, a struct): the call may write through it from every
+        // item at once. An element's value is no pointer. Mirrored in the port.
+        NSString* argRoots = self.plArgs[@(i)];
+        NSString* passed = argRoots ? [self parAutoPointerArg:argRoots declared:declared] : nil;
+        if (passed)
+            {
+            NSString* why = [NSString stringWithFormat:@"its body passes '%@' to a call, which may write through it", passed];
+            if (!passed.length)
+                why = @"its body passes a member to a call, which may write through it";
+            else if ([passed isEqualToString:@"()"])
+                why = @"its body passes a call's result to a call, which may write through it";
+            [self parAutoWarnSerial:why];
+            self.parScanAcc = nil;
+            return [self parAutoNo:@"pointer-arg"];
             }
         // A declaration: its declarators are the body's own names.
         BOOL declStart = stmtStart || (prev == XTTokenLParen && [self parTokType:i - 2] == XTTokenFor);

@@ -743,8 +743,14 @@ the same `e` twice and no `else`), `acc` an integer local used nowhere else
 in the body — and is in the program's own files: loops in the standard library
 are never wrapped. It must also have no `break` of its own, `return`, `goto` or label, no outer name
 incremented or written through a member, and take no address of an outer
-variable or of an element or member of one (`&c`, `&c[k]`, `&s.f`): a call
-may write through it. A loop in a method that names an instance variable the
+variable or of an element or member of one (`&c`, `&c[k]`, `&s.f`), nor pass
+an outer array or pointer to a call (`f(c)`, `f(p + k)`, `f(rows[i])`): a call
+may write through it. A member (`f(s.p)`, even `f(s.n)`), a call's result
+(`f(g())`, unless `g` is declared above the loop to return a number, or is
+one of Math's built-ins), a struct passed by value and a name of no
+known type count as pointers, since the decision is made before the types are
+checked. An element's value, as in `f(c[i])`, is no
+pointer. A loop in a method that names an instance variable the
 class declares further down stays a loop: a block captures an instance
 variable from its declaration. A float
 reduction is left alone (its sum would reassociate across the items) unless

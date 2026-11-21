@@ -182,6 +182,101 @@ static NSString* plAssignSpelling(XTAssignOp op, XTTokenType* t)
     return @"=";
     }
 
+// Each of a comma-separated list of roots with `suffix` after it.
+static NSString* plArgEach(NSString* r, NSString* suffix)
+    {
+    NSMutableArray<NSString*>* out = [NSMutableArray array];
+    for (NSString* one in [r componentsSeparatedByString:@","])
+        [out addObject:[one stringByAppendingString:suffix]];
+    return [out componentsJoinedByString:@","];
+    }
+
+// The variables a call argument may pass a pointer from, comma-separated:
+// the name itself, through a `+` or `-` offset and either arm of `?:`, with
+// `[]` for each subscript or `*` it reads an element through, `.` for each
+// member (whose type the parser does not know) and `!` for a cast to a
+// pointer. A member of no name is `.` alone, and a call's result `()` after
+// the function's name, if it has one; one of Math's built-ins, which return
+// numbers, a literal or anything else gives none.
+static NSString* plArgRoots(XTASTNode* _Nullable e)
+    {
+    if ([e isKindOfClass:[XTIdentifierNode class]])
+        return ((XTIdentifierNode*)e).identName;
+    if ([e isKindOfClass:[XTCallExprNode class]])
+        {
+        XTCallExprNode* c = (XTCallExprNode*)e;
+        return !c.calleeExpr && c.calleeName.length ? [c.calleeName stringByAppendingString:@"()"] : @"()";
+        }
+    if ([e isKindOfClass:[XTMethodCallExprNode class]])
+        {
+        XTMethodCallExprNode* m = (XTMethodCallExprNode*)e;
+        static NSSet<NSString*>* maths;
+        if (!maths)
+            maths = [NSSet setWithArray:@[ @"sqrt", @"sin", @"cos", @"exp", @"ln", @"pow", @"min", @"max",
+                                           @"abs", @"floor", @"fma" ]];
+        BOOL pure = [m.receiver isKindOfClass:[XTIdentifierNode class]] &&
+                    [((XTIdentifierNode*)m.receiver).identName isEqualToString:@"Math"] && [maths containsObject:m.methodName];
+        return pure ? @"" : @"()";
+        }
+    if ([e isKindOfClass:[XTCastExprNode class]])
+        {
+        NSString* r = plArgRoots(((XTCastExprNode*)e).operand);
+        if (r.length && parAutoPointsToData(((XTCastExprNode*)e).castType, 0))
+            return plArgEach(r, @"!");
+        return r;
+        }
+    if ([e isKindOfClass:[XTMemberAccessNode class]])
+        {
+        NSString* r = plArgRoots(((XTMemberAccessNode*)e).base);
+        return r.length ? plArgEach(r, @".") : @".";
+        }
+    if ([e isKindOfClass:[XTSubscriptExprNode class]] ||
+        ([e isKindOfClass:[XTUnaryExprNode class]] && ((XTUnaryExprNode*)e).op == XTUnaryOpDeref))
+        {
+        XTASTNode* b = [e isKindOfClass:[XTSubscriptExprNode class]] ? ((XTSubscriptExprNode*)e).base
+                                                                      : ((XTUnaryExprNode*)e).operand;
+        NSString* r = plArgRoots(b);
+        return r.length ? plArgEach(r, @"[]") : @"";
+        }
+    NSString* l = @"";
+    NSString* r = @"";
+    if ([e isKindOfClass:[XTBinaryExprNode class]])
+        {
+        XTBinaryExprNode* b = (XTBinaryExprNode*)e;
+        if (b.op == XTBinaryOpAdd || b.op == XTBinaryOpSub)
+            l = plArgRoots(b.left);
+        if (b.op == XTBinaryOpAdd)
+            r = plArgRoots(b.right);
+        }
+    else if ([e isKindOfClass:[XTTernaryExprNode class]])
+        {
+        l = plArgRoots(((XTTernaryExprNode*)e).thenExpr);
+        r = plArgRoots(((XTTernaryExprNode*)e).elseExpr);
+        }
+    if (!l.length)
+        return r;
+    if (!r.length)
+        return l;
+    return [NSString stringWithFormat:@"%@,%@", l, r];
+    }
+
+// A call's arguments, comma-separated, each recorded at its first token with
+// the variables it may pass a pointer from (plArgs).
+- (void)plArgList:(nullable NSArray<XTASTNode*>*)es
+    {
+    BOOL first = YES;
+    for (XTASTNode* e in es)
+        {
+        if (!first)
+            [self plTok:XTTokenComma value:@","];
+        first = NO;
+        NSString* roots = plArgRoots(e);
+        if (roots.length)
+            self.plArgs[@(self.plToks.count)] = roots;
+        [self plExpr:e];
+        }
+    }
+
 - (void)plExprs:(nullable NSArray<XTASTNode*>*)es
     {
     BOOL first = YES;
@@ -368,7 +463,7 @@ static NSString* plAddrRoot(XTASTNode* _Nullable e)
         else
             [self plName:c.calleeName synth:NO];
         [self plTok:XTTokenLParen value:@"("];
-        [self plExprs:c.arguments];
+        [self plArgList:c.arguments];
         if (c.forwardsVarargs)
             {
             if (c.arguments.count)
@@ -397,7 +492,7 @@ static NSString* plAddrRoot(XTASTNode* _Nullable e)
                 [self plTok:XTTokenIdentifier value:m.methodName];
             }
         [self plTok:XTTokenLParen value:@"("];
-        [self plExprs:m.arguments];
+        [self plArgList:m.arguments];
         if (m.forwardsVarargs)
             {
             if (m.arguments.count)
@@ -478,7 +573,7 @@ static NSString* plAddrRoot(XTASTNode* _Nullable e)
         else
             {
             [self plTok:XTTokenLParen value:@"("];
-            [self plExprs:n.arguments];
+            [self plArgList:n.arguments];
             [self plTok:XTTokenRParen value:@")"];
             }
         return;
@@ -538,7 +633,7 @@ static NSString* plAddrRoot(XTASTNode* _Nullable e)
         if (d.constructorArgs)
             {
             [self plTok:XTTokenLParen value:@"("];
-            [self plExprs:d.constructorArgs];
+            [self plArgList:d.constructorArgs];
             [self plTok:XTTokenRParen value:@")"];
             }
         else if (d.initialiser)
@@ -1052,6 +1147,7 @@ static BOOL plStepOk(XTASTNode* _Nullable st, NSString* var)
     self.plToks = [NSMutableArray array];
     self.plDecls = [NSMutableDictionary dictionary];
     self.plAddrs = [NSMutableDictionary dictionary];
+    self.plArgs = [NSMutableDictionary dictionary];
     self.plLits = 0;
     self.plSkipWhileIf = NO;
     }
@@ -1080,6 +1176,7 @@ static BOOL plStepOk(XTASTNode* _Nullable st, NSString* var)
     self.plToks = nil;
     self.plDecls = nil;
     self.plAddrs = nil;
+    self.plArgs = nil;
     }
 
 // The recogniser's verdict on `loop`, a `for` as parsed (the loop as
@@ -1122,6 +1219,7 @@ static BOOL plStepOk(XTASTNode* _Nullable st, NSString* var)
     NSArray<XTToken*>* toks = self.plToks;
     NSDictionary* decls = self.plDecls;
     NSDictionary* addrs = self.plAddrs;
+    NSDictionary* args = self.plArgs;
     self.plToks = nil;
     NSString* var = nil;
     NSUInteger bndFrom = 0, bndTo = 0;
@@ -1190,6 +1288,7 @@ static BOOL plStepOk(XTASTNode* _Nullable st, NSString* var)
     self.plStream = YES;
     self.plDecls = [decls mutableCopy];
     self.plAddrs = [addrs mutableCopy];
+    self.plArgs = [args mutableCopy];
     self.parAutoWhy = nil;
     self.parAutoGridCap = 3;
     self.parScanAcc = nil;

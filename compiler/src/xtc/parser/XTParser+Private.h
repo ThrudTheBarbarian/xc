@@ -83,6 +83,10 @@ NS_ASSUME_NONNULL_BEGIN
 // The index of an address-of's `&` among those tokens -> the variable it
 // takes the address of, or of an element or member of, else @"" (plAddrRoot).
 @property(nonatomic, strong, nullable) NSMutableDictionary<NSNumber*, NSString*>* plAddrs;
+// The index of a call argument's first token among those tokens -> the
+// variables it may pass a pointer from, comma-separated, each marked with
+// what it reads through (plArgRoots).
+@property(nonatomic, strong, nullable) NSMutableDictionary<NSNumber*, NSString*>* plArgs;
 @property(nonatomic, strong, nullable) XTSourceLocation* plLoc;
 @property(nonatomic) BOOL plStream;
 @property(nonatomic, strong, nullable) NSMapTable* plSites;
@@ -246,5 +250,9 @@ NSString* _Nullable parUpdateKey(XTASTNode* _Nullable target, XTAssignOp aop, XT
 @end
 
 #pragma clang diagnostic pop
+
+// A pointer to numbers or structs, or an array of them, once `strip` elements
+// are read through it (XTParser.m).
+BOOL parAutoPointsToData(XTType* _Nullable t, NSUInteger strip);
 
 NS_ASSUME_NONNULL_END

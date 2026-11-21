@@ -92,6 +92,8 @@ u32 g2[90000];
 struct S { u32 n; u32 v; u32 acc; };
 S gs;
 u32 f1(u32 x) { return x + 1; }
+void put(u32* p, u32 k, u32 x) { p[k] = x; }
+u32* row(u32 k) { return b; }
 class K
     {
     u32 _k;
@@ -171,6 +173,17 @@ i32 main(void)
     for (u32 i = 0; i < n; i++) { u32* p = &b[i]; *p = i; }
     for (u32 i = 0; i < n; i++) { u32* p = &gs.v; b[i] = *p; }
     for (u32 i = 0; i < n; i++) { u32 t = i; u32* p = &t; b[i] = *p; }
+    // An outer array or pointer passed to a call; an element's value.
+    for (u32 i = 0; i < n; i++) put(b, i, i);
+    u32* pb = b;
+    for (u32 i = 0; i < n; i++) put(pb + 1, i / 2, i);
+    for (u32 i = 0; i < n; i++) b[i] = f1(a[i]);
+    // A member passed to a call: a pointer or a number, the parser cannot tell.
+    for (u32 i = 0; i < n; i++) b[i] = f1(gs.n);
+    // A call's result passed to a call: a pointer, or a number the callee
+    // is declared to return.
+    for (u32 i = 0; i < n; i++) put(row(i), i, i);
+    for (u32 i = 0; i < n; i++) b[i] = f1(f1(i));
     K* k = new K();
     k.run();
     Stdio.printf("%u %u %u %d %u %u %u %u\n", acc, acc2, m, sacc, serial, total, q, b[5]);

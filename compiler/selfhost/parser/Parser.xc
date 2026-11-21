@@ -4627,6 +4627,7 @@ class Parser
     Array*  _plToks;        // the walk's tokens
     Map*    _plDecls;       // the index of a declaration's first token -> its names
     Map*    _plAddrs;       // the index of an address-of's `&` -> the variable it names, or ""
+    Map*    _plArgs;        // the index of a call argument's first token -> the variables it may pass a pointer from
     Token*  _plAt;          // the place the walk's tokens carry
     bool    _plStream;      // the scan's body rules are reading the walk's tokens
     Array*  _plSites;       // [site, kind, plain or body, params, increment]
@@ -4811,6 +4812,90 @@ class Parser
         return String.withCString("");
     }
 
+    // Each of a comma-separated list of roots with `suffix` after it.
+    static String* plArgEach(String* r, string suffix)
+    {
+        Array* parts = r.splitOnByte(',');
+        String* out = String.withCString("");
+        for (u32 j = 0; j < parts.count(); j++) : serial {
+            if (j > 0) out.appendByte(',');
+            out.append((String*)parts.get(j));
+            out.appendCString(suffix);
+        }
+        return out;
+    }
+
+    // The variables a call argument may pass a pointer from, comma-separated:
+    // the name itself, through a `+` or `-` offset and either arm of `?:`,
+    // with `[]` for each subscript or `*` it reads an element through, `.`
+    // for each member (whose type the parser does not know) and `!` for a
+    // cast to a pointer. A member of no name is `.` alone, and a call's
+    // result `()` after the function's name, if it has one; one of Math's
+    // built-ins, which return numbers, a literal or anything else gives none.
+    String* plArgRoots(Node* e)
+    {
+        if (e == (Node*)0) return String.withCString("");
+        u16 k = e.kind();
+        if (k == nkIdent) return e.name();
+        if (k == nkCall) {
+            if (Parser._same(e.name(), "<indirect>") || e.name().byteLength() == 0) return String.withCString("()");
+            String* c = String.withString(e.name());
+            c.appendCString("()");
+            return c;
+        }
+        if (k == nkMethodCall) {
+            Node* r = e.kid(0);
+            String* m = e.name();
+            bool maths = Parser._same(m, "sqrt") || Parser._same(m, "sin") || Parser._same(m, "cos") || Parser._same(m, "exp")
+                || Parser._same(m, "ln") || Parser._same(m, "pow") || Parser._same(m, "min") || Parser._same(m, "max")
+                || Parser._same(m, "abs") || Parser._same(m, "floor") || Parser._same(m, "fma");
+            if (maths && r != (Node*)0 && r.kind() == nkIdent && Parser._same(r.name(), "Math")) return String.withCString("");
+            return String.withCString("()");
+        }
+        if (k == nkCast) {
+            String* r = plArgRoots(e.kid(0));
+            if (r.byteLength() > 0 && parAutoPointsToData(e.name(), 0)) return Parser.plArgEach(r, "!");
+            return r;
+        }
+        if (k == nkMember) {
+            String* r = plArgRoots(e.kid(0));
+            if (r.byteLength() == 0) return String.withCString(".");
+            return Parser.plArgEach(r, ".");
+        }
+        if (k == nkSubscript || k == nkUnary && Parser._same(e.op(), "*")) {
+            String* r = plArgRoots(e.kid(0));
+            if (r.byteLength() == 0) return r;
+            return Parser.plArgEach(r, "[]");
+        }
+        String* l = String.withCString("");
+        String* r = String.withCString("");
+        if (k == nkBinary) {
+            if (Parser._same(e.op(), "+") || Parser._same(e.op(), "-")) l = plArgRoots(e.kid(0));
+            if (Parser._same(e.op(), "+")) r = plArgRoots(e.kid(1));
+        } else if (k == nkTernary) {
+            l = plArgRoots(e.kid(1));
+            r = plArgRoots(e.kid(2));
+        }
+        if (l.byteLength() == 0) return r;
+        if (r.byteLength() == 0) return l;
+        String* both = String.withString(l);
+        both.appendByte(',');
+        both.append(r);
+        return both;
+    }
+
+    // A call's arguments [from, to), comma-separated, each recorded at its
+    // first token with the variables it may pass a pointer from (_plArgs).
+    void plCallArgs(Node* n, u32 from, u32 to)
+    {
+        for (u32 i = from; i < to; i++) : serial {
+            if (i > from) plTok(tokComma, ",");
+            String* roots = plArgRoots(n.kid(i));
+            if (roots.byteLength() > 0) _plArgs.set((Hashable*)String.withU32(_plToks.count()), (Object*)roots);
+            plExpr(n.kid(i));
+        }
+    }
+
     void plExpr(Node* e)
     {
         if (e == (Node*)0) return;
@@ -4891,7 +4976,7 @@ class Parser
             } else
                 plName(e.name(), false);
             plTok(tokLParen, "(");
-            plArgs(e, 0, argc);
+            plCallArgs(e, 0, argc);
             if (e.hasFlag(NF_VAFWD)) {
                 if (argc > 0) plTok(tokComma, ",");
                 plTok(tokEllipsis, "...");
@@ -4914,7 +4999,7 @@ class Parser
                     plTokS(tokIdentifier, e.name());
             }
             plTok(tokLParen, "(");
-            plArgs(e, 1, e.kidCount());
+            plCallArgs(e, 1, e.kidCount());
             if (e.hasFlag(NF_VAFWD)) {
                 if (e.kidCount() > 1) plTok(tokComma, ",");
                 plTok(tokEllipsis, "...");
@@ -4978,7 +5063,7 @@ class Parser
                 plTok(tokRBracket, "]");
             } else {
                 plTok(tokLParen, "(");
-                plArgs(e, 0, e.kidCount());
+                plCallArgs(e, 0, e.kidCount());
                 plTok(tokRParen, ")");
             }
             return;
@@ -5023,7 +5108,7 @@ class Parser
             plDims(d.op());
             if (ctor && i + 1 == ds.count()) {
                 plTok(tokLParen, "(");
-                plArgs(d, 0, d.kidCount());
+                plCallArgs(d, 0, d.kidCount());
                 plTok(tokRParen, ")");
             } else if (d.kidCount() > 0) {
                 plTok(tokAssign, "=");
@@ -5486,6 +5571,7 @@ class Parser
         _plToks = (Array*)0;
         _plDecls = (Map*)0;
         _plAddrs = (Map*)0;
+        _plArgs = (Map*)0;
     }
 
     void plBegin(Token* at)
@@ -5494,6 +5580,7 @@ class Parser
         _plToks = new Array();
         _plDecls = new Map();
         _plAddrs = new Map();
+        _plArgs = new Map();
         _plLits = 0;
         _plSkipWhileIf = false;
     }
@@ -5539,6 +5626,7 @@ class Parser
         Array* toks = _plToks;
         Map* decls = _plDecls;
         Map* addrs = _plAddrs;
+        Map* args = _plArgs;
         String* var = (String*)0;
         u32 bndFrom = 0;
         u32 bndTo = 0;
@@ -5596,6 +5684,7 @@ class Parser
         _plStream = true;
         _plDecls = decls;
         _plAddrs = addrs;
+        _plArgs = args;
         _parAutoWhy = (String*)0;
         _parAutoGridCap = 3;
         _parScanAcc = (String*)0;
@@ -5720,6 +5809,107 @@ class Parser
     // the body's tokens, its names and their uses, its reductions, and the
     // tests of #415 and #416 against the bound [bndFrom, bndTo). As the
     // reference.
+    // A pointer to numbers or to structs, or an array of them, once `strip`
+    // elements are read through it: what a call may write through. A class
+    // instance, collection, block or function pointer is none (a block that
+    // captures one is refused on its own). As the reference.
+    bool parAutoPointsToData(String* ty, u32 strip)
+    {
+        if (ty == (String*)0) return false;
+        String* t = ty;
+        for (u32 k = 0; k < strip; k++) : serial {
+            u32 n = t.byteLength();
+            if (n == 0) return false;
+            u8 last = t.byteAt(n - 1);
+            if (last == ']') t = t.substringBytes(0, t.lastIndexOfByte('['));
+            else if (last == '*' || last == '@') t = t.substringBytes(0, n - 1);
+            else return false;
+        }
+        // The base word, after any `simd:`-style qualifiers: a pointer or an
+        // array when a sigil or a bracket follows it.
+        u32 n = t.byteLength();
+        u32 from = 0;
+        for (u32 q = 0; q < n; q++) : serial {
+            u8 c = t.byteAt(q);
+            if (c == '<' || c == '(' || c == '*' || c == '@' || c == '[') break;
+            if (c == ':') from = q + 1;
+        }
+        u32 to = from;
+        for (; to < n && Parser.plWordByte(t.byteAt(to)); to++) : serial {
+        }
+        if (to == from || to >= n) return false;
+        u8 after = t.byteAt(to);
+        if (after != '*' && after != '@' && after != '[') return false;
+        String* b = t.substringBytes(from, to - from);
+        return Parser._same(b, "u8") || Parser._same(b, "i8") || Parser._same(b, "u16") || Parser._same(b, "i16")
+            || Parser._same(b, "u32") || Parser._same(b, "i32") || Parser._same(b, "u64") || Parser._same(b, "i64")
+            || Parser._same(b, "bool") || Parser._same(b, "float") || Parser._same(b, "double") || Parser._same(b, "void")
+            || _structNames.contains((Hashable*)b);
+    }
+
+    // A value whose pointer-ness the parser cannot tell, once `strip`
+    // elements are read through it: a type it does not know (`auto`, none) or
+    // a struct passed by value, which may hold a pointer. As the reference.
+    bool parAutoTypeUnknown(String* ty, u32 strip)
+    {
+        if (ty == (String*)0) return true;
+        String* t = ty;
+        for (u32 k = 0; k < strip; k++) : serial {
+            u32 n = t.byteLength();
+            if (n == 0) return false;
+            u8 last = t.byteAt(n - 1);
+            if (last == ']') t = t.substringBytes(0, t.lastIndexOfByte('['));
+            else if (last == '*' || last == '@') t = t.substringBytes(0, n - 1);
+            else return false;
+        }
+        u32 from = 0;
+        for (u32 q = 0; q < t.byteLength(); q++) : serial
+            if (t.byteAt(q) == ':') from = q + 1;
+        String* b = t.substringBytes(from, t.byteLength() - from);
+        return Parser._same(b, "auto") || _structNames.contains((Hashable*)b);
+    }
+
+    // The outer variable a call argument may pass a pointer from (_plArgs: its
+    // roots, each marked with `[]` per element, `.` per member and `!` for a
+    // cast to a pointer, `()` for a call's result), "" for a member of no
+    // name, "()" for a call's result, else 0: a pointer to numbers or structs,
+    // a member, a cast to a pointer, a call's result or a name whose type the
+    // parser cannot see. An element's value, a number and the body's own
+    // names are none. As the reference.
+    String* parAutoPointerArg(String* roots, Set* declared)
+    {
+        Array* parts = roots.splitOnByte(',');
+        for (u32 j = 0; j < parts.count(); j++) : serial {
+            String* r = (String*)parts.get(j);
+            u32 m = r.byteLength();
+            for (u32 q = 0; q < r.byteLength(); q++) : serial {
+                u8 c = r.byteAt(q);
+                if (c == '[' || c == '.' || c == '!' || c == '(') { m = q; break; }
+            }
+            String* name = r.substringBytes(0, m);
+            String* tail = r.substringBytes(m, r.byteLength() - m);
+            bool call = tail.indexOfByte('(') != String.notFound();
+            if (name.byteLength() > 0 && !call && declared.contains((Hashable*)name)) continue;
+            // A call's result: a top-level function's declared result when
+            // it is known and no pointer, else what the call may hand back.
+            if (call) {
+                // A name the scopes bind (a local, a parameter, a capture or
+                // an ivar) is no top-level function, whatever its spelling.
+                bool bound = declared.contains((Hashable*)name) || blkLookup(name, (u32*)0) != (Map*)0;
+                String* rt = name.byteLength() > 0 && !bound && Parser._same(tail, "()") ? (String*)_blkFnRet.get((Hashable*)name) : (String*)0;
+                if (rt == (String*)0 || parAutoPointsToData(rt, 0) || parAutoTypeUnknown(rt, 0)) return String.withCString("()");
+                continue;
+            }
+            if (tail.indexOfByte('.') != String.notFound() || tail.indexOfByte('!') != String.notFound()) return name;
+            u32 strip = tail.byteLength() / 2;
+            Map* info = blkLookup(name, (u32*)0);
+            String* ty = info != (Map*)0 ? blkTyOf(info) : (String*)0;
+            if (info == (Map*)0 && _parTopVars != (Map*)0) ty = (String*)_parTopVars.get((Hashable*)name);
+            if (parAutoPointsToData(ty, strip) || parAutoTypeUnknown(ty, strip)) return name;
+        }
+        return (String*)0;
+    }
+
     bool parAutoScanBodyAfter(u32 pe, String* var, u32 bndFrom, u32 bndTo, Array* reds, u32* goalOut)
     {
         u32 n = _tokens.count();
@@ -5803,6 +5993,26 @@ class Parser
                 parAutoWarnSerial(w);
                 _parScanAcc = (String*)0;
                 return parAutoNo("address");
+            }
+            // An outer array or pointer passed to a call, as itself, at an
+            // offset, or as a pointer element of one (`f(c)`, `f(p + k)`,
+            // `f(rows[i])`), or a value the parser cannot tell from one
+            // (`f(s.p)`, `f(g())`, a name of no known type, a struct): the
+            // call may write through it from every item at once. An element's
+            // value is no pointer.
+            String* argRoots = _plArgs != (Map*)0 ? (String*)_plArgs.get((Hashable*)String.withU32(i)) : (String*)0;
+            String* passed = argRoots != (String*)0 ? parAutoPointerArg(argRoots, declared) : (String*)0;
+            if (passed != (String*)0) {
+                String* w = String.withCString("its body passes a member to a call, which may write through it");
+                if (Parser._same(passed, "()")) w = String.withCString("its body passes a call's result to a call, which may write through it");
+                else if (passed.byteLength() > 0) {
+                    w = String.withCString("its body passes '");
+                    w.append(passed);
+                    w.appendCString("' to a call, which may write through it");
+                }
+                parAutoWarnSerial(w);
+                _parScanAcc = (String*)0;
+                return parAutoNo("pointer-arg");
             }
             // A declaration: its declarators are the body's own names.
             bool declStart = stmtStart || (prev == (u16)tokLParen && parTokType(i - (u32)2) == (u16)tokFor);
