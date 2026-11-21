@@ -4950,6 +4950,20 @@ class ClassInfo
         return emit(String.withCString("Const"), it, zops);
         }
 
+    // An array operand of pointer arithmetic: its lowered value is the array's
+    // address, typed as whatever the array lowers to. The Bitcast retypes it as
+    // the pointer to the element that sema decayed it to, as `(u32*)b` does, so
+    // the ElementAddr strides by one element (#516). Any other operand passes
+    // through.
+    IRValue* arrayPtr(IRValue* v, String* ast, String* decayed)
+        {
+        if (_failed || v == (IRValue*)0 || ast == 0 || decayed == 0 || ast.equals(decayed) || !isPtrIr(v.ty()))
+            return v;
+        Array* ops = new Array();
+        ops.add((Object*)IROperand.useVal(v));
+        return emit(String.withCString("Bitcast"), irType(decayed), ops);
+        }
+
     IRValue* lowerBinary(Node* n)
         {
         String* op = n.op();
@@ -4970,8 +4984,19 @@ class ClassInfo
         // same instruction with a NEGATED index — signed, because `p - 2` is
         // an offset of -2 and a U16 would make that +65534 and walk off into
         // a wild address.
-        bool lptr = Types.isPointer(n.kid((u32)0).ty());
-        bool rptr = Types.isPointer(n.kid((u32)1).ty());
+        //
+        // An ARRAY operand of `+` or `-` takes part as a pointer to its element,
+        // the type sema decayed it to (#516); arrayPtr reinterprets its address
+        // as that pointer once it is lowered.
+        String* lat = n.kid((u32)0).ty();
+        String* rat = n.kid((u32)1).ty();
+        if (isName(op, "+") || isName(op, "-"))
+            {
+            lat = Types.arithmeticDecay(n.kid((u32)0).ty(), n.kid((u32)1).ty());
+            rat = Types.arithmeticDecay(n.kid((u32)1).ty(), n.kid((u32)0).ty());
+            }
+        bool lptr = Types.isPointer(lat);
+        bool rptr = Types.isPointer(rat);
         // `p - q` — pointer DIFFERENCE, in ELEMENTS as C has it. This fell
         // through the XOR guard below into generic arithmetic and emitted a raw
         // BYTE `Sub` typed as a POINTER, so `q - p` on a double* answered 40
@@ -4985,10 +5010,10 @@ class ClassInfo
         // them is negative.
         if (isName(op, "-") && lptr && rptr)
             {
-            IRValue* lv = lowerExpr(n.kid((u32)0));
+            IRValue* lv = arrayPtr(lowerExpr(n.kid((u32)0)), n.kid((u32)0).ty(), lat);
             if (_failed)
                 return (IRValue*)0;
-            IRValue* rv = lowerExpr(n.kid((u32)1));
+            IRValue* rv = arrayPtr(lowerExpr(n.kid((u32)1)), n.kid((u32)1).ty(), rat);
             if (_failed)
                 return (IRValue*)0;
             // The ptrdiff type, and it must match the one SEMA chose —
@@ -5016,7 +5041,7 @@ class ClassInfo
             // The element size. irWidth answers 0 for a pointer pointee, where
             // the element is an address and the width is the target's own —
             // which is what the reference's pointee.byteWidth returns there.
-            String* pe = pointeeOf(n.kid((u32)0).ty());
+            String* pe = pointeeOf(lat);
             u32 esz = irWidth(irType(pe));
             if (esz == (u32)0)
                 esz = Types.isPointer(pe) ? _ptrW : (u32)1;
@@ -5032,7 +5057,7 @@ class ClassInfo
             {
             Node* ptrSide = lptr ? n.kid((u32)0) : n.kid((u32)1);
             Node* idxSide = lptr ? n.kid((u32)1) : n.kid((u32)0);
-            IRValue* base = lowerExpr(ptrSide);
+            IRValue* base = arrayPtr(lowerExpr(ptrSide), ptrSide.ty(), lptr ? lat : rat);
             if (_failed)
                 return (IRValue*)0;
             IRValue* idx = lowerExpr(idxSide);

@@ -120,6 +120,37 @@ class Types
         return String.withCString("i32");
         }
 
+    // An ARRAY operand of `+` or `-` decays to a pointer to its element, as a
+    // C array does: `b + 1` is `&b[1]` and `b - p` is a pointer difference.
+    // Without this the array met the integer in widen() as a type it has no
+    // width for, the sum took the integer's type, and the array's address was
+    // added as a narrow integer (#516). One dimension only, where the element
+    // is not itself an array; the other operand must be an integer, a pointer
+    // or such an array. Anything else comes back unchanged.
+    // XTType.arithmeticDecay:other:, rule for rule.
+    static String* arithmeticDecay(String* t, String* other)
+        {
+        if (!Types._oneDimArray(t) || other == 0)
+            return t;
+        if (!Types.isInteger(other) && !Types.isEnumName(other) && !Types.isPointer(other) && !Types._oneDimArray(other))
+            return t;
+        String* p = t.substringBytes((u32)0, t.lastIndexOfByte((u8)'['));
+        p.appendByte((u8)'*');
+        return p;
+        }
+
+    // An array whose element is not itself an array: the spelling ends in
+    // `]`, and what comes before its last `[` does not.
+    static bool _oneDimArray(String* t)
+        {
+        if (t == 0 || t.byteLength() == (u32)0 || t.byteAt(t.byteLength() - (u32)1) != (u8)']')
+            return false;
+        u32 at = t.lastIndexOfByte((u8)'[');
+        if (at == String.notFound() || at == (u32)0)
+            return false;
+        return t.byteAt(at - (u32)1) != (u8)']';
+        }
+
     // XTType.widenType:with:, rule for rule.
     static String* widen(String* a, String* b)
         {
