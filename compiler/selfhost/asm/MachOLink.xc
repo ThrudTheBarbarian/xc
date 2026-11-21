@@ -135,13 +135,6 @@ class MachOLink
             }
         }
 
-    static bool hasNameIn(Array* a, String* n)
-        {
-        for (u32 i = (u32)0; i < a.count(); i = i + (u32)1)
-            if (((String*)a.get(i)).equals(n)) return true;
-        return false;
-        }
-
     static String* taggedSym(MachOSymDef* sd, u32 oi)
         {
         bool localDef = !sd.ext() && sd.where() != (u32)0;
@@ -213,6 +206,12 @@ class MachOLink
         _rc = (u32)0;
         if (objectFiles.count() == (u32)0 && archives.count() == (u32)0)
             return;
+        // Every name mdataSyms holds, as a set kept in step with each add
+        // below, so a FDE's LSDA asks it instead of scanning the list (#335).
+        // The list itself still takes a name each time an object defines it.
+        Map* mdataSet = new Map();
+        for (u32 q = (u32)0; q < mdataSyms.count(); q = q + (u32)1)
+            mdataSet.set((Hashable*)mdataSyms.get(q), mdataSyms.get(q));
         Array* allObjs = new Array();
         Map* forced = new Map();
         for (u32 i = (u32)0; i < objectFiles.count(); i = i + (u32)1)
@@ -373,6 +372,7 @@ class MachOLink
                                 {
                                 msyms.set((Hashable*)nm, (Object*)Number.withU32(dbase + sd.off()));
                                 mdataSyms.add((Object*)nm);
+                                mdataSet.set((Hashable*)nm, (Object*)nm);
                                 commonSizes.set((Hashable*)nm, (Object*)Number.withU32(csz));
                                 }
                             }
@@ -380,6 +380,7 @@ class MachOLink
                             {
                             msyms.set((Hashable*)nm, (Object*)Number.withU32(dbase + sd.off()));
                             mdataSyms.add((Object*)nm);
+                            mdataSet.set((Hashable*)nm, (Object*)nm);
                             strongDataDefs.set((Hashable*)nm, (Object*)Number.withU32((u32)1));
                             commonSizes.remove((Hashable*)nm);
                             }
@@ -505,6 +506,7 @@ class MachOLink
                         String* ln = String.withFormat("__xc_lsda$%u$%u", oi, ur.lsda() - (u32)1);
                         msyms.set((Hashable*)ln, (Object*)Number.withU32(dbase + ur.lsda() - (u32)1));
                         mdataSyms.add((Object*)ln);
+                        mdataSet.set((Hashable*)ln, (Object*)ln);
                         mr.setLsdaSym(ln);
                         }
                     _unwind.add((Object*)mr);
@@ -523,7 +525,11 @@ class MachOLink
                         {
                         String* ln = String.withFormat("__xc_lsda$%u$%u", oi, of.lsda() - (u32)1);
                         msyms.set((Hashable*)ln, (Object*)Number.withU32(dbase + of.lsda() - (u32)1));
-                        if (!MachOLink.hasNameIn(mdataSyms, ln)) mdataSyms.add((Object*)ln);
+                        if (mdataSet.get((Hashable*)ln) == (Object*)0)
+                            {
+                            mdataSyms.add((Object*)ln);
+                            mdataSet.set((Hashable*)ln, (Object*)ln);
+                            }
                         mf.setLsdaSym(ln);
                         }
                     _fdes.add((Object*)mf);

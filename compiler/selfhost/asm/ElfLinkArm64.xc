@@ -154,6 +154,11 @@ class ElfLinkArm64
         _rc = (u32)0;
         if (objectFiles.count() == (u32)0 && archives.count() == (u32)0)
             return;
+        // mdataSyms as a set too, kept in step with it below: whether a data
+        // symbol is already listed, without a scan per symbol (#335).
+        Map* mdataSet = new Map();
+        for (u32 q = (u32)0; q < mdataSyms.count(); q = q + (u32)1)
+            mdataSet.set((Hashable*)mdataSyms.get(q), mdataSyms.get(q));
         // The program's own GOT references too: xcc reaches what another
         // file defines through the GOT (a C program's globals, which clang's
         // half defines), and once an object here defines it the image does.
@@ -263,6 +268,7 @@ class ElfLinkArm64
                     {
                     msyms.set((Hashable*)ehName, (Object*)Number.withU32(dbase + obj.ehFrameOff() - (u32)1));
                     mdataSyms.add((Object*)ehName);
+                    mdataSet.set((Hashable*)ehName, (Object*)ehName);
                     strongDefs.set((Hashable*)ehName, (Object*)Number.withU32((u32)1));
                     }
                 // Every definition at its merged offset.
@@ -305,13 +311,17 @@ class ElfLinkArm64
                         msyms.set((Hashable*)nm, (Object*)Number.withU32(mdata.length()));
                         mdata.appendZeros(sd.size());
                         mdataSyms.add((Object*)nm);
+                        mdataSet.set((Hashable*)nm, (Object*)nm);
                         weakDefs.set((Hashable*)nm, (Object*)Number.withU32((u32)1));
                         continue;
                         }
                     bool inData = sd.where() == (u32)2;
                     msyms.set((Hashable*)nm, (Object*)Number.withU32((inData ? dbase : base) + sd.off()));
-                    if (inData && !ElfArm64.inArray(mdataSyms, nm))
+                    if (inData && mdataSet.get((Hashable*)nm) == (Object*)0)
+                        {
                         mdataSyms.add((Object*)nm);
+                        mdataSet.set((Hashable*)nm, (Object*)nm);
+                        }
                     if (sd.ext() && !sd.weak())
                         strongDefs.set((Hashable*)nm, (Object*)Number.withU32((u32)1));
                     else if (sd.ext())

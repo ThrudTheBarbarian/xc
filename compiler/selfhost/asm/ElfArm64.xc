@@ -22,6 +22,7 @@
 // time, not by us.
 
 #import "Foundation.xc"
+#import <SortStable>
 #import <Arm64Asm>
 #import <SectionBytes>
 #import <DwarfWriter>
@@ -661,33 +662,8 @@ class ElfArm64
         }
     static void sortStrings(Array* a)
         {
-        for (u32 i = (u32)1; i < a.count(); i = i + (u32)1)
-            {
-            Object* cur = a.get(i);
-            u32 j = i;
-            while (j > (u32)0 && ((String*)a.get(j - (u32)1)).compare((String*)cur) > (i32)0)
-                {
-                a.set(j, a.get(j - (u32)1));
-                j = j - (u32)1;
-                }
-            a.set(j, cur);
-            }
-        }
-
-    static bool inArray(Array* a, String* nm)
-        {
-        for (u32 i = (u32)0; i < a.count(); i = i + (u32)1)
-            if (((String*)a.get(i)).equals(nm))
-                return true;
-        return false;
-        }
-
-    static u32 indexIn(Array* a, String* nm)
-        {
-        for (u32 i = (u32)0; i < a.count(); i = i + (u32)1)
-            if (((String*)a.get(i)).equals(nm))
-                return i;
-        return (u32)$FFFF_FFFF;
+        // Stable and n log n (#335): ties keep their order.
+        SortStable.byString(a);
         }
 
     // The SysV ELF hash DT_HASH requires — unchanged since 1995 and specified

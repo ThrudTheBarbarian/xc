@@ -123,8 +123,13 @@ class X86Link
         if (_glibc && exports != (Array*)0)
             {
             pub = new Array();
+            // The globals as a set, once, not a scan per export (#335).
+            Map* globals = new Map();
+            Array* gs = a.globalSyms();
+            for (u32 k = (u32)0; k < gs.count(); k = k + (u32)1)
+                globals.set((Hashable*)gs.get(k), gs.get(k));
             for (u32 k = (u32)0; k < exports.count(); k = k + (u32)1)
-                if (Elf64.hasName(a.globalSyms(), (String*)exports.get(k)))
+                if (globals.get((Hashable*)exports.get(k)) != (Object*)0)
                     pub.add(exports.get(k));
             }
         Elf64* e = new Elf64();

@@ -1700,20 +1700,56 @@ class IRType
 
     Map* _freshSet;
 
+    // By sequence number, ascending and stable: a bottom-up merge sort, n log n
+    // where the insertion sort it replaces was quadratic in the function's
+    // fresh values (#335). Ties keep their order, as the insertion sort left
+    // them.
     static void sortBySeq(Array* a)
         {
-        for (u32 i = (u32)1; i < a.count(); i = i + (u32)1)
+        u32 n = a.count();
+        if (n < (u32)2)
+            return;
+        Array* src = new Array();
+        Array* dst = new Array();
+        for (u32 i = (u32)0; i < n; i = i + (u32)1)
             {
-            Object* cur = a.get(i);
-            u32 ck = ((IRValue*)cur).seq();
-            u32 j = i;
-            while (j > (u32)0 && ((IRValue*)a.get(j - (u32)1)).seq() > ck)
-                {
-                a.set(j, a.get(j - (u32)1));
-                j = j - (u32)1;
-                }
-            a.set(j, cur);
+            src.add(a.get(i));
+            dst.add(a.get(i));
             }
+        u32 width = (u32)1;
+        while (width < n)
+            {
+            u32 lo = (u32)0;
+            while (lo < n)
+                {
+                u32 mid = lo + width < n ? lo + width : n;
+                u32 hi = lo + width + width < n ? lo + width + width : n;
+                u32 x = lo;
+                u32 y = mid;
+                u32 k = lo;
+                while (k < hi)
+                    {
+                    bool takeX = x < mid
+                        && (y >= hi || ((IRValue*)src.get(x)).seq() <= ((IRValue*)src.get(y)).seq());
+                    if (takeX)
+                        {
+                        dst.set(k, src.get(x));
+                        x = x + (u32)1;
+                        }
+                    else
+                        {
+                        dst.set(k, src.get(y));
+                        y = y + (u32)1;
+                        }
+                    k = k + (u32)1;
+                    }
+                lo = hi;
+                }
+            Array* t = src; src = dst; dst = t;
+            width = width + width;
+            }
+        for (u32 i = (u32)0; i < n; i = i + (u32)1)
+            a.set(i, src.get(i));
         }
 
     // The print-ids, in the original's canonical order. Everything the

@@ -13,6 +13,7 @@
 // than repeating a zero at forty call sites.
 
 #import "Foundation.xc"
+#import <SortStable>
 #import <X86Asm>
 #import <SectionBytes>
 #import "X86AsmDefs.xc"
@@ -1628,21 +1629,9 @@ class ElfSharedInfo
             fsOff.add((Object*)Number.withU32(((Number*)o).asU32()));
             fsName.add((Object*)n);
             }
-        // insertion sort by offset (stable, small n per object)
-        for (u32 i = (u32)1; i < fsOff.count(); i = i + (u32)1)
-            {
-            u32 vo = ((Number*)fsOff.get(i)).asU32();
-            String* vn = (String*)fsName.get(i);
-            u32 j = i;
-            while (j > (u32)0 && ((Number*)fsOff.get(j - (u32)1)).asU32() > vo)
-                {
-                fsOff.set(j, fsOff.get(j - (u32)1));
-                fsName.set(j, fsName.get(j - (u32)1));
-                j = j - (u32)1;
-                }
-            fsOff.set(j, (Object*)Number.withU32(vo));
-            fsName.set(j, (Object*)vn);
-            }
+        // By offset, stably (#335: it was an insertion sort over every
+        // function of the object).
+        SortStable.byU32(fsName, fsOff);
         Map* funcSize = new Map();
         for (u32 i = (u32)0; i < fsOff.count(); i = i + (u32)1)
             {
@@ -1672,20 +1661,7 @@ class ElfSharedInfo
             dsOff.add((Object*)Number.withU32(((Number*)o).asU32()));
             dsName.add((Object*)n);
             }
-        for (u32 i = (u32)1; i < dsOff.count(); i = i + (u32)1)
-            {
-            u32 vo = ((Number*)dsOff.get(i)).asU32();
-            String* vn = (String*)dsName.get(i);
-            u32 j = i;
-            while (j > (u32)0 && ((Number*)dsOff.get(j - (u32)1)).asU32() > vo)
-                {
-                dsOff.set(j, dsOff.get(j - (u32)1));
-                dsName.set(j, dsName.get(j - (u32)1));
-                j = j - (u32)1;
-                }
-            dsOff.set(j, (Object*)Number.withU32(vo));
-            dsName.set(j, (Object*)vn);
-            }
+        SortStable.byU32(dsName, dsOff);
         for (u32 i = (u32)0; i < dsOff.count(); i = i + (u32)1)
             {
             u32 o0 = ((Number*)dsOff.get(i)).asU32();
