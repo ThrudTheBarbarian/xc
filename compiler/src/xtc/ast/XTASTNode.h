@@ -81,7 +81,8 @@ typedef NS_OPTIONS(NSUInteger, XTSrcFact) {
     XTSrcSynth = 1 << 10,      // made by the parser, not read: the par frame walk passes over it
     XTSrcCalled = 1 << 11,     // `b(…)` made into `b.invoke(…)` (a block binding, or a literal calling itself)
     XTSrcAnnot = 1 << 12,      // a loop with an annotation the parser does not know (it warns and drops it);
-                               // retired when the token scan goes (part C phase B / step 4–5)
+                               // it stays: auto keeps an outer loop holding such an inner loop serial, and
+                               // dropping it would lift that loop, a widening of auto deferred to #523
 };
 
 @interface XTASTNode : NSObject

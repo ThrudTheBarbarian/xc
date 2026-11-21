@@ -75,5 +75,8 @@
 // binding, or a named literal calling itself.
 #define SRC_CALLED $0800
 // A loop with an annotation the parser does not know (it warns and drops it).
-// Retired when the token scan goes (part C phase B / step 4–5).
+// It stays: --par-style=auto reads it, and an outer loop holding an inner loop
+// with an unknown annotation stays serial. Without it that outer loop would be
+// lifted, which is a widening of auto, deferred until its safety fixes settle
+// (#523).
 #define SRC_ANNOT $1000
