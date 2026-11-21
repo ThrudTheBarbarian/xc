@@ -3516,6 +3516,35 @@ class BeFact : Object
         return out;
         }
 
+    // fn's blocks as a set, for asking lrcSuccsIn many times over one CFG.
+    Map* fnBlockSet(IRFunc* fn)
+        {
+        Map* m = new Map();
+        for (u32 i = (u32)0; i < fn.blocks().count(); i = i + (u32)1)
+            m.set((Hashable*)fn.blocks().get(i), fn.blocks().get(i));
+        return m;
+        }
+
+    // lrcSuccs, with fn's blocks given as a set (fnBlockSet) instead of
+    // searched per successor (#331): the same successors, in the same order.
+    Array* lrcSuccsIn(IRBlock* bb, Map* inFn)
+        {
+        Array* out = new Array();
+        IRInsn* t = bb.term();
+        if (t == (IRInsn*)0)
+            return out;
+        for (u32 i = (u32)0; i < t.ops().count(); i = i + (u32)1)
+            {
+            IROperand* o = (IROperand*)t.ops().get(i);
+            if (o.kind() != (u8)OPK_BLOCK || o.blk() == (IRBlock*)0)
+                continue;
+            if (inFn.get((Hashable*)o.blk()) == (Object*)0)
+                continue;
+            out.add((Object*)o.blk());
+            }
+        return out;
+        }
+
     // The blocks whose terminator names `target`, once per mention — what
     // filtering every block's lrcSuccs for target gave. lrcSuccs checks each
     // successor is still one of fn's blocks; only target's answer matters here,

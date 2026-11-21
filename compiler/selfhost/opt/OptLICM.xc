@@ -96,10 +96,14 @@
             }
 
         bool any = false;
+        // fn's blocks as a set, once: this pass moves instructions and
+        // never adds or removes a block (#331: lrcSuccs searched them per
+        // successor, per latch).
+        Map* inFn = self.fnBlockSet(fn);
         for (u32 li = (u32)0; li < fn.blocks().count(); li = li + (u32)1)
             {
             IRBlock* latch = (IRBlock*)fn.blocks().get(li);
-            Array* ss = self.lrcSuccs(fn, latch);
+            Array* ss = self.lrcSuccsIn(latch, inFn);
             for (u32 s = (u32)0; s < ss.count(); s = s + (u32)1)
                 {
                 IRBlock* H = (IRBlock*)ss.get(s);

@@ -529,12 +529,13 @@
         IROperand* ro = (IROperand*)d.ops().get((u32)0);
         DomTree* dom = self.domTree(fn);
         Map* preds = self.lrcPredMap(fn);
+        Map* inFn = self.fnBlockSet(fn); // the CFG does not change until the rewrite below
         Array* best = (Array*)0;
         IRBlock* bestH = (IRBlock*)0;
         for (u32 li = (u32)0; li < fn.blocks().count(); li = li + (u32)1)
             {
             IRBlock* latch = (IRBlock*)fn.blocks().get(li);
-            Array* ss = self.lrcSuccs(fn, latch);
+            Array* ss = self.lrcSuccsIn(latch, inFn);
             for (u32 s = (u32)0; s < ss.count(); s = s + (u32)1)
                 {
                 IRBlock* H = (IRBlock*)ss.get(s);
@@ -578,7 +579,7 @@
             {
             IRBlock* bb = (IRBlock*)best.get(b);
             ninsns = ninsns + bb.insns().count() + bb.phis().count();
-            Array* ss = self.lrcSuccs(fn, bb);
+            Array* ss = self.lrcSuccsIn(bb, inFn);
             for (u32 s = (u32)0; s < ss.count(); s = s + (u32)1)
                 {
                 IRBlock* t = (IRBlock*)ss.get(s);
