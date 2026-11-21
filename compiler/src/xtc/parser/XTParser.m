@@ -6901,8 +6901,12 @@ static NSString* scCombine(NSString* op, NSString* r, NSString* v)
 
     while (![self check:XTTokenRParen] && ![self check:XTTokenEOF])
         {
-        // Optional type followed by name
-        if ([self currentToken].isTypeKeyword || [_typeTable isTypeName:[self currentToken].value])
+        NSUInteger startPos = self.pos;
+        // Optional type followed by name. A type may begin with qualifiers
+        // (`weak:T@`); parseType takes them, and sema decides what a tuple
+        // target may be declared as.
+        if ([self currentToken].isTypeKeyword || [_typeTable isTypeName:[self currentToken].value]
+            || [self currentBeginsQualifierPrefix])
             {
             XTType* t = [self parseType];
             XTToken* n = [self expect:XTTokenIdentifier];
@@ -6923,6 +6927,10 @@ static NSString* scCombine(NSString* op, NSString* r, NSString* v)
                 }
             }
         [self match:XTTokenComma];
+        // A target that consumed nothing has already been reported; step past
+        // the token so the list cannot go round on it for ever (#507).
+        if (self.pos == startPos)
+            [self advance];
         }
     [self expect:XTTokenRParen];
     [self expect:XTTokenAssign];

@@ -2993,6 +2993,16 @@ class Sema
                     define(k2.name(), k2.op());
                     k2.setTy(k2.op());
                     checkTupleTarget(k2, k2.op());
+                    // A weak slot has to be linked to its referent where it
+                    // lives, which a target declared in the tuple has nowhere
+                    // to do (#507). As the reference.
+                    if (k2.op() != 0 && k2.op().byteIndexOf(String.withCString("weak:")) != (u32)$FFFFFFFF)
+                        {
+                        String* m = String.withCString("a tuple target cannot be declared weak ('");
+                        m.append(k2.name());
+                        m.appendCString("'); declare it before the assignment");
+                        _errorAt(m, k2);
+                        }
                     continue;
                     }
                 if (k2.kind() == (u16)nkIdent && i + (u32)1 < n.kidCount())

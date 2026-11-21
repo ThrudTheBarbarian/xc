@@ -2008,6 +2008,13 @@
             [self.diagnostics emitError:[NSString stringWithFormat:
                                                       @"a tuple cannot hold the struct '%@'; pass a pointer to it instead", tn]
                                      at:target.location];
+        // A weak slot has to be linked to its referent where it lives, which a
+        // target declared in the tuple has nowhere to do (#507).
+        if ([target isKindOfClass:[XTVariableDeclNode class]] && [tt isKindOfClass:[XTPointerType class]]
+            && ((XTPointerType*)tt).isWeak)
+            [self.diagnostics emitError:[NSString stringWithFormat:
+                                                      @"a tuple target cannot be declared weak ('%@'); declare it before the assignment", tn]
+                                     at:target.location];
         }
     }
 
