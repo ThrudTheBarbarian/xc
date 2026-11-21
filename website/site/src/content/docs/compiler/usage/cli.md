@@ -369,7 +369,7 @@ Suppress a category with `-Wno-<category>`. All are on by default except `par-au
 | `unknown-pragma` | an unrecognised `#` directive |
 | `toolchain-fallback` | the build fell back from the in-house assembler/linker to an external tool |
 | `return-type` | a non-`void` function that can reach its closing brace without returning — its body traps at run time, so the missing `return` is named at compile time |
-| `par-scatter` | a `par` block writes a buffer at an index that is not `k*i + c` in the item's index, so two items might write the same element |
+| `par-scatter` | a `par` block writes a buffer at an index that is not `k*i + c` in the item's index, or passes it to a call that may write through it other than at the item's own element, so two items might write the same element |
 | `par-gpu` | compiling for a target with a GPU, a `par` block that cannot run there, and why: it runs on the CPU's threads instead |
 | `range-init-count` | a range initialiser (`u8 a[10] = 0..9;`) that supplies fewer or more values than the array holds |
 | `retain-cycle` | a class whose strong class-pointer fields, its own or inherited, lead back to it through another class (`Parent.kids` holds `Child` and `Child.dad` holds `Parent`): ARC can free none of them. Named at the field that closes the cycle; mark one side `weak:`. A field of the class's own type (a list's `next`) is not a cycle, and typed collections are not followed. |

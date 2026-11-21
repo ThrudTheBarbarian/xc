@@ -1735,11 +1735,15 @@ static BOOL gEmitsWGSL = NO;
                 gParGuards[cls] = guards;
             if (!dep)
                 {
-                if (scatter)
-                    [diag emitWarning:[NSString stringWithFormat:@"a 'par' block writes %@, so the compiler "
+                // A written block's call that may write a buffer from every
+                // item says so the same way (#513). Its code is unchanged.
+                NSString* passes = !scatter && !isAuto ? [c callScatterIn:f ivarNames:[c ivarNamesOf:decl in:classDecls]] : nil;
+                if (scatter || passes)
+                    [diag emitWarning:[NSString stringWithFormat:@"a 'par' block %@ %@, so the compiler "
                                                                  @"cannot prove two work items never write the "
                                                                  @"same element; if they can, the result depends "
-                                                                 @"on which runs last", scatter]
+                                                                 @"on which runs last", scatter ? @"writes" : @"passes",
+                                                                 scatter ?: passes]
                              category:XTWarnParScatter
                                    at:decl.location];
                 // -Wpar-auto says what was wrapped as well as what was demoted.
@@ -2919,6 +2923,209 @@ static BOOL parIsComputeOp(XTIROpcode op)
                                           @"item's result; that is a scan, not a par",
                                           name, shownIndex(rx), name, shownIndex(wx)];
         }
+    return nil;
+    }
+
+// Whether the call `ci` may write through its argument `j`: a function of
+// the program that stores through that parameter, or through a pointer made
+// from it (an element, a member, a cast, a pointer loaded from what it points
+// to, or one kept in a local and read back), or passes such a pointer to a
+// call that may; a call to a function outside the program or through a
+// pointer; and an argument after the parameters a function declares.
+// `seen` holds the function:argument pairs already asked. Mirrored in the
+// port (parCallMayWrite).
+- (BOOL)call:(XTIRInsn*)ci mayWriteArg:(NSUInteger)j seen:(NSMutableSet<NSString*>*)seen
+    {
+    if ((ci.opcode != XTIROpCall && ci.opcode != XTIROpCallBanked && ci.opcode != XTIROpCallCloaked) ||
+        !ci.operands.count || ci.operands[0].kind != XTIROperandKindSym)
+        return YES;
+    XTIRSymbol* sym = [self.module symbolForId:ci.operands[0].symbolId];
+    XTIRFunction* g = sym.name ? self.fnByName[sym.name] : nil;
+    if (!g || !g.blocks.count || j + 1 >= g.paramTypes.count)
+        return YES;
+    NSString* key = [NSString stringWithFormat:@"%@:%lu", g.name, (unsigned long)j];
+    if ([seen containsObject:key])
+        return NO;
+    [seen addObject:key];
+    // The pointers made from parameter j (parameter n is value n), and the
+    // locals that hold one.
+    NSMutableSet<NSNumber*>* from = [NSMutableSet setWithObject:@(j)];
+    NSMutableSet<NSNumber*>* held = [NSMutableSet set];
+    NSMutableDictionary<NSNumber*, XTIRInsn*>* def = [NSMutableDictionary dictionary];
+    for (XTIRBlock* bb in g.blocks)
+        for (XTIRInsn* i in pwAll(bb))
+            if (i.result)
+                def[@(i.result.valueId)] = i;
+    // A local is named by the value it is pinned to, whichever AddrOf of it
+    // the access goes through.
+    NSNumber* (^slotOf)(XTIROperand*) = ^NSNumber*(XTIROperand* a) {
+        if (a.kind != XTIROperandKindUse)
+            return nil;
+        XTIRInsn* d = def[@(a.valueId)];
+        if (d.opcode == XTIROpAddrOf && d.operands.count && d.operands[0].kind == XTIROperandKindUse)
+            return @(d.operands[0].valueId);
+        return @(a.valueId);
+    };
+    BOOL grew = YES;
+    while (grew)
+        {
+        grew = NO;
+        for (XTIRBlock* bb in g.blocks)
+            for (XTIRInsn* i in pwAll(bb))
+                {
+                NSUInteger n = i.operands.count;
+                if ((i.opcode == XTIROpStore || i.opcode == XTIROpStoreVolatile) && n >= 2 &&
+                    i.operands[1].kind == XTIROperandKindUse && [from containsObject:@(i.operands[1].valueId)])
+                    {
+                    NSNumber* s = slotOf(i.operands[0]);
+                    if (s && ![held containsObject:s])
+                        {
+                        [held addObject:s];
+                        grew = YES;
+                        }
+                    continue;
+                    }
+                if (!i.result || i.result.type.kind != XTIRTypeKindPtr || [from containsObject:@(i.result.valueId)])
+                    continue;
+                BOOL base = i.opcode == XTIROpElementAddr || i.opcode == XTIROpFieldAddr || i.opcode == XTIROpLoad ||
+                            i.opcode == XTIROpLoadVolatile;
+                BOOL hit = NO;
+                if (i.opcode == XTIROpLoad || i.opcode == XTIROpLoadVolatile)
+                    {
+                    NSNumber* s = n ? slotOf(i.operands[0]) : nil;
+                    hit = s && [held containsObject:s];
+                    }
+                for (NSUInteger k = 0; k < (base ? MIN(n, (NSUInteger)1) : n) && !hit; k++)
+                    hit = i.operands[k].kind == XTIROperandKindUse && [from containsObject:@(i.operands[k].valueId)];
+                if (hit)
+                    {
+                    [from addObject:@(i.result.valueId)];
+                    grew = YES;
+                    }
+                }
+        }
+    for (XTIRBlock* bb in g.blocks)
+        for (XTIRInsn* i in pwAll(bb))
+            {
+            NSUInteger n = i.operands.count;
+            XTIROpcode op = i.opcode;
+            BOOL store = op == XTIROpStore || op == XTIROpStoreVolatile || op == XTIROpAggStore || op == XTIROpVStore ||
+                         op == XTIROpMemCopy || op == XTIROpMemSet;
+            if (store)
+                {
+                if (n && i.operands[0].kind == XTIROperandKindUse && [from containsObject:@(i.operands[0].valueId)])
+                    return YES;
+                continue;
+                }
+            BOOL call = XTIROpcodeCallsOut(op);
+            if (!call && op != XTIROpAsm)
+                continue;
+            for (NSUInteger k = call ? 1 : 0; k + (call ? 1 : 0) < n; k++)
+                {
+                XTIROperand* a = i.operands[k];
+                if (a.kind != XTIROperandKindUse || ![from containsObject:@(a.valueId)])
+                    continue;
+                if (!call || [self call:i mayWriteArg:k - 1 seen:seen])
+                    return YES;
+                }
+            }
+    return NO;
+    }
+
+// A written block that passes a buffer (a captured array or pointer, or a
+// global array) to a call that may write through it (call:mayWriteArg:),
+// as the pointer itself, at one element for every work item, or at an index
+// computed from data: two items' calls may write the same element. An
+// element at the item's own index (`&c[i]`) is the item's. The first such
+// argument, as the warning words it, or nil. Mirrored in the port
+// (parCallScatter).
+- (nullable NSString*)callScatterIn:(XTIRFunction*)f ivarNames:(NSArray<NSString*>*)ivars
+    {
+    NSMutableDictionary<NSNumber*, XTIRInsn*>* def = [NSMutableDictionary dictionary];
+    XTIRValueId firstPhi = 0;
+    BOOL haveIV = NO;
+    for (XTIRBlock* b in f.blocks)
+        {
+        for (XTIRInsn* i in b.phiNodes)
+            if (i.result)
+                {
+                def[@(i.result.valueId)] = i;
+                if (!haveIV)
+                    {
+                    firstPhi = i.result.valueId;
+                    haveIV = YES;
+                    }
+                }
+        for (XTIRInsn* i in b.instructions)
+            if (i.result)
+                def[@(i.result.valueId)] = i;
+        }
+    if (!haveIV || f.paramTypes.count == 0)
+        return nil;
+    XTIRValueId iv = [self inductionVariableOf:f defs:def first:firstPhi];
+    XTIRValueId selfId = (XTIRValueId)0;
+    NSMutableSet<NSString*>* seen = [NSMutableSet set];
+    for (XTIRBlock* b in f.blocks)
+        for (XTIRInsn* ci in b.instructions)
+            {
+            if (!XTIROpcodeCallsOut(ci.opcode))
+                continue;
+            for (NSUInteger k = 1; k + 1 < ci.operands.count; k++)
+                {
+                // The buffer the argument points into, and the index of the
+                // element of it, when that is the last step to the argument.
+                XTIROperand* o = ci.operands[k];
+                XTIROperand* idx = nil;
+                NSString* buf = nil;
+                for (int step = 0; step < 32 && o.kind == XTIROperandKindUse; step++)
+                    {
+                    buf = [self bufferOf:o self:selfId ivars:ivars defs:def];
+                    if (buf)
+                        break;
+                    XTIRInsn* d = def[@(o.valueId)];
+                    if (!d.operands.count)
+                        break;
+                    if (d.opcode == XTIROpElementAddr && d.operands.count >= 2)
+                        idx = d.operands[1];
+                    else if (d.opcode == XTIROpFieldAddr || d.opcode == XTIROpAdd || d.opcode == XTIROpSub)
+                        idx = nil;
+                    else if (d.opcode != XTIROpBitcast)
+                        break;
+                    if (d.result.type.kind != XTIRTypeKindPtr)
+                        break;
+                    o = d.operands[0];
+                    }
+                // The compiler's own globals: a static initialiser's guard
+                // (`_xtc_sinit_run`) and a class's static data.
+                if (!buf || [buf hasPrefix:@"__sinit_"] || [buf hasPrefix:@"__sdata_"] || [buf hasSuffix:@"$init"])
+                    continue;
+                NSString* shown = nil;
+                if (idx)
+                    {
+                    XTParIndex x = [self indexOf:idx iv:iv defs:def depth:0];
+                    if (!x.affine)
+                        x = [self gridIndexOf:idx iv:iv self:selfId ivars:ivars defs:def];
+                    XTParSym sx = x.affine ? (XTParSym){ YES, x.k, x.c, -1, 0 }
+                                           : [self symIndexOf:idx iv:iv self:selfId defs:def depth:0];
+                    if (!sx.affine)
+                        sx = [self gridSymIndexOf:idx iv:iv self:selfId ivars:ivars defs:def];
+                    if (sx.affine && sx.k != 0)
+                        continue;
+                    shown = x.affine ? [NSString stringWithFormat:@"'%@%@' to a call that may write through it, from "
+                                                                  @"every work item",
+                                                                  shownName(buf), shownIndex(x)]
+                                     : [NSString stringWithFormat:@"'%@' at an index computed from data to a call "
+                                                                  @"that may write through it",
+                                                                  shownName(buf)];
+                    }
+                else
+                    shown = [NSString stringWithFormat:@"'%@' to a call that may write through it, from every work "
+                                                       @"item",
+                                                       shownName(buf)];
+                if ([self call:ci mayWriteArg:k - 1 seen:seen])
+                    return shown;
+                }
+            }
     return nil;
     }
 

@@ -1042,6 +1042,15 @@ the odd ones only read, so no item sees another's work — where the first rule
 refused every pair with different offsets. An index computed from data is
 taken as able to meet anything.
 
+A write the test cannot place, one element from every item (`c[0] = …`) or
+an index from data (`b[idx[i]] = …`), is accepted with a warning
+(`par-scatter`): two items might write the same element. So is a buffer
+passed to a call that may write through it, other than at the item's own
+element: `step(&c[0], …)`, `step(c, …)` or `step(&c[idx[i]], …)`, where
+`step` stores through that argument, directly or through a call of its own,
+or is a function outside the program. `put(&e[i], …)` passes the item's own
+element and gets no warning.
+
 An offset held in a variable the block captures, `a[i + off] = a[i] * 3`,
 cannot be settled when the program is built: an `off` of `n` keeps every
 item to its own elements, and an `off` of `1` makes each item read the one

@@ -94,10 +94,14 @@
                 _parGuardList = (Array*)0;
                 if (dep == (String*)0)
                     {
-                    if (_parScatter != (String*)0)
+                    // A written block's call that may write a buffer from
+                    // every item says so the same way (#513). Its code is
+                    // unchanged.
+                    String* passes = _parScatter == (String*)0 && !isAuto ? parCallScatter(f, parIvarNames(cls)) : (String*)0;
+                    if (_parScatter != (String*)0 || passes != (String*)0)
                         {
-                        String* w = String.withCString("a 'par' block writes ");
-                        w.append(_parScatter);
+                        String* w = String.withCString(_parScatter != (String*)0 ? "a 'par' block writes " : "a 'par' block passes ");
+                        w.append(_parScatter != (String*)0 ? _parScatter : passes);
                         w.appendCString(", so the compiler cannot prove two work items never write the same element; if they can, the result depends on which runs last");
                         self.warnAtNode(String.withCString("par-scatter"), w, (Node*)_classDecls.get((Hashable*)cls));
                         }
@@ -2043,6 +2047,246 @@
             out.append((String*)wShown.get((Hashable*)buf));
             out.appendCString(", so an item would read another item's result; that is a scan, not a par");
             return out;
+            }
+        return (String*)0;
+        }
+
+    // Whether the call `ci` may write through its argument `j`: a function
+    // of the program that stores through that parameter, or through a
+    // pointer made from it (an element, a member, a cast, a pointer loaded
+    // from what it points to, or one kept in a local and read back), or
+    // passes such a pointer to a call that may; a call to a function outside
+    // the program or through a pointer; and an argument after the parameters
+    // a function declares. `seen` holds the function:argument pairs already
+    // asked. As the reference.
+    final bool parCallMayWrite(IRInsn* ci, u32 j, Set* seen)
+        {
+        if ((!ci.isOp(opCall) && !ci.isOp(opCallBanked) && !ci.isOp(opCallCloaked)) || ci.ops().count() == 0
+            || ((IROperand*)ci.ops().get(0)).kind() != OPK_SYM)
+            return true;
+        IRFunc* g = (IRFunc*)_parFns.get((Hashable*)((IROperand*)ci.ops().get(0)).name());
+        if (g == (IRFunc*)0 || g.blocks().count() == 0 || j + 1 >= g.params().count())
+            return true;
+        String* key = String.withString(g.name());
+        key.appendCString(":");
+        key.append(String.withU32(j));
+        if (seen.contains((Hashable*)key))
+            return false;
+        seen.add((Hashable*)key);
+        // The pointers made from parameter j, and the locals that hold one.
+        Set* from = new Set();
+        from.add((Hashable*)String.withU32(((IRValue*)g.params().get(j)).seq()));
+        Set* held = new Set();
+        Map* def = new Map();
+        Array* all = new Array();
+        for (u32 b = 0; b < g.blocks().count(); b++)
+            {
+            IRBlock* bb = (IRBlock*)g.blocks().get(b);
+            for (u32 i = 0; i < bb.phis().count(); i++)
+                all.add(bb.phis().get(i));
+            for (u32 i = 0; i < bb.insns().count(); i++)
+                all.add(bb.insns().get(i));
+            }
+        for (u32 i = 0; i < all.count(); i++)
+            {
+            IRInsn* ip = (IRInsn*)all.get(i);
+            if (ip.res() != (IRValue*)0)
+                def.set((Hashable*)String.withU32(ip.res().seq()), (Object*)ip);
+            }
+        bool grew = true;
+        while (grew)
+            {
+            grew = false;
+            for (u32 i = 0; i < all.count(); i++)
+                {
+                IRInsn* ip = (IRInsn*)all.get(i);
+                u32 n = ip.ops().count();
+                if ((ip.isOp(opStore) || ip.isOp(opStoreVolatile)) && n >= 2 && Lower.parUseIn((IROperand*)ip.ops().get(1), from))
+                    {
+                    String* s = Lower.parSlotOf((IROperand*)ip.ops().get(0), def);
+                    if (s != (String*)0 && !held.contains((Hashable*)s))
+                        {
+                        held.add((Hashable*)s);
+                        grew = true;
+                        }
+                    continue;
+                    }
+                if (ip.res() == (IRValue*)0 || !IRType.isPtr(ip.res().ty()) || from.contains((Hashable*)String.withU32(ip.res().seq())))
+                    continue;
+                bool isLoad = ip.isOp(opLoad) || ip.isOp(opLoadVolatile);
+                bool base = ip.isOp(opElementAddr) || ip.isOp(opFieldAddr) || isLoad;
+                bool hit = false;
+                if (isLoad && n > 0)
+                    {
+                    String* s = Lower.parSlotOf((IROperand*)ip.ops().get(0), def);
+                    hit = s != (String*)0 && held.contains((Hashable*)s);
+                    }
+                u32 upto = base ? (n < 1 ? n : 1) : n;
+                for (u32 k = 0; k < upto && !hit; k++)
+                    hit = Lower.parUseIn((IROperand*)ip.ops().get(k), from);
+                if (hit)
+                    {
+                    from.add((Hashable*)String.withU32(ip.res().seq()));
+                    grew = true;
+                    }
+                }
+            }
+        for (u32 i = 0; i < all.count(); i++)
+            {
+            IRInsn* ip = (IRInsn*)all.get(i);
+            u32 n = ip.ops().count();
+            u16 oc = ip.opc();
+            if (oc == opStore || oc == opStoreVolatile || oc == opAggStore || oc == opVStore || oc == opMemCopy || oc == opMemSet)
+                {
+                if (n > 0 && Lower.parUseIn((IROperand*)ip.ops().get(0), from))
+                    return true;
+                continue;
+                }
+            bool call = Lower.parCallsOut(oc);
+            if (!call && oc != opAsm)
+                continue;
+            u32 k0 = call ? 1 : 0;
+            u32 tail = call ? 1 : 0;
+            for (u32 k = k0; k + tail < n; k++)
+                {
+                if (!Lower.parUseIn((IROperand*)ip.ops().get(k), from))
+                    continue;
+                if (!call || parCallMayWrite(ip, k - 1, seen))
+                    return true;
+                }
+            }
+        return false;
+        }
+
+    // A call, a call through a pointer, or a method's dispatch (the
+    // reference's XTIROpcodeCallsOut).
+    static bool parCallsOut(u16 oc)
+        {
+        return oc == opCall || oc == opCallIndirect || oc == opCallCloaked || oc == opCallBanked
+            || oc == opCallBankedIndirect || oc == opVTblDispatch || oc == opProtoDispatch;
+        }
+
+    // A use of one of the values in `vals` (by sequence number).
+    static bool parUseIn(IROperand* o, Set* vals)
+        {
+        return o.kind() == OPK_USE && o.val() != (IRValue*)0 && vals.contains((Hashable*)String.withU32(o.val().seq()));
+        }
+
+    // The local an address names: the value it is pinned to, whichever
+    // AddrOf of it the access goes through; else the address itself.
+    static String* parSlotOf(IROperand* a, Map* def)
+        {
+        if (a.kind() != OPK_USE || a.val() == (IRValue*)0)
+            return (String*)0;
+        IRInsn* d = (IRInsn*)def.get((Hashable*)String.withU32(a.val().seq()));
+        if (d != (IRInsn*)0 && d.isOp(opAddrOf) && d.ops().count() > 0)
+            {
+            IROperand* o0 = (IROperand*)d.ops().get(0);
+            if (o0.kind() == OPK_USE && o0.val() != (IRValue*)0)
+                return String.withU32(o0.val().seq());
+            }
+        return String.withU32(a.val().seq());
+        }
+
+    // A written block that passes a buffer (a captured array or pointer, or
+    // a global array) to a call that may write through it (parCallMayWrite),
+    // as the pointer itself, at one element for every work item, or at an
+    // index computed from data: two items' calls may write the same element.
+    // An element at the item's own index (`&c[i]`) is the item's. The first
+    // such argument, as the warning words it, or 0. As the reference.
+    final String* parCallScatter(IRFunc* f, Array* ivars)
+        {
+        Map* def = new Map();
+        IRValue* iv = (IRValue*)0;
+        for (u32 b = 0; b < f.blocks().count(); b++)
+            {
+            IRBlock* bb = (IRBlock*)f.blocks().get(b);
+            for (u32 i = 0; i < bb.phis().count(); i++)
+                {
+                IRInsn* ph = (IRInsn*)bb.phis().get(i);
+                if (ph.res() == (IRValue*)0)
+                    continue;
+                def.set((Hashable*)String.withU32(ph.res().seq()), (Object*)ph);
+                if (iv == (IRValue*)0)
+                    iv = ph.res();
+                }
+            for (u32 i = 0; i < bb.insns().count(); i++)
+                {
+                IRInsn* ip = (IRInsn*)bb.insns().get(i);
+                if (ip.res() != (IRValue*)0)
+                    def.set((Hashable*)String.withU32(ip.res().seq()), (Object*)ip);
+                }
+            }
+        if (iv == (IRValue*)0 || f.params().count() == 0)
+            return (String*)0;
+        iv = parInductionVariable(f, def, iv);
+        IRValue* selfVal = (IRValue*)f.params().get(0);
+        Set* seen = new Set();
+        for (u32 b = 0; b < f.blocks().count(); b++)
+            {
+            IRBlock* bb = (IRBlock*)f.blocks().get(b);
+            for (u32 i = 0; i < bb.insns().count(); i++)
+                {
+                IRInsn* ci = (IRInsn*)bb.insns().get(i);
+                if (!Lower.parCallsOut(ci.opc()))
+                    continue;
+                for (u32 k = 1; k + 1 < ci.ops().count(); k++)
+                    {
+                    // The buffer the argument points into, and the index of
+                    // the element of it, when that is the last step to the
+                    // argument.
+                    IROperand* o = (IROperand*)ci.ops().get(k);
+                    IROperand* idx = (IROperand*)0;
+                    String* buf = (String*)0;
+                    for (u32 step = 0; step < 32 && o.kind() == OPK_USE; step++)
+                        {
+                        buf = parBufferOf(o, selfVal, ivars, def);
+                        if (buf != (String*)0)
+                            break;
+                        IRInsn* d = o.val() != (IRValue*)0 ? (IRInsn*)def.get((Hashable*)String.withU32(o.val().seq())) : (IRInsn*)0;
+                        if (d == (IRInsn*)0 || d.ops().count() == 0)
+                            break;
+                        if (d.isOp(opElementAddr) && d.ops().count() >= 2)
+                            idx = (IROperand*)d.ops().get(1);
+                        else if (d.isOp(opFieldAddr) || d.isOp(opAdd) || d.isOp(opSub))
+                            idx = (IROperand*)0;
+                        else if (!d.isOp(opBitcast))
+                            break;
+                        if (d.res() == (IRValue*)0 || !IRType.isPtr(d.res().ty()))
+                            break;
+                        o = (IROperand*)d.ops().get(0);
+                        }
+                    // The compiler's own globals: a static initialiser's
+                    // guard (`_xtc_sinit_run`) and a class's static data.
+                    if (buf == (String*)0 || buf.hasPrefix(String.withCString("__sinit_")) || buf.hasPrefix(String.withCString("__sdata_"))
+                        || buf.hasSuffix(String.withCString("$init")))
+                        continue;
+                    String* shown = String.withCString("'");
+                    shown.append(self.parShown(buf));
+                    if (idx != (IROperand*)0)
+                        {
+                        ParIdx* px = parIndex(idx, iv, def, 0);
+                        if (!px.affine)
+                            px = parGridIndex(idx, iv, selfVal, ivars, def);
+                        ParIdx* sx = px.affine ? ParIdx.of(true, px.k, px.c) : parSymIndex(idx, iv, selfVal, def, 0);
+                        if (!sx.affine)
+                            sx = parGridSym(idx, iv, selfVal, ivars, def);
+                        if (sx.affine && sx.k != 0)
+                            continue;
+                        if (px.affine)
+                            {
+                            shown.append(parShownIndex(true, px.k, px.c));
+                            shown.appendCString("' to a call that may write through it, from every work item");
+                            }
+                        else
+                            shown.appendCString("' at an index computed from data to a call that may write through it");
+                        }
+                    else
+                        shown.appendCString("' to a call that may write through it, from every work item");
+                    if (parCallMayWrite(ci, k - 1, seen))
+                        return shown;
+                    }
+                }
             }
         return (String*)0;
         }
