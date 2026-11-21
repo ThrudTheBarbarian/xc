@@ -29,6 +29,7 @@
 //   * A COMMON symbol has no section at all: st_value is its ALIGNMENT and
 //     st_size its size, and the linker is what allocates it.
 #import "Foundation.xc"
+#import <ElfRead>
 
 // Where a symbol is defined: 0 = nowhere (undefined), 1 = text, 2 = data,
 // 3 = thread-local.
@@ -407,29 +408,17 @@ class ElfSymDef
         if (ElfObject._rd16(d, (u32)16) != (u32)1)
             return o; // ET_REL
         o._d = d;
-        u32 shoff = (u32)ElfObject._rd64(d, (u32)40);
-        u32 shent = ElfObject._rd16(d, (u32)58);
-        u32 shnum = ElfObject._rd16(d, (u32)60);
-        u32 shstrn = ElfObject._rd16(d, (u32)62);
-        if (shnum == (u32)0 || shent == (u32)0)
+        // The section table through the one reader, offsets checked at their
+        // full width (#336).
+        Array* secs = ElfRead.sections(d);
+        if (secs == (Array*)0)
             return o;
-        if (shoff + shnum * shent > d.length())
-            return o;
-
-        u32 shstrHdr = shoff + shstrn * shent;
-        u32 shstrOff = (u32)ElfObject._rd64(d, shstrHdr + (u32)24);
-        for (u32 i = (u32)0; i < shnum; i = i + (u32)1)
+        for (u32 i = (u32)0; i < secs.count(); i = i + (u32)1)
             {
-            u32 s = shoff + i * shent;
+            ElfSec* es = (ElfSec*)secs.get(i);
             ElfSection* sec = new ElfSection();
-            sec.set(ElfObject._str(d, shstrOff + ElfObject._rd32(d, s)),
-                    ElfObject._rd32(d, s + (u32)4),
-                    ElfObject._rd64(d, s + (u32)8),
-                    (u32)ElfObject._rd64(d, s + (u32)24),
-                    (u32)ElfObject._rd64(d, s + (u32)32),
-                    ElfObject._rd32(d, s + (u32)40),
-                    ElfObject._rd32(d, s + (u32)44),
-                    (u32)ElfObject._rd64(d, s + (u32)48));
+            sec.set(es.name(), es.type(), es.flags(), (u32)es.off(), (u32)es.size(),
+                    es.link(), es.info(), (u32)es.align());
             o._sections.add((Object*)sec);
             }
         if (!o._blobs())

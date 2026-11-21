@@ -22,6 +22,7 @@
 #import "NodeDefs.xc"
 #import "Files.xc"
 #import "Process.xc"
+#import <ElfRead>
 
 bool gIfaceNeedsV2;
 
@@ -782,48 +783,18 @@ class JsonVal
     static String* elfIfaceSection(String* path)
         {
         Data* d = Files.readData(path);
-        if (d == (Data*)0 || d.length() < (u32)64)
+        // ELF32 or ELF64, through the one section-table reader: an arm9 `.so`
+        // is ELF32, and every offset moves with the class.
+        Array* secs = ElfRead.sections(d);
+        if (secs == (Array*)0)
             return (String*)0;
-        if (d.byteAt((u32)0) != (u8)$7F || d.byteAt((u32)1) != (u8)'E' || d.byteAt((u32)2) != (u8)'L' || d.byteAt((u32)3) != (u8)'F')
-            return (String*)0;
-        // ELF32 or ELF64 — EI_CLASS says which, and EVERY offset below moves.
-        // This read only 64-bit layouts, so an arm9 `.so` (ELF32) was parsed
-        // with 64-bit offsets: e_shoff came out of the middle of e_entry, and
-        // the section walk found nothing. `#import <GEM>` then reported
-        // "cannot read interface" for a file that is present and correct, and
-        // the arm9 umbrella library could not be built at all.
-        bool elf32 = d.byteAt((u32)4) == (u8)1;
-        u32 shoff = elf32 ? IfaceImport.le32(d, (u32)32) : IfaceImport.le32(d, (u32)40);
-        u32 shentsize = elf32 ? IfaceImport.le16(d, (u32)46) : IfaceImport.le16(d, (u32)58);
-        u32 shnum = elf32 ? IfaceImport.le16(d, (u32)48) : IfaceImport.le16(d, (u32)60);
-        u32 shstrndx = elf32 ? IfaceImport.le16(d, (u32)50) : IfaceImport.le16(d, (u32)62);
-        // sh_offset and sh_size within a section header: 32-bit words at 16/20
-        // in ELF32, 64-bit at 24/32 in ELF64.
-        u32 shOffField = elf32 ? (u32)16 : (u32)24;
-        u32 shSizeField = elf32 ? (u32)20 : (u32)32;
-        if (shnum == (u32)0 || shstrndx >= shnum)
-            return (String*)0;
-        if (shoff + shnum * shentsize > d.length())
-            return (String*)0;
-        u32 sh = shoff + shstrndx * shentsize;
-        u32 nameBase = IfaceImport.le32(d, sh + shOffField);
-        for (u32 i = (u32)0; i < shnum; i = i + (u32)1)
+        for (u32 i = (u32)0; i < secs.count(); i = i + (u32)1)
             {
-            u32 e = shoff + i * shentsize;
-            u32 nameOff = IfaceImport.le32(d, e);
-            String* nm = new String();
-            u32 k = nameBase + nameOff;
-            while (k < d.length() && d.byteAt(k) != (u8)0)
-                {
-                nm.appendByte(d.byteAt(k));
-                k = k + (u32)1;
-                }
-            if (!nm.equals(String.withCString(".xtc.iface")))
+            ElfSec* s = (ElfSec*)secs.get(i);
+            if (!s.name().equals(String.withCString(".xtc.iface")))
                 continue;
-            u32 off = IfaceImport.le32(d, e + shOffField);
-            u32 len = IfaceImport.le32(d, e + shSizeField);
-            if (off + len > d.length())
-                return (String*)0;
+            u32 off = (u32)s.off();
+            u32 len = (u32)s.size();
             String* out = new String();
             for (u32 b = (u32)0; b < len; b = b + (u32)1)
                 out.appendByte(d.byteAt(off + b));

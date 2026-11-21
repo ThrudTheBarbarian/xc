@@ -25,6 +25,7 @@
 // A9 is.
 
 #import "Foundation.xc"
+#import <ElfRead>
 #import <Arm32>
 #import "Arm32Defs.xc"
 
@@ -1170,13 +1171,12 @@ class Elf32Object
             return (Elf32Object*)0;
         if (Elf32Object.rd16(d, (u32)16) != (u32)1)
             return (Elf32Object*)0; // ET_REL only
-        u32 shoff = Elf32Object.rd32(d, (u32)32);
-        u32 shentsz = Elf32Object.rd16(d, (u32)46);
-        u32 shnum = Elf32Object.rd16(d, (u32)48);
-        u32 shstrndx = Elf32Object.rd16(d, (u32)50);
-        if (shnum == (u32)0 || shoff + shnum * shentsz > d.length())
+        // The section table through the one reader, offsets and sums checked
+        // without wrapping (#336).
+        Array* secs = ElfRead.sections(d);
+        if (secs == (Array*)0)
             return (Elf32Object*)0;
-        u32 shstrOff = Elf32Object.rd32(d, shoff + shstrndx * shentsz + (u32)16);
+        u32 shnum = secs.count();
         u32 textIdx = (u32)0;
         u32 dataIdx = (u32)0;
         u32 symIdx = (u32)0;
@@ -1184,7 +1184,7 @@ class Elf32Object
         u32 ctorIdx = (u32)0;
         for (u32 i = (u32)1; i < shnum; i = i + (u32)1)
             {
-            String* n = Elf32Object.cstr(d, shstrOff + Elf32Object.rd32(d, shoff + i * shentsz));
+            String* n = ((ElfSec*)secs.get(i)).name();
             if (n.equals(String.withCString(".text")))
                 textIdx = i;
             else if (n.equals(String.withCString(".data")))
@@ -1200,18 +1200,18 @@ class Elf32Object
             return (Elf32Object*)0;
         Elf32Object* o = new Elf32Object();
         if (textIdx != (u32)0)
-            Elf32Object.slice(d, Elf32Object.rd32(d, shoff + textIdx * shentsz + (u32)16),
-                              Elf32Object.rd32(d, shoff + textIdx * shentsz + (u32)20), o._text);
+            Elf32Object.slice(d, (u32)((ElfSec*)secs.get(textIdx)).off(),
+                              (u32)((ElfSec*)secs.get(textIdx)).size(), o._text);
         if (dataIdx != (u32)0)
-            Elf32Object.slice(d, Elf32Object.rd32(d, shoff + dataIdx * shentsz + (u32)16),
-                              Elf32Object.rd32(d, shoff + dataIdx * shentsz + (u32)20), o._data);
+            Elf32Object.slice(d, (u32)((ElfSec*)secs.get(dataIdx)).off(),
+                              (u32)((ElfSec*)secs.get(dataIdx)).size(), o._data);
         if (ctorIdx != (u32)0)
-            Elf32Object.slice(d, Elf32Object.rd32(d, shoff + ctorIdx * shentsz + (u32)16),
-                              Elf32Object.rd32(d, shoff + ctorIdx * shentsz + (u32)20), o._ctors);
+            Elf32Object.slice(d, (u32)((ElfSec*)secs.get(ctorIdx)).off(),
+                              (u32)((ElfSec*)secs.get(ctorIdx)).size(), o._ctors);
 
-        u32 symOff = Elf32Object.rd32(d, shoff + symIdx * shentsz + (u32)16);
-        u32 nsym = Elf32Object.rd32(d, shoff + symIdx * shentsz + (u32)20) / (u32)16;
-        u32 strOff = Elf32Object.rd32(d, shoff + strIdx * shentsz + (u32)16);
+        u32 symOff = (u32)((ElfSec*)secs.get(symIdx)).off();
+        u32 nsym = (u32)((ElfSec*)secs.get(symIdx)).size() / (u32)16;
+        u32 strOff = (u32)((ElfSec*)secs.get(strIdx)).off();
         Array* byIndex = new Array();
         for (u32 i = (u32)0; i < nsym; i = i + (u32)1)
             {
@@ -1271,11 +1271,11 @@ class Elf32Object
 
         for (u32 i = (u32)1; i < shnum; i = i + (u32)1)
             {
-            u32 sh = shoff + i * shentsz;
-            if (Elf32Object.rd32(d, sh + (u32)4) != (u32)9)
+            ElfSec* sh = (ElfSec*)secs.get(i);
+            if (sh.type() != (u32)9)
                 continue; // SHT_REL
-            // sh_info, at 28: the section these relocate.
-            u32 target = Elf32Object.rd32(d, sh + (u32)28);
+            // sh_info: the section these relocate.
+            u32 target = sh.info();
             u32 which = (u32)0;
             if (textIdx != (u32)0 && target == textIdx)
                 which = (u32)1;
@@ -1285,8 +1285,8 @@ class Elf32Object
                 which = (u32)4;
             if (which == (u32)0)
                 continue;
-            u32 ro = Elf32Object.rd32(d, sh + (u32)16);
-            u32 rsz = Elf32Object.rd32(d, sh + (u32)20);
+            u32 ro = (u32)sh.off();
+            u32 rsz = (u32)sh.size();
             for (u32 k = (u32)0; k + (u32)8 <= rsz; k = k + (u32)8)
                 {
                 u32 off = Elf32Object.rd32(d, ro + k);

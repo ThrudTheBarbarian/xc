@@ -21,6 +21,7 @@
 
 #import "Elf64Defs.xc"
 #import <DwarfWriter>
+#import <ElfRead>
 // ── ET_DYN (shared object) ───────────────────────────────────────────────
 
 // What a `.so` tells an app that wants to link against it.
@@ -514,11 +515,12 @@ class ElfSharedInfo
         if (Elf64.rd16(d, (u32)16) != (u32)ET_DYN)
             return (ElfSharedInfo*)0;
 
-        u32 shoff = Elf64.rd32(d, (u32)40); // 64-bit, but our images are < 4 GB
-        u32 shentsize = Elf64.rd16(d, (u32)58);
-        u32 shnum = Elf64.rd16(d, (u32)60);
-        if (shnum == (u32)0 || shoff + shnum * shentsize > d.length())
+        // The section table through the one reader, offsets checked at their
+        // full width (#336).
+        Array* secs = ElfRead.sections(d);
+        if (secs == (Array*)0)
             return (ElfSharedInfo*)0;
+        u32 shnum = secs.count();
         u32 dynsymOff = (u32)0;
         u32 dynsymSz = (u32)0;
         u32 dynsymLink = (u32)0;
@@ -527,21 +529,20 @@ class ElfSharedInfo
         u32 dynLink = (u32)0;
         for (u32 i = (u32)0; i < shnum; i = i + (u32)1)
             {
-            u32 sh = shoff + i * shentsize;
-            u32 type = Elf64.rd32(d, sh + (u32)4);
+            ElfSec* sh = (ElfSec*)secs.get(i);
             // SHT_DYNSYM
-            if (type == (u32)11)
+            if (sh.type() == (u32)11)
                 {
-                dynsymOff = Elf64.rd32(d, sh + (u32)24);
-                dynsymSz = Elf64.rd32(d, sh + (u32)32);
-                dynsymLink = Elf64.rd32(d, sh + (u32)40);
+                dynsymOff = (u32)sh.off();
+                dynsymSz = (u32)sh.size();
+                dynsymLink = sh.link();
                 }
             // SHT_DYNAMIC
-            else if (type == (u32)6)
+            else if (sh.type() == (u32)6)
                 {
-                dynOff = Elf64.rd32(d, sh + (u32)24);
-                dynSz = Elf64.rd32(d, sh + (u32)32);
-                dynLink = Elf64.rd32(d, sh + (u32)40);
+                dynOff = (u32)sh.off();
+                dynSz = (u32)sh.size();
+                dynLink = sh.link();
                 }
             }
         // The android writer emits .dynamic and .dynstr but no .dynsym section
@@ -552,9 +553,8 @@ class ElfSharedInfo
         u32 strLink = dynsymOff != (u32)0 ? dynsymLink : dynLink;
         if ((dynsymOff == (u32)0 && dynOff == (u32)0) || strLink >= shnum)
             return (ElfSharedInfo*)0;
-        u32 ls = shoff + strLink * shentsize;
-        u32 strOff = Elf64.rd32(d, ls + (u32)24);
-        u32 strSz = Elf64.rd32(d, ls + (u32)32);
+        u32 strOff = (u32)((ElfSec*)secs.get(strLink)).off();
+        u32 strSz = (u32)((ElfSec*)secs.get(strLink)).size();
         // No .dynsym section: the symbol table is where the dynamic segment
         // says, DT_SYMTAB, and DT_HASH's chain count is how many entries it
         // has, as the loader finds them (the reference does the same). An

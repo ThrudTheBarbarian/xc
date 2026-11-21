@@ -31,6 +31,7 @@
 
 // ── tags, attributes, forms ──────────────────────────────────────────────
 #import "DwarfDefs.xc"
+#import <ElfRead>
 
 
 
@@ -644,90 +645,21 @@ class DwCur
     // ── ELF section table ────────────────────────────────────────────────
     bool parseElf(void)
         {
-        DwCur* c = DwCur.over(_d, (u32)0, _d.length());
-        u32 shoff = (u32)0;
-        u32 shentsize = (u32)0;
-        u32 shnum = (u32)0;
-        u32 shstrndx = (u32)0;
-        if (_elf32)
-            {
-            c.seek((u32)$20);
-            shoff = c.u32v();
-            c.seek((u32)$2E);
-            shentsize = c.u16v();
-            shnum = c.u16v();
-            shstrndx = c.u16v();
-            }
-        else
-            {
-            c.seek((u32)$28);
-            shoff = c.u64v();
-            c.seek((u32)$3A);
-            shentsize = c.u16v();
-            shnum = c.u16v();
-            shstrndx = c.u16v();
-            }
-        if (!c.ok() || shoff == (u32)0 || shnum == (u32)0)
+        // The section table through the one reader, offsets checked at their
+        // full width (#336): a 64-bit offset was cut to its low 32 bits here.
+        Array* secs = ElfRead.sections(_d);
+        if (secs == (Array*)0)
             return false;
-        if (shoff + shentsize * shnum > _d.length())
-            return false;
-        if (shstrndx >= shnum)
-            return false;
-
-        // The string table first — every other name is read through it.
-        u32 se = shoff + shstrndx * shentsize;
-        u32 strOff = (u32)0;
-        u32 strSize = (u32)0;
-        DwCur* s = DwCur.over(_d, (u32)0, _d.length());
-        s.seek(se + (u32)4); // past sh_name
-        if (_elf32)
+        for (u32 i = (u32)0; i < secs.count(); i = i + (u32)1)
             {
-            s.skip((u32)12);
-            strOff = s.u32v();
-            strSize = s.u32v();
-            }
-        else
-            {
-            s.skip((u32)20);
-            strOff = s.u64v();
-            strSize = s.u64v();
-            }
-        if (!s.ok() || strOff + strSize > _d.length())
-            return false;
-
-        for (u32 i = (u32)0; i < shnum; i = i + (u32)1)
-            {
-            DwCur* r = DwCur.over(_d, (u32)0, _d.length());
-            r.seek(shoff + i * shentsize);
-            u32 nameIdx = r.u32v();
-            u32 off = (u32)0;
-            u32 size = (u32)0;
-            u32 flags = (u32)0;
-            if (_elf32)
-                {
-                r.skip((u32)4);          // type
-                flags = r.u32v();
-                r.skip((u32)4);          // addr
-                off = r.u32v();
-                size = r.u32v();
-                }
-            else
-                {
-                r.skip((u32)4);          // type
-                flags = r.u64v();
-                r.skip((u32)8);          // addr
-                off = r.u64v();
-                size = r.u64v();
-                }
-            if (!r.ok())
-                continue;
-            String* nm = cStringAt(strOff + nameIdx, strOff + strSize);
+            ElfSec* es = (ElfSec*)secs.get(i);
+            String* nm = es.name();
             if (nm.byteLength() == (u32)0)
                 continue;
             Array* rec = new Array();
-            rec.add((Object*)Number.withU32(off));
-            rec.add((Object*)Number.withU32(size));
-            rec.add((Object*)Number.withU32(flags));
+            rec.add((Object*)Number.withU32((u32)es.off()));
+            rec.add((Object*)Number.withU32((u32)es.size()));
+            rec.add((Object*)Number.withU32((u32)es.flags()));
             _sections.set((Hashable*)nm, (Object*)rec);
             }
         inflateCompressed();
