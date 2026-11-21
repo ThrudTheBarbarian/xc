@@ -78,9 +78,11 @@ echo "compiled+linked $compiled   (compile fail $asmfail, link fail $linkfail, /
 [ "$compiled" -gt 0 ] || exit 0
 
 tar -czf "$WORK/payload.tgz" -C "$WORK/bin" .
-scp -q "$WORK/payload.tgz" "$HOST:/tmp/xtc-selfhost.tgz"
-ssh "$HOST" 'rm -rf /tmp/xtc-selfhost && mkdir -p /tmp/xtc-selfhost &&
-  tar -xzf /tmp/xtc-selfhost.tgz -C /tmp/xtc-selfhost && cd /tmp/xtc-selfhost &&
+# A private directory on the host, removed after: a fixed one was shared by
+# concurrent runs.
+RD=$(ssh "$HOST" 'mktemp -d /tmp/xc-shcorpus.XXXXXX') || { echo "no scratch dir on $HOST"; exit 1; }
+scp -q "$WORK/payload.tgz" "$HOST:$RD/payload.tgz"
+ssh "$HOST" "RD=$RD; "'cd "$RD" && tar -xzf payload.tgz && rm -f payload.tgz &&
   pass=0; fail=0; crash=0
   for b in *; do
     case "$b" in *.expected) continue;; esac
@@ -90,7 +92,7 @@ ssh "$HOST" 'rm -rf /tmp/xtc-selfhost && mkdir -p /tmp/xtc-selfhost &&
     elif [ "$got" = "$(cat "$b.expected")" ]; then pass=$((pass+1))
     else fail=$((fail+1)); echo "DIFF $b"; fi
   done
-  echo "--- self-hosted linux: $pass pass, $fail diff, $crash crash"'
+  echo "--- self-hosted linux: $pass pass, $fail diff, $crash crash"; cd / && rm -rf "$RD"'
 
 echo "link errors by cause:"
 sed 's/.*undefined symbol/undefined symbol/' "$WORK/link-errors.txt" 2>/dev/null |

@@ -53,14 +53,16 @@ done
 if ! ssh -o ConnectTimeout=10 "$HOST" true 2>/dev/null; then
     echo "SKIP: no x86-64 host ($HOST) — built and compared but NOT run"; exit $fail
 fi
+# A private directory per compiler on the host, removed after: a fixed one
+# was shared by concurrent runs.
 for C in xcc xcc-xc; do
-    ssh "$HOST" 'rm -rf /tmp/xc-emitlib && mkdir -p /tmp/xc-emitlib' </dev/null
-    scp -q "$C/app" "$C/weakapp" "$C/libAdder.so" "$HOST":/tmp/xc-emitlib/
-    OUT="$(ssh "$HOST" 'cd /tmp/xc-emitlib && ./app' </dev/null 2>&1)"
+    RD=$(ssh "$HOST" 'mktemp -d /tmp/xc-emitlib.XXXXXX' </dev/null)
+    scp -q "$C/app" "$C/weakapp" "$C/libAdder.so" "$HOST":"$RD"/
+    OUT="$(ssh "$HOST" "cd $RD && ./app" </dev/null 2>&1)"
     [ "$OUT" = "$WANT" ] || { echo "FAIL: $C produced:" >&2; echo "$OUT" >&2; fail=1; }
-    OUT="$(ssh "$HOST" 'cd /tmp/xc-emitlib && ./weakapp' </dev/null 2>&1)"
+    OUT="$(ssh "$HOST" "cd $RD && ./weakapp" </dev/null 2>&1)"
     [ "$OUT" = "$WWANT" ] || { echo "FAIL: $C weakapp produced:" >&2; echo "$OUT" >&2; fail=1; }
+    ssh "$HOST" "rm -rf $RD" </dev/null
 done
-ssh "$HOST" 'rm -rf /tmp/xc-emitlib' </dev/null
 [ $fail -eq 0 ] && echo "PASS (built, compared and ran on $HOST)"
 exit $fail

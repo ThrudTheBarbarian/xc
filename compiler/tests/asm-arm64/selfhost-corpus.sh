@@ -7,15 +7,18 @@ XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
 cd "$(dirname "$0")/../.."
 XTC=bin/$XC_PLAT/xcc; SR=support/arm64/lib
 [ -x "$XTC" ] && [ -x bin/$XC_PLAT/xcc-ln-arm64 ] || { echo "build first: make"; exit 1; }
+# One private directory for everything, removed on exit: a program run from a
+# shared temp directory would load any libRuntime another run left beside it.
+W=$(mktemp -d); trap 'rm -rf "$W"' EXIT; export TMPDIR="$W"
 match=0; mismatch=0; shfail=0; dylib=0; clangskip=0; total=0
 mm=$(mktemp); bf=$(mktemp)
 for f in tests/fixtures/*.xc; do
   head -20 "$f" | grep -qE 'xtc-flags:.*(skip|expect=sema-error|target=xt6502)' && continue
   total=$((total+1)); c=$(mktemp); s=$(mktemp)
   $XTC -A arm64 -L "$SR" -o "$c" "$f" >/dev/null 2>/dev/null || { clangskip=$((clangskip+1)); rm -f "$c" "$s"; continue; }
-  if ! $XTC -A arm64 --self-host -L "$SR" -o "$s" "$f" >/dev/null 2>/tmp/serr.$$; then
-    if grep -q 'external librar' /tmp/serr.$$; then dylib=$((dylib+1));
-    else shfail=$((shfail+1)); echo "$(basename "$f"): $(tail -1 /tmp/serr.$$)" >> "$bf"; fi
+  if ! $XTC -A arm64 --self-host -L "$SR" -o "$s" "$f" >/dev/null 2>"$W/serr"; then
+    if grep -q 'external librar' "$W/serr"; then dylib=$((dylib+1));
+    else shfail=$((shfail+1)); echo "$(basename "$f"): $(tail -1 "$W/serr")" >> "$bf"; fi
     rm -f "$c" "$s"; continue
   fi
   co=$(timeout 10 "$c" 2>/dev/null); crc=$?; so=$(timeout 10 "$s" 2>/dev/null); src=$?
@@ -32,4 +35,4 @@ printf 'MATCH: %d   MISMATCH: %d   build-fail: %d   ext-dylib: %d   (clang-skip:
   "$match" "$mismatch" "$shfail" "$dylib" "$clangskip"
 echo "--- build-fail reasons ---"; sed -E 's/^[^:]+: //' "$bf" | sort | uniq -c | sort -rn | head
 echo "--- mismatches ---"; cat "$mm"
-rm -f "$mm" "$bf" /tmp/serr.$$
+rm -f "$mm" "$bf"

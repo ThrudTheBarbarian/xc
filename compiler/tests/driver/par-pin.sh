@@ -19,10 +19,18 @@ elif [ -n "${XTC_X86_64_HOST:-}" ]; then RUN() { ssh "$XTC_X86_64_HOST" "$1"; };
         || { echo "par-pin: skipped (cannot log in to $XTC_X86_64_HOST)"; exit 0; }
 else echo "par-pin: skipped (no Linux host)"; exit 0; fi
 "$XC" -q -H . -O2 $ARCH -o "$W/pin" tests/fixtures/par_pin_cpus.xc || { echo "FAIL par-pin: build"; exit 1; }
-R=/tmp/par-pin-$$
-if [ -n "$ARCH" ]; then scp -q "$W/pin" "$XTC_X86_64_HOST:$R" || { echo "FAIL par-pin: the copy to $XTC_X86_64_HOST"; exit 1; }; else cp "$W/pin" "$R"; fi
-E="XC_PAR=cpu XC_PAR_THREADS=4 XC_SETTINGS_DIR=$R.s"
-out=$(RUN "$E taskset -c 2,3,4,5 $R; echo ---; XC_PAR_PIN=0 $E taskset -c 2,3,4,5 $R; rm -rf $R $R.s")
+# Run from a private directory, never from /tmp itself: the program's search
+# path starts at its own directory ($ORIGIN), so a libRuntime another run left
+# in /tmp was loaded in place of the tree's (#508).
+if [ -n "$ARCH" ]; then
+    RD=$(ssh "$XTC_X86_64_HOST" 'mktemp -d /tmp/xc-parpin.XXXXXX') || { echo "FAIL par-pin: no scratch dir on $XTC_X86_64_HOST"; exit 1; }
+    R=$RD/pin
+    scp -q "$W/pin" "$XTC_X86_64_HOST:$R" || { echo "FAIL par-pin: the copy to $XTC_X86_64_HOST"; exit 1; }
+else
+    RD=$W; R=$W/pin
+fi
+E="XC_PAR=cpu XC_PAR_THREADS=4 XC_SETTINGS_DIR=$RD/settings"
+out=$(RUN "$E taskset -c 2,3,4,5 $R; echo ---; XC_PAR_PIN=0 $E taskset -c 2,3,4,5 $R; [ $RD = $W ] || rm -rf $RD")
 want=$'2\n2-5\n3\n4\n5\nsum 12288\n---\n2-5\n2-5\n2-5\n2-5\n2-5\nsum 12288'
 if [ "$out" = "$want" ]; then echo "par-pin: ok"; exit 0; fi
 echo "FAIL par-pin: wanted one CPU a lane (then, with XC_PAR_PIN=0, none pinned), got:"; echo "$out" | sed 's/^/    /'; exit 1

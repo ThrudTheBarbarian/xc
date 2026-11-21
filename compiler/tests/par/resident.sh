@@ -27,8 +27,11 @@ for C in xcc-xc xcc; do
     [ -x "$XC" ] || continue
     if [ "$PLAT" = osx ] && [ -n "$HOST" ]; then
         "$XC" -q -O2 -H . -A x86_64 -o "$W/r.$C" "$F" > "$W/b.$C" 2>&1 || { echo "FAIL resident ($C): no build: $(head -c 300 "$W/b.$C")"; fail=1; continue; }
-        scp -q "$W/r.$C" "$HOST:/tmp/resident.$C.$$" || { echo "resident: cannot reach $HOST, skipped"; exit 0; }
-        run() { ssh "$HOST" "cd /tmp && $1 ./resident.$C.$$ $2"; }
+        # A private directory on the host, removed after: a binary run from
+        # /tmp itself would load whatever libRuntime another run left there.
+        RD=$(ssh "$HOST" 'mktemp -d /tmp/xc-resident.XXXXXX' 2>/dev/null) || { echo "resident: cannot reach $HOST, skipped"; exit 0; }
+        scp -q "$W/r.$C" "$HOST:$RD/resident" || { echo "resident: cannot reach $HOST, skipped"; exit 0; }
+        run() { ssh "$HOST" "cd $RD && $1 ./resident $2"; }
     else
         "$XC" -q -O2 -H . -o "$W/r.$C" "$F" > "$W/b.$C" 2>&1 || { echo "FAIL resident ($C): no build: $(head -c 300 "$W/b.$C")"; fail=1; continue; }
         run() { (cd "$W" && env $1 ./r.$C $2); }
@@ -51,7 +54,7 @@ for C in xcc-xc xcc; do
             fi
         done
     done
-    [ "$PLAT" = osx ] && [ -n "$HOST" ] && ssh "$HOST" "rm -f /tmp/resident.$C.$$"
+    [ "$PLAT" = osx ] && [ -n "$HOST" ] && ssh "$HOST" "rm -rf $RD"
 done
 [ $fail = 0 ] && echo "resident: ok"
 exit $fail

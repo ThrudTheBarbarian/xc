@@ -64,8 +64,11 @@ fi
 if "$ROOT"/bin/$XC_PLAT/xcc -A x86_64 --self-host "$W/prog.xc" -o "$W/prog.elf" >"$W/log" 2>&1 \
    && grep -q "self-hosted, no clang" "$W/log"; then
     if ssh -o BatchMode=yes -o ConnectTimeout=5 "$HOST" true 2>/dev/null; then
-        scp -q "$W/prog.elf" "$HOST:/tmp/xtc-cm-$$" 2>/dev/null
-        got=$(ssh "$HOST" "chmod +x /tmp/xtc-cm-$$; /tmp/xtc-cm-$$; rm -f /tmp/xtc-cm-$$" 2>/dev/null | tr -d '\r')
+        # A private directory on the host, removed after: a binary run from
+        # /tmp itself would load whatever libRuntime another run left there.
+        RD=$(ssh "$HOST" 'mktemp -d /tmp/xc-cm.XXXXXX' 2>/dev/null)
+        scp -q "$W/prog.elf" "$HOST:$RD/prog" 2>/dev/null
+        got=$(ssh "$HOST" "chmod +x $RD/prog; $RD/prog; rm -rf $RD" 2>/dev/null | tr -d '\r')
         report "Linux x86-64 (self-host)" "$got"
     else
         report "Linux x86-64 (self-host)" SKIP "no Linux host '$HOST'"

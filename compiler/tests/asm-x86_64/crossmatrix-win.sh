@@ -51,11 +51,14 @@ if scp -q "$WHOST:cm.macho" "$TMP/cm.macho" 2>/dev/null; then
 else printf '  %-36s' "Windows builds → macOS"; echo "SKIP (scp)"; fi
 
 # Windows → Linux: pull the ELF here, push to the Linux host, run.
+# In a private directory on the Linux host, removed after: a binary run from
+# /tmp itself would load whatever libRuntime another run left there.
 if scp -q "$WHOST:cm.elf" "$TMP/cm.elf" 2>/dev/null && \
    ssh -o BatchMode=yes -o ConnectTimeout=5 "$LHOST" true 2>/dev/null && \
-   scp -q "$TMP/cm.elf" "$LHOST:/tmp/cm-win.elf" 2>/dev/null; then
+   LRD=$(ssh "$LHOST" 'mktemp -d /tmp/xc-cmwin.XXXXXX' 2>/dev/null) && \
+   scp -q "$TMP/cm.elf" "$LHOST:$LRD/cm-win.elf" 2>/dev/null; then
     report "Windows builds → Linux (run there)" \
-           "$(ssh "$LHOST" 'chmod +x /tmp/cm-win.elf && /tmp/cm-win.elf; rm -f /tmp/cm-win.elf' 2>/dev/null | tr -d '\r')"
+           "$(ssh "$LHOST" "chmod +x $LRD/cm-win.elf && $LRD/cm-win.elf; rm -rf $LRD" 2>/dev/null | tr -d '\r')"
 else printf '  %-36s' "Windows builds → Linux"; echo "SKIP (no Linux host)"; fi
 
 ssh "$WHOST" 'del %USERPROFILE%\cm.xc %USERPROFILE%\cm.exe %USERPROFILE%\cm.macho %USERPROFILE%\cm.elf 2>nul' >/dev/null 2>&1

@@ -550,8 +550,9 @@ if "$XCC" -q -A x86_64 "$W/modMain-x86.o" "$W/modA-x86.o" -o "$W/xprog" 2>"$W/xl
     # than let a skipped run read as a pass.
     XH="${XTC_X86_HOST:-${XTC_LINUX_HOST:-}}"
     if ssh -o ConnectTimeout=8 -o BatchMode=yes "$XH" true 2>/dev/null; then
-        scp -q "$W/xprog" "$XH:/tmp/xtc-objlink-$$" 2>/dev/null
-        out="$(ssh -o BatchMode=yes "$XH" "chmod +x /tmp/xtc-objlink-$$ && /tmp/xtc-objlink-$$; rm -f /tmp/xtc-objlink-$$" 2>/dev/null)"
+        RD=$(ssh -o BatchMode=yes "$XH" 'mktemp -d /tmp/xc-objlink.XXXXXX' 2>/dev/null)
+        scp -q "$W/xprog" "$XH:$RD/p" 2>/dev/null
+        out="$(ssh -o BatchMode=yes "$XH" "chmod +x $RD/p && $RD/p; rm -rf $RD" 2>/dev/null)"
         [ "$out" = "9" ] && ok "x86_64 linked program runs on $XH (got 9)" \
                          || bad "x86_64 linked program (got '$out', want 9)"
     else
@@ -571,8 +572,9 @@ fi
 if "$XCC" -q -A x86_64 "$W/catOver-x86.o" "$W/catBase-x86.o" -o "$W/xcat" 2>>"$W/xc.err"; then
     XH="${XTC_X86_HOST:-${XTC_LINUX_HOST:-}}"
     if ssh -o ConnectTimeout=8 -o BatchMode=yes "$XH" true 2>/dev/null; then
-        scp -q "$W/xcat" "$XH:/tmp/xtc-objcat-$$" 2>/dev/null
-        out="$(ssh -o BatchMode=yes "$XH" "chmod +x /tmp/xtc-objcat-$$ && /tmp/xtc-objcat-$$; rm -f /tmp/xtc-objcat-$$" 2>/dev/null)"
+        RD=$(ssh -o BatchMode=yes "$XH" 'mktemp -d /tmp/xc-objlink.XXXXXX' 2>/dev/null)
+        scp -q "$W/xcat" "$XH:$RD/p" 2>/dev/null
+        out="$(ssh -o BatchMode=yes "$XH" "chmod +x $RD/p && $RD/p; rm -rf $RD" 2>/dev/null)"
         [ "$out" = "1011 1012 2011" ] \
             && ok "x86_64 interface + category chain across objects (got '$out')" \
             || bad "x86_64 category chain (got '$out', want '1011 1012 2011')"
@@ -589,8 +591,9 @@ fi
 if "$XCC" -q -A x86_64 -flto "$W/modMain-x86.o" "$W/modA-x86.o" -o "$W/xlto" 2>"$W/xlto.err"; then
     XH="${XTC_X86_HOST:-${XTC_LINUX_HOST:-}}"
     if ssh -o ConnectTimeout=8 -o BatchMode=yes "$XH" true 2>/dev/null; then
-        scp -q "$W/xlto" "$XH:/tmp/xtc-xlto-$$" 2>/dev/null
-        out="$(ssh -o BatchMode=yes "$XH" "chmod +x /tmp/xtc-xlto-$$ && /tmp/xtc-xlto-$$; rm -f /tmp/xtc-xlto-$$" 2>/dev/null)"
+        RD=$(ssh -o BatchMode=yes "$XH" 'mktemp -d /tmp/xc-objlink.XXXXXX' 2>/dev/null)
+        scp -q "$W/xlto" "$XH:$RD/p" 2>/dev/null
+        out="$(ssh -o BatchMode=yes "$XH" "chmod +x $RD/p && $RD/p; rm -rf $RD" 2>/dev/null)"
         [ "$out" = "9" ] && ok "x86_64 -flto links and runs (got 9)" \
                          || bad "x86_64 -flto (got '$out', want 9)"
     else
@@ -1060,8 +1063,9 @@ GOT9EOF
         # Runs only when the x86 host answers; a silent host is NOT a pass.
         X86HOST="${XTC_X86_HOST:-${XTC_LINUX_HOST:-}}"
         if ssh -o ConnectTimeout=3 "$X86HOST" true 2>/dev/null; then
-            scp -q "$W/got9m" "$X86HOST:/tmp/xt-got9m" 2>/dev/null
-            run9=$(ssh "$X86HOST" "/tmp/xt-got9m; rm -f /tmp/xt-got9m" 2>/dev/null)
+            RD=$(ssh "$X86HOST" 'mktemp -d /tmp/xc-objlink.XXXXXX' 2>/dev/null)
+            scp -q "$W/got9m" "$X86HOST:$RD/p" 2>/dev/null
+            run9=$(ssh "$X86HOST" "$RD/p; rm -rf $RD" 2>/dev/null)
             [ "$run9" = "49 0 2 7" ] \
                 && ok "type-9 slot reads, weak-undef 0, strong-over-weak run right (got '$run9')" \
                 || bad "got9 program ran wrong (got '$run9', want '49 0 2 7')"
@@ -1100,8 +1104,9 @@ TLSEOF
         ok "__thread (local-exec TLS) object links in-house"
         X86HOST="${XTC_X86_HOST:-${XTC_LINUX_HOST:-}}"
         if ssh -o ConnectTimeout=3 "$X86HOST" true 2>/dev/null; then
-            scp -q "$W/tlsm" "$X86HOST:/tmp/xt-tlsm" 2>/dev/null
-            runt=$(ssh "$X86HOST" "/tmp/xt-tlsm; rm -f /tmp/xt-tlsm" 2>/dev/null)
+            RD=$(ssh "$X86HOST" 'mktemp -d /tmp/xc-objlink.XXXXXX' 2>/dev/null)
+            scp -q "$W/tlsm" "$X86HOST:$RD/p" 2>/dev/null
+            runt=$(ssh "$X86HOST" "$RD/p; rm -rf $RD" 2>/dev/null)
             [ "$runt" = "44" ]                 && ok "__thread image initialised and writable (got '$runt')"                 || bad "__thread program ran wrong (got '$runt', want '44')"
         else
             echo "  (x86 host unreachable -- TLS RUN not attempted, link-only)"
@@ -1152,8 +1157,9 @@ EOF
     if bin/$XC_PLAT/xcc-ln-x86_64 $RT "$W/ar.s" "$X86LIBC" -o "$W/ar_yes" 2>"$W/ar.err"; then
         XH="${XTC_X86_HOST:-${XTC_LINUX_HOST:-}}"
         if ssh -o ConnectTimeout=8 -o BatchMode=yes "$XH" true 2>/dev/null; then
-            scp -q "$W/ar_yes" "$XH:/tmp/xtc-ar-$$" 2>/dev/null
-            out="$(ssh -o BatchMode=yes "$XH" "chmod +x /tmp/xtc-ar-$$ && /tmp/xtc-ar-$$; rm -f /tmp/xtc-ar-$$" 2>/dev/null)"
+            RD=$(ssh -o BatchMode=yes "$XH" 'mktemp -d /tmp/xc-objlink.XXXXXX' 2>/dev/null)
+            scp -q "$W/ar_yes" "$XH:$RD/p" 2>/dev/null
+            out="$(ssh -o BatchMode=yes "$XH" "chmod +x $RD/p && $RD/p; rm -rf $RD" 2>/dev/null)"
             [ "$out" = "4711" ] && ok "libc.a member pulled in by our own linker (got 4711)" \
                                 || bad "archive pull (got '$out', want 4711)"
         else

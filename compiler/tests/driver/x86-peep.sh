@@ -94,7 +94,7 @@ if [ -n "$H" ] || [ $native = 1 ]; then
     if [ -f "$W/lp" ] && [ $native = 1 ]; then
         got=$("$W/lp"); H=$(uname -n)
     elif [ -f "$W/lp" ]; then
-        scp -q "$W/lp" "$H:/tmp/lea-peep.$$" && got=$(ssh "$H" "/tmp/lea-peep.$$; rm -f /tmp/lea-peep.$$")
+        RD=$(ssh "$H" 'mktemp -d /tmp/xc-peep.XXXXXX') && scp -q "$W/lp" "$H:$RD/p" && got=$(ssh "$H" "$RD/p; rm -rf $RD")
     fi
     [ "$got" = "$(cat tests/fixtures/lea_peep.expected.out)" ] || { echo "FAIL: lea_peep on $H printed '$got'"; fail=1; }
     "$XC" -q --par-style=cpu -A x86_64 -O2 -H . -o "$W/ix" tests/fixtures/index_nonneg.xc || { echo "FAIL: no x86-64 index_nonneg"; fail=1; }
@@ -102,7 +102,7 @@ if [ -n "$H" ] || [ $native = 1 ]; then
     if [ -f "$W/ix" ] && [ $native = 1 ]; then
         got=$("$W/ix")
     elif [ -f "$W/ix" ]; then
-        scp -q "$W/ix" "$H:/tmp/index-nonneg.$$" && got=$(ssh "$H" "/tmp/index-nonneg.$$; rm -f /tmp/index-nonneg.$$")
+        RD=$(ssh "$H" 'mktemp -d /tmp/xc-peep.XXXXXX') && scp -q "$W/ix" "$H:$RD/p" && got=$(ssh "$H" "$RD/p; rm -rf $RD")
     fi
     [ "$got" = "$(cat tests/fixtures/index_nonneg.expected.out)" ] || { echo "FAIL: index_nonneg on $H printed '$got'"; fail=1; }
 fi

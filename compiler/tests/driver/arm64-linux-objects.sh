@@ -30,8 +30,7 @@ if command -v clang > /dev/null && [ -d /opt/clang/linux/aarch64-linux-gnu/usr/i
       && "$H/$XC" -q -A arm64-linux -H "$H" -o cprog cadd.o cmain.o ) || { echo "FAIL arm64-linux-objects: the C objects"; rc=1; }
 fi
 if [ -n "${XTC_LINUX_ARM64_HOST:-}" ]; then
-    R=/tmp/a64objs-$$
-    ssh "$XTC_LINUX_ARM64_HOST" "mkdir -p $R" && scp -q "$W/prog" "$XTC_LINUX_ARM64_HOST:$R/"
+    R=$(ssh "$XTC_LINUX_ARM64_HOST" 'mktemp -d /tmp/xc-a64objs.XXXXXX') && scp -q "$W/prog" "$XTC_LINUX_ARM64_HOST:$R/"
     [ -x "$W/cprog" ] && scp -q "$W/cprog" "$XTC_LINUX_ARM64_HOST:$R/"
     out=$(ssh "$XTC_LINUX_ARM64_HOST" "$R/prog; [ -x $R/cprog ] && $R/cprog; rm -rf $R")
     want=$'counter 90\nc 42'

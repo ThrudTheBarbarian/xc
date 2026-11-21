@@ -62,8 +62,11 @@ if [ -n "$H" ] || [ $native = 1 ]; then
         if [ $native = 1 ]; then
             got=$("$W/$f")
         else
-            scp -q "$W/$f" "$H:/tmp/select-mask.$$" &&
-                got=$(ssh "$H" "/tmp/select-mask.$$; rm -f /tmp/select-mask.$$")
+            # A private directory on the host (a binary run from /tmp itself
+            # loads whatever libRuntime another run left there).
+            RD=$(ssh "$H" 'mktemp -d /tmp/xc-selmask.XXXXXX') &&
+            scp -q "$W/$f" "$H:$RD/p" &&
+                got=$(ssh "$H" "$RD/p; rm -rf $RD")
         fi
         [ "$got" = "$(cat tests/fixtures/$f.expected.out)" ] || { echo "FAIL: $f on $H printed '$got'"; fail=1; }
     done

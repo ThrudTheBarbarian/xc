@@ -84,13 +84,17 @@ case "$appout2" in *"self-hosted, no clang"*) app2_sh=yes;; *) app2_sh=no;; esac
 check "class library built without clang" yes "$lib2_sh"
 check "class app built without clang"     yes "$app2_sh"
 
-scp -q libGreeter.so app libCounter.so app2 "$HOST:/tmp/" || { echo "selfhost-lib: scp failed"; exit 1; }
+# A private directory on the host, removed after. $ORIGIN is that directory,
+# so the run finds these libraries and no other run's (a libRuntime left in
+# /tmp itself was found first).
+RD=$(ssh "$HOST" 'mktemp -d /tmp/xc-shlib.XXXXXX') || { echo "selfhost-lib: no scratch dir on $HOST"; exit 1; }
+scp -q libGreeter.so app libCounter.so app2 "$HOST:$RD/" || { echo "selfhost-lib: scp failed"; exit 1; }
 # No LD_LIBRARY_PATH: DT_RUNPATH $ORIGIN has to do the work.
-got=$(ssh "$HOST" 'cd /tmp && chmod +x app && ./app' 2>/dev/null) || true
+got=$(ssh "$HOST" "cd $RD && chmod +x app && ./app" 2>/dev/null) || true
 check "app resolves the library and runs" "triple(14)=42" "$got"
-got=$(ssh "$HOST" 'cd /tmp && chmod +x app2 && ./app2' 2>/dev/null) || true
+got=$(ssh "$HOST" "cd $RD && chmod +x app2 && ./app2" 2>/dev/null) || true
 check "heap + vtable + ARC across the .so" "count=42" "$got"
 
-ssh "$HOST" 'rm -f /tmp/app /tmp/libGreeter.so /tmp/app2 /tmp/libCounter.so' 2>/dev/null || true
+ssh "$HOST" "rm -rf $RD" 2>/dev/null || true
 [ $fail = 0 ] && echo "selfhost-lib: all ok" || echo "selfhost-lib: FAILURES"
 exit $fail

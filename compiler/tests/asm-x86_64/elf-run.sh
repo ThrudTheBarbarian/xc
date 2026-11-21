@@ -31,16 +31,19 @@ check() {   # check <name> <expected-status> <expected-stdout>
 
 "$SMOKE" "$TMP/elf-exit42"           >/dev/null
 "$SMOKE" "$TMP/elf-hello"  --hello   >/dev/null
-scp -q "$TMP/elf-exit42" "$TMP/elf-hello" "$HOST:/tmp/" || { echo "elf-run: scp failed"; exit 1; }
+# A private directory on the host, removed after: a binary run from /tmp
+# itself would load whatever libRuntime another run left there.
+RD=$(ssh "$HOST" 'mktemp -d /tmp/xc-elfrun.XXXXXX') || { echo "elf-run: no scratch dir on $HOST"; exit 1; }
+scp -q "$TMP/elf-exit42" "$TMP/elf-hello" "$HOST:$RD/" || { echo "elf-run: scp failed"; exit 1; }
 
-got_out=$(ssh "$HOST" 'chmod +x /tmp/elf-exit42; /tmp/elf-exit42' 2>/dev/null) || true
-got_status=$(ssh "$HOST" 'chmod +x /tmp/elf-exit42; /tmp/elf-exit42 >/dev/null 2>&1; echo $?')
+got_out=$(ssh "$HOST" "chmod +x $RD/elf-exit42; $RD/elf-exit42" 2>/dev/null) || true
+got_status=$(ssh "$HOST" "chmod +x $RD/elf-exit42; $RD/elf-exit42 >/dev/null 2>&1; echo \$?")
 check "exit status passthrough" 42 ""
 
-got_out=$(ssh "$HOST" 'chmod +x /tmp/elf-hello; /tmp/elf-hello' 2>/dev/null) || true
-got_status=$(ssh "$HOST" 'chmod +x /tmp/elf-hello; /tmp/elf-hello >/dev/null 2>&1; echo $?')
+got_out=$(ssh "$HOST" "chmod +x $RD/elf-hello; $RD/elf-hello" 2>/dev/null) || true
+got_status=$(ssh "$HOST" "chmod +x $RD/elf-hello; $RD/elf-hello >/dev/null 2>&1; echo \$?")
 check "write(2) + absolute data" 0 "hello from xtc"
 
-ssh "$HOST" 'rm -f /tmp/elf-exit42 /tmp/elf-hello' 2>/dev/null || true
+ssh "$HOST" "rm -rf $RD" 2>/dev/null || true
 [ $fail = 0 ] && echo "elf-run: all ok" || echo "elf-run: FAILURES"
 exit $fail

@@ -327,10 +327,12 @@ if [ $fail = 0 ] && reach "$H"; then
     SSHO="-o BatchMode=yes -o LogLevel=ERROR -o ConnectTimeout=10"
     for t in x86_64 x86_64-linux-musl; do
         for m in -fbounds-check=light -fbounds-check; do
-            scp $SSHO -q "$W/x-$t$m" support/runtime-lib/x86_64-linux/libRuntime.so "$H:" \
-                && ssh $SSHO "$H" "mkdir -p vtbl-check && mv x-$t$m libRuntime.so vtbl-check/" \
+            # Straight into a private directory, removed after: copied to the
+            # home directory first, a libRuntime.so could be left there.
+            RD=$(ssh $SSHO "$H" 'mktemp -d /tmp/xc-vtbl.XXXXXX') \
+                && scp $SSHO -q "$W/x-$t$m" support/runtime-lib/x86_64-linux/libRuntime.so "$H:$RD/" \
                 || { bad "copy to the Linux host"; break 2; }
-            out=$(ssh $SSHO "$H" "cd vtbl-check && LD_LIBRARY_PATH=. ./x-$t$m; echo rc=\$?; LD_LIBRARY_PATH=. ./x-$t$m forge 2>&1; echo rc=\$?; cd && rm -rf vtbl-check")
+            out=$(ssh $SSHO "$H" "cd $RD && LD_LIBRARY_PATH=. ./x-$t$m; echo rc=\$?; LD_LIBRARY_PATH=. ./x-$t$m forge 2>&1; echo rc=\$?; cd / && rm -rf $RD")
             case "$out" in
                 "$want_ok"*"rc=0"*"not a vtable"*"at f.xc:20:31"*"rc=134") ;;
                 *) bad "-A $t $m on the Linux host printed: $out" ;;
@@ -344,10 +346,10 @@ H=${XTC_LINUX_ARM64_HOST:-}
 if [ $fail = 0 ] && reach "$H"; then
     SSHO="-o BatchMode=yes -o LogLevel=ERROR -o ConnectTimeout=10"
     for m in -fbounds-check=light -fbounds-check; do
-        scp $SSHO -q "$W/x-arm64-linux$m" support/runtime-lib/arm64-linux/libRuntime.so "$H:" \
-            && ssh $SSHO "$H" "mkdir -p vtbl-check && mv x-arm64-linux$m libRuntime.so vtbl-check/" \
+        RD=$(ssh $SSHO "$H" 'mktemp -d /tmp/xc-vtbl.XXXXXX') \
+            && scp $SSHO -q "$W/x-arm64-linux$m" support/runtime-lib/arm64-linux/libRuntime.so "$H:$RD/" \
             || { bad "copy to the arm64 Linux host"; break; }
-        out=$(ssh $SSHO "$H" "cd vtbl-check && LD_LIBRARY_PATH=. ./x-arm64-linux$m; echo rc=\$?; LD_LIBRARY_PATH=. ./x-arm64-linux$m forge 2>&1; echo rc=\$?; cd && rm -rf vtbl-check")
+        out=$(ssh $SSHO "$H" "cd $RD && LD_LIBRARY_PATH=. ./x-arm64-linux$m; echo rc=\$?; LD_LIBRARY_PATH=. ./x-arm64-linux$m forge 2>&1; echo rc=\$?; cd / && rm -rf $RD")
         case "$out" in
             "$want_ok"*"rc=0"*"not a vtable"*"at f.xc:20:31"*"rc=134") ;;
             *) bad "-A arm64-linux $m on its host printed: $out" ;;

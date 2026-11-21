@@ -8,24 +8,25 @@ XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
 cd "$(dirname "$0")/../.."
 BIN=bin/$XC_PLAT/macho-smoke
 [ -x "$BIN" ] || { echo "build first: make macho-smoke"; exit 1; }
+W=$(mktemp -d); trap 'rm -rf "$W"' EXIT   # private: no fixed names in /tmp
 fail=0
 run() { # name  src-file  expected-exit  [expected-stdout]
-  "$BIN" "$2" /tmp/xt-macho-$$
-  chmod +x /tmp/xt-macho-$$; set +e; out=$(/tmp/xt-macho-$$); got=$?; set -e
+  "$BIN" "$2" "$W/prog"
+  chmod +x "$W/prog"; set +e; out=$("$W/prog"); got=$?; set -e
   ok=1; [ "$got" = "$3" ] || ok=0; [ -z "$4" ] || [ "$out" = "$4" ] || ok=0
   if [ "$ok" = 1 ]; then echo "  PASS: $1 (exit $got${4:+, out='$out'})";
   else echo "  FAIL: $1 (exit $got want $3; out='$out' want '$4')"; fail=1; fi
-  rm -f /tmp/xt-macho-$$
+  rm -f "$W/prog"
 }
-printf '_main:\nmovz w0, #42\nret\n' > /tmp/p1.s
-run "return 42 (no imports)" /tmp/p1.s 42
-printf '_main:\nmov w0,#0\nmov w1,#1\nL:\nadd w0,w0,w1\nadd w1,w1,#1\ncmp w1,#10\nb.lo L\nret\n' > /tmp/p2.s
-run "sum 1..9 = 45 (local branch)" /tmp/p2.s 45
-printf '_main:\nmovz w0, #42\nbl _exit\n' > /tmp/p3.s
-run "exit(42) (1 import)" /tmp/p3.s 42
-printf '_main:\nsub sp,sp,#16\nmov w0,#72\nstrb w0,[sp]\nmov w0,#105\nstrb w0,[sp,#1]\nmov w0,#10\nstrb w0,[sp,#2]\nmov w0,#1\nmov x1,sp\nmov w2,#3\nbl _write\nmov w0,#0\nadd sp,sp,#16\nbl _exit\n' > /tmp/p4.s
-run "write(Hi) + exit(0) (2 imports)" /tmp/p4.s 0 "Hi"
+printf '_main:\nmovz w0, #42\nret\n' > "$W/p1.s"
+run "return 42 (no imports)" "$W/p1.s" 42
+printf '_main:\nmov w0,#0\nmov w1,#1\nL:\nadd w0,w0,w1\nadd w1,w1,#1\ncmp w1,#10\nb.lo L\nret\n' > "$W/p2.s"
+run "sum 1..9 = 45 (local branch)" "$W/p2.s" 45
+printf '_main:\nmovz w0, #42\nbl _exit\n' > "$W/p3.s"
+run "exit(42) (1 import)" "$W/p3.s" 42
+printf '_main:\nsub sp,sp,#16\nmov w0,#72\nstrb w0,[sp]\nmov w0,#105\nstrb w0,[sp,#1]\nmov w0,#10\nstrb w0,[sp,#2]\nmov w0,#1\nmov x1,sp\nmov w2,#3\nbl _write\nmov w0,#0\nadd sp,sp,#16\nbl _exit\n' > "$W/p4.s"
+run "write(Hi) + exit(0) (2 imports)" "$W/p4.s" 0 "Hi"
 # a string constant in __DATA, reached via adrp/add (PAGE21/PAGEOFF12 fixups)
-printf '.text\n_main:\nadrp x1, _m@PAGE\nadd x1, x1, _m@PAGEOFF\nmov w0,#1\nmov w2,#6\nbl _write\nmov w0,#0\nbl _exit\n.section __DATA,__data\n_m:\n.asciz "data!\\n"\n' > /tmp/p5.s
-run "__DATA string via adrp/add" /tmp/p5.s 0 "data!"
+printf '.text\n_main:\nadrp x1, _m@PAGE\nadd x1, x1, _m@PAGEOFF\nmov w0,#1\nmov w2,#6\nbl _write\nmov w0,#0\nbl _exit\n.section __DATA,__data\n_m:\n.asciz "data!\\n"\n' > "$W/p5.s"
+run "__DATA string via adrp/add" "$W/p5.s" 0 "data!"
 exit $fail

@@ -38,39 +38,45 @@ PROG='#import "Stdio.xc"
 class Acc { i32 total; void init(void){total=0;} void add(i32 n){total=total+n;} i32 get(void){return total;} }
 void main(void){ Acc@ a = new Acc(); for (i32 i=(i32)1; i<=(i32)8; i=i+(i32)1){ a.add(i*i); } Stdio.printf("sum-of-squares=%d\n", a.get()); }'
 
+# A private directory on each side, removed on exit: a binary run from /tmp
+# itself would load whatever libRuntime another run left there ($ORIGIN comes
+# first on its search path).
+RD=$(ssh "$HOST" 'mktemp -d /tmp/xc-cm.XXXXXX' 2>/dev/null) || { echo "crossmatrix-linux: SKIP (no scratch dir on '$HOST')"; exit 0; }
+L=$(mktemp -d)
+trap 'rm -rf "$L"; ssh "$HOST" "rm -rf $RD" 2>/dev/null' EXIT
+
 # Build all three targets ON the Linux host in one ssh. The compiler needs its
 # GNUstep libs on LD_LIBRARY_PATH and its support tree via -H.
 ssh "$HOST" "cd $RXTC && export LD_LIBRARY_PATH=\$HOME/gnustep/lib PATH=\$HOME/opt/bin:\$PATH
-    printf '%s' '$PROG' > /tmp/cm.xc
-    bin/linux/xcc -A x86_64 --self-host -q -H . /tmp/cm.xc -o /tmp/cm.elf 2>/dev/null
-    bin/linux/xcc -A arm64  --self-host -q -H . /tmp/cm.xc -o /tmp/cm.macho 2>/dev/null
-    bin/linux/xcc -A win64  --self-host -q -H . /tmp/cm.xc -o /tmp/cm.exe 2>/dev/null
+    printf '%s' '$PROG' > $RD/cm.xc
+    bin/linux/xcc -A x86_64 --self-host -q -H . $RD/cm.xc -o $RD/cm.elf 2>/dev/null
+    bin/linux/xcc -A arm64  --self-host -q -H . $RD/cm.xc -o $RD/cm.macho 2>/dev/null
+    bin/linux/xcc -A win64  --self-host -q -H . $RD/cm.xc -o $RD/cm.exe 2>/dev/null
     echo built" >/dev/null 2>&1
 
 fail=0
 report() { printf '  %-34s' "$1"; [ "$2" = "$EXPECT" ] && echo "ok" || { echo "FAIL (got '$2')"; fail=1; }; }
 
 # Linux → Linux: run on the host.
-got=$(ssh "$HOST" 'chmod +x /tmp/cm.elf 2>/dev/null && /tmp/cm.elf' 2>/dev/null | tr -d '\r')
+got=$(ssh "$HOST" "chmod +x $RD/cm.elf 2>/dev/null && $RD/cm.elf" 2>/dev/null | tr -d '\r')
 report "Linux builds+runs → Linux" "$got"
 
 # Linux → macOS: pull the Mach-O here and run it natively.
-if scp -q "$HOST:/tmp/cm.macho" /tmp/cm.macho 2>/dev/null; then
-    chmod +x /tmp/cm.macho
-    report "Linux builds → macOS (run here)" "$(/tmp/cm.macho 2>/dev/null | tr -d '\r')"
+if scp -q "$HOST:$RD/cm.macho" "$L/cm.macho" 2>/dev/null; then
+    chmod +x "$L/cm.macho"
+    report "Linux builds → macOS (run here)" "$("$L/cm.macho" 2>/dev/null | tr -d '\r')"
 else
     printf '  %-34s' "Linux builds → macOS"; echo "SKIP (scp)"
 fi
 
 # Linux → Windows: pull the PE here and run under Wine.
-if [ -n "$WINE" ] && scp -q "$HOST:/tmp/cm.exe" /tmp/cm.exe 2>/dev/null; then
+if [ -n "$WINE" ] && scp -q "$HOST:$RD/cm.exe" "$L/cm.exe" 2>/dev/null; then
     "$WINE" --version >/dev/null 2>&1 || true
-    report "Linux builds → Windows (Wine here)" "$(timeout 90 "$WINE" /tmp/cm.exe 2>/dev/null | tr -d '\r')"
+    report "Linux builds → Windows (Wine here)" "$(timeout 90 "$WINE" "$L/cm.exe" 2>/dev/null | tr -d '\r')"
 else
     printf '  %-34s' "Linux builds → Windows"; echo "SKIP (no wine/scp)"
 fi
 
-ssh "$HOST" 'rm -f /tmp/cm.xc /tmp/cm.elf /tmp/cm.macho /tmp/cm.exe' 2>/dev/null || true
 echo
 [ $fail = 0 ] && echo "crossmatrix-linux: the Linux-hosted compiler produces working mac/linux/win binaries" \
               || echo "crossmatrix-linux: FAILURES"

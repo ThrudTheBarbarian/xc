@@ -28,8 +28,11 @@ done
 # x86_64 runs on the Linux box; win64 under wine. Both are skipped, loudly,
 # when the host is unavailable — a skip is not a pass.
 if "$BIN/xcc" -A x86_64 -H . -o "$TMP/x" "$SRC" >"$TMP/log" 2>&1; then
-    if [ -n "${XTC_LINUX_HOST:-}" ] && scp -q "$TMP/x" "$XTC_LINUX_HOST:/tmp/xtc-i64" 2>/dev/null &&
-       ssh "$XTC_LINUX_HOST" 'chmod +x /tmp/xtc-i64 && /tmp/xtc-i64' > "$TMP/xout" 2>/dev/null; then
+    # In a private directory on the host, removed after (a binary run from
+    # /tmp itself loads whatever libRuntime another run left there).
+    if [ -n "${XTC_LINUX_HOST:-}" ] && RD=$(ssh "$XTC_LINUX_HOST" 'mktemp -d /tmp/xc-i64.XXXXXX' 2>/dev/null) &&
+       scp -q "$TMP/x" "$XTC_LINUX_HOST:$RD/i64" 2>/dev/null &&
+       ssh "$XTC_LINUX_HOST" "chmod +x $RD/i64 && $RD/i64; s=\$?; rm -rf $RD; exit \$s" > "$TMP/xout" 2>/dev/null; then
         if diff -q "$TMP/xout" "$WANT" >/dev/null; then echo "  PASS x86_64"
         else echo "  FAIL x86_64"; diff "$TMP/xout" "$WANT" | sed 's/^/    /'; fail=1; fi
     else echo "  SKIP x86_64 (XTC_LINUX_HOST unset or unreachable — NOT a pass)"; fi
