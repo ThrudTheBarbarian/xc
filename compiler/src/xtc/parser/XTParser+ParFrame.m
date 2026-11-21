@@ -644,6 +644,20 @@ void parAutoGoals(XTASTNode* n, NSInteger g)
             [self blkCaptureError:0 name:name at:[self currentLocation]];
         else if (self.pfwAuto && [self blkIsLaterIvar:name])
             [self blkCaptureError:3 name:name at:[self currentLocation]];
+        // A written block captures an ivar the class declares further down
+        // as one declared above, with the type its declaration gives it
+        // (#513). A lifted loop stays a loop instead (above).
+        XTType* later = self.pfwAuto ? nil : [self blkLaterIvarType:name];
+        if (later)
+            {
+            NSMutableArray* names = self.pfw[@"names"];
+            if (![names containsObject:name])
+                {
+                [names addObject:name];
+                self.pfw[@"types"][name] = later;
+                }
+            return;
+            }
         NSMutableArray* outer = self.pfw[@"outer"];
         if (!outer)
             self.pfw[@"outer"] = outer = [NSMutableArray array];

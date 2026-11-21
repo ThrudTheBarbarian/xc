@@ -97,6 +97,7 @@ class Parser
     Map*    _blkClassParent; // class -> parent class
     Map*    _blkClassMethods; // class -> Set of its method names (bare-call error)
     Map*    _blkClassIvarNames; // class -> Set of the ivar names its body declares (blkScanMethods)
+    Map*    _blkClassIvarAt; // class -> ivar name -> [its member's first token, its name's, the name] (blkLaterIvarType)
     String* _blkCurClass;   // the class being parsed, or 0
     u32     _blkCounter;
     String* _lastBlkName;
@@ -133,6 +134,7 @@ class Parser
         _blkClassParent = new Map();
         _blkClassMethods = new Map();
         _blkClassIvarNames = new Map();
+        _blkClassIvarAt = new Map();
         _blkCurClass = (String*)0;
         _blkCounter = (u32)0;
         _lastBlkName = (String*)0;
@@ -248,7 +250,9 @@ class Parser
     // The same walk reads the names of the class's ivars, those declared
     // after the method being parsed among them (blkIsLaterIvar): at the body's
     // own level, outside type arguments and initialisers, a name that is not a
-    // type, not after `.`, `:` or `<`, and followed by `;`, `,`, `=` or `[`.
+    // type, not after `.`, `:` or `<`, and followed by `;`, `,`, `=` or `[`;
+    // with where its member starts and where the name is, for its type
+    // (blkLaterIvarType).
     void blkScanMethods(void)
     {
         if (_blkCurClass == (String*)0) return;
@@ -262,6 +266,12 @@ class Parser
             ivars = new Set();
             _blkClassIvarNames.set((Hashable*)String.withString(_blkCurClass), (Object*)ivars);
         }
+        Map* at = (Map*)_blkClassIvarAt.get((Hashable*)_blkCurClass);
+        if (at == (Map*)0) {
+            at = new Map();
+            _blkClassIvarAt.set((Hashable*)String.withString(_blkCurClass), (Object*)at);
+        }
+        u32 member = 0;
         u32 braces = 0;
         u32 parens = 0;
         u32 angles = 0;
@@ -281,6 +291,7 @@ class Parser
                 if (braces == 0) {
                     inInit = false;
                     ivInit = false;
+                    member = i + 1;
                 }
             } else if (braces == 0) {
                 if (parens == 0 && !ivInit) {
@@ -300,6 +311,7 @@ class Parser
                 } else if (parens == 0 && ty == (u16)tokSemicolon) {
                     inInit = false;
                     ivInit = false;
+                    member = i + 1;
                 } else if (parens == 0 && ty == (u16)tokIdentifier && !inInit
                            && prev != (u16)tokDot && prev != (u16)tokColon
                            && peek(i + 1).type() == (u16)tokLParen && !Parser._same(t.value(), "since")) {
@@ -308,8 +320,16 @@ class Parser
                 if (parens == 0 && angles == 0 && !ivInit && ty == tokIdentifier
                     && prev != tokDot && prev != tokColon && prev != tokLess && !isTypeName(t.value())) {
                     u16 nx = peek(i + 1).type();
-                    if (nx == tokSemicolon || nx == tokComma || nx == tokAssign || nx == tokLBracket)
+                    if (nx == tokSemicolon || nx == tokComma || nx == tokAssign || nx == tokLBracket) {
                         ivars.add((Hashable*)String.withString(t.value()));
+                        if (at.get((Hashable*)t.value()) == (Object*)0) {
+                            Array* where = new Array();
+                            where.add((Object*)Number.with(_pos + member));
+                            where.add((Object*)Number.with(_pos + i));
+                            where.add((Object*)t);
+                            at.set((Hashable*)String.withString(t.value()), (Object*)where);
+                        }
+                    }
                 }
             }
             prev = ty;
@@ -324,6 +344,60 @@ class Parser
         if (_blkCurClass == (String*)0) return false;
         Set* ivars = (Set*)_blkClassIvarNames.get((Hashable*)_blkCurClass);
         return ivars != (Set*)0 && ivars.contains((Hashable*)name) && blkLookup(name, (u32*)0) == (Map*)0;
+    }
+
+    // The type of an ivar the class declares further down (blkIsLaterIvar),
+    // read from its declaration's tokens as the class body will read them:
+    // the member's modifiers, its type (a list of them for a tuple), and an
+    // array suffix after its name. 0 when the tokens are not the ones the
+    // class body was read from. A written par block captures the ivar with
+    // it (#513). As the reference.
+    String* blkLaterIvarType(String* name)
+    {
+        if (!blkIsLaterIvar(name)) return (String*)0;
+        Map* all = (Map*)_blkClassIvarAt.get((Hashable*)_blkCurClass);
+        Array* where = all != (Map*)0 ? (Array*)all.get((Hashable*)name) : (Array*)0;
+        if (where == (Array*)0) return (String*)0;
+        u32 from = ((Number*)where.get(0)).asU32();
+        u32 nameAt = ((Number*)where.get(1)).asU32();
+        if (nameAt >= _tokens.count() || _tokens.get(nameAt) != where.get(2)) return (String*)0;
+        u32 saved = _pos;
+        bool outlet = _lastTypeIsOutlet;
+        bool wb = _lastBlkWb;
+        String* blkName = _lastBlkName;
+        String* blkBase = _lastBlkBase;
+        Array* blkParams = _lastBlkParams;
+        String* blkRet = _lastBlkRet;
+        _pos = from;
+        while (true) {
+            u16 ty = curType();
+            if (ty == tokStatic || ty == tokFinal || ty == tokOptional || ty == tokInline
+                || ty == tokVolatile || ty == tokRegister || ty == tokGlobal)
+                advance();
+            else if (ty == tokIdentifier && Parser._same(cur().value(), "since") && checkAt(1, tokLParen)) {
+                while (!check(tokRParen) && !check(tokEOF))
+                    advance();
+                advance();
+            } else
+                break;
+        }
+        String* t = parseTypeSpelling();
+        while (check(tokComma) && (isTypeKeywordToken(peek(1).type())
+                                   || (peek(1).type() == tokIdentifier && isTypeName(peek(1).value())))) {
+            advance();
+            t.appendByte(',');
+            t.append(parseTypeSpelling());
+        }
+        _pos = nameAt + 1;
+        t = memberTypeSuffix(t);
+        _pos = saved;
+        _lastTypeIsOutlet = outlet;
+        _lastBlkWb = wb;
+        _lastBlkName = blkName;
+        _lastBlkBase = blkBase;
+        _lastBlkParams = blkParams;
+        _lastBlkRet = blkRet;
+        return t;
     }
 
     // A method of the class being parsed or of a parent (blkScanMethods).
@@ -4414,6 +4488,18 @@ class Parser
                 _error(Parser.blkSelfMsg(name));
             else if (_pfwAuto && blkIsLaterIvar(name))
                 _error(Parser.blkLaterIvarMsg(name));
+            // A written block captures an ivar the class declares further
+            // down as one declared above, with the type its declaration
+            // gives it (#513). A lifted loop stays a loop instead (above).
+            String* later = _pfwAuto ? (String*)0 : blkLaterIvarType(name);
+            if (later != (String*)0) {
+                Array* names = (Array*)pfwGet(_pfw, "names");
+                for (u32 i = 0; i < names.count(); i++)
+                    if (((String*)names.get(i)).equals(name)) return;
+                names.add((Object*)name);
+                ((Map*)pfwGet(_pfw, "types")).set((Hashable*)name, (Object*)later);
+                return;
+            }
             Array* outer = (Array*)pfwGet(_pfw, "outer");
             if (outer == (Array*)0) {
                 outer = new Array();

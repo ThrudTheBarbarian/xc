@@ -241,7 +241,9 @@ NS_ASSUME_NONNULL_BEGIN
 |* ivars, those declared after the method being parsed among them
 |* (blkIsLaterIvar): at the body's own level, outside type arguments and
 |* initialisers, a name that is not a type, not after `.`, `:` or `<`, and
-|* followed by `;`, `,`, `=` or `[`. Mirrored in the port (blkScanMethods).
+|* followed by `;`, `,`, `=` or `[`; with where its member starts and where
+|* the name is, for its type (blkLaterIvarType). Mirrored in the port
+|* (blkScanMethods).
 \****************************************************************************/
 - (void)blkScanMethodNames
     {
@@ -260,6 +262,13 @@ NS_ASSUME_NONNULL_BEGIN
     NSMutableSet* ivars = allIvars[cls];
     if (!ivars)
         allIvars[cls] = ivars = [NSMutableSet set];
+    NSMutableDictionary* allAt = self.blkState[@"classIvarAt"];
+    if (!allAt)
+        self.blkState[@"classIvarAt"] = allAt = [NSMutableDictionary dictionary];
+    NSMutableDictionary* at = allAt[cls];
+    if (!at)
+        allAt[cls] = at = [NSMutableDictionary dictionary];
+    NSUInteger member = 0;
     NSInteger braces = 0, parens = 0, angles = 0;
     BOOL inInit = NO, ivInit = NO;
     XTTokenType prev = XTTokenEOF;
@@ -276,7 +285,10 @@ NS_ASSUME_NONNULL_BEGIN
             if (braces == 0)
                 break;
             if (--braces == 0)
+                {
                 inInit = ivInit = NO;
+                member = i + 1;
+                }
             }
         else if (braces == 0)
             {
@@ -300,7 +312,10 @@ NS_ASSUME_NONNULL_BEGIN
             else if (parens == 0 && ty == XTTokenAssign)
                 inInit = ivInit = YES;
             else if (parens == 0 && ty == XTTokenSemicolon)
+                {
                 inInit = ivInit = NO;
+                member = i + 1;
+                }
             else if (parens == 0 && ty == XTTokenIdentifier && !inInit && prev != XTTokenDot && prev != XTTokenColon &&
                      [self peekToken:i + 1].type == XTTokenLParen && ![t.value isEqualToString:@"since"])
                 [own addObject:t.value];
@@ -309,7 +324,11 @@ NS_ASSUME_NONNULL_BEGIN
                 {
                 XTTokenType nx = [self peekToken:i + 1].type;
                 if (nx == XTTokenSemicolon || nx == XTTokenComma || nx == XTTokenAssign || nx == XTTokenLBracket)
+                    {
                     [ivars addObject:t.value];
+                    if (!at[t.value])
+                        at[t.value] = @[ @(self.pos + member), @(self.pos + i), t ];
+                    }
                 }
             }
         prev = ty;
@@ -322,6 +341,64 @@ NS_ASSUME_NONNULL_BEGIN
     {
     NSString* cls = self.blkState[@"curClass"];
     return cls && [self.blkState[@"classIvarNames"][cls] containsObject:name] && ![self blkLookup:name depth:NULL];
+    }
+
+// The type of an ivar the class declares further down (blkIsLaterIvar), read
+// from its declaration's tokens as the class body will read them: the
+// member's modifiers, its type, and an array suffix after its first name. Nil
+// when the tokens are not the ones the class body was read from. A written
+// par block captures the ivar with it (#513). As the port (blkLaterIvarType).
+- (nullable XTType*)blkLaterIvarType:(NSString*)name
+    {
+    if (![self blkIsLaterIvar:name])
+        return nil;
+    NSArray* at = self.blkState[@"classIvarAt"][self.blkState[@"curClass"]][name];
+    NSUInteger from = [at[0] unsignedIntegerValue], nameAt = [at[1] unsignedIntegerValue];
+    if (!at || nameAt >= self.tokens.count || self.tokens[nameAt] != at[2])
+        return nil;
+    NSUInteger saved = self.pos;
+    BOOL outlet = self.lastTypeIsOutlet, wb = self.lastTypeIsBlockWb;
+    NSString* blockName = self.lastBlockDeclName;
+    NSString* blockBase = self.lastBlockBaseName;
+    NSArray<XTParamNode*>* blockParams = self.lastBlockParams;
+    XTType* blockRet = self.lastBlockRet;
+    self.pos = from;
+    while (YES)
+        {
+        XTTokenType ty = [self currentToken].type;
+        if (ty == XTTokenStatic || ty == XTTokenFinal || ty == XTTokenOptional || ty == XTTokenInline ||
+            ty == XTTokenVolatile || ty == XTTokenRegister || ty == XTTokenGlobal)
+            [self advance];
+        else if (ty == XTTokenIdentifier && [[self currentToken].value isEqualToString:@"since"] &&
+                 [self peekToken:1].type == XTTokenLParen)
+            {
+            while (![self check:XTTokenRParen] && ![self check:XTTokenEOF])
+                [self advance];
+            [self advance];
+            }
+        else
+            break;
+        }
+    XTType* t = [self parseType];
+    if (t && [self check:XTTokenIdentifier])
+        {
+        [self advance];
+        if ([self match:XTTokenLBracket])
+            {
+            NSUInteger count = 0;
+            if (![self check:XTTokenRBracket])
+                count = [self resolveArraySizeExpr:[self parseExpression]];
+            t = [XTArrayType arrayOfType:t count:count];
+            }
+        }
+    self.pos = saved;
+    self.lastTypeIsOutlet = outlet;
+    self.lastTypeIsBlockWb = wb;
+    self.lastBlockDeclName = blockName;
+    self.lastBlockBaseName = blockBase;
+    self.lastBlockParams = blockParams;
+    self.lastBlockRet = blockRet;
+    return t;
     }
 
 // A method of the class being parsed or of a parent (blkScanMethodNames).
