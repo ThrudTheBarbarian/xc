@@ -166,6 +166,14 @@ class ElfLinkArm64
     // The merge: `objectFiles` (paths) join first and forced, archive members
     // as something needs them. Symbols land in `msyms` (data ones also in
     // `mdataSyms`), fixups in `mfix`.
+    // A C or C++ program's heap (CAlloc.xc, #326): the objects' undefined
+    // allocator references bind to the heap's names, as on x86-64.
+    Map* _redirect;
+    void setRedirect(Map* to)
+        {
+        _redirect = to;
+        }
+
     void merge(Array* objectFiles, Array* archives,
                SectionBytes* mtext, SectionBytes* mdata, Map* msyms, Array* mdataSyms, Array* mfix)
         {
@@ -200,6 +208,8 @@ class ElfLinkArm64
                 fail(String.withCString("'").appending(op).appending(String.withCString("' is not a readable aarch64 ELF object")));
                 return;
                 }
+            if (_redirect != (Map*)0)
+                o.redirectUndefined(_redirect);
             forced.set((Hashable*)Number.withU32(allObjs.count()), (Object*)Number.withU32((u32)1));
             allObjs.add((Object*)o);
             labels.add((Object*)op);
