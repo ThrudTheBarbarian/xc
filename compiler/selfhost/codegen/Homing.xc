@@ -74,6 +74,25 @@ class BitSet
         return _n;
         }
 
+    // The first member at or after i, or $FFFF_FFFF: how a walk visits the
+    // members without asking about every value (#331).
+    u32 nextFrom(u32 i)
+        {
+        while (i < _n)
+            {
+            u8 w = _bits[i >> 3];
+            if (w == (u8)0)
+                {
+                i = (i | (u32)7) + (u32)1;
+                continue;
+                }
+            if ((w & ((u8)1 << (u8)(i & (u32)7))) != (u8)0)
+                return i;
+            i = i + (u32)1;
+            }
+        return (u32)$FFFF_FFFF;
+        }
+
     void unionWith(BitSet* o)
         {
         for (u32 i = (u32)0; i < (_n >> 3) + (u32)1; i = i + (u32)1)
@@ -577,10 +596,8 @@ class BitSet
             {
             u32 be = (u32)2 * ((Number*)_blkEnd.get(bi)).asU32() + (u32)2;
             BitSet* lo = (BitSet*)_liveOut.get(bi);
-            for (u32 v = (u32)0; v < _nv; v = v + (u32)1)
+            for (u32 v = lo.nextFrom((u32)0); v < _nv; v = lo.nextFrom(v + (u32)1))
                 {
-                if (!lo.has(v))
-                    continue;
                 Object* cur = endByVal.get(v);
                 if (cur == 0 || be > ((Number*)cur).asU32())
                     endByVal.set(v, (Object*)Number.with(be));
@@ -685,6 +702,28 @@ class BitSet
             blkS[bi] = ((Number*)_blkStart.get(bi)).asU32();
             blkE[bi] = ((Number*)_blkEnd.get(bi)).asU32();
             }
+        // Each value's live-in blocks, in block order, gathered from the sets
+        // once; and the block holding each position (the blocks' positions run
+        // in order and do not overlap). The loop below visits only a value's
+        // live-in blocks and the one it is defined in, where it asked every
+        // block about every value (#331).
+        Array* inBlocks = new Array();
+        for (u32 v = (u32)0; v < _nv; v = v + (u32)1)
+            inBlocks.add((Object*)0);
+        for (u32 bi = (u32)0; bi < _nb; bi = bi + (u32)1)
+            {
+            BitSet* li = (BitSet*)_liveIn.get(bi);
+            for (u32 v = li.nextFrom((u32)0); v < _nv; v = li.nextFrom(v + (u32)1))
+                {
+                Array* l = (Array*)inBlocks.get(v);
+                if (l == (Array*)0)
+                    {
+                    l = new Array();
+                    inBlocks.set(v, (Object*)l);
+                    }
+                l.add((Object*)Number.with(bi));
+                }
+            }
         for (u32 v = (u32)0; v < _nv; v = v + (u32)1)
             {
             _related.add((Object*)0);
@@ -699,8 +738,42 @@ class BitSet
             Object* dpo = _defPos.get(v);
             bool hasDef = dpo != 0;
             u32 dp = hasDef ? ((Number*)dpo).asU32() : (u32)0;
-            for (u32 bi = (u32)0; bi < _nb; bi = bi + (u32)1)
+            // The block the definition is in, if any: block starts never
+            // decrease, so it is the last block starting at or before dp, when
+            // that block's range holds dp (an empty block's holds nothing).
+            u32 defBlk = (u32)$FFFF_FFFF;
+            if (hasDef && _nb > (u32)0 && blkS[0] <= dp)
                 {
+                u32 lo = (u32)0;
+                u32 hi = _nb - (u32)1;
+                while (lo < hi)
+                    {
+                    u32 mid = lo + (hi - lo + (u32)1) / (u32)2;
+                    if (blkS[mid] <= dp)
+                        lo = mid;
+                    else
+                        hi = mid - (u32)1;
+                    }
+                if (dp <= blkE[lo] && blkE[lo] + (u32)1 > blkS[lo])
+                    defBlk = lo;
+                }
+            Array* il = (Array*)inBlocks.get(v);
+            u32 ilN = il == (Array*)0 ? (u32)0 : il.count();
+            u32 ii = (u32)0;
+            bool defDone = defBlk == (u32)$FFFF_FFFF;
+            while (ii < ilN || !defDone)
+                {
+                u32 nextIn = ii < ilN ? ((Number*)il.get(ii)).asU32() : (u32)$FFFF_FFFF;
+                u32 bi = nextIn;
+                if (!defDone && defBlk <= nextIn)
+                    {
+                    bi = defBlk;
+                    defDone = true;
+                    if (defBlk == nextIn)
+                        ii = ii + (u32)1;
+                    }
+                else
+                    ii = ii + (u32)1;
                 u32 bs = blkS[bi];
                 u32 be = blkE[bi];
                 bool inL = ((BitSet*)_liveIn.get(bi)).has(v);
