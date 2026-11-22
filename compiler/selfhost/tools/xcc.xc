@@ -749,6 +749,10 @@ bool linksXcLibrary(DriverOptions* d)
     return false;
 }
 
+// Whether a linked object took libRuntimeSupport, not libRuntime (#278):
+// set while the objects' .deplibs are read (objectLinkDeps).
+bool gObjWantRuntimeSupport; // …and it is libRuntimeSupport (#278)
+
 // libRuntime (owner, 2026-11-03): the runtime's files, prebuilt per target
 // as one shared library, at <support>/runtime-lib/<row>/libRuntime.<ext>
 // (lib/xc/runtime-lib/... in an install). Building it (--emit-runtime): the
@@ -823,8 +827,10 @@ void resolveRuntimeLib(DriverOptions* d)
     // Its stub is then read with no platform prelude. An object (-c) keeps
     // libRuntime, as any other object of the program may, and so does a
     // program that links an xc library (linksXcLibrary).
-    bool support = !d.compileOnly() && d.fe().input() != (String*)0
-                   && Languages.forFile(d.fe().input()) != (LanguageRow*)0 && !linksXcLibrary(d);
+    // …or an object link whose C or C++ objects took it (their .deplibs).
+    bool support = !d.compileOnly() && !linksXcLibrary(d)
+                   && ((d.fe().input() != (String*)0 && Languages.forFile(d.fe().input()) != (LanguageRow*)0)
+                       || gObjWantRuntimeSupport);
     for (u32 pass = (u32)0; pass < (u32)2; pass = pass + (u32)1) {
     if (pass == (u32)0 && !support) continue;
     for (u32 i = (u32)0; exts != (Array*)0 && i < exts.count(); i = i + (u32)1) {
@@ -4722,7 +4728,13 @@ bool addObjectDepLibs(DriverOptions* d)
         for (u32 k = (u32)0; dl != (Array*)0 && k < dl.count(); k = k + (u32)1) {
             String* nm = (String*)dl.get(k);
             any = true;
-            if (nm.equals(String.withCString("Runtime"))) { wantRt = true; gObjWantRuntime = true; continue; }
+            // libRuntime, or the libRuntimeSupport a C or C++ object took (#278):
+            // either way the program's runtime is the library's.
+            if (nm.equals(String.withCString("Runtime")) || nm.equals(String.withCString("RuntimeSupport"))) {
+                wantRt = true; gObjWantRuntime = true;
+                if (nm.equals(String.withCString("RuntimeSupport"))) gObjWantRuntimeSupport = true;
+                continue;
+            }
             String* li = String.withCString("-l").appending(nm);
             bool have = false;
             for (u32 q = (u32)0; q < d.linkInputs().count(); q = q + (u32)1)
