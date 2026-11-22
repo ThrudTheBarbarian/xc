@@ -5700,6 +5700,7 @@ void xccMain(void)
         // …and with no loop lifted, the par runtime the C path lowered goes
         // (#278): the program keeps libc's allocator and none of the runtime.
         optSetDropBase(!gCSplitRelocatable && !d.keepAsm() && !d.compileOnly());
+        cPathSetDropBase(!gCSplitRelocatable && !d.keepAsm() && !d.compileOnly());
         // The class-name root stays for an object or archive the command line
         // joins (bug 605), not for the language's own libraries (libc++'s
         // archive), which addLanguageLibs adds below.

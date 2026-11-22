@@ -133,6 +133,11 @@ void cPathSetElf(bool b) { gCPathElf = b; }
 // carries CAlloc.xc, which the link turns on (x86-64 glibc, macOS).
 bool gCPathHeap;
 void cPathSetHeap(bool b) { gCPathHeap = b; }
+// Whether this build drops the runtime stub when no loop is lifted: a linked
+// program, not an object (-c), an assembly listing or a relocatable split
+// part, which another object's lifted loop may still need (#278).
+bool gCPathDropBase;
+void cPathSetDropBase(bool b) { gCPathDropBase = b; }
 // The source's row of the language table (Language.xc): the command that
 // writes its LLVM IR, and which functions xcc takes. 0: C's.
 LanguageRow* gCPathLang;
@@ -169,6 +174,62 @@ class CPath
     u8 _unused;
 
     // One argument quoted for the shell system() runs (External.quote).
+    // Whether LLVM IR text has a loop in any function (#278): only then can
+    // the outliner lift one, so only then is the par runtime's stub read in.
+    // In any order of a function's blocks a cycle has an edge back to a block
+    // at or before its own, so a loop is exactly a branch to a label already
+    // seen in that function. (A function's entry block cannot be a target.)
+    static bool irHasLoop(String* ll)
+    {
+        Array* lines = ll.splitOnByte((u8)10);
+        Set* seen = (Set*)0;
+        for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1)
+        {
+            String* l = (String*)lines.get(i);
+            u32 n = l.byteLength();
+            if (l.hasPrefix(String.withCString("define ")))
+            {
+                seen = new Set();
+                continue;
+            }
+            if (seen == (Set*)0)
+                continue;
+            if (n == (u32)1 && l.byteAt((u32)0) == (u8)'}')
+            {
+                seen = (Set*)0;
+                continue;
+            }
+            // A block label: `name:` at the start of the line.
+            u32 k = (u32)0;
+            while (k < n && CPath.labelChar(l.byteAt(k)))
+                k = k + (u32)1;
+            if (k > (u32)0 && k < n && l.byteAt(k) == (u8)':')
+            {
+                seen.add((Hashable*)l.substringBytes((u32)0, k));
+                continue;
+            }
+            // Every `label %name` the line branches to.
+            u32 at = l.byteIndexOf(String.withCString("label %"));
+            while (at != String.notFound())
+            {
+                u32 b = at + (u32)7;
+                u32 e = b;
+                while (e < n && CPath.labelChar(l.byteAt(e)))
+                    e = e + (u32)1;
+                if (e > b && seen.contains((Hashable*)l.substringBytes(b, e - b)))
+                    return true;
+                at = l.byteIndexOf(String.withCString("label %"), e);
+            }
+        }
+        return false;
+    }
+
+    static bool labelChar(u8 c)
+    {
+        return (c >= (u8)'a' && c <= (u8)'z') || (c >= (u8)'A' && c <= (u8)'Z') || (c >= (u8)'0' && c <= (u8)'9')
+            || c == (u8)'_' || c == (u8)'.' || c == (u8)'$' || c == (u8)'-';
+    }
+
     static String* quoted(String* a)
         {
         return External.quote(a);   // the one quoting rule (#337)
@@ -549,6 +610,13 @@ class CPath
         if (Platform.env(String.withCString("XC_C_CABI")).byteLength() > (u32)0)
             r.setCabiAll(true);
         IRModule* m = (IRModule*)0;
+        // No loop, nothing to lift: the program is the C file's own code, with
+        // no runtime stub to lower and then drop (#278). The C heap's
+        // allocator (CAlloc) goes with the stub, as it did when the optimiser
+        // dropped an unused one: the program keeps libc's. Only where the
+        // optimiser would drop the stub anyway (gCPathDropBase).
+        if (fe != (FeOptions*)0 && gCPathDropBase && !CPath.irHasLoop(readText))
+            fe = (FeOptions*)0;
         if (fe != (FeOptions*)0)
             {
             String* stub = String.withString(scratch);
