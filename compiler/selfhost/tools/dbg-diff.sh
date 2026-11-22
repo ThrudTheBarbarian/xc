@@ -44,9 +44,9 @@ TOOL=${XC_TOOL_XCC:-$BIN/xcc}
 
 echo "building the port's back ends and linkers (xtc → native host binaries)…"
 "$TOOL" -O2 -A $XC_HOST_ARCH -H . -o "$WORK/xtcga64" selfhost/tools/xtcga64.xc \
-    -I selfhost/ir -I selfhost/defs -I selfhost/opt -I selfhost/codegen > "$WORK/b1.log" 2>&1 &
+    -I selfhost/ir -I selfhost/defs -I selfhost/opt -I selfhost/codegen -I selfhost/asm > "$WORK/b1.log" 2>&1 &
 "$TOOL" -O2 -A $XC_HOST_ARCH -H . -o "$WORK/xtcgx86" selfhost/tools/xtcgx86.xc \
-    -I selfhost/ir -I selfhost/defs -I selfhost/opt -I selfhost/codegen > "$WORK/b2.log" 2>&1 &
+    -I selfhost/ir -I selfhost/defs -I selfhost/opt -I selfhost/codegen -I selfhost/asm > "$WORK/b2.log" 2>&1 &
 "$TOOL" -O2 -A $XC_HOST_ARCH -H . -DXCC_VERSION="\"$VERSION\"" -o "$WORK/xtld64" \
     selfhost/tools/xtld64.xc -I selfhost/asm -I selfhost/defs > "$WORK/b3.log" 2>&1 &
 "$TOOL" -O2 -A $XC_HOST_ARCH -H . -DXCC_VERSION="\"$VERSION\"" -o "$WORK/xtldx86" \
