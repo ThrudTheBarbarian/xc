@@ -2014,6 +2014,15 @@ class LlvmReader
                 fail("a cast not read");
                 return;
                 }
+            // `sext i1 %b`: all ones when b is true (libstdc++'s deque counts
+            // its nodes with one), 0 - zext(b); a Bool's SExt widened 1.
+            if (cast.equals(String.withCString("SExt")) && a.ty().equals(String.withCString("Bool")))
+                {
+                IRValue* z = emit(String.withCString("ZExt"), t, IROperand.useVal(a), (IROperand*)0, (IROperand*)0);
+                IRValue* zero = emit(String.withCString("Const"), t, IROperand.immI((i64)0, t), (IROperand*)0, (IROperand*)0);
+                define(res, String.withCString("Sub"), t, IROperand.useVal(zero), IROperand.useVal(z), (IROperand*)0, (String*)0);
+                return;
+                }
             // C's integers are read as signed types, and a back end widens
             // an I8 or I16 by the extension its type implies (a byte loaded
             // sign-extended stays so): C's zext of one is the widening with

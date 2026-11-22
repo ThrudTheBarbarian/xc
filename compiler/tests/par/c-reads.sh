@@ -8,7 +8,8 @@
 # corpus's strings.cpp has one).
 #
 # tests/par/c-reads/reads.c: xcc builds it with no function left to clang,
-# and it gives clang's output. Skipped without clang.
+# and it gives clang's output. sext.c, read from clang's optimised IR, has a
+# `sext i1` (all ones when true). Skipped without clang.
 #
 #   bash tests/par/c-reads.sh
 set -u
@@ -29,5 +30,14 @@ for O in -O0 -O2; do
         echo "FAIL c-reads $O: functions left to clang:"; grep 'because of' "$W/b" | head -4; fail=1
     fi
 done
+# sext.c through clang's optimised IR (XC_C_LL), where `x ? -1 : 0` is
+# `sext i1`: all ones, not 1.
+G=tests/par/c-reads/sext.c
+clang -O2 -o "$W/sref" "$G" && clang -O1 -S -emit-llvm -fno-discard-value-names -o "$W/sext.ll" "$G" \
+    || { echo "FAIL c-reads: clang does not build sext.c"; exit 1; }
+grep -q 'sext i1' "$W/sext.ll" || { echo "FAIL c-reads: clang's IR for sext.c has no sext i1"; fail=1; }
+XC_C_LL="$W/sext.ll" XC_C_TRACE=1 "$XC" -q -O2 -H . -o "$W/sx" "$G" > "$W/sb" 2>&1 || { echo "FAIL c-reads: sext.c does not build"; head -3 "$W/sb"; fail=1; }
+[ -x "$W/sx" ] && { [ "$("$W/sx")" = "$("$W/sref")" ] || { echo "FAIL c-reads: sext.c gives '$("$W/sx")', clang's '$("$W/sref")'"; fail=1; }; }
+grep -q 'left to clang' "$W/sb" && { echo "FAIL c-reads: sext.c left to clang:"; grep 'because of' "$W/sb" | head -2; fail=1; }
 [ $fail = 0 ] && echo "--- c-reads: pass ---" || echo "--- c-reads: FAIL ---"
 exit $fail
