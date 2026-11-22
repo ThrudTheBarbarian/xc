@@ -32,6 +32,7 @@
 #import "IrDefs.xc"
 #import <CgCommon>
 #import <Homing>
+#import <SortStable>
 
 // C and C++ input (the driver sets it): each function's callee saves go out
 // as `.xc_saves`, from which the assembler builds the unwind tables a C++
@@ -5192,21 +5193,17 @@ class Arm64
     static void sortByStart(Array* a, Map* key) { sortByKey(a, key); }
     static void sortByEnd(Array* a, Map* key)   { sortByKey(a, key); }
 
-    // Insertion sort on the interval endpoint. Stable, and the arrays here are
-    // a handful of entries.
+    // Stable sort on the interval endpoint, n log n (#540; it was an insertion
+    // sort). Each key is read once and offset by 2^31, so the unsigned order
+    // of the offset keys is the signed order of the endpoints.
     static void sortByKey(Array* a, Map* key)
     {
-        for (u32 i = (u32)1; i < a.count(); i = i + (u32)1) {
-            Object* cur = a.get(i);
-            i32 ck = ((Number*)key.get((Hashable*)(IRValue*)cur)).asI32();
-            u32 j = i;
-            while (j > (u32)0
-                && ((Number*)key.get((Hashable*)(IRValue*)a.get(j - (u32)1))).asI32() > ck) {
-                a.set(j, a.get(j - (u32)1));
-                j = j - (u32)1;
-            }
-            a.set(j, cur);
+        Array* keys = new Array();
+        for (u32 i = 0; i < a.count(); i = i + 1) {
+            i32 k = ((Number*)key.get((Hashable*)(IRValue*)a.get(i))).asI32();
+            keys.add((Object*)Number.withU32((u32)k ^ (u32)$80000000));
         }
+        SortStable.byU32(a, keys);
     }
 
     // ── Floating point ───────────────────────────────────────────────────
@@ -10217,41 +10214,6 @@ class Arm64
             seeUses(all, seen, blockInsns((IRBlock*)fn.blocks().get(b)));
     }
 
-    void collectFreshKeys(Array* fresh, IRFunc* fn, Array* known)
-    {
-        for (u32 i = (u32)0; i < fn.params().count(); i = i + (u32)1)
-            noteFreshKey(fresh, known, (IRValue*)fn.params().get(i));
-        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1) {
-            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
-            freshKeysIn(fresh, known, bb.phis());
-            freshKeysIn(fresh, known, bb.insns());
-            if (bb.term() != (IRInsn*)0) freshKeysOne(fresh, known, bb.term());
-        }
-    }
-
-    void freshKeysIn(Array* fresh, Array* known, Array* list)
-    {
-        for (u32 i = (u32)0; i < list.count(); i = i + (u32)1)
-            freshKeysOne(fresh, known, (IRInsn*)list.get(i));
-    }
-
-    void freshKeysOne(Array* fresh, Array* known, IRInsn* n)
-    {
-        noteFreshKey(fresh, known, n.res());
-        noteFreshKey(fresh, known, n.memRes());
-        for (u32 i = (u32)0; i < n.ops().count(); i = i + (u32)1) {
-            IROperand* o = (IROperand*)n.ops().get(i);
-            if (o.kind() == (u8)OPK_USE) noteFreshKey(fresh, known, o.val());
-        }
-    }
-
-    static void noteFreshKey(Array* fresh, Array* known, IRValue* v)
-    {
-        if (v == (IRValue*)0) return;
-        if (hasVal(known, v) || hasVal(fresh, v)) return;
-        fresh.add((Object*)v);
-    }
-
     void collectFrom(Array* all, Array* list)
     {
         for (u32 i = (u32)0; i < list.count(); i = i + (u32)1)
@@ -11225,21 +11187,52 @@ class Arm64
         }
     }
 
-    // Stable insertion sort by interval start. The STABILITY is what supplies
-    // the original's tie-break: it orders equal starts by value id, and this
-    // array is built in exactly that sequence.
+    // Stable sort by interval start. The STABILITY is what supplies the
+    // original's tie-break: it orders equal starts by value id, and this array
+    // is built in exactly that sequence. A bottom-up merge sort of the indices
+    // with each start read once (#540; it was an insertion sort): the right
+    // run's element goes first only when its start is strictly earlier.
     void sortByIntervalStart(Array* a)
     {
-        for (u32 i = (u32)1; i < a.count(); i = i + (u32)1) {
-            IRValue* v = (IRValue*)a.get(i);
-            i32 s = startOf(v);
-            u32 j = i;
-            while (j > (u32)0 && startOf((IRValue*)a.get(j - (u32)1)) > s) {
-                a.set(j, a.get(j - (u32)1));
-                j = j - (u32)1;
-            }
-            a.set(j, (Object*)v);
+        u32 n = a.count();
+        if (n < 2) return;
+        i32* key = new i32[n];
+        u32* src = new u32[n];
+        u32* dst = new u32[n];
+        for (u32 i = 0; i < n; i = i + 1) {
+            key[i] = startOf((IRValue*)a.get(i));
+            src[i] = i;
         }
+        u32 width = 1;
+        while (width < n) {
+            u32 lo = 0;
+            while (lo < n) {
+                u32 mid = lo + width < n ? lo + width : n;
+                u32 hi = mid + width < n ? mid + width : n;
+                u32 x = lo;
+                u32 y = mid;
+                for (u32 k = lo; k < hi; k = k + 1) {
+                    if (x >= mid || (y < hi && key[src[y]] < key[src[x]])) {
+                        dst[k] = src[y];
+                        y = y + 1;
+                    } else {
+                        dst[k] = src[x];
+                        x = x + 1;
+                    }
+                }
+                lo = hi;
+            }
+            u32* t = src; src = dst; dst = t;
+            width = width + width;
+        }
+        Array* orig = new Array();
+        for (u32 i = 0; i < n; i = i + 1)
+            orig.add(a.get(i));
+        for (u32 i = 0; i < n; i = i + 1)
+            a.set(i, orig.get(src[i]));
+        delete src;
+        delete dst;
+        delete key;
     }
 
     // The width a value occupies in the frame: 8, or a whole number of 8s for
@@ -11978,36 +11971,6 @@ class Arm64
                 if (o.kind() == (u8)OPK_USE) seeVal(into, seen, o.val());
             }
         }
-    }
-
-    void collectFresh(Array* into, Array* vals)
-    {
-        for (u32 i = (u32)0; i < vals.count(); i = i + (u32)1)
-            noteFresh(into, (IRValue*)vals.get(i));
-    }
-
-    void collectFreshInsns(Array* into, Array* list)
-    {
-        for (u32 i = (u32)0; i < list.count(); i = i + (u32)1)
-            collectFreshInsn(into, (IRInsn*)list.get(i));
-    }
-
-    void collectFreshInsn(Array* into, IRInsn* n)
-    {
-        noteFresh(into, n.res());
-        noteFresh(into, n.memRes());
-        for (u32 i = (u32)0; i < n.ops().count(); i = i + (u32)1) {
-            IROperand* o = (IROperand*)n.ops().get(i);
-            if (o.kind() == (u8)OPK_USE) noteFresh(into, o.val());
-        }
-    }
-
-    void noteFresh(Array* into, IRValue* v)
-    {
-        if (v == (IRValue*)0) return;
-        if (_slot.get((Hashable*)v) != (Object*)0) return;
-        if (hasVal(into, v)) return;
-        into.add((Object*)v);
     }
 
     u32 slotsFor(Array* vals, u32 cur)

@@ -30,6 +30,7 @@
 #import "IrDefs.xc"
 #import <CgCommon>
 #import <Homing>
+#import <SortStable>
 
 // C/C++ input (the driver sets it): after each prologue, where the frame keeps
 // rbp, the return address and each callee-saved register, as `.xc_saves`,
@@ -3672,20 +3673,18 @@ class X86_64
         sortByKey(a, key);
         }
 
+    // Stable sort on the interval endpoint, n log n (#540; it was an insertion
+    // sort). Each key is read once and offset by 2^31, so the unsigned order
+    // of the offset keys is the signed order of the endpoints.
     static void sortByKey(Array* a, Map* key)
         {
-        for (u32 i = (u32)1; i < a.count(); i = i + (u32)1)
+        Array* keys = new Array();
+        for (u32 i = 0; i < a.count(); i = i + 1)
             {
-            Object* cur = a.get(i);
-            i32 ck = ((Number*)key.get((Hashable*)(IRValue*)cur)).asI32();
-            u32 j = i;
-            while (j > (u32)0 && ((Number*)key.get((Hashable*)(IRValue*)a.get(j - (u32)1))).asI32() > ck)
-                {
-                a.set(j, a.get(j - (u32)1));
-                j = j - (u32)1;
-                }
-            a.set(j, cur);
+            i32 k = ((Number*)key.get((Hashable*)(IRValue*)a.get(i))).asI32();
+            keys.add((Object*)Number.withU32((u32)k ^ (u32)$80000000));
             }
+        SortStable.byU32(a, keys);
         }
 
     // ── Aggregate returns ────────────────────────────────────────────────

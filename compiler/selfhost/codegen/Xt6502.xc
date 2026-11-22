@@ -716,11 +716,23 @@ class Xt6502
         return r;
     }
 
+    // b's index in fn's blocks, or -1. Each block remembers the index it was
+    // last given (IRBlock.bix), checked before it is trusted; when it is stale
+    // the blocks are numbered again (#540; this was a scan per successor per
+    // liveness round).
     i32 blockIndexOf(IRFunc* fn, IRBlock* b)
     {
-        for (u32 i = (u32)0; i < fn.blocks().count(); i = i + (u32)1)
-            if ((IRBlock*)fn.blocks().get(i) == b) return (i32)i;
-        return (i32)-1;
+        if (b == (IRBlock*)0) return -1;
+        Array* bs = fn.blocks();
+        u32 n = bs.count();
+        u32 i = b.bix();
+        if (i < n && (IRBlock*)bs.get(i) == b) return (i32)i;
+        // Last to first, so a block listed twice answers its first place.
+        for (u32 k = n; k > 0; k = k - 1)
+            ((IRBlock*)bs.get(k - 1)).setBix(k - 1);
+        i = b.bix();
+        if (i < n && (IRBlock*)bs.get(i) == b) return (i32)i;
+        return -1;
     }
 
     static void addVal(Array* a, IRValue* v)
