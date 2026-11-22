@@ -1234,6 +1234,14 @@ class IrParser
             blk.addPhi(insn);
             return;
             }
+        // No front end makes an IndirectBranch and no back end lowers one, so
+        // IR text that has one is refused (#435): placed as an ordinary
+        // instruction it left its block with no terminator.
+        if (oc == opIndirectBranch)
+            {
+            giveUpAt("IndirectBranch is not supported");
+            return;
+            }
         if (IrParser.isTerminator(oc))
             {
             blk.setTerm(insn);
@@ -1242,11 +1250,9 @@ class IrParser
         blk.add(insn);
         }
 
-    // Every terminator but IndirectBranch, which this parser places as an
-    // ordinary instruction.
     static bool isTerminator(u16 oc)
         {
-        return IROp.has(oc, OPF_TERM) && oc != opIndirectBranch;
+        return IROp.has(oc, OPF_TERM);
         }
 
     void operands(IRInsn* insn, u16 oc)

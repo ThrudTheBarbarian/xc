@@ -337,10 +337,10 @@
         return !licmIsTerminator(oc);
         }
 
-    // Not Invoke or Resume.
+    // Every terminator, Invoke and Resume included (#435).
     final bool licmIsTerminator(u16 oc)
         {
-        return IROp.has(oc, OPF_TERM) && oc != opInvoke && oc != opResume;
+        return IROp.has(oc, OPF_TERM);
         }
 
     // Clobbers the caller-saved registers: every call and dispatch, and the
