@@ -94,6 +94,8 @@ class FeOptions
     Array* _runtimeMembers;
     String* _runtimeLibDir;
     String* _runtimeLibFile;
+    bool _runtimeAllStd;        // building libRuntimeSupport (#278)
+    bool _noPlatformPrelude;    // ...and a C program's stub that takes it
     // …and whether it is `-c` in particular: an object without `main` leaves
     // the class-name root (`_xtc_class_new`) to the module that has it.
     bool _compileOnly;
@@ -123,6 +125,8 @@ class FeOptions
         _runtimeMembers = (Array*)0;
         _runtimeLibDir = (String*)0;
         _runtimeLibFile = (String*)0;
+        _runtimeAllStd = false;
+        _noPlatformPrelude = false;
         _emitLib = false;
         _compileOnly = false;
         _classTable = (String*)0;
@@ -303,6 +307,26 @@ class FeOptions
     void setRuntimeLibFile(String* f)
         {
         _runtimeLibFile = f;
+        }
+    // libRuntimeSupport (#278): the par runtime with every standard-library
+    // file it reaches as its own, for the LLVM-IR languages. Built and taken
+    // with no platform prelude, whose files would otherwise be read as source
+    // ahead of the library.
+    bool runtimeAllStd(void)
+        {
+        return _runtimeAllStd;
+        }
+    void setRuntimeAllStd(bool b)
+        {
+        _runtimeAllStd = b;
+        }
+    bool noPlatformPrelude(void)
+        {
+        return _noPlatformPrelude;
+        }
+    void setNoPlatformPrelude(bool b)
+        {
+        _noPlatformPrelude = b;
         }
     bool compileOnly(void)
         {
@@ -2587,11 +2611,19 @@ Preprocessor* buildPP(FeOptions* o)
     // imports the target's prebuilt one first of all, so what it provides is
     // never read as source after it (an explicit #import "Par.xc" included).
     if (o.runtimeMembers() != (Array*)0)
+        {
         pp.setRuntimeMembers(o.runtimeMembers());
+        pp.setRuntimeAllStd(o.runtimeAllStd());
+        }
     else if (o.runtimeLibDir() != (String*)0)
         {
         pp.addLibraryPath(o.runtimeLibDir());
         pp.offerRuntime(IfaceImport.providesOf(o.runtimeLibFile()));
+        // `libRuntimeSupport.dylib` is imported as <RuntimeSupport>.
+        String* base = o.runtimeLibFile().lastPathComponent();
+        u32 dot = base.byteIndexOf(String.withCString("."));
+        if (base.hasPrefix(String.withCString("lib")) && dot != String.notFound() && dot > (u32)3)
+            pp.setRuntimeName(base.substringBytes((u32)3, dot - (u32)3));
         }
     // macOS and iOS: `#import <F>` may name a system framework.
     // On exactly when the row names an Apple SDK (the reference says why).
@@ -2644,7 +2676,7 @@ Preprocessor* buildPP(FeOptions* o)
     // The target's implicit platform header, when it has one. win64's declares
     // the Win32 entry points a program reaches the native API through; a target
     // without one simply skips it rather than failing every compile.
-    if (hasPlatformPrelude(o))
+    if (hasPlatformPrelude(o) && !o.noPlatformPrelude())
         pp.setPrelude(String.withCString("Platform.xc"));
     // A -D on the command line comes LAST, so it wins over the target's own.
     for (u32 i = (u32)0; i < o.defs().count(); i = i + (u32)1)

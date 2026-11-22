@@ -283,7 +283,9 @@ $(XCC_XC_BIN): $(XTC_BIN) $(XCC_XC_SRC) $(wildcard selfhost/*/*.xc) \
 # one shared library per target, which every program the target's xcc builds
 # links: support/runtime-lib/<row>/libRuntime.<ext> here, lib/xc/runtime-lib/
 # in an install. Built by this tree's compiler from support/generic/lib/Par.xc
-# with Runtime.list's files. RUNTIME_ROWS: the targets — on a Mac its own and
+# with Runtime.list's files. Beside it, libRuntimeSupport (#278): the same
+# runtime with every standard-library file it reaches, which the C and C++
+# (LLVM-IR language) programs link, so they compile none of it. RUNTIME_ROWS: the targets — on a Mac its own and
 # the Linux rows (cross-built); elsewhere the Linux rows (a macOS libRuntime
 # needs the SDK's Metal and CoreFoundation).
 ifeq ($(UNAME_S),Darwin)
@@ -299,6 +301,9 @@ runtime-libs: $(XCC_XC_BIN)
 	    echo "  xc   libRuntime for $$r"; \
 	    $(XCC_XC_BIN) -q -O2 -A $$r -H . --par-style=cpu --emit-runtime support/generic/lib/Par.xc \
 	        -o support/runtime-lib/$$r/libRuntime.$$e || exit 1; \
+	    echo "  xc   libRuntimeSupport for $$r"; \
+	    $(XCC_XC_BIN) -q -O2 -A $$r -H . --par-style=cpu --emit-runtime-support support/generic/lib/Par.xc \
+	        -o support/runtime-lib/$$r/libRuntimeSupport.$$e || exit 1; \
 	done
 
 # The one-unit build of stage 2, kept as a check on the split one. The two are
@@ -639,7 +644,8 @@ install: $(SHIP_OSX)
 	@# and is cached) kills the next process with SIGKILL.
 	@for d in support/runtime-lib/*/; do [ -d "$$d" ] || continue; r=$$(basename $$d); \
 		mkdir -p "$(XCDIR)/runtime-lib/$$r"; \
-		for f in $$d/libRuntime.*; do \
+		for f in $$d/libRuntime.* $$d/libRuntimeSupport.*; do \
+			[ -f "$$f" ] || continue; \
 			b=$$(basename $$f); \
 			if ! cmp -s $$f "$(XCDIR)/runtime-lib/$$r/$$b" 2>/dev/null; then \
 				$(CP) $$f "$(XCDIR)/runtime-lib/$$r/$$b.new" && mv -f "$(XCDIR)/runtime-lib/$$r/$$b.new" "$(XCDIR)/runtime-lib/$$r/$$b"; \
@@ -1572,9 +1578,13 @@ done
 @# programs with the runtime compiled in, slowly, and say nothing.
 @if ! ls support/runtime-lib/*/libRuntime.* > /dev/null 2>&1; then \
 	echo "dist($(1)): no libRuntime in support/runtime-lib — run make runtime-libs first"; exit 1; fi
+@# …and libRuntimeSupport beside each, which the C and C++ programs link (#278).
+@for d in support/runtime-lib/*/; do ls $$d/libRuntimeSupport.* > /dev/null 2>&1 || { \
+	echo "dist($(1)): no libRuntimeSupport in $$d — run make runtime-libs first"; exit 1; }; done
 @for d in support/runtime-lib/*/; do r=$$(basename $$d); \
 	mkdir -p $(DIST_STAGE)/xcc-$(1)-$(VERSION)/lib/xc/runtime-lib/$$r; \
-	$(CP) $$d/libRuntime.* $(DIST_STAGE)/xcc-$(1)-$(VERSION)/lib/xc/runtime-lib/$$r/ || exit 1; done
+	$(CP) $$d/libRuntime.* $(DIST_STAGE)/xcc-$(1)-$(VERSION)/lib/xc/runtime-lib/$$r/ || exit 1; \
+	$(CP) $$d/libRuntimeSupport.* $(DIST_STAGE)/xcc-$(1)-$(VERSION)/lib/xc/runtime-lib/$$r/ || exit 1; done
 @# The GPLv3 text travels with the binaries. The runtime exception,
 @# lib/xc/COPYING.RUNTIME, is already there via SUPPORT_SRCS.
 @$(CP) ../COPYING $(DIST_STAGE)/xcc-$(1)-$(VERSION)/COPYING

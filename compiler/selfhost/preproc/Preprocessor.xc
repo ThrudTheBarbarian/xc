@@ -136,6 +136,8 @@ class IfFrame
     Set* _runtimeFiles;   // of String@ — those files' keys and #line spellings (library code all the same)
     Set* _provided;       // of String@ — names an imported library provides
     Set* _runtimeOffer;   // of String@ — what the target's prebuilt libRuntime provides, before it is taken
+    bool _runtimeAllStd;  // building libRuntimeSupport: every standard-library file is a member (#278)
+    String* _runtimeName; // the prebuilt runtime library a program takes: Runtime, or RuntimeSupport
     bool _runtimeTaken;   // …and whether this unit has imported it (at the first file it provides)
     callback _providesOf Array*(String* lib);
     // Each standard-library file's name within its directory -> both of its
@@ -182,6 +184,8 @@ class IfFrame
         _runtimeFiles = new Set();
         _provided = new Set();
         _runtimeOffer = new Set();
+        _runtimeAllStd = false;
+        _runtimeName = String.withCString("Runtime");
         _runtimeTaken = false;
         _providesOf = (callback Array*(String* lib))0;
         _definesOf = (callback Array*(String* lib))0;
@@ -486,6 +490,30 @@ class IfFrame
         {
         for (u32 i = (u32)0; names != (Array*)0 && i < names.count(); i = i + (u32)1)
             _runtimeOffer.add((Hashable*)names.get(i));
+        }
+
+    // Building libRuntimeSupport (#278): every standard-library file the unit
+    // reaches is the module's own, but ParSoftFloat.xc, whose bodies a GPU
+    // kernel inlines and which a program therefore compiles as source.
+    void setRuntimeAllStd(bool b)
+        {
+        _runtimeAllStd = b;
+        }
+
+    // The standard-library files libRuntimeSupport leaves as source, which a
+    // program compiles itself: ParSoftFloat.xc, whose bodies a GPU kernel
+    // inlines, and Url.xc, whose fetch takes a block, a type an interface
+    // cannot carry yet.
+    static bool keepAsSource(String* nm)
+        {
+        return nm.equals(String.withCString("ParSoftFloat.xc")) || nm.equals(String.withCString("Url.xc"));
+        }
+
+    // Which prebuilt runtime a program takes when it imports one of its files
+    // (`import <Runtime>` or `import <RuntimeSupport>`).
+    void setRuntimeName(String* n)
+        {
+        _runtimeName = n;
         }
 
     // Building libRuntime: these standard-library files are the module's own.
@@ -2198,15 +2226,20 @@ class IfFrame
                         if (!_runtimeTaken && _runtimeOffer.contains((Hashable*)nm))
                             {
                             _runtimeTaken = true;
-                            handleInclude(String.withCString("import <Runtime>"), filename, line, output, true);
+                            String* imp = String.withCString("import <");
+                            imp.append(_runtimeName);
+                            imp.appendCString(">");
+                            handleInclude(imp, filename, line, output, true);
                             }
                         // Provided by an imported library (libRuntime): its
                         // declarations came with that library's interface.
                         if (_provided.contains((Hashable*)nm))
                             return;
                         // Building libRuntime: one of its own files.
-                        if (_runtimeMembers.contains((Hashable*)nm))
+                        if (_runtimeMembers.contains((Hashable*)nm)
+                            || (_runtimeAllStd && !Preprocessor.keepAsSource(nm)))
                             {
+                            _runtimeMembers.add((Hashable*)nm); // so providedFiles lists it
                             _runtimeFiles.add((Hashable*)key);
                             _runtimeFiles.add((Hashable*)String.withString(foundPath));
                             break;
