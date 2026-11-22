@@ -8128,10 +8128,11 @@ class X86_64
         // The arguments end before the memory token and the two blocks. On
         // win64 the frame keeps rsp fixed after the prologue, so the pad
         // starts with the rsp the unwinder restores.
+        bool indirect = ((IROperand*)t.ops().get((u32)0)).kind() != (u8)OPK_SYM;
         if (_win64)
-            emitWin64Call(fn, t, false, nops - (u32)3);
+            emitWin64Call(fn, t, indirect, nops - (u32)3);
         else
-            emitSysVCall(fn, t, false, nops - (u32)3);
+            emitSysVCall(fn, t, indirect, nops - (u32)3);
         _out.appendFormat("%s:\n", le.cString());
         Object* act = _ehPadAction != (Map*)0 ? _ehPadAction.get((Hashable*)unwind.blk().name()) : (Object*)0;
         _ehSites.add((Object*)lb);

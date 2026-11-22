@@ -8333,16 +8333,23 @@ class Arm64
         u32 nops = n.ops().count();
         if (nops < (u32)4) { unsupported(n.op()); return; }
         IROperand* callee = (IROperand*)n.ops().get((u32)0);
-        if (callee.kind() != (u8)OPK_SYM) { unsupported(String.withCString("Invoke:indirect")); return; }
+        // Through a pointer (a virtual call in a try): in x16, which no
+        // argument register touches, as emitCallIndirect has it.
+        bool indirect = callee.kind() != (u8)OPK_SYM;
         IROperand* normal = (IROperand*)n.ops().get(nops - (u32)2);
         IROperand* unwind = (IROperand*)n.ops().get(nops - (u32)1);
         if (normal.kind() != (u8)OPK_BLOCK || unwind.kind() != (u8)OPK_BLOCK) { unsupported(n.op()); return; }
+        if (indirect)
+            materialise(callee, String.withCString("x16"));
         if (!marshalArgs(n, (u32)1, nops - (u32)4, (u32)0)) return;
         bool sret = emitSretSetupIfNeeded(n);
         _ehN = _ehN + (u32)1;
         String* lb = String.withFormat("Lxceh_%s_%ub", _fn.name().cString(), _ehN);
         String* le = String.withFormat("Lxceh_%s_%ue", _fn.name().cString(), _ehN);
-        _out.appendFormat("%s:\n    bl _%s\n%s:\n", lb.cString(), callee.name().cString(), le.cString());
+        if (indirect)
+            _out.appendFormat("%s:\n    blr x16\n%s:\n", lb.cString(), le.cString());
+        else
+            _out.appendFormat("%s:\n    bl _%s\n%s:\n", lb.cString(), callee.name().cString(), le.cString());
         Object* act = _ehPadAction != (Map*)0 ? _ehPadAction.get((Hashable*)unwind.blk().name()) : (Object*)0;
         _ehSites.add((Object*)lb);
         _ehSites.add((Object*)le);
