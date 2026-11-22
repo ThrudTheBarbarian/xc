@@ -1500,6 +1500,15 @@
             }
         }
 
+    // A by-value argument is checked once, with the call's other
+    // stack-instance rules (checkStackInstanceStrongParamArgs:).
+    if (![lhsType isKindOfClass:[XTPointerType class]] && ![rhsType isKindOfClass:[XTPointerType class]])
+        {
+        if ([site isEqualToString:@"initialiser"] || [site isEqualToString:@"assignment"] ||
+            [site isEqualToString:@"return"])
+            [self checkSliceByValue:lhsType rhsType:rhsType site:site location:loc];
+        return;
+        }
     if (![lhsType isKindOfClass:[XTPointerType class]])
         return;
     if (![rhsType isKindOfClass:[XTPointerType class]])
@@ -1599,6 +1608,46 @@
     [self.diagnostics emitError:[NSString stringWithFormat:
                                               @"%@: '%@' is not a subclass of '%@'",
                                               site, rp.displayName, lp.displayName]
+                             at:loc];
+    }
+
+/****************************************************************************\
+|* A stack instance copied BY VALUE into a slot of one of its ancestors (a
+|* return, an initialiser, an assignment or an argument) would be cut down to
+|* the ancestor's ivars while keeping its own class, so a virtual call on the
+|* copy runs the subclass's method on fields that are not there (#552).
+|* Refused. The same class copies as before, and a reference to the subclass
+|* instance is a pointer and never reaches here.
+\****************************************************************************/
+- (void)checkSliceByValue:(XTType*)lhsType
+                  rhsType:(XTType*)rhsType
+                     site:(NSString*)site
+                 location:(XTSourceLocation*)loc
+    {
+    if (lhsType.kind != XTTypeKindClass || rhsType.kind != XTTypeKindClass)
+        return;
+    NSString* l = lhsType.displayName;
+    NSString* r = rhsType.displayName;
+    if (l.length == 0 || r.length == 0 || [l isEqualToString:r])
+        return;
+    XTClassDeclNode* lc = self.classesByName[l];
+    XTClassDeclNode* rc = self.classesByName[r];
+    if (!lc || !rc || ![self class:rc inheritsFromOrEquals:lc])
+        return;
+    NSString* msg;
+    if ([site isEqualToString:@"return"])
+        msg = [NSString stringWithFormat:@"returning a '%@' by value as a '%@' would slice it; return a '%@'",
+                                         r, l, r];
+    else if ([site isEqualToString:@"initialiser"])
+        msg = [NSString stringWithFormat:@"initialising a '%@' by value from a '%@' would slice it; declare a '%@'",
+                                         l, r, r];
+    else if ([site isEqualToString:@"assignment"])
+        msg = [NSString stringWithFormat:@"assigning a '%@' by value to a '%@' would slice it; assign it to a '%@'",
+                                         r, l, r];
+    else
+        msg = [NSString stringWithFormat:@"%@: passing a '%@' by value as a '%@' would slice it; take a '%@'",
+                                         site, r, l, r];
+    [self.diagnostics emitError:[NSString stringWithFormat:@"%@, or a reference ('%@*')", msg, l]
                              at:loc];
     }
 

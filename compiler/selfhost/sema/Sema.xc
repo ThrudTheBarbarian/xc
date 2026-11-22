@@ -850,6 +850,15 @@ class Sema
         if (lBound || rBound)
             return;
 
+        // A by-value argument is checked once, with the call's other
+        // stack-instance rules (checkStackStrongArgs).
+        if (!Types.isPointer(lhs) && !Types.isPointer(rhs))
+            {
+            if (siteName.equals(String.withCString("initialiser")) || siteName.equals(String.withCString("assignment"))
+                || siteName.equals(String.withCString("return")))
+                checkSliceByValue(lhs, rhs, site, at);
+            return;
+            }
         if (!Types.isPointer(lhs) || !Types.isPointer(rhs))
             return;
         bool lCls = lp != 0 && _classes.get((Hashable*)lp) != 0;
@@ -925,6 +934,63 @@ class Sema
         e.appendCString("' is not a subclass of '");
         e.append(lp);
         e.appendByte((u8)0x27);
+        _errorAt(e, at);
+        }
+
+    // A stack instance copied BY VALUE into a slot of one of its ancestors —
+    // a return, an initialiser, an assignment or an argument — would be cut
+    // down to the ancestor's ivars while keeping its own class, so a virtual
+    // call on the copy runs the subclass's method on fields that are not
+    // there (#552). Refused. The same class copies as before, and a reference
+    // to the subclass instance is a pointer and never reaches here.
+    void checkSliceByValue(String* lhs, String* rhs, string site, Node* at)
+        {
+        if (lhs.equals(rhs) || _classes.get((Hashable*)lhs) == 0 || _classes.get((Hashable*)rhs) == 0)
+            return;
+        if (!Overload.descendsFrom(rhs, lhs))
+            return;
+        String* s = String.withCString(site);
+        String* e = String.withCString("");
+        if (s.equals(String.withCString("return")))
+            {
+            e.appendCString("returning a '");
+            e.append(rhs);
+            e.appendCString("' by value as a '");
+            e.append(lhs);
+            e.appendCString("' would slice it; return a '");
+            e.append(rhs);
+            }
+        else if (s.equals(String.withCString("initialiser")))
+            {
+            e.appendCString("initialising a '");
+            e.append(lhs);
+            e.appendCString("' by value from a '");
+            e.append(rhs);
+            e.appendCString("' would slice it; declare a '");
+            e.append(rhs);
+            }
+        else if (s.equals(String.withCString("assignment")))
+            {
+            e.appendCString("assigning a '");
+            e.append(rhs);
+            e.appendCString("' by value to a '");
+            e.append(lhs);
+            e.appendCString("' would slice it; assign it to a '");
+            e.append(rhs);
+            }
+        else
+            {
+            e.append(s);
+            e.appendCString(": passing a '");
+            e.append(rhs);
+            e.appendCString("' by value as a '");
+            e.append(lhs);
+            e.appendCString("' would slice it; take a '");
+            e.append(rhs);
+            }
+        e.appendCString("', or a reference ('");
+        e.append(lhs);
+        e.appendCString("*')");
         _errorAt(e, at);
         }
 
@@ -2175,9 +2241,20 @@ class Sema
             if (ai >= call.kidCount())
                 return;
             String* pt = p.op();
+            Node* a = call.kid(ai);
+            // A subclass instance passed by value into a superclass parameter
+            // would be sliced (checkSliceByValue).
+            if (pt != 0 && a.ty() != 0 && !Types.isPointer(pt) && !Types.isPointer(a.ty()))
+                {
+                String* site = String.withCString("argument ");
+                site.append(String.withU32(pi));
+                site.appendCString(" of ");
+                site.append(desc);
+                checkSliceByValue(pt, a.ty(), site.cString(), call);
+                continue;
+                }
             if (pt == 0 || !Types.isPointer(pt) || _classes.get((Hashable*)classNameOf(pt)) == 0)
                 continue;
-            Node* a = call.kid(ai);
             if (a.kind() != (u16)nkUnary || !_isOp(a.op(), "&") || a.kidCount() == (u32)0)
                 continue;
             Node* operand = a.kid((u32)0);

@@ -903,12 +903,23 @@ static BOOL XTIsErasedKeyType(XTType* t)
     for (NSUInteger i = 0; i < n; i++)
         {
         XTType* pt = paramTypes[i];
+        XTASTNode* arg = arguments[i];
+        // A subclass instance passed by value into a superclass parameter
+        // would be sliced (checkSliceByValue).
+        if (pt && arg.resolvedType && ![pt isKindOfClass:[XTPointerType class]] &&
+            ![arg.resolvedType isKindOfClass:[XTPointerType class]])
+            {
+            [self checkSliceByValue:pt
+                            rhsType:arg.resolvedType
+                               site:[NSString stringWithFormat:@"argument %lu of %@", (unsigned long)(i + 1), calleeDesc]
+                           location:loc];
+            continue;
+            }
         if (![pt isKindOfClass:[XTPointerType class]])
             continue;
         XTType* pointee = ((XTPointerType*)pt).pointeeType;
         if (!pointee || pointee.kind != XTTypeKindClass)
             continue;
-        XTASTNode* arg = arguments[i];
         NSString* instName = nil;
         if ([arg isKindOfClass:[XTUnaryExprNode class]])
             {

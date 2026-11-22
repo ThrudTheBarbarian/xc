@@ -155,6 +155,11 @@ class Overload
             }
         if (Types.isPointer(arg) != Types.isPointer(parc))
             return Overload.noMatch();
+        // A stack instance of a subclass converts as its pointer does, at an
+        // upcast's rank, so the call resolves and sema refuses the slice
+        // (checkSliceByValue) rather than reporting no overload.
+        if (Overload.descendsFrom(arg, parc))
+            return (u32)1;
 
         if (Overload._is(arg, "bool") && (Overload._is(parc, "u8") || Overload._is(parc, "i8")))
             return (u32)1;

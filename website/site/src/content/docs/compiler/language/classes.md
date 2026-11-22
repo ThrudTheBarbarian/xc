@@ -48,6 +48,10 @@ When it goes out of scope (the end of the block, each loop iteration, or a
   references are not retained again, and the callee does not release them.
 - A returned instance that is not stored (`make().n`) is torn down at the end
   of the statement.
+- A copy of a subclass instance into a superclass value is a compile error,
+  whether it is an initialiser, an assignment, a `return` or a by-value
+  argument, because the copy would keep only the superclass's ivars. Use the
+  subclass's type, or a pointer of the superclass's type.
 
 A local array of class instances (`MyClass arr[4];`) is not supported. Declare
 an array of references (`MyClass* arr[4];`) instead.
