@@ -801,10 +801,21 @@ class String<Comparable, Hashable, Copying>
         if (from + n > _length)
             return String.notFound();
 
+        // The needle's bytes are taken once and its first byte is tested
+        // before the rest: a compiler pass searched lines this way often
+        // enough for a call per position to show (#331).
         u32 last = _length - n;
+        u8* h = _bytes;
+        u8* p = needle.cString();
+        u8 first = p[(u32)0];
         for (u32 i = from; i <= last; i = i + (u32)1)
             {
-            if (_matchesAt(i, needle))
+            if (h[i] != first)
+                continue;
+            u32 j = (u32)1;
+            while (j < n && h[i + j] == p[j])
+                j = j + (u32)1;
+            if (j == n)
                 return i;
             }
         return String.notFound();
