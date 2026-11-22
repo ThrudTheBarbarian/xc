@@ -45,11 +45,16 @@
             base.appendCString("2");
         return base;
         }
-    final u32 mslWidth(String* t)
+    // An element's size in a GPU buffer, on every GPU lowering (Metal, SPIR-V,
+    // WGSL, PTX): its storage with 8-byte pointers, an aggregate's layout size
+    // (#436: the three lowerings each had a helper that answered pointers,
+    // aggregates and vectors differently).
+    final u32 gpuBytes(String* t)
         {
-        // Anything but a scalar (a pointer among them) reads as 8.
-        u32 w = IRType.bytes(t);
-        return w != 0 ? w : 8;
+        IRLayout* l = self.mslLayoutOf(t);
+        if (l != (IRLayout*)0)
+            return l.size();
+        return IRType.storageBytes(t, (u32)8);
         }
     final bool mslIsPtr(String* t)
         {
@@ -190,7 +195,7 @@
                         if (!IRType.is(pe, tyU32) && !IRType.is(pe, tyI32))
                             {
                             String* w = String.withCString("its array reduction (:reduce(op a[])) is over ");
-                            w.append(String.withU32(mslWidth(pe) * (u32)8));
+                            w.append(String.withU32(gpuBytes(pe) * (u32)8));
                             w.appendCString("-bit integers, and its GPU version takes 32-bit ones");
                             parBecause(w);
                             return false;
@@ -230,7 +235,7 @@
                             if (((IRPinned*)f.pinned().get(q)).val() == pv)
                                 pl = (IRPinned*)f.pinned().get(q);
                         String* en = mslIsPtr(r.ty()) ? mslScalar(mslPointee(r.ty())) : (String*)0;
-                        u32 ew = en != (String*)0 ? mslWidth(mslPointee(r.ty())) : (u32)0;
+                        u32 ew = en != (String*)0 ? gpuBytes(mslPointee(r.ty())) : (u32)0;
                         u32 total = (u32)0;
                         if (pl != (IRPinned*)0 && IRType.isAgg(pl.ty()))
                             {
@@ -761,7 +766,7 @@
         if (l == (IRLayout*)0 || l.fieldCount() == (u32)0)
             return (String*)0;
         String* ft = l.typeAt((u32)0);
-        u32 w = mslWidth(ft);
+        u32 w = gpuBytes(ft);
         if (mslScalar(ft) == (String*)0 || w == (u32)0 || l.size() != w * l.fieldCount())
             return (String*)0;
         bool mixed = false;
@@ -775,7 +780,7 @@
                 // of 32-bit words to a kernel; each field that is not a U32
                 // is reinterpreted where it is read or written (see
                 // parWordStructs).
-                if (w != (u32)4 || mslWidth(l.typeAt(k)) != (u32)4 || mslScalar(l.typeAt(k)) == (String*)0
+                if (w != (u32)4 || gpuBytes(l.typeAt(k)) != (u32)4 || mslScalar(l.typeAt(k)) == (String*)0
                     || IRType.is(l.typeAt(k), tyBool))
                     return (String*)0;
                 mixed = true;
@@ -818,7 +823,7 @@
         if (t == (String*)0 || depth > (u32)8)
             return (u32)0;
         if (self.parLeaf(t))
-            return self.mslWidth(t);
+            return self.gpuBytes(t);
         IRLayout* l = self.mslLayoutOf(t);
         if (l == (IRLayout*)0 || l.fieldCount() == (u32)0)
             return (u32)0;

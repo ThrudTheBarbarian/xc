@@ -266,7 +266,7 @@
             String* et = self.mslScalar(pe);
             if (et == (String*)0) return (String*)0;
             meta.appendCString(" buf="); meta.append(String.withU32(_mObj.offsetAt(k))); meta.appendCString(":");
-            meta.append(String.withU32(k - (u32)3)); meta.appendCString(":"); meta.append(String.withU32(self.mslWidth(pe)));
+            meta.append(String.withU32(k - (u32)3)); meta.appendCString(":"); meta.append(String.withU32(self.gpuBytes(pe)));
             params.appendCString(self.mslIsConst((i64)k) ? ", constant " : ", device "); params.append(et); params.appendCString("* buf_"); params.append(String.withU32(k));
             params.appendCString(" [[buffer("); params.append(String.withU32(slot)); params.appendCString(")]]");
             slot = slot + (u32)1;
@@ -288,7 +288,7 @@
                 et = fe;
             String* en = self.mslScalar(et);
             if (en == (String*)0) return (String*)0;
-            meta.appendCString(" glob="); meta.append(gn); meta.appendCString(":"); meta.append(String.withU32(self.mslWidth(et)));
+            meta.appendCString(" glob="); meta.append(gn); meta.appendCString(":"); meta.append(String.withU32(self.gpuBytes(et)));
             params.appendCString(", device "); params.append(en); params.appendCString("* glob_"); params.append(String.withU32(gi));
             params.appendCString(" [[buffer("); params.append(String.withU32(slot)); params.appendCString(")]]");
             slot = slot + (u32)1;
@@ -308,7 +308,7 @@
             if (_mReds.get((Hashable*)String.withI64((i64)k)) == (Object*)0) continue;
             String* et = self.mslScalar(_mObj.typeAt(k));
             if (et == (String*)0) return (String*)0;
-            meta.appendCString(" red="); meta.append(String.withU32(_mObj.offsetAt(k))); meta.appendCString(":"); meta.append(String.withU32(self.mslWidth(_mObj.typeAt(k))));
+            meta.appendCString(" red="); meta.append(String.withU32(_mObj.offsetAt(k))); meta.appendCString(":"); meta.append(String.withU32(self.gpuBytes(_mObj.typeAt(k))));
             params.appendCString(", device "); params.append(et); params.appendCString("* red_"); params.append(String.withU32(k));
             params.appendCString(" [[buffer("); params.append(String.withU32(slot)); params.appendCString(")]]");
             slot = slot + (u32)1;

@@ -1038,10 +1038,29 @@ class IRType
         }
     // A scalar's byte width (Bool, the integers, the floats); 0 for a pointer,
     // an aggregate, a vector or anything else.
+    // A scalar's size: an integer, float or bool; 0 for anything else (a
+    // pointer, vector or aggregate). What a pass that narrows or folds asks.
     static u32 bytes(String* t)
         {
         IRType* r = IRType.of(t);
         return r == (IRType*)0 ? 0 : r._bytes;
+        }
+
+    // What a value of this type occupies in memory (#436): a scalar its size,
+    // a pointer ptrBytes (the target's: 8 on arm64, x86-64 and the GPUs, 4 on
+    // arm9, m68k and wasm32, 3 on the banked 6502), a vector its lanes. An
+    // aggregate is its layout's size, which the caller's layout table holds:
+    // 0 here, as for void or an unknown type.
+    static u32 storageBytes(String* t, u32 ptrBytes)
+        {
+        IRType* r = IRType.of(t);
+        if (r == (IRType*)0)
+            return 0;
+        if (r._tag == tyPtr)
+            return ptrBytes;
+        if (r._vecBytes != (u32)0)
+            return r._vecBytes;
+        return r._bytes;
         }
 
     // Questions about a record.

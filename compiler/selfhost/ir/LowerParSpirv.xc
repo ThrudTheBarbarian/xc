@@ -42,11 +42,6 @@
         return w <= 2 ? w : 0;
         }
     final bool spvWide(String* t) { return IRType.is(t, tyI64) || IRType.is(t, tyU64); }
-    final u32 spvWidth(String* t)
-        {
-        if (IRType.isPtr(t)) return 8;
-        return IRType.bytes(t);
-        }
 
     // A scalar type's id; 0 for a type this cut does not print.
     final u32 spvType(String* t)
@@ -529,7 +524,7 @@
         u32 ty = spvType(rt);
         if (a == (u32)0 || ty == (u32)0 || spvType(st) == (u32)0)
             return false;
-        bool sameWidth = spvWidth(st) == spvWidth(rt);
+        bool sameWidth = gpuBytes(st) == gpuBytes(rt);
         u32 v = (u32)0;
         u16 o = ip.opc();
         if (IRType.is(st, tyBool) && !IRType.is(rt, tyBool))
@@ -830,7 +825,7 @@
             if (b == (SpvRecipe*)0 || pe == (String*)0) return false;
             // A work item's array holds one slot per element of its own type:
             // an index by any other width would land elsewhere. As the reference.
-            if (b.local && self.mslWidth(pe) != self.mslWidth(b.pointee)) return false;
+            if (b.local && self.gpuBytes(pe) != self.gpuBytes(b.pointee)) return false;
             IROperand* o1 = (IROperand*)ip.ops().get((u32)1);
             // A constant index is 64-bit unless it is a 32-bit one (a field's
             // word in an array of structs): the 32-bit span form then needs
@@ -865,14 +860,14 @@
                 {
                 SpvRecipe* b = o0.kind() == (u8)OPK_USE && o0.val() != (IRValue*)0 ? (SpvRecipe*)_spvFn.recipeOf.get((Hashable*)self.mslKey(o0.val())) : (SpvRecipe*)0;
                 String* pe = self.mslPointee(rt);
-                if (b == (SpvRecipe*)0 || spvWidth(b.pointee) != spvWidth(pe) || spvType(b.pointee) != spvType(pe))
+                if (b == (SpvRecipe*)0 || gpuBytes(b.pointee) != gpuBytes(pe) || spvType(b.pointee) != spvType(pe))
                     return false;
                 _spvFn.recipeOf.set((Hashable*)self.mslKey(res), (Object*)b);
                 return true;
                 }
             String* st = o0.kind() == (u8)OPK_USE ? self.mslTypeOf(o0) : rt;
             u32 a = spvValue(o0, st);
-            if (a == (u32)0 || spvWidth(st) != spvWidth(rt) || spvType(rt) == (u32)0) return false;
+            if (a == (u32)0 || gpuBytes(st) != gpuBytes(rt) || spvType(rt) == (u32)0) return false;
             // A narrow result is re-wrapped to its own form. As the reference.
             spvSetResult(ip, spvCanon(spvEmitR((u32)SPV_BITCAST, spvType(rt), spvA1(a)), rt));
             return true;
@@ -959,7 +954,7 @@
                 if (k >= _mLocalBytes.count()) return false;
                 String* et = (String*)_mLocalElem.get(k);
                 u32 ety = spvType(et);
-                u32 ew = self.mslWidth(et);
+                u32 ew = self.gpuBytes(et);
                 if (ety == (u32)0 || ew == (u32)0) return false;
                 Number* var = (Number*)_spvFn.locals.get((Hashable*)lk);
                 if (var == (Number*)0)
@@ -1876,13 +1871,13 @@
                 return false;
                 }
             meta.appendCString(" buf="); meta.append(String.withU32(_mObj.offsetAt(k))); meta.appendCString(":");
-            meta.append(String.withU32(k - (u32)3)); meta.appendCString(":"); meta.append(String.withU32(spvWidth(et)));
+            meta.append(String.withU32(k - (u32)3)); meta.appendCString(":"); meta.append(String.withU32(gpuBytes(et)));
             // A byte array is a buffer of 8-bit integers (#7); a 16-bit one
             // lives in 32-bit words.
             bool bytes = spvNarrowBytes(et) == (u32)1;
             bool narrow = !bytes && spvNarrowBytes(et) != (u32)0;
             u32 v = bytes ? spvBuffer(m.typeInt8Storage(), (u32)1, binding)
-                          : spvBuffer(narrow ? m.typeInt((u32)32) : t, narrow ? (u32)4 : spvWidth(et), binding);
+                          : spvBuffer(narrow ? m.typeInt((u32)32) : t, narrow ? (u32)4 : gpuBytes(et), binding);
             if (narrow)
                 _sWordBufs.set((Hashable*)String.withU32(v), (Object*)spvS("1"));
             if (bytes)
@@ -1914,11 +1909,11 @@
                 self.parBecause(w);
                 return false;
                 }
-            meta.appendCString(" glob="); meta.append(gn); meta.appendCString(":"); meta.append(String.withU32(spvWidth(et)));
+            meta.appendCString(" glob="); meta.append(gn); meta.appendCString(":"); meta.append(String.withU32(gpuBytes(et)));
             bool bytesG = spvNarrowBytes(et) == (u32)1;
             bool narrowG = !bytesG && spvNarrowBytes(et) != (u32)0;
             u32 v = bytesG ? spvBuffer(m.typeInt8Storage(), (u32)1, binding)
-                           : spvBuffer(narrowG ? m.typeInt((u32)32) : t, narrowG ? (u32)4 : spvWidth(et), binding);
+                           : spvBuffer(narrowG ? m.typeInt((u32)32) : t, narrowG ? (u32)4 : gpuBytes(et), binding);
             if (narrowG)
                 _sWordBufs.set((Hashable*)String.withU32(v), (Object*)spvS("1"));
             if (bytesG)
@@ -1950,9 +1945,9 @@
             // An 8- or 16-bit value or a bool: a 32-bit slot per thread (the
             // reference explains).
             bool narrow = spvNarrowBytes(ft) != (u32)0;
-            meta.appendCString(" red="); meta.append(String.withU32(_mObj.offsetAt(k))); meta.appendCString(":"); meta.append(String.withU32(spvWidth(ft)));
+            meta.appendCString(" red="); meta.append(String.withU32(_mObj.offsetAt(k))); meta.appendCString(":"); meta.append(String.withU32(gpuBytes(ft)));
             if (narrow) meta.appendCString(":4");
-            u32 v = narrow ? spvBuffer(m.typeInt((u32)32), (u32)4, binding) : spvBuffer(t, spvWidth(ft), binding);
+            u32 v = narrow ? spvBuffer(m.typeInt((u32)32), (u32)4, binding) : spvBuffer(t, gpuBytes(ft), binding);
             binding = binding + (u32)1;
             redVars.add((Object*)Number.withU32(v));
             redFields.add((Object*)Number.withU32(k));
