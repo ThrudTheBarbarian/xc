@@ -33,12 +33,45 @@
 
 class IfaceWrite
 {
+    // The program's classes and protocols by name, the first of each name
+    // (as the scans in classNamed and protocolNamed find it), while
+    // jsonWithState writes that program (#335): the slot walks asked per
+    // ancestor per method, and each ask scanned every declaration.
+    static Node* _indexFor;
+    static u32 _indexKids;
+    static Map* _classByName;
+    static Map* _protoByName;
+
+    static void indexNames(Node* program)
+    {
+        _indexFor = program;
+        _classByName = new Map();
+        _protoByName = new Map();
+        if (program == (Node*)0) return;
+        _indexKids = program.kidCount();
+        for (u32 i = 0; i < program.kidCount(); i = i + 1) {
+            Node* d = program.kid(i);
+            if (d == (Node*)0 || d.name() == (String*)0) continue;
+            Map* into = d.kind() == (u16)nkClassDecl ? _classByName
+                      : d.kind() == (u16)nkProtocolDecl ? _protoByName : (Map*)0;
+            if (into != (Map*)0 && into.get((Hashable*)d.name()) == (Object*)0)
+                into.set((Hashable*)d.name(), (Object*)d);
+        }
+    }
+
+    static bool indexed(Node* program)
+    {
+        return _indexFor != (Node*)0 && _indexFor == program && _indexKids == program.kidCount();
+    }
+
     // The class node of that name, or null. Object lives in the prelude and is
     // not among the classes an interface KEEPS, but it is in the program, and
     // it owns the slot every `description` override answers at.
     static Node* classNamed(Node* program, String* name)
     {
         if (program == (Node*)0 || name == (String*)0) return (Node*)0;
+        if (IfaceWrite.indexed(program))
+            return (Node*)_classByName.get((Hashable*)name);
         for (u32 i = (u32)0; i < program.kidCount(); i = i + (u32)1) {
             Node* d = program.kid(i);
             if (d == (Node*)0 || d.kind() != (u16)nkClassDecl) continue;
@@ -92,6 +125,8 @@ class IfaceWrite
     static Node* protocolNamed(Node* program, String* name)
     {
         if (program == (Node*)0 || name == (String*)0) return (Node*)0;
+        if (IfaceWrite.indexed(program))
+            return (Node*)_protoByName.get((Hashable*)name);
         for (u32 i = (u32)0; i < program.kidCount(); i = i + (u32)1) {
             Node* d = program.kid(i);
             if (d == (Node*)0 || d.kind() != (u16)nkProtocolDecl) continue;
@@ -614,6 +649,7 @@ class IfaceWrite
                                  String* classTable, Array* stdImports, String* stdState,
                                  Array* defines)
     {
+        IfaceWrite.indexNames(program);
         String* out = new String();
         out.appendCString("{\n");
         out.appendCString("\"ifaceVersion\": 2, \"version\": 1,\n");
@@ -1064,6 +1100,7 @@ class IfaceWrite
         }
         out.appendCString("\n");
         out.appendCString("}\n");
+        IfaceWrite.indexNames((Node*)0);
         return JsonVal.canonical(out);
     }
 }

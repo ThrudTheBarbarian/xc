@@ -43,8 +43,16 @@ class Overload
     // on every query, and overload ranking asks once per candidate per
     // argument. Built once, when the hierarchy is set.
     static Map* _conformSets;
+    // Counts setHierarchy calls, so a cache of conformsTo answers (Sema's
+    // conformers) knows when the hierarchy it read has been replaced.
+    static u32 _generation;
+    static u32 generation(void)
+        {
+        return _generation;
+        }
     static void setHierarchy(Map* parents, Map* conforms)
         {
+        _generation = _generation + 1;
         _parents = parents;
         _conforms = conforms;
         _conformSets = new Map();

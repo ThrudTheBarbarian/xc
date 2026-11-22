@@ -724,10 +724,8 @@ class Vtable
         return s.equals(String.withCString(lit));
         }
 
-    // Insertion sort: a few dozen entries at most, and the ORDER is the
-    // contract — not the speed of getting there.
-    // O(n log n) by String.compare, as Elf64.sortStrings (#335; was an
-    // insertion sort). Equal strings are byte-identical, so the order among
+    // Ascending by String.compare, in n log n as Elf64.sortStrings: the ORDER
+    // is the contract. Equal strings are byte-identical, so the order among
     // them cannot show.
     static void sortStrings(Array* a)
         {

@@ -976,13 +976,10 @@ class Sema
             {
             if (ap.equals(pp))
                 return true;
-            Array* names = _classes.allKeys();
+            Array* names = conformers(ap);
             for (u32 i = (u32)0; i < names.count(); i = i + (u32)1)
-                {
-                String* c = (String*)names.get(i);
-                if (Overload.conformsTo(c, ap) && Overload.conformsTo(c, pp))
+                if (Overload.conformsTo((String*)names.get(i), pp))
                     return true;
-                }
             }
         return false;
         }
@@ -993,14 +990,38 @@ class Sema
         {
         if (_isOp(cls, "Object"))
             return true;
+        Array* names = conformers(proto);
+        for (u32 i = (u32)0; i < names.count(); i = i + (u32)1)
+            if (Overload.descendsFrom((String*)names.get(i), cls))
+                return true;
+        return false;
+        }
+
+    // The known classes that conform to `proto`, found once per protocol
+    // (#335): each pointer-argument check walked every class. The cache is
+    // dropped when a class is added or the hierarchy is set again.
+    Map* _conformers;
+    u32 _conformersClasses;
+    u32 _conformersGen;
+    Array* conformers(String* proto)
+        {
+        if (_conformers == (Map*)0 || _conformersClasses != _classes.count()
+            || _conformersGen != Overload.generation())
+            {
+            _conformers = new Map();
+            _conformersClasses = _classes.count();
+            _conformersGen = Overload.generation();
+            }
+        Array* out = (Array*)_conformers.get((Hashable*)proto);
+        if (out != (Array*)0)
+            return out;
+        out = new Array();
         Array* names = _classes.allKeys();
         for (u32 i = (u32)0; i < names.count(); i = i + (u32)1)
-            {
-            String* c = (String*)names.get(i);
-            if (Overload.descendsFrom(c, cls) && Overload.conformsTo(c, proto))
-                return true;
-            }
-        return false;
+            if (Overload.conformsTo((String*)names.get(i), proto))
+                out.add(names.get(i));
+        _conformers.set((Hashable*)proto, (Object*)out);
+        return out;
         }
 
     // Enforce `final`. Without both halves it is an unsound promise — a way to
