@@ -139,15 +139,24 @@ x86-64 Linux and arm64 Linux; on the other targets (Windows, Android, iOS,
 WebAssembly, the 6502 and m68k) the runtime is still compiled into each
 program.
 
+A C or C++ program links **libRuntimeSupport** instead, from the same
+directory: the same runtime together with the standard-library classes it uses
+(strings, arrays, maps and the rest). A program written in C or C++ does not
+otherwise use those classes, so it compiles none of them, only its own code and
+the loops `--par-style` makes into blocks. A C or C++ program that links an xc
+library keeps `libRuntime`, as that library does, so the process has one
+runtime.
+
 A program finds the library beside itself first, then where the compiler
 that built it keeps it. **To run a program on another machine, copy
-`libRuntime` from the same compiler next to it**, or build it with
-`--no-runtime-lib`.
+`libRuntime` (or, for a C or C++ program, `libRuntimeSupport`) from the same
+compiler next to it**, or build it with `--no-runtime-lib`.
 
 | Flag | Effect |
 |------|--------|
 | `--no-runtime-lib` | Compile the runtime into the program instead: one file that runs without `libRuntime`, larger, and slower to build when it uses `par`. `XCC_NO_RUNTIME_LIB=1` does the same. A `-static` link, and a link that brings object files or archives (`-Wl,x.o`), always do. |
 | `--emit-runtime` | Build a target's `libRuntime` from its root file, `support/generic/lib/Par.xc`, as `make runtime-libs` does. |
+| `--emit-runtime-support` | Build a target's `libRuntimeSupport` from the same root file, as `make runtime-libs` does. |
 
 ## Support tree and memory model
 
