@@ -321,6 +321,143 @@ static NSString* XTIRDSEKey(XTIROperand* p, NSDictionary<NSNumber*, XTIRInsn*>* 
         }
     }
 
+// Every use of the value `old` in fn becomes the operand `to`.
+static void XTIRDCEForward(XTIRFunction* fn, XTIRValueId old, XTIROperand* to)
+    {
+    for (XTIRBlock* b in fn.blocks)
+        {
+        NSMutableArray<XTIRInsn*>* all = [NSMutableArray arrayWithArray:b.phiNodes];
+        [all addObjectsFromArray:b.instructions];
+        if (b.terminator)
+            [all addObject:b.terminator];
+        for (XTIRInsn* u in all)
+            {
+            NSMutableArray<XTIROperand*>* ops = [u.operands mutableCopy];
+            BOOL ch = NO;
+            for (NSUInteger m = 0; m < ops.count; m++)
+                if (ops[m].kind == XTIROperandKindUse && ops[m].valueId == old)
+                    {
+                    ops[m] = to;
+                    ch = YES;
+                    }
+            if (ch)
+                [u replaceOperands:ops];
+            }
+        }
+    }
+
+// A Release of a join's phi, where an arm feeding it retained its value
+// (#477): a guarded devirtualisation's inlined arm holds the Retain, the
+// virtual arm returns its result owned, and the Release follows the join. The
+// Release moves into the arms: in an arm whose last effect is the Retain of
+// its incoming value the two cancel; any other arm releases its own incoming
+// value at its end. Only pure instructions may lie between the join's top and
+// the Release, and each arm must branch only to the join.
+- (void)retainPairsAtJoins:(XTIRFunction*)fn
+    {
+    for (XTIRBlock* J in [fn.blocks copy])
+        {
+        if (J.phiNodes.count == 0)
+            continue;
+        XTIRInsn* q = nil;
+        for (XTIRInsn* n in J.instructions)
+            {
+            if (n.opcode == XTIROpRelease)
+                {
+                q = n;
+                break;
+                }
+            if (n.memoryResult || !XTIRDCEIsPure(n.opcode))
+                break;
+            }
+        if (!q || q.operands.count != 2 || !q.memoryResult || q.operands[0].kind != XTIROperandKindUse ||
+            q.operands[1].kind != XTIROperandKindUse)
+            continue;
+        XTIRInsn* phi = nil;
+        BOOL memInJ = NO;
+        for (XTIRInsn* p in J.phiNodes)
+            {
+            if (p.result && p.result.valueId == q.operands[0].valueId)
+                phi = p;
+            if ((p.memoryResult && p.memoryResult.valueId == q.operands[1].valueId) ||
+                (p.result && p.result.valueId == q.operands[1].valueId))
+                memInJ = YES;
+            }
+        if (!phi || memInJ || phi.operands.count < 2)
+            continue;
+        NSMutableArray<XTIRBlock*>* arms = [NSMutableArray array];
+        NSMutableArray<NSNumber*>* vals = [NSMutableArray array];
+        NSMutableArray<NSNumber*>* rets = [NSMutableArray array];
+        BOOL ok = YES, gain = NO;
+        for (NSUInteger k = 0; ok && k + 1 < phi.operands.count; k += 2)
+            {
+            XTIROperand* bo = phi.operands[k];
+            XTIROperand* vo = phi.operands[k + 1];
+            if (bo.kind != XTIROperandKindBlock || !bo.blockRef || vo.kind != XTIROperandKindUse)
+                {
+                ok = NO;
+                break;
+                }
+            XTIRBlock* P = bo.blockRef;
+            if (!P.terminator || P.terminator.opcode != XTIROpBranch || [arms indexOfObjectIdenticalTo:P] != NSNotFound)
+                {
+                ok = NO;
+                break;
+                }
+            NSInteger at = -1;
+            NSArray<XTIRInsn*>* pi = P.instructions;
+            for (NSUInteger m = pi.count; m > 0; m--)
+                {
+                XTIRInsn* n = pi[m - 1];
+                if (n.opcode == XTIROpRetain && n.operands.count == 2 && n.operands[0].kind == XTIROperandKindUse &&
+                    n.operands[0].valueId == vo.valueId && n.operands[1].kind == XTIROperandKindUse)
+                    {
+                    at = (NSInteger)(m - 1);
+                    break;
+                    }
+                if (n.memoryResult || !XTIRDCEIsPure(n.opcode))
+                    break;
+                }
+            if (at >= 0)
+                gain = YES;
+            [arms addObject:P];
+            [vals addObject:@(vo.valueId)];
+            [rets addObject:@(at)];
+            }
+        if (!ok || !gain)
+            continue;
+        XTIROperand* qMem = q.operands[1];
+        XTIRDCEForward(fn, q.memoryResult.valueId, qMem);
+        [J.instructions removeObjectIdenticalTo:q];
+        for (NSUInteger a = 0; a < arms.count; a++)
+            {
+            XTIRBlock* P = arms[a];
+            NSInteger at = rets[a].integerValue;
+            if (at >= 0)
+                {
+                XTIRInsn* r = P.instructions[(NSUInteger)at];
+                if (r.memoryResult)
+                    XTIRDCEForward(fn, r.memoryResult.valueId, r.operands[1]);
+                [P.instructions removeObjectAtIndex:(NSUInteger)at];
+                }
+            else
+                {
+                XTIRInsn* rel = [[XTIRInsn alloc]
+                    initWithOpcode:XTIROpRelease
+                            result:nil
+                          operands:@[ [XTIROperand useWithValueId:(XTIRValueId)vals[a].unsignedLongLongValue], qMem ]
+                            dbgLoc:nil];
+                XTIRValue* mv = [[XTIRValue alloc] initWithValueId:[fn allocateValueId]
+                                                              type:[XTIRType memoryType]
+                                                           defSite:[[XTIRDefSite alloc] initWithBlock:P insnIndex:0]];
+                [fn registerValue:mv];
+                rel.memoryResult = mv;
+                [P.instructions addObject:rel];
+                }
+            }
+        }
+    }
+
 // A Retain and a Release of the same value that cancel, block by block: the
 // Release takes its memory token straight from the Retain and only pure
 // instructions (no memory token, no call) lie between, so nothing can drop the
@@ -391,6 +528,7 @@ static NSString* XTIRDSEKey(XTIROperand* p, NSDictionary<NSNumber*, XTIRInsn*>* 
 
 - (void)runOnFunction:(XTIRFunction*)fn
     {
+    [self retainPairsAtJoins:fn];
     [self retainPairsIn:fn];
     [self deadStoresIn:fn];
     [self writeOnlyLocalsIn:fn];
