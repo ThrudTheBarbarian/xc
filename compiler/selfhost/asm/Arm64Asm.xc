@@ -20,6 +20,7 @@
 
 #import "Foundation.xc"
 #import <U64>
+#import <SortStable>
 #import <DwarfWriter>
 #import <SectionBytes>
 #import <GasString>
@@ -366,19 +367,13 @@ class Arm64Asm
     // Give every COMMON real storage in __data and define it locally, then clear
     // the common set. For single-unit IMAGE builds (executable/dylib), which
     // have no separate link stage; the object (`-c`) path keeps commons. Sorted
-    // order (same insertion sort as MachO.sortNames) so the reference and this
+    // order (as MachO.sortNames) so the reference and this
     // assembler lay them out identically (bug 169).
     void demoteCommonsToLocalData(void)
     {
         if (_commonSyms.count() == (u32)0) return;
         Array* names = _commonSyms.allKeys();
-        for (u32 i = (u32)1; i < names.count(); i = i + (u32)1) {
-            Object* cur = names.get(i); u32 j = i;
-            while (j > (u32)0 && ((String*)names.get(j - (u32)1)).compare((String*)cur) > (i32)0) {
-                names.set(j, names.get(j - (u32)1)); j = j - (u32)1;
-            }
-            names.set(j, cur);
-        }
+        SortStable.byString(names);   // n log n (#335); the names are distinct
         for (u32 k = (u32)0; k < names.count(); k = k + (u32)1) {
             String* nm = (String*)names.get(k);
             Array* info = (Array*)_commonSyms.get((Hashable*)nm);
@@ -401,13 +396,7 @@ class Arm64Asm
     {
         Array* out = new Array();
         Array* names = _commonSyms.allKeys();
-        for (u32 i = (u32)1; i < names.count(); i = i + (u32)1) {
-            Object* cur = names.get(i); u32 j = i;
-            while (j > (u32)0 && ((String*)names.get(j - (u32)1)).compare((String*)cur) > (i32)0) {
-                names.set(j, names.get(j - (u32)1)); j = j - (u32)1;
-            }
-            names.set(j, cur);
-        }
+        SortStable.byString(names);   // n log n (#335); the names are distinct
         for (u32 k = (u32)0; k < names.count(); k = k + (u32)1) {
             String* nm = (String*)names.get(k);
             Array* info = (Array*)_commonSyms.get((Hashable*)nm);

@@ -19,6 +19,7 @@
 
 #import "Foundation.xc"
 #import <NumLit>
+#import <SortStable>
 #import <DwarfWriter>
 #import <SectionBytes>
 #import <GasString>
@@ -513,17 +514,7 @@ class X86Mn
         if (_commonSyms.count() == (u32)0)
             return;
         Array* names = _commonSyms.allKeys();
-        for (u32 i = (u32)1; i < names.count(); i = i + (u32)1)
-            {
-            Object* cur = names.get(i);
-            u32 j = i;
-            while (j > (u32)0 && ((String*)names.get(j - (u32)1)).compare((String*)cur) > (i32)0)
-                {
-                names.set(j, names.get(j - (u32)1));
-                j = j - (u32)1;
-                }
-            names.set(j, cur);
-            }
+        SortStable.byString(names);   // n log n (#335); the names are distinct
         for (u32 k = (u32)0; k < names.count(); k = k + (u32)1)
             {
             String* nm = (String*)names.get(k);
