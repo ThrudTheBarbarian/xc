@@ -1474,6 +1474,7 @@ class IRType
     String* _simdLevel;
     String* _simdBaseName;
     bool _simdDispatch;
+    bool _noInline;    // never inlined (C's noinline), printed `inline: never`
     // A par block's kernel (PARK_BLOCK: the run of the class the parser made
     // of a block; PARK_OUTLINED: the run the IR outliner made of a loop), set
     // where it is made and printed as `par: kernel` / `par: outlined`. The
@@ -1499,6 +1500,7 @@ class IRType
         _simdLevel = (String*)0;
         _simdBaseName = (String*)0;
         _simdDispatch = false;
+        _noInline = false;
         _parKernel = (u8)PARK_NONE;
         _ret = String.withCString("Void");
         _pinnedSize = (u32)0;
@@ -1514,6 +1516,8 @@ class IRType
     void setSimdDispatch(bool d)       { _simdDispatch = d; }
     u8 parKernel(void)                 { return _parKernel; }
     void setParKernel(u8 k)            { _parKernel = k; }
+    bool noInline(void)                { return _noInline; }
+    void setNoInline(bool b)           { _noInline = b; }
     bool hasDbg(void)                  { return _dbg; }
     u32 dbgFile(void)                  { return _dbgFile; }
     u32 dbgLine(void)                  { return _dbgLine; }
@@ -1974,6 +1978,10 @@ class IRType
             out.appendCString("    par: kernel\n");
         else if (_parKernel == (u8)PARK_OUTLINED)
             out.appendCString("    par: outlined\n");
+        // `inline: never`, after `par:`, only on a function never inlined
+        // (C's noinline, from the C/C++ reader).
+        if (_noInline)
+            out.appendCString("    inline: never\n");
 
         Map* preds = predsAll();
         for (u32 b = (u32)0; b < _blocks.count(); b = b + (u32)1)

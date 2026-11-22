@@ -5,10 +5,11 @@
 # (made before the call, as a constant operand's Const is), and
 # twopads.cpp, whose cleanups clang merges into one resume of a phi of
 # the pad pair, and virtcall.cpp, a virtual call and a function pointer's in
-# a try (invokes through a pointer), and padphi.cpp, whose landing pad starts
-# with a phi, give clang++'s answer, and on arm64 macOS (whose back end
-# writes the LSDA and the zPLR CIE) xcc takes sumsafe and every function of
-# the other four itself.
+# a try (invokes through a pointer), padphi.cpp, whose landing pad starts
+# with a phi, and varinvoke.cpp, printf's doubles in an invoke (a variadic
+# callee's tail on the stack on arm64 macOS), give clang++'s answer, and on
+# arm64 macOS (whose back end writes the LSDA and the zPLR CIE) xcc takes
+# sumsafe and every function of the other five itself.
 # Skipped without clang++.
 #
 #   bash tests/par/cpp-handlers.sh
@@ -28,7 +29,7 @@ got=$("$W/x" 2>&1)
 if [ "$PLAT" = osx ] && [ "$(uname -m)" = arm64 ] && grep -q 'left to clang: @_Z7sumsafei' "$W/b"; then
     echo "FAIL cpp-handlers: sumsafe was left to clang"; grep 'first because' "$W/b" | head -2; fail=1
 fi
-for b in allocsum twopads virtcall padphi; do
+for b in allocsum twopads virtcall padphi varinvoke; do
     F=tests/par/c-handlers/$b.cpp
     clang++ -O2 -o "$W/ref.$b" "$F" || { echo "FAIL cpp-handlers: clang++ does not build $b"; fail=1; continue; }
     want=$("$W/ref.$b")
