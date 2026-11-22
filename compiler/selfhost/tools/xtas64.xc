@@ -15,6 +15,7 @@
 #import "Process.xc"
 #import <U64>
 #import <Arm64Asm>
+#import <SortStable>
 #import <SectionBytes>
 #import "Arm64AsmDefs.xc"
 
@@ -57,26 +58,24 @@ void dumpBytes(String* tag, SectionBytes* bytes)
 Array* sortedKeys(Map* m)
     {
     Array* keys = m.allKeys();
-    for (u32 i = (u32)1; i < keys.count(); i = i + (u32)1)
-        {
-        Object* k = keys.get(i);
-        u32 j = i;
-        while (j > (u32)0 && ((String*)keys.get(j - (u32)1)).compare((String*)k) > (i32)0)
-            {
-            keys.set(j, keys.get(j - (u32)1));
-            j = j - (u32)1;
-            }
-        keys.set(j, k);
-        }
+    SortStable.byString(keys);
     return keys;
     }
 
-bool isDataSym(Array* dataSyms, String* name)
+// The names in `names` as a set, so each symbol's look-up is one hash probe
+// rather than a scan of the list (the listing of a large unit has tens of
+// thousands of symbols).
+Map* nameSet(Array* names)
     {
-    for (u32 i = (u32)0; i < dataSyms.count(); i = i + (u32)1)
-        if (((String*)dataSyms.get(i)).equals(name))
-            return true;
-    return false;
+    Map* set = new Map();
+    for (u32 i = 0; i < names.count(); i = i + 1) : serial
+        set.set((Hashable*)names.get(i), (Object*)names.get(i));
+    return set;
+    }
+
+bool isDataSym(Map* dataSyms, String* name)
+    {
+    return dataSyms.get((Hashable*)name) != (Object*)0;
     }
 
 void main(void)
@@ -120,13 +119,14 @@ void main(void)
     dumpBytes(String.withCString("data"), a.dataBytes());
 
     Array* keys = sortedKeys(a.symbols());
+    Map* dataSet = nameSet(a.dataSyms());
     Stdio.printf("symbols %ld\n", (i32)keys.count());
     for (u32 i = (u32)0; i < keys.count(); i = i + (u32)1)
         {
         String* k = (String*)keys.get(i);
         u32 off = ((Number*)a.symbols().get((Hashable*)k)).asU32();
         Stdio.printf("  %s %lu %s\n", k.cString(), off,
-                     isDataSym(a.dataSyms(), k) ? "data" : "text");
+                     isDataSym(dataSet, k) ? "data" : "text");
         }
 
     Array* fx = a.fixups();
