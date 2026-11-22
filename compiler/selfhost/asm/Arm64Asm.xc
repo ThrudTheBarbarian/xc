@@ -47,7 +47,6 @@ class Arm64Fixup
     u32     offset(void) { return _offset; }
     u32     kind(void)   { return _kind; }
     String* symbol(void) { return _symbol; }
-    void setSymbol(String* s) { _symbol = s; }
     u32     scale(void)  { return _scale; }
     i32     addend(void) { return _addend; }
     // The linker rewrites fixups it merged from foreign objects (bug 138): a
