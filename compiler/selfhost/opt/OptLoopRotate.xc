@@ -72,14 +72,17 @@
                     defBlk.set((Hashable*)n.memRes(), (Object*)bb);
                 }
             }
+        _rotDom = rotEntryEntered(fn) ? (DomTree*)0 : self.domTree(fn);
         for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
             {
             if (!rotRecognise(fn, (IRBlock*)fn.blocks().get(b), defBlk))
                 continue;
+            _rotDom = (DomTree*)0;
             rotApply(fn);
             self.invalidateCfg(fn);
             return true;
             }
+        _rotDom = (DomTree*)0;
         // Then a loop whose test is a short-circuit chain. Mirrors the original.
         for (u32 b = (u32)0; _profile.loopRotateChain() && b < fn.blocks().count(); b = b + (u32)1)
             {
@@ -88,6 +91,27 @@
             rcApply(fn);
             self.invalidateCfg(fn);
             return true;
+            }
+        return false;
+        }
+
+    // Whether some terminator branches to fn's entry block.
+    final bool rotEntryEntered(IRFunc* fn)
+        {
+        if (fn.blocks().count() == (u32)0)
+            return false;
+        IRBlock* entry = (IRBlock*)fn.blocks().get((u32)0);
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRInsn* t = ((IRBlock*)fn.blocks().get(b)).term();
+            if (t == (IRInsn*)0)
+                continue;
+            for (u32 i = (u32)0; i < t.ops().count(); i = i + (u32)1)
+                {
+                IROperand* o = (IROperand*)t.ops().get(i);
+                if (o.kind() == (u8)OPK_BLOCK && o.blk() == entry)
+                    return true;
+                }
             }
         return false;
         }
@@ -165,6 +189,18 @@
             IRBlock* e = side == (u32)0 ? t1 : t0;
             if (b == H || b.phis().count() != (u32)0)
                 continue;
+            // A body entered only by H -> b is dominated by b, and its latch is
+            // one of H's two predecessors. So unless b dominates one of them
+            // the walk below can only fail, and it can cover the rest of the
+            // function first: the exit side of every loop and both sides of
+            // every join that tests, after every rotation (#331).
+            if (_rotDom != (DomTree*)0)
+                {
+                Array* hpre = self.faPreds(fn, H);
+                if (!_rotDom.dominates(b, (IRBlock*)hpre.get((u32)0)) &&
+                    !_rotDom.dominates(b, (IRBlock*)hpre.get((u32)1)))
+                    continue;
+                }
             Array* reg = new Array();
             reg.add((Object*)b);
             // The region's blocks as a set beside the list (#335): each block

@@ -2343,6 +2343,10 @@ class BeFact : Object
     IRBlock* _rotE;
     IRValue* _rotCond;
     bool _rotEntryTrue;   // the guard holds on the entry values: no zero-trip path
+    // rotOne's dominator tree of the current CFG, for rotRecognise's test that
+    // a side can lead to the latch at all; 0 when some edge enters the entry
+    // block, which the tree ignores (then every side is walked).
+    DomTree* _rotDom;
     i64 _rcVal;           // rotConst's result
 
     // ── loop-rotate: a short-circuit chain ──────────────────────────────
