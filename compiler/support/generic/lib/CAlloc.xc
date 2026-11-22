@@ -43,7 +43,7 @@
 // grows is replaced; the old one is never unmapped, so a reader still in it
 // reads valid memory and retries.
 
-#if OS_macos || (ARCH_x86_64 && LIBC_glibc && !OS_android)
+#if OS_macos || ((ARCH_x86_64 || ARCH_arm64) && LIBC_glibc && !OS_android)
 
 pointer dlsym(pointer handle, u8* name);
 pointer mmap(pointer addr, u64 len, i32 prot, i32 flags, i32 fd, i64 off);
@@ -69,6 +69,9 @@ pointer __libc_realloc(pointer p, u64 n);
 pointer __libc_memalign(u64 a, u64 n);
 void __libc_free(pointer p);
 i32 pthread_atfork(pointer prepare, pointer parent, pointer child);
+// glibc's pthread_atfork is a stub in libc_nonshared.a calling this; arm64
+// Linux names it directly, as its executable may not import the stub (#326).
+i32 __register_atfork(pointer prepare, pointer parent, pointer child, pointer dso);
 #else
 i32 malloc_zone_register(pointer zone);
 #endif
@@ -315,6 +318,9 @@ void _xcStart(void)
         _xt_thread_join(h);
 #if OS_macos
     _xcZoneRegister();
+#elif ARCH_arm64
+    // No DSO handle: the program's own handlers, never unregistered.
+    __register_atfork((pointer)&_xcForkPrepare, (pointer)&_xcForkParent, (pointer)&_xcForkChild, (pointer)0);
 #else
     pthread_atfork((pointer)&_xcForkPrepare, (pointer)&_xcForkParent, (pointer)&_xcForkChild);
 #endif
