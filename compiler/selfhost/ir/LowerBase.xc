@@ -7362,37 +7362,47 @@ class ClassInfo
     // Names in SORTED order. Both implementations sort, for the same reason:
     // the phi ORDER is printed, so it has to be a property of the program and
     // not of a hash table.
+    // A sorted copy, by String.compare in n log n (#335; it was an insertion
+    // sort). Equal names are the same bytes, so their order cannot show.
     Array* sortedNames(Array* names)
         {
         Array* out = new Array();
         for (u32 i = (u32)0; i < names.count(); i = i + (u32)1)
-            {
-            String* n = (String*)names.get(i);
-            u32 at = out.count();
-            for (u32 j = (u32)0; j < out.count(); j = j + (u32)1)
-                {
-                if (n.compare((String*)out.get(j)) < (i8)0)
-                    {
-                    at = j;
-                    break;
-                    }
-                }
-            out.insert(at, (Object*)n);
-            }
+            out.add(names.get(i));
+        out.sort();
         return out;
         }
 
+    // b's index in the function's blocks. Each block remembers the index it
+    // was last given (IRBlock.bix), checked before it is trusted; when it is
+    // stale the blocks are numbered again (#335; this was a scan per call, and
+    // the phi merges ask per name per edge).
     u32 blockIndex(IRBlock* b)
         {
-        for (u32 i = (u32)0; i < _fn.blocks().count(); i = i + (u32)1)
-            if ((IRBlock*)_fn.blocks().get(i) == b)
+        Array* bs = _fn.blocks();
+        u32 n = bs.count();
+        if (b != (IRBlock*)0)
+            {
+            u32 i = b.bix();
+            if (i < n && (IRBlock*)bs.get(i) == b)
                 return i;
+            }
+        // Last to first, so a block listed twice answers its first place.
+        for (u32 k = n; k > 0; k = k - 1)
+            ((IRBlock*)bs.get(k - 1)).setBix(k - 1);
+        if (b != (IRBlock*)0)
+            {
+            u32 i = b.bix();
+            if (i < n && (IRBlock*)bs.get(i) == b)
+                return i;
+            }
         return (u32)$FFFFFFFF;
         }
 
     IRBlock* addBlock(String* name)
         {
         IRBlock* b = new IRBlock(name);
+        b.setBix(_fn.blocks().count());   // its index, for blockIndex
         _fn.addBlock(b);
         return b;
         }
@@ -7463,10 +7473,37 @@ class ClassInfo
             String* nm = (String*)bk.get(i);
             merged.set((Hashable*)nm, base.get((Hashable*)nm));
             }
-        Array* names = new Array();
-        for (u32 i = (u32)0; i < bk.count(); i = i + (u32)1)
-            addUnique(names, (String*)bk.get(i));
-        names = sortedNames(names);
+        // A map's keys are distinct already (#335: an addUnique pass over
+        // them was quadratic).
+        Array* names = sortedNames(bk);
+
+        // Phi pairs follow each predecessor's index in the function — the
+        // order the verifier walks predecessors in. Each predecessor's index
+        // read once (#335); the blocks do not change while the names are
+        // merged, so the order is found once for all of them. A stable
+        // insertion sort on the keys gives the order the stable bubble sort
+        // before it did.
+        Array* order = new Array();
+        Array* keys = new Array();
+        for (u32 e = (u32)0; e < blocks.count(); e = e + (u32)1)
+            {
+            order.add((Object*)Number.withU32(e));
+            keys.add((Object*)Number.withU32(blockIndex((IRBlock*)blocks.get(e))));
+            }
+        for (u32 a = (u32)1; a < order.count(); a = a + (u32)1)
+            {
+            u32 j = a;
+            while (j > (u32)0 && ((Number*)keys.get(j - (u32)1)).asU32() > ((Number*)keys.get(j)).asU32())
+                {
+                Object* to = order.get(j - (u32)1);
+                order.set(j - (u32)1, order.get(j));
+                order.set(j, to);
+                Object* tk = keys.get(j - (u32)1);
+                keys.set(j - (u32)1, keys.get(j));
+                keys.set(j, tk);
+                j = j - (u32)1;
+                }
+            }
 
         for (u32 i = (u32)0; i < names.count(); i = i + (u32)1)
             {
@@ -7504,34 +7541,6 @@ class ClassInfo
                 continue;
                 }
 
-            // Phi pairs follow each predecessor's index in the function — the
-            // order the verifier walks predecessors in.
-            // Each predecessor's index read once (#335): the bubble sort asked
-            // blockIndex, a scan of the function's blocks, on every
-            // comparison. A stable insertion sort on the same keys gives the
-            // same order the stable bubble sort did.
-            Array* order = new Array();
-            Array* keys = new Array();
-            for (u32 e = (u32)0; e < blocks.count(); e = e + (u32)1)
-                {
-                order.add((Object*)Number.withU32(e));
-                keys.add((Object*)Number.withU32(blockIndex((IRBlock*)blocks.get(e))));
-                }
-            for (u32 a = (u32)1; a < order.count(); a = a + (u32)1)
-                {
-                u32 j = a;
-                while (j > (u32)0 && ((Number*)keys.get(j - (u32)1)).asU32() > ((Number*)keys.get(j)).asU32())
-                    {
-                    Object* to = order.get(j - (u32)1);
-                    order.set(j - (u32)1, order.get(j));
-                    order.set(j, to);
-                    Object* tk = keys.get(j - (u32)1);
-                    keys.set(j - (u32)1, keys.get(j));
-                    keys.set(j, tk);
-                    j = j - (u32)1;
-                    }
-                }
-
             IRInsn* phi = IRInsn.with(String.withCString("Phi"));
             IRValue* res = new IRValue(first.ty());
             phi.setRes(res);
@@ -7559,11 +7568,9 @@ class ClassInfo
         // inside an arm, out of scope at the join: two sibling-scope `bits`
         // (u64 and u32) became one dead phi of the wrong type and wasm32
         // refused the module (private:docs/bugs/132). Mirrors the reference.
-        Array* names = new Array();
-        Array* kb0 = base.allKeys();
-        for (u32 i = (u32)0; i < kb0.count(); i = i + (u32)1)
-            addUnique(names, (String*)kb0.get(i));
-        names = sortedNames(names);
+        // A map's keys are distinct already (#335).
+        Array* names = sortedNames(base.allKeys());
+        bool aFirst = blockIndex(blockA) <= blockIndex(blockB);
         Map* merged = new Map();
         for (u32 i = (u32)0; i < names.count(); i = i + (u32)1)
             {
@@ -7585,7 +7592,6 @@ class ClassInfo
                 merged.set((Hashable*)name, (Object*)(vA == 0 ? vB : vA));
                 continue;
                 }
-            bool aFirst = blockIndex(blockA) <= blockIndex(blockB);
             IRInsn* phi = IRInsn.with(String.withCString("Phi"));
             IRValue* res = new IRValue(vA.ty());
             phi.setRes(res);
