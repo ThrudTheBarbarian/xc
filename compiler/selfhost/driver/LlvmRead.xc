@@ -1725,23 +1725,7 @@ class LlvmReader
         String* op = word();
         if (op.equals(String.withCString("alloca")))
             {
-            String* lt = llType();
-            String* t = lt != (String*)0 ? irOf(lt) : (String*)0;
-            // A local array (`alloca [256 x double]`, of arrays maybe): a
-            // slot of all its innermost elements, which GEPs into it index.
-            if (t == (String*)0 && lt != (String*)0 && lt.hasPrefix(String.withCString("[")))
-                {
-                Array* dims = new Array();
-                String* leaf = arrayLeaf(lt, dims);
-                if (leaf != (String*)0 && !leaf.equals(String.withCString("Void")) && dims.count() > (u32)0)
-                    {
-                    i64 all = (i64)1;
-                    for (u32 d = (u32)0; d < dims.count(); d = d + (u32)1)
-                        all = all * ((Number*)dims.get(d)).asI64();
-                    if (all > (i64)0)
-                        t = String.withFormat("Agg(%u)", _m.addLayout(IRLayout.array(leaf, (u32)all, widthOf(leaf), alignOf(leaf))));
-                    }
-                }
+            String* t = irOf(llType());
             if (t == (String*)0 || t.equals(String.withCString("Void")))
                 {
                 fail("an alloca of a type not read");
@@ -2535,22 +2519,10 @@ class LlvmReader
             fail("an invoke of an intrinsic");
             return;
             }
-        // The call, after what its operands needed first (a constant
-        // argument's Const), which stays before it.
-        u32 at = before;
-        while (at < _blk.insns().count() && !((IRInsn*)_blk.insns().get(at)).isCall())
-            at = at + (u32)1;
-        if (at >= _blk.insns().count())
+        IRInsn* c = (IRInsn*)_blk.insns().get(before);
+        if (!c.isCall())
             {
             fail("an invoke not read as a call");
-            return;
-            }
-        IRInsn* c = (IRInsn*)_blk.insns().get(at);
-        // Each back end's Invoke calls a symbol: one through a pointer (a
-        // virtual call in a try) is clang's.
-        if (c.op().equals(String.withCString("CallIndirect")))
-            {
-            fail("an invoke through a pointer");
             return;
             }
         IRInsn* inv = IRInsn.with(String.withCString("Invoke"));
@@ -2560,9 +2532,9 @@ class LlvmReader
         inv.setRes(c.res());
         inv.setMemRes(c.memRes());
         Array* after = new Array();
-        for (u32 i = at + (u32)1; i < _blk.insns().count(); i = i + (u32)1)
+        for (u32 i = before + (u32)1; i < _blk.insns().count(); i = i + (u32)1)
             after.add(_blk.insns().get(i));
-        while (_blk.insns().count() > at)
+        while (_blk.insns().count() > before)
             _blk.insns().removeLast();
         _pendingInvoke = inv;
         _invokeAfter = after;
@@ -2640,35 +2612,20 @@ class LlvmReader
             return;
             }
         // A function type for a variadic callee: `(ptr, ...)`.
-        bool fnTy = peek() == (u8)'(';
-        if (fnTy)
+        if (peek() == (u8)'(')
             skipParens();
         skipAttrs();
         ws();
-        // An indirect call (a virtual function, a function pointer): through
-        // the pointer, a CallIndirect, which follows the C convention for
-        // any callee that is not variadic. A variadic one (its function type
-        // written) is clang's.
-        IRValue* fptr = (IRValue*)0;
-        String* callee = String.withCString("");
         if (peek() != (u8)'@')
             {
-            if (fnTy || peek() != (u8)'%')
-                {
-                fail("an indirect call");
-                return;
-                }
-            fptr = operand(irOf(String.withCString("ptr")));
-            if (fptr == (IRValue*)0)
-                return;
+            fail("an indirect call");
+            return;
             }
-        else
-            callee = word();
+        String* callee = word();
         // Markers that mean nothing to xc: not even their operands are read
         // (an alloca's address taken for one would keep the slot in memory).
         if (callee.hasPrefix(String.withCString("@llvm.lifetime.")) || callee.hasPrefix(String.withCString("@llvm.dbg."))
-            || callee.hasPrefix(String.withCString("@llvm.assume"))
-            || callee.equals(String.withCString("@llvm.experimental.noalias.scope.decl")))
+            || callee.hasPrefix(String.withCString("@llvm.assume")))
             return;
         Array* args = new Array();
         Array* zxArg = new Array();
@@ -2870,8 +2827,7 @@ class LlvmReader
             {
             // Markers that mean nothing to xc.
             if (callee.hasPrefix(String.withCString("@llvm.lifetime.")) || callee.hasPrefix(String.withCString("@llvm.dbg."))
-                || callee.hasPrefix(String.withCString("@llvm.assume"))
-                || callee.equals(String.withCString("@llvm.experimental.noalias.scope.decl")))
+                || callee.hasPrefix(String.withCString("@llvm.assume")))
                 return;
             // The maths: the C library's functions of the same meaning
             // (llvm.minnum is fmin, llvm.round C's round), the float forms
@@ -2903,33 +2859,6 @@ class LlvmReader
                              : fam.equals(String.withCString("maxnum")) ? String.withCString("fmax") : fam;
                 lib = f32 ? base.appending(String.withCString("f")) : base;
                 }
-            // llvm.objectsize (a fortified C library call's bound): "not
-            // known", which it may always answer: -1 when asked for the most
-            // (its second operand `i1 false`), 0 for the least.
-            if (callee.hasPrefix(String.withCString("@llvm.objectsize.i")) && args.count() >= (u32)2)
-                {
-                String* call = _s.substringFromByte(_s.byteIndexOf(callee));
-                u32 c1 = call.byteIndexOf(String.withCString(", "));
-                bool least = c1 != String.notFound() && call.substringFromByte(c1 + (u32)2).hasPrefix(String.withCString("i1 true"));
-                define(res, String.withCString("Const"), rt, IROperand.immI(least ? (i64)0 : (i64)-1, rt), (IROperand*)0, (IROperand*)0, (String*)0);
-                return;
-                }
-            // memset, memcpy and memmove: the C library's, without the last
-            // operand (`isvolatile`, i1 false), memset's byte as the int it
-            // takes; each returns its first operand, which LLVM's form drops.
-            bool mset = callee.hasPrefix(String.withCString("@llvm.memset.p0.i"));
-            bool mcpy = callee.hasPrefix(String.withCString("@llvm.memcpy.p0.p0.i"));
-            bool mmov = callee.hasPrefix(String.withCString("@llvm.memmove.p0.p0.i"));
-            bool memFn = (mset || mcpy || mmov) && args.count() == (u32)4 && rt.equals(String.withCString("Void"));
-            if (memFn)
-                {
-                lib = String.withCString(mset ? "memset" : mcpy ? "memcpy" : "memmove");
-                args.removeLast();
-                zxArg.removeLast();
-                if (mset && !((IRValue*)args.get((u32)1)).ty().equals(String.withCString("I32")))
-                    args.set((u32)1, (Object*)emit(String.withCString("ZExt"), String.withCString("I32"),
-                                                   IROperand.useVal((IRValue*)args.get((u32)1)), (IROperand*)0, (IROperand*)0));
-                }
             if (lib == (String*)0)
                 {
                 fail(String.withFormat("an intrinsic not read: %s", callee.cString()).cString());
@@ -2939,43 +2868,23 @@ class LlvmReader
             if (_globals.get((Hashable*)n) == (Object*)0)
                 {
                 _globals.set((Hashable*)n, (Object*)lib);
-                String* sig = (String*)0;
-                if (memFn)
-                    {
-                    IRValue* a0 = (IRValue*)args.get((u32)0);
-                    sig = String.withFormat("(%s, %s, %s) -> %s", a0.ty().cString(), ((IRValue*)args.get((u32)1)).ty().cString(),
-                                            ((IRValue*)args.get((u32)2)).ty().cString(), a0.ty().cString());
-                    }
-                else
-                    {
-                    String* ps = String.withString(rt);
-                    for (u32 q = (u32)1; q < args.count(); q = q + (u32)1)
-                        ps.appendFormat(", %s", rt.cString());
-                    sig = String.withFormat("(%s) -> %s", ps.cString(), rt.cString());
-                    }
+                String* ps = String.withString(rt);
+                for (u32 q = (u32)1; q < args.count(); q = q + (u32)1)
+                    ps.appendFormat(", %s", rt.cString());
+                String* sig = String.withFormat("(%s) -> %s", ps.cString(), rt.cString());
                 _m.addSym(IRSymbol.func(lib, sig, false, true));
                 }
             callee = n;
             }
-        IRInsn* c = (IRInsn*)0;
-        if (fptr != (IRValue*)0)
+        String* sym = (String*)_globals.get((Hashable*)callee);
+        if (sym == (String*)0)
             {
-            c = IRInsn.with(String.withCString("CallIndirect"));
-            c.setCc(String.withCString("CallConv::Standard"));
-            c.add(IROperand.useVal(fptr));
+            fail("a call to a function not declared");
+            return;
             }
-        else
-            {
-            String* sym = (String*)_globals.get((Hashable*)callee);
-            if (sym == (String*)0)
-                {
-                fail("a call to a function not declared");
-                return;
-                }
-            c = IRInsn.with(String.withCString("Call"));
-            c.setCc(String.withCString("CallConv::Standard"));
-            c.add(IROperand.sym(sym));
-            }
+        IRInsn* c = IRInsn.with(String.withCString("Call"));
+        c.setCc(String.withCString("CallConv::Standard"));
+        c.add(IROperand.sym(sym));
         // A zeroext narrow argument goes as the unsigned type, as the callee
         // (clang's code too) reads the whole register.
         for (u32 i = (u32)0; i < args.count(); i = i + (u32)1)
