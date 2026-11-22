@@ -5829,7 +5829,9 @@ class Arm64
                 if (fixed >= (i32)0) vfrom = fixed;
             }
         }
-        if (isDirectCallOp(n.opc()) && first == 1) {
+        // An Invoke (a C++ call in a try) is a direct call as far as this
+        // goes: printf invoked in a try still takes its tail on the stack.
+        if ((isDirectCallOp(n.opc()) || n.isOp(opInvoke)) && first == 1) {
             IROperand* callee = (IROperand*)n.ops().get((u32)0);
             if (callee.kind() == (u8)OPK_SYM) {
                 IRSymbol* s = symbolNamed(callee.name());

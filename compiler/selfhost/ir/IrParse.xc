@@ -750,6 +750,7 @@ class IrParser
         unrollLine();
         speedLine();
         parLine();
+        inlineLine();
         collectDefs(_li, end);
         while (!_failed && _li < end)
             blockOrInsn();
@@ -863,6 +864,21 @@ class IrParser
             _fn.setParKernel((u8)PARK_BLOCK);
         else if (expectWord("outlined"))
             _fn.setParKernel((u8)PARK_OUTLINED);
+        nextLine();
+        }
+
+    // `inline: never` — a function the inliner leaves alone (C's noinline).
+    void inlineLine(void)
+        {
+        u32 save = _ci;
+        if (!expectWord("inline"))
+            {
+            _ci = save;
+            return;
+            }
+        expectChar((u8)':');
+        if (expectWord("never"))
+            _fn.setNoInline(true);
         nextLine();
         }
 

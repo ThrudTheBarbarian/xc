@@ -427,6 +427,9 @@
         IRFunc* callee = self.funcNamed(m, c.name());
         if (callee == 0 || callee == caller)
             return (IRFunc*)0;
+        // C's noinline: kept a call (the reader marks it).
+        if (callee.noInline())
+            return (IRFunc*)0;
         // A subscript check inlines only after bounds-elide, and then nothing else.
         bool isCheck = IRRuntime.inlinesWithChecks(c.name());
         if (isCheck != _inlineChecks)

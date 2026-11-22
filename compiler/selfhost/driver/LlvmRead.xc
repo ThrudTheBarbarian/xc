@@ -65,6 +65,7 @@ class LlvmReader
     Map* _pins;             // "%name" -> IRPinned@ (an alloca)
     Map* _blocks;           // label -> IRBlock@
     Map* _blockNames;       // the IR names given (blockNamed)
+    Map* _noInlineGroups;   // `#N` -> its line, for each attribute group with noinline
     u32 _pinOff;
 
     // The line being read, and where in it.
@@ -224,6 +225,18 @@ class LlvmReader
         {
         _m = m;
         Array* lines = text.splitOnByte((u8)10);
+        // The attribute groups that say noinline (`attributes #3 = {
+        // noinline ... }`): a function naming one is never inlined.
+        _noInlineGroups = new Map();
+        for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1)
+            {
+            String* l = (String*)lines.get(i);
+            if (!l.hasPrefix(String.withCString("attributes #")) || !l.contains(String.withCString(" noinline ")))
+                continue;
+            u32 sp = LlvmReader.byteAfter(l, (u8)' ', (u32)11);
+            if (sp != (u32)$FFFFFFFF)
+                _noInlineGroups.set((Hashable*)l.substringBytes((u32)11, sp - (u32)11), (Object*)l);
+            }
         _locs = new Map();
         if (_path != (String*)0)
             {
@@ -957,6 +970,15 @@ class LlvmReader
         return n;
         }
 
+    // The first c in s at or after `from`, or $FFFFFFFF.
+    static u32 byteAfter(String* s, u8 c, u32 from)
+        {
+        for (u32 k = from; k < s.byteLength(); k = k + (u32)1)
+            if (s.byteAt(k) == c)
+                return k;
+        return (u32)$FFFFFFFF;
+        }
+
     // A decimal number's value (0 for anything else).
     static i64 decimal(String* w)
         {
@@ -1380,11 +1402,30 @@ class LlvmReader
             return;
         _fn = new IRFunc();
         _fn.setName(symFor(name));
+        // noinline: an attribute group on the define line (`... #3 {`), or
+        // the word itself.
+        String* hl = (String*)lines.get(head);
+        if (hl.contains(String.withCString(" noinline ")))
+            _fn.setNoInline(true);
+        else if (_noInlineGroups != (Map*)0)
+            {
+            u32 q = LlvmReader.byteAfter(hl, (u8)'#', (u32)0);
+            while (q != (u32)$FFFFFFFF && !_fn.noInline())
+                {
+                u32 e = q + (u32)1;
+                while (e < hl.byteLength() && hl.byteAt(e) >= (u8)'0' && hl.byteAt(e) <= (u8)'9')
+                    e = e + (u32)1;
+                if (e > q + (u32)1 && _noInlineGroups.get((Hashable*)hl.substringBytes(q, e - q)) != (Object*)0)
+                    _fn.setNoInline(true);
+                q = LlvmReader.byteAfter(hl, (u8)'#', e);
+                }
+            }
         _fn.setRet(zx ? unsignedOf(irOf(ret)) : irOf(ret));
         _vals = new Map();
         _pins = new Map();
         _blocks = new Map();
         _blockNames = new Map();
+        _pairFixups = new Array();
         _pinOff = (u32)0;
         _bad = false;
         _fnWhy = (String*)0;
@@ -1506,6 +1547,8 @@ class LlvmReader
                 continue;
             readInsn(t);
             }
+        if (_readHandlers && !_bad)
+            fixPairPhis();
         if (_readHandlers && !_bad)
             splitPhiPads();
         IRDbg.clearCurrent();
@@ -2055,7 +2098,18 @@ class LlvmReader
             while (eat("["))
                 {
                 ws();
+                // A value, unless it names a slot (an alloca: a std::list's
+                // head), whose address is made in the predecessor below, as
+                // a constant is.
+                u32 vs = _p;
+                bool slot = false;
                 if (peek() == (u8)'%')
+                    {
+                    String* pn = word();
+                    slot = _pins.get((Hashable*)pn) != (Object*)0;
+                    _p = vs;
+                    }
+                if (peek() == (u8)'%' && !slot)
                     {
                     String* vn = word();
                     eat(",");
@@ -2066,8 +2120,8 @@ class LlvmReader
                     phi.add(IROperand.useVal(valNamed(vn, t)));
                     continue;
                     }
-                // A constant (`[ false, %land.lhs ]`, C's && and ||): made in
-                // the predecessor, where it flows from.
+                // A constant (`[ false, %land.lhs ]`, C's && and ||), or a
+                // slot's address: made in the predecessor, where it flows from.
                 u32 cs = _p;
                 while (_p < _s.byteLength() && _s.byteAt(_p) != (u8)',')
                     _p = _p + (u32)1;
@@ -2082,6 +2136,9 @@ class LlvmReader
                 _blk = blockNamed(bn);
                 at(line.substringBytes(cs, ce - cs));
                 IRValue* cv = operand(t);
+                if (cv != (IRValue*)0 && t != (String*)0 && !cv.ty().equals(t) && cv.ty().hasPrefix(String.withCString("Ptr("))
+                    && t.hasPrefix(String.withCString("Ptr(")))
+                    cv = emit(String.withCString("Bitcast"), t, IROperand.useVal(cv), (IROperand*)0, (IROperand*)0);
                 at(line);
                 _p = resume;
                 _blk = here;
@@ -2635,21 +2692,33 @@ class LlvmReader
         }
 
     // A landing pad's pair (`{ ptr, i32 }`: the exception and its selector)
-    // is read as its two values. One a phi named before it was made (a
-    // pair from a later block, `common.resume.op`) took each part by name,
-    // `<pair>$a0` and `<pair>$a1`: those are its parts' copies.
+    // is read as its two values.
     void aggDefined(String* res, Array* pair)
         {
-        if (res == (String*)0)
-            return;
-        _aggParams.set((Hashable*)res, (Object*)pair);
-        for (u32 k = (u32)0; k < (u32)2 && k < pair.count(); k = k + (u32)1)
+        if (res != (String*)0)
+            _aggParams.set((Hashable*)res, (Object*)pair);
+        }
+
+    // A phi of pairs names one made in a later block (`common.resume.op`):
+    // its operands are filled in once the function is read (fixPairPhis).
+    Array* _pairFixups;     // per entry: the phi, the operand's index, the pair's name, the part
+
+    void fixPairPhis(void)
+        {
+        for (u32 i = (u32)0; i + (u32)3 < _pairFixups.count() && !_bad; i = i + (u32)4)
             {
-            String* pn = String.withFormat("%s$a%u", res.cString(), k);
-            IRValue* part = (IRValue*)pair.get(k);
-            if (part != (IRValue*)0 && _vals.get((Hashable*)pn) != (Object*)0)
-                define(pn, String.withCString("Copy"), part.ty(), IROperand.useVal(part), (IROperand*)0, (IROperand*)0, (String*)0);
+            IRInsn* ph = (IRInsn*)_pairFixups.get(i);
+            u32 at = ((Number*)_pairFixups.get(i + (u32)1)).asU32();
+            Array* pair = (Array*)_aggParams.get((Hashable*)_pairFixups.get(i + (u32)2));
+            u32 k = ((Number*)_pairFixups.get(i + (u32)3)).asU32();
+            if (pair == (Array*)0 || pair.get(k) == (Object*)0)
+                {
+                fail("a phi of an aggregate not read (a part not made)");
+                return;
+                }
+            ph.ops().set(at, (Object*)IROperand.useVal((IRValue*)pair.get(k)));
             }
+        _pairFixups = new Array();
         }
 
     // `phi { ptr, i32 } [ %a, %b1 ], ...`: a phi of each part.
@@ -2667,8 +2736,8 @@ class LlvmReader
         String* it = String.withCString("I32");
         IRInsn* p0 = IRInsn.with(String.withCString("Phi"));
         IRInsn* p1 = IRInsn.with(String.withCString("Phi"));
-        IRValue* r0 = valNamed(String.withFormat("%s$a0", res.cString()), pt);
-        IRValue* r1 = valNamed(String.withFormat("%s$a1", res.cString()), it);
+        IRValue* r0 = new IRValue(pt);
+        IRValue* r1 = new IRValue(it);
         p0.setRes(r0);
         p1.setRes(r1);
         while (eat("["))
@@ -2685,17 +2754,25 @@ class LlvmReader
             eat("]");
             eat(",");
             Array* have = (Array*)_aggParams.get((Hashable*)vn);
-            IRValue* v0 = have != (Array*)0 ? (IRValue*)have.get((u32)0) : valNamed(String.withFormat("%s$a0", vn.cString()), pt);
-            IRValue* v1 = have != (Array*)0 ? (IRValue*)have.get((u32)1) : valNamed(String.withFormat("%s$a1", vn.cString()), it);
-            if (v0 == (IRValue*)0 || v1 == (IRValue*)0)
-                {
-                fail("a phi of an aggregate not read (a part not made)");
-                return;
-                }
             p0.add(IROperand.block(blockNamed(bn)));
-            p0.add(IROperand.useVal(v0));
             p1.add(IROperand.block(blockNamed(bn)));
-            p1.add(IROperand.useVal(v1));
+            if (have != (Array*)0 && have.get((u32)0) != (Object*)0 && have.get((u32)1) != (Object*)0)
+                {
+                p0.add(IROperand.useVal((IRValue*)have.get((u32)0)));
+                p1.add(IROperand.useVal((IRValue*)have.get((u32)1)));
+                continue;
+                }
+            // Made later: a stand-in until the function is read.
+            p0.add(IROperand.useVal(new IRValue(pt)));
+            p1.add(IROperand.useVal(new IRValue(it)));
+            for (u32 k = (u32)0; k < (u32)2; k = k + (u32)1)
+                {
+                IRInsn* ph = k == (u32)0 ? p0 : p1;
+                _pairFixups.add((Object*)ph);
+                _pairFixups.add((Object*)Number.with(ph.ops().count() - (u32)1));
+                _pairFixups.add((Object*)vn);
+                _pairFixups.add((Object*)Number.with(k));
+                }
             }
         _blk.addPhi(p0);
         _blk.addPhi(p1);
