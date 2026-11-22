@@ -20,7 +20,7 @@ struct OBJECT
     i32 w;
     i32 h;
     i32 stride;
-    u32 @px;
+    u32 *px;
     }
     // opaque: 2439*8 = 19512 bytes, 8-aligned
     struct theme

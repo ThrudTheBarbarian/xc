@@ -20,7 +20,7 @@ void put(i32 i, i32 r, i32 g, i32 b)
     gSheet[i * (i32)4 + (i32)2] = (u8)b;
     gSheet[i * (i32)4 + (i32)3] = (u8)255;
     }
-UXImage@ gImg;
+UXImage* gImg;
 
 // A view that paints far past its own frame, as a self-scrolling panel paints its page: the part
 // outside its frame must not reach the window.

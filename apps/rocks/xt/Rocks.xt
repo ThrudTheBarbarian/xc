@@ -22,8 +22,8 @@ void main(void)
     // does NOT get to start the window server, and this goes the moment qemu boots properly.
     if (!XGBoot.ensureWindowServer()) { Stdio.printf("Rocks: no window server\n"); return; }
 
-    XGApplication@ app = new XGApplication();
-    Rocks@ r = new Rocks();
+    XGApplication* app = new XGApplication();
+    Rocks* r = new Rocks();
     app.setDelegate(r);
     app.run();
 }

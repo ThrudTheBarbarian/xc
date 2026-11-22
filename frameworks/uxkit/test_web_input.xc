@@ -55,9 +55,9 @@ class Flat : Object<UXOutlineDataSource>
     u8* valueForItem(UXOutlineView* o, Object* item, i32 col) { return (u8*)"row"; }
     }
 
-UXWebDriver@ gWd;
-UXApplication@ gApp;
-UXEvent@ gEv;
+UXWebDriver* gWd;
+UXApplication* gApp;
+UXEvent* gEv;
 // Feed one slot through the decoder and the dispatch, as nextEvent + the run loop would.
 UXEvent* slot(i32 t, i32 a, i32 b, i32 c)
     {

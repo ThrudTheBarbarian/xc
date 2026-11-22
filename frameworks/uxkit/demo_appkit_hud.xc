@@ -14,8 +14,8 @@
 #import "demo_autoquit.xc"
 
 u8* getenv(u8* name);
-UXFrameHud@ gHud;
-UXApplication@ gApp;
+UXFrameHud* gHud;
+UXApplication* gApp;
 i32 gTicks;
 i32 gDone;
 

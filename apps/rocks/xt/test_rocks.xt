@@ -13,7 +13,7 @@
 i32 gAnswer;             // which key the alert will "see"
 i32 fake_events(pointer evp, i32 timeout_ms)
 {
-    aes_event@ ev = (aes_event@)evp;
+    aes_event* ev = (aes_event*)evp;
     ev.type = (i32)AES_KEY;
     ev.key  = gAnswer;
     ev.shift = (i32)0; ev.mx = (i32)0; ev.my = (i32)0; ev.button = (i32)0; ev.wheel = (i32)0;
@@ -22,17 +22,17 @@ i32 fake_events(pointer evp, i32 timeout_ms)
 
 class Harness : Object <XGApplicationDelegate>
 {
-    weak:XGApplication@ app;
-    Rocks@ rocks;
+    weak:XGApplication* app;
+    Rocks* rocks;
     void init(void) { }
 
-    i32 applicationDidStart(XGApplication@ a) {
+    i32 applicationDidStart(XGApplication* a) {
         app = a;
         rocks = new Rocks();
         i32 rc = rocks.applicationDidStart(a);     // build the real app
         if (rc != (i32)0) { Stdio.printf("FAIL: Rocks would not start\n"); a.stop(); return rc; }
 
-        XGViewTree@ doc = rocks.doc;
+        XGViewTree* doc = rocks.doc;
         Stdio.printf("1. resource loaded: %d objects\n", (i16)doc.length());
 
         // ---- 2. click a real widget in the canvas ---------------------------
@@ -45,7 +45,7 @@ class Harness : Object <XGApplicationDelegate>
         Stdio.printf("2. the resource defines a G_BUTTON at object %d\n", btn);
 
         XGRect r = doc.absoluteFrame((u16)btn);
-        XGEvent@ e = new XGEvent();
+        XGEvent* e = new XGEvent();
         e.kind = (u8)XGEventMouseDown;
         e.x = (i16)(r.x + r.w / (i16)2);
         e.y = (i16)(r.y + r.h / (i16)2);
@@ -61,7 +61,7 @@ class Harness : Object <XGApplicationDelegate>
                                                     // in Rocks' quit alert is Cancel
         aes_set_events((pointer)&fake_events);
         bool running_before = true;
-        rocks.onQuit((XGMenuItem@)0);               // the same call MN_SELECTED makes
+        rocks.onQuit((XGMenuItem*)0);               // the same call MN_SELECTED makes
         Stdio.printf("5. File>Quit, alert CANCELLED -> app still running\n");
 
         // ---- 6. the STRUCTURE outline IS the resource's OBJECT tree -----------
@@ -78,8 +78,8 @@ class Harness : Object <XGApplicationDelegate>
         bool expanded = (rows0 == (i32)1) && (rows1 == (i32)1 + kids) && (kids > (i32)0);
 
         // ---- 8. SELECTION IS TWO-WAY -----------------------------------------
-        XGOutlineNode@ on = rocks.outline.nodeAt((i32)1);   // the root's first child
-        RNode@ rn = (RNode@ ?)on.item;
+        XGOutlineNode* on = rocks.outline.nodeAt((i32)1);   // the root's first child
+        RNode* rn = (RNode* ?)on.item;
         rocks.outline.selectRow((i32)1);
         Stdio.printf("8. picked outline row 1 (object %d) -> canvas selection %d\n",
                      (i16)rn.obj, (i16)rocks.sel);
@@ -117,8 +117,8 @@ void main(void)
     // qemu has no SD card, so no boot script started gemd (see Rocks.xt). Test-only.
     if (!XGBoot.ensureWindowServer()) { Stdio.printf("no gemd\n"); return; }
 
-    XGApplication@ app = new XGApplication();
-    Harness@ h = new Harness();
+    XGApplication* app = new XGApplication();
+    Harness* h = new Harness();
     app.setDelegate(h);
     app.run();
 }
