@@ -813,7 +813,7 @@
                 if (def.res() == (IRValue*)0 || def.ops().count() < (u32)1)
                     return false;
                 String* rt = def.res().ty();
-                u32 w = self.irWidth(rt);
+                u32 w = IRType.bytes(rt);
                 if (w == (u32)0 || w > (u32)8)
                     return false;
                 i32 bits = (i32)((i32)w * (i32)8);

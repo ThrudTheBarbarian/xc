@@ -52,7 +52,7 @@
                 idx = idx + (u32)1;
                 continue;
                 }
-            u32 w = self.irWidth(tr.res().ty());
+            u32 w = IRType.bytes(tr.res().ty());
             _narrowInserts = new Array();
             Array* nops = narrowedOperands(fn, defOf, src, tr, w);
             if (nops == 0)
@@ -100,7 +100,7 @@
             return (IRInsn*)0;
         if (src.res() == 0 || src.ops().count() < (u32)2)
             return (IRInsn*)0;
-        if (irWidth(src.res().ty()) <= self.irWidth(tr.res().ty()))
+        if (IRType.bytes(src.res().ty()) <= IRType.bytes(tr.res().ty()))
             return (IRInsn*)0;
         return src;
         }
@@ -128,14 +128,14 @@
                 if ((od.isOp(opZExt) || od.isOp(opSExt)) && od.ops().count() >= 1)
                     {
                     IROperand* inner = (IROperand*)od.ops().get((u32)0);
-                    if (inner.kind() == (u8)OPK_USE && inner.val() != 0 && self.irWidth(inner.val().ty()) == w)
+                    if (inner.kind() == (u8)OPK_USE && inner.val() != 0 && IRType.bytes(inner.val().ty()) == w)
                         {
                         nops.add((Object*)IROperand.useVal(inner.val()));
                         continue;
                         }
                     }
                 }
-            u32 ow = self.irWidth(o.val().ty());
+            u32 ow = IRType.bytes(o.val().ty());
             if (ow == w)
                 {
                 nops.add((Object*)o);

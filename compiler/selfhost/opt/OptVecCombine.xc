@@ -199,7 +199,7 @@
                 continue;
                 }
             String* lane = laneOfVec(n.res().ty());
-            u32 w = self.irWidth(lane);
+            u32 w = IRType.bytes(lane);
             i64 v = ((IROperand*)kc.ops().get((u32)0)).imm();
             if (w < (u32)8)
                 v = v & (((i64)1 << (i64)(w * (u32)8)) - (i64)1);

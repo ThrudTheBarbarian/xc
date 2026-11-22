@@ -469,7 +469,7 @@
             return false;
         if (v < (i64)0 || v >= ((i64)1 << 31))
             return false;
-        u32 bw = self.irWidth(t);
+        u32 bw = IRType.bytes(t);
         if (bw >= (u32)1 && bw < (u32)4 && v >= ((i64)1 << ((u32)8 * bw - (u32)1)))
             return false;
         _rcVal = v;

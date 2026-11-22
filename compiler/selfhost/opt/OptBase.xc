@@ -2654,10 +2654,6 @@ class BeFact : Object
 
     // The byte width of an IR type spelling. Pointers and aggregates are not
     // narrowing candidates, and report 0.
-    u32 irWidth(String* t)
-        {
-        return IRType.bytes(t);
-        }
 
     // Whether fn's vector code may use the bit select and the lane rotate:
     // everywhere on arm64; on x86 in a function 32 or 64 bytes wide (an AVX2
@@ -2704,7 +2700,7 @@ class BeFact : Object
         IROperand* d = (IROperand*)sr.ops().get((u32)1);
         if (c.kind() != (u8)OPK_IMMI || d.kind() != (u8)OPK_IMMI || c.ty() == (String*)0)
             return (IRInsn*)0;
-        i64 w = (i64)(irWidth(c.ty()) * (u32)8);
+        i64 w = (i64)(IRType.bytes(c.ty()) * (u32)8);
         if (w == (i64)0 || c.imm() <= (i64)0 || c.imm() >= w || c.imm() + d.imm() != w)
             return (IRInsn*)0;
         IRInsn* r = IRInsn.with(String.withCString("VRotl"));

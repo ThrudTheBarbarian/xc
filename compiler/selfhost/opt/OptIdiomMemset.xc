@@ -52,7 +52,7 @@
         IRInsn* ivPhi = (IRInsn*)H.phis().get((u32)0);
         if (ivPhi.res() == 0 || ivPhi.memRes() != 0)
             return false;
-        if (irWidth(ivPhi.res().ty()) == (u32)0)
+        if (IRType.bytes(ivPhi.res().ty()) == (u32)0)
             return false;
         IRValue* iv = ivPhi.res();
         for (u32 i = (u32)0; i < H.insns().count(); i = i + (u32)1)

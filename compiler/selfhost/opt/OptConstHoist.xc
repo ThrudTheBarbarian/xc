@@ -115,7 +115,7 @@
                         ity = oth.val().ty();
                     if (ity == (String*)0)
                         continue;
-                    u32 w = self.irWidth(ity);
+                    u32 w = IRType.bytes(ity);
                     if (w == (u32)0 || chArm64CmpImm(imm.imm(), w))
                         continue;
                     String* key = new String();
