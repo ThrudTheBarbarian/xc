@@ -5808,6 +5808,9 @@ void xccMain(void)
         cPathSetHeap((isMacArm64(d) && !isIos(d) && !cElfArm64)
                      || (isX86_64(d) && d.caps().dynamic())
                      || (cElfArm64 && !isAndroid(d)));
+        // arm64 Linux: xcc's half is the image's model, not an object the
+        // link redirects, so the C file's allocator calls are renamed in its IR.
+        cPathSetAllocRedirect(cElfArm64 && !isAndroid(d) ? cAllocRedirects(false) : (Map*)0);
         // -Wpar-auto: the outliner says what it lifted from this file, and why not.
         optSetWarnParAuto(!d.fe().warningSuppressed(String.withCString("par-auto")));
         // C and C++: unwind tables for xcc's functions, so a C++ exception
