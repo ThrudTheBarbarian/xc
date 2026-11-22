@@ -45,7 +45,7 @@ class Counter
     i32 n;
     void bump(i32 by)   { n = n + by; }
     i32  value(void)    { return n; }
-    static Counter@ make(void) { return new Counter(); }
+    static Counter* make(void) { return new Counter(); }
 }
 EOF
 cat > "$W/app2.xc" <<'EOF'
@@ -53,7 +53,7 @@ cat > "$W/app2.xc" <<'EOF'
 #import "Stdio.xc"
 void main(void)
 {
-    Counter@ c = Counter.make();
+    Counter* c = Counter.make();
     c.bump(20);
     c.bump(22);
     Stdio.printf("count=%d\n", c.value());

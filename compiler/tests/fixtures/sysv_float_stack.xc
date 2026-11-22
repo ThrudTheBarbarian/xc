@@ -91,7 +91,7 @@ i32 main(void)
     Stdio.printf("%f\n", b.mix((i64)4, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, (i64)5));
     Weigher* w = b;
     Stdio.printf("%f\n", w.weigh(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0));
-    nine_t@ p = &nine;
+    nine_t* p = &nine;
     Stdio.printf("%f\n", p(2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0));
     Stdio.printf("%f %f %f %f %f %f %f %f %f %f\n", 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0);
     return 0;

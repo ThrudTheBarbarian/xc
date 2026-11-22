@@ -28,12 +28,12 @@ class Item
 
 class Holder
 {
-    weak:Item@ wf;
+    weak:Item* wf;
     void bindBare(void)      { wf = new Item(); }   // T1: bare-ident ivar store
     Item* readField(void)    { return wf; }
 }
 
-weak:Item@ gWeak;
+weak:Item* gWeak;
 
 void main(void)
 {
@@ -56,7 +56,7 @@ void main(void)
 
     // T4 — weak array element store.
     {
-        weak:Item@ warr[3];
+        weak:Item* warr[3];
         warr[0] = new Item();
         warr[1] = new Item();
         Assert.isEqual(gLive, (u16)0);      // T4a: both freed

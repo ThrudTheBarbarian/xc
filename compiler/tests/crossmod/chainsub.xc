@@ -11,6 +11,6 @@ class Sub : Base
 
 class ChainB
     {
-    static Sub@ make(void) { return new Sub(); }
+    static Sub* make(void) { return new Sub(); }
     static u32 viaSub(Sub* s) { return s.h() + s.g() * (u32)10; }
     }

@@ -124,8 +124,8 @@ void main(void)
     Stdio.printf("nested %ld %ld calls %ld\n", (i64)l32[0], (i64)l32[2], (i64)calls);
     i64* q = &g64[2];
     g64[2] = 6;
-    @q += 4;
-    @q *= 3;
-    @q <<= 2;
+    *q += 4;
+    *q *= 3;
+    *q <<= 2;
     Stdio.printf("deref %ld\n", g64[2]);
 }

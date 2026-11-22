@@ -11,7 +11,7 @@ protocol Named { i32 id(); }
 
 class C : A <Named> { i32 id() { return a; } }
 
-void f(Named@ n) { Stdio.printf("f %ld\n", n.id()); }
+void f(Named* n) { Stdio.printf("f %ld\n", n.id()); }
 
 void main(void)
     {

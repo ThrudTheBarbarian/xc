@@ -147,6 +147,11 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
     {
     if (!XTIsPointerSigil([self currentToken].type))
         return NO;
+    // `@`, the old spelling, is retired (#549): it still parses as a sigil, so
+    // the rest of the file reads as meant, but each use is an error.
+    if ([self currentToken].type == XTTokenAt)
+        [_diagnostics emitError:@"'@' is no longer a pointer sigil: use * for pointers"
+                             at:[self currentToken].location];
     [self advance];
     return YES;
     }

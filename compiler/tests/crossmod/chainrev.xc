@@ -9,7 +9,7 @@ i32 main(void)
     {
     Stdio.printf("boot=%lu\n", ChainU.booted());
     Stdio.printf("many=%lu\n", ChainU.many((u32)4));
-    Base@ b = new Base();
+    Base* b = new Base();
     Stdio.printf("base=%lu\n", ChainA.viaBase(b));
     return 0;
     }

@@ -38,7 +38,7 @@ echo "building the ported tools…"
     -I selfhost/lexer -I selfhost/link -I selfhost/defs -I selfhost/preproc -I selfhost/parser -I selfhost/sema \
     -I selfhost/ir -I selfhost/defs -I selfhost/opt >/dev/null
 "${XC_TOOL_XCC:-$BIN/xcc}" --par-style=cpu -O2 -A $XC_HOST_ARCH -H . -o "$W/xtcg9" selfhost/tools/xtcg9.xc \
-    -I selfhost/ir -I selfhost/defs -I selfhost/opt -I selfhost/codegen >/dev/null
+    -I selfhost/ir -I selfhost/defs -I selfhost/opt -I selfhost/codegen -I selfhost/asm >/dev/null
 "${XC_TOOL_XCC:-$BIN/xcc}" --par-style=cpu -O2 -A $XC_HOST_ARCH -H . -o "$W/xtas9" selfhost/tools/xtas9.xc \
     -I selfhost/asm -I selfhost/defs >/dev/null
 

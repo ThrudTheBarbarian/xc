@@ -37,9 +37,9 @@ void show(string tag, i64 v)
 
 void main(void)
 {
-    Impl@ o = new Impl();
-    P@    p = o;        // protocol-typed: dispatch through the itable slot
-    Base@ b = o;        // base-typed: dispatch through the vtable slot
+    Impl* o = new Impl();
+    P*    p = o;        // protocol-typed: dispatch through the itable slot
+    Base* b = o;        // base-typed: dispatch through the vtable slot
 
     show("fn    ", viaFunction());      // expect 295044791 3022825522
     show("direct", o.viaDirect());      // expect 295044791 3022825522

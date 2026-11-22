@@ -206,8 +206,12 @@
             idx.add(r.members.get(i));
         if (r.indexVar != (u32)0)
             idx.add((Object*)Number.withU32(spvEmitR((u32)SPV_LOAD, r.indexType, spvA1(r.indexVar))));
-        else if (r.local)
-            idx.add((Object*)Number.withU32(_sMod.u32c((u32)0)));   // the array itself: its first element
+        else if (r.local || r.runArray)
+            // the array itself, a work item's or a buffer's: its first element.
+            // A buffer read with no index (a scalar global, #563) pointed at the
+            // runtime array, not its element: invalid SPIR-V, which crashed a
+            // driver's compiler.
+            idx.add((Object*)Number.withU32(_sMod.u32c((u32)0)));
         if (idx.count() == (u32)0)
             return r.base;
         Array* a = new Array();
@@ -884,6 +888,7 @@
                 r.storage = (u32)SPV_ST_STORAGEBUFFER;
                 r.members = new Array();
                 r.members.add((Object*)Number.withU32(_sMod.u32c((u32)0)));
+                r.runArray = true;
                 r.pointee = self.mslPointee(rt);
                 r.words = _sWordBufs.get((Hashable*)String.withU32(r.base)) != (Object*)0;
                 r.bytes = _sByteBufs.get((Hashable*)String.withU32(r.base)) != (Object*)0;
@@ -991,6 +996,7 @@
             r.storage = (u32)SPV_ST_STORAGEBUFFER;
             r.members = new Array();
             r.members.add((Object*)Number.withU32(_sMod.u32c((u32)0)));
+            r.runArray = true;
             r.pointee = self.mslPointee(rt);
             r.words = _sWordBufs.get((Hashable*)String.withU32(r.base)) != (Object*)0;
             r.bytes = _sByteBufs.get((Hashable*)String.withU32(r.base)) != (Object*)0;

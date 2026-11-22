@@ -21,9 +21,9 @@ class Shape2(Rep)
         }
     } void main(void)
     {
-    Shape2 @b = makeShape2();
-    Shape2 @d = makeDerived2();
-    Shape2 @s = new Sub2();
+    Shape2 *b = makeShape2();
+    Shape2 *d = makeDerived2();
+    Shape2 *s = new Sub2();
     Stdio.printf("%lu %lu %lu\n", (u32)b.rep(), (u32)d.rep(), (u32)s.rep());
     return;
     }

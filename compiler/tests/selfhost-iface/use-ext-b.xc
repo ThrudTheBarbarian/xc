@@ -15,11 +15,11 @@ class Shape2(RepB)
         {
         return who() + (u16)400;
         }
-    } Shape2 @makeSubB(void)
+    } Shape2 *makeSubB(void)
     {
     return new SubB();
     }
-u16 callRepB(Shape2 @s)
+u16 callRepB(Shape2 *s)
     {
     return s.repB();
     }

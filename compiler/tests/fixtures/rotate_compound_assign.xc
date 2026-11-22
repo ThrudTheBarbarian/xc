@@ -133,7 +133,7 @@ void locals(u8 k, u32 kw, i32 ks)
     u32 p = $12345678;
     u32* pp = &p;
     p <:= 8;    Stdio.printf("pinned <:= 8 %ld\n", (i64)p);
-    p :>= kw;   Stdio.printf("pinned :>= kw %ld %ld\n", (i64)p, (i64)@pp);
+    p :>= kw;   Stdio.printf("pinned :>= kw %ld %ld\n", (i64)p, (i64)*pp);
 }
 
 void globals(u8 k, u32 kw)
@@ -177,8 +177,8 @@ void elements(u8 k, u32 kw)
     lh[at(2)] :>= kw;   Stdio.printf("lh[2] :>= kw %ld\n", (i64)lh[2]);
 
     u32* q = &gw[0];
-    @q = $000000F1;
-    @q <:= 28;          Stdio.printf("@q <:= 28 %ld\n", (i64)gw[0]);
+    *q = $000000F1;
+    *q <:= 28;          Stdio.printf("@q <:= 28 %ld\n", (i64)gw[0]);
     q[at(3)] = 1;
     q[at(3)] :>= 1;     Stdio.printf("q[3] :>= 1 %ld\n", (i64)gw[3]);
     Stdio.printf("element calls %ld\n", (i64)calls);
@@ -204,7 +204,7 @@ void elements(u8 k, u32 kw)
     s.c <:= 8;              Stdio.printf("s.c <:= 8 %ld\n", (i64)s.c);
     P* sp = &ps[1];
     sp[at(0)].b <:= 3;      Stdio.printf("sp[0].b <:= 3 %ld\n", (i64)ps[1].b);
-    (@sp).c :>= 16;         Stdio.printf("(@sp).c :>= 16 %ld\n", (i64)ps[1].c);
+    (*sp).c :>= 16;         Stdio.printf("(@sp).c :>= 16 %ld\n", (i64)ps[1].c);
 }
 
 void main(void)

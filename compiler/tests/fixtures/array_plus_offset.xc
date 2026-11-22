@@ -51,8 +51,8 @@ void main(void)
     put(g + k, (u32)11);
     check("variable offset", g[5] == (u32)11);
 
-    @(g + 6) = (u32)12;
-    check("dereference", g[6] == (u32)12 && @(g + 6) == (u32)12);
+    *(g + 6) = (u32)12;
+    check("dereference", g[6] == (u32)12 && *(g + 6) == (u32)12);
 
     (g + 7)[0] = (u32)13;
     check("subscript of the sum", g[7] == (u32)13);

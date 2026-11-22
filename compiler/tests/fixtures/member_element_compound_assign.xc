@@ -172,8 +172,8 @@ void main(void)
     // A dereferenced pointer to a struct.
     S* q = &ls[0];
     ls[0].b = 40;
-    (@q).b += 2;
-    (@q).b *= 3;
+    (*q).b += 2;
+    (*q).b *= 3;
     Stdio.printf("deref %ld\n", (i64)ls[0].b);
 
     // Class ivars through an array of class pointers.

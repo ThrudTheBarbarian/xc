@@ -1754,10 +1754,10 @@ void injectConformanceHelper(Node* program)
     String* src = String.withCString("");
     src.appendCString("bool _xtc_obj_conforms(pointer vtbl, u32 pid) {\n");
     src.appendCString("  if (vtbl == (pointer)0) { return false; }\n");
-    src.appendCString("  pointer* vp = (pointer@)vtbl;\n");
+    src.appendCString("  pointer* vp = (pointer*)vtbl;\n");
     src.appendCString("  pointer itab = vp[1];\n");
     src.appendCString("  if (itab == (pointer)0) { return false; }\n");
-    src.appendCString("  pointer* ip = (pointer@)itab;\n");
+    src.appendCString("  pointer* ip = (pointer*)itab;\n");
     src.appendCString("  i32 k = (i32)0;\n");
     src.appendCString("  while (ip[k + k] != (pointer)0) {\n");
     src.appendCString("    if ((u32)ip[k + k] == pid) { return true; }\n");

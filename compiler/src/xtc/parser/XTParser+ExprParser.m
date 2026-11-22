@@ -355,7 +355,10 @@ static XTOpInfo operatorInfo(XTTokenType type)
     if (cur.type == XTTokenAt || cur.type == XTTokenStar)
         {
         // Prefix `*` is a dereference; infix `*` is multiply. Reaching here at
-        // all means prefix position, so there is nothing to disambiguate.
+        // all means prefix position, so there is nothing to disambiguate. `@`
+        // is retired (#549).
+        if (cur.type == XTTokenAt)
+            [self.diagnostics emitError:@"'@' is no longer a pointer sigil: use * for pointers" at:cur.location];
         [self advance];
         return [[XTUnaryExprNode alloc] initWithOp:XTUnaryOpDeref operand:[self parseUnary] location:cur.location];
         }

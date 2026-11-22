@@ -8,21 +8,21 @@
 // of type i32"). Invisible while every pinned local was 32 bits or narrower.
 #import "Stdio.xc"
 
-void bump(u64@ p) { @p = @p + (u64)7; }
+void bump(u64* p) { *p = *p + (u64)7; }
 
 void main(void)
 {
     u64 w = (u64)11216243352465308576;
-    u64@ pw = &w;
-    @pw = @pw + (u64)1;
+    u64* pw = &w;
+    *pw = *pw + (u64)1;
     Stdio.printf("w %lu:%lu\n", (u32)(w >> (u64)32), (u32)w);
 
     bump(&w);                             // through a call, so it cannot fold
     Stdio.printf("b %lu:%lu\n", (u32)(w >> (u64)32), (u32)w);
 
     i64 s = (i64)-5000000000;
-    i64@ ps = &s;
-    @ps = @ps - (i64)1;
+    i64* ps = &s;
+    *ps = *ps - (i64)1;
     Stdio.printf("s %lu:%lu\n", (u32)((u64)s >> (u64)32), (u32)s);
     return;
 }

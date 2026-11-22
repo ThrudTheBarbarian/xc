@@ -51,8 +51,8 @@ tool_incs() {
           echo "-I selfhost/asm -I selfhost/defs";;
       xtcg65)    echo "-I selfhost/ir -I selfhost/opt -I selfhost/codegen -I selfhost/driver -I selfhost/defs";;
       xtcg68|xtcgwasm|xtcgx86)
-                 echo "-I selfhost/ir -I selfhost/defs -I selfhost/opt -I selfhost/codegen";;
-      xtcg9)     echo "-I selfhost/ir -I selfhost/defs -I selfhost/opt -I selfhost/codegen";;
+                 echo "-I selfhost/ir -I selfhost/defs -I selfhost/opt -I selfhost/codegen -I selfhost/asm";;
+      xtcg9)     echo "-I selfhost/ir -I selfhost/defs -I selfhost/opt -I selfhost/codegen -I selfhost/asm";;
       xtcga64)   echo "-I selfhost/lexer -I selfhost/link -I selfhost/defs -I selfhost/preproc -I selfhost/parser -I selfhost/sema -I selfhost/ir -I selfhost/opt -I selfhost/codegen -I selfhost/asm";;
       # The front end pulls in the whole chain. The set here was originally
       # lifted from bootstrap.sh, where `-I selfhost/driver` is glued onto a

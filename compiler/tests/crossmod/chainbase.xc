@@ -24,7 +24,7 @@ class ChainA
 // whose startup code calls it.
 class UXRsc
     {
-    static Base@ probe;
+    static Base* probe;
     static u32 boot;
     static void registerObjectFactory(pointer fn)
         {

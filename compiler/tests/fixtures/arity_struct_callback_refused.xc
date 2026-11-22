@@ -5,7 +5,7 @@
 
 typedef void cb_t(i32 x);
 
-struct S { cb_t@ cb; }
+struct S { cb_t* cb; }
 
 void f(i32 x) { Stdio.printf("f %ld\n", x); }
 

@@ -16,7 +16,7 @@ class K : Object
     static void m(B* x) { Stdio.printf("m %ld\n", x.b); }
     }
 
-void pass(Named@ n) { K.m(n); }
+void pass(Named* n) { K.m(n); }
 
 void main(void)
     {

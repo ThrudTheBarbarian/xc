@@ -36,7 +36,7 @@ class Sh () {
 
 void main(void)
 {
-    Sh@ s = new Sh();
+    Sh* s = new Sh();
     s.extra = (u16)7;
     Stdio.printf("%lu %lu %lu\n", (u32)s.area(), (u32)s.drawn(), (u32)s.withExtra());
     return;

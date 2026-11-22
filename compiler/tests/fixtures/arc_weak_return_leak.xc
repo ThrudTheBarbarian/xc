@@ -24,7 +24,7 @@ class Item
 
 // The return type is spelled weak: — it normalises to strong, so this is an
 // ordinary +1-returning maker.
-weak:Item@ makeWeak(void)
+weak:Item* makeWeak(void)
 {
     Item* p = new Item();
     p.v = (u16)5;
@@ -33,9 +33,9 @@ weak:Item@ makeWeak(void)
 
 // A METHOD whose return type is spelled weak: — it normalises to strong too
 // (the parser strips weak: from a method return, not only a free function's).
-class Factory { weak:Item@ make(void) { Item* p = new Item(); p.v = (u16)9; return p; } }
+class Factory { weak:Item* make(void) { Item* p = new Item(); p.v = (u16)9; return p; } }
 
-class Box { weak:Item@ wf; }
+class Box { weak:Item* wf; }
 
 void main(void)
 {

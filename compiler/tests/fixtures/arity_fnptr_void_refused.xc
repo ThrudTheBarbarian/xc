@@ -9,6 +9,6 @@ void f(void) { Stdio.printf("f\n"); }
 
 void main(void)
     {
-    cb_t@ p = &f;
+    cb_t* p = &f;
     p(1);
     }

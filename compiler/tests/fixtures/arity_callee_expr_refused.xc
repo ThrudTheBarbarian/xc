@@ -8,7 +8,7 @@ typedef void cb_t(i32 x);
 
 void f(i32 x) { Stdio.printf("f %ld\n", x); }
 
-cb_t@ get(void) { return &f; }
+cb_t* get(void) { return &f; }
 
 void main(void)
     {

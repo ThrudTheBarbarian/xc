@@ -7,7 +7,7 @@ typedef void cb_t(i32 x);
 
 void f(i32 x) { Stdio.printf("f %ld\n", x); }
 
-class K : Object { cb_t@ cb; }
+class K : Object { cb_t* cb; }
 
 void main(void)
     {

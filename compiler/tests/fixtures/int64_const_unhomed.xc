@@ -25,7 +25,7 @@ class K0 {
 class TC0 {
     u16 v;
 }
-TC0@ gca[3];
+TC0* gca[3];
 u16 gcafill(void) {
     for (i16 i = (i16)0; i < (i16)3; i = i + (i16)1) {
         gca[i] = new TC0();

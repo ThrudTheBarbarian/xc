@@ -18,11 +18,11 @@ class Shape2(RepA)
         {
         return who() + (u16)200;
         }
-    } Shape2 @makeSubA(void)
+    } Shape2 *makeSubA(void)
     {
     return new SubA();
     }
-u16 callRepA(Shape2 @s)
+u16 callRepA(Shape2 *s)
     {
     return s.repA();
     }

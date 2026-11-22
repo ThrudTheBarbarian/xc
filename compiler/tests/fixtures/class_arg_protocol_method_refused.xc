@@ -13,7 +13,7 @@ class C : A <Named> { i32 id() { return a; } }
 
 class K : Object
     {
-    static void m(Named@ n) { Stdio.printf("m %ld\n", n.id()); }
+    static void m(Named* n) { Stdio.printf("m %ld\n", n.id()); }
     }
 
 void main(void)

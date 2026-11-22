@@ -6,7 +6,7 @@
 
 i32 main(void)
     {
-    Sub@ s = ChainB.make();
+    Sub* s = ChainB.make();
     Stdio.printf("base=%lu\n", ChainA.viaBase((Base*)s));
     Stdio.printf("sub=%lu\n", ChainB.viaSub(s));
     Stdio.printf("app=%lu\n", s.h() * (u32)100 + s.f());

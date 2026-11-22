@@ -59,9 +59,9 @@ for m in re.finditer(r'^struct (\w+)\n\{\n(.*?)^\}$', text, re.S | re.M):
 
 def normalise(t):
     """A C function-pointer type has no xtc source spelling that survives to
-    the IR — the original lowers one to Ptr(Ptr(Void)), which is `void@@`.
+    the IR — the original lowers one to Ptr(Ptr(Void)), which is `void**`.
     Read off the original's own IR, not invented."""
-    return 'void@@' if '(' in t else t
+    return 'void**' if '(' in t else t
 
 
 def base(spelling):

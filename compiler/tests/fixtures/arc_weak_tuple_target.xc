@@ -17,11 +17,11 @@ class Item
     void dealloc(void) { gLive = gLive - (u16)1; }
 }
 
-Item@ gKeep;
+Item* gKeep;
 
-Item@, u32 make(void)
+Item*, u32 make(void)
 {
-    Item@ it = new Item();
+    Item* it = new Item();
     gKeep = it;
     return it, (u32)5;
 }
@@ -29,11 +29,11 @@ Item@, u32 make(void)
 void main(void)
 {
     gLive = (u16)0;
-    weak:Item@ w;
+    weak:Item* w;
     u32 k = (u32)0;
     (w, k) = make();
     Stdio.printf("T1 live=%u w=%s k=%u\n", (u32)gLive, w == 0 ? "null" : "set", k);
-    gKeep = (Item@)0;
+    gKeep = (Item*)0;
     Stdio.printf("T1 after: live=%u w=%s\n", (u32)gLive, w == 0 ? "null" : "set");
     return;
 }

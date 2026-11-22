@@ -7,7 +7,7 @@ typedef void cb_t(i32 x);
 
 void f(i32 x) { Stdio.printf("f %ld\n", x); }
 
-void run(cb_t@ cb)
+void run(cb_t* cb)
     {
     cb(1, 2);
     }

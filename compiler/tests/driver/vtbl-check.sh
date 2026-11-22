@@ -87,9 +87,9 @@ class Shape { u32 k; u32 area(void) { return k * k; } }
 class Square : Shape { u32 area(void) { return k * k + (u32)1; } }
 class Shapes
     {
-    static Shape@ make(u32 x)
+    static Shape* make(u32 x)
         {
-        Shape@ s = x > (u32)2 ? (Shape@)new Square() : new Shape();
+        Shape* s = x > (u32)2 ? (Shape*)new Square() : new Shape();
         s.k = x;
         return s;
         }
@@ -100,8 +100,8 @@ cat > "$W/app.xc" <<'XC'
 #import <VtLib>
 i32 main(i32 argc, u8** argv)
     {
-    Shape@ s = Shapes.make((u32)argc + (u32)2);
-    Shape@ t = new Shape();
+    Shape* s = Shapes.make((u32)argc + (u32)2);
+    Shape* t = new Shape();
     t.k = (u32)5;
     Stdio.printf("areas %u %u\n", s.area(), t.area());
     return 0;
@@ -129,7 +129,7 @@ XC
 cat > "$W/pllib.xc" <<'XC'
 #import "Stdio.xc"
 class Shape { u32 k; u32 area(void) { return k * k; } }
-class Shapes { static u32 twice(Shape@ s) { return s.area() * (u32)2; } }
+class Shapes { static u32 twice(Shape* s) { return s.area() * (u32)2; } }
 XC
 cat > "$W/tri.xc" <<'XC'
 // The plugin: a subclass of the library's Shape, and a call through a Shape
@@ -138,8 +138,8 @@ cat > "$W/tri.xc" <<'XC'
 class Tri : Shape { u32 area(void) { return k + (u32)100; } }
 class TriTool
     {
-    static Shape@ make(u32 x) { Tri@ t = new Tri(); t.k = x; return t; }
-    static u32 measure(Shape@ s) { return s.area() + (u32)1; }
+    static Shape* make(u32 x) { Tri* t = new Tri(); t.k = x; return t; }
+    static u32 measure(Shape* s) { return s.area() + (u32)1; }
     }
 XC
 cat > "$W/plhost.xc" <<'XC'
@@ -150,8 +150,8 @@ cat > "$W/plhost.xc" <<'XC'
 #import "Plugin.xc"
 #import <VtLib>
 class Hex : Shape { u32 area(void) { return k + (u32)200; } }
-typedef Shape@ Make_t(u32 x);
-typedef u32 Measure_t(Shape@ s);
+typedef Shape* Make_t(u32 x);
+typedef u32 Measure_t(Shape* s);
 bool answerYes(String* name, String* publisher, String* domain, String* keyId) { return true; }
 i32 main(void)
 {
@@ -160,8 +160,8 @@ i32 main(void)
     Make_t* make = (Make_t*)p.symbol(String.withCString("TriTool$make"));
     Measure_t* measure = (Measure_t*)p.symbol(String.withCString("TriTool$measure"));
     if (make == (Make_t*)0 || measure == (Measure_t*)0) { Stdio.printf("no TriTool\\n"); return 1; }
-    Shape@ t = make((u32)3);
-    Hex@ h = new Hex();
+    Shape* t = make((u32)3);
+    Hex* h = new Hex();
     h.k = (u32)7;
     Stdio.printf("into %u out %u lib %u\n", t.area(), measure(h), Shapes.twice(t));
     return 0;
@@ -170,7 +170,7 @@ XC
 cat > "$W/mo_a.xc" <<'XC'
 class Animal { u32 legs(void) { return (u32)4; } }
 class Bird : Animal { u32 legs(void) { return (u32)2; } }
-class Zoo { static Animal@ pick(u32 i) { return i > (u32)1 ? (Animal@)new Bird() : new Animal(); } }
+class Zoo { static Animal* pick(u32 i) { return i > (u32)1 ? (Animal*)new Bird() : new Animal(); } }
 XC
 cat > "$W/mo_m.xc" <<'XC'
 #import "Stdio.xc"
@@ -178,8 +178,8 @@ cat > "$W/mo_m.xc" <<'XC'
 class Fish : Animal { u32 legs(void) { return (u32)0; } }
 i32 main(i32 argc, u8** argv)
     {
-    Animal@ a = Zoo.pick((u32)argc + (u32)1);
-    Animal@ f = new Fish();
+    Animal* a = Zoo.pick((u32)argc + (u32)1);
+    Animal* f = new Fish();
     Stdio.printf("%u %u\n", a.legs(), f.legs());
     return 0;
     }

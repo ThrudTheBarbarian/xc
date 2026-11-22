@@ -5,8 +5,8 @@
 #import <mod-shape>
 void main(void)
     {
-    Shape2 @s = makeShape2();
-    Shape2 @d = makeDerived2();
+    Shape2 *s = makeShape2();
+    Shape2 *d = makeDerived2();
     Stdio.printf("%u %u\n", s.who(), d.who());
     return;
     }
