@@ -307,6 +307,7 @@ static NSArray<NSNumber*>* spvString(NSString* s)
 @property(nonatomic) BOOL bytes;            // an element of a buffer of 8-bit integers
 @property(nonatomic) uint32_t wordShift;    // a narrow captured value: its bit offset in its word, + 1 (0: none)
 @property(nonatomic) BOOL local;            // a work item's own array (a Function array variable)
+@property(nonatomic) BOOL runArray;         // a buffer whose one member is a runtime array (#563)
 @end
 
 @implementation XTSpvRecipe
@@ -633,8 +634,8 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
     NSMutableArray* idx = [NSMutableArray arrayWithArray:r.members];
     if (r.indexVar)
         [idx addObject:@([self emit:SpvOpLoad type:r.indexType args:@[ @(r.indexVar) ]])];
-    else if (r.local)
-        [idx addObject:@([self.spv u32:0])];   // the array itself: its first element
+    else if (r.local || r.runArray)
+        [idx addObject:@([self.spv u32:0])];   // the array itself, a work item's or a buffer's: its first element (#563)
     if (!idx.count)
         return r.base;
     NSMutableArray* a = [NSMutableArray arrayWithObject:@(r.base)];
@@ -1184,6 +1185,7 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
     r.bytes = b.bytes;
     r.wordShift = b.wordShift;
     r.local = b.local;
+    r.runArray = b.runArray;
     return r;
     }
 
@@ -1366,6 +1368,7 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
                 r.base = [self.bufVar[buf] unsignedIntValue];
                 r.storage = SpvStorageStorageBuffer;
                 r.members = @[ @([self.spv u32:0]) ];
+                r.runArray = YES;
                 r.pointee = rt.pointeeType;
                 r.words = [self.wordBufs containsObject:@(r.base)];
                 r.bytes = [self.byteBufs containsObject:@(r.base)];
@@ -1470,6 +1473,7 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
             r.base = [self.bufVar[@(-1 - (NSInteger)[self.globals indexOfObject:g])] unsignedIntValue];
             r.storage = SpvStorageStorageBuffer;
             r.members = @[ @([self.spv u32:0]) ];
+            r.runArray = YES;
             r.pointee = rt.pointeeType;
             r.words = [self.wordBufs containsObject:@(r.base)];
             r.bytes = [self.byteBufs containsObject:@(r.base)];
