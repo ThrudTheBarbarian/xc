@@ -1221,28 +1221,29 @@ class Pe
         text.appendLE((u32)r, (u32)4);
         }
 
-    // Sort n 12-byte RUNTIME_FUNCTION entries at `at` by their first word
-    // (insertion: the objects' tables come nearly sorted).
+    // Sort n 12-byte RUNTIME_FUNCTION entries at `at` by their first word,
+    // stably (equal keys keep their order), as the insertion sort this
+    // replaces did, in n log n (#335).
     static void sortPdata(SectionBytes* d, u32 at, u32 n)
         {
-        for (u32 i = (u32)1; i < n; i = i + (u32)1)
+        if (n < (u32)2)
+            return;
+        Array* idx = new Array();
+        Array* keys = new Array();
+        Data* was = new Data();
+        for (u32 i = (u32)0; i < n; i = i + (u32)1)
             {
-            u32 e = at + i * (u32)12;
-            u32 key = Pe.rd32s(d, e);
-            u32 w1 = Pe.rd32s(d, e + (u32)4);
-            u32 w2 = Pe.rd32s(d, e + (u32)8);
-            u32 j = i;
-            while (j > (u32)0 && Pe.rd32s(d, at + (j - (u32)1) * (u32)12) > key)
-                {
-                u32 src = at + (j - (u32)1) * (u32)12;
-                for (u32 b = (u32)0; b < (u32)12; b = b + (u32)1)
-                    d.setByteAt(src + (u32)12 + b, d.byteAt(src + b));
-                j = j - (u32)1;
-                }
-            u32 dst = at + j * (u32)12;
-            Pe.wr32s(d, dst, key);
-            Pe.wr32s(d, dst + (u32)4, w1);
-            Pe.wr32s(d, dst + (u32)8, w2);
+            idx.add((Object*)Number.withU32(i));
+            keys.add((Object*)Number.withU32(Pe.rd32s(d, at + i * (u32)12)));
+            }
+        for (u32 b = (u32)0; b < n * (u32)12; b = b + (u32)1)
+            was.appendByte(d.byteAt(at + b));
+        SortStable.byU32(idx, keys);
+        for (u32 i = (u32)0; i < n; i = i + (u32)1)
+            {
+            u32 from = ((Number*)idx.get(i)).asU32() * (u32)12;
+            for (u32 b = (u32)0; b < (u32)12; b = b + (u32)1)
+                d.setByteAt(at + i * (u32)12 + b, was.byteAt(from + b));
             }
         }
     static u32 rd32s(SectionBytes* d, u32 o)

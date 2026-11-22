@@ -153,6 +153,7 @@ class MergedImage
     Map* _syms;        // name -> Number(offset into text, or into data)
     Array* _dataSyms;  // String@ — names whose offset is a DATA offset
     Array* _globals;   // String@ — names this image exports
+    NameSet* _globalSet; // the same names, to look up (#335)
     Array* _fixups;    // X86Fixup@
     Array* _weakUndef; // String@ — weak references, may end up absolute 0
     Array* _weakDef;   // String@ — weak definitions, may be replaced
@@ -183,6 +184,7 @@ class MergedImage
         _syms = new Map();
         _dataSyms = new Array();
         _globals = new Array();
+        _globalSet = new NameSet();
         _fixups = new Array();
         _weakUndef = new Array();
         _weakDef = new Array();
@@ -1686,12 +1688,12 @@ class MergedImage
         _weakUndef.add((Object*)n);
         }
 
+    // Each name once, in the order first added; the set answers "already
+    // there" in one lookup, where a scan made a static link O(G^2) (#335).
     void addGlobal(String* n)
         {
-        for (u32 i = (u32)0; i < _globals.count(); i = i + (u32)1)
-            if (((String*)_globals.get(i)).equals(n))
-                return;
-        _globals.add((Object*)n);
+        if (n == (String*)0 || _globalSet.add(n))
+            _globals.add((Object*)n);
         }
     }
 

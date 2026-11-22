@@ -34,6 +34,7 @@
 #import <Opt>
 #import "OptDefs.xc"
 #import <IrParse>
+#import <NameList>
 #import <LowerBase>
 #import <LowerParCommon>
 #import <LowerParPtx>
@@ -169,7 +170,7 @@
                     if (m.kind() != (u16)nkMethodDecl || !self.isName(m.name(), "dealloc"))
                         continue;
                     if (callsSuperDealloc(self.methodBody(m)))
-                        self.addUnique(_deallocCallsSuper, d.name());
+                        _deallocCallsSuper.add(d.name());
                     }
                 }
             if (_failed)

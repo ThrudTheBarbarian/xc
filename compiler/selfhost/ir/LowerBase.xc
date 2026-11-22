@@ -30,6 +30,7 @@
 #import "IrDefs.xc"
 #import <FloatEncoding>
 #import <ParSpirv>
+#import <NameList>
 #import "ParSpirvDefs.xc"
 #import <ParWgsl>
 #import <Overload>
@@ -465,10 +466,10 @@ class ClassInfo
     Map* _pinSeq;
     Map* _pinNext;
     Map* _arrayElem;    // name -> element spelling, for the array locals
-    Array* _ampTaken;   // names an `&` was applied to
-    Array* _vaCursors;  // names handed to a va_* intrinsic as its cursor
-    Array* _asmNamed;   // names an inline-asm body mentions
-    Array* _weakLocals; // pinned names that are AUTO-ZEROING slots
+    NameList* _ampTaken;   // names an `&` was applied to
+    NameList* _vaCursors;  // names handed to a va_* intrinsic as its cursor
+    NameList* _asmNamed;   // names an inline-asm body mentions
+    NameList* _weakLocals; // pinned names that are AUTO-ZEROING slots
     Map* _boundPair;    // a `^` spelling -> its {recv, code} layout
     Map* _tramps;       // a `^` signature -> its trampoline symbol name
     Array* _pendingFns; // functions synthesised while another was lowering
@@ -487,7 +488,7 @@ class ClassInfo
     Map* _methodParIr;  // …and the IR parameter types, frozen with it
     // Classes whose user `dealloc` explicitly calls `super.dealloc()`: the
     // teardown must not append a second one.
-    Array* _deallocCallsSuper;
+    NameList* _deallocCallsSuper;
     Array* _usedClasses; // classes named by `use X;` — their statics answer
                          // a bare call
     Map* _tupleAgg;      // an IR function name -> its `Agg(N)` return
@@ -528,10 +529,10 @@ class ClassInfo
     IRFunc* _tryPrefixFn;     // …which function they are for
     bool _fnThrows;           // the function being lowered is declared `throws`
     Array* _deferScopes;      // per open scope, the `defer` bodies it registered
-    Array* _strongLocals;     // every name currently holding an owned reference
-    Array* _assignedNames;    // names the body assigns whose slot is a class ptr
+    NameList* _strongLocals;     // every name currently holding an owned reference
+    NameList* _assignedNames;    // names the body assigns whose slot is a class ptr
     Array* _strongParams;     // params those made strong, awaiting enrolment
-    Array* _synthDealloc;     // classes given a generated destructor
+    NameList* _synthDealloc;     // classes given a generated destructor
     Map* _weakArray;          // a local ARRAY of auto-zeroing slots -> its type
     Map* _strongArray;        // a local ARRAY of class pointers -> its type
     Map* _strongStruct;       // struct local -> its type, when it owns a class ref
@@ -845,11 +846,11 @@ class ClassInfo
         _pinSeq = new Map();
         _pinNext = new Map();
         _arrayElem = new Map();
-        _ampTaken = new Array();
-        _assignedNames = new Array();
-        _vaCursors = new Array();
-        _asmNamed = new Array();
-        _weakLocals = new Array();
+        _ampTaken = new NameList();
+        _assignedNames = new NameList();
+        _vaCursors = new NameList();
+        _asmNamed = new NameList();
+        _weakLocals = new NameList();
         _boundPair = new Map();
         _tramps = new Map();
         _pendingFns = new Array();
@@ -864,7 +865,7 @@ class ClassInfo
         _enums = new Map();
         _methodRetIr = new Map();
         _methodParIr = new Map();
-        _deallocCallsSuper = new Array();
+        _deallocCallsSuper = new NameList();
         _usedClasses = new Array();
         _tupleAgg = new Map();
         _staticLocals = (u32)0;
@@ -877,8 +878,8 @@ class ClassInfo
         _valueClass = new Map();
         _arcScopes = new Array();
         _deferScopes = new Array();
-        _strongLocals = new Array();
-        _synthDealloc = new Array();
+        _strongLocals = new NameList();
+        _synthDealloc = new NameList();
         _strongStruct = new Map();
         _bcTo = new Array();
         _bcFrom = new Array();
@@ -2415,7 +2416,7 @@ class ClassInfo
                 // as reads/writes route through pinAddrNamed's FieldAddr(base, 2).
                 // The bare AddrOf handed `&cb` the link region, so word[0] read
                 // the null prev link, not the pair's recv (bug 168).
-                if (hasName(_weakLocals, target.name()))
+                if (_weakLocals.has(target.name()))
                     return pinAddrNamed(p, target.name());
                 Array* ops = new Array();
                 ops.add((Object*)IROperand.useVal(p.val()));
@@ -3626,7 +3627,7 @@ class ClassInfo
     IRValue* pinAddrNamed(IRPinned* p, String* name)
         {
         IRValue* base = pinSlotAddr(p);
-        if (name == 0 || !hasName(_weakLocals, name))
+        if (name == 0 || !_weakLocals.has(name))
             return base;
         String* payload = (String*)_pinAst.get((Hashable*)name);
         return fieldAddr(base, (u32)2, ptrTo(irType(payload)));
@@ -5837,7 +5838,7 @@ class ClassInfo
             // the slot adopts it. Either way the OLD occupant is released —
             // after the retain, so `p = p` cannot free the object it is about
             // to keep.
-            if (hasName(_strongLocals, lhs.name()))
+            if (_strongLocals.has(lhs.name()))
                 {
                 if (rhsIsBorrowed(n.kid((u32)1)) && isAnyClassPointer(n.kid((u32)1).ty()))
                     refOp(String.withCString("Retain"), c);
@@ -9622,14 +9623,14 @@ class ClassInfo
             // and its payload is not zeroed at the declaration, so at -O0 the
             // release read frame litter (SIGBUS). As the reference, whose
             // strong locals never include a weak one.
-            if (hasName(_strongLocals, t.name()) && !hasName(_weakLocals, t.name()))
+            if (_strongLocals.has(t.name()) && !_weakLocals.has(t.name()))
                 refOp(String.withCString("Release"),
                       loadThrough(addr, (String*)_pinAst.get((Hashable*)t.name())));
             storeThrough(addr, fv);
             tupleWeakRelink(p, t.name(), (String*)_pinAst.get((Hashable*)t.name()), fv);
             return;
             }
-        if (hasName(_strongLocals, t.name()))
+        if (_strongLocals.has(t.name()))
             refOp(String.withCString("Release"), (IRValue*)existing);
         _locals.set((Hashable*)t.name(), (Object*)fv);
         }
@@ -9704,7 +9705,7 @@ class ClassInfo
             }
         // An auto-zeroing local is enrolled in the scope it is DECLARED in,
         // and its links are zeroed before anything can follow them.
-        if (hasName(_weakLocals, n.name()))
+        if (_weakLocals.has(n.name()))
             {
             weakLinkInit(n.name());
             noteStrongLocal(n.name());
@@ -12958,8 +12959,8 @@ class ClassInfo
                 return;
         Object* lv = _locals.get((Hashable*)name);
         Object* lt = _localTypes.get((Hashable*)name);
-        bool st = hasName(_strongLocals, name);
-        bool wp = hasName(_weakLocals, name);
+        bool st = _strongLocals.has(name);
+        bool wp = _weakLocals.has(name);
         Object* sa = _strongArray.get((Hashable*)name);
         Object* wa = _weakArray.get((Hashable*)name);
         Object* ss = _strongStruct.get((Hashable*)name);
@@ -13011,13 +13012,13 @@ class ClassInfo
             else
                 _localTypes.remove((Hashable*)name);
             if (sv.strong())
-                addUnique(_strongLocals, name);
+                _strongLocals.add(name);
             else
-                removeName(_strongLocals, name);
+                _strongLocals.remove(name);
             if (sv.weakPinned())
-                addUnique(_weakLocals, name);
+                _weakLocals.add(name);
             else
-                removeName(_weakLocals, name);
+                _weakLocals.remove(name);
             if (sv.strongArr() != 0)
                 _strongArray.set((Hashable*)name, sv.strongArr());
             else
@@ -13105,7 +13106,7 @@ class ClassInfo
             Node* p = d.kid(i);
             if (p.kind() != (u16)nkParam)
                 continue;
-            if (!hasName(_assignedNames, p.name()))
+            if (!_assignedNames.has(p.name()))
                 continue;
             // The PARAMETER must be the class pointer: the body's assignment
             // may be to an inner local of the same name that shadows it (a
@@ -13126,7 +13127,7 @@ class ClassInfo
 
     void noteStrongLocal(String* name)
         {
-        addUnique(_strongLocals, name);
+        _strongLocals.add(name);
         if (_arcScopes.count() == (u32)0)
             return;
         Array* frame = (Array*)_arcScopes.get(_arcScopes.count() - (u32)1);
@@ -13191,7 +13192,7 @@ class ClassInfo
         IRValue* root = bitcastRoot(v);
         for (u32 i = (u32)0; i < _strongLocals.count(); i = i + (u32)1)
             {
-            Object* lv = _locals.get((Hashable*)(String*)_strongLocals.get(i));
+            Object* lv = _locals.get((Hashable*)_strongLocals.get(i));
             if (lv == 0)
                 continue;
             if ((IRValue*)lv == v || (IRValue*)lv == root)
@@ -13431,7 +13432,7 @@ class ClassInfo
         // further up, so the whole hierarchy comes apart exactly once — and
         // is skipped when the user body already said `super.dealloc()`, or it
         // would run twice.
-        if (hasName(_deallocCallsSuper, _curClass.name()))
+        if (_deallocCallsSuper.has(_curClass.name()))
             return;
         for (ClassInfo* p = _curClass.parent(); p != 0; p = p.parent())
             {
@@ -13531,7 +13532,7 @@ class ClassInfo
             return;
         if (lv != 0 && _returning != 0 && (IRValue*)lv == bitcastRoot(_returning))
             return;
-        if (hasName(_weakLocals, name))
+        if (_weakLocals.has(name))
             {
             IRPinned* p = pinOf(name);
             if (p != 0)
@@ -13593,7 +13594,7 @@ class ClassInfo
         {
         Array* frame = (Array*)_arcScopes.get(si);
         for (u32 i = (u32)0; i < frame.count(); i = i + (u32)1)
-            removeName(_strongLocals, (String*)frame.get(i));
+            _strongLocals.remove((String*)frame.get(i));
         if (si < _shadowScopes.count())
             restoreShadows((Array*)_shadowScopes.get(si));
         }
@@ -13621,8 +13622,8 @@ class ClassInfo
         {
         refillMap(_locals, (Map*)t.get((u32)0));
         refillMap(_localTypes, (Map*)t.get((u32)1));
-        refillArray(_strongLocals, (Array*)t.get((u32)2));
-        refillArray(_weakLocals, (Array*)t.get((u32)3));
+        _strongLocals.refill((NameList*)t.get((u32)2));
+        _weakLocals.refill((NameList*)t.get((u32)3));
         refillMap(_strongArray, (Map*)t.get((u32)4));
         refillMap(_weakArray, (Map*)t.get((u32)5));
         refillMap(_strongStruct, (Map*)t.get((u32)6));
@@ -13654,7 +13655,7 @@ class ClassInfo
             return;
         Array* frame = (Array*)_arcScopes.get(_arcScopes.count() - (u32)1);
         for (u32 i = (u32)0; i < frame.count(); i = i + (u32)1)
-            removeName(_strongLocals, (String*)frame.get(i));
+            _strongLocals.remove((String*)frame.get(i));
         _arcScopes.removeAt(_arcScopes.count() - (u32)1);
         if (_deferScopes.count() > (u32)0)
             _deferScopes.removeAt(_deferScopes.count() - (u32)1);
@@ -14617,7 +14618,7 @@ class ClassInfo
         IRSymbol* ds = IRSymbol.func(dname, sig, false, false);
         ds.setPlain();
         _m.addSym(ds);
-        addUnique(_synthDealloc, cls.name());
+        _synthDealloc.add(cls.name());
         }
 
     // The generated body: release each of the class's OWN strong ivars, in
@@ -14824,10 +14825,10 @@ class ClassInfo
 
     void preScanPinned(Node* body)
         {
-        _ampTaken = new Array();
-        _assignedNames = new Array();
-        _vaCursors = new Array();
-        _asmNamed = new Array();
+        _ampTaken = new NameList();
+        _assignedNames = new NameList();
+        _vaCursors = new NameList();
+        _asmNamed = new NameList();
 
         // A struct declared INSIDE the function names a shape the pre-scan has
         // to know about before it can decide which locals are aggregates —
@@ -14840,6 +14841,7 @@ class ClassInfo
         // they must not be pinned even when address-taken (bug 174).
         Array* staticNames = new Array();
         collectStaticLocalNames(body, staticNames);
+        NameList* staticSet = NameList.of(staticNames);
         // A function with a goto pins ALL its locals (so a jump is a plain
         // branch, no SSA value reconstruction across the edge). Reject the cases
         // the pinned model cannot yet tear down on a jump.
@@ -14872,7 +14874,7 @@ class ClassInfo
             Array* all = new Array();
             collectDbgLocalNames(body, all);
             Map* decls = new Map();
-            collectDbgDeclTypes(body, all, decls);
+            collectDbgDeclTypes(body, NameList.of(all), decls);
             for (u32 i = (u32)0; i < all.count(); i = i + (u32)1)
                 {
                 String* nm = (String*)all.get(i);
@@ -14889,7 +14891,7 @@ class ClassInfo
                 if (!isName(pn, "self") && scalarParam && !hasName(all, pn))
                     {
                     addUnique(addressed, pn);
-                    addUnique(_ampTaken, pn);
+                    _ampTaken.add(pn);
                     }
                 }
             }
@@ -14903,7 +14905,7 @@ class ClassInfo
         for (u32 i = (u32)0; i < aggNames.count(); i = i + (u32)1)
             {
             String* nm = (String*)aggNames.get(i);
-            if (hasName(staticNames, nm))
+            if (staticSet.has(nm))
                 continue; // static: global-backed (bug 174)
             addUnique(addressed, nm);
             String* ty = (String*)aggTypes.get((Hashable*)nm);
@@ -14911,7 +14913,7 @@ class ClassInfo
                 _arrayElem.set((Hashable*)nm, (Object*)elementOf(ty));
             }
         for (u32 i = (u32)0; i < _vaCursors.count(); i = i + (u32)1)
-            addUnique(addressed, (String*)_vaCursors.get(i));
+            addUnique(addressed, _vaCursors.get(i));
         if (addressed.count() == (u32)0)
             return;
 
@@ -14919,7 +14921,7 @@ class ClassInfo
         // aggregate walk already carries an authoritative one, so it wins.
         Map* typesByName = new Map();
         _pinDeclTys = new Map();
-        collectVarDeclTypes(body, addressed, typesByName);
+        collectVarDeclTypes(body, NameList.of(addressed), typesByName);
         for (u32 i = (u32)0; i < aggNames.count(); i = i + (u32)1)
             {
             String* nm = (String*)aggNames.get(i);
@@ -14931,7 +14933,7 @@ class ClassInfo
         for (u32 i = (u32)0; i < sorted.count(); i = i + (u32)1)
             {
             String* name = (String*)sorted.get(i);
-            if (hasName(staticNames, name))
+            if (staticSet.has(name))
                 continue; // static: global-backed (bug 174)
             Object* t = typesByName.get((Hashable*)name);
             if (t == 0)
@@ -14953,7 +14955,7 @@ class ClassInfo
                 // feeds later calls (bug 202). Asm-named params keep the alias
                 // (they need the param's ZP address); aggregates ride their
                 // prologue slot. So only `&`-taken, non-asm, non-Agg params.
-                if (pv != 0 && pinOf(name) == 0 && hasName(_ampTaken, name) && !hasName(_asmNamed, name) && !isAggIr(((IRValue*)pv).ty()))
+                if (pv != 0 && pinOf(name) == 0 && _ampTaken.has(name) && !_asmNamed.has(name) && !isAggIr(((IRValue*)pv).ty()))
                     {
                     IRValue* v = (IRValue*)pv;
                     IRPinned* p = IRPinned.with(new IRValue(v.ty()), v.ty(), off, true);
@@ -14991,7 +14993,7 @@ class ClassInfo
             // type and never read the offset, so reserving space by advancing
             // the offset would let the links land on a neighbour.
             if (isWeakSlot(ast))
-                addUnique(_weakLocals, name);
+                _weakLocals.add(name);
             // An `&`-taken local, a va cursor, and an array all escape: the
             // pointer reaches a callee, which reads and writes through it. The
             // backend has to give them storage a call cannot reuse.
@@ -15003,7 +15005,7 @@ class ClassInfo
             // A stack instance is only ever reached through its self-pointer,
             // which is handed to every method it calls — so it escapes for the
             // same reason an `&`-taken local does.
-            bool esc = hasName(_ampTaken, name) || hasName(_vaCursors, name) || _valueClass.get((Hashable*)name) != 0 || (_arrayElem.get((Hashable*)name) != 0 && !hasName(_asmNamed, name));
+            bool esc = _ampTaken.has(name) || _vaCursors.has(name) || _valueClass.get((Hashable*)name) != 0 || (_arrayElem.get((Hashable*)name) != 0 && !_asmNamed.has(name));
             // One slot per DECLARATION of the name — a name declared twice in
             // two blocks is two locals, and giving them one slot makes the
             // second's width and contents overwrite the first's.
@@ -15143,14 +15145,14 @@ class ClassInfo
 
     // -g: EVERY declaration's type per name (collectVarDeclTypes keeps only
     // the distinct ones), over the same statements it walks.
-    void collectDbgDeclTypes(Node* n, Array* names, Map* out)
+    void collectDbgDeclTypes(Node* n, NameList* names, Map* out)
         {
         if (n == 0)
             return;
         u16 k = n.kind();
         if (k == (u16)nkVariableDecl)
             {
-            if (n.name() != 0 && n.op() != 0 && hasName(names, n.name()))
+            if (n.name() != 0 && n.op() != 0 && names.has(n.name()))
                 {
                 Object* seq = out.get((Hashable*)n.name());
                 if (seq == 0)
@@ -15254,7 +15256,10 @@ class ClassInfo
             for (u32 i = (u32)0; i < n.kidCount(); i = i + (u32)1)
                 {
                 collectAsmIdentifiers(n.kid(i).name(), out);
-                collectAsmIdentifiers(n.kid(i).name(), _asmNamed);
+                Array* named = new Array();
+                collectAsmIdentifiers(n.kid(i).name(), named);
+                for (u32 j = (u32)0; j < named.count(); j = j + (u32)1)
+                    _asmNamed.add((String*)named.get(j));
                 }
             return;
             }
@@ -15278,7 +15283,7 @@ class ClassInfo
             if (cur != 0 && cur.kind() == (u16)nkIdent)
                 {
                 addUnique(out, cur.name());
-                addUnique(_ampTaken, cur.name());
+                _ampTaken.add(cur.name());
                 }
             }
         // A plain `name = …` whose slot is a class pointer. A PARAMETER that
@@ -15287,10 +15292,10 @@ class ClassInfo
         // pre-pass over the body, so it is collected here rather than in a
         // second traversal to drift against.
         if (k == (u16)nkAssign && n.kidCount() > (u32)0 && n.kid((u32)0).kind() == (u16)nkIdent && isClassPointer(n.kid((u32)0).ty()))
-            addUnique(_assignedNames, n.kid((u32)0).name());
+            _assignedNames.add(n.kid((u32)0).name());
         if (k == (u16)nkCall && n.sym() != 0 && n.sym().hasPrefix(String.withCString("__intrinsic_va_")) && n.kidCount() > (u32)0 && n.kid((u32)0).kind() == (u16)nkIdent)
             {
-            addUnique(_vaCursors, n.kid((u32)0).name());
+            _vaCursors.add(n.kid((u32)0).name());
             }
         if (preScanNested(k) || k == (u16)nkBlock || k == (u16)nkIf || k == (u16)nkWhile || k == (u16)nkForCStyle || k == (u16)nkReturn || k == (u16)nkExprStatement || k == (u16)nkVariableDecl || k == (u16)nkUnary || k == (u16)nkPostfix || k == (u16)nkBinary || k == (u16)nkAssign || k == (u16)nkCall || k == (u16)nkMethodCall || k == (u16)nkSubscript || k == (u16)nkMember || k == (u16)nkCast || k == (u16)nkTernary || k == (u16)nkMarkerInit || k == (u16)nkMarkerCond || k == (u16)nkMarkerStep)
             {
@@ -15401,14 +15406,14 @@ class ClassInfo
             }
         }
 
-    void collectVarDeclTypes(Node* n, Array* names, Map* out)
+    void collectVarDeclTypes(Node* n, NameList* names, Map* out)
         {
         if (n == 0)
             return;
         u16 k = n.kind();
         if (k == (u16)nkVariableDecl)
             {
-            if (n.name() != 0 && n.op() != 0 && hasName(names, n.name()))
+            if (n.name() != 0 && n.op() != 0 && names.has(n.name()))
                 {
                 out.set((Hashable*)n.name(), (Object*)n.op());
                 // …and EVERY declaration of the name, in order. Two blocks can
@@ -15544,7 +15549,7 @@ class ClassInfo
             if (_failed)
                 return;
             }
-        if (hasName(_synthDealloc, cls.name()))
+        if (_synthDealloc.has(cls.name()))
             emitSynthDeallocBody(info, cls);
         }
 
@@ -15947,7 +15952,7 @@ class ClassInfo
         _pinNext = new Map();
         _arrayElem = new Map();
         _valueClass = new Map();
-        _weakLocals = new Array();
+        _weakLocals = new NameList();
         _weakArray = new Map();
         _strongArray = new Map();
         _strongStruct = new Map();
@@ -15958,7 +15963,7 @@ class ClassInfo
         _tryHandlers = new Array();
         _usedHandlers = new Array();
         _fnThrows = false;
-        _strongLocals = new Array();
+        _strongLocals = new NameList();
         _curClass = (ClassInfo*)0;
         _curMethodName = (String*)0;
         _staticSelfClass = (String*)0;
