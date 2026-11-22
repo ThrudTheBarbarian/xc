@@ -52,6 +52,17 @@ echo "$libs" | grep -q "libRuntimeSupport\.$EXT" && echo "  ok: lift loads libRu
 echo "$libs" | grep -q "libRuntime\.$EXT" && { echo "  FAIL: lift loads libRuntime as well"; fail=1; } || echo "  ok: lift loads no libRuntime beside it"
 n=$(echo "$libs" | grep -c "libRuntimeSupport\.$EXT")
 [ "$n" = 1 ] || { echo "  FAIL: lift loads libRuntimeSupport $n times"; fail=1; }
+# …and carries no object runtime of its own: the library's is the one
+# (two kept apart what each other set: the registry the heap fills and
+# Par.spanOf reads, the threads flag). nm reads nothing from an arm64-linux
+# image, so there the dynamic symbols say it: _xtc_alloc_object imported.
+if nm "$W/lift" 2>/dev/null | grep -q .; then
+    nm "$W/lift" | grep -qE ' [Tt] _?_xtc_alloc_object$' && { echo "  FAIL: lift carries its own object runtime"; fail=1; } \
+        || echo "  ok: lift carries no object runtime of its own"
+elif command -v readelf > /dev/null 2>&1; then
+    readelf --use-dynamic -s -W "$W/lift" 2>/dev/null | grep -qE ' UND _xtc_alloc_object$' \
+        && echo "  ok: lift carries no object runtime of its own" || { echo "  FAIL: lift carries its own object runtime"; fail=1; }
+fi
 # Its loops still run as blocks.
 "$XC" -q -O2 -H . -Wpar-auto -o "$W/lift2" "$W/lift.c" > "$W/w" 2>&1
 grep -q "became a 'par' block" "$W/w" && echo "  ok: lift's loops are lifted" || { echo "  FAIL: lift's loops were not lifted"; head -3 "$W/w"; fail=1; }
