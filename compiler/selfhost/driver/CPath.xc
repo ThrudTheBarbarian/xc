@@ -233,6 +233,8 @@ class CPath
     {
         return (c >= (u8)'a' && c <= (u8)'z') || (c >= (u8)'A' && c <= (u8)'Z') || (c >= (u8)'0' && c <= (u8)'9')
             || c == (u8)'_' || c == (u8)'.' || c == (u8)'$' || c == (u8)'-';
+    }
+
     // The C file's functions (those the stub module did not bring) name the
     // heap's allocator, not libc's (#326): every call, and every address
     // taken, of malloc, free and the rest. The runtime's own allocations, in
