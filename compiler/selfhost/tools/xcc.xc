@@ -7085,6 +7085,9 @@ void usage(void)
     Stdio.printf("  --emit-lib                 Build a shared library, with its interface\n");
     Stdio.printf("                             embedded (arm64, x86_64, arm9, wasm32)\n");
     Stdio.printf("  --emit-runtime             Build the target's libRuntime from its root file\n");
+    Stdio.printf("  --emit-runtime-support     Build the target's libRuntimeSupport (the runtime\n");
+    Stdio.printf("                             with its standard library), which C and C++\n");
+    Stdio.printf("                             programs link\n");
     Stdio.printf("  --no-runtime-lib           Compile the runtime in as source, not linking the\n");
     Stdio.printf("                             target's prebuilt libRuntime\n");
     Stdio.printf("  -dynamic                   (-A x86_64) Link against glibc and the -l\n");
