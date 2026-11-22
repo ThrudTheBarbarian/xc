@@ -9837,18 +9837,26 @@ class Parser
         return lhs;
     }
 
-    // The language is moving from `@` to `*` (`u8@` -> `u8*`, `@p` -> `*p`), so
-    // both spellings are accepted while the tree converts. `*` is unambiguous
-    // despite also being multiply: a sigil is a suffix in a TYPE or a prefix in
-    // an expression, and multiply is infix, so the two never share a position.
+    // `*` is the pointer sigil. It is unambiguous despite also being multiply:
+    // a sigil is a suffix in a TYPE or a prefix in an expression, and multiply
+    // is infix, so the two never share a position. `@`, the old spelling, is
+    // retired (#549): it still parses as a sigil, so the rest of the file reads
+    // as meant, but each use is an error.
     bool isPointerSigil(u16 t)
     {
         return t == (u16)tokAt || t == (u16)tokStar;
     }
 
+    void refuseAtSigil(Token* t)
+    {
+        if (t != (Token*)0 && t.type() == (u16)tokAt)
+            _errorAtTok(String.withCString("'@' is no longer a pointer sigil: use * for pointers"), t);
+    }
+
     bool matchPointerSigil(void)
     {
         if (!isPointerSigil(curType())) return false;
+        refuseAtSigil(cur());
         advance();
         return true;
     }
@@ -9861,6 +9869,7 @@ class Parser
             || t == (u16)tokPlusPlus || t == (u16)tokMinusMinus
             || t == (u16)tokLess || t == (u16)tokByte3) {
             Token* op = advance();
+            refuseAtSigil(op);
             // The OPERATOR's position. mk() takes the token the parser is
             // looking at, which by here is the operand — so `&x` reported the
             // `x`, one column right of where the reference points. Same rule

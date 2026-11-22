@@ -16,6 +16,6 @@ class K : Object <Taker>
 
 void main(void)
     {
-    Taker@ t = new K();
+    Taker* t = new K();
     t.take(new B());
     }

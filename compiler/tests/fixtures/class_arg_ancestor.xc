@@ -16,9 +16,9 @@ class A2 : A <Named>
     }
 
 void f(A2* x) { Stdio.printf("f %ld %ld\n", x.a, x.b); }
-void g(Named@ n) { Stdio.printf("g %ld\n", n.id()); }
+void g(Named* n) { Stdio.printf("g %ld\n", n.id()); }
 void h(A2* x) { Stdio.printf("h %ld\n", x.b); }
-void viaProto(Named@ n) { h(n); }
+void viaProto(Named* n) { h(n); }
 
 protocol Taker { void take(A2* x); }
 
@@ -47,7 +47,7 @@ void main(void)
     K* k = new K();
     k.m(obj);
     k.self1(up);
-    Taker@ t = k;
+    Taker* t = k;
     t.take(up);
     g(obj);
     viaProto(two);

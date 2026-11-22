@@ -9,6 +9,6 @@ void f(i32 n, ...) { Stdio.printf("f %ld\n", n); }
 
 void main(void)
     {
-    log_t@ p = &f;
+    log_t* p = &f;
     p();
     }

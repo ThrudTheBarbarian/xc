@@ -33,9 +33,9 @@ class Der2 : Base2
 
 i32 main(void)
     {
-    Crate@ c = new Crate();
-    Box@ a = ProtoLib.make();
-    Base2@ b = new Der2();
+    Crate* c = new Crate();
+    Box* a = ProtoLib.make();
+    Base2* b = new Der2();
     Stdio.printf("own=%lu\n", b.f());
     Stdio.printf("lib-hash=%lu\n", ProtoLib.viaHashable((Hashable*)c));
     Stdio.printf("lib-cmp=%d\n", ProtoLib.viaComparable((Comparable*)c, (Object*)a) ? (i32)1 : (i32)0);

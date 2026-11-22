@@ -40,10 +40,10 @@ class Der2 : Base2
 
 i32 main(void)
     {
-    Tag@ t = new Tag();
-    Box@ a = ProtoLib.make();
-    Base2@ b = new Der2();
-    String@ s = String.withCString("hello");
+    Tag* t = new Tag();
+    Box* a = ProtoLib.make();
+    Base2* b = new Der2();
+    String* s = String.withCString("hello");
     Stdio.printf("own=%lu\n", b.f());
     Stdio.printf("lib-hash=%lu\n", ProtoLib.viaHashable((Hashable*)t));
     Stdio.printf("lib-cmp=%d\n", ProtoLib.viaComparable((Comparable*)t, (Object*)a) ? (i32)1 : (i32)0);

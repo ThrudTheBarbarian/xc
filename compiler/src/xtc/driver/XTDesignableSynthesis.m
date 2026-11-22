@@ -147,16 +147,16 @@ static NSString* XTStripTypeQualifiers(NSString* disp)
     //    designable class holding its setOutlet/wireAction bodies.
     NSMutableString* src = [NSMutableString string];
     [src appendString:
-             @"bool _xtc_streq(u8@ a, u8@ b) {\n"
+             @"bool _xtc_streq(u8* a, u8* b) {\n"
              @"  i32 i = (i32)0;\n"
              @"  while (a[i] != (u8)0 && a[i] == b[i]) { i = i + (i32)1; }\n"
              @"  return a[i] == b[i];\n"
              @"}\n"];
-    [src appendFormat:@"%@@ _xtc_nibNew(u8@ name) {\n", protoName];
+    [src appendFormat:@"%@* _xtc_nibNew(u8* name) {\n", protoName];
     for (XTClassDeclNode* c in designable)
-        [src appendFormat:@"  if (_xtc_streq(name, (u8@)\"%@\")) return (%@@)new %@();\n",
+        [src appendFormat:@"  if (_xtc_streq(name, (u8*)\"%@\")) return (%@*)new %@();\n",
                           c.className, protoName, c.className];
-    [src appendFormat:@"  return (%@@)0;\n}\n", protoName];
+    [src appendFormat:@"  return (%@*)0;\n}\n", protoName];
     // A load-time constructor registers the factory with the loader, so nibs
     // resolve this module's classes with no per-app code. Only when the nib
     // class is in scope (imported) — otherwise the factory is still generated
@@ -172,19 +172,19 @@ static NSString* XTStripTypeQualifiers(NSString* disp)
     for (XTClassDeclNode* c in designable)
         {
         [src appendFormat:@"class __xtc_synth_%@ {\n", c.className];
-        [src appendString:@"  bool setOutlet(u8@ name, Object@ value) {\n"];
+        [src appendString:@"  bool setOutlet(u8* name, Object* value) {\n"];
         for (XTVariableDeclNode* v in c.ivars)
             {
             if (!v.isOutlet)
                 continue;
             NSString* ty = XTStripTypeQualifiers(v.declaredType.displayName ?: @"Object@");
             [src appendFormat:
-                     @"    if (_xtc_streq(name, (u8@)\"%@\")) { %@ = (%@ ?)value; "
+                     @"    if (_xtc_streq(name, (u8*)\"%@\")) { %@ = (%@ ?)value; "
                      @"return %@ != (%@)0 || value == (Object@)0; }\n",
                      v.varName, v.varName, ty, v.varName, ty];
             }
         [src appendString:@"    return false;\n  }\n"];
-        [src appendFormat:@"  bool wireAction(u8@ name, %@@ control) {\n", controlType];
+        [src appendFormat:@"  bool wireAction(u8* name, %@* control) {\n", controlType];
         for (XTMethodDeclNode* m in c.methods)
             {
             if (!m.isAction)
@@ -198,7 +198,7 @@ static NSString* XTStripTypeQualifiers(NSString* disp)
             if (menuItemType && [mbase isEqualToString:menuItemType])
                 continue;
             [src appendFormat:
-                     @"    if (_xtc_streq(name, (u8@)\"%@\")) { control.setAction(&self.%@); return true; }\n",
+                     @"    if (_xtc_streq(name, (u8*)\"%@\")) { control.setAction(&self.%@); return true; }\n",
                      m.methodName, m.methodName];
             }
         [src appendString:@"    return false;\n  }\n"];
@@ -207,7 +207,7 @@ static NSString* XTStripTypeQualifiers(NSString* disp)
         // in scope, so a designable class conforms whether or not it has one.
         if (menuItemType)
             {
-            [src appendFormat:@"  bool wireMenuAction(u8@ name, %@@ item) {\n", menuItemType];
+            [src appendFormat:@"  bool wireMenuAction(u8* name, %@* item) {\n", menuItemType];
             for (XTMethodDeclNode* m in c.methods)
                 {
                 if (!m.isAction)
@@ -218,7 +218,7 @@ static NSString* XTStripTypeQualifiers(NSString* disp)
                 if (![mbase isEqualToString:menuItemType])
                     continue;
                 [src appendFormat:
-                         @"    if (_xtc_streq(name, (u8@)\"%@\")) { item.setAction(&self.%@); return true; }\n",
+                         @"    if (_xtc_streq(name, (u8*)\"%@\")) { item.setAction(&self.%@); return true; }\n",
                          m.methodName, m.methodName];
                 }
             [src appendString:@"    return false;\n  }\n"];

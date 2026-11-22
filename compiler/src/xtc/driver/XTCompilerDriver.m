@@ -867,10 +867,10 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     NSString* src =
         @"bool _xtc_obj_conforms(pointer vtbl, u32 pid) {\n"
         @"  if (vtbl == (pointer)0) { return false; }\n"
-        @"  pointer@ vp = (pointer@)vtbl;\n"
+        @"  pointer* vp = (pointer*)vtbl;\n"
         @"  pointer itab = vp[1];\n" // vtable[1] = itable ptr (after parent link)
         @"  if (itab == (pointer)0) { return false; }\n"
-        @"  pointer@ ip = (pointer@)itab;\n"
+        @"  pointer* ip = (pointer*)itab;\n"
         @"  i32 k = (i32)0;\n"
         @"  while (ip[k + k] != (pointer)0) {\n" // (protoId, &table) pairs; id at even index
         @"    if ((u32)ip[k + k] == pid) { return true; }\n"

@@ -22,7 +22,7 @@ class Poller {
 
 void classHalf(void)
 {
-    Poller@ p = new Poller();
+    Poller* p = new Poller();
     printf("%lu\n", p.peek());              // 7 + 3 + 42 = 52
     p.tally = (u32)100;
     p.mark = (u8)9;

@@ -10,6 +10,6 @@ void f(i32 x) { Stdio.printf("f %ld\n", x); }
 
 void main(void)
     {
-    cb_t@ p = &f;
+    cb_t* p = &f;
     p();
     }

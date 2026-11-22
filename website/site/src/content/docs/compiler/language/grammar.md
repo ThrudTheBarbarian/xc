@@ -111,15 +111,15 @@ base-type       ::= 'i8'  | 'u8'  | 'i16' | 'u16' | 'i32' | 'u32'
                   | 'auto'
                   | IDENT                  // class, struct, enum, protocol, typedef
 
-ptr-sigil       ::= '*' | '@'
+ptr-sigil       ::= '*'
 
 array-suffix    ::= '[' expr? ']'
 
 type-list       ::= type (',' type)*
 ```
 
-`*` is the current pointer sigil and `@` is accepted for source written before
-it changed. The sigil binds to the type, so `u8* a, b;` declares two pointers.
+`*` is the pointer sigil. It binds to the type, so `u8* a, b;` declares two
+pointers.
 
 Qualifiers may be stacked, as in `weak:banked:T*`. `weak:` cannot be written on
 a `callback` or `block`, where it is already implied.
@@ -348,7 +348,7 @@ rotate          ::= additive    (('<:' | ':>') additive)*
 additive        ::= multiplicative (('+' | '-') multiplicative)*
 multiplicative  ::= unary (('*' | '/' | '%') unary)*
 
-unary           ::= ('~' | '!' | '-' | '*' | '@' | '&' | '++' | '--') unary
+unary           ::= ('~' | '!' | '-' | '*' | '&' | '++' | '--') unary
                   | postfix
 
 postfix         ::= primary postfix-op*

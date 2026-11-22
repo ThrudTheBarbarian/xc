@@ -22,11 +22,11 @@ class Shape2
         {
         return v + (u16)2;
         }
-    } Shape2 @makeShape2(void)
+    } Shape2 *makeShape2(void)
     {
     return new Shape2();
     }
-Shape2 @makeDerived2(void)
+Shape2 *makeDerived2(void)
     {
     return new Derived2();
     }

@@ -48,7 +48,7 @@ class ProtoLib
         {
         return s.byteLength();
         }
-    static Box@ make(void)
+    static Box* make(void)
         {
         return new Box();
         }

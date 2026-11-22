@@ -16,7 +16,7 @@ void main(void)
     {
     f(1, 2, 3);
     K.m(4, 5);
-    log_t@ p = &f;
+    log_t* p = &f;
     p(6);
     p(7, 8, 9);
     }
