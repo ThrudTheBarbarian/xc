@@ -296,6 +296,132 @@
             }
         }
 
+    // A Release of a join's phi, where an arm feeding it retained its value
+    // (#477): a guarded devirtualisation's inlined arm holds the Retain, the
+    // virtual arm returns its result owned, and the Release follows the join.
+    // The Release moves into the arms: in an arm whose last effect is the
+    // Retain of its incoming value, the two cancel; any other arm releases its
+    // own incoming value at its end. Only pure instructions may lie between
+    // the join's top and the Release, and each arm must branch only to the
+    // join, so on every path the Release still follows exactly the work it
+    // followed before.
+    final void retainPairsAtJoins(IRFunc* fn)
+        {
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* J = (IRBlock*)fn.blocks().get(b);
+            if (J.phis().count() == (u32)0)
+                continue;
+            Array* ins = J.insns();
+            IRInsn* q = (IRInsn*)0;
+            for (u32 i = (u32)0; i < ins.count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)ins.get(i);
+                if (n.isOp(opRelease))
+                    {
+                    q = n;
+                    break;
+                    }
+                if (n.memRes() != (IRValue*)0 || !isPureOp(n))
+                    break;
+                }
+            if (q == (IRInsn*)0 || q.ops().count() != (u32)2 || q.memRes() == (IRValue*)0
+                || ((IROperand*)q.ops().get((u32)0)).kind() != (u8)OPK_USE
+                || ((IROperand*)q.ops().get((u32)1)).kind() != (u8)OPK_USE)
+                continue;
+            IRValue* pv = ((IROperand*)q.ops().get((u32)0)).val();
+            IRInsn* phi = (IRInsn*)0;
+            for (u32 i = (u32)0; i < J.phis().count(); i = i + (u32)1)
+                if (((IRInsn*)J.phis().get(i)).res() == pv)
+                    phi = (IRInsn*)J.phis().get(i);
+            if (phi == (IRInsn*)0)
+                continue;
+            IRValue* qMem = ((IROperand*)q.ops().get((u32)1)).val();
+            bool memInJ = false;
+            for (u32 i = (u32)0; i < J.phis().count(); i = i + (u32)1)
+                if (((IRInsn*)J.phis().get(i)).memRes() == qMem || ((IRInsn*)J.phis().get(i)).res() == qMem)
+                    memInJ = true;
+            if (memInJ)
+                continue;
+            // Each incoming arm: it branches to J alone, and the Retain it may
+            // end with (the index of it in the arm, or -1).
+            Array* arms = new Array();
+            Array* vals = new Array();
+            Array* rets = new Array();
+            bool ok = phi.ops().count() >= (u32)2;
+            bool gain = false;
+            for (u32 k = (u32)0; ok && k + (u32)1 < phi.ops().count(); k = k + (u32)2)
+                {
+                IROperand* bo = (IROperand*)phi.ops().get(k);
+                IROperand* vo = (IROperand*)phi.ops().get(k + (u32)1);
+                if (bo.kind() != (u8)OPK_BLOCK || bo.blk() == (IRBlock*)0 || vo.kind() != (u8)OPK_USE)
+                    {
+                    ok = false;
+                    break;
+                    }
+                IRBlock* P = bo.blk();
+                IRInsn* t = P.term();
+                if (t == (IRInsn*)0 || !t.isOp(opBranch) || arms.contains((Object*)P))
+                    {
+                    ok = false;
+                    break;
+                    }
+                IRValue* v = vo.val();
+                i32 at = (i32)-1;
+                Array* pi = P.insns();
+                for (u32 m = pi.count(); m > (u32)0; m = m - (u32)1)
+                    {
+                    IRInsn* n = (IRInsn*)pi.get(m - (u32)1);
+                    if (n.isOp(opRetain) && n.ops().count() == (u32)2
+                        && ((IROperand*)n.ops().get((u32)0)).kind() == (u8)OPK_USE
+                        && ((IROperand*)n.ops().get((u32)0)).val() == v
+                        && ((IROperand*)n.ops().get((u32)1)).kind() == (u8)OPK_USE)
+                        {
+                        at = (i32)(m - (u32)1);
+                        break;
+                        }
+                    if (n.memRes() != (IRValue*)0 || !isPureOp(n))
+                        break;
+                    }
+                if (at >= (i32)0)
+                    gain = true;
+                arms.add((Object*)P);
+                vals.add((Object*)v);
+                rets.add((Object*)Number.with(at));
+                }
+            if (!ok || !gain)
+                continue;
+            // The Release's memory result now continues from its memory input.
+            self.rewriteUsesTo(fn, q.memRes(), (IROperand*)q.ops().get((u32)1));
+            Array* keepJ = new Array();
+            for (u32 m = (u32)0; m < ins.count(); m = m + (u32)1)
+                if ((IRInsn*)ins.get(m) != q)
+                    keepJ.add(ins.get(m));
+            J.setInsns(keepJ);
+            for (u32 a = (u32)0; a < arms.count(); a = a + (u32)1)
+                {
+                IRBlock* P = (IRBlock*)arms.get(a);
+                i32 at = ((Number*)rets.get(a)).asI32();
+                Array* pi = P.insns();
+                if (at >= (i32)0)
+                    {
+                    IRInsn* r = (IRInsn*)pi.get((u32)at);
+                    if (r.memRes() != (IRValue*)0)
+                        self.rewriteUsesTo(fn, r.memRes(), (IROperand*)r.ops().get((u32)1));
+                    pi.removeAt((u32)at);
+                    }
+                else
+                    {
+                    IRInsn* rel = IRInsn.withOpOf(q);
+                    rel.ops().add((Object*)IROperand.useVal((IRValue*)vals.get(a)));
+                    rel.ops().add((Object*)IROperand.useVal(qMem));
+                    rel.setMemRes(new IRValue(String.withCString("Mem")));
+                    pi.add((Object*)rel);
+                    }
+                }
+            }
+        }
+
     // A Retain and a Release of the same value that cancel, block by block:
     // the Release takes its memory token straight from the Retain and only
     // pure instructions lie between, so nothing can drop the count meanwhile
@@ -350,6 +476,7 @@
 
     final void deadCodeInFunc(IRFunc* fn)
         {
+        retainPairsAtJoins(fn);
         retainPairsIn(fn);
         deadStoresIn(fn);
         writeOnlyLocalsIn(fn);
