@@ -16,7 +16,7 @@
 #   3. Every .asm in the tree, plain and banked through the xt layout, with a
 #      listing.
 #
-#   bash selfhost/tools/xccas-diff.sh [pattern]     # `cases` or `opcodes` runs one part
+#   bash selfhost/tools/xccas-diff.sh [pattern]     # `cases`, `bytes` or `opcodes` runs one part
 
 set -u
 XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
@@ -78,6 +78,29 @@ while IFS= read -r line || [ -n "$line" ]; do
     run_both "case '$line'" "$FIX" ${args[@]+"${args[@]}"}
 done < "$FIX/cases.txt"
 
+# ── 1b. Known bytes ──────────────────────────────────────────────────
+# Two assemblers that fail the same way still agree, so the cases above cannot
+# tell a broken feature from a working one. These fixtures must assemble, and
+# both outputs must match bytes worked out apart from either assembler.
+hexdump_of() { od -An -v -tx1 "$1" | awk '{$1=$1; print}'; }
+if [ -z "$PATTERN" ] || [ "$PATTERN" = cases ] || [ "$PATTERN" = bytes ]; then
+    for kb in "longbr.asm -f prg -o out.prg" "prg.asm -o out.prg"; do
+        read -r -a args <<< "$kb"
+        exp=$FIX/${args[0]%.asm}.expect
+        for tool in "$REF" "$PORT"; do
+            side=ref; [ "$tool" = "$PORT" ] && side=port
+            rm -rf "$WORK/kb"; cp -R "$FIX" "$WORK/kb"
+            if ( cd "$WORK/kb" && "$tool" "${args[@]}" > /dev/null 2>&1 ) \
+                && hexdump_of "$WORK/kb/out.prg" | cmp -s - <(grep -v '^#' "$exp"); then
+                pass=$((pass+1))
+            else
+                fail=$((fail+1)); FAILED+=("known bytes '$kb' ($side)")
+            fi
+        done
+    done
+    rm -rf "$WORK/kb"
+fi
+
 # ── 2. The opcode table ──────────────────────────────────────────────
 MNEMS="ADC ADD AND ASL BCC BCS BEQ BIT BMI BNE BPL BRA BRK BVC BVS CLC CLD CLI CLV CMP CPX CPY DEC DEX DEY EOR INC INX INY JMP JSR LDA LDX LDY LSR NOP ORA PHA PHP PHX PHY PLA PLL PLP PLX PLY PSH ROL ROR RTI RTS SBC SEC SED SEI STA STX STY TAX TAY TSX TXA TXS TYA"
 FORMS=("" "A" '#$12' '$12' '$12,X' '$12,Y' '$1234' '$1234,X' '$1234,Y' '($12,X)' '($12),Y' '($1234)'
@@ -103,7 +126,7 @@ mkdir -p "$WORK/empty"
 FILES=$(find tests support -name '*.asm' -not -path 'tests/xcc-as/*' | sort | awk -v i="${SHARD_I:-0}" -v n="${SHARD_N:-1}" 'NR % n == i')
 for f in $FILES; do
     [ -n "$PATTERN" ] && [[ "$f" != *"$PATTERN"* ]] && continue
-    [ "$PATTERN" = cases ] || [ "$PATTERN" = opcodes ] && continue
+    [ "$PATTERN" = cases ] || [ "$PATTERN" = bytes ] || [ "$PATTERN" = opcodes ] && continue
     run_both "$f" "$WORK/empty" "$ROOT/$f" -I "$ROOT" -I "$ROOT/support" -o out.xex
     run_both "$f (banked)" "$WORK/empty" "$ROOT/$f" -L "$XT_LNK" -I "$ROOT" -I "$ROOT/support" -o out.xex -l out.lst
 done

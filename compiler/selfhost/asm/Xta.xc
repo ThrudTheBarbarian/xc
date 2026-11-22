@@ -2397,6 +2397,38 @@ class Xta
             }
         }
 
+    // A long-branch rewrite replaces the whole source line, so the rest of
+    // that line, a label in front of the branch or the other statements of a
+    // compound line, is kept around the replacement, one statement per line.
+    // `branch` is the statement as pass 1 parsed it.
+    static Array* keepLineContext(String* source, String* branch, bool labelled, Array* rep)
+        {
+        Array* parts = splitCompoundLine(stripComment(source));
+        Array* out = new Array();
+        bool found = false;
+        for (u32 k = (u32)0; k < parts.count(); k = k + (u32)1)
+            {
+            String* part = (String*)parts.get(k);
+            if (found || !part.equals(branch))
+                {
+                out.add((Object*)part);
+                continue;
+                }
+            found = true;
+            if (labelled)
+                {
+                u32 colon = part.byteIndexOf(String.withCString(":"));
+                String* label = new String();
+                label.append(XaText.tws(part.substringBytes((u32)0, colon)));
+                label.appendCString(":");
+                out.add((Object*)label);
+                }
+            for (u32 j = (u32)0; j < rep.count(); j = j + (u32)1)
+                out.add(rep.get(j));
+            }
+        return found ? out : rep;
+        }
+
     // ── The long-branch rewriter ─────────────────────────────────────────
     //
     // A conditional branch that cannot reach its target becomes its INVERSE
@@ -2465,6 +2497,7 @@ class Xta
                 String* j = String.withCString("    JMP ");
                 j.append(targetExpr);
                 lines.add((Object*)j);
+                lines = keepLineContext((String*)sourceLines.get(srcLine), pl.rawText(), pl.label() != (String*)0, lines);
                 }
             else
                 {
@@ -2487,6 +2520,7 @@ class Xta
                 lines.add((Object*)a);
                 lines.add((Object*)b);
                 lines.add((Object*)c);
+                lines = keepLineContext((String*)sourceLines.get(srcLine), pl.rawText(), pl.label() != (String*)0, lines);
                 }
             repByLine.set((Hashable*)Number.withU32(srcLine), (Object*)lines);
             repCount = repCount + 1;

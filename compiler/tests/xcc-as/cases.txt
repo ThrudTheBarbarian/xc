@@ -28,6 +28,7 @@ badregion.asm
 badrange.asm
 longbr.asm -l l.lst
 longbr.asm -V
+longbr.asm -f prg -o lb.prg
 bank.asm -L @SUPPORT@/xt6502/layouts/xt.lnk -l b.lst
 bank.asm -L @SUPPORT@/xt6502/internal/xt-heap.lnk
 bank.asm -b

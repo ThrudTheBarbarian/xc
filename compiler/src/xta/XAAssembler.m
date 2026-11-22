@@ -1690,6 +1690,44 @@ static NSDictionary<NSString*, NSString*>* XAInverseBranch(void)
 |*   >_longbr_NNN:
 |* Returns the number of rewrites performed.
 \****************************************************************************/
+/****************************************************************************\
+|* The long-branch rewrite replaces a whole source line, so the rest of that
+|* line, a label in front of the branch or the other statements of a compound
+|* line, is kept around the replacement, one statement per line.
+|* @param source       The source line holding the branch.
+|* @param branch       The branch statement as pass 1 parsed it.
+|* @param labelled     Whether that statement carries a label.
+|* @param replacement  The lines that stand in for the branch.
+|* @return  The lines that stand in for the whole source line.
+\****************************************************************************/
+- (NSArray<NSString*>*)keepLineContext:(NSString*)source
+                                branch:(NSString*)branch
+                              labelled:(BOOL)labelled
+                           replacement:(NSArray<NSString*>*)replacement
+    {
+    NSArray<NSString*>* parts = [self splitCompoundLine:[self stripComment:source]];
+    NSMutableArray<NSString*>* out = [NSMutableArray array];
+    BOOL found = NO;
+    for (NSString* part in parts)
+        {
+        if (found || ![part isEqualToString:branch])
+            {
+            [out addObject:part];
+            continue;
+            }
+        found = YES;
+        if (labelled)
+            {
+            NSUInteger colon = [part rangeOfString:@":"].location;
+            NSString* label = [[part substringToIndex:colon]
+                stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+            [out addObject:[label stringByAppendingString:@":"]];
+            }
+        [out addObjectsFromArray:replacement];
+        }
+    return found ? out : replacement;
+    }
+
 - (NSUInteger)rewriteLongBranches:(NSMutableArray<NSString*>*)sourceLines
     {
     // Build a PC map for each parsedLine
@@ -1758,9 +1796,12 @@ static NSDictionary<NSString*, NSString*>* XAInverseBranch(void)
         // shifts the layout).
         if ([pl.mnemonic isEqualToString:@"BRA"])
             {
-            replacements[@(srcLine)] = @[
+            replacements[@(srcLine)] = [self keepLineContext:sourceLines[srcLine]
+                                                      branch:pl.rawText
+                                                    labelled:pl.label != nil
+                                                 replacement:@[
                 [NSString stringWithFormat:@"    JMP %@", targetExpr],
-            ];
+            ]];
             continue;
             }
 
@@ -1781,11 +1822,14 @@ static NSDictionary<NSString*, NSString*>* XAInverseBranch(void)
         NSString* skipLabel = [NSString stringWithFormat:@"_xlb_%lu",
                                                          (unsigned long)_longBranchCounter++];
 
-        replacements[@(srcLine)] = @[
+        replacements[@(srcLine)] = [self keepLineContext:sourceLines[srcLine]
+                                                  branch:pl.rawText
+                                                labelled:pl.label != nil
+                                             replacement:@[
             [NSString stringWithFormat:@"    %@ %@ ; longbr", inverse, skipLabel],
             [NSString stringWithFormat:@"    JMP %@", targetExpr],
             [NSString stringWithFormat:@"%@:", skipLabel],
-        ];
+        ]];
         }
 
     if (replacements.count == 0)

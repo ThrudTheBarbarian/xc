@@ -1,0 +1,6 @@
+# prg.asm -o prg.prg: the load address, the BASIC stub, the program at
+# $0810 and the bytes at $0820, with the gaps zero-filled.
+01 08 0b 08 0a 00 9e 32 30 36 34 00 00 00 00 00
+00 a9 01 60 00 00 00 00 00 00 00 00 00 00 00 00
+00 01 02 03
+
