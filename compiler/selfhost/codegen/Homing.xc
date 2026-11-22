@@ -38,6 +38,15 @@ class BitSet
         _n = (u32)0;
         }
 
+    // The bits are a raw array, which releasing the set does not free:
+    // liveness makes several sets per block per round, and every one of them
+    // was kept until the compiler exited.
+    void dealloc(void)
+        {
+        if (_bits != (u8*)0)
+            delete _bits;
+        }
+
     static BitSet* withCapacity(u32 n)
         {
         BitSet* b = new BitSet();
