@@ -56,7 +56,7 @@ if [ "$PLAT" = linux ] && command -v nm > /dev/null; then
     # nm reads nothing from an arm64-linux image (no section for its dynamic
     # symbols): read them through the dynamic segment instead (#326).
     [ -z "$defs" ] && command -v readelf > /dev/null \
-        && defs=$(readelf --use-dynamic -s -W "$W/rt" 2>/dev/null | awk '$1 ~ /:$/ && $7 != "UND" && $8 != "" { print $8 }' | sort -u | tr '\n' ' ')
+        && defs=$(readelf --use-dynamic -s -W "$W/rt" 2>/dev/null | awk '$1 ~ /^[0-9]+:$/ && $7 != "UND" && $8 != "" { print $8 }' | sort -u | tr '\n' ' ')
     [ "$defs" = "free malloc_usable_size realloc " ] && echo "  ok: exports $defs" \
         || { echo "  FAIL: the executable exports '$defs' (want free malloc_usable_size realloc)"; fail=1; }
 fi

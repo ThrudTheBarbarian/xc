@@ -133,6 +133,11 @@ void cPathSetElf(bool b) { gCPathElf = b; }
 // carries CAlloc.xc, which the link turns on (x86-64 glibc, macOS).
 bool gCPathHeap;
 void cPathSetHeap(bool b) { gCPathHeap = b; }
+// The heap's names for the allocator (malloc -> _xc_malloc, ...), or 0: set
+// where xcc's half is not an object the link redirects (arm64 Linux, #326),
+// so the C file's own calls are renamed in its IR.
+Map* gCPathAllocRedirect;
+void cPathSetAllocRedirect(Map* m) { gCPathAllocRedirect = m; }
 // The source's row of the language table (Language.xc): the command that
 // writes its LLVM IR, and which functions xcc takes. 0: C's.
 LanguageRow* gCPathLang;
@@ -169,6 +174,43 @@ class CPath
     u8 _unused;
 
     // One argument quoted for the shell system() runs (External.quote).
+    // The C file's functions (those the stub module did not bring) name the
+    // heap's allocator, not libc's (#326): every call, and every address
+    // taken, of malloc, free and the rest. The runtime's own allocations, in
+    // the stub's functions, stay libc's.
+    static void renameAllocCalls(IRModule* m, Map* to)
+    {
+        Map* base = m.baseNames();
+        for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
+        {
+            IRFunc* fn = (IRFunc*)m.funcs().get(f);
+            if (base != (Map*)0 && base.get((Hashable*)fn.name()) != (Object*)0)
+                continue;
+            for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+                IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+                Array* all = new Array();
+                all.addAll(bb.phis());
+                all.addAll(bb.insns());
+                if (bb.term() != (IRInsn*)0)
+                    all.add((Object*)bb.term());
+                for (u32 i = (u32)0; i < all.count(); i = i + (u32)1)
+                {
+                    Array* ops = ((IRInsn*)all.get(i)).ops();
+                    for (u32 k = (u32)0; k < ops.count(); k = k + (u32)1)
+                    {
+                        IROperand* o = (IROperand*)ops.get(k);
+                        if (o.kind() != (u8)OPK_SYM || o.name() == (String*)0)
+                            continue;
+                        Object* n = to.get((Hashable*)o.name());
+                        if (n != (Object*)0)
+                            ops.set(k, (Object*)IROperand.sym((String*)n));
+                    }
+                }
+            }
+        }
+    }
+
     static String* quoted(String* a)
         {
         return External.quote(a);   // the one quoting rule (#337)
@@ -584,6 +626,8 @@ class CPath
             // loop is lifted (Opt.dropBase).
             base.markBase();
             m = r.readInto(readText, base);
+            if (m != (IRModule*)0 && gCPathHeap && gCPathAllocRedirect != (Map*)0)
+                CPath.renameAllocCalls(m, gCPathAllocRedirect);
             }
         else
             m = r.read(readText);
