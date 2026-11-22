@@ -61,7 +61,15 @@ int main(void)
 C
 # A program and the count of the runtime's symbols it defines or imports
 # (from libRuntime, where the target has one).
-rtsyms() { nm "$1" 2>/dev/null | grep -cE "$RT"; }
+# nm reads nothing from xcc's arm64-linux images (no .symtab, #562): there
+# the dynamic symbols, read through the dynamic segment, are counted instead.
+rtsyms() {
+    local n; n=$(nm "$1" 2>/dev/null | grep -cE "$RT")
+    if [ "$n" = 0 ] && command -v readelf > /dev/null 2>&1; then
+        n=$(readelf --use-dynamic -s -W "$1" 2>/dev/null | grep -cE "$RT")
+    fi
+    echo "$n"
+}
 check() { # name, source, compiler, want-runtime (0/1)
     local n=$1 src=$2 cc=$3 want=$4
     $cc -O2 -w -o "$W/$n.ref" "$src" || { echo "FAIL c-no-runtime: clang does not build $n"; fail=1; return; }
