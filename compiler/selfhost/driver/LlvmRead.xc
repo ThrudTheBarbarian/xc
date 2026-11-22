@@ -64,6 +64,7 @@ class LlvmReader
     Map* _vals;             // "%name" -> IRValue@
     Map* _pins;             // "%name" -> IRPinned@ (an alloca)
     Map* _blocks;           // label -> IRBlock@
+    Map* _blockNames;       // the IR names given (blockNamed)
     u32 _pinOff;
 
     // The line being read, and where in it.
@@ -1383,6 +1384,7 @@ class LlvmReader
         _vals = new Map();
         _pins = new Map();
         _blocks = new Map();
+        _blockNames = new Map();
         _pinOff = (u32)0;
         _bad = false;
         _fnWhy = (String*)0;
@@ -1504,18 +1506,8 @@ class LlvmReader
                 continue;
             readInsn(t);
             }
-        // A landing pad with phis: nothing runs on the way from the throw to
-        // the pad, so no copies can feed them. Such a function stays clang's.
-        for (u32 bi = (u32)0; _readHandlers && !_bad && bi < _fn.blocks().count(); bi = bi + (u32)1)
-            {
-            IRBlock* ib = (IRBlock*)_fn.blocks().get(bi);
-            IRInsn* it = ib.term();
-            if (it == (IRInsn*)0 || !it.isInvoke() || it.ops().count() < (u32)1)
-                continue;
-            IROperand* uo = (IROperand*)it.ops().get(it.ops().count() - (u32)1);
-            if (uo.kind() == (u8)OPK_BLOCK && uo.blk() != (IRBlock*)0 && uo.blk().phis().count() > (u32)0)
-                fail("a landing pad with a phi");
-            }
+        if (_readHandlers && !_bad)
+            splitPhiPads();
         IRDbg.clearCurrent();
         if (_bad)
             {
@@ -1535,7 +1527,28 @@ class LlvmReader
         IRBlock* b = (IRBlock*)_blocks.get((Hashable*)label);
         if (b == (IRBlock*)0)
             {
-            b = new IRBlock(String.withFormat("bb_%s", label.cString()));
+            // xc's IR names a block with letters, digits, `_ $ .`: any other
+            // byte of clang's label (`lpad6.loopexit.split-lp`) is written
+            // `_x` and its hex, and a name met already takes a count.
+            String* nm = String.withCString("bb_");
+            for (u32 k = (u32)0; k < label.byteLength(); k = k + (u32)1)
+                {
+                u8 c = label.byteAt(k);
+                if ((c >= (u8)'a' && c <= (u8)'z') || (c >= (u8)'A' && c <= (u8)'Z') || (c >= (u8)'0' && c <= (u8)'9')
+                    || c == (u8)'_' || c == (u8)'$' || c == (u8)'.')
+                    nm.appendByte(c);
+                else
+                    nm.appendFormat("_x%02x", (u32)c);
+                }
+            String* base = nm;
+            u32 n = (u32)0;
+            while (_blockNames.get((Hashable*)nm) != (Object*)0)
+                {
+                n = n + (u32)1;
+                nm = String.withFormat("%s_%u", base.cString(), n);
+                }
+            _blockNames.set((Hashable*)nm, (Object*)nm);
+            b = new IRBlock(nm);
             _blocks.set((Hashable*)label, (Object*)b);
             }
         return b;
@@ -2526,6 +2539,101 @@ class LlvmReader
         llType();
         }
 
+    // A landing pad with phis (a value that differs by the invoke it came
+    // from): nothing runs on the way from the throw to the pad, so no copy
+    // can feed them there. Each invoke unwinds to a pad of its own instead,
+    // the landing pad's two values made there, which goes on to the block:
+    // its phis come from those pads, and two more join the exception and
+    // the selector.
+    void splitPhiPads(void)
+        {
+        u32 nb = _fn.blocks().count();
+        for (u32 bi = (u32)0; bi < nb && !_bad; bi = bi + (u32)1)
+            {
+            IRBlock* pad = (IRBlock*)_fn.blocks().get(bi);
+            if (pad.phis().count() == (u32)0 || pad.insns().count() < (u32)2)
+                continue;
+            IRInsn* lp = (IRInsn*)pad.insns().get((u32)0);
+            IRInsn* sl = (IRInsn*)pad.insns().get((u32)1);
+            if (!lp.op().equals(String.withCString("LandingPad")))
+                continue;
+            if (!sl.op().equals(String.withCString("EhSelector")))
+                {
+                fail("a landing pad with a phi");
+                return;
+                }
+            // Every way in is an invoke's unwind edge.
+            Array* preds = new Array();
+            for (u32 k = (u32)0; k < nb; k = k + (u32)1)
+                {
+                IRBlock* ib = (IRBlock*)_fn.blocks().get(k);
+                IRInsn* it = ib.term();
+                if (it == (IRInsn*)0)
+                    continue;
+                for (u32 o = (u32)0; o < it.ops().count(); o = o + (u32)1)
+                    {
+                    IROperand* bo = (IROperand*)it.ops().get(o);
+                    if (bo.kind() != (u8)OPK_BLOCK || bo.blk() != pad)
+                        continue;
+                    if (!it.isInvoke() || o + (u32)1 != it.ops().count())
+                        {
+                        fail("a landing pad with a phi");
+                        return;
+                        }
+                    preds.add((Object*)ib);
+                    }
+                }
+            Array* rest = new Array();
+            for (u32 k = (u32)2; k < pad.insns().count(); k = k + (u32)1)
+                rest.add(pad.insns().get(k));
+            pad.insns().removeAll();
+            pad.insns().addAll(rest);
+            IRInsn* pe = IRInsn.with(String.withCString("Phi"));
+            pe.setRes(lp.res());
+            IRInsn* ps = IRInsn.with(String.withCString("Phi"));
+            ps.setRes(sl.res());
+            for (u32 k = (u32)0; k < preds.count(); k = k + (u32)1)
+                {
+                IRBlock* from = (IRBlock*)preds.get(k);
+                IRBlock* own = new IRBlock(String.withFormat("%s_xcu%u", pad.name().cString(), k));
+                IRInsn* lk = IRInsn.with(String.withCString("LandingPad"));
+                for (u32 o = (u32)0; o < lp.ops().count(); o = o + (u32)1)
+                    lk.add((IROperand*)lp.ops().get(o));
+                IRValue* ek = new IRValue(lp.res().ty());
+                lk.setRes(ek);
+                own.add(lk);
+                IRInsn* sk = IRInsn.with(String.withCString("EhSelector"));
+                IRValue* svk = new IRValue(sl.res().ty());
+                sk.setRes(svk);
+                own.add(sk);
+                IRInsn* br = IRInsn.with(String.withCString("Branch"));
+                br.add(IROperand.block(pad));
+                own.setTerm(br);
+                _fn.addBlock(own);
+                IRInsn* it = from.term();
+                it.ops().set(it.ops().count() - (u32)1, (Object*)IROperand.block(own));
+                for (u32 q = (u32)0; q < pad.phis().count(); q = q + (u32)1)
+                    {
+                    IRInsn* ph = (IRInsn*)pad.phis().get(q);
+                    for (u32 o = (u32)0; o < ph.ops().count(); o = o + (u32)1)
+                        {
+                        IROperand* po = (IROperand*)ph.ops().get(o);
+                        if (po.kind() == (u8)OPK_BLOCK && po.blk() == from)
+                            ph.ops().set(o, (Object*)IROperand.block(own));
+                        }
+                    }
+                pe.add(IROperand.block(own));
+                pe.add(IROperand.useVal(ek));
+                ps.add(IROperand.block(own));
+                ps.add(IROperand.useVal(svk));
+                }
+            pad.addPhi(pe);
+            pad.addPhi(ps);
+            if (lp == _lastPad)
+                _lastPad = (IRInsn*)0;
+            }
+        }
+
     // A landing pad's pair (`{ ptr, i32 }`: the exception and its selector)
     // is read as its two values. One a phi named before it was made (a
     // pair from a later block, `common.resume.op`) took each part by name,
@@ -2623,13 +2731,6 @@ class LlvmReader
             return;
             }
         IRInsn* c = (IRInsn*)_blk.insns().get(at);
-        // Each back end's Invoke calls a symbol: one through a pointer (a
-        // virtual call in a try) is clang's.
-        if (c.op().equals(String.withCString("CallIndirect")))
-            {
-            fail("an invoke through a pointer");
-            return;
-            }
         IRInsn* inv = IRInsn.with(String.withCString("Invoke"));
         inv.setCc(c.cc());
         for (u32 i = (u32)0; i < c.ops().count(); i = i + (u32)1)
@@ -2723,9 +2824,9 @@ class LlvmReader
         skipAttrs();
         ws();
         // An indirect call (a virtual function, a function pointer): through
-        // the pointer, a CallIndirect, which follows the C convention for
-        // any callee that is not variadic. A variadic one (its function type
-        // written) is clang's.
+        // the pointer, a CallIndirect (an Invoke whose callee is that value,
+        // in a try), which follows the C convention for any callee that is
+        // not variadic. A variadic one (its function type written) is clang's.
         IRValue* fptr = (IRValue*)0;
         String* callee = String.withCString("");
         if (peek() != (u8)'@')
