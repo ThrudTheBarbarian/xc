@@ -1803,15 +1803,41 @@ class MachOSha256
             if (uw == (Array*)0)
                 uw = new Array();
             u32 nObj = uw.count();
+            // The objects' entries by start, each with the furthest end of
+            // those up to it: an FDE's function is covered when the last
+            // entry starting at or before it has that end past it (#335; each
+            // FDE used to be checked against every entry).
+            Array* cover = new Array();
+            Array* starts = new Array();
+            for (u32 k = 0; k < nObj; k = k + 1)
+                {
+                MachOUnwindRec* r = (MachOUnwindRec*)uw.get(k);
+                cover.add((Object*)Number.withU32(r.fn() + r.len()));
+                starts.add((Object*)Number.withU32(r.fn()));
+                }
+            SortStable.byU32(cover, starts);
+            u32 reach = 0;
+            for (u32 k = 0; k < nObj; k = k + 1)
+                {
+                u32 e = ((Number*)cover.get(k)).asU32();
+                if (k == 0 || e > reach)
+                    reach = e;
+                cover.set(k, (Object*)Number.withU32(reach));
+                }
             for (u32 i = (u32)0; i < ehFdes.count(); i = i + (u32)1)
                 {
                 MachOFde* f = (MachOFde*)ehFdes.get(i);
-                bool covered = false;
-                for (u32 k = (u32)0; k < nObj && !covered; k = k + (u32)1)
+                u32 lo = 0;
+                u32 hi = nObj;
+                while (lo < hi)
                     {
-                    MachOUnwindRec* r = (MachOUnwindRec*)uw.get(k);
-                    covered = f.fn() >= r.fn() && f.fn() < r.fn() + r.len();
+                    u32 mid = lo + (hi - lo) / 2;
+                    if (((Number*)starts.get(mid)).asU32() <= f.fn())
+                        lo = mid + 1;
+                    else
+                        hi = mid;
                     }
+                bool covered = lo > 0 && f.fn() < ((Number*)cover.get(lo - 1)).asU32();
                 if (!covered && f.len() > (u32)0)
                     uw.add((Object*)MachOUnwindRec.with(f.fn(), f.len(),
                                                          (u32)$03000000 | (((Number*)ehAt.get(i)).asU32() & (u32)$00FFFFFF), (u32)0, (u32)0));
@@ -2865,19 +2891,12 @@ class MachOSha256
         Array* recs = new Array();
         for (u32 i = (u32)0; i < uw.count(); i = i + (u32)1)
             recs.add(uw.get(i));
-        // insertion sort by function offset: one object's entries come sorted
-        for (u32 i = (u32)1; i < recs.count(); i = i + (u32)1)
-            {
-            Object* x = recs.get(i);
-            u32 xf = ((MachOUnwindRec*)x).fn();
-            u32 j = i;
-            while (j > (u32)0 && ((MachOUnwindRec*)recs.get(j - (u32)1)).fn() > xf)
-                {
-                recs.set(j, recs.get(j - (u32)1));
-                j = j - (u32)1;
-                }
-            recs.set(j, x);
-            }
+        // Sorted by function offset, stably (#335): equal offsets keep the
+        // order given, as the insertion sort this replaces left them.
+        Array* fns = new Array();
+        for (u32 i = 0; i < recs.count(); i = i + 1)
+            fns.add((Object*)Number.withU32(((MachOUnwindRec*)recs.get(i)).fn()));
+        SortStable.byU32(recs, fns);
         Array* rows = new Array();
         u32 at = (u32)0;
         for (u32 i = (u32)0; i < recs.count(); i = i + (u32)1)

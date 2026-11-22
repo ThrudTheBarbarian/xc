@@ -761,6 +761,21 @@ class DwarfWriter
         }
     }
 
+    // The index of the first offset in `setups` (Number@ u32, ascending) at
+    // or after `start`, or its count when there is none: a binary search
+    // where each function used to scan every setup (#335).
+    static u32 firstAtOrAfter(Array* setups, u32 start)
+    {
+        u32 lo = 0;
+        u32 hi = setups.count();
+        while (lo < hi) {
+            u32 mid = lo + (hi - lo) / 2;
+            if (((Number*)setups.get(mid)).asU32() < start) lo = mid + 1;
+            else hi = mid;
+        }
+        return lo;
+    }
+
     // A function's call-frame rules once its frame is set up `delta` code
     // units in: the frame is fp + size, fp and the return address at its
     // bottom, and each register `saves` names (`reg:cfaoff`) at its offset.
@@ -847,12 +862,14 @@ class DwarfWriter
             DwarfWriter.putU32(frame, (u32)0); // CIE at offset 0
             DwarfWriter.putU64(frame, textAddress + (u64)start);
             DwarfWriter.putU64(frame, (u64)(end - start));
-            for (u32 k = (u32)0; k < setups.count(); k = k + (u32)1) {
+            // The first setup in [start, end): setups is sorted, so it is the
+            // first at or after start, when that is before end.
+            u32 k = DwarfWriter.firstAtOrAfter(setups, start);
+            if (k < setups.count()) {
                 u32 at = ((Number*)setups.get(k)).asU32();
-                if (at < start || at >= end) continue;
-                DwarfWriter.frameRules(frame, (at - start) / minInsnLength, ((Number*)sizes.get(k)).asU32(),
-                                       (String*)saves.get(k), fpReg, raReg);
-                break;
+                if (at < end)
+                    DwarfWriter.frameRules(frame, (at - start) / minInsnLength, ((Number*)sizes.get(k)).asU32(),
+                                           (String*)saves.get(k), fpReg, raReg);
             }
             while ((frame.length() - fdeAt) % (u32)8 != (u32)0)
                 DwarfWriter.putU8(frame, (u32)0);
@@ -985,10 +1002,13 @@ class DwarfWriter
         for (u32 i = (u32)0; i < names.count(); i = i + (u32)1) {
             u32 start = ((Number*)offs.get(i)).asU32();
             u32 end = (i + (u32)1 < names.count()) ? ((Number*)offs.get(i + (u32)1)).asU32() : textSize;
+            // The first setup in [start, end) that recorded its saves, read
+            // from the first at or after start (setups is sorted).
             u32 found = (u32)$FFFF_FFFF;
-            for (u32 k = (u32)0; k < setups.count() && end > start; k = k + (u32)1) {
-                u32 at = ((Number*)setups.get(k)).asU32();
-                if (at >= start && at < end && ((String*)saves.get(k)).byteLength() > (u32)0) { found = k; break; }
+            u32 k = end > start ? DwarfWriter.firstAtOrAfter(setups, start) : setups.count();
+            while (k < setups.count() && ((Number*)setups.get(k)).asU32() < end) {
+                if (((String*)saves.get(k)).byteLength() > 0) { found = k; break; }
+                k = k + 1;
             }
             if (found == (u32)$FFFF_FFFF) {
                 fdeOffs.add((Object*)Number.withI64((i64)-1));
