@@ -1,0 +1,37 @@
+loop live 0
+copy changed item7
+copy shares 0 live 2
+copy live 0
+assign same 1 live 1
+assign n 4 live 2
+assign live 0
+early 5 live 0
+early 0 live 0
+break live 0
+while live 0
+goto 0 live 0
+goto 1 live 0
+return live 0
+temp 9 live 1
+temp id 1
+temps 23 live 0
+cond live 0
+cond after 0
+dup 120 21 20 live 1
+dup live 0
+ternary 31 live 0
+ternary value 33 32 live 2
+ternary live 0
+noisy
+  temp 4
+  dealloc 4
+  dealloc 5
+  dealloc 3
+  dealloc 2
+  dealloc 1
+noisy live 0
+boxed same 1 live 2
+boxed live 0
+weak set 1 1
+weak gone 1 1
+end live 0

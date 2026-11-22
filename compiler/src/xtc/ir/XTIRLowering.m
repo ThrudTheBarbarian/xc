@@ -236,6 +236,15 @@
 // return (sret move) — its scope-exit teardown is skipped so the returned
 // struct's strong fields aren't freed out from under the caller.
 @property(nonatomic, copy, nullable) NSString* returnExemptStructName;
+// Stack instances that own references (#551): each enrolled key's local name
+// and declared type, the key a by-value `return` moves out, and the by-value
+// call results not yet adopted (their slot address, conditional depth, class).
+@property(nonatomic, nullable) NSMutableDictionary<NSString*, NSString*>* stackKeyName;
+@property(nonatomic, nullable) NSMutableDictionary<NSString*, XTType*>* stackKeyType;
+@property(nonatomic, copy, nullable) NSString* returnExemptValueKey;
+@property(nonatomic, nullable) NSMutableArray<XTIRValue*>* valTemps;
+@property(nonatomic, nullable) NSMutableArray<NSNumber*>* valTempDepths;
+@property(nonatomic, nullable) NSMutableArray<XTIRClassInfo*>* valTempClasses;
 // Heap-array element-count tracker: `T@ p = new T[N];` (with N
 // foldable to a compile-time integer) records the local name → N so
 // `p.length` lowers to a Const without a runtime header read. Reset
@@ -3725,6 +3734,7 @@ static NSString* XTDescribeNodeKind(XTASTNodeKind k)
 // temp, and releasing it would free the expression's own result.
 - (void)releaseOwnedTempsAtDepth:(NSInteger)depth
     {
+    [self releaseValueTempsAtDepth:depth all:NO];
     if (self.ownedTemps.count == 0)
         return;
     if (self.currentBlock.terminator != nil)
@@ -3766,6 +3776,7 @@ static NSString* XTDescribeNodeKind(XTASTNodeKind k)
 
 - (void)flushOwnedTempsFrom:(XTIRBlock*)startBlock
     {
+    [self releaseValueTempsAtDepth:self.condDepth all:YES];
     if (self.ownedTemps.count == 0)
         return;
     // A block that already has a terminator cannot take more instructions —
@@ -6087,24 +6098,7 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
                         XTIRValue* srcAddr = [self lowerExpression:call.receiver];
                         if (srcAddr)
                             {
-                            XTIRValue* dstAddr = [self emitInsnOpcode:XTIROpAddrOf
-                                                               result:vci.selfPtrType
-                                                             operands:@[ [XTIROperand useWithValueId:pl.valueId] ]];
-                            XTIRLayout* layout = vci.instanceLayout;
-                            for (NSUInteger i = 0; i < layout.fields.count; i++)
-                                {
-                                XTIRType* fieldTy = layout.fields[i].type;
-                                XTIRType* fieldPtrTy = [XTIRType ptrToType:fieldTy
-                                                                    window:XTIRWindowUnbanked];
-                                XTIRValue* srcFa = [self emitFieldAddr:srcAddr
-                                                            fieldIndex:i
-                                                            resultType:fieldPtrTy];
-                                XTIRValue* srcVal = [self emitLoad:srcFa pointeeType:fieldTy];
-                                XTIRValue* dstFa = [self emitFieldAddr:dstAddr
-                                                            fieldIndex:i
-                                                            resultType:fieldPtrTy];
-                                [self emitStore:dstFa value:srcVal];
-                                }
+                            [self valueCopyFrom:srcAddr into:nil pinned:pl class:vci assign:YES];
                             return nil; // void-ish assignment result
                             }
                         }
@@ -6145,24 +6139,7 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
                     XTIRValue* srcAddr = [self lowerExpression:node.rhs];
                     if (srcAddr && srcAddr.type.kind == XTIRTypeKindPtr)
                         {
-                        XTIRValue* dstAddr = [self emitInsnOpcode:XTIROpAddrOf
-                                                           result:vci.selfPtrType
-                                                         operands:@[ [XTIROperand useWithValueId:pl.valueId] ]];
-                        XTIRLayout* layout = vci.instanceLayout;
-                        for (NSUInteger i = 0; i < layout.fields.count; i++)
-                            {
-                            XTIRType* fieldTy = layout.fields[i].type;
-                            XTIRType* fieldPtrTy = [XTIRType ptrToType:fieldTy
-                                                                window:XTIRWindowUnbanked];
-                            XTIRValue* srcFa = [self emitFieldAddr:srcAddr
-                                                        fieldIndex:i
-                                                        resultType:fieldPtrTy];
-                            XTIRValue* srcVal = [self emitLoad:srcFa pointeeType:fieldTy];
-                            XTIRValue* dstFa = [self emitFieldAddr:dstAddr
-                                                        fieldIndex:i
-                                                        resultType:fieldPtrTy];
-                            [self emitStore:dstFa value:srcVal];
-                            }
+                        [self valueCopyFrom:srcAddr into:nil pinned:pl class:vci assign:YES];
                         return nil;
                         }
                     }
@@ -8083,8 +8060,23 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
         {
         XTVariableDeclNode* vd = (XTVariableDeclNode*)n;
         XTType* t = vd.declaredType;
+        // …initialised by a copy or a call's result too: that is a slot of its
+        // own (`V b = make(); return b;`). Only a name bound straight to a
+        // stack instance's method result has none (the port's bindsWithoutSlot).
+        XTASTNode* init = vd.initialiser;
+        BOOL copied = NO;
+        if (init && [self valueClassForASTType:init.resolvedType] && [init.resolvedType.displayName isEqualToString:cls])
+            {
+            copied = YES;
+            if (init.nodeKind == XTASTNodeKindMethodCallExpr)
+                {
+                XTType* rt = ((XTMethodCallExprNode*)init).receiver.resolvedType;
+                if (rt && ![rt isKindOfClass:[XTPointerType class]] && self.classesByName[rt.displayName])
+                    copied = NO;
+                }
+            }
         if (vd.varName && t && t.kind == XTTypeKindClass && ![t isKindOfClass:[XTPointerType class]]
-            && [t.displayName isEqualToString:cls] && !vd.initialiser)
+            && [t.displayName isEqualToString:cls] && (!vd.initialiser || copied))
             [out addObject:vd.varName];
         return;
         }
@@ -8167,7 +8159,414 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
                                  result:ci.selfPtrType
                                operands:@[ [XTIROperand useWithValueId:vid] ]];
     [self emitStore:a value:r];
+    // An instance that owns references is held by this slot until something
+    // adopts it (#551).
+    if ([self stackDeallocSymbolFor:ci])
+        {
+        [self stackWeakLinksAt:a class:ci relink:YES];
+        [self noteValueTemp:a class:ci];
+        }
     return a;
+    }
+
+#pragma mark - Stack instances that own references (#551)
+
+// A stack instance whose class or an ancestor has a dealloc owns what its ivars
+// hold, as a heap instance does, and comes apart the same way: the class's
+// dealloc runs on it (the user body, the release of the strong ivars, the
+// super-chain), with no storage to free. Every way out of its scope runs it; a
+// copy retains what it copies; a by-value return moves. The port has the same
+// functions, under the same names.
+
+// The dealloc an instance of `ci` runs: its own or the nearest ancestor's. None
+// means the instance owns nothing.
+- (nullable XTIRSymbol*)stackDeallocSymbolFor:(nullable XTIRClassInfo*)ci
+    {
+    for (XTIRClassInfo* c = ci; c != nil; c = c.parent)
+        {
+        XTIRSymbol* sym = [self.module symbolForName:[NSString stringWithFormat:@"%@$dealloc", c.className]];
+        if (sym)
+            return sym;
+        }
+    return nil;
+    }
+
+- (void)stackTeardownAt:(nullable XTIRValue*)addr class:(nullable XTIRClassInfo*)ci
+    {
+    XTIRSymbol* sym = [self stackDeallocSymbolFor:ci];
+    if (!sym || !addr)
+        return;
+    XTIRSymbolId sid = [self.module.symbols indexOfObjectIdenticalTo:sym];
+    XTIRCallConv* conv = sym.attributes[@"cloaked"].boolValue  ? [XTIRCallConv cloaked]
+                         : sym.attributes[@"banked"].boolValue ? [XTIRCallConv banked]
+                                                               : [XTIRCallConv standard];
+    (void)[self emitCall:sid callConv:conv argValues:@[ addr ] resultType:nil];
+    }
+
+// The class's ivars, its ancestors' included, in field order.
+- (NSArray<NSString*>*)stackIvarNamesOf:(XTIRClassInfo*)ci
+    {
+    return [ci.ivarFieldIndex.allKeys sortedArrayUsingComparator:
+                                          ^NSComparisonResult(NSString* a, NSString* b) {
+                                            return [ci.ivarFieldIndex[a] compare:ci.ivarFieldIndex[b]];
+                                          }];
+    }
+
+// Every strong reference the instance holds, retained: what a copy of it owns
+// on top of what the original does.
+- (void)stackClaimAt:(XTIRValue*)addr class:(XTIRClassInfo*)ci
+    {
+    for (NSString* name in [self stackIvarNamesOf:ci])
+        {
+        XTType* t = ci.ivarASTType[name];
+        NSUInteger slot = ci.ivarFieldIndex[name].unsignedIntegerValue;
+        if (!t || [self astTypeIsWeakSlot:t])
+            continue;
+        if (t.kind == XTTypeKindStruct && [t isKindOfClass:[XTStructType class]])
+            {
+            if ([self structTypeContainsStrongPointer:(XTStructType*)t])
+                {
+                XTIRType* sIR = [self irTypeForASTTypeQuiet:t];
+                if (!sIR)
+                    continue;
+                XTIRValue* fa = [self emitFieldAddr:addr fieldIndex:slot
+                                         resultType:[XTIRType ptrToType:sIR window:XTIRWindowUnbanked]];
+                [self emitStructStrongFieldRetainAt:fa structType:(XTStructType*)t];
+                }
+            continue;
+            }
+        if ([self astTypeIsClassPtrArray:t])
+            {
+            XTArrayType* at = (XTArrayType*)t;
+            XTIRType* elemIR = [self irTypeForASTTypeQuiet:at.elementType];
+            if (!elemIR)
+                continue;
+            XTIRType* elemPtrIR = [XTIRType ptrToType:elemIR window:XTIRWindowUnbanked];
+            for (NSUInteger e = 0; e < at.elementCount; e++)
+                {
+                XTIRValue* base = [self emitFieldAddr:addr fieldIndex:slot resultType:elemPtrIR];
+                XTIRValue* idx = [self emitInsnOpcode:XTIROpConst
+                                               result:[XTIRType u16Type]
+                                             operands:@[ [XTIROperand immIWithType:[XTIRType u16Type] value:(int64_t)e] ]];
+                XTIRValue* ea = [self emitInsnOpcode:XTIROpElementAddr
+                                              result:elemPtrIR
+                                            operands:@[ [XTIROperand useWithValueId:base.valueId],
+                                                        [XTIROperand useWithValueId:idx.valueId] ]];
+                [self emitRetain:[self emitLoad:ea pointeeType:elemIR]];
+                }
+            continue;
+            }
+        if (![self astTypeIsClassPointer:t])
+            continue;
+        XTIRType* fIR = [self irTypeForASTTypeQuiet:t];
+        if (!fIR)
+            continue;
+        XTIRValue* fa = [self emitFieldAddr:addr fieldIndex:slot
+                                 resultType:[XTIRType ptrToType:fIR window:XTIRWindowUnbanked]];
+        [self emitRetain:[self emitLoad:fa pointeeType:fIR]];
+        }
+    }
+
+// A struct ivar's references are left alone by the ivar zeroing, and an
+// instance that owns references releases them at its scope exit, so they start
+// null: a heap instance gets that from the allocator.
+- (void)stackZeroStructsAt:(XTIRValue*)addr class:(XTIRClassInfo*)ci
+    {
+    if (![self stackDeallocSymbolFor:ci])
+        return;
+    for (NSString* name in [self stackIvarNamesOf:ci])
+        {
+        XTType* t = ci.ivarASTType[name];
+        NSUInteger slot = ci.ivarFieldIndex[name].unsignedIntegerValue;
+        if (!t || t.kind != XTTypeKindStruct || ![t isKindOfClass:[XTStructType class]]
+            || ![self structTypeContainsStrongPointer:(XTStructType*)t])
+            continue;
+        XTIRType* sIR = [self irTypeForASTTypeQuiet:t];
+        if (!sIR)
+            continue;
+        XTIRValue* fa = [self emitFieldAddr:addr fieldIndex:slot
+                                 resultType:[XTIRType ptrToType:sIR window:XTIRWindowUnbanked]];
+        [self emitStructARCWalkAt:fa type:(XTStructType*)t mode:XTStructARCZeroInit];
+        }
+    }
+
+// An auto-zeroing ivar is linked into its referent's chain at its own address,
+// so bytes moved or copied to another instance are linked again there (links
+// nulled, payload registered), and a source that is moved out of, and never
+// torn down, is unlinked.
+- (void)stackWeakLinksAt:(XTIRValue*)addr class:(XTIRClassInfo*)ci relink:(BOOL)relink
+    {
+    XTIRType* ptrT = [XTIRType ptrToType:[XTIRType voidType] window:XTIRWindowUnbanked];
+    XTIRType* ptrPtr = [XTIRType ptrToType:ptrT window:XTIRWindowUnbanked];
+    for (NSString* name in [self stackIvarNamesOf:ci])
+        {
+        XTType* t = ci.ivarASTType[name];
+        NSUInteger pidx = ci.ivarFieldIndex[name].unsignedIntegerValue;
+        if (!t || ![self astTypeIsWeakSlot:t] || pidx < 2)
+            continue;
+        XTIRType* payloadIR = [self irTypeForASTTypeQuiet:t];
+        if (!payloadIR)
+            continue;
+        XTIRType* payloadPtr = [XTIRType ptrToType:payloadIR window:XTIRWindowUnbanked];
+        if (!relink)
+            {
+            XTIRValue* ua = [self emitFieldAddr:addr fieldIndex:pidx resultType:payloadPtr];
+            if (t.boundMethodSignature != nil)
+                ua = [self emitFieldAddr:ua fieldIndex:0 resultType:ptrPtr];
+            [self emitWeakUnregisterSlot:ua];
+            continue;
+            }
+        XTIRValue* zero = [self allocateValueOfType:ptrT atSite:self.currentBlock];
+        [self.currentBlock appendInstruction:
+                               [[XTIRInsn alloc] initWithOpcode:XTIROpConst
+                                                         result:zero
+                                                       operands:@[ [XTIROperand immIWithType:ptrT value:0] ]
+                                                         dbgLoc:nil]];
+        for (NSUInteger k = 0; k < 2; k++)
+            {
+            XTIRValue* la = [self emitFieldAddr:addr fieldIndex:(uint32_t)(pidx - 2 + k) resultType:ptrPtr];
+            [self emitStore:la value:zero consumesOwnership:NO];
+            }
+        XTIRValue* slotA = [self emitFieldAddr:addr fieldIndex:pidx resultType:payloadPtr];
+        XTIRValue* payload = [self emitLoad:slotA pointeeType:payloadIR];
+        if ([self astTypeIsWeakBound:t])
+            [self emitWeakBoundRegisterAt:slotA value:payload boundType:t rhsNode:nil];
+        else
+            [self emitWeakRegisterSlot:slotA obj:payload];
+        }
+    }
+
+// The instance a value-class slot holds, addressed as the class.
+- (XTIRValue*)instanceAddrOf:(XTIRPinnedLocal*)pl class:(XTIRClassInfo*)ci
+    {
+    return [self emitInsnOpcode:XTIROpAddrOf
+                         result:ci.selfPtrType
+                       operands:@[ [XTIROperand useWithValueId:pl.valueId] ]];
+    }
+
+// One instance's bytes into another's: `dst`, or the instance in `pl`. An
+// instance that owns references COPIES them, retained, unless `src` is a call's
+// by-value result nothing else holds, whose references MOVE. Replacing an
+// instance (`assign`) retains the new references before the old instance comes
+// apart, so `c = c` keeps what it has.
+- (void)valueCopyFrom:(XTIRValue*)src
+                 into:(nullable XTIRValue*)dst
+               pinned:(nullable XTIRPinnedLocal*)pl
+                class:(XTIRClassInfo*)ci
+               assign:(BOOL)assign
+    {
+    BOOL owns = [self stackDeallocSymbolFor:ci] != nil;
+    BOOL moved = owns && [self consumeValueTemp:src];
+    if (owns && !moved)
+        [self stackClaimAt:src class:ci];
+    if (owns && assign)
+        [self stackTeardownAt:(dst ?: [self instanceAddrOf:pl class:ci]) class:ci];
+    if (!dst)
+        dst = [self instanceAddrOf:pl class:ci];
+    XTIRLayout* layout = ci.instanceLayout;
+    for (NSUInteger i = 0; i < layout.fields.count; i++)
+        {
+        XTIRType* fieldTy = layout.fields[i].type;
+        XTIRType* fieldPtrTy = [XTIRType ptrToType:fieldTy
+                                            window:XTIRWindowUnbanked];
+        XTIRValue* srcFa = [self emitFieldAddr:src
+                                    fieldIndex:i
+                                    resultType:fieldPtrTy];
+        XTIRValue* srcVal = [self emitLoad:srcFa pointeeType:fieldTy];
+        XTIRValue* dstFa = [self emitFieldAddr:dst
+                                    fieldIndex:i
+                                    resultType:fieldPtrTy];
+        [self emitStore:dstFa value:srcVal];
+        }
+    if (moved)
+        [self stackWeakLinksAt:src class:ci relink:NO];
+    [self stackWeakLinksAt:dst class:ci relink:YES];
+    }
+
+// Enrol a stack instance in the current scope, when it owns anything, under a
+// KEY no identifier can spell: `name%Type` for a slot of its own, `name&Type`
+// for a name bound to a call's result slot.
+- (void)enrolStackNamed:(NSString*)name type:(nullable XTType*)ty viaLocal:(BOOL)viaLocal
+    {
+    XTIRClassInfo* ci = [self valueClassForASTType:ty];
+    if (!ci || ![self stackDeallocSymbolFor:ci] || self.arcScopeStack.count == 0)
+        return;
+    NSString* key = [NSString stringWithFormat:@"%@%@%@", name, viaLocal ? @"&" : @"%", ty.displayName];
+    if (!self.stackKeyName)
+        self.stackKeyName = [NSMutableDictionary dictionary];
+    if (!self.stackKeyType)
+        self.stackKeyType = [NSMutableDictionary dictionary];
+    self.stackKeyName[key] = name;
+    self.stackKeyType[key] = ty;
+    [self enrollInArcScope:key];
+    }
+
+// The innermost enrolled key for `name`, or nil.
+- (nullable NSString*)stackKeyOf:(NSString*)name
+    {
+    for (NSInteger si = (NSInteger)self.arcScopeStack.count - 1; si >= 0; si--)
+        {
+        NSArray<NSString*>* frame = self.arcScopeStack[(NSUInteger)si];
+        for (NSInteger i = (NSInteger)frame.count - 1; i >= 0; i--)
+            if ([self.stackKeyName[frame[(NSUInteger)i]] isEqualToString:name])
+                return frame[(NSUInteger)i];
+        }
+    return nil;
+    }
+
+// A key's scope exit: its instance's dealloc. The instance a `return` moves out
+// is skipped, once. NO when `key` is an ordinary local's name.
+- (BOOL)tearDownStackKey:(NSString*)key
+    {
+    NSString* name = self.stackKeyName[key];
+    if (!name)
+        return NO;
+    if (self.returnExemptValueKey && [self.returnExemptValueKey isEqualToString:key])
+        {
+        self.returnExemptValueKey = nil;
+        return YES;
+        }
+    XTType* ty = self.stackKeyType[key];
+    if ([key characterAtIndex:name.length] == '&')
+        {
+        XTIRValue* lv = self.locals[name];
+        if (lv)
+            [self stackTeardownAt:lv class:[self valueClassForASTType:ty]];
+        return YES;
+        }
+    XTIRPinnedLocal* pl = self.pinnedLocals[name];
+    if (!pl)
+        return YES;
+    XTIRClassInfo* ci = [self valueClassForASTType:ty];
+    [self stackTeardownAt:[self instanceAddrOf:pl class:ci] class:ci];
+    return YES;
+    }
+
+// `return x;` of an instance by value. A local instance, or a call's result
+// slot, MOVES: its references leave with the bytes and its scope exit skips it.
+// Anything else (a parameter, an element) is copied out, so what leaves is
+// retained.
+- (void)valueReturnArcFrom:(XTIRValue*)from expr:(XTASTNode*)e class:(XTIRClassInfo*)ci
+    {
+    if (![self stackDeallocSymbolFor:ci])
+        return;
+    NSString* key = e.nodeKind == XTASTNodeKindIdentifier ? [self stackKeyOf:((XTIdentifierNode*)e).identName] : nil;
+    if (key)
+        {
+        self.returnExemptValueKey = key;
+        [self stackWeakLinksAt:from class:ci relink:NO];
+        return;
+        }
+    if ([self consumeValueTemp:from])
+        {
+        [self stackWeakLinksAt:from class:ci relink:NO];
+        return;
+        }
+    [self stackClaimAt:from class:ci];
+    }
+
+// A copy of an instance in a fresh slot of this frame.
+- (XTIRValue*)copyToTemp:(XTIRValue*)src class:(XTIRClassInfo*)ci
+    {
+    XTIRType* aggTy = [XTIRType aggWithLayout:ci.instanceLayout];
+    XTIRFunction* fn = self.currentFunction;
+    XTIRValueId vid = [fn allocateValueId];
+    uint32_t off = fn.frameInfo.pinnedLocalSize;
+    XTIRPinnedLocal* pl = [[XTIRPinnedLocal alloc] initWithName:[NSString stringWithFormat:@"__copy%llu", (unsigned long long)vid]
+                                                           type:aggTy
+                                                     byteOffset:off
+                                                        valueId:vid];
+    pl.escapesViaPointer = YES;
+    XTIRValue* v = [[XTIRValue alloc] initWithValueId:vid type:aggTy defSite:[XTIRDefSite parameterDef]];
+    [fn registerValue:v];
+    fn.frameInfo.pinnedLocals = [(fn.frameInfo.pinnedLocals ?: @[]) arrayByAddingObject:pl];
+    fn.frameInfo.pinnedLocalSize = off + aggTy.byteWidth;
+    XTIRValue* dst = [self instanceAddrOf:pl class:ci];
+    [self valueCopyFrom:src into:dst pinned:nil class:ci assign:NO];
+    return dst;
+    }
+
+// The end of a conditional arm (`c ? a : b`): the by-value results it made
+// come apart here, on the only path that made them, unless one IS the arm's
+// value. An arm of an owning class is always an instance of its own (a copy
+// when it named one), so the join is a temporary either way. A pointer arm may
+// point into one of them, so those stay pending, as before.
+- (XTIRValue*)valueArmEnd:(XTIRValue*)v type:(nullable XTType*)ty
+    {
+    XTIRClassInfo* ci = [self valueClassForASTType:ty];
+    if (ci && [self stackDeallocSymbolFor:ci] && [self irValueIsPointer:v])
+        {
+        BOOL t = [self consumeValueTemp:v];
+        [self releaseValueTempsAtDepth:self.condDepth all:NO];
+        if (!t)
+            v = [self copyToTemp:v class:ci];
+        return v;
+        }
+    if (![self irValueIsPointer:v] && v.type.kind != XTIRTypeKindAgg)
+        [self releaseValueTempsAtDepth:self.condDepth all:NO];
+    return v;
+    }
+
+// A call's by-value class result lives in a slot of this frame until something
+// adopts it; the end of the full expression tears down what nothing did.
+- (void)noteValueTemp:(XTIRValue*)addr class:(XTIRClassInfo*)ci
+    {
+    if (!self.valTemps)
+        {
+        self.valTemps = [NSMutableArray array];
+        self.valTempDepths = [NSMutableArray array];
+        self.valTempClasses = [NSMutableArray array];
+        }
+    [self.valTemps addObject:addr];
+    [self.valTempDepths addObject:@(self.condDepth)];
+    [self.valTempClasses addObject:ci];
+    }
+
+- (BOOL)consumeValueTemp:(nullable XTIRValue*)addr
+    {
+    if (!addr || !self.valTemps)
+        return NO;
+    NSUInteger i = [self.valTemps indexOfObjectIdenticalTo:addr];
+    if (i == NSNotFound)
+        return NO;
+    [self.valTemps removeObjectAtIndex:i];
+    [self.valTempDepths removeObjectAtIndex:i];
+    [self.valTempClasses removeObjectAtIndex:i];
+    return YES;
+    }
+
+// The temps made at `depth`, last first; with `all`, the rest are dropped, as
+// the owned temps are at the end of a full expression. A block that has
+// already branched away takes nothing.
+- (void)releaseValueTempsAtDepth:(NSInteger)depth all:(BOOL)all
+    {
+    if (self.valTemps.count == 0)
+        return;
+    NSMutableArray* keepT = [NSMutableArray array];
+    NSMutableArray* keepD = [NSMutableArray array];
+    NSMutableArray* keepC = [NSMutableArray array];
+    NSMutableArray* doomT = [NSMutableArray array];
+    NSMutableArray* doomC = [NSMutableArray array];
+    for (NSUInteger i = 0; i < self.valTemps.count; i++)
+        {
+        if (self.valTempDepths[i].integerValue == depth)
+            {
+            [doomT addObject:self.valTemps[i]];
+            [doomC addObject:self.valTempClasses[i]];
+            }
+        else if (!all)
+            {
+            [keepT addObject:self.valTemps[i]];
+            [keepD addObject:self.valTempDepths[i]];
+            [keepC addObject:self.valTempClasses[i]];
+            }
+        }
+    if (self.currentBlock.terminator == nil)
+        for (NSInteger i = (NSInteger)doomT.count - 1; i >= 0; i--)
+            [self stackTeardownAt:doomT[(NSUInteger)i] class:doomC[(NSUInteger)i]];
+    self.valTemps = keepT;
+    self.valTempDepths = keepD;
+    self.valTempClasses = keepC;
     }
 
 - (nullable XTIRValue*)lowerMethodCallExpr:(XTMethodCallExprNode*)node
@@ -13162,6 +13561,8 @@ static const NSUInteger kVarargSlotBytes = 8;
         {
         NSString* name = top[i];
             {
+            if ([self tearDownStackKey:name])
+                continue;
             if (self.strongArrayLocals[name])
                 {
                 [self emitStrongArrayReleaseForLocalNamed:name];
@@ -13726,6 +14127,8 @@ typedef NS_ENUM(NSInteger, XTStructARCMode) {
             for (NSInteger i = (NSInteger)frame.count - 1; i >= 0; i--)
                 {
                 NSString* name = frame[i];
+                if ([self tearDownStackKey:name])
+                    continue;
                 if (self.strongArrayLocals[name])
                     {
                     [self emitStrongArrayReleaseForLocalNamed:name];
@@ -14711,6 +15114,10 @@ typedef NS_ENUM(NSInteger, XTStructARCMode) {
             }
         }
     XTIRPinnedLocal* pl = self.pinnedLocals[node.varName];
+    // A name declared as instances of two classes in two blocks is two
+    // instances: from here on it is THIS declaration's class (#551).
+    if (pl && self.valueClassLocals[node.varName] && [self valueClassForASTType:node.declaredType])
+        self.valueClassLocals[node.varName] = [self valueClassForASTType:node.declaredType];
     if (pl)
         {
         // `<ValueClass> b = recv.clone()` where recv's class has no
@@ -14750,24 +15157,8 @@ typedef NS_ENUM(NSInteger, XTStructARCMode) {
                     XTIRValue* srcAddr = [self lowerExpression:call.receiver];
                     if (srcAddr)
                         {
-                        XTIRValue* dstAddr = [self emitInsnOpcode:XTIROpAddrOf
-                                                           result:vci.selfPtrType
-                                                         operands:@[ [XTIROperand useWithValueId:pl.valueId] ]];
-                        XTIRLayout* layout = vci.instanceLayout;
-                        for (NSUInteger i = 0; i < layout.fields.count; i++)
-                            {
-                            XTIRType* fieldTy = layout.fields[i].type;
-                            XTIRType* fieldPtrTy = [XTIRType ptrToType:fieldTy
-                                                                window:XTIRWindowUnbanked];
-                            XTIRValue* srcFa = [self emitFieldAddr:srcAddr
-                                                        fieldIndex:i
-                                                        resultType:fieldPtrTy];
-                            XTIRValue* srcVal = [self emitLoad:srcFa pointeeType:fieldTy];
-                            XTIRValue* dstFa = [self emitFieldAddr:dstAddr
-                                                        fieldIndex:i
-                                                        resultType:fieldPtrTy];
-                            [self emitStore:dstFa value:srcVal];
-                            }
+                        [self valueCopyFrom:srcAddr into:nil pinned:pl class:vci assign:NO];
+                        [self enrolStackNamed:node.varName type:node.declaredType viaLocal:NO];
                         return;
                         }
                     }
@@ -14794,24 +15185,8 @@ typedef NS_ENUM(NSInteger, XTStructARCMode) {
                 XTIRValue* srcAddr = [self lowerExpression:node.initialiser];
                 if (srcAddr && srcAddr.type.kind == XTIRTypeKindPtr)
                     {
-                    XTIRValue* dstAddr = [self emitInsnOpcode:XTIROpAddrOf
-                                                       result:vci.selfPtrType
-                                                     operands:@[ [XTIROperand useWithValueId:pl.valueId] ]];
-                    XTIRLayout* layout = vci.instanceLayout;
-                    for (NSUInteger i = 0; i < layout.fields.count; i++)
-                        {
-                        XTIRType* fieldTy = layout.fields[i].type;
-                        XTIRType* fieldPtrTy = [XTIRType ptrToType:fieldTy
-                                                            window:XTIRWindowUnbanked];
-                        XTIRValue* srcFa = [self emitFieldAddr:srcAddr
-                                                    fieldIndex:i
-                                                    resultType:fieldPtrTy];
-                        XTIRValue* srcVal = [self emitLoad:srcFa pointeeType:fieldTy];
-                        XTIRValue* dstFa = [self emitFieldAddr:dstAddr
-                                                    fieldIndex:i
-                                                    resultType:fieldPtrTy];
-                        [self emitStore:dstFa value:srcVal];
-                        }
+                    [self valueCopyFrom:srcAddr into:nil pinned:pl class:vci assign:NO];
+                    [self enrolStackNamed:node.varName type:node.declaredType viaLocal:NO];
                     return;
                     }
                 }
@@ -14838,6 +15213,7 @@ typedef NS_ENUM(NSInteger, XTStructARCMode) {
                     // Zero the ivars first (so a strong-pointer field's
                     // first ARC store sees null), then seed the vtable.
                     [self emitZeroInitIvarsFor:addr class:vci];
+                    [self stackZeroStructsAt:addr class:vci];
                     [self emitVtableInitFor:addr class:vci];
                     // Auto-init: if the class defines a zero-arg `init()`,
                     // call it automatically after the slot is set up — same
@@ -14877,6 +15253,7 @@ typedef NS_ENUM(NSInteger, XTStructARCMode) {
                             }
                         }
                     }
+                [self enrolStackNamed:node.varName type:node.declaredType viaLocal:NO];
                 }
             // Uninitialised array of class pointers: null every element so
             // the scope-exit walker's Release of an un-assigned slot is a
@@ -14895,6 +15272,17 @@ typedef NS_ENUM(NSInteger, XTStructARCMode) {
             if (self.strongStructArrayLocals[node.varName])
                 {
                 [self emitStructArrayARCForLocalNamed:node.varName mode:XTStructARCZeroInit];
+                }
+            // An ARRAY of a class is an array of references, and a local one has
+            // never been given storage for them: refused rather than lowered
+            // into a slot of no size (#551).
+            if ([node.declaredType isKindOfClass:[XTArrayType class]]
+                && [self valueClassForASTType:((XTArrayType*)node.declaredType).elementType])
+                {
+                XTType* et = ((XTArrayType*)node.declaredType).elementType;
+                [self softFailLoweringAt:node.location
+                             withMessage:[NSString stringWithFormat:@"a local array of class instances (`%@`) is not supported; declare an array of references (`%@* %@[N]`) instead",
+                                                                    node.declaredType.displayName, et.displayName, node.varName]];
                 }
             return;
             }
@@ -15065,6 +15453,7 @@ typedef NS_ENUM(NSInteger, XTStructARCMode) {
     XTIRValue* initVal = [self lowerExpression:node.initialiser];
     if (!initVal)
         return;
+    XTIRValue* made = initVal;
     if (node.declaredType)
         {
         initVal = [self coerceValue:initVal
@@ -15104,6 +15493,9 @@ typedef NS_ENUM(NSInteger, XTStructARCMode) {
     // when the value is read on the next line (#123).
     [self consumeOwnedTemp:initVal];
     self.locals[node.varName] = initVal;
+    // A name bound straight to a call's by-value result slot owns it.
+    if ([self consumeValueTemp:made])
+        [self enrolStackNamed:node.varName type:node.declaredType viaLocal:YES];
     // Release any other +1 temps produced by the initialiser (e.g. factory
     // calls passed as arguments) that weren't adopted by the slot.
     [self flushOwnedTempsFrom:exprStart];
@@ -15200,6 +15592,8 @@ typedef NS_ENUM(NSInteger, XTStructARCMode) {
             for (NSInteger i = (NSInteger)frame.count - 1; i >= 0; i--)
                 {
                 NSString* name = frame[i];
+                if ([self tearDownStackKey:name])
+                    continue;
                 if (self.strongArrayLocals[name])
                     {
                     [self emitStrongArrayReleaseForLocalNamed:name];
@@ -15337,8 +15731,10 @@ typedef NS_ENUM(NSInteger, XTStructARCMode) {
         XTIRClassInfo* rvc = [self valueClassForASTType:returnAstType];
         if (rvc)
             {
+            XTIRValue* from = returnValue;
             returnValue = [self emitLoad:returnValue pointeeType:[XTIRType aggWithLayout:rvc.instanceLayout]];
             classByValue = YES;
+            [self valueReturnArcFrom:from expr:node.values[0] class:rvc];
             }
         }
     BOOL returnIsOwnedTemp = returnValue && self.ownedTemps && [self.ownedTemps indexOfObjectIdenticalTo:returnValue] != NSNotFound;
@@ -15386,6 +15782,7 @@ typedef NS_ENUM(NSInteger, XTStructARCMode) {
         }
     [self releaseStrongLocalsAlongReturnExcept:returnValue];
     self.returnExemptStructName = nil;
+    self.returnExemptValueKey = nil;
     if (returnValue)
         {
         XTIRValue* v = returnValue;
@@ -15838,6 +16235,7 @@ static NSString* XTIRTypeKindName(XTIRTypeKind k)
         self.condDepth -= 1;
         return nil;
         }
+    thenVal = [self valueArmEnd:thenVal type:node.resolvedType];
     XTIRBlock* thenExit = self.currentBlock;
     XTIRLocalSnapshot* thenSnap = [self snapshotLocals];
     // The branch is NOT emitted yet. Ownership of the arms cannot be settled
@@ -15863,6 +16261,7 @@ static NSString* XTIRTypeKindName(XTIRTypeKind k)
         self.condDepth -= 1;
         return nil;
         }
+    elseVal = [self valueArmEnd:elseVal type:node.resolvedType];
     XTIRBlock* elseExit = self.currentBlock;
     XTIRLocalSnapshot* elseSnap = [self snapshotLocals];
 
@@ -15963,6 +16362,10 @@ static NSString* XTIRTypeKindName(XTIRTypeKind k)
     // case D) even once the binding case is right.
     if (armOwned)
         [self registerOwnedTemp:phiResult];
+    // …and an instance of an owning class, which each arm made one of.
+    XTIRClassInfo* tci = [self valueClassForASTType:node.resolvedType];
+    if (tci && [self stackDeallocSymbolFor:tci] && [self irValueIsPointer:phiResult])
+        [self noteValueTemp:phiResult class:tci];
     return phiResult;
     }
 
@@ -18623,6 +19026,10 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
     self.weakPinnedLocals = [NSMutableSet set];
     self.pinnedLocalsByType = [NSMutableDictionary dictionary];
     self.valueClassLocals = [NSMutableDictionary dictionary];
+    self.valTemps = nil;
+    self.valTempDepths = nil;
+    self.valTempClasses = nil;
+    self.returnExemptValueKey = nil;
     // Undo any globalsByName bindings the PREVIOUS function's static
     // locals installed, so a static's name doesn't leak into siblings.
     [self.staticLocalSaved enumerateKeysAndObjectsUsingBlock:

@@ -622,6 +622,17 @@ class ClassInfo
     Array* _ownedBlocks; // the conditional DEPTH each pending temp was created at
     u32 _condDepth;      // how many conditional arms we are inside
 
+    // A stack instance that owns references (its class or an ancestor has a
+    // dealloc) is enrolled in its scope under a KEY, `name%Type` for a slot
+    // (`name&Type` for a name bound to a call's slot), which no identifier can
+    // spell; the key says what to tear down whatever the name means by then.
+    Map* _stackKeyName;          // key -> the local's name
+    Map* _stackKeyTy;            // key -> its declared class
+    String* _returnExemptValue;  // the key a by-value `return` moves out
+    Array* _valTemps;            // a call's by-value class result, not yet adopted: its slot address
+    Array* _valTempDepth;        // …the conditional depth it was made at
+    Array* _valTempCls;          // …and its class
+
     // ── functions and the module ─────────────────────────────────────────
     // ── the `par` subset (par-blocks.md §2) ─────────────────────────────────
     // Every `par` block's kernel — `run` of the class the parser made of it — and
@@ -876,6 +887,11 @@ class ClassInfo
         _staticIvar = new Map();
         _staticIvarTy = new Map();
         _valueClass = new Map();
+        _stackKeyName = new Map();
+        _stackKeyTy = new Map();
+        _valTemps = new Array();
+        _valTempDepth = new Array();
+        _valTempCls = new Array();
         _arcScopes = new Array();
         _deferScopes = new Array();
         _strongLocals = new NameList();
@@ -2199,10 +2215,14 @@ class ClassInfo
         _blk = thenB;
         _condDepth = _condDepth + (u32)1;
         IRValue* a = lowerExpr(n.kid((u32)1));
-        _condDepth = _condDepth - (u32)1;
         if (_failed)
+            {
+            _condDepth = _condDepth - (u32)1;
             return (IRValue*)0;
+            }
         a = coerce(a, n.kid((u32)1).ty(), ty);
+        a = valueArmEnd(a, ty);
+        _condDepth = _condDepth - (u32)1;
         IRBlock* thenExit = _blk;
         IRInsn* b1 = IRInsn.with(String.withCString("Branch"));
         b1.add(IROperand.block(joinB));
@@ -2211,10 +2231,14 @@ class ClassInfo
         _blk = elseB;
         _condDepth = _condDepth + (u32)1;
         IRValue* b = lowerExpr(n.kid((u32)2));
-        _condDepth = _condDepth - (u32)1;
         if (_failed)
+            {
+            _condDepth = _condDepth - (u32)1;
             return (IRValue*)0;
+            }
         b = coerce(b, n.kid((u32)2).ty(), ty);
+        b = valueArmEnd(b, ty);
+        _condDepth = _condDepth - (u32)1;
         IRBlock* elseExit = _blk;
 
         // OWNERSHIP OF THE ARMS (private:docs/bugs/081).
@@ -2288,6 +2312,10 @@ class ClassInfo
         // release it — or a binding can adopt it and consume the registration.
         if (armOwned)
             noteOwnedTemp(res, ty);
+        // …and an instance of an owning class, which each arm made one of.
+        ClassInfo* tci = valueClassOf(ty);
+        if (tci != 0 && stackDeallocSym(tci) != (String*)0 && isPtrIr(res.ty()))
+            noteValueTemp(res, tci);
         return res;
         }
 
@@ -9372,7 +9400,11 @@ class ClassInfo
                 // before the teardown, while the instance is still whole.
                 ClassInfo* rvc = valueClassOf(n.kid((u32)0).ty());
                 if (rvc != 0 && isPtrIr(v.ty()) && IRType.isAgg(_fn.ret()))
+                    {
+                    IRValue* from = v;
                     v = loadThroughIr(v, rvc.agg());
+                    valueReturnArc(from, n.kid((u32)0), rvc);
+                    }
                 // Every class pointer LEAVES at +1. A value that is already
                 // owned here — a call's result, or a strong local whose
                 // ownership transfers — is one already; anything else was
@@ -9412,6 +9444,7 @@ class ClassInfo
                 flushOwnedTemps();
                 releaseAlongExit();
                 _returnExemptStruct = (String*)0;
+                _returnExemptValue = (String*)0;
                 _returning = (IRValue*)0;
                 // A RETURN adjusts its value the way a call adjusts an
                 // ARGUMENT — declared width against the return type's IR width
@@ -9726,6 +9759,10 @@ class ClassInfo
         // first, then the initialiser, then the store. There is no SSA
         // binding to make — the name IS the slot from here on.
         IRPinned* pin = pinOf(n.name());
+        // A name declared as instances of two classes in two blocks is two
+        // instances: from here on it is THIS declaration's class (#551).
+        if (pin != 0 && _valueClass.get((Hashable*)n.name()) != 0 && valueClassOf(n.op()) != 0)
+            _valueClass.set((Hashable*)n.name(), (Object*)valueClassOf(n.op()));
         if (pin != 0)
             {
             // A STACK instance is made into an object here rather than
@@ -9739,6 +9776,7 @@ class ClassInfo
             if (vco != 0 && (n.kidCount() == (u32)0 || !isName(stripQual(n.kid((u32)0).ty()), n.op().cString())))
                 {
                 setUpStackInstance(n.name(), (ClassInfo*)vco);
+                enrolStack(n.name(), n.op(), false);
                 return;
                 }
             // Any initialiser yielding the class: a call's result, or another
@@ -9746,8 +9784,11 @@ class ClassInfo
             if (vco != 0 && n.kidCount() > (u32)0 && n.kid((u32)0).kind() != (u16)nkNew && valueClassOf(n.kid((u32)0).ty()) != 0
                 && IRType.isAgg(pin.ty()))
                 {
-                if (valueClassInit(n.kid((u32)0), pin, (ClassInfo*)vco))
+                if (valueClassInit(n.kid((u32)0), pin, (ClassInfo*)vco, false))
+                    {
+                    enrolStack(n.name(), n.op(), false);
                     return;
+                    }
                 if (_failed)
                     return;
                 }
@@ -9785,6 +9826,20 @@ class ClassInfo
                         {
                         structFieldARC(n.name(), true);
                         noteStrongLocal(n.name());
+                        }
+                    // An ARRAY of a class is an array of references, and a
+                    // local one has never been given storage for them: refused
+                    // rather than lowered into a slot of no size (#551).
+                    if (isArrayLike(n.op()) && valueClassOf(elementOf(n.op())) != 0)
+                        {
+                        String* w = String.withCString("a local array of class instances (`");
+                        w.append(n.op());
+                        w.appendCString("`) is not supported; declare an array of references (`");
+                        w.append(stripQual(elementOf(n.op())));
+                        w.appendCString("* ");
+                        w.append(n.name());
+                        w.appendCString("[N]`) instead");
+                        giveUpAt(w, n);
                         }
                     return;
                     }
@@ -9956,6 +10011,7 @@ class ClassInfo
         IRValue* v = lowerExpr(n.kid((u32)0));
         if (_failed)
             return;
+        IRValue* made = v;
         v = coerce(v, n.kid((u32)0).ty(), n.op());
         // A strong slot OWNS what it holds. `new T()` transfers a +1 the slot
         // adopts, so it needs no Retain; every other initialiser borrows, and
@@ -9986,6 +10042,9 @@ class ClassInfo
         consumeOwnedTemp(v);
         _locals.set((Hashable*)n.name(), (Object*)v);
         _localTypes.set((Hashable*)n.name(), (Object*)n.op());
+        // A name bound straight to a call's by-value result slot owns it.
+        if (consumeValueTemp(made))
+            enrolStack(n.name(), n.op(), true);
         }
 
     // The module symbol a global NAME stands for. Ordinarily itself; for a
@@ -10690,10 +10749,11 @@ class ClassInfo
         Object* vco = _valueClass.get((Hashable*)name);
         if (vco == 0)
             return false;
-        return valueClassInit(rhs, vpin, (ClassInfo*)vco);
+        return valueClassInit(rhs, vpin, (ClassInfo*)vco, true);
         }
 
-    bool valueClassInit(Node* call, IRPinned* pin, ClassInfo* ci)
+    // `assign`: the slot already holds an instance, which this replaces.
+    bool valueClassInit(Node* call, IRPinned* pin, ClassInfo* ci, bool assign)
         {
         IRValue* src = (IRValue*)0;
         if (call.kind() == (u16)nkMethodCall && isName(call.name(), "clone") && call.kidCount() == (u32)1)
@@ -10724,12 +10784,36 @@ class ClassInfo
             if (src == 0 || !isPtrIr(src.ty()))
                 return false;
             }
+        if (layoutOfAgg(ci.agg()) == 0)
+            return false;
+        valueCopyInto(src, (IRValue*)0, pin, ci, assign);
+        return true;
+        }
+
+    // The instance a value-class slot holds, addressed as the class.
+    IRValue* instanceAddr(IRPinned* pin, ClassInfo* ci)
+        {
         Array* aops = new Array();
         aops.add((Object*)IROperand.useVal(pin.val()));
-        IRValue* dst = emit(String.withCString("AddrOf"), ci.selfPtr(), aops);
+        return emit(String.withCString("AddrOf"), ci.selfPtr(), aops);
+        }
+
+    // One instance's bytes into another's: `dst`, or the instance in `pin`.
+    // An instance that owns references (#551) COPIES them, retained, unless
+    // `src` is a call's by-value result nothing else holds, whose references
+    // MOVE. Replacing an instance (`assign`) retains the new references
+    // before the old instance comes apart, so `c = c` keeps what it has.
+    void valueCopyInto(IRValue* src, IRValue* dst, IRPinned* pin, ClassInfo* ci, bool assign)
+        {
+        bool owns = stackDeallocSym(ci) != (String*)0;
+        bool moved = owns && consumeValueTemp(src);
+        if (owns && !moved)
+            stackClaim(src, ci);
+        if (owns && assign)
+            stackTeardown(dst != (IRValue*)0 ? dst : instanceAddr(pin, ci), ci);
+        if (dst == (IRValue*)0)
+            dst = instanceAddr(pin, ci);
         IRLayout* lay = layoutOfAgg(ci.agg());
-        if (lay == 0)
-            return false;
         for (u32 i = (u32)0; i < lay.fieldCount(); i = i + (u32)1)
             {
             String* ft = lay.typeAt(i);
@@ -10738,7 +10822,308 @@ class ClassInfo
             IRValue* df = fieldAddr(dst, i, ptrTo(ft));
             storeThrough(df, sv);
             }
-        return true;
+        if (moved)
+            stackUnlink(src, ci);
+        stackRelink(dst, ci);
+        }
+
+    // ── stack instances that own references (#551) ───────────────────────
+    // A stack instance whose class or an ancestor has a dealloc owns what its
+    // ivars hold, as a heap instance does, and comes apart the same way: the
+    // class's dealloc runs on it (the user body, the release of the strong
+    // ivars, the super-chain), with no storage to free. Every way out of its
+    // scope runs it; a copy retains what it copies; a by-value return moves.
+
+    // The dealloc an instance of `ci` runs: its own or the nearest ancestor's.
+    // None means the instance owns nothing.
+    String* stackDeallocSym(ClassInfo* ci)
+        {
+        for (ClassInfo* c = ci; c != 0; c = c.parent())
+            {
+            String* s = String.withString(c.name());
+            s.appendCString("$dealloc");
+            if (symbolExists(s))
+                return s;
+            }
+        return (String*)0;
+        }
+
+    void stackTeardown(IRValue* addr, ClassInfo* ci)
+        {
+        String* d = stackDeallocSym(ci);
+        if (d != (String*)0)
+            emitMethodCall(d, addr, new Array(), String.withCString("void"), false);
+        }
+
+    // Every strong reference the instance holds, its ancestors' included,
+    // retained: what a copy of it owns on top of what the original does.
+    void stackClaim(IRValue* addr, ClassInfo* ci)
+        {
+        Array* names = sortedByIvarIndex(ci);
+        for (u32 i = (u32)0; i < names.count(); i = i + (u32)1)
+            {
+            String* nm = (String*)names.get(i);
+            String* ty = (String*)ci.ivarType().get((Hashable*)nm);
+            u32 slot = ((Number*)ci.ivarIndex().get((Hashable*)nm)).asU32();
+            if (ty == (String*)0 || isWeakSlot(ty))
+                continue;
+            if (structDeclFor(ty) != 0)
+                {
+                if (structHasStrongPointer(ty))
+                    structFieldsAt(fieldAddr(addr, slot, ptrTo(irType(ty))), ty, false, true);
+                continue;
+                }
+            if (isClassPtrArray(ty))
+                {
+                String* elem = elementOf(ty);
+                String* elemPtr = ptrTo(irType(elem));
+                u32 count = arrayCount(ty);
+                for (u32 e = (u32)0; e < count; e = e + (u32)1)
+                    refOp(String.withCString("Retain"), loadThrough(byteSlotAddr(fieldAddr(addr, slot, elemPtr), e, elemPtr), elem));
+                continue;
+                }
+            if (!isClassPointer(ty))
+                continue;
+            refOp(String.withCString("Retain"), loadThrough(fieldAddr(addr, slot, ptrTo(irType(ty))), ty));
+            }
+        }
+
+    // A struct ivar's references are left alone by the ivar zeroing, and an
+    // instance that owns references releases them at its scope exit, so they
+    // start null: a heap instance gets that from the allocator.
+    void stackZeroStructs(IRValue* addr, ClassInfo* ci)
+        {
+        if (stackDeallocSym(ci) == (String*)0)
+            return;
+        Array* names = sortedByIvarIndex(ci);
+        for (u32 i = (u32)0; i < names.count(); i = i + (u32)1)
+            {
+            String* nm = (String*)names.get(i);
+            String* ty = (String*)ci.ivarType().get((Hashable*)nm);
+            u32 slot = ((Number*)ci.ivarIndex().get((Hashable*)nm)).asU32();
+            if (ty == (String*)0 || structDeclFor(ty) == 0 || !structHasStrongPointer(ty))
+                continue;
+            structFieldsAt(fieldAddr(addr, slot, ptrTo(irType(ty))), ty, true);
+            }
+        }
+
+    // An auto-zeroing ivar is linked into its referent's chain at its own
+    // address, so bytes moved or copied to another instance are linked again
+    // there (links nulled, payload registered), and a source that is moved
+    // out of, and never torn down, is unlinked.
+    void stackRelink(IRValue* addr, ClassInfo* ci)
+        {
+        stackWeakLinks(addr, ci, true);
+        }
+
+    void stackUnlink(IRValue* addr, ClassInfo* ci)
+        {
+        stackWeakLinks(addr, ci, false);
+        }
+
+    void stackWeakLinks(IRValue* addr, ClassInfo* ci, bool relink)
+        {
+        String* link = ptrTo(String.withCString("Void"));
+        Array* names = sortedByIvarIndex(ci);
+        for (u32 i = (u32)0; i < names.count(); i = i + (u32)1)
+            {
+            String* nm = (String*)names.get(i);
+            String* ty = (String*)ci.ivarType().get((Hashable*)nm);
+            u32 pidx = ((Number*)ci.ivarIndex().get((Hashable*)nm)).asU32();
+            if (ty == (String*)0 || !isWeakSlot(ty) || pidx < (u32)2)
+                continue;
+            if (!relink)
+                {
+                IRValue* ua = fieldAddr(addr, pidx, ptrTo(irType(ty)));
+                if (isBoundSig(stripQual(ty)))
+                    ua = fieldAddr(ua, (u32)0, ptrTo(ptrTo(String.withCString("Void"))));
+                weakOp(String.withCString("WeakUnregister"), ua, (IRValue*)0);
+                continue;
+                }
+            Array* zops = new Array();
+            zops.add((Object*)IROperand.immI((i32)0, link));
+            IRValue* z = emit(String.withCString("Const"), link, zops);
+            storeThrough(fieldAddr(addr, pidx - (u32)2, ptrTo(link)), z);
+            storeThrough(fieldAddr(addr, pidx - (u32)1, ptrTo(link)), z);
+            IRValue* slotA = fieldAddr(addr, pidx, ptrTo(irType(ty)));
+            IRValue* pv = loadThrough(slotA, ty);
+            if (isBoundSig(stripQual(ty)))
+                registerBoundPair(slotA, pv, ty);
+            else
+                weakOp(String.withCString("WeakRegister"), slotA, pv);
+            }
+        }
+
+    // Enrol a stack instance in the current scope, when it owns anything.
+    // `viaLocal`: the name is bound to a call's result slot rather than owning
+    // a slot of its own.
+    void enrolStack(String* name, String* ty, bool viaLocal)
+        {
+        ClassInfo* ci = valueClassOf(ty);
+        if (ci == 0 || stackDeallocSym(ci) == (String*)0 || _arcScopes.count() == (u32)0)
+            return;
+        String* key = String.withString(name);
+        key.appendByte(viaLocal ? (u8)'&' : (u8)'%');
+        key.append(stripQual(ty));
+        _stackKeyName.set((Hashable*)key, (Object*)name);
+        _stackKeyTy.set((Hashable*)key, (Object*)ty);
+        Array* frame = (Array*)_arcScopes.get(_arcScopes.count() - (u32)1);
+        if (!hasName(frame, key))
+            frame.add((Object*)key);
+        }
+
+    // The innermost enrolled key for `name`, or 0.
+    String* stackKeyOf(String* name)
+        {
+        for (u32 si = _arcScopes.count(); si > (u32)0; si = si - (u32)1)
+            {
+            Array* frame = (Array*)_arcScopes.get(si - (u32)1);
+            for (u32 i = frame.count(); i > (u32)0; i = i - (u32)1)
+                {
+                Object* kn = _stackKeyName.get((Hashable*)(String*)frame.get(i - (u32)1));
+                if (kn != 0 && ((String*)kn).equals(name))
+                    return (String*)frame.get(i - (u32)1);
+                }
+            }
+        return (String*)0;
+        }
+
+    // A key's scope exit: its instance's dealloc. The instance a `return`
+    // moves out is skipped, once.
+    void tearDownStackKey(String* key)
+        {
+        if (_returnExemptValue != (String*)0 && _returnExemptValue.equals(key))
+            {
+            _returnExemptValue = (String*)0;
+            return;
+            }
+        String* name = (String*)_stackKeyName.get((Hashable*)key);
+        String* ty = (String*)_stackKeyTy.get((Hashable*)key);
+        if (key.byteAt(name.byteLength()) == (u8)'&')
+            {
+            Object* lv = _locals.get((Hashable*)name);
+            if (lv != 0)
+                stackTeardown((IRValue*)lv, valueClassOf(ty));
+            return;
+            }
+        IRPinned* p = pinOf(name);
+        if (p == 0)
+            return;
+        ClassInfo* ci = valueClassOf(ty);
+        stackTeardown(instanceAddr(p, ci), ci);
+        }
+
+    // `return x;` of an instance by value. A local instance, or a call's
+    // result slot, MOVES: its references leave with the bytes and its scope
+    // exit skips it. Anything else (a parameter, an element) is copied out,
+    // so what leaves is retained.
+    void valueReturnArc(IRValue* from, Node* e, ClassInfo* ci)
+        {
+        if (stackDeallocSym(ci) == (String*)0)
+            return;
+        String* key = e.kind() == (u16)nkIdent ? stackKeyOf(e.name()) : (String*)0;
+        if (key != (String*)0)
+            {
+            _returnExemptValue = key;
+            stackUnlink(from, ci);
+            return;
+            }
+        if (consumeValueTemp(from))
+            {
+            stackUnlink(from, ci);
+            return;
+            }
+        stackClaim(from, ci);
+        }
+
+    // A copy of an instance in a fresh slot of this frame.
+    IRValue* copyToTemp(IRValue* src, ClassInfo* ci)
+        {
+        u32 off = _fn.pinnedSize();
+        IRPinned* p = IRPinned.with(new IRValue(ci.agg()), ci.agg(), off, true);
+        _fn.addPinned(p);
+        _fn.setPinnedSize(off + irWidth(ci.agg()));
+        IRValue* dst = instanceAddr(p, ci);
+        valueCopyInto(src, dst, (IRPinned*)0, ci, false);
+        return dst;
+        }
+
+    // The end of a conditional arm (`c ? a : b`): the by-value results it made
+    // come apart here, on the only path that made them, unless one IS the
+    // arm's value. An arm of an owning class is always an instance of its own
+    // (a copy when it named one), so the join is a temporary either way. A
+    // pointer arm may point into one of them, so those stay pending, as before.
+    IRValue* valueArmEnd(IRValue* v, String* ty)
+        {
+        ClassInfo* ci = valueClassOf(ty);
+        if (ci != 0 && stackDeallocSym(ci) != (String*)0 && isPtrIr(v.ty()))
+            {
+            bool t = consumeValueTemp(v);
+            releaseValueTempsAtDepth(_condDepth, false);
+            if (!t)
+                v = copyToTemp(v, ci);
+            return v;
+            }
+        if (!isPtrIr(v.ty()) && !IRType.isAgg(v.ty()))
+            releaseValueTempsAtDepth(_condDepth, false);
+        return v;
+        }
+
+    // A call's by-value class result lives in a slot of this frame until
+    // something adopts it; the end of the full expression tears down what
+    // nothing did.
+    void noteValueTemp(IRValue* addr, ClassInfo* ci)
+        {
+        _valTemps.add((Object*)addr);
+        _valTempDepth.add((Object*)Number.with(_condDepth));
+        _valTempCls.add((Object*)ci);
+        }
+
+    bool consumeValueTemp(IRValue* addr)
+        {
+        for (u32 i = (u32)0; i < _valTemps.count(); i = i + (u32)1)
+            if ((IRValue*)_valTemps.get(i) == addr)
+                {
+                _valTemps.removeAt(i);
+                _valTempDepth.removeAt(i);
+                _valTempCls.removeAt(i);
+                return true;
+                }
+        return false;
+        }
+
+    // The temps made at `depth`, last first; with `all`, the rest are
+    // dropped, as the owned temps are at the end of a full expression. A
+    // block that has already branched away takes nothing.
+    void releaseValueTempsAtDepth(u32 depth, bool all)
+        {
+        if (_valTemps.count() == (u32)0)
+            return;
+        Array* keepT = new Array();
+        Array* keepD = new Array();
+        Array* keepC = new Array();
+        Array* doomT = new Array();
+        Array* doomC = new Array();
+        for (u32 i = (u32)0; i < _valTemps.count(); i = i + (u32)1)
+            {
+            if (((Number*)_valTempDepth.get(i)).asU32() == depth)
+                {
+                doomT.add(_valTemps.get(i));
+                doomC.add(_valTempCls.get(i));
+                }
+            else if (!all)
+                {
+                keepT.add(_valTemps.get(i));
+                keepD.add(_valTempDepth.get(i));
+                keepC.add(_valTempCls.get(i));
+                }
+            }
+        if (_blk.term() == 0)
+            for (u32 i = doomT.count(); i > (u32)0; i = i - (u32)1)
+                stackTeardown((IRValue*)doomT.get(i - (u32)1), (ClassInfo*)doomC.get(i - (u32)1));
+        _valTemps = keepT;
+        _valTempDepth = keepD;
+        _valTempCls = keepC;
         }
 
     // The module layout an `Agg(N)` spelling names.
@@ -10766,6 +11151,7 @@ class ClassInfo
         aops.add((Object*)IROperand.useVal(pin.val()));
         IRValue* addr = emit(String.withCString("AddrOf"), ci.selfPtr(), aops);
         zeroInitIvars(addr, ci);
+        stackZeroStructs(addr, ci);
         stampInstanceIdentity(addr, ci);
         Node* init = zeroArgInit(ci);
         if (init != 0)
@@ -11019,6 +11405,55 @@ class ClassInfo
         IRInsn* br = IRInsn.with(String.withCString("Branch"));
         br.add(IROperand.block(block));
         _blk.setTerm(br);
+        }
+
+    // Each label's scope depth, worked out before the body is lowered, so a
+    // FORWARD goto knows how many scopes it leaves and tears them down (#551):
+    // it released nothing, and a stack instance or strong local in a scope it
+    // left was never released. The reference's walk, construct for construct;
+    // the label's own lowering records the real depth when it is reached.
+    void collectLabelDepths(Node* n, u32 depth)
+        {
+        if (n == 0)
+            return;
+        u16 k = n.kind();
+        if (k == (u16)nkGotoLabel)
+            {
+            if (_gotoLabelDepths == 0)
+                _gotoLabelDepths = new Map();
+            _gotoLabelDepths.set((Hashable*)n.name(), (Object*)Number.with(depth));
+            return;
+            }
+        if (k == (u16)nkBlock)
+            {
+            for (u32 i = (u32)0; i < n.kidCount(); i = i + (u32)1)
+                collectLabelDepths(n.kid(i), depth);
+            return;
+            }
+        if (k == (u16)nkIf)
+            {
+            for (u32 i = (u32)1; i < n.kidCount(); i = i + (u32)1)
+                collectLabelDepths(n.kid(i), depth + (u32)1);
+            return;
+            }
+        if (k == (u16)nkWhile && n.kidCount() > (u32)1)
+            collectLabelDepths(n.kid((u32)1), depth + (u32)1);
+        else if (k == (u16)nkForCStyle && n.kidCount() > (u32)3)
+            collectLabelDepths(n.kid((u32)3), depth + (u32)1);
+        else if (k == (u16)nkForIn && n.kidCount() > (u32)2)
+            collectLabelDepths(n.kid((u32)2), depth + (u32)1);
+        else if (k == (u16)nkSwitch)
+            {
+            for (u32 i = (u32)1; i < n.kidCount(); i = i + (u32)1)
+                {
+                Node* arm = n.kid(i);
+                if (arm.kind() != (u16)nkCase)
+                    continue;
+                for (u32 si = (u32)0; si < arm.kidCount(); si = si + (u32)1)
+                    if (arm.kid(si).kind() != (u16)nkLabel)
+                        collectLabelDepths(arm.kid(si), depth + (u32)1);
+                }
+            }
         }
 
     // Does a subtree contain a goto? (→ pin all locals so a jump is a branch.)
@@ -12777,8 +13212,12 @@ class ClassInfo
         u16 k = n.kind();
         if (k == (u16)nkVariableDecl)
             {
+            // …initialised by a copy or a call's result too: that is a slot of
+            // its own (`V b = make(); return b;`). Only a name bound straight
+            // to a stack instance's method result has none.
             if (n.name() != 0 && n.op() != 0 && !Types.isPointer(n.op()) && stripQual(n.op()).equals(cls)
-                && (n.kidCount() == (u32)0 || n.kid((u32)0).ty() == 0 || !stripQual(n.kid((u32)0).ty()).equals(cls)))
+                && (n.kidCount() == (u32)0 || n.kid((u32)0).ty() == 0 || !stripQual(n.kid((u32)0).ty()).equals(cls)
+                    || !bindsWithoutSlot(n.kid((u32)0))))
                 out.set((Hashable*)n.name(), (Object*)n);
             return;
             }
@@ -12851,6 +13290,13 @@ class ClassInfo
         aops.add((Object*)IROperand.useVal(p.val()));
         IRValue* a = emit(String.withCString("AddrOf"), ci.selfPtr(), aops);
         storeThrough(a, r);
+        // An instance that owns references is held by this slot until
+        // something adopts it (#551).
+        if (stackDeallocSym(ci) != (String*)0)
+            {
+            stackRelink(a, ci);
+            noteValueTemp(a, ci);
+            }
         return a;
         }
 
@@ -13274,6 +13720,7 @@ class ClassInfo
 
     void releaseOwnedTempsAtDepth(u32 depth)
         {
+        releaseValueTempsAtDepth(depth, false);
         if (_ownedTemps == 0)
             return;
         Array* keepT = new Array();
@@ -13300,6 +13747,7 @@ class ClassInfo
 
     void flushOwnedTemps(void)
         {
+        releaseValueTempsAtDepth(_condDepth, true);
         if (_ownedTemps == 0)
             return;
         for (u32 i = (u32)0; i < _ownedTemps.count(); i = i + (u32)1)
@@ -13504,6 +13952,11 @@ class ClassInfo
     // stale address.
     void tearDownLocal(String* name)
         {
+        if (_stackKeyName.get((Hashable*)name) != 0)
+            {
+            tearDownStackKey(name);
+            return;
+            }
         if (_weakArray.get((Hashable*)name) != 0)
             {
             weakArrayUnregister(name);
@@ -14863,6 +15316,7 @@ class ClassInfo
                 return;
                 }
             collectAllLocalNames(body, addressed);
+            collectLabelDepths(body, (u32)1);
             }
         // -g: every local and parameter lives in its own frame slot for the
         // whole function, as at -O0 in C, so a debugger can read it at any line
@@ -15958,6 +16412,10 @@ class ClassInfo
         _pinNext = new Map();
         _arrayElem = new Map();
         _valueClass = new Map();
+        _valTemps = new Array();
+        _valTempDepth = new Array();
+        _valTempCls = new Array();
+        _returnExemptValue = (String*)0;
         _weakLocals = new NameList();
         _weakArray = new Map();
         _strongArray = new Map();

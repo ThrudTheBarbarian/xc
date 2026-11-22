@@ -26,7 +26,7 @@ Below, the **enclosing scope** of a declaration is the `{ }` block that contains
 ### Stack instance
 
 ```c
-MyClass mine;          // zero-filled, init() runs, storage reclaimed at scope exit
+MyClass mine;          // zero-filled, init() runs, dealloc() runs at scope exit
 ```
 
 A bare `MyClass mine;` allocates the instance in the enclosing scope's local
@@ -34,6 +34,23 @@ storage. It is zero-filled on entry to the scope, the parameterless `init()`
 (if present) runs automatically, and the bytes are reused when the scope
 closes. It does **not touch the heap**, so it is safe to declare inside a loop
 body; the same storage serves every iteration.
+
+A stack instance owns the objects its ivars refer to, as a heap instance does.
+When it goes out of scope (the end of the block, each loop iteration, or a
+`return`, `break`, `continue` or `goto` out of the block), its class's
+`dealloc()` runs on it and its strong ivars are released.
+
+- `MyClass b = a;` copies `a`, retaining each object it refers to, so `b` and
+  `a` each own their references.
+- `b = a;` retains `a`'s references, runs `dealloc()` on the instance `b` held,
+  then copies `a` into `b`.
+- A function that returns a stack instance by value moves it to the caller: the
+  references are not retained again, and the callee does not release them.
+- A returned instance that is not stored (`make().n`) is torn down at the end
+  of the statement.
+
+A local array of class instances (`MyClass arr[4];`) is not supported. Declare
+an array of references (`MyClass* arr[4];`) instead.
 
 Where local storage lives depends on the target. It matters only when you are
 counting bytes:
@@ -124,7 +141,7 @@ xcc has **no operator overloading**, only method overloading.
 
 ## Destructor: `dealloc`
 
-`dealloc(void)` runs when a heap-allocated class instance's refcount reaches zero, before the bytes return to the free list. Every class gets an auto-generated empty `dealloc` stub. Override it only when the instance owns external state (open files, mapped I/O, caches the ARC walker does not see).
+`dealloc(void)` runs when a heap-allocated class instance's refcount reaches zero, before the bytes return to the free list, and when a stack instance goes out of scope. Every class gets an auto-generated empty `dealloc` stub. Override it only when the instance owns external state (open files, mapped I/O, caches the ARC walker does not see).
 
 ```c
 class Buffer {
@@ -145,7 +162,7 @@ class Buffer {
 }
 ```
 
-`dealloc` runs **once**, when the last owning reference is dropped. For arrays of class instances (`new T[N]`), `dealloc` runs once per element before the whole block is freed.
+`dealloc` runs **once** for each instance: for a heap instance when the last owning reference is dropped, and for a stack instance when it goes out of scope. For arrays of class instances (`new T[N]`), `dealloc` runs once per element before the whole block is freed.
 
 With inheritance, the `init` chain runs parent-first and the `dealloc` chain runs subclass-first. Both walk up to the universal `Object` base. See [Inheritance & protocols → Construction and destruction](/compiler/language/inheritance/#construction-and-destruction).
 

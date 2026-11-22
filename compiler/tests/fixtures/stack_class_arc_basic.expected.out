@@ -1,0 +1,15 @@
+  dealloc 0
+  dealloc 1
+  dealloc 2
+loop live 0
+copy live 2
+  dealloc 11
+assign live 2
+  dealloc 12
+  dealloc 10
+scope live 0
+  dealloc 51
+early 1
+temp 20
+  dealloc 20
+end live 0
