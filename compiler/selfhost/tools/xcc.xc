@@ -216,6 +216,7 @@ class DriverOptions
     bool       _keepAsm;     // -S: stop after the back end
     bool       _emitLib;     // --emit-lib: a SHARED LIBRARY, not an executable
     bool       _emitRuntime; // --emit-runtime: libRuntime itself (an --emit-lib build of Runtime.list's files)
+    bool       _runtimeSupport; // --emit-runtime-support: libRuntimeSupport, the same with its standard library (#278)
     bool       _noRuntimeLib; // --no-runtime-lib: compile the runtime's files in, as source
     bool       _noXcArgs;    // -fno-xc-args: the start code passes every argument through
     // --bundle <dir> (bundles-and-plugins.md §2): the library goes into a
@@ -336,6 +337,7 @@ class DriverOptions
         _rawLinkFlags = new Array();
         _rpaths = new Array();
         _emitRuntime = false;
+        _runtimeSupport = false;
         _noRuntimeLib = false;
         _noXcArgs = false;
         _rpathPending = false;
@@ -422,6 +424,7 @@ class DriverOptions
     Array* rawLinkFlags(void)       { return _rawLinkFlags; }
     Array* rpaths(void)             { return _rpaths; }
     bool emitRuntime(void)          { return _emitRuntime; }
+    bool runtimeSupport(void)       { return _runtimeSupport; }
     bool noRuntimeLib(void)         { return _noRuntimeLib; }
     bool noXcArgs(void)             { return _noXcArgs; }
     Array* ldDirs(void)             { return _ldDirs; }
@@ -743,6 +746,10 @@ void resolveRuntimeLib(DriverOptions* d)
             names.add((Object*)l);
         }
         d.fe().setRuntimeMembers(names);
+        if (d.runtimeSupport()) {
+            d.fe().setRuntimeAllStd(true);
+            d.fe().setNoPlatformPrelude(true);
+        }
         return;
     }
     // XCC_NO_RUNTIME_LIB=1 as --no-runtime-lib: the build of the tools an
@@ -777,9 +784,18 @@ void resolveRuntimeLib(DriverOptions* d)
     dir.appendCString("/runtime-lib/");
     dir.append(d.targetRow().name());
     Array* exts = d.targetRow().libExts();
+    // A linked C or C++ program (an LLVM-IR language) takes libRuntimeSupport
+    // when the target has one (#278): the runtime and the standard library it
+    // uses, so the program compiles only its own code and its lifted loops.
+    // Its stub is then read with no platform prelude. An object (-c) keeps
+    // libRuntime, as any other object of the program may.
+    bool support = !d.compileOnly() && d.fe().input() != (String*)0
+                   && Languages.forFile(d.fe().input()) != (LanguageRow*)0;
+    for (u32 pass = (u32)0; pass < (u32)2; pass = pass + (u32)1) {
+    if (pass == (u32)0 && !support) continue;
     for (u32 i = (u32)0; exts != (Array*)0 && i < exts.count(); i = i + (u32)1) {
         String* f = String.withString(dir);
-        f.appendCString("/libRuntime.");
+        f.appendCString(pass == (u32)0 ? "/libRuntimeSupport." : "/libRuntime.");
         f.append((String*)exts.get(i));
         if (!Files.exists(f)) continue;
         // Absolute (the runpath and LC_RPATH are read from wherever the
@@ -794,9 +810,11 @@ void resolveRuntimeLib(DriverOptions* d)
         abs = IRDbg.canonicalPath(abs);
         d.fe().setRuntimeLibDir(abs);
         String* file = String.withString(abs);
-        file.appendCString("/libRuntime.");
+        file.appendCString(pass == (u32)0 ? "/libRuntimeSupport." : "/libRuntime.");
         file.append((String*)exts.get(i));
         d.fe().setRuntimeLibFile(file);
+        if (pass == (u32)0)
+            d.fe().setNoPlatformPrelude(true);
         // The program knows it shares the library, and which: a plugin built
         // to share it is loaded only into a program that does, by this xcc
         // (Plugin._checkAbi).
@@ -805,6 +823,7 @@ void resolveRuntimeLib(DriverOptions* d)
         def.appendCString("\"");
         d.fe().defs().add((Object*)def);
         return;
+    }
     }
 }
 
@@ -4681,7 +4700,9 @@ Array* objectLinkerOptions(DriverOptions* d)
     // link finds it as resolveRuntimeLib does.
     if (d.fe().runtimeLibFile() != (String*)0) {
         Array* g = new Array();
-        g.add((Object*)String.withCString("-lRuntime"));
+        // libRuntimeSupport's object (#278) asks for that library, not libRuntime.
+        String* rb = d.fe().runtimeLibFile().lastPathComponent();
+        g.add((Object*)String.withCString(rb.hasPrefix(String.withCString("libRuntimeSupport.")) ? "-lRuntimeSupport" : "-lRuntime"));
         out.add((Object*)g);
     }
     if (d.targetRow() != (TargetRow*)0) {
@@ -4717,15 +4738,18 @@ void addObjectLinkerOptions(DriverOptions* d)
                 for (u32 q = (u32)0; q < d.frameworks().count(); q = q + (u32)1)
                     if (((String*)d.frameworks().get(q)).equals(nm)) have = true;
                 if (!have) d.frameworks().add((Object*)nm);
-            } else if (g.count() == (u32)1 && ((String*)g.get((u32)0)).equals(String.withCString("-lRuntime"))) {
+            } else if (g.count() == (u32)1 && (((String*)g.get((u32)0)).equals(String.withCString("-lRuntime"))
+                                               || ((String*)g.get((u32)0)).equals(String.withCString("-lRuntimeSupport")))) {
                 // xcc's shared runtime (the objects' xc halves took it): this
-                // target's libRuntime, imported, its directory a runpath.
+                // target's libRuntime, or the libRuntimeSupport a C or C++
+                // program's took (#278), imported, its directory a runpath.
+                String* rname = ((String*)g.get((u32)0)).substringFromByte((u32)2);
                 String* root = supportRoot(d.fe());
                 if (root == (String*)0 || d.targetRow() == (TargetRow*)0) continue;
                 Array* exts = d.targetRow().libExts();
                 for (u32 e = (u32)0; exts != (Array*)0 && e < exts.count(); e = e + (u32)1) {
-                    String* lp = String.withFormat("%s/runtime-lib/%s/libRuntime.%s", root.cString(),
-                                                   d.targetRow().name().cString(), ((String*)exts.get(e)).cString());
+                    String* lp = String.withFormat("%s/runtime-lib/%s/lib%s.%s", root.cString(),
+                                                   d.targetRow().name().cString(), rname.cString(), ((String*)exts.get(e)).cString());
                     if (!Files.exists(lp)) continue;
                     if (lp.byteAt((u32)0) != (u8)'/') {
                         IRDbg.setWorkingDirectory(Frontend.workingDirectory());
@@ -4797,7 +4821,13 @@ void linkObjectsArm64(DriverOptions* d)
     Array* objNeeds = objectNeeds(d.objectInputs());
     if (gObjRuntimeLib != (String*)0) {
         if (objNeeds == (Array*)0) objNeeds = new Array();
-        objNeeds.add((Object*)gObjRuntimeLib);
+        // Once: the object's sidecar may name it already, spelled otherwise.
+        bool have = false;
+        for (u32 k = (u32)0; k < objNeeds.count(); k = k + (u32)1)
+            if (((String*)objNeeds.get(k)).lastPathComponent().equals(gObjRuntimeLib.lastPathComponent()))
+                have = true;
+        if (!have)
+            objNeeds.add((Object*)gObjRuntimeLib);
     }
     Array* deps = arm64LinkDeps(d, objNeeds, d.objectInputs());
     MachO* m = new MachO();
@@ -5946,7 +5976,8 @@ void makeBundle(DriverOptions* d)
         // plugin's need binds to that copy and no file is searched for. The
         // loader takes the plugin only into a program that shares the same
         // one (its ABI says "+rt"; Plugin._checkAbi).
-        if (base.hasPrefix(String.withCString("libRuntime.")) && d.fe().runtimeLibFile() != (String*)0)
+        if ((base.hasPrefix(String.withCString("libRuntime.")) || base.hasPrefix(String.withCString("libRuntimeSupport.")))
+            && d.fe().runtimeLibFile() != (String*)0)
             continue;
         bool shipped = false;
         for (u32 j = (u32)0; d._bundleLibs != (Array*)0 && j < d._bundleLibs.count(); j = j + (u32)1) {
@@ -8040,6 +8071,7 @@ enum DriverOptionId = {
     doptPublisher,
     doptPublisherDomain,
     doptEmitRuntime,
+    doptEmitRuntimeSupport,
     doptNoRuntimeLib,
     doptNoXcArgs,
     doptEmitLib,
@@ -8168,6 +8200,7 @@ Array* driverOptions(void)
     driverOption((u32)doptPublisher, (u32)doptkExactValue, "--publisher", (u32)0);
     driverOption((u32)doptPublisherDomain, (u32)doptkExactValue, "--publisher-domain", (u32)0);
     driverOption((u32)doptEmitRuntime, (u32)doptkExact, "--emit-runtime", (u32)0);
+    driverOption((u32)doptEmitRuntimeSupport, (u32)doptkExact, "--emit-runtime-support", (u32)0);
     driverOption((u32)doptNoRuntimeLib, (u32)doptkExact, "--no-runtime-lib", (u32)0);
     driverOption((u32)doptNoXcArgs, (u32)doptkExact, "-fno-xc-args", (u32)0);
     driverOption((u32)doptEmitLib, (u32)doptkExact, "--emit-lib", (u32)0);
@@ -8583,8 +8616,12 @@ u32 applyOption(DriverOptions* d, u32 id, String* a, u32 i, u32 argc)
     // --emit-runtime: libRuntime (owner, 2026-11-03), a library build of
     // the runtime's files, which then export their classes; the input is
     // the runtime's root file (Par.xc).
-    if (id == (u32)doptEmitRuntime) {
+    // --emit-runtime-support (#278): libRuntimeSupport, the runtime with every
+    // standard-library file it reaches as its own, which the LLVM-IR
+    // languages' programs link so they compile none of it.
+    if (id == (u32)doptEmitRuntime || id == (u32)doptEmitRuntimeSupport) {
         d._emitRuntime = true;
+        d._runtimeSupport = id == (u32)doptEmitRuntimeSupport;
         d.setEmitLib(true);
         o.setEmitIface(true);
         o.setLibraryBuild(true);
