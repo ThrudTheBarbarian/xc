@@ -14,6 +14,12 @@ cd "$(dirname "$0")/../.." || exit 1
 PLAT=$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )
 XC=${XC:-bin/$PLAT/xcc-xc}
 command -v spirv-val > /dev/null 2>&1 || { echo "--- spirv-scalar-global: skipped (no spirv-val) ---"; exit 0; }
+# The program is built for x86-64, whose C path needs clang to target it:
+# from macOS or an x86-64 Linux host.
+case "$(uname -s)-$(uname -m)" in
+    Darwin-*|Linux-x86_64) ;;
+    *) echo "--- spirv-scalar-global: skipped (host) ---"; exit 0 ;;
+esac
 W=$(mktemp -d); trap 'rm -rf "${W:?}"' EXIT
 fail=0
 cat > "$W/mix.c" <<'C'
