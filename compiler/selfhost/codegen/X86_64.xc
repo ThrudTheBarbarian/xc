@@ -42,6 +42,15 @@ void x86SetEhTables(bool on) { gX86EhTables = on; }
 class X86_64
     {
     IRModule* _m;
+    // The module's symbols by name (the first of each) and the names of the
+    // functions it defines, for the per-call lookups below (#331). Rebuilt
+    // whenever the module or its symbol or function count has changed, and
+    // after the emitter renames a SIMD dispatcher's body to `name$base`.
+    Map* _symByName;
+    Map* _funcDefined;
+    IRModule* _symIdxFor;
+    u32 _symIdxSyms;
+    u32 _symIdxFuncs;
     // Thread-safe ARC (private:docs/Design/threading.md §4.1): a LOCK-prefixed refcount
     // update, on exactly when the module spawns a thread.
     bool _atomicArc;
@@ -497,6 +506,7 @@ class X86_64
                 String* bn = String.withString(nm);
                 bn.appendCString("$base");
                 fn.setName(bn);
+                _symIdxFor = (IRModule*)0; // a function's name changed: symNamed rebuilds
                 }
             // Each function is peepholed in ISOLATION: slot offsets are
             // per-function, and the scan reasons about a straight-line region.
@@ -6791,19 +6801,36 @@ class X86_64
         {
         if (_m == (IRModule*)0)
             return false;
-        IRSymbol* sym = (IRSymbol*)0;
-        for (u32 i = (u32)0; i < _m.syms().count() && sym == (IRSymbol*)0; i = i + (u32)1)
-            {
-            IRSymbol* s = (IRSymbol*)_m.syms().get(i);
-            if (s.name().equals(name))
-                sym = s;
-            }
+        IRSymbol* sym = symNamed(name);
         if (sym == (IRSymbol*)0 || !sym.isFunc())
             return false;
-        for (u32 i = (u32)0; i < _m.funcs().count(); i = i + (u32)1)
-            if (((IRFunc*)_m.funcs().get(i)).name().equals(name))
-                return false;
-        return true;
+        return _funcDefined.get((Hashable*)name) == (Object*)0;
+        }
+
+    // The first module symbol called name, or 0.
+    IRSymbol* symNamed(String* name)
+        {
+        if (_symIdxFor != _m || _symIdxSyms != _m.syms().count() || _symIdxFuncs != _m.funcs().count())
+            {
+            _symByName = new Map();
+            _funcDefined = new Map();
+            for (u32 i = (u32)0; i < _m.syms().count(); i = i + (u32)1)
+                {
+                IRSymbol* s = (IRSymbol*)_m.syms().get(i);
+                if (s.name() != (String*)0 && _symByName.get((Hashable*)s.name()) == (Object*)0)
+                    _symByName.set((Hashable*)s.name(), (Object*)s);
+                }
+            for (u32 i = (u32)0; i < _m.funcs().count(); i = i + (u32)1)
+                {
+                String* fnm = ((IRFunc*)_m.funcs().get(i)).name();
+                if (fnm != (String*)0)
+                    _funcDefined.set((Hashable*)fnm, (Object*)fnm);
+                }
+            _symIdxFor = _m;
+            _symIdxSyms = _m.syms().count();
+            _symIdxFuncs = _m.funcs().count();
+            }
+        return name == (String*)0 ? (IRSymbol*)0 : (IRSymbol*)_symByName.get((Hashable*)name);
         }
 
     // An extern DATA global: on win64 one from a DLL (a library's
@@ -6812,26 +6839,16 @@ class X86_64
         {
         if (_m == (IRModule*)0)
             return false;
-        for (u32 i = (u32)0; i < _m.syms().count(); i = i + (u32)1)
-            {
-            IRSymbol* s = (IRSymbol*)_m.syms().get(i);
-            if (s.name().equals(name))
-                return s.isExtern() && s.kind() == (u8)SYM_DATAGLOBAL && s.attr(String.withCString("dllimport"));
-            }
-        return false;
+        IRSymbol* s = symNamed(name);
+        return s != (IRSymbol*)0 && s.isExtern() && s.kind() == (u8)SYM_DATAGLOBAL && s.attr(String.withCString("dllimport"));
         }
 
     bool symbolIsExtern(String* name)
         {
         if (_m == (IRModule*)0)
             return false;
-        for (u32 i = (u32)0; i < _m.syms().count(); i = i + (u32)1)
-            {
-            IRSymbol* s = (IRSymbol*)_m.syms().get(i);
-            if (s.name().equals(name))
-                return s.isExtern();
-            }
-        return false;
+        IRSymbol* s = symNamed(name);
+        return s != (IRSymbol*)0 && s.isExtern();
         }
 
     // addr = base + index * stride, the stride being the base pointee's NATIVE
