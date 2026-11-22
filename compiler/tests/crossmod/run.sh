@@ -149,9 +149,9 @@ GOT3=$(run_prog "$TMP/dcclient.so")
 
 rm -f "$LOADER/romfs-overlay/Library/libdclib.so"
 if [ "$GOT3" = "$(cat tests/crossmod/dc.expected.out)" ]; then
-  echo "PASS  conformance downcast (Object@ -> protocol) across a .so"
+  echo "PASS  conformance downcast (Object* -> protocol) across a .so"
 else
-  echo "FAIL  conformance downcast (Object@ -> protocol) across a .so"; echo "--- want:"; cat tests/crossmod/dc.expected.out; echo "--- got:"; echo "$GOT3"; exit 1
+  echo "FAIL  conformance downcast (Object* -> protocol) across a .so"; echo "--- want:"; cat tests/crossmod/dc.expected.out; echo "--- got:"; echo "$GOT3"; exit 1
 fi
 
 # ── The prelude protocols, Object and String across a .so: the library calls

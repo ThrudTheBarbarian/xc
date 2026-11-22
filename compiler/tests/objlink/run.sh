@@ -107,16 +107,16 @@ class Derived : Base {
     void init(void) { super.init(); }
     u16 who(void) { return v + (u16)2; }
 }
-Base@ makeDerived(void) { return new Derived(); }
+Base* makeDerived(void) { return new Derived(); }
 EOF
 cat > "$W/useShape.xc" <<'EOF'
 #import "Stdio.xc"
 #import <ShapeMod>
 void main(void)
 {
-    Shape@ s = new Shape();
-    Base@ b = new Base();
-    Base@ d = makeDerived();
+    Shape* s = new Shape();
+    Base* b = new Base();
+    Base* d = makeDerived();
     Stdio.printf("%lu %lu %lu\n", (u32)s.area(), (u32)b.who(), (u32)d.who());
     return;
 }
@@ -161,7 +161,7 @@ class Sh (Drawing) { u16 drawn(void) { return area() + (u16)100; } }
 class Sh () { u16 extra; u16 withExtra(void) { return w + extra; } }
 void main(void)
 {
-    Sh@ s = new Sh();
+    Sh* s = new Sh();
     s.extra = (u16)7;
     Stdio.printf("%lu %lu %lu\n", (u32)s.area(), (u32)s.drawn(), (u32)s.withExtra());
     return;
@@ -183,7 +183,7 @@ cat > "$W/useCat.xc" <<'EOF'
 class Shape (Report) { u16 report(void) { return area() + (u16)1000; } }
 void main(void)
 {
-    Shape@ s = new Shape();
+    Shape* s = new Shape();
     Stdio.printf("%lu %lu\n", (u32)s.area(), (u32)s.report());
     return;
 }
@@ -206,32 +206,32 @@ fi
 # fallback (111 and 311).
 cat > "$W/ShapeMod2.xc" <<'EOF'
 class Shape2 { u16 v; void init(void) { v = (u16)10; } u16 who(void) { return v + (u16)1; } }
-Shape2@ makeShape2(void) { return new Shape2(); }
+Shape2* makeShape2(void) { return new Shape2(); }
 EOF
 cat > "$W/extA2.xc" <<'EOF'
 #import <ShapeMod2>
 class Shape2 (RepA) { u16 repA(void) { return who() + (u16)100; } }
 class SubA : Shape2 { void init(void) { super.init(); } u16 repA(void) { return who() + (u16)200; } }
-Shape2@ makeSubA(void) { return new SubA(); }
-u16 callRepA(Shape2@ s) { return s.repA(); }
+Shape2* makeSubA(void) { return new SubA(); }
+u16 callRepA(Shape2* s) { return s.repA(); }
 EOF
 cat > "$W/extB2.xc" <<'EOF'
 #import <ShapeMod2>
 class Shape2 (RepB) { u16 repB(void) { return who() + (u16)300; } }
 class SubB : Shape2 { void init(void) { super.init(); } u16 repB(void) { return who() + (u16)400; } }
-Shape2@ makeSubB(void) { return new SubB(); }
-u16 callRepB(Shape2@ s) { return s.repB(); }
+Shape2* makeSubB(void) { return new SubB(); }
+u16 callRepB(Shape2* s) { return s.repB(); }
 EOF
 cat > "$W/mainAB2.xc" <<'EOF'
 #import "Stdio.xc"
 #import <ShapeMod2>
-Shape2@ makeSubA(void); u16 callRepA(Shape2@ s);
-Shape2@ makeSubB(void); u16 callRepB(Shape2@ s);
+Shape2* makeSubA(void); u16 callRepA(Shape2* s);
+Shape2* makeSubB(void); u16 callRepB(Shape2* s);
 void main(void)
 {
-    Shape2@ s = makeShape2();
-    Shape2@ a = makeSubA();
-    Shape2@ b = makeSubB();
+    Shape2* s = makeShape2();
+    Shape2* a = makeSubA();
+    Shape2* b = makeSubB();
     Stdio.printf("%u %u %u %u %u %u\n",
         callRepA(s), callRepA(a), callRepA(b),
         callRepB(s), callRepB(a), callRepB(b));
@@ -256,13 +256,13 @@ cat > "$W/dupA2.xc" <<'EOF'
 #import <ShapeMod2>
 class Shape2 (Rep) { u16 rx(void) { return who() + (u16)1; } }
 class DupSubA : Shape2 { void init(void) { super.init(); } u16 rx(void) { return (u16)0; } }
-u16 useDA(void) { Shape2@ s = new DupSubA(); return s.rx(); }
+u16 useDA(void) { Shape2* s = new DupSubA(); return s.rx(); }
 EOF
 cat > "$W/dupB2.xc" <<'EOF'
 #import <ShapeMod2>
 class Shape2 (Rep) { u16 ry(void) { return who() + (u16)2; } }
 class DupSubB : Shape2 { void init(void) { super.init(); } u16 ry(void) { return (u16)0; } }
-u16 useDB(void) { Shape2@ s = new DupSubB(); return s.ry(); }
+u16 useDB(void) { Shape2* s = new DupSubB(); return s.ry(); }
 EOF
 cat > "$W/dmain2.xc" <<'EOF'
 u16 useDA(void); u16 useDB(void);
@@ -368,8 +368,8 @@ fi
 cat > "$W/catBase.xc" <<'EOF'
 class Base2 { u16 v; void init(void){ v = (u16)10; } u16 who(void){ return v + (u16)1; } }
 class Derived2 : Base2 { void init(void){ super.init(); } u16 who(void){ return v + (u16)2; } }
-Base2@ makeBase2(void)    { return new Base2(); }
-Base2@ makeDerived2(void) { return new Derived2(); }
+Base2* makeBase2(void)    { return new Base2(); }
+Base2* makeDerived2(void) { return new Derived2(); }
 EOF
 cat > "$W/catOver.xc" <<'EOF'
 #import "Stdio.xc"
@@ -378,9 +378,9 @@ class Base2 (Rep) { u16 rep(void) { return who() + (u16)1000; } }
 class Sub2 : Base2 { void init(void){ super.init(); } u16 rep(void) { return who() + (u16)2000; } }
 void main(void)
 {
-    Base2@ b = makeBase2();
-    Base2@ d = makeDerived2();
-    Base2@ s = new Sub2();
+    Base2* b = makeBase2();
+    Base2* d = makeDerived2();
+    Base2* s = new Sub2();
     Stdio.printf("%lu %lu %lu\n", (u32)b.rep(), (u32)d.rep(), (u32)s.rep());
     return;
 }
@@ -405,15 +405,15 @@ cat > "$W/twoA.xc" <<'EOF'
 #import <catBase>
 class Base2 (One) { u16 one(void) { return who() + (u16)100; } }
 class T1 : Base2 { void init(void){ super.init(); } u16 one(void) { return who() + (u16)200; } }
-u16 useOne(Base2@ b) { return b.one(); }
+u16 useOne(Base2* b) { return b.one(); }
 EOF
 cat > "$W/twoB.xc" <<'EOF'
 #import "Stdio.xc"
 #import <catBase>
 class Base2 (Two) { u16 two(void) { return who() + (u16)300; } }
 class T2 : Base2 { void init(void){ super.init(); } u16 two(void) { return who() + (u16)400; } }
-u16 useOne(Base2@ b);
-void main(void) { Base2@ b = makeBase2(); Stdio.printf("%lu %lu\n", (u32)useOne(b), (u32)b.two()); return; }
+u16 useOne(Base2* b);
+void main(void) { Base2* b = makeBase2(); Stdio.printf("%lu %lu\n", (u32)useOne(b), (u32)b.two()); return; }
 EOF
 "$XCC" -q -A arm64 -c -L "$W" "$W/twoA.xc" -o "$W/twoA.o" 2>/dev/null
 "$XCC" -q -A arm64 -c -L "$W" "$W/twoB.xc" -o "$W/twoB.o" 2>/dev/null

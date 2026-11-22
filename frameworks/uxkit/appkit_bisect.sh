@@ -32,20 +32,20 @@ variant() {
 #import "UXEvent.xc"
 class Canvas : UXView {
     void init(void) { super.init(); }
-    void drawRect(UXGraphics@ g, UXRect dirty) { $2 }
+    void drawRect(UXGraphics* g, UXRect dirty) { $2 }
     bool acceptsFirstResponder(void) { return true; }
 }
 class Ctl : Object <UXApplicationDelegate> {
-    UXApplication@ app;
-    UXTextField@ field;
-    void onAlert(UXControl@ c) { }
-    void onQuit(UXControl@ c) { app.stop(); }
-    void mA(UXMenuItem@ s) { }
-    i32 applicationDidStart(UXApplication@ a) {
+    UXApplication* app;
+    UXTextField* field;
+    void onAlert(UXControl* c) { }
+    void onQuit(UXControl* c) { app.stop(); }
+    void mA(UXMenuItem* s) { }
+    i32 applicationDidStart(UXApplication* a) {
         app = a;
-        UXWindow@ win = new UXWindow();
-        Canvas@ canvas = new Canvas();
-        win.open((u8@)"UXKit AppKit Demo", UXGeom.make((i16)140,(i16)140,(i16)340,(i16)240), canvas);
+        UXWindow* win = new UXWindow();
+        Canvas* canvas = new Canvas();
+        win.open((u8*)"UXKit AppKit Demo", UXGeom.make((i16)140,(i16)140,(i16)340,(i16)240), canvas);
         app.addWindow(win);
         $3
         win.displayAll();
@@ -53,10 +53,10 @@ class Ctl : Object <UXApplicationDelegate> {
     }
 }
 void main(void) {
-    UXAppKitDriver@ d = new UXAppKitDriver(); gDriver = d;
+    UXAppKitDriver* d = new UXAppKitDriver(); gDriver = d;
     d.setInteractive(true);
-    Ctl@ c = new Ctl();
-    UXApplication@ app = new UXApplication();
+    Ctl* c = new Ctl();
+    UXApplication* app = new UXApplication();
     d.attachApp(app);
     app.setDelegate(c);
     app.run();
@@ -66,10 +66,10 @@ XT
 }
 
 FILL='g.fillRect(UXGeom.make((i16)0,(i16)0,(i16)340,(i16)240), (i32)8);'
-TEXT="$FILL"' g.fillRect(UXGeom.make((i16)0,(i16)0,(i16)340,(i16)6),(i32)2); g.drawText((u8@)"UXKit - running native on AppKit",(i16)20,(i16)28,(i32)1,(i32)0); g.drawText((u8@)"click a button, type below, or use the menu",(i16)20,(i16)52,(i32)1,(i32)0);'
-B2='UXButton@ b1 = new UXButton(); b1.setTitle((u8@)"Alert"); b1.setAction(&self.onAlert); canvas.addSubview(b1, UXGeom.make((i16)20,(i16)180,(i16)90,(i16)28)); UXButton@ b2 = new UXButton(); b2.setTitle((u8@)"Quit"); b2.setAction(&self.onQuit); canvas.addSubview(b2, UXGeom.make((i16)120,(i16)180,(i16)90,(i16)28));'
+TEXT="$FILL"' g.fillRect(UXGeom.make((i16)0,(i16)0,(i16)340,(i16)6),(i32)2); g.drawText((u8*)"UXKit - running native on AppKit",(i16)20,(i16)28,(i32)1,(i32)0); g.drawText((u8*)"click a button, type below, or use the menu",(i16)20,(i16)52,(i32)1,(i32)0);'
+B2='UXButton* b1 = new UXButton(); b1.setTitle((u8*)"Alert"); b1.setAction(&self.onAlert); canvas.addSubview(b1, UXGeom.make((i16)20,(i16)180,(i16)90,(i16)28)); UXButton* b2 = new UXButton(); b2.setTitle((u8*)"Quit"); b2.setAction(&self.onQuit); canvas.addSubview(b2, UXGeom.make((i16)120,(i16)180,(i16)90,(i16)28));'
 FLD='field = new UXTextField(); canvas.addSubview(field, UXGeom.make((i16)20,(i16)120,(i16)300,(i16)24));'
-M2='UXMenuBar@ bar = new UXMenuBar(); UXMenu@ dm = bar.addMenu((u8@)"Demo"); dm.addItem((u8@)"About", &self.mA); dm.addSeparator(); dm.addItem((u8@)"Quit", &self.mA); UXMenu@ em = bar.addMenu((u8@)"Edit"); em.addItem((u8@)"Clear Field", &self.mA); app.setMenuBar(bar);'
+M2='UXMenuBar* bar = new UXMenuBar(); UXMenu* dm = bar.addMenu((u8*)"Demo"); dm.addItem((u8*)"About", &self.mA); dm.addSeparator(); dm.addItem((u8*)"Quit", &self.mA); UXMenu* em = bar.addMenu((u8*)"Edit"); em.addItem((u8*)"Clear Field", &self.mA); app.setMenuBar(bar);'
 
 variant c1_fill      "$FILL" ""
 variant c2_text      "$TEXT" ""

@@ -177,10 +177,10 @@ static NSString* XTStripTypeQualifiers(NSString* disp)
             {
             if (!v.isOutlet)
                 continue;
-            NSString* ty = XTStripTypeQualifiers(v.declaredType.displayName ?: @"Object@");
+            NSString* ty = XTStripTypeQualifiers(v.declaredType.displayName ?: @"Object*");
             [src appendFormat:
                      @"    if (_xtc_streq(name, (u8*)\"%@\")) { %@ = (%@ ?)value; "
-                     @"return %@ != (%@)0 || value == (Object@)0; }\n",
+                     @"return %@ != (%@)0 || value == (Object*)0; }\n",
                      v.varName, v.varName, ty, v.varName, ty];
             }
         [src appendString:@"    return false;\n  }\n"];

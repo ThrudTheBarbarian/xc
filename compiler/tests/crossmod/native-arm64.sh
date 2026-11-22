@@ -80,7 +80,7 @@ class Fact
 {
     u8 _u;
     void init(void) { _u = (u8)0; }
-    static Thing@ make(u16 t) { Thing@ p = new Thing(); p.tag = t; return p; }
+    static Thing* make(u16 t) { Thing* p = new Thing(); p.tag = t; return p; }
     static u16 live(void) { return gLive; }
 }
 EOF
@@ -90,7 +90,7 @@ cat > "$TMP/factuser.xc" <<'EOF'
 void main(void)
 {
     for (u16 i = (u16)0; i < (u16)10; i = i + (u16)1) {
-        Thing@ t = Fact.make(i);
+        Thing* t = Fact.make(i);
         if (t.value() == (u16)999) Stdio.printf("never\n");
     }
     Stdio.printf("%u\n", Fact.live());
@@ -276,8 +276,8 @@ fi
 cat > "$TMP/Cat42.xc" <<'EOF'
 class Base { u16 v; void init(void){ v = (u16)10; } u16 who(void){ return v + (u16)1; } }
 class Derived : Base { void init(void){ super.init(); } u16 who(void){ return v + (u16)2; } }
-Base@ makeBase(void)    { return new Base(); }
-Base@ makeDerived(void) { return new Derived(); }
+Base* makeBase(void)    { return new Base(); }
+Base* makeDerived(void) { return new Derived(); }
 EOF
 cat > "$TMP/cat42user.xc" <<'EOF'
 #import "Stdio.xc"
@@ -286,9 +286,9 @@ class Base (Rep) { u16 rep(void) { return who() + (u16)1000; } }
 class Sub : Base { void init(void){ super.init(); } u16 rep(void) { return who() + (u16)2000; } }
 void main(void)
 {
-    Base@ b = makeBase();
-    Base@ d = makeDerived();
-    Base@ s = new Sub();
+    Base* b = makeBase();
+    Base* d = makeDerived();
+    Base* s = new Sub();
     Stdio.printf("%u %u %u\n", b.rep(), d.rep(), s.rep());
 }
 EOF
@@ -314,14 +314,14 @@ fi
 # a name. The rule is an ancestry walk, not a name comparison.
 cat > "$TMP/Zoo.xc" <<'EOF'
 class Zoo { u16 v; void init(void){ v = (u16)10; } u16 who(void){ return v + (u16)1; } }
-Zoo@ makeZoo(void) { return new Zoo(); }
+Zoo* makeZoo(void) { return new Zoo(); }
 EOF
 cat > "$TMP/zoouser.xc" <<'EOF'
 #import "Stdio.xc"
 #import <Zoo>
 class Zoo (Rep) { u16 rep(void) { return who() + (u16)1000; } }
 class Alpha : Zoo { void init(void){ super.init(); } u16 rep(void) { return who() + (u16)2000; } }
-void main(void) { Stdio.printf("%u %u\n", makeZoo().rep(), ((Zoo@)new Alpha()).rep()); }
+void main(void) { Stdio.printf("%u %u\n", makeZoo().rep(), ((Zoo*)new Alpha()).rep()); }
 EOF
 ( cd "$TMP" && "$ROOT/$XTC" -H "$ROOT" -q -A arm64 --emit-lib Zoo.xc -o libZoo.dylib ) 2>"$TMP/ez"
 ( cd "$TMP" && "$ROOT/$XTC" -H "$ROOT" -q -A arm64 -L "$TMP" zoouser.xc -o zoouser ) 2>>"$TMP/ez"
@@ -362,8 +362,8 @@ cat > "$TMP/zooext.xc" <<'EOF'
 #import <Zoo>
 class Zoo (RepL) { u16 repL(void) { return who() + (u16)500; } }
 class ZooLibSub : Zoo { void init(void){ super.init(); } u16 repL(void) { return who() + (u16)600; } }
-Zoo@ makeZooLibSub(void) { return new ZooLibSub(); }
-u16 callRepL(Zoo@ s) { return s.repL(); }
+Zoo* makeZooLibSub(void) { return new ZooLibSub(); }
+u16 callRepL(Zoo* s) { return s.repL(); }
 EOF
 cat > "$TMP/zoomain.xc" <<'EOF'
 #import "Stdio.xc"
@@ -371,12 +371,12 @@ cat > "$TMP/zoomain.xc" <<'EOF'
 #import <ZooExt>
 class Zoo (RepM) { u16 repM(void) { return who() + (u16)700; } }
 class ZooAppSub : Zoo { void init(void){ super.init(); } u16 repM(void) { return who() + (u16)800; } }
-u16 callRepM(Zoo@ s) { return s.repM(); }
+u16 callRepM(Zoo* s) { return s.repM(); }
 void main(void)
 {
-    Zoo@ s = makeZoo();
-    Zoo@ l = makeZooLibSub();
-    Zoo@ m = (Zoo@)new ZooAppSub();
+    Zoo* s = makeZoo();
+    Zoo* l = makeZooLibSub();
+    Zoo* m = (Zoo*)new ZooAppSub();
     Stdio.printf("%u %u %u %u %u %u\n",
         callRepL(s), callRepL(l), callRepL(m),
         callRepM(s), callRepM(l), callRepM(m));

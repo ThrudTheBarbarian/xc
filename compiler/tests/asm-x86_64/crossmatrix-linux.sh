@@ -36,7 +36,7 @@ fi
 EXPECT="sum-of-squares=204"
 PROG='#import "Stdio.xc"
 class Acc { i32 total; void init(void){total=0;} void add(i32 n){total=total+n;} i32 get(void){return total;} }
-void main(void){ Acc@ a = new Acc(); for (i32 i=(i32)1; i<=(i32)8; i=i+(i32)1){ a.add(i*i); } Stdio.printf("sum-of-squares=%d\n", a.get()); }'
+void main(void){ Acc* a = new Acc(); for (i32 i=(i32)1; i<=(i32)8; i=i+(i32)1){ a.add(i*i); } Stdio.printf("sum-of-squares=%d\n", a.get()); }'
 
 # A private directory on each side, removed on exit: a binary run from /tmp
 # itself would load whatever libRuntime another run left there ($ORIGIN comes

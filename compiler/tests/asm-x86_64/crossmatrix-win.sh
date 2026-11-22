@@ -29,7 +29,7 @@ EXPECT="sum-of-squares=204"
 # Write the program on the Windows host (base64 to dodge cmd quoting).
 PROG='#import "Stdio.xc"
 class Acc { i32 total; void init(void){total=0;} void add(i32 n){total=total+n;} i32 get(void){return total;} }
-void main(void){ Acc@ a = new Acc(); for (i32 i=(i32)1; i<=(i32)8; i=i+(i32)1){ a.add(i*i); } Stdio.printf("sum-of-squares=%d\n", a.get()); }'
+void main(void){ Acc* a = new Acc(); for (i32 i=(i32)1; i<=(i32)8; i=i+(i32)1){ a.add(i*i); } Stdio.printf("sum-of-squares=%d\n", a.get()); }'
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 printf '%s\n' "$PROG" > "$TMP/cm.xc"
 # Names of this run's own in the Windows home directory, removed after: fixed
