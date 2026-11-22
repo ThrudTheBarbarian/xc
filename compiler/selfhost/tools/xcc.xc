@@ -4455,25 +4455,17 @@ void mergeElfLinkObjects(DriverOptions* d, SectionBytes* mtext, SectionBytes* md
         else if (lp.hasSuffix(String.withCString(".a"))) ars.add((Object*)lp);
     }
     // A C or C++ program on arm64 Linux with glibc whose xc half carries the
-    // heap (CAlloc.xc's _xc_malloc, #326): every allocator call is the
-    // heap's, the program's own (its references in this model, which no
-    // object redirect reaches) and its objects', and the executable exports
-    // free, realloc and malloc_usable_size as the heap's, so its libraries'
-    // calls reach them.
+    // heap (CAlloc.xc's _xc_malloc, #326): its objects' allocator calls are
+    // the heap's, and the executable exports free, realloc and
+    // malloc_usable_size as the heap's, so its libraries' calls reach them.
     // (The split link of a C program brings xcc's half as an object, which
     // cAllocFor reads; a build from source has it in this model.)
     bool heap = !d.emitLib() && d.targetRow() != (TargetRow*)0 && d.targetRow().os().equals(String.withCString("linux"))
                 && (msyms.get((Hashable*)String.withCString("_xc_malloc")) != (Object*)0 || cAllocFor(d, false));
+    // Only the objects' calls are redirected, as on x86-64: this model holds
+    // the runtime, whose own allocations must stay glibc's (renamed, the
+    // heap's start re-entered itself through them and waited for itself).
     Map* redirect = heap ? cAllocRedirects(false) : (Map*)0;
-    if (heap) {
-        for (u32 i = (u32)0; i < mfix.count(); i = i + (u32)1) {
-            Arm64Fixup* f = (Arm64Fixup*)mfix.get(i);
-            if (f.symbol() == (String*)0) continue;
-            Object* to = redirect.get((Hashable*)f.symbol());
-            if (to != (Object*)0 && msyms.get((Hashable*)f.symbol()) == (Object*)0)
-                f.setSymbol((String*)to);
-        }
-    }
     ElfLinkArm64* el = new ElfLinkArm64();
     if (objs.count() > (u32)0 || ars.count() > (u32)0) {
         if (heap)
