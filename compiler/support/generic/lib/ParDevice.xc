@@ -1692,7 +1692,12 @@ class ParDevice
         // where every byte goes there and back around the run; auto does not
         // measure it there (par-auto-parallelisation.md, step B.2). A
         // unified-memory GPU is still measured: a `simd:` array costs it no
-        // copy at all.
+        // copy at all. The GPU and every set that holds a GPU are out of the
+        // comparison, as a declined set is, and the CPU is measured on all
+        // its threads and on one. Learned as "the CPU" straight away, such a
+        // block ran on every thread for good, a short one too, where one
+        // thread is many times faster (20000 adds: one thread 6 us, the
+        // lanes 100; #527).
         if (gParGpuUs[i] < (i64)0 && gParGpuDiscrete)
             {
             ParLayout* l = layout(proto, src, (i64)0, n);
@@ -1700,8 +1705,14 @@ class ParDevice
                 {
                 if (reporting())
                     Log.info("par: %s: auto keeps it on the CPU (bandwidth-bound, and the GPU is across a bus)", gParBlock[i]);
-                learn(i, proto, n, (i32)1);
-                return (i32)1;
+                gParGpuUs[i] = (i64)1 << (i64)50;
+                gParGpuRuns[i] = (u32)2;
+                gParGpusUs[i] = (i64)1 << (i64)50;
+                gParGpusRuns[i] = (u32)2;
+                gParAllUs[i] = (i64)1 << (i64)50;
+                gParAllRuns[i] = (u32)2;
+                gParRemUs[i] = (i64)1 << (i64)50;
+                gParRemRuns[i] = (u32)2;
                 }
             }
         // The GPU candidates first: a card measured after the CPU's runs has
