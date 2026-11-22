@@ -4507,17 +4507,30 @@ void mergeElfLinkObjects(DriverOptions* d, SectionBytes* mtext, SectionBytes* md
         if (lp.hasSuffix(String.withCString(".o"))) objs.add((Object*)lp);
         else if (lp.hasSuffix(String.withCString(".a"))) ars.add((Object*)lp);
     }
-    if (objs.count() == (u32)0 && ars.count() == (u32)0) return;
-    ElfLinkArm64* el = new ElfLinkArm64();
     // A C or C++ program on arm64 Linux with glibc whose xc half carries the
-    // heap (CAlloc.xc's _xc_malloc, #326): its objects' allocator calls are
-    // the heap's, and the executable exports free, realloc and
-    // malloc_usable_size as the heap's, so its libraries' calls reach them.
+    // heap (CAlloc.xc's _xc_malloc, #326): every allocator call is the
+    // heap's, the program's own (its references in this model, which no
+    // object redirect reaches) and its objects', and the executable exports
+    // free, realloc and malloc_usable_size as the heap's, so its libraries'
+    // calls reach them.
     bool heap = !d.emitLib() && d.targetRow() != (TargetRow*)0 && d.targetRow().os().equals(String.withCString("linux"))
                 && msyms.get((Hashable*)String.withCString("_xc_malloc")) != (Object*)0;
-    if (heap)
-        el.setRedirect(cAllocRedirects(false));
-    el.merge(objs, ars, mtext, mdata, msyms, mdataSyms, mfix);
+    Map* redirect = heap ? cAllocRedirects(false) : (Map*)0;
+    if (heap) {
+        for (u32 i = (u32)0; i < mfix.count(); i = i + (u32)1) {
+            Arm64Fixup* f = (Arm64Fixup*)mfix.get(i);
+            if (f.symbol() == (String*)0) continue;
+            Object* to = redirect.get((Hashable*)f.symbol());
+            if (to != (Object*)0 && msyms.get((Hashable*)f.symbol()) == (Object*)0)
+                f.setSymbol((String*)to);
+        }
+    }
+    ElfLinkArm64* el = new ElfLinkArm64();
+    if (objs.count() > (u32)0 || ars.count() > (u32)0) {
+        if (heap)
+            el.setRedirect(redirect);
+        el.merge(objs, ars, mtext, mdata, msyms, mdataSyms, mfix);
+    }
     if (heap && el.rc() == (u32)0) {
         Map* ex = cAllocExports();
         Array* ks = ex.allKeys();
@@ -4530,6 +4543,7 @@ void mergeElfLinkObjects(DriverOptions* d, SectionBytes* mtext, SectionBytes* md
             gArm64CExports.add(ks.get(i));
         }
     }
+    if (objs.count() == (u32)0 && ars.count() == (u32)0) return;
     if (el.rc() != (u32)0) {
         Stdio.printf("xcc: error: %s link: %s\n", d.targetRow().name().cString(), el.why() == 0 ? "?" : el.why().cString());
         driverExit((i32)1); return;
