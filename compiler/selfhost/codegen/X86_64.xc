@@ -4700,6 +4700,44 @@ class X86_64
     // not match inside `flags`.
     static bool mentions(String* s, String* tok)
         {
+        // One pass over the bytes (#331): the peephole asks this of every later
+        // line for every register view, and a byteIndexOf per try cost more
+        // than the scan. As before, a match inside a longer word resumes the
+        // search after that match.
+        u32 n = tok.byteLength();
+        u32 len = s.byteLength();
+        if (n > (u32)0)
+            {
+            if (n > len)
+                return false;
+            u8* h = s.cString();
+            u8* p = tok.cString();
+            u8 first = p[(u32)0];
+            u32 at = (u32)0;
+            while (at + n <= len)
+                {
+                if (h[at] != first)
+                    {
+                    at = at + (u32)1;
+                    continue;
+                    }
+                u32 j = (u32)1;
+                while (j < n && h[at + j] == p[j])
+                    j = j + (u32)1;
+                if (j < n)
+                    {
+                    at = at + (u32)1;
+                    continue;
+                    }
+                u32 e = at + n;
+                u8 before = at > (u32)0 ? h[at - (u32)1] : (u8)' ';
+                u8 after = e < len ? h[e] : (u8)' ';
+                if (!isWordChar(before) && !isWordChar(after))
+                    return true;
+                at = e;
+                }
+            return false;
+            }
         u32 at = s.byteIndexOf(tok);
         while (at != (u32)$FFFF_FFFF)
             {
