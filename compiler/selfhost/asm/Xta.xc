@@ -31,6 +31,7 @@
 #import "Xa6502Defs.xc"
 
 #import "XtaDefs.xc"
+#import <SortStable>
 
 class XaLine
     {
@@ -2428,10 +2429,11 @@ class Xta
                 pc = (pc + pl.byteSize()) & (u32)$FFFF;
             }
 
-        // One replacement per SOURCE line, applied back to front so the
-        // earlier indices stay valid.
-        Array* repIdx = new Array();
-        Array* repText = new Array(); // Array@ of String@ per entry
+        // One replacement per SOURCE line, keyed by the line's index (#540: a
+        // list scanned per branch, then sorted by insertion and spliced in
+        // back to front, was quadratic in the replacements).
+        Map* repByLine = new Map(); // line index -> Array@ of String@
+        u32 repCount = 0;
         for (u32 i = (u32)0; i < _lines.count(); i = i + (u32)1)
             {
             XaLine* pl = (XaLine*)_lines.get(i);
@@ -2454,7 +2456,7 @@ class Xta
             u32 srcLine = pl.sourceLine() - (u32)1;
             if (srcLine >= sourceLines.count())
                 continue;
-            if (containsIndex(repIdx, srcLine))
+            if (repByLine.get((Hashable*)Number.withU32(srcLine)) != (Object*)0)
                 continue;
 
             Array* lines = new Array();
@@ -2486,49 +2488,29 @@ class Xta
                 lines.add((Object*)b);
                 lines.add((Object*)c);
                 }
-            repIdx.add((Object*)Number.withU32(srcLine));
-            repText.add((Object*)lines);
+            repByLine.set((Hashable*)Number.withU32(srcLine), (Object*)lines);
+            repCount = repCount + 1;
             }
-        if (repIdx.count() == (u32)0)
-            return (u32)0;
+        if (repCount == 0)
+            return 0;
 
-        // Back to front, so an insertion never shifts an index still to come.
-        sortByIndexDescending(repIdx, repText);
-        for (u32 r = (u32)0; r < repIdx.count(); r = r + (u32)1)
+        // One pass front to back: each replaced line gives way to its lines.
+        Array* out = new Array();
+        for (u32 i = 0; i < sourceLines.count(); i = i + 1)
             {
-            u32 at = ((Number*)repIdx.get(r)).asU32();
-            Array* lines = (Array*)repText.get(r);
-            sourceLines.set(at, lines.get((u32)0));
-            for (u32 j = (u32)1; j < lines.count(); j = j + (u32)1)
-                sourceLines.insert(at + j, lines.get(j));
-            }
-        return repIdx.count();
-        }
-
-    static bool containsIndex(Array* a, u32 v)
-        {
-        for (u32 i = (u32)0; i < a.count(); i = i + (u32)1)
-            if (((Number*)a.get(i)).asU32() == v)
-                return true;
-        return false;
-        }
-
-    static void sortByIndexDescending(Array* idx, Array* txt)
-        {
-        for (u32 i = (u32)1; i < idx.count(); i = i + (u32)1)
-            {
-            Object* vi = idx.get(i);
-            Object* vt = txt.get(i);
-            u32 j = i;
-            while (j > (u32)0 && ((Number*)idx.get(j - (u32)1)).asU32() < ((Number*)vi).asU32())
+            Array* lines = (Array*)repByLine.get((Hashable*)Number.withU32(i));
+            if (lines == (Array*)0)
                 {
-                idx.set(j, idx.get(j - (u32)1));
-                txt.set(j, txt.get(j - (u32)1));
-                j = j - (u32)1;
+                out.add(sourceLines.get(i));
+                continue;
                 }
-            idx.set(j, vi);
-            txt.set(j, vt);
+            for (u32 j = 0; j < lines.count(); j = j + 1)
+                out.add(lines.get(j));
             }
+        sourceLines.removeAll();
+        for (u32 i = 0; i < out.count(); i = i + 1)
+            sourceLines.add(out.get(i));
+        return repCount;
         }
 
     static String* inverseBranch(String* m)
@@ -3094,13 +3076,12 @@ class Xta
                 continue;
             u32 lo = rs > segStart ? rs : segStart;
             u32 hi = re < segEnd ? re : segEnd;
-            // Kept sorted by start as they arrive.
-            u32 at = ovLo.count();
-            while (at > (u32)0 && ((Number*)ovLo.get(at - (u32)1)).asU32() > lo)
-                at = at - (u32)1;
-            ovLo.insert(at, (Object*)Number.withU32(lo));
-            ovHi.insert(at, (Object*)Number.withU32(hi));
+            ovLo.add((Object*)Number.withU32(lo));
+            ovHi.add((Object*)Number.withU32(hi));
             }
+        // By start, stably: equal starts keep the order they arrived in, as
+        // the sorted inserts did (#540).
+        SortStable.byU32(ovHi, ovLo);
         if (ovLo.count() == (u32)0)
             {
             mainPieces.add((Object*)Number.withU32(segStart));
@@ -3298,16 +3279,18 @@ class Xta
     Data* writePrg(void)
         {
         Array* sorted = new Array();
+        Array* origins = new Array();
         for (u32 i = (u32)0; i < _segments.count(); i = i + (u32)1)
             {
             XaSegment* seg = (XaSegment*)_segments.get(i);
             if (seg.data().length() == (u32)0)
                 continue;
-            u32 at = sorted.count();
-            while (at > (u32)0 && ((XaSegment*)sorted.get(at - (u32)1)).origin() > seg.origin())
-                at = at - (u32)1;
-            sorted.insert(at, (Object*)seg);
+            sorted.add((Object*)seg);
+            origins.add((Object*)Number.withU32(seg.origin()));
             }
+        // By origin, stably: equal origins keep their order, as the sorted
+        // inserts did (#540).
+        SortStable.byU32(sorted, origins);
         if (sorted.count() == (u32)0)
             return (Data*)0;
         u32 loadAddr = ((XaSegment*)sorted.get((u32)0)).origin();

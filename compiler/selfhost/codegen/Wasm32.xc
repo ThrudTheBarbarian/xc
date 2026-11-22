@@ -17,6 +17,7 @@
 #import <Ir>
 #import <CgCommon>
 #import "IrDefs.xc"
+#import <SortStable>
 
 
 // ── Per-function emission state ────────────────────────────────────────────
@@ -243,25 +244,13 @@ class Wasm32
     void setOptLevel(u32 level) { _optLevel = level; }
     void setTailCalls(bool on)  { _tailCalls = on; }
 
-    // The key arrays in ascending numeric order (insertion sort — the sets
-    // are a handful of value ids). Matches the original's sorted walk of
+    // The key arrays in ascending numeric order, a stable sorted copy (#540;
+    // it was an insertion sort). Matches the original's sorted walk of
     // pinnedOffset / aggSlot keys.
     static Array* ascendingKeys(Array* keys)
     {
-        Array* out = new Array();
-        for (u32 i = (u32)0; i < keys.count(); i = i + (u32)1)
-            out.add(keys.get(i));
-        for (u32 i = (u32)1; i < out.count(); i = i + (u32)1) {
-            u32 j = i;
-            while (j > (u32)0
-                   && ((Number*)out.get(j - (u32)1)).asU32()
-                      > ((Number*)out.get(j)).asU32()) {
-                Object* t = out.get(j - (u32)1);
-                out.set(j - (u32)1, out.get(j));
-                out.set(j, t);
-                j = j - (u32)1;
-            }
-        }
+        Array* out = SortStable.copy(keys);
+        SortStable.byU32(out, out);
         return out;
     }
 
@@ -633,33 +622,12 @@ class Wasm32
         return v;
     }
 
-    // Bytewise <, matching NSString compare: over ASCII names.
-    static bool strLt(String* a, String* b)
-    {
-        u32 n = a.byteLength() < b.byteLength() ? a.byteLength() : b.byteLength();
-        for (u32 i = (u32)0; i < n; i = i + (u32)1) {
-            u8 ca = a.byteAt(i);
-            u8 cb = b.byteAt(i);
-            if (ca < cb) return true;
-            if (ca > cb) return false;
-        }
-        return a.byteLength() < b.byteLength();
-    }
-
+    // A sorted copy in byte order (String.compare),
+    // stable and n log n (#540; it was an insertion sort).
     static Array* sorted(Array* names)
     {
-        Array* out = new Array();
-        for (u32 i = (u32)0; i < names.count(); i = i + (u32)1)
-            out.add(names.get(i));
-        for (u32 i = (u32)1; i < out.count(); i = i + (u32)1) {
-            Object* cur = out.get(i);
-            u32 j = i;
-            while (j > (u32)0 && Wasm32.strLt((String*)cur, (String*)out.get(j - (u32)1))) {
-                out.set(j, out.get(j - (u32)1));
-                j = j - (u32)1;
-            }
-            out.set(j, cur);
-        }
+        Array* out = SortStable.copy(names);
+        SortStable.byString(out);
         return out;
     }
 

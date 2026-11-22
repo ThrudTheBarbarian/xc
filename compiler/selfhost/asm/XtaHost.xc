@@ -12,6 +12,7 @@
 #import "Files.xc"
 #import <Xta>
 #import "XtaDefs.xc"
+#import <SortStable>
 
 #if OS_windows
 pointer FindFirstFileA(u8* pattern, u8* data);
@@ -119,20 +120,11 @@ class XaDir
         return XaDir.list(path) != (Array*)0;
         }
 
-    // Byte order, which is the reference's order for these names.
+    // Byte order, which is the reference's order for these names. Stable and
+    // n log n (#540; it was an insertion sort).
     static void sort(Array* a)
         {
-        for (u32 i = (u32)1; i < a.count(); i = i + (u32)1)
-            {
-            Object* v = a.get(i);
-            u32 j = i;
-            while (j > (u32)0 && ((String*)a.get(j - (u32)1)).compare((String*)v) > (i8)0)
-                {
-                a.set(j, a.get(j - (u32)1));
-                j = j - (u32)1;
-                }
-            a.set(j, v);
-            }
+        SortStable.byString(a);
         }
     }
 

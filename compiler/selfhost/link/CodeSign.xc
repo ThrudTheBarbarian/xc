@@ -1023,23 +1023,56 @@ class Bytes
             return (i32)1;
         return (i32)0;
         }
+    // The indices of `names` in nameCmp order, as Numbers. A bottom-up merge
+    // sort (#540; it was an insertion sort): the right run's index goes first
+    // only when its name sorts strictly before, so equal names keep their
+    // order.
+    static Array* sortedIndex(Array* names)
+        {
+        u32 n = names.count();
+        Array* src = new Array();
+        Array* dst = new Array();
+        for (u32 i = 0; i < n; i = i + 1)
+            {
+            src.add((Object*)Number.withU32(i));
+            dst.add((Object*)Number.withU32(i));
+            }
+        u32 width = 1;
+        while (width < n)
+            {
+            u32 lo = 0;
+            while (lo < n)
+                {
+                u32 mid = lo + width < n ? lo + width : n;
+                u32 hi = mid + width < n ? mid + width : n;
+                u32 x = lo;
+                u32 y = mid;
+                for (u32 k = lo; k < hi; k = k + 1)
+                    {
+                    bool takeY = x >= mid
+                        || (y < hi && CodeRes.nameCmp((String*)names.get(((Number*)src.get(x)).asU32()),
+                                                      (String*)names.get(((Number*)src.get(y)).asU32())) > 0);
+                    if (takeY)
+                        {
+                        dst.set(k, src.get(y));
+                        y = y + 1;
+                        }
+                    else
+                        {
+                        dst.set(k, src.get(x));
+                        x = x + 1;
+                        }
+                    }
+                lo = hi;
+                }
+            Array* t = src; src = dst; dst = t;
+            width = width + width;
+            }
+        return src;
+        }
     static String* build(Array* names, Array* contents)
         {
-        Array* idx = new Array();
-        for (u32 i = (u32)0; i < names.count(); i = i + (u32)1)
-            idx.add((Object*)Number.withU32(i));
-        for (u32 i = (u32)1; i < idx.count(); i = i + (u32)1)
-            {
-            Object* k = idx.get(i);
-            u32 kv = ((Number*)k).asU32();
-            u32 j = i;
-            while (j > (u32)0 && CodeRes.nameCmp((String*)names.get(((Number*)idx.get(j - (u32)1)).asU32()), (String*)names.get(kv)) > (i32)0)
-                {
-                idx.set(j, idx.get(j - (u32)1));
-                j = j - (u32)1;
-                }
-            idx.set(j, k);
-            }
+        Array* idx = CodeRes.sortedIndex(names);
         String* out = String.withCString("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n");
         out.appendCString("\t<key>files</key>\n\t<dict>\n");
         for (u32 t = (u32)0; t < idx.count(); t = t + (u32)1)
@@ -1548,21 +1581,7 @@ class Bytes
             vals.add((Object*)vd);
             }
         // sort indices by key ascending (byte order)
-        Array* idx = new Array();
-        for (u32 i = (u32)0; i < keys.count(); i = i + (u32)1)
-            idx.add((Object*)Number.withU32(i));
-        for (u32 i = (u32)1; i < idx.count(); i = i + (u32)1)
-            {
-            Object* kk = idx.get(i);
-            u32 kv = ((Number*)kk).asU32();
-            u32 j = i;
-            while (j > (u32)0 && CodeRes.nameCmp((String*)keys.get(((Number*)idx.get(j - (u32)1)).asU32()), (String*)keys.get(kv)) > (i32)0)
-                {
-                idx.set(j, idx.get(j - (u32)1));
-                j = j - (u32)1;
-                }
-            idx.set(j, kk);
-            }
+        Array* idx = CodeRes.sortedIndex(keys);
         Array* pairs = new Array();
         for (u32 t = (u32)0; t < idx.count(); t = t + (u32)1)
             {
