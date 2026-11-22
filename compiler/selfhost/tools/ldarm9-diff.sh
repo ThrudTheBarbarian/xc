@@ -37,7 +37,7 @@ fi
 # already being run here, so comparing their `--emit-lib` output costs one
 # `cmp` and closes it.
 "${XC_TOOL_XCC:-$BIN/xcc}" --par-style=cpu -O2 -A $XC_HOST_ARCH -H . -o "$WORK/xtcg9" selfhost/tools/xtcg9.xc \
-    -I selfhost/ir -I selfhost/defs -I selfhost/codegen -I selfhost/opt > "$WORK/cgbuild.log" 2>&1
+    -I selfhost/ir -I selfhost/defs -I selfhost/codegen -I selfhost/asm -I selfhost/opt > "$WORK/cgbuild.log" 2>&1
 if [ ! -x "$WORK/xtcg9" ]; then
     grep -a error "$WORK/cgbuild.log" | head -5
     exit 1
