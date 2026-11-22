@@ -271,6 +271,7 @@ class SpvRecipe
     bool bytes;        // an element of a buffer of 8-bit integers
     u32 wordShift;     // a narrow captured value: its bit offset in its word, + 1 (0: none)
     bool local;        // a work item's own array (a Function array variable)
+    bool runArray;     // a buffer whose one member is a runtime array (an `f` or `g` binding, #563)
 
     SpvRecipe* copy(void)
         {
@@ -285,6 +286,7 @@ class SpvRecipe
         r.bytes = bytes;
         r.wordShift = wordShift;
         r.local = local;
+        r.runArray = runArray;
         return r;
         }
     }
