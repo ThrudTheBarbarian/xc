@@ -136,6 +136,19 @@
         IRBlock* t1 = ((IROperand*)term.ops().get((u32)2)).blk();
         if (t0 == (IRBlock*)0 || t1 == (IRBlock*)0 || t0 == t1)
             return false;
+        // Two of the tests below need no region, so they run before the walk
+        // that finds it (#331): every block ending in a test was walked after
+        // every rotation, which made the pass the optimiser's slowest. H has
+        // exactly two predecessors (the preheader and the latch), and each of
+        // its phis is a clean two-way merge.
+        if (self.faPreds(fn, H).count() != (u32)2)
+            return false;
+        for (u32 i = (u32)0; i < H.phis().count(); i = i + (u32)1)
+            {
+            IRInsn* p = (IRInsn*)H.phis().get(i);
+            if (p.res() == (IRValue*)0 || p.memRes() != (IRValue*)0 || p.ops().count() != (u32)4)
+                return false;
+            }
         // The body is a REGION, not only a single block: B, the successor of
         // H that starts it, and everything reachable from B without passing
         // through H. It must be left only by going back to H, and exactly one
