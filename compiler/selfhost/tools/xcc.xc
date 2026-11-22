@@ -4434,6 +4434,10 @@ Array* mergeLinkObjects(DriverOptions* d, SectionBytes* mtext, SectionBytes* mda
 // into the assembler's model before the image is written. It used to drop
 // them without a word, so a library bundling C code came out with that code
 // undefined.
+// What an arm64 Linux C program's executable exports for its libraries (the
+// heap's free, realloc and malloc_usable_size, #326), or 0.
+Array* gArm64CExports;
+
 void mergeElfLinkObjects(DriverOptions* d, SectionBytes* mtext, SectionBytes* mdata, Map* msyms,
                          Array* mdataSyms, Array* mfix, Array* extra, Arm64Asm* as)
 {
@@ -4452,7 +4456,27 @@ void mergeElfLinkObjects(DriverOptions* d, SectionBytes* mtext, SectionBytes* md
     }
     if (objs.count() == (u32)0 && ars.count() == (u32)0) return;
     ElfLinkArm64* el = new ElfLinkArm64();
+    // A C or C++ program on arm64 Linux with glibc whose xc half carries the
+    // heap (CAlloc.xc's _xc_malloc, #326): its objects' allocator calls are
+    // the heap's, and the executable exports free, realloc and
+    // malloc_usable_size as the heap's, so its libraries' calls reach them.
+    bool heap = !d.emitLib() && d.targetRow() != (TargetRow*)0 && d.targetRow().os().equals(String.withCString("linux"))
+                && msyms.get((Hashable*)String.withCString("_xc_malloc")) != (Object*)0;
+    if (heap)
+        el.setRedirect(cAllocRedirects(false));
     el.merge(objs, ars, mtext, mdata, msyms, mdataSyms, mfix);
+    if (heap && el.rc() == (u32)0) {
+        Map* ex = cAllocExports();
+        Array* ks = ex.allKeys();
+        Elf64.sortStrings(ks);
+        gArm64CExports = new Array();
+        for (u32 i = (u32)0; i < ks.count(); i = i + (u32)1) {
+            Object* at = msyms.get(ex.get(ks.get(i)));
+            if (at == (Object*)0) continue;
+            msyms.set((Hashable*)ks.get(i), at);
+            gArm64CExports.add(ks.get(i));
+        }
+    }
     if (el.rc() != (u32)0) {
         Stdio.printf("xcc: error: %s link: %s\n", d.targetRow().name().cString(), el.why() == 0 ? "?" : el.why().cString());
         driverExit((i32)1); return;
@@ -5706,10 +5730,11 @@ void xccMain(void)
         optSetDropBaseClassRoot(linkJoinsObjects(d));
         cPathSetElf(crow != (TargetRow*)0 && crow.exeFormat().hasPrefix(String.withCString("elf")));
         // xcc's half carries the heap of the program's large blocks
-        // (CAlloc.xc, #235) where the link can turn it on: macOS, and x86-64
-        // linked against glibc.
+        // (CAlloc.xc, #235) where the link can turn it on: macOS, x86-64
+        // linked against glibc, and arm64 Linux (glibc, #326).
         cPathSetHeap((isMacArm64(d) && !isIos(d) && !cElfArm64)
-                     || (isX86_64(d) && d.caps().dynamic()));
+                     || (isX86_64(d) && d.caps().dynamic())
+                     || (cElfArm64 && !isAndroid(d)));
         // -Wpar-auto: the outliner says what it lifted from this file, and why not.
         optSetWarnParAuto(!d.fe().warningSuppressed(String.withCString("par-auto")));
         // C and C++: unwind tables for xcc's functions, so a C++ exception
@@ -6406,7 +6431,7 @@ void emitModule(DriverOptions* d, IRModule* mod)
                     (String*)0, aMi, iface);
         } else {
             w.image(as.textBytes(), aData, as.symbols(), as.dataSyms(),
-                    new Array(), aFix, (String*)0, needed,
+                    gArm64CExports != (Array*)0 ? gArm64CExports : new Array(), aFix, (String*)0, needed,
                     String.withCString("_start"), aMi);
         }
         if (w.failed()) {
