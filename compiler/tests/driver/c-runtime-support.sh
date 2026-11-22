@@ -55,5 +55,55 @@ n=$(echo "$libs" | grep -c "libRuntimeSupport\.$EXT")
 # Its loops still run as blocks.
 "$XC" -q -O2 -H . -Wpar-auto -o "$W/lift2" "$W/lift.c" > "$W/w" 2>&1
 grep -q "became a 'par' block" "$W/w" && echo "  ok: lift's loops are lifted" || { echo "  FAIL: lift's loops were not lifted"; head -3 "$W/w"; fail=1; }
+# A C program that links an xc library (which itself links libRuntime) keeps
+# libRuntime and does not load libRuntimeSupport: one object runtime.
+mkdir -p "$W/lib"
+cat > "$W/Adder.xc" <<'XC'
+#import "Foundation.xc"
+i32 xcAdd(i32 a, i32 b)
+    {
+    String* s = String.withFormat("%d", a + b);
+    return (i32)s.byteLength() + a + b;
+    }
+XC
+cat > "$W/use.c" <<'C'
+#include <stdio.h>
+int xcAdd(int a, int b);
+#define N 1000000
+double a[N];
+int main(void)
+{
+    for (int i = 0; i < N; i++) a[i] = i * 2.0;
+    double t = 0;
+    for (int i = 0; i < N; i++) t += a[i];
+    printf("%d %.1f\n", xcAdd(40, 2), t);
+    return 0;
+}
+C
+if "$XC" -q -O2 -H . --emit-lib -o "$W/lib/libAdder.$EXT" "$W/Adder.xc" > "$W/lb" 2>&1 \
+   && "$XC" -q -O2 -H . -L "$W/lib" -lAdder -o "$W/use" "$W/use.c" > "$W/ub" 2>&1; then
+    if [ "$PLAT" = osx ]; then ul=$(otool -L "$W/use" | tail -n +2); else ul=$(readelf -d "$W/use" | grep NEEDED); fi
+    echo "$ul" | grep -q "libRuntimeSupport" && { echo "  FAIL: use (links an xc library) loads libRuntimeSupport"; fail=1; } \
+        || echo "  ok: use (links an xc library) keeps libRuntime alone"
+    ug=$(DYLD_LIBRARY_PATH="$W/lib" LD_LIBRARY_PATH="$W/lib" "$W/use" 2>&1)
+    [ "$ug" = "44 999999000000.0" ] && echo "  ok: use gives its answer" || { echo "  FAIL: use gives '$ug'"; fail=1; }
+else
+    echo "  FAIL: the xc library or its C client does not build"; head -3 "$W/lb" "$W/ub"; fail=1
+fi
+# A C++ program takes the same path.
+if clang++ --version > /dev/null 2>&1; then
+    sed 's/#include <stdio.h>/#include <cstdio>/' "$W/lift.c" > "$W/lift.cpp"
+    clang++ -O2 -w -o "$W/refpp" "$W/lift.cpp"
+    if "$XC" -q -O2 -H . -o "$W/liftpp" "$W/lift.cpp" > "$W/pb" 2>&1; then
+        pg=$("$W/liftpp" 2>&1); pw=$("$W/refpp")
+        [ "$pg" = "$pw" ] && echo "  ok: lift.cpp gives clang++'s answer" || { echo "  FAIL: lift.cpp gives '$pg', clang++'s '$pw'"; fail=1; }
+        if [ "$PLAT" = osx ]; then pl=$(otool -L "$W/liftpp" | tail -n +2); else pl=$(readelf -d "$W/liftpp" | grep NEEDED); fi
+        echo "$pl" | grep -q "libRuntime\.$EXT" && { echo "  FAIL: lift.cpp loads libRuntime"; fail=1; } || echo "  ok: lift.cpp loads no libRuntime"
+        po=$(nm "$W/liftpp" 2>/dev/null | grep -E ' [Tt] ' | grep -cE ' _?(String|Array|Number|Map)\$')
+        [ "$po" = 0 ] && echo "  ok: lift.cpp defines no Foundation code" || { echo "  FAIL: lift.cpp defines $po Foundation function(s)"; fail=1; }
+    else
+        echo "  FAIL: lift.cpp does not build"; head -3 "$W/pb"; fail=1
+    fi
+fi
 echo "--- c-runtime-support: $([ $fail = 0 ] && echo pass || echo FAIL) ---"
 exit $fail
