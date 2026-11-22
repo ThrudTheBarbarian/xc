@@ -967,7 +967,11 @@ form of its own target's GPU unless it was built with `-fpar-kernels=all`
 same), so a daemon of another kind takes a block only from a program built
 that way; the daemon says so in its log. `xcd -no-mdns` keeps a daemon
 off the air; it is still reachable by address. One subnet only: multicast
-does not cross routers or VPNs.
+does not cross routers or VPNs. On macOS, a program or daemon without Local
+Network access can neither ask nor answer on the network; the daemon says so
+in its log, and with `XC_PAR_REPORT` the program does too. Programs and
+daemons on one machine still find each other, as the question is also asked on
+the loopback.
 
 A daemon that goes away mid-run costs the run nothing but time: the tiles it
 held are handed to the other workers, and a tile is the same wherever it

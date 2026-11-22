@@ -12,6 +12,13 @@
 // keeps its port with us through SO_REUSEPORT/SO_REUSEADDR and is not
 // consulted. One subnet only: multicast does not cross routers or VPNs, by
 // the owner's decision.
+//
+// The query also goes to the group on the loopback, where the daemon has
+// joined it too, so a program finds the daemons of its own machine when it
+// may not use the local network: macOS's Local Network privacy refuses a
+// process without that permission every multicast datagram on the network
+// (sendto fails with EHOSTUNREACH, and none arrives), on the loopback none.
+// A daemon that answers on both is taken once, at its network address.
 #import "Socket.xc"
 #import "ParDevice.xc"   // the clock
 
@@ -77,6 +84,9 @@ class MdnsSocket
                 return (MdnsSocket*)0;
                 }
             setsockopt(h, (i32)0, (i32)12, &mreq[0], (i32)8);               // IP_ADD_MEMBERSHIP
+            mreq[4] = (u8)127;
+            mreq[7] = (u8)1;
+            setsockopt(h, (i32)0, (i32)12, &mreq[0], (i32)8);               // and on the loopback
             }
         i64 fd = (i64)h;
 #else
@@ -97,11 +107,21 @@ class MdnsSocket
                 _socket_closeFd((i64)h);
                 return (MdnsSocket*)0;
                 }
+            // The group on the default interface, then on the loopback (a
+            // system with no multicast there refuses the second: no matter).
+            for (u32 j = (u32)0; j < (u32)2; j = j + (u32)1)
+                {
+                if (j == (u32)1)
+                    {
+                    mreq[4] = (u8)127;
+                    mreq[7] = (u8)1;
+                    }
 #if ARCH_x86_64 || OS_linux || OS_android
-            setsockopt(h, (i32)0, (i32)35, &mreq[0], (u32)8);                // IP_ADD_MEMBERSHIP
+                setsockopt(h, (i32)0, (i32)35, &mreq[0], (u32)8);            // IP_ADD_MEMBERSHIP
 #else
-            setsockopt(h, (i32)0, (i32)12, &mreq[0], (u32)8);
+                setsockopt(h, (i32)0, (i32)12, &mreq[0], (u32)8);
 #endif
+                }
             }
         i64 fd = (i64)h;
 #endif
@@ -109,6 +129,26 @@ class MdnsSocket
         s._fd = fd;
         s._open = true;
         return s;
+#endif
+        }
+
+    // Multicast from here on goes out of the loopback, not the default
+    // interface.
+    void useLoopback(void)
+        {
+#if !_SOCKET_NO_TCP
+        u8 lo[4];
+        lo[0] = (u8)127;
+        lo[1] = (u8)0;
+        lo[2] = (u8)0;
+        lo[3] = (u8)1;
+#if OS_windows
+        setsockopt((u64)_fd, (i32)0, (i32)9, &lo[0], (i32)4);               // IP_MULTICAST_IF
+#elif ARCH_x86_64 || OS_linux || OS_android
+        setsockopt((i32)_fd, (i32)0, (i32)32, &lo[0], (u32)4);
+#else
+        setsockopt((i32)_fd, (i32)0, (i32)9, &lo[0], (u32)4);
+#endif
 #endif
         }
 
@@ -480,7 +520,12 @@ class Mdns
         group[2] = (u8)0;
         group[3] = (u8)251;
         Data* q = Mdns.query();
-        s.send(q.bytes(), q.length(), &group[0], (u16)MDNS_PORT);
+        bool sent = s.send(q.bytes(), q.length(), &group[0], (u16)MDNS_PORT);
+        if (!sent && ParDevice.reporting())
+            Log.info("par: mdns: the query could not be sent on the local network (on macOS: is Local Network access allowed?)");
+        s.useLoopback();
+        if (!s.send(q.bytes(), q.length(), &group[0], (u16)MDNS_PORT) && ParDevice.reporting())
+            Log.info("par: mdns: the query could not be sent on the loopback");
         i64 start = ParDevice.nowUs() / (i64)1000;
         i64 last = (i64)-1;          // when the latest daemon's answer came
         u8 buf[1500];
@@ -525,6 +570,27 @@ class Mdns
         s.close();
         if (ParDevice.reporting())
             Log.info("par: mdns: listened %ld ms", ParDevice.nowUs() / (i64)1000 - start);
+        // A daemon of this machine that answered on the network as well as
+        // on the loopback is taken at its network address.
+        u32 k = (u32)0;
+        while (k < found.count())
+            {
+            MdnsService* o = (MdnsService*)found.get(k);
+            bool twice = false;
+            if (o.host.equals(String.withCString("127.0.0.1")))
+                {
+                for (u32 i = (u32)0; i < found.count(); i = i + (u32)1)
+                    {
+                    MdnsService* p = (MdnsService*)found.get(i);
+                    if (i != k && p.port == o.port && !p.host.equals(o.host))
+                        twice = true;
+                    }
+                }
+            if (twice)
+                found.removeAt(k);
+            else
+                k = k + (u32)1;
+            }
         return found;
         }
     }
@@ -564,7 +630,12 @@ class MdnsResponder : Object
         group[1] = (u8)0;
         group[2] = (u8)0;
         group[3] = (u8)251;
-        s.send(a.bytes(), a.length(), &group[0], (u16)MDNS_PORT);
+        // The announcement fails when this process may not use the local
+        // network (macOS's Local Network privacy): no program elsewhere can
+        // find the daemon then, and those on this machine find it on the
+        // loopback.
+        if (!s.send(a.bytes(), a.length(), &group[0], (u16)MDNS_PORT))
+            Log.info("xcd: mdns: cannot send on the local network (on macOS: is Local Network access allowed?); found on this machine only");
         u8 buf[1500];
         u8 ip[4];
         u16 port = (u16)0;
