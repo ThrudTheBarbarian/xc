@@ -1182,7 +1182,7 @@
         words.appendCString(":");
         words.append(String.withU32(lay.offsetAt((u32)q)));
         words.appendCString(":");
-        words.append(String.withU32(self.mslWidth(lay.typeAt((u32)q))));
+        words.append(String.withU32(self.gpuBytes(lay.typeAt((u32)q))));
         words.appendCString(":");
         words.append((String*)p.get(at + (u32)3));
         }
@@ -1200,7 +1200,7 @@
         words.appendCString(":");
         words.append(String.withU32(lay.offsetAt((u32)q)));
         words.appendCString(":");
-        words.append(String.withU32(self.mslWidth(lay.typeAt((u32)q))));
+        words.append(String.withU32(self.gpuBytes(lay.typeAt((u32)q))));
         words.appendCString(":");
         words.append((String*)p.get(at + (u32)1));
         }
@@ -1246,7 +1246,7 @@
             words.appendCString(" guard=");
             words.append(String.withU32(lay.offsetAt((u32)sl)));
             words.appendCString(":");
-            words.append(String.withU32(self.mslWidth(lay.typeAt((u32)sl))));
+            words.append(String.withU32(self.gpuBytes(lay.typeAt((u32)sl))));
             words.append(g.substringBytes(c1, g.byteLength() - c1));
             }
         return words;
@@ -2745,7 +2745,7 @@
                     String* t = (String*)cTy.get((Hashable*)vk);
                     String* wt = self.parWordOf((String*)sty.get((Hashable*)ck));
                     bool root = (IRValue*)cRoot.get((Hashable*)vk) == o.val();
-                    if (!root && t.equals(wt) && ((Number*)cOff.get((Hashable*)vk)).asU32() % self.mslWidth(wt) == (u32)0)
+                    if (!root && t.equals(wt) && ((Number*)cOff.get((Hashable*)vk)).asU32() % self.gpuBytes(wt) == (u32)0)
                         continue;
                     bool access = k == 0 && !root && (ip.isOp(opLoad)
                                   || (ip.isOp(opStore) && ip.ops().count() >= 2));
@@ -2756,7 +2756,7 @@
                     // another field of the element would lose: only at the
                     // item's own index, which no other item writes.
                     else if (ip.isOp(opStore)
-                             && (self.mslWidth(t) < self.mslWidth(wt) || IRType.is(t, tyBool)))
+                             && (self.gpuBytes(t) < self.gpuBytes(wt) || IRType.is(t, tyBool)))
                         {
                         IRValue* rv = (IRValue*)cRoot.get((Hashable*)vk);
                         IRInsn* re = (IRInsn*)def.get((Hashable*)String.withU32(rv.seq()));
@@ -2861,7 +2861,7 @@
                     {
                     // [i] of the struct: [i * (size / word)] of the word.
                     IRLayout* sl = self.mslLayoutOf((String*)sty.get((Hashable*)ck));
-                    u32 n = sl.size() / self.mslWidth(wt);
+                    u32 n = sl.size() / self.gpuBytes(wt);
                     IROperand* io = (IROperand*)ip.ops().get((u32)1);
                     IROperand* scaled = (IROperand*)0;
                     if (io.kind() == (u8)OPK_IMMI)
@@ -2887,7 +2887,7 @@
                     u32 off = ((Number*)cOff.get((Hashable*)rk)).asU32();
                     IRInsn* ea = IRInsn.with(String.withCString("ElementAddr"));
                     ea.add(IROperand.useVal(root));
-                    ea.add(IROperand.immI((i64)(off / self.mslWidth(wt)), String.withCString("U32")));
+                    ea.add(IROperand.immI((i64)(off / self.gpuBytes(wt)), String.withCString("U32")));
                     ea.setRes(r);
                     r.setTy(pt);
                     bb.insns().set(i, (Object*)ea);
@@ -2990,8 +2990,8 @@
         {
         if (!self.parLeaf(t))
             return false;
-        u32 w = self.mslWidth(t);
-        u32 ww = self.mslWidth(wt);
+        u32 w = self.gpuBytes(t);
+        u32 ww = self.gpuBytes(wt);
         if (off % w != (u32)0)
             return false;
         if (w <= ww)
@@ -3004,8 +3004,8 @@
     // it in words. The index after them.
     final u32 parWordAccess(IRBlock* bb, u32 i, IRInsn* ip, String* t, u32 off, String* wt, IRValue* root)
         {
-        u32 w = self.mslWidth(t);
-        u32 ww = self.mslWidth(wt);
+        u32 w = self.gpuBytes(t);
+        u32 ww = self.gpuBytes(wt);
         bool load = ip.isOp(opLoad);
         if (w == ww && !IRType.is(t, tyBool))
             {

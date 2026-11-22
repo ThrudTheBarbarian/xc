@@ -629,7 +629,7 @@
             if (b == (WgRecipe*)0 || pe == (String*)0 || b.base.hasPrefix(self.spvS("f"))) return false;
             // A work item's array holds one slot per element of its own type:
             // an index by any other width would land elsewhere. As the reference.
-            if (b.base.hasPrefix(self.spvS("loc_")) && self.mslWidth(pe) != self.mslWidth(b.pointee)) return false;
+            if (b.base.hasPrefix(self.spvS("loc_")) && self.gpuBytes(pe) != self.gpuBytes(b.pointee)) return false;
             IROperand* o1 = (IROperand*)ip.ops().get((u32)1);
             String* it = o1.kind() == (u8)OPK_USE ? self.mslTypeOf(o1) : self.spvS("I64");
             String* idx = wgValue(o1, it);
@@ -660,17 +660,17 @@
                 {
                 WgRecipe* b = o0.kind() == (u8)OPK_USE && o0.val() != (IRValue*)0 ? (WgRecipe*)_wf.recipeOf.get((Hashable*)self.mslKey(o0.val())) : (WgRecipe*)0;
                 String* pe = self.mslPointee(rt);
-                if (b == (WgRecipe*)0 || self.spvWidth(b.pointee) != self.spvWidth(pe) || !wgSameType(b.pointee, pe))
+                if (b == (WgRecipe*)0 || self.gpuBytes(b.pointee) != self.gpuBytes(pe) || !wgSameType(b.pointee, pe))
                     return false;
                 _wf.recipeOf.set((Hashable*)self.mslKey(res), (Object*)b);
                 return true;
                 }
             String* st = o0.kind() == (u8)OPK_USE ? self.mslTypeOf(o0) : rt;
             String* a = wgValue(o0, st);
-            if (a == (String*)0 || self.spvWidth(st) != self.spvWidth(rt) || wgType(rt) == (String*)0 || wgType(st) == (String*)0) return false;
+            if (a == (String*)0 || self.gpuBytes(st) != self.gpuBytes(rt) || wgType(rt) == (String*)0 || wgType(st) == (String*)0) return false;
             if (wgType(st).equals(wgType(rt)))
                 wgSet(ip, wgCanon(a, rt));   // a narrow result in its own form
-            else if (spvWidth(st) == (u32)4)
+            else if (gpuBytes(st) == (u32)4)
                 wgSet(ip, String.withFormat("bitcast<%s>(%s)", wgType(rt).cString(), a.cString()));
             else
                 return false;
@@ -1092,7 +1092,7 @@
             {
             String* et = (String*)_mLocalElem.get(q);
             String* ty = wgType(et);
-            u32 ew = self.mslWidth(et);
+            u32 ew = self.gpuBytes(et);
             if (ty == (String*)0 || ew == (u32)0)
                 {
                 self.parBecause(IRType.is(et, tyF64) ? self.spvS("it uses a double, which WebGPU does not have") : self.spvS("it uses a local value its WebGPU version cannot place"));
@@ -1282,7 +1282,7 @@
                 return false;
                 }
             meta.appendCString(" buf="); meta.append(String.withU32(_mObj.offsetAt(k))); meta.appendCString(":");
-            meta.append(String.withU32(k - (u32)3)); meta.appendCString(":"); meta.append(String.withU32(self.spvWidth(et)));
+            meta.append(String.withU32(k - (u32)3)); meta.appendCString(":"); meta.append(String.withU32(self.gpuBytes(et)));
             String* key = self.spvS("k");
             key.append(String.withI64((i64)k));
             _wgBufName.set((Hashable*)key, (Object*)n);
@@ -1308,7 +1308,7 @@
                 self.parBecause(w);
                 return false;
                 }
-            meta.appendCString(" glob="); meta.append(gn); meta.appendCString(":"); meta.append(String.withU32(self.spvWidth(et)));
+            meta.appendCString(" glob="); meta.append(gn); meta.appendCString(":"); meta.append(String.withU32(self.gpuBytes(et)));
             String* key = self.spvS("g");
             key.append(String.withU32(gi));
             _wgBufName.set((Hashable*)key, (Object*)n);
@@ -1334,7 +1334,7 @@
             // An 8- or 16-bit value or a bool: a u32 slot per thread (the
             // reference explains).
             bool narrow = self.spvNarrowBytes(t) != (u32)0;
-            meta.appendCString(" red="); meta.append(String.withU32(_mObj.offsetAt(k))); meta.appendCString(":"); meta.append(String.withU32(self.spvWidth(t)));
+            meta.appendCString(" red="); meta.append(String.withU32(_mObj.offsetAt(k))); meta.appendCString(":"); meta.append(String.withU32(self.gpuBytes(t)));
             if (narrow) meta.appendCString(":4");
             decls.append(String.withFormat("@group(0) @binding(%u) var<storage, read_write> r%u: array<%s>;\n", _wgBinding, k,
                                            narrow ? "u32" : wgType(t).cString()));

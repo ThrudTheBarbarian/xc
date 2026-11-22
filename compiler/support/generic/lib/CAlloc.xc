@@ -43,7 +43,7 @@
 // grows is replaced; the old one is never unmapped, so a reader still in it
 // reads valid memory and retries.
 
-#if OS_macos || (ARCH_x86_64 && LIBC_glibc && !OS_android)
+#if OS_macos || ((ARCH_x86_64 || ARCH_arm64) && LIBC_glibc && !OS_android)
 
 pointer dlsym(pointer handle, u8* name);
 pointer mmap(pointer addr, u64 len, i32 prot, i32 flags, i32 fd, i64 off);

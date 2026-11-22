@@ -1001,7 +1001,7 @@
                 // store writes a different number of elements than it steps.
                 String* sty = Opt.vecOperandTy((IROperand*)n.ops().get((u32)1));
                 if (laneTy != (String*)0 && sty != (String*)0 && self.vecLaneOK(sty)
-                    && self.irWidth(sty) != self.irWidth(laneTy))
+                    && IRType.bytes(sty) != IRType.bytes(laneTy))
                     return (String*)0;
                 sawStore = true;
                 stBases.add((Object*)self.vecElemBase((IROperand*)n.ops().get((u32)0), defOf));
@@ -1015,7 +1015,7 @@
             // lane value.
             if (Opt.vecConvOp(op))
                 {
-                if (!self.vecMapConvOK(n) || laneTy == (String*)0 || self.irWidth(laneTy) != (u32)4)
+                if (!self.vecMapConvOK(n) || laneTy == (String*)0 || IRType.bytes(laneTy) != (u32)4)
                     return (String*)0;
                 if (!hasValue(elems, ((IROperand*)n.ops().get((u32)0)).val()))
                     return (String*)0;
@@ -1067,7 +1067,7 @@
     // end with the lane conversions.
     final bool vecLanesMix(String* a, String* b)
         {
-        return _profile != (OptProfile*)0 && _profile.escapeVec() && self.irWidth(a) == self.irWidth(b);
+        return _profile != (OptProfile*)0 && _profile.escapeVec() && IRType.bytes(a) == IRType.bytes(b);
         }
 
     static bool vecConvOp(u16 op)
@@ -1419,7 +1419,7 @@
         {
         IRBlock* B = _vrB;
         i64 n = _vrN;
-        u32 lw = self.irWidth(lt);
+        u32 lw = IRType.bytes(lt);
         if (lw == (u32)0)
             return (VecCand*)0;
         u32 wvb = self.vectorBytes(); // 16, or 32/64 on an x86-64 clone (bug 644)
@@ -2007,7 +2007,7 @@
         bool isMax = elemLeft ? gtFam : ltFam;
 
         IROperand* seedOp = self.vecEntryOpOf(_mmAccPhi, L);
-        u32 lw = self.irWidth(laneTy);
+        u32 lw = IRType.bytes(laneTy);
         if (lw == (u32)0)
             return (VecCand*)0;
         u32 vb = self.vectorBytes();
@@ -2313,9 +2313,9 @@
             }
         // Fold the lanes up to u32, one pairwise widening at a time.
         String* curLane = c.loadLaneTy();
-        while (irWidth(curLane) < (u32)4)
+        while (IRType.bytes(curLane) < (u32)4)
             {
-            String* nextLane = self.irWidth(curLane) == (u32)1
+            String* nextLane = IRType.bytes(curLane) == (u32)1
                                    ? String.withCString("U16")
                                    : u32t;
             String* wTy = self.vecTyOf(nextLane, c.vecBytes());

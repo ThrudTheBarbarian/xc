@@ -1300,7 +1300,7 @@
         String* laneTy = self.vecClassifyBody(B, iv, ivNext, defOf, defBlk);
         if (laneTy == (String*)0)
             return (VecCand*)0;
-        u32 lw = self.irWidth(laneTy);
+        u32 lw = IRType.bytes(laneTy);
         if (lw == (u32)0)
             return (VecCand*)0;
         u32 vb = self.vectorBytes();
@@ -1501,7 +1501,7 @@
         // add, not a widening one (that shape has its own recogniser).
         if (accNext.res() == (IRValue*)0 || !laneTy.equals(accNext.res().ty()))
             return (VecCand*)0;
-        u32 lw = self.irWidth(laneTy);
+        u32 lw = IRType.bytes(laneTy);
         if (lw == (u32)0)
             return (VecCand*)0;
         u32 vb = self.vectorBytes();
@@ -2281,7 +2281,7 @@
         if (!self.vecCountClean(fn, H, B, L, acc, iv))
             return (VecCand*)0;
 
-        u32 lw = self.irWidth(_vcLaneTy);
+        u32 lw = IRType.bytes(_vcLaneTy);
         if (lw == (u32)0)
             return (VecCand*)0;
         u32 wvb = self.vectorBytes(); // 16, or 32/64 on an x86-64 clone (bug 644)
@@ -2303,10 +2303,10 @@
         // vw came from the LOAD's width (16 lanes for a byte). When the element
         // is narrower than the count, the accumulator keeps its own width and
         // loadLaneTy records the element's, exactly as the widening sum does.
-        if (irWidth(_vcLaneTy) < (u32)4)
+        if (IRType.bytes(_vcLaneTy) < (u32)4)
             {
             String* accTy = acc.ty();
-            if (accTy == (String*)0 || self.irWidth(accTy) != (u32)4)
+            if (accTy == (String*)0 || IRType.bytes(accTy) != (u32)4)
                 return (VecCand*)0;             // only a 32-bit count
             // vecConstWIDE, because dk2 is an i64 and the narrow resolver
             // writes only its low four bytes. The high half then keeps its
@@ -2318,7 +2318,7 @@
             i64 dk2 = (i64)0;
             if (!self.vecConstWide(_vcDelta, defOf, &dk2))
                 return (VecCand*)0;
-            i64 laneMax = self.irWidth(_vcLaneTy) == (u32)1 ? (i64)255 : (i64)65535;
+            i64 laneMax = IRType.bytes(_vcLaneTy) == (u32)1 ? (i64)255 : (i64)65535;
             if (dk2 < (i64)0 || dk2 > laneMax)
                 return (VecCand*)0;             // the delta must fit the lane
             c.setLoadLane(_vcLaneTy);
@@ -2468,9 +2468,9 @@
         // so folding lanes together does not disturb a count.
         IRValue* curInc = vinc;
         String* curLane = elemLane;
-        while (irWidth(curLane) < self.irWidth(c.laneTy()))
+        while (IRType.bytes(curLane) < IRType.bytes(c.laneTy()))
             {
-            String* nextLane = self.irWidth(curLane) == (u32)1
+            String* nextLane = IRType.bytes(curLane) == (u32)1
                                    ? String.withCString("U16")
                                    : String.withCString("U32");
             String* wTy = self.vecTyOf(nextLane, c.vecBytes());

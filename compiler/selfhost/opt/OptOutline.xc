@@ -1149,7 +1149,7 @@
                             size = ((IRLayout*)m.layouts().get(id)).size();
                         }
                     else
-                        size = self.irWidth(gt);
+                        size = IRType.bytes(gt);
                     v = ppEmit(b, String.withCString("Const"), i64t, IROperand.immI((i64)size, i64t), (IROperand*)0, (IROperand*)0);
                     }
                 acc = ppEmit(b, String.withCString("Select"), rt, IROperand.useVal(same), IROperand.useVal(v), IROperand.useVal(acc));
@@ -1191,7 +1191,7 @@
             if (!IRType.isPtr(t))
                 continue;
             u32 comma = t.indexOfByte((u8)',');
-            u32 es = comma == (u32)$FFFFFFFF ? (u32)0 : self.irWidth(t.substringBytes((u32)4, comma - (u32)4));
+            u32 es = comma == (u32)$FFFFFFFF ? (u32)0 : IRType.bytes(t.substringBytes((u32)4, comma - (u32)4));
             if (es == (u32)0)
                 continue;
             if (rec == (IRValue*)0)
@@ -1598,7 +1598,7 @@
     // float; -1 for a type it does not take.
     final i64 ppScanBits(String* ty)
         {
-        u32 w = self.irWidth(ty);
+        u32 w = IRType.bytes(ty);
         i64 lg = w == (u32)1 ? (i64)0 : w == (u32)2 ? (i64)1 : w == (u32)4 ? (i64)2 : w == (u32)8 ? (i64)3 : (i64)-1;
         if (lg < (i64)0)
             return (i64)-1;
@@ -3418,8 +3418,8 @@
     // v as an integer of type `to` (widened by its own signedness, or cut).
     final IRValue* ppConvertTo(IRBlock* b, IRValue* v, String* to)
         {
-        u32 have = self.irWidth(v.ty());
-        u32 want = self.irWidth(to);
+        u32 have = IRType.bytes(v.ty());
+        u32 want = IRType.bytes(to);
         if (have == want)
             {
             if (v.ty().equals(to))
@@ -3443,7 +3443,7 @@
             if (kind == (u8)'F')
                 return ppEmit(b, String.withCString("Const"), ty,
                               IROperand.immF(String.withCString(isMax ? "fff0000000000000" : "7ff0000000000000"), ty), (IROperand*)0, (IROperand*)0);
-            u32 bits = self.irWidth(ty) * (u32)8;
+            u32 bits = IRType.bytes(ty) * (u32)8;
             i64 v = (i64)0;
             if (kind == (u8)'U')
                 v = isMax ? (i64)0 : (i64)0 - (i64)1;
@@ -3644,7 +3644,7 @@
                         es = ((IRLayout*)_ppModule.layouts().get(lid)).size();
                     }
                 else
-                    es = self.irWidth(et);
+                    es = IRType.bytes(et);
                 }
             }
         if (k == (u32)$FFFFFFFF)
@@ -4646,7 +4646,7 @@
     // a pointer (the span the guard keeps clear of the loop's stores).
     final bool ppScalarLoad(String* t)
         {
-        return self.irWidth(t) > 0 || (t != (String*)0 && IRType.isPtr(t));
+        return IRType.bytes(t) > 0 || (t != (String*)0 && IRType.isPtr(t));
         }
 
     // Whether v is a load the memory check took as one from an address the

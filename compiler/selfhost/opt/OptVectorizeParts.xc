@@ -2171,7 +2171,7 @@
             IRInsn* sh = IRInsn.with(String.withCString("AShr"));
             sh.setRes(sv);
             sh.add(tl);
-            sh.add(IROperand.immI((i64)(self.irWidth(ivTy) * (u32)8 - (u32)1),
+            sh.add(IROperand.immI((i64)(IRType.bytes(ivTy) * (u32)8 - (u32)1),
                                   String.withCString("U8")));
             PH.add(sh);
             IRValue* nv = new IRValue(ivTy);

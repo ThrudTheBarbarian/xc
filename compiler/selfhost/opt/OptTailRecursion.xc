@@ -138,7 +138,7 @@
                 continue;
             if (!isCombineOp(cmb.opc()))
                 continue;
-            if (irWidth(cmb.res().ty()) == (u32)0)
+            if (IRType.bytes(cmb.res().ty()) == (u32)0)
                 continue; // integers only
             if (countOf(useCount, valOp.val()) != (u32)1)
                 continue;

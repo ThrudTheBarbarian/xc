@@ -62,14 +62,14 @@
                     continue;
                 IROperand* c = (IROperand*)n.ops().get((u32)1);
                 String* t = c.kind() == (u8)OPK_USE && c.val() != (IRValue*)0 ? c.val().ty() : c.ty();
-                if (!simpIntTy(t) || self.irWidth(t) > (u32)4)
+                if (!simpIntTy(t) || IRType.bytes(t) > (u32)4)
                     continue;
                 if (ule != t.hasPrefix(String.withCString("U")))
                     continue;
                 i64 k = (i64)0;
                 if (!simpConst(c, defOf, repl, &k))
                     continue;
-                u32 bits = self.irWidth(t) * (u32)8;
+                u32 bits = IRType.bytes(t) * (u32)8;
                 i64 kw = (i64)0;
                 i64 top = (i64)0;
                 if (ule)
@@ -123,7 +123,7 @@
                 if (a.kind() != (u8)OPK_USE || a.val() == (IRValue*)0)
                     continue;
                 String* t = a.val().ty();
-                if (!simpIntTy(t) || self.irWidth(t) > (u32)4)
+                if (!simpIntTy(t) || IRType.bytes(t) > (u32)4)
                     continue;
                 i64 k = (i64)0;
                 if (!simpConst((IROperand*)n.ops().get((u32)1), defOf, repl, &k))
@@ -140,7 +140,7 @@
                 IRValue* xv = d0.val();
                 if (!xv.ty().equals(t))
                     continue;
-                u32 bits = self.irWidth(t) * (u32)8;
+                u32 bits = IRType.bytes(t) * (u32)8;
                 i64 wmask = ((i64)1 << (i64)bits) - (i64)1;
                 m = m & wmask;
                 k = k & wmask;
@@ -375,7 +375,7 @@
     // v wrapped to t's width (8 to 32 bits).
     final i64 simpWrap(i64 v, String* t)
         {
-        u32 bits = self.irWidth(t) * (u32)8;
+        u32 bits = IRType.bytes(t) * (u32)8;
         i64 span = (i64)1 << (i64)bits;
         i64 r = v & (span - (i64)1);
         if (t.hasPrefix(String.withCString("I")) && r >= span / (i64)2)
@@ -414,12 +414,12 @@
         if (!zx && !sx && !tr)
             return false;
         String* st = d0.kind() == (u8)OPK_USE && d0.val() != (IRValue*)0 ? d0.val().ty() : d0.ty();
-        if (!simpIntTy(st) || self.irWidth(st) > (u32)4)
+        if (!simpIntTy(st) || IRType.bytes(st) > (u32)4)
             return false;
         i64 k = (i64)0;
         if (!simpConst(d0, defOf, repl, &k))
             return false;
-        u32 sbits = self.irWidth(st) * (u32)8;
+        u32 sbits = IRType.bytes(st) * (u32)8;
         i64 smask = ((i64)1 << (i64)sbits) - (i64)1;
         if (zx)
             out[0] = k & smask;
@@ -476,9 +476,9 @@
             IROperand* a = (IROperand*)n.ops().get((u32)0);
             String* st = a.kind() == (u8)OPK_USE && a.val() != (IRValue*)0 ? a.val().ty() : a.ty();
             i64 k = (i64)0;
-            if (!simpIntTy(st) || self.irWidth(st) > (u32)4 || !simpConst(a, defOf, repl, &k))
+            if (!simpIntTy(st) || IRType.bytes(st) > (u32)4 || !simpConst(a, defOf, repl, &k))
                 return (IRInsn*)0;
-            u32 sbits = self.irWidth(st) * (u32)8;
+            u32 sbits = IRType.bytes(st) * (u32)8;
             i64 smask = ((i64)1 << (i64)sbits) - (i64)1;
             i64 u = k & smask;
             if (si && u >= ((i64)1 << (i64)(sbits - (u32)1)))
@@ -597,7 +597,7 @@
                 IRInsn* n = (IRInsn*)bb.insns().get(i);
                 IRValue* r = n.res();
                 if (r == (IRValue*)0 || n.memRes() != (IRValue*)0 || !n.isOp(opMul)
-                    || n.ops().count() != (u32)2 || !simpIntTy(r.ty()) || self.irWidth(r.ty()) > (u32)4)
+                    || n.ops().count() != (u32)2 || !simpIntTy(r.ty()) || IRType.bytes(r.ty()) > (u32)4)
                     continue;
                 i64 k = (i64)0;
                 IROperand* v = (IROperand*)0;
@@ -650,7 +650,7 @@
                     {
                     IRValue* r = n.res();
                     if (r != (IRValue*)0 && n.memRes() == (IRValue*)0 && n.isOp(opMul)
-                        && n.ops().count() == (u32)2 && simpIntTy(r.ty()) && self.irWidth(r.ty()) <= (u32)4)
+                        && n.ops().count() == (u32)2 && simpIntTy(r.ty()) && IRType.bytes(r.ty()) <= (u32)4)
                         {
                         i64 k = (i64)0;
                         IROperand* v = (IROperand*)0;
@@ -729,7 +729,7 @@
                 // Neg of a constant (`-7`, which arrives as Neg #7), 8 to 32 bits.
                 i64 kn = (i64)0;
                 if (r != (IRValue*)0 && n.memRes() == (IRValue*)0 && n.isOp(opNeg)
-                    && n.ops().count() == (u32)1 && simpIntTy(r.ty()) && self.irWidth(r.ty()) <= (u32)4
+                    && n.ops().count() == (u32)1 && simpIntTy(r.ty()) && IRType.bytes(r.ty()) <= (u32)4
                     && simpConst((IROperand*)n.ops().get((u32)0), defOf, repl, &kn))
                     {
                     IRInsn* kq = IRInsn.with(String.withCString("Const"));
@@ -760,7 +760,7 @@
                 i64 kc = (i64)0;
                 bool ca = simpConst(a, defOf, repl, &ka);
                 bool cc = simpConst(c, defOf, repl, &kc);
-                u32 w = self.irWidth(r.ty());
+                u32 w = IRType.bytes(r.ty());
                 bool small = w <= (u32)4;
                 if (ca && cc && small)
                     {

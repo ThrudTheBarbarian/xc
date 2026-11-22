@@ -61,14 +61,6 @@
         if (IRType.is(t, tyF64)) return self.ptxS("f64");
         return (String*)0;
         }
-    // A type's size in bytes (an aggregate's is its layout's).
-    final u32 ptxSize(String* t)
-        {
-        IRLayout* l = self.mslLayoutOf(t);
-        if (l != (IRLayout*)0) return l.size();
-        if (mslIsPtr(t)) return (u32)8;
-        return self.mslWidth(t);
-        }
     final String* ptxReg(IRValue* v)
         {
         if (_mHelper && _mParams != (Map*)0)
@@ -754,7 +746,7 @@
             }
         if (op == opElementAddr)
             {
-            u32 size = ptxSize(mslPointee(self.mslTypeOf(o0)));
+            u32 size = gpuBytes(mslPointee(self.mslTypeOf(o0)));
             String* base = ptxReg(o0.val());
             IROperand* io = (IROperand*)ip.ops().get((u32)1);
             if (io.kind() == (u8)OPK_IMMI)
@@ -1424,7 +1416,7 @@
             String* et = self.mslPointee(_mObj.typeAt(k));
             if (ptxMem(et) == (String*)0) return (String*)0;
             meta.appendCString(" buf="); meta.append(String.withU32(_mObj.offsetAt(k))); meta.appendCString(":");
-            meta.append(String.withU32(k - (u32)3)); meta.appendCString(":"); meta.append(String.withU32(ptxSize(et)));
+            meta.append(String.withU32(k - (u32)3)); meta.appendCString(":"); meta.append(String.withU32(gpuBytes(et)));
             params.appendCString(", .param .u64 buf_"); params.append(String.withU32(k));
             }
         for (u32 gi = (u32)0; gi < _mGlobals.count(); gi = gi + (u32)1)
@@ -1440,7 +1432,7 @@
             String* fe = self.parWordOf(et);
             if (fe != (String*)0) et = fe;
             if (ptxMem(et) == (String*)0) return (String*)0;
-            meta.appendCString(" glob="); meta.append(gn); meta.appendCString(":"); meta.append(String.withU32(ptxSize(et)));
+            meta.appendCString(" glob="); meta.append(gn); meta.appendCString(":"); meta.append(String.withU32(gpuBytes(et)));
             params.appendCString(", .param .u64 glob_"); params.append(String.withU32(gi));
             }
         if (_parExtraMeta != (String*)0) meta.append(_parExtraMeta);
@@ -1460,12 +1452,12 @@
             String* rt = ptxRegType(t);
             if (m == (String*)0 || rt == (String*)0 || rt.equals(self.ptxS(".pred"))) return (String*)0;
             String* kk = String.withU32(k);
-            meta.appendCString(" red="); meta.append(String.withU32(_mObj.offsetAt(k))); meta.appendCString(":"); meta.append(String.withU32(ptxSize(t)));
+            meta.appendCString(" red="); meta.append(String.withU32(_mObj.offsetAt(k))); meta.appendCString(":"); meta.append(String.withU32(gpuBytes(t)));
             params.appendCString(", .param .u64 red_"); params.append(kk);
             String* tmp = self.ptxS(rt.equals(self.ptxS(".b64")) ? "%y" : rt.equals(self.ptxS(".f32")) ? "%fk" : rt.equals(self.ptxS(".f64")) ? "%dk" : "%k");
             tail.appendCString("\tld.local."); tail.append(m); tail.appendCString(" "); tail.append(tmp); tail.appendCString(", [%stp+");
             tail.append(String.withU32(_mObj.offsetAt(k))); tail.appendCString("];\n\tld.param.u64 %x, [red_"); tail.append(kk);
-            tail.appendCString("];\n\tcvta.to.global.u64 %x, %x;\n\tmad.lo.u64 %x, %tid64, "); tail.append(String.withU32(ptxSize(t)));
+            tail.appendCString("];\n\tcvta.to.global.u64 %x, %x;\n\tmad.lo.u64 %x, %tid64, "); tail.append(String.withU32(gpuBytes(t)));
             tail.appendCString(", %x;\n\tst.global."); tail.append(m); tail.appendCString(" [%x], "); tail.append(tmp); tail.appendCString(";\n");
             // On the device (bug 645): this field's value from every thread of
             // the workgroup, through shared memory, combined in a fixed tree;
@@ -1492,16 +1484,16 @@
                                    tmp.cString());
                 dtail.appendFormat("\tld.param.u64 %%x, [red_%u];\n\tcvta.to.global.u64 %%x, %%x;\n", k);
                 dtail.appendFormat("\tmad.lo.u64 %%x, %%cta64, %u, %%x;\n\tst.global.%s [%%x], %s;\nRN_%u:\n\tbar.sync 0;\n",
-                                   ptxSize(t), m.cString(), tmp.cString(), k);
+                                   gpuBytes(t), m.cString(), tmp.cString(), k);
                 // The last workgroup's fold of this field (the reference
                 // explains; bug 645).
                 ftail.appendFormat("\tld.param.u64 %%x, [red_%u];\n\tcvta.to.global.u64 %%x, %%x;\n", k);
                 ftail.appendFormat("\tsetp.ge.u32 %%pz, %%tx, %%nc;\n\t@%%pz bra FA_%u;\n", k);
                 ftail.appendFormat("\tmul.wide.u32 %%fa, %%tx, %u;\n\tadd.u64 %%fa, %%fa, %%x;\n\tld.global.cg.%s %s, [%%fa];\n",
-                                   ptxSize(t), m.cString(), tmp.cString());
+                                   gpuBytes(t), m.cString(), tmp.cString());
                 ftail.appendFormat("\tadd.u32 %%j, %%tx, 256;\nFL_%u:\n\tsetp.ge.u32 %%pz, %%j, %%nc;\n\t@%%pz bra FS_%u;\n", k, k);
                 ftail.appendFormat("\tmul.wide.u32 %%fa, %%j, %u;\n\tadd.u64 %%fa, %%fa, %%x;\n\tld.global.cg.%s %s, [%%fa];\n",
-                                   ptxSize(t), m.cString(), tmp2.cString());
+                                   gpuBytes(t), m.cString(), tmp2.cString());
                 ftail.append(step);
                 ftail.appendFormat("\tadd.u32 %%j, %%j, 256;\n\tbra.uni FL_%u;\nFS_%u:\n\tst.shared.%s [%%sha], %s;\nFA_%u:\n\tbar.sync 0;\n",
                                    k, k, m.cString(), tmp.cString(), k);
