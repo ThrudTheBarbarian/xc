@@ -2028,12 +2028,6 @@ class LlvmReader
         if (op.equals(String.withCString("phi")))
             {
             eatFastMath();
-            ws();
-            if (peek() == (u8)'{')
-                {
-                readPairPhi(res);
-                return;
-                }
             String* t = irOf(llType());
             IRInsn* phi = IRInsn.with(String.withCString("Phi"));
             IRValue* r = valNamed(res, t);
@@ -2178,7 +2172,7 @@ class LlvmReader
             Array* pair = new Array();
             pair.add((Object*)e);
             pair.add((Object*)sv);
-            aggDefined(res, pair);
+            _aggParams.set((Hashable*)res, (Object*)pair);
             _lastPad = lp;
             // `landingpad { ptr, i32 } cleanup` on one line.
             if (_s.contains(String.withCString(" cleanup")))
@@ -2209,7 +2203,7 @@ class LlvmReader
                 return;
                 }
             pair.set(k, (Object*)v);
-            aggDefined(res, pair);
+            _aggParams.set((Hashable*)res, (Object*)pair);
             return;
             }
         if (_readHandlers && op.equals(String.withCString("resume")))
@@ -2524,77 +2518,6 @@ class LlvmReader
             return;
             }
         llType();
-        }
-
-    // A landing pad's pair (`{ ptr, i32 }`: the exception and its selector)
-    // is read as its two values. One a phi named before it was made (a
-    // pair from a later block, `common.resume.op`) took each part by name,
-    // `<pair>$a0` and `<pair>$a1`: those are its parts' copies.
-    void aggDefined(String* res, Array* pair)
-        {
-        if (res == (String*)0)
-            return;
-        _aggParams.set((Hashable*)res, (Object*)pair);
-        for (u32 k = (u32)0; k < (u32)2 && k < pair.count(); k = k + (u32)1)
-            {
-            String* pn = String.withFormat("%s$a%u", res.cString(), k);
-            IRValue* part = (IRValue*)pair.get(k);
-            if (part != (IRValue*)0 && _vals.get((Hashable*)pn) != (Object*)0)
-                define(pn, String.withCString("Copy"), part.ty(), IROperand.useVal(part), (IROperand*)0, (IROperand*)0, (String*)0);
-            }
-        }
-
-    // `phi { ptr, i32 } [ %a, %b1 ], ...`: a phi of each part.
-    void readPairPhi(String* res)
-        {
-        u32 t0 = _p;
-        aggType();
-        String* ty = _s.substringBytes(t0, _p - t0);
-        if (!ty.equals(String.withCString("{ ptr, i32 }")) || res == (String*)0)
-            {
-            fail("a phi of an aggregate not read");
-            return;
-            }
-        String* pt = String.withCString("Ptr(U8, unbanked)");
-        String* it = String.withCString("I32");
-        IRInsn* p0 = IRInsn.with(String.withCString("Phi"));
-        IRInsn* p1 = IRInsn.with(String.withCString("Phi"));
-        IRValue* r0 = valNamed(String.withFormat("%s$a0", res.cString()), pt);
-        IRValue* r1 = valNamed(String.withFormat("%s$a1", res.cString()), it);
-        p0.setRes(r0);
-        p1.setRes(r1);
-        while (eat("["))
-            {
-            ws();
-            if (peek() != (u8)'%')
-                {
-                fail("a phi of an aggregate not read (a constant)");
-                return;
-                }
-            String* vn = word();
-            eat(",");
-            String* bn = word().substringFromByte((u32)1);
-            eat("]");
-            eat(",");
-            Array* have = (Array*)_aggParams.get((Hashable*)vn);
-            IRValue* v0 = have != (Array*)0 ? (IRValue*)have.get((u32)0) : valNamed(String.withFormat("%s$a0", vn.cString()), pt);
-            IRValue* v1 = have != (Array*)0 ? (IRValue*)have.get((u32)1) : valNamed(String.withFormat("%s$a1", vn.cString()), it);
-            if (v0 == (IRValue*)0 || v1 == (IRValue*)0)
-                {
-                fail("a phi of an aggregate not read (a part not made)");
-                return;
-                }
-            p0.add(IROperand.block(blockNamed(bn)));
-            p0.add(IROperand.useVal(v0));
-            p1.add(IROperand.block(blockNamed(bn)));
-            p1.add(IROperand.useVal(v1));
-            }
-        _blk.addPhi(p0);
-        _blk.addPhi(p1);
-        Array* pair = new Array();
-        pair.add((Object*)r0);
-        pair.add((Object*)r1);
-        _aggParams.set((Hashable*)res, (Object*)pair);
         }
 
     // invoke <ret> @f(args): read as the call it is, which then ends the
