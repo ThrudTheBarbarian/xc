@@ -716,6 +716,39 @@ bool namesRuntime(String* path)
     return false;
 }
 
+// Whether a shared library this link names depends on libRuntime: an xc
+// library. A C or C++ program linking one keeps libRuntime, so the process
+// has one object runtime, not that library's and libRuntimeSupport's (#278).
+bool linksXcLibrary(DriverOptions* d)
+{
+    Array* li = d.linkInputs();
+    for (u32 i = (u32)0; li != (Array*)0 && i < li.count(); i = i + (u32)1) {
+        String* t = (String*)li.get(i);
+        Array* cands = new Array();
+        if (t.hasPrefix(String.withCString("-l"))) {
+            String* stem = t.substringFromByte((u32)2);
+            Array* dirs = new Array();
+            for (u32 k = (u32)0; k < d.fe().libs().count(); k = k + (u32)1) dirs.add(d.fe().libs().get(k));
+            for (u32 k = (u32)0; k < d.ldDirs().count(); k = k + (u32)1) dirs.add(d.ldDirs().get(k));
+            for (u32 k = (u32)0; k < dirs.count(); k = k + (u32)1) {
+                cands.add((Object*)String.withFormat("%s/lib%s.dylib", ((String*)dirs.get(k)).cString(), stem.cString()));
+                cands.add((Object*)String.withFormat("%s/lib%s.so", ((String*)dirs.get(k)).cString(), stem.cString()));
+                cands.add((Object*)String.withFormat("%s/lib%s.dll", ((String*)dirs.get(k)).cString(), stem.cString()));
+            }
+        } else if (t.hasSuffix(String.withCString(".dylib")) || t.hasSuffix(String.withCString(".dll")) || isSharedLib(t)) {
+            cands.add((Object*)t);
+        }
+        for (u32 k = (u32)0; k < cands.count(); k = k + (u32)1) {
+            String* f = (String*)cands.get(k);
+            if (!Files.exists(f)) continue;
+            Data* data = Files.readData(f);
+            if (data != (Data*)0 && String.withBytes(data.bytes(), data.length()).contains(String.withCString("libRuntime.")))
+                return true;
+        }
+    }
+    return false;
+}
+
 // libRuntime (owner, 2026-11-03): the runtime's files, prebuilt per target
 // as one shared library, at <support>/runtime-lib/<row>/libRuntime.<ext>
 // (lib/xc/runtime-lib/... in an install). Building it (--emit-runtime): the
@@ -788,9 +821,10 @@ void resolveRuntimeLib(DriverOptions* d)
     // when the target has one (#278): the runtime and the standard library it
     // uses, so the program compiles only its own code and its lifted loops.
     // Its stub is then read with no platform prelude. An object (-c) keeps
-    // libRuntime, as any other object of the program may.
+    // libRuntime, as any other object of the program may, and so does a
+    // program that links an xc library (linksXcLibrary).
     bool support = !d.compileOnly() && d.fe().input() != (String*)0
-                   && Languages.forFile(d.fe().input()) != (LanguageRow*)0;
+                   && Languages.forFile(d.fe().input()) != (LanguageRow*)0 && !linksXcLibrary(d);
     for (u32 pass = (u32)0; pass < (u32)2; pass = pass + (u32)1) {
     if (pass == (u32)0 && !support) continue;
     for (u32 i = (u32)0; exts != (Array*)0 && i < exts.count(); i = i + (u32)1) {
