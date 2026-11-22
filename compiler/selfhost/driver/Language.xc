@@ -2406,20 +2406,17 @@ class Languages
                 pre.appendFormat("  %s.b%u = getelementptr inbounds %s, ptr %s, i64 %s.negn\n", tag.cString(), k,
                                  q.elem().cString(), q.start().cString(), tag.cString());
                 }
-            // Each pointer's value when the loop ends (start + n*S, or the
-            // base for one that steps down), for a use past the exit (an
-            // extracted loop handing back std::copy's end iterator).
+            // Each pointer's value when the loop ends, start + n*S bytes (the
+            // base, for one that steps down), for a use past the exit (an
+            // extracted loop handing back std::copy's end iterator, or the
+            // end of a vector's elements moved on growth). In bytes, so a
+            // struct element (whose literal type the reader does not take)
+            // has one too.
             for (u32 k = 0; k < allQ.count(); k = k + 1)
                 {
                 PtrIv* q = (PtrIv*)allQ.get(k);
-                if (q.elem().hasPrefix(String.withCString("<{")))
-                    continue;
-                if (q.step() < 0)
-                    pre.appendFormat("  %s.f%u = getelementptr inbounds %s, ptr %s.b%u, i64 0\n", tag.cString(), k,
-                                     q.elem().cString(), tag.cString(), k);
-                else
-                    pre.appendFormat("  %s.f%u = getelementptr inbounds %s, ptr %s, i64 %s\n", tag.cString(), k,
-                                     q.elem().cString(), q.start().cString(), cnt.cString());
+                pre.appendFormat("  %s.m%u = mul i64 %s, %ld\n  %s.f%u = getelementptr inbounds i8, ptr %s, i64 %s.m%u\n",
+                                 tag.cString(), k, cnt.cString(), q.step(), tag.cString(), k, q.start().cString(), tag.cString(), k);
                 }
             lines.set(preBr, (Object*)pre.appending((String*)lines.get(preBr)));
             // The header: the counter's phi, then each pointer as [i].
@@ -2438,8 +2435,7 @@ class Languages
                 for (u32 k = 0; k < allQ.count(); k = k + 1)
                     {
                     PtrIv* q = (PtrIv*)allQ.get(k);
-                    if (!q.elem().hasPrefix(String.withCString("<{")))
-                        fin.set((Hashable*)q.name(), (Object*)String.withFormat("%s.f%u", tag.cString(), k));
+                    fin.set((Hashable*)q.name(), (Object*)String.withFormat("%s.f%u", tag.cString(), k));
                     }
                 for (u32 k = exitAt + 1; k < end; k = k + 1)
                     {
