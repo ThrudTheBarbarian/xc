@@ -4460,8 +4460,10 @@ void mergeElfLinkObjects(DriverOptions* d, SectionBytes* mtext, SectionBytes* md
     // object redirect reaches) and its objects', and the executable exports
     // free, realloc and malloc_usable_size as the heap's, so its libraries'
     // calls reach them.
+    // (The split link of a C program brings xcc's half as an object, which
+    // cAllocFor reads; a build from source has it in this model.)
     bool heap = !d.emitLib() && d.targetRow() != (TargetRow*)0 && d.targetRow().os().equals(String.withCString("linux"))
-                && msyms.get((Hashable*)String.withCString("_xc_malloc")) != (Object*)0;
+                && (msyms.get((Hashable*)String.withCString("_xc_malloc")) != (Object*)0 || cAllocFor(d, false));
     Map* redirect = heap ? cAllocRedirects(false) : (Map*)0;
     if (heap) {
         for (u32 i = (u32)0; i < mfix.count(); i = i + (u32)1) {
@@ -4598,7 +4600,7 @@ void linkObjectsArm64Elf(DriverOptions* d)
     w.setRunpath(arm64ElfRunpath(d, lrow));
     if (lrow.os().equals(String.withCString("linux")))
         w.setKnownImports(arm64KnownImports(d));
-    w.image(as.textBytes(), aData, as.symbols(), as.dataSyms(), new Array(), aFix, (String*)0,
+    w.image(as.textBytes(), aData, as.symbols(), as.dataSyms(), gArm64CExports != (Array*)0 ? gArm64CExports : new Array(), aFix, (String*)0,
             androidNeededWithImports(d, baseNeeded.cString()), String.withCString("_start"), aMi);
     if (w.failed()) {
         Stdio.printf("xcc: %s link failed: %s\n", lrow.name().cString(), w.why().cString());
