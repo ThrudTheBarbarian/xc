@@ -10956,8 +10956,6 @@ class Arm64
         }
     }
 
-    // Deepest loop use first, then static use count. Insertion sort: the
-    // candidate lists are register-pool sized in practice.
     // Loop depth first, then use count, both descending; ties keep their
     // order. Each value's key is read once (#335): comparing through the
     // maps cost four lookups per comparison.
@@ -10970,18 +10968,42 @@ class Arm64
             IRValue* v = (IRValue*)a.get(i);
             key[i] = ((u64)hotDepthOf(v) << (u64)32) | (u64)useCount(v);
         }
-        for (u32 i = (u32)1; i < n; i = i + (u32)1) {
-            Object* v = a.get(i);
-            u64 k = key[i];
-            u32 j = i;
-            while (j > (u32)0 && k > key[j - (u32)1]) {
-                a.set(j, a.get(j - (u32)1));
-                key[j] = key[j - (u32)1];
-                j = j - (u32)1;
+        // A bottom-up merge sort of the indices (#335; was an insertion
+        // sort): the right run's element goes first only when its key is
+        // strictly greater, so ties keep their order.
+        u32* src = new u32[n];
+        u32* dst = new u32[n];
+        for (u32 i = 0; i < n; i = i + 1)
+            src[i] = i;
+        u32 width = 1;
+        while (width < n) {
+            u32 lo = 0;
+            while (lo < n) {
+                u32 mid = lo + width < n ? lo + width : n;
+                u32 hi = mid + width < n ? mid + width : n;
+                u32 x = lo;
+                u32 y = mid;
+                for (u32 k = lo; k < hi; k = k + 1) {
+                    if (x >= mid || (y < hi && key[src[y]] > key[src[x]])) {
+                        dst[k] = src[y];
+                        y = y + 1;
+                    } else {
+                        dst[k] = src[x];
+                        x = x + 1;
+                    }
+                }
+                lo = hi;
             }
-            a.set(j, v);
-            key[j] = k;
+            u32* t = src; src = dst; dst = t;
+            width = width + width;
         }
+        Array* orig = new Array();
+        for (u32 i = 0; i < n; i = i + 1)
+            orig.add(a.get(i));
+        for (u32 i = 0; i < n; i = i + 1)
+            a.set(i, orig.get(src[i]));
+        delete src;
+        delete dst;
         delete key;
     }
 
@@ -11986,21 +12008,6 @@ class Arm64
         if (_slot.get((Hashable*)v) != (Object*)0) return;
         if (hasVal(into, v)) return;
         into.add((Object*)v);
-    }
-
-    // Insertion sort on the creation sequence.
-    static void sortBySeq(Array* a)
-    {
-        for (u32 i = (u32)1; i < a.count(); i = i + (u32)1) {
-            Object* cur = a.get(i);
-            u32 ck = ((IRValue*)cur).seq();
-            u32 j = i;
-            while (j > (u32)0 && ((IRValue*)a.get(j - (u32)1)).seq() > ck) {
-                a.set(j, a.get(j - (u32)1));
-                j = j - (u32)1;
-            }
-            a.set(j, cur);
-        }
     }
 
     u32 slotsFor(Array* vals, u32 cur)

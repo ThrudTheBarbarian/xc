@@ -36,8 +36,15 @@
             blFunc((IRFunc*)m.funcs().get(f));
         }
 
+    // b's index in orig, or orig's count when it is not there. blFunc numbers
+    // the blocks (IRBlock.setBix) before asking, so this is one check where
+    // it was a scan per edge (#335); the scan stays for a block it did not
+    // number.
     final u32 blIndexOf(Array* orig, IRBlock* b)
         {
+        u32 at = b == (IRBlock*)0 ? orig.count() : b.bix();
+        if (at < orig.count() && (IRBlock*)orig.get(at) == b)
+            return at;
         for (u32 i = (u32)0; i < orig.count(); i = i + (u32)1)
             if ((IRBlock*)orig.get(i) == b)
                 return i;
@@ -53,6 +60,10 @@
         Array* orig = new Array();
         for (u32 i = (u32)0; i < n; i = i + (u32)1)
             orig.add(fn.blocks().get(i));
+        // Numbered last to first, so a block listed twice answers its first
+        // place, as the scan did.
+        for (u32 i = n; i > 0; i = i - 1)
+            ((IRBlock*)orig.get(i - 1)).setBix(i - 1);
 
         // Predecessors, by index.
         Array* preds = new Array();

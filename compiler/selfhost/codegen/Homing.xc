@@ -979,9 +979,9 @@ class BitSet
             }
         }
 
-    // The same insertion sort and the same order as before, on keys
-    // read once per value (#331): the comparator (keyLess, below) read three
-    // boxed arrays and a map for both sides of every comparison.
+    // Stable, in the order the insertion sort gave, on keys read once per
+    // value (#331): the comparator (keyLess, below) read three boxed arrays
+    // and a map for both sides of every comparison.
     void sortByUses(Array* a)
         {
         u32 n = a.count();
@@ -998,20 +998,50 @@ class BitSet
             Object* r = _rank.get((Hashable*)v);
             rk[i] = r == (Object*)0 ? v.asU32() + (u32)1000000 : ((Number*)r).asU32();
             }
-        for (u32 i = (u32)1; i < n; i = i + (u32)1)
+        // A bottom-up merge sort of the indices (#335): it takes from the
+        // right run only when that element is strictly less, so equal keys
+        // keep the order the insertion sort it replaces left them in.
+        u32* src = new u32[n];
+        u32* dst = new u32[n];
+        for (u32 i = 0; i < n; i = i + 1)
+            src[i] = i;
+        u32 width = 1;
+        while (width < n)
             {
-            u32 j = i;
-            while (j > (u32)0 && keyLess(wt[j], ln[j], rk[j], wt[j - (u32)1], ln[j - (u32)1], rk[j - (u32)1]))
+            u32 lo = 0;
+            while (lo < n)
                 {
-                Object* t = a.get(j - (u32)1);
-                a.set(j - (u32)1, a.get(j));
-                a.set(j, t);
-                u64 tw = wt[j - (u32)1]; wt[j - (u32)1] = wt[j]; wt[j] = tw;
-                u64 tl = ln[j - (u32)1]; ln[j - (u32)1] = ln[j]; ln[j] = tl;
-                u32 tr = rk[j - (u32)1]; rk[j - (u32)1] = rk[j]; rk[j] = tr;
-                j = j - (u32)1;
+                u32 mid = lo + width < n ? lo + width : n;
+                u32 hi = mid + width < n ? mid + width : n;
+                u32 x = lo;
+                u32 y = mid;
+                for (u32 k = lo; k < hi; k = k + 1)
+                    {
+                    bool takeY = x >= mid
+                        || (y < hi && keyLess(wt[src[y]], ln[src[y]], rk[src[y]], wt[src[x]], ln[src[x]], rk[src[x]]));
+                    if (takeY)
+                        {
+                        dst[k] = src[y];
+                        y = y + 1;
+                        }
+                    else
+                        {
+                        dst[k] = src[x];
+                        x = x + 1;
+                        }
+                    }
+                lo = hi;
                 }
+            u32* t = src; src = dst; dst = t;
+            width = width + width;
             }
+        Array* orig = new Array();
+        for (u32 i = 0; i < n; i = i + 1)
+            orig.add(a.get(i));
+        for (u32 i = 0; i < n; i = i + 1)
+            a.set(i, orig.get(src[i]));
+        delete src;
+        delete dst;
         delete wt;
         delete ln;
         delete rk;
