@@ -74,5 +74,13 @@ for src in tests/fixtures/*.xc; do
     esac
 done
 echo "    identical=$p differs=$d unsupported=$u oracle-failed=$o"
+# Zero fixtures compiled is not a pass: without an arm9 sysroot (XTC_ARM9_SYSROOT
+# or -L, the loader build with libc.so) the standard library does not compile,
+# every `-S` fails, and this half used to compare nothing and still report
+# ALL IDENTICAL.
+if [ "$n" -eq 0 ]; then
+    echo "!!! no fixture compiled for arm9 — set XTC_ARM9_SYSROOT to the loader build; the corpus was NOT checked"
+    fail=1
+fi
 echo "--- asm-arm32: $([ $fail -eq 0 ] && echo ALL IDENTICAL || echo FAILURES) ---"
 exit $fail
