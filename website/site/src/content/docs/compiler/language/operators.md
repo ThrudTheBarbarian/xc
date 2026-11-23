@@ -144,6 +144,8 @@ Operators work on every target.
 | Bitwise and shift | `& \| ^ << >>` |
 | Rotate | `<: :>` |
 | Relational | `< <= > >=` |
+| Index | `self[i]` (get), `self[i] = v` (set), several indices `self[i, j]`, a range `self[lo..hi]` or `self[lo...hi]` |
+| Compound assignment | `+= -= *= /= %= &= \|= ^= <<= >>= <:= :>=` |
 
 A relational operator returns whatever its method returns, so a class can
 return a mask or a flag object rather than a `bool`.
@@ -151,8 +153,7 @@ return a mask or a flag object rather than a `bool`.
 These operators keep their fixed meaning and cannot be defined: `&&`, `||`,
 `? :`, `=`, `.`, `->`, prefix `&` and `*`, `,`, calls, the byte-extract
 prefixes, `++` and `--`. `==` and `!=` compare identity on objects; value
-equality is the `equals` method. Index operators (`self[i]`) and compound
-assignment (`self += o`) cannot be defined yet.
+equality is the `equals` method.
 
 Precedence and associativity are the built-in ones. Defining `*` does not
 change how `a + b * c` groups.
@@ -164,7 +165,10 @@ change how `a + b * c` groups.
   parameter appears.
 - An instance method's pattern uses `self`. A static method's pattern does not,
   and one of its parameters is of its own class (or a subclass).
-- The method returns one value. It takes no `...`.
+- The method returns one value, except an index set and a compound assignment,
+  which are statements and return `void`. It takes no `...`.
+- An index or compound-assignment pattern applies its operator to `self`:
+  `self[i]`, `self[i] = v`, `self += o`.
 - Operators are methods: a free function or a protocol method cannot carry
   `:operator`.
 
@@ -199,6 +203,62 @@ error: 'Vec2' has no '+' taking 'i32'
 
 It keeps the built-in meaning of the operators it does not define, so its
 pointers still compare with `<` unless it defines `<` too.
+
+### Index operators
+
+`:operator(self[i])` makes `v[i]` a call of the method, and
+`:operator(self[i] = x)` makes `v[i] = x` one. A pattern may take several
+indices, `self[r, c]`, and is then written `m[r, c]`.
+
+```c
+class Matrix
+    {
+    float cells[9];
+    float at(i32 r, i32 c) :operator(self[r, c]) { return cells[r * 3 + c]; }
+    void put(i32 r, i32 c, float x) :operator(self[r, c] = x) { cells[r * 3 + c] = x; }
+    }
+
+m[0, 2] = 2.5;          // m.put(0, 2, 2.5)
+float d = m[1, 1];      // m.at(1, 1)
+m[1, 1] += 1.5;         // m.put(1, 1, m.at(1, 1) + 1.5)
+```
+
+A range index, `self[lo..hi]` or `self[lo...hi]`, takes the two bounds as two
+parameters, so `s[2..5]` is a call with 2 and 5. `..` and `...` are separate
+operators: a class decides what each one means. Both bounds are needed. A range
+index has a set form too, `self[lo..hi] = x`.
+
+`v[i] op= x` reads with the get, applies `op` (the built-in one at the element's
+type, or the element class's operator) and writes with the set. The base and the
+indices are evaluated once each, in source order, before the get: in
+`f()[g()] += h()`, `f`, `g` and `h` each run once, in that order.
+
+In `g[i][j] = v` the get reads `g[i]`, and the set assigns `[j] = v` on what it
+returned. Reading `g[i][j]` is a get and then a get. A get that returns a
+built-in pointer is indexed the built-in way, and an element of a built-in array
+of objects is indexed with its class's operator.
+
+A class that defines any index operator, or inherits one, gives up the built-in
+index for its pointers: `p[i]` on it is an operator, and an index no operator
+takes is an error. A class without index operators keeps C's pointer indexing.
+Several indices are accepted only by an index operator.
+
+An element read through an index operator is a call's result, so `&v[i]`,
+`v[i]++` and `--v[i]` are errors. `for … in` cannot iterate a range index made by
+an operator; assign it to a variable first.
+
+### Compound assignment
+
+`:operator(self += o)` defines `+=` in place: `a += b` is a call of the method.
+When a class defines `+` and no `+=` that takes `b`, `a += b` is `a = a + b`: the
+result of `+` is assigned to `a`, the old value is released, and whatever the
+address of `a` is computed from is evaluated once. For a class returned by value,
+it is a by-value assignment.
+
+The built-in compound assignment applies when the class defines neither `+=` nor
+`+`, so `p += 1` still steps a pointer. A class that defines operators gets no
+`p += q` of two pointers: that is an error. A compound operator cannot assign
+through a property's setter; write the assignment out.
 
 ### Results and memory
 

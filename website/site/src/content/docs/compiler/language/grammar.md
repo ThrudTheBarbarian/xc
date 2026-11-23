@@ -170,6 +170,14 @@ annotation      ::= 'banked' | 'main' | 'shadow'
 
 operator-pattern ::= IDENT binary-op IDENT
                   | prefix-op IDENT
+                  | IDENT compound-op IDENT
+                  | IDENT '[' index-names ']' ('=' IDENT)?
+
+index-names     ::= IDENT (',' IDENT)*
+                  | IDENT ('..' | '...') IDENT
+
+compound-op     ::= '+=' | '-=' | '*=' | '/=' | '%=' | '&=' | '|=' | '^='
+                  | '<<=' | '>>=' | '<:=' | ':>='
 
 binary-op       ::= '+' | '-' | '*' | '/' | '%' | '&' | '|' | '^'
                   | '<<' | '>>' | '<:' | ':>' | '<' | '<=' | '>' | '>='
@@ -363,7 +371,8 @@ unary           ::= ('~' | '!' | '-' | '+' | '*' | '&' | '++' | '--') unary
 postfix         ::= primary postfix-op*
 
 postfix-op      ::= '++' | '--'
-                  | '[' expr ']'
+                  | '[' expr (',' expr)* ']'          // several: an index operator
+                  | '[' expr? ('..' | '...') expr? ']'
                   | '.' IDENT
                   | '->' IDENT
                   | '(' arg-list ')'
