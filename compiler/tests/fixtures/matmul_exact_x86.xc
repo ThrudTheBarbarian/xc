@@ -4,7 +4,10 @@
 // zeros and denormals. On x86-64 the matrix kernel does the work at whichever
 // vector tier the machine picks (idiom-matmul); the results must be the loop's,
 // bit for bit, at every tier, which the hashes pin. A NaN input sends the kernel
-// back to the loop, so the NaN keeps its payload (nanCase).
+// back to the loop, so the NaN keeps its payload (nanCase): exactly, where one
+// NaN reaches the result; where two meet, IEEE 754 leaves open whose payload
+// wins (it follows operand order, which code generation may commute), so
+// there the result need only be a quiet NaN.
 #import "Stdio.xc"
 void gemm32(float* a, float* b, float* c, u32 m, u32 n, u32 kk, u32 lda, u32 ldb, u32 ldc)
     {
@@ -60,6 +63,10 @@ u64 bits64(u32* st)
     u64 m = ((u64)rng(st) << (u64)32 | (u64)rng(st)) & (u64)$800FFFFFFFFFFFFF;
     return m | (e << (u64)52);
     }
+bool quietNaN(u32 x)
+    {
+    return (x & (u32)$7FC00000) == (u32)$7FC00000;
+    }
 void nanCase(void)
     {
     float* a = new float[4]; float* b = new float[4]; float* c = new float[4];
@@ -68,8 +75,12 @@ void nanCase(void)
     ab[0] = (u32)$7FC01234; ab[1] = (u32)$3F800000; ab[2] = (u32)$40000000; ab[3] = (u32)$40400000;
     bb[0] = (u32)$3F800000; bb[1] = (u32)$7FC0BEEF; bb[2] = (u32)$40000000; bb[3] = (u32)$FFC05555;
     gemm32(a, b, c, (u32)2, (u32)2, (u32)2, (u32)2, (u32)2, (u32)2);
-    Stdio.printf("%08x %08x %08x %08x\n", cb[0], cb[1], cb[2], cb[3]);
+    // c[0][0]: one NaN (a0). c[0][1] = a0*b1 + a1*b3 and c[1][1] = a2*b1 + a3*b3:
+    // two or three NaNs meet. c[1][0] = 2 + 6.
+    Stdio.printf("%08x %s %08x %s\n", cb[0], quietNaN(cb[1]) ? "qnan" : "not-qnan",
+                 cb[2], quietNaN(cb[3]) ? "qnan" : "not-qnan");
     }
+
 
 i32 main(i32 argc, u8** argv)
     {

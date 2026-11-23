@@ -36,8 +36,12 @@ ONLY="${1:-}"   # optional: substring filter for a partial run
 applies() {
   local f="$1" na tgt
   case "$(basename "$f")" in gfx*) return 1;; esac         # gfx → GEM/SDL3 later
+  # The n/a targets are the list before the dash; after it is a comment, which
+  # may name x86-64 without meaning it. A fixture n/a on arm64 alone still
+  # applies here: the x86-64 fixtures are exactly those.
   na="$(grep -hE '//[ ]*xtc-na:' "$f" | head -1)"
-  [ -n "$na" ] && echo "$na" | grep -qE '\b(arm64|x86_64|x86-64)\b' && return 1
+  na="${na#*xtc-na:}"; na="${na%%—*}"
+  [ -n "$na" ] && echo ",$na," | tr ' ' ',' | grep -qE ',(x86_64|x86-64),' && return 1
   grep -qiE '//[ ]*xtc-flags:.*\bskip\b'   "$f" && return 1
   grep -qiE '//[ ]*xtc-flags:.*expect=sema' "$f" && return 1
   if grep -qE '//[ ]*xtc-flags:.*target=' "$f"; then       # X-only → x86-64 iff X=arm64
