@@ -430,6 +430,9 @@ same "-fbounds-check=light" $A -fbounds-check=light -o @OUT@ ret.xc
 same "-fbounds-check (-A atarist)"       -q -A atarist -fbounds-check -o @OUT@.s ret.xc
 same "-fbounds-check=light (-A atarist)" -q -A atarist -fbounds-check=light -o @OUT@.s ret.xc
 same "-fbounds-check (-A 6502, refused)" -q -A 6502 -fbounds-check -o @OUT@ ret.xc
+# =light builds there, reporting without write() (#621).
+same "-fbounds-check=light (-A 6502)"   -q -A 6502 -fbounds-check=light -o @OUT@.s ret.xc
+same "-fbounds-check=light (-A wasm32)" -q -A wasm32 -fbounds-check=light -o @OUT@ ret.xc
 for v in never auto always bogus; do same "-fauto-cloak=$v" $A -fauto-cloak=$v -o @OUT@ ret.xc; done
 same "-farc"                $A -farc -o @OUT@ ret.xc
 same "-farc=off"            $A -farc=off -o @OUT@ ret.xc
