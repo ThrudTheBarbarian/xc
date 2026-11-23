@@ -3,9 +3,10 @@
 #
 #   bash tests/crossmod/operators.sh
 #
-# opobj.xc defines a class with `:operator(pattern)` methods and is compiled
-# with -c; opmain.xc imports its interface and uses the operators. The pattern
-# travels in the interface, so the program resolves `a + b` to the method as
+# opobj.xc defines classes with `:operator(pattern)` methods (arithmetic,
+# compound and index operators) and is compiled with -c; opmain.xc imports its
+# interface and uses the operators. The pattern travels in the interface, so
+# the program resolves `a + b`, `a += b` and `l[r, c] = x` to the methods as
 # the defining module would. Each half is built by both compilers, every
 # pairing is linked and run, and the two compilers' objects, interfaces and
 # programs are compared byte for byte. arm64 (this host) only.
@@ -20,7 +21,7 @@ if [ "$(uname -s)" != Darwin ] || [ "$(uname -m)" != arm64 ]; then
     echo "SKIP  operators.sh runs on an arm64 macOS host"
     exit 0
 fi
-WANT=$'sum 175\nneg -150\nscaled 75'
+WANT=$'sum 175\nneg -150\nscaled 75\ncompound 175\nindex 5 10 15'
 fail=0
 bad() { echo "FAIL  $*"; fail=$((fail+1)); }
 for O in xcc xcc-xc; do
