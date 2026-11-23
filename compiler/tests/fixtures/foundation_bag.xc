@@ -98,8 +98,9 @@ i32 main(void)
 
     // Many distinct members: past what a u16 index reaches on the 32-bit
     // machines; on the 6502, whose Foundation indexes with u16 and whose heap
-    // is a few banks, a few hundred.
-#if ARCH_6502
+    // is a few banks, a few hundred. The Atari ST's array count is 16 bits too
+    // (and its RAM 4 MB), so it takes the small case.
+#if ARCH_6502 || ARCH_m68k
     u32 big = (u32)300;
 #else
     u32 big = (u32)70000;
