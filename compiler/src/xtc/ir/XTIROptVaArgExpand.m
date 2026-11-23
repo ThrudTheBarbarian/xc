@@ -195,11 +195,16 @@ static XTIROperand* U(XTIRValue* v)
         if (resT.pointeeType.byteWidth > 0)
             advance = resT.pointeeType.byteWidth;
         }
-    else if (XTIRTypeKindIsInteger(resT.kind) && resT.byteWidth < 2)
+    else if ((XTIRTypeKindIsInteger(resT.kind) || resT.kind == XTIRTypeKindBool)
+             && resT.byteWidth < self.profile.intBytes)
         {
-        // Packer widened narrow ints to 2 bytes — read wide, truncate.
+        // The packer promoted a narrow int to `int` (2 bytes on the 6502, 4
+        // elsewhere): read it at that width and truncate. Reading the narrow
+        // width at the slot's start takes the HIGH half on a big-endian target.
         BOOL sgn = XTIRTypeKindIsSigned(resT.kind);
-        XTIRType* wide = sgn ? [XTIRType i16Type] : [XTIRType u16Type];
+        BOOL int16 = self.profile.intBytes == 2;
+        XTIRType* wide = int16 ? (sgn ? [XTIRType i16Type] : [XTIRType u16Type])
+                               : (sgn ? [XTIRType i32Type] : [XTIRType u32Type]);
         XTIRValue* wv = [self fresh:wide];
         XTIRValue* m2 = [self fresh:memTy];
         [self push:XTIROpLoad result:wv operands:@[ U(slotPtr), U(m1) ] memOut:m2];

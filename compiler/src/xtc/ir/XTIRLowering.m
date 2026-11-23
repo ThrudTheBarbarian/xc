@@ -10046,13 +10046,23 @@ static const NSUInteger kVarargSlotBytes = 8;
         // — 0xBE01 on a little-endian target whose slot still held 0xBEEF,
         // and a plain 256 on big-endian m68k, where the live byte IS the
         // high half of the 16 bits `%d` reads.
+        //
+        // C's default promotion, to `int` itself: the callee reads every
+        // integer conversion (`%d`, `%u`, `%x`, `%c`) as exactly an int — 16
+        // bits on the banked 6502, 32 elsewhere. Widening only to 16 bits left
+        // a u16's upper half to whatever an earlier call had put in the slot,
+        // which a format the caller could not check (a forwarded `...`) read.
         XTIRValue* toStore = args[i];
         XTIRType* vt = toStore.type;
-        BOOL narrowInt = vt && vt.byteWidth < 2 && (XTIRTypeKindIsInteger(vt.kind) || vt.kind == XTIRTypeKindBool);
+        // The target's pointer width, from its row (3 only on the 6502): a
+        // `u8*` is two bytes there when it is unbanked, so its size cannot say.
+        NSUInteger intW = [XTPointerType heapPointerWidth] == 3 ? 2 : 4;
+        BOOL narrowInt = vt && vt.byteWidth < intW && (XTIRTypeKindIsInteger(vt.kind) || vt.kind == XTIRTypeKindBool);
         if (narrowInt)
             {
             BOOL sgn = XTIRTypeKindIsSigned(vt.kind);
-            XTIRType* promoted = sgn ? [XTIRType i16Type] : [XTIRType u16Type];
+            XTIRType* promoted = intW == 2 ? (sgn ? [XTIRType i16Type] : [XTIRType u16Type])
+                                           : (sgn ? [XTIRType i32Type] : [XTIRType u32Type]);
             XTIRValue* cv = [self emitInsnOpcode:(sgn ? XTIROpSExt : XTIROpZExt)
                                           result:promoted
                                         operands:@[ [XTIROperand useWithValueId:toStore.valueId] ]];

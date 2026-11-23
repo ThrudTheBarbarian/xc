@@ -12226,10 +12226,21 @@ class ClassInfo
             IRValue* slot = byteSlotAddr(bufPtr, byteOff, u8Ptr);
             IRValue* v = (IRValue*)args.get(i);
             String* vt = v.ty();
-            if (irWidth(vt) < 2 && (IRType.is(vt, tyU8) || IRType.is(vt, tyI8) || IRType.is(vt, tyBool)))
+            // C's default promotion: an integer narrower than `int` widens to
+            // `int` before it is packed, because the callee reads every integer
+            // conversion (`%d`, `%u`, `%x`, `%c`) as exactly an int — 16 bits on
+            // the banked 6502, 32 elsewhere. Widening only to 16 bits left a
+            // u16's upper half to whatever an earlier call had put in the slot:
+            // a format the caller could not check (a forwarded `...`) printed
+            // a (u16)7 as -65529 on x86-64 and as 458974 on big-endian m68k.
+            u32 intW = _ptrW == (u32)3 ? (u32)2 : (u32)4;
+            bool narrowInt = IRType.is(vt, tyU8) || IRType.is(vt, tyI8) || IRType.is(vt, tyBool)
+                             || IRType.is(vt, tyU16) || IRType.is(vt, tyI16);
+            if (narrowInt && irWidth(vt) < intW)
                 {
-                bool sgn = IRType.is(vt, tyI8);
-                String* wide = sgn ? String.withCString("I16") : String.withCString("U16");
+                bool sgn = IRType.is(vt, tyI8) || IRType.is(vt, tyI16);
+                String* wide = intW == (u32)2 ? (sgn ? String.withCString("I16") : String.withCString("U16"))
+                                              : (sgn ? String.withCString("I32") : String.withCString("U32"));
                 Array* wops = new Array();
                 wops.add((Object*)IROperand.useVal(v));
                 v = emit(String.withCString(sgn ? "SExt" : "ZExt"), wide, wops);

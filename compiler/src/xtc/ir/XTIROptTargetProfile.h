@@ -73,6 +73,13 @@ NS_ASSUME_NONNULL_BEGIN
 // leaving the ops for the backend. NO elsewhere → the pack-buffer expansion runs.
 - (BOOL)usesNativeVarargs;
 
+// The width of C's `int` in bytes: what a narrow vararg is promoted to in the
+// pack buffer, and so the width XTIROptVaArgExpand reads a narrow va_arg at.
+// 2 on the 6502, 4 elsewhere. A profile property, not the type system's
+// pointer width: this pass runs in the code generator, where the front end's
+// width settings were never made.
+- (NSUInteger)intBytes;
+
 // YES to hoist & dedup loop-invariant global-symbol addresses (`AddrOf @sym`)
 // to the function entry, so a global accessed across several loops computes its
 // base once (homed in a register) instead of re-materialising adrp/add per

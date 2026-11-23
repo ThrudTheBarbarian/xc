@@ -1,0 +1,5 @@
+big -1
+small 7
+u8 200 char A i8 -3 i16 -300
+bool 1
+sum 42999

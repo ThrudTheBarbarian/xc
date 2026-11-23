@@ -164,6 +164,7 @@ class OptProfile
     bool _layoutHotPath;   // blocks ordered so the expected branch falls through
     bool _narrowIV;        // a counted IV is recomputed at its smallest width
     bool _ptr64;           // pointers are 8 bytes and threads exist (arm64, x86-64, win64): IR outlining runs blocks in parallel
+    u32 _intBytes;         // C's `int`: 2 on the 6502, 4 elsewhere (what a vararg is promoted to)
     // Bytes in one vector register the vectoriser may use: 16 (SSE2 / NEON /
     // simd128) or 32 (AVX2, -mavx2). The lane count, remainder loop and unroll
     // factor key off it (SIMD step 1, S2); set from the driver's vector level.
@@ -184,6 +185,7 @@ class OptProfile
 
     void init(void)
         {
+        _intBytes = (u32)4;
         _vectorLaneBytes = (u32)16;
         _simdDispatch = false;
         _matMulPrefix = (String*)0;
@@ -254,6 +256,10 @@ class OptProfile
         {
         return _ptr64;
         }
+    u32 intBytes(void)
+        {
+        return _intBytes;
+        }
     static OptProfile* forTarget(String* t)
         {
         OptProfile* p = new OptProfile();
@@ -284,6 +290,7 @@ class OptProfile
         p._inlineAggParams = wide || wasm;
         p._initGuardElim = true;
         p._ptr64 = wide;
+        p._intBytes = xt ? (u32)2 : (u32)4;
         // The 6502 and the 68000 backends do not lower MemSet, so the idiom
         // stays a loop there.
         // arm9 leaves the reduction collapse OFF: its trip-1 rewrite and

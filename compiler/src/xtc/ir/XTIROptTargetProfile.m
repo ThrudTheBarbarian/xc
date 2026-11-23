@@ -87,6 +87,10 @@
     {
     return NO;
     }
+- (NSUInteger)intBytes
+    {
+    return 4;
+    }
 - (BOOL)hoistsGlobalAddr
     {
     return NO;
@@ -393,6 +397,10 @@
 @end
 
 @implementation XTIRXt6502TargetProfile
+- (NSUInteger)intBytes
+    {
+    return 2; // the 6502's int is 16 bits
+    }
 
 // Keep the conservative unroll caps (the 6502's 16 KB code bank can't absorb a
 // large unroll) — so DON'T override unrollMaxTrip / unrollMaxBodyInsns / etc.

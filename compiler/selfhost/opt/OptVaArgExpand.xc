@@ -111,12 +111,16 @@
                 _vaAdvance = w;
             return r;
             }
-        if (isNarrowInt(resT))
+        u32 intW = _profile != (OptProfile*)0 ? _profile.intBytes() : (u32)4;
+        if (isNarrowInt(resT) && irWidthOf(resT) < intW)
             {
-            // The packer widened a narrow int to two bytes: read it wide and
-            // truncate, or the high byte is read as the next argument.
-            bool sgn = IRType.is(resT, tyI8);
-            String* wide = String.withCString(sgn ? "I16" : "U16");
+            // The packer promoted a narrow int to `int` (2 bytes on the 6502, 4
+            // elsewhere): read it at that width and truncate. Reading the
+            // narrow width at the slot's start takes the HIGH half on a
+            // big-endian target, and the next argument's bytes on any target.
+            bool sgn = IRType.is(resT, tyI8) || IRType.is(resT, tyI16);
+            String* wide = intW == (u32)2 ? String.withCString(sgn ? "I16" : "U16")
+                                                         : String.withCString(sgn ? "I32" : "U32");
             IRValue* wv = new IRValue(wide);
             IRValue* m2 = new IRValue(String.withCString("Mem"));
             IRInsn* l2 = IRInsn.with(String.withCString("Load"));
@@ -243,7 +247,13 @@
 
     final bool isNarrowInt(String* t)
         {
-        return IRType.is(t, tyU8) || IRType.is(t, tyI8);
+        return IRType.is(t, tyU8) || IRType.is(t, tyI8) || IRType.is(t, tyBool)
+               || IRType.is(t, tyU16) || IRType.is(t, tyI16);
+        }
+
+    final u32 irWidthOf(String* t)
+        {
+        return IRType.bytes(t);
         }
 
     // `Ptr(Agg(N), unbanked)` -> the size layout N records.
