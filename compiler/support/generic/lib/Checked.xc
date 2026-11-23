@@ -11,14 +11,33 @@
 // the compiler knows). Nothing here allocates or takes a lock, so a check is
 // safe anywhere a subscript is, a par block's threads included.
 
-#if ARCH_m68k
-// TOS has no write(): the report goes to the console a byte at a time, where
-// the Atari ST's Stdio.error sends a diagnostic (#596).
+#if ARCH_m68k || ARCH_wasm32
+// TOS has no write(), and a wasm32 host imports none: the report goes out a
+// byte at a time through _putc, where Stdio.error sends a diagnostic on
+// those targets (#596, #621).
 void _putc(u8 c);
+#elif ARCH_6502
+// The 6502 has one screen, which Stdio writes (#621).
+#import "Stdio.xc"
 #else
 i32 write(i32 fd, u8* buf, i32 len);   // as Stdio declares it
 #endif
+#if ARCH_6502
+// A 6502 program ends through DOSVEC (System.exit), not a host exit (#621).
+#import "System.xc"
+#else
 void _xt_exit(i32 code);
+#endif
+
+// A failed check ends the program with status 134, as an abort does.
+void _xt_check_abort(void)
+{
+#if ARCH_6502
+    System.exit((i16)134);
+#else
+    _xt_exit((i32)134);
+#endif
+}
 
 // The heap block header (rt.c, rt-freestanding.c): the magic at payload-8,
 // next to the refcount; an array's element count at payload-32. A block of
@@ -30,9 +49,12 @@ void _xt_exit(i32 code);
 
 void _xt_check_put(u8* s)
 {
-#if ARCH_m68k
+#if ARCH_m68k || ARCH_wasm32
     for (u32 i = (u32)0; s[i] != (u8)0; i++)
         _putc(s[i]);
+#elif ARCH_6502
+    for (u32 i = (u32)0; s[i] != (u8)0; i++)
+        Stdio.putChar(s[i]);
 #else
     u64 n = (u64)0;
     while (s[n] != (u8)0)
@@ -75,7 +97,7 @@ void _xt_check_trap(u8* site, u64 index, u64 count, bool known)
     else
         _xt_check_put(" through a null pointer\n");
     _xt_check_put("  aborting\n");
-    _xt_exit((i32)134);
+    _xt_check_abort();
 }
 
 void _xt_check_cast_trap(u8* site)
@@ -83,7 +105,7 @@ void _xt_check_cast_trap(u8* site)
     _xt_check_put("\n=== xcc: a pointer cast to a class is not an object ===\n  at ");
     _xt_check_put(site != (u8*)0 ? site : "?");
     _xt_check_put("\n  aborting\n");
-    _xt_exit((i32)134);
+    _xt_check_abort();
 }
 
 // A raw pointer cast to a class: it must be null or a heap object, whose
