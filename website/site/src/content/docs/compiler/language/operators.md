@@ -243,6 +243,13 @@ index for its pointers: `p[i]` on it is an operator, and an index no operator
 takes is an error. A class without index operators keeps C's pointer indexing.
 Several indices are accepted only by an index operator.
 
+When a get returns a class by value, `g[i][j] = v` would set an element of a
+temporary copy, and the write would be lost. That is an error when the class
+holds no pointer or reference, directly or in a by-value member; store the
+value in a variable first (`Row r = g[i]; r[j] = v;`), or have the get return a
+pointer. A class that does hold a pointer is treated as a view into its owner,
+so writing through it is allowed. The same applies to compound assignment.
+
 An element read through an index operator is a call's result, so `&v[i]`,
 `v[i]++` and `--v[i]` are errors. `for … in` cannot iterate a range index made by
 an operator; assign it to a variable first.

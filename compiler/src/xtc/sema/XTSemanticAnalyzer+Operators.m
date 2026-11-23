@@ -131,6 +131,22 @@ static NSString* XTAssignBinarySpelling(XTAssignOp op)
         }
     }
 
+// The method call an overloaded operator node became, or nil.
+static XTASTNode* _Nullable XTOperatorCallOf(XTASTNode* node)
+    {
+    if ([node isKindOfClass:[XTBinaryExprNode class]]) return ((XTBinaryExprNode*)node).operatorCall;
+    if ([node isKindOfClass:[XTUnaryExprNode class]]) return ((XTUnaryExprNode*)node).operatorCall;
+    if ([node isKindOfClass:[XTSubscriptExprNode class]]) return ((XTSubscriptExprNode*)node).operatorCall;
+    if ([node isKindOfClass:[XTSliceExprNode class]]) return ((XTSliceExprNode*)node).operatorCall;
+    return nil;
+    }
+
+// `+` -> `+=`.
+static NSString* cOpOf(NSString* bop)
+    {
+    return [bop stringByAppendingString:@"="];
+    }
+
 static XTBinaryOp XTAssignBinaryOp(XTAssignOp op)
     {
     switch (op)
@@ -719,6 +735,89 @@ static void XTSharedLvalue(XTASTNode* lv, NSMutableArray<XTASTNode*>* out)
     return bin;
     }
 
+// Does a value of this type hold a pointer or reference, directly or in a
+// by-value member? A struct member counts as one.
+- (BOOL)operatorTypeHoldsReference:(nullable XTType*)t depth:(NSUInteger)depth
+    {
+    if (!t)
+        return NO;
+    if ([t isKindOfClass:[XTPointerType class]] || [t.displayName isEqualToString:@"string"])
+        return YES;
+    if ([t isKindOfClass:[XTArrayType class]])
+        return [self operatorTypeHoldsReference:((XTArrayType*)t).elementType depth:depth];
+    if (t.kind == XTTypeKindStruct)
+        return YES;
+    if (t.kind == XTTypeKindClass)
+        {
+        XTClassDeclNode* cls = self.classesByName[t.displayName];
+        if (!cls)
+            return NO;
+        return depth > 8 || [self operatorClassHoldsReferences:cls depth:depth + 1];
+        }
+    return NO;
+    }
+
+- (BOOL)operatorClassHoldsReferences:(XTClassDeclNode*)cls depth:(NSUInteger)depth
+    {
+    for (XTClassDeclNode* c = cls; c != nil; c = c.parentClass)
+        for (XTVariableDeclNode* v in c.ivars)
+            if ([self operatorTypeHoldsReference:v.declaredType depth:depth])
+                return YES;
+    return NO;
+    }
+
+/****************************************************************************\
+|* `g[1][0] = 7` where g's `[]` returns a Row by value: the set would write
+|* into a temporary copy and be lost. Reports it, and returns YES, when
+|* `recv` is a call's by-value class result and the class holds no pointer
+|* or reference (one that does may be a view into its owner, and passes).
+\****************************************************************************/
+- (BOOL)refuseOperatorWrite:(NSString*)op into:(XTASTNode*)recv at:(XTSourceLocation*)loc
+    {
+    XTType* t = recv.resolvedType;
+    if (!t || t.kind != XTTypeKindClass || [t isKindOfClass:[XTPointerType class]])
+        return NO;
+    XTClassDeclNode* cls = self.classesByName[t.displayName];
+    if (!cls)
+        return NO;
+    NSString* src = nil;
+    NSString* owner = nil;
+    XTASTNode* oc = XTOperatorCallOf(recv);
+    if ([oc isKindOfClass:[XTMethodCallExprNode class]])
+        {
+        owner = [self operatorClassOfType:((XTMethodCallExprNode*)oc).receiver.resolvedType].className;
+        if ([recv isKindOfClass:[XTSubscriptExprNode class]])
+            src = @"[]";
+        else if ([recv isKindOfClass:[XTSliceExprNode class]])
+            src = ((XTSliceExprNode*)recv).inclusive ? @"[...]" : @"[..]";
+        else if ([recv isKindOfClass:[XTBinaryExprNode class]])
+            src = XTOperatorBinarySpelling(((XTBinaryExprNode*)recv).op);
+        else
+            src = XTOperatorUnarySpelling(((XTUnaryExprNode*)recv).op);
+        }
+    else if ([recv isKindOfClass:[XTMethodCallExprNode class]])
+        {
+        owner = [self operatorClassOfType:((XTMethodCallExprNode*)recv).receiver.resolvedType].className;
+        src = ((XTMethodCallExprNode*)recv).methodName;
+        }
+    else if ([recv isKindOfClass:[XTCallExprNode class]])
+        src = ((XTCallExprNode*)recv).calleeName;
+    if (!src || [self operatorClassHoldsReferences:cls depth:0])
+        return NO;
+    NSString* tn = cls.className;
+    NSString* msg;
+    if (owner)
+        msg = [NSString stringWithFormat:@"'%@' writes into a temporary copy of %@ (%@'s '%@' returns %@ by value), so the write is lost; "
+                                         @"store it in a variable first (%@ t = ...;) and write through that, or have %@'s '%@' return a %@* or a view that points into %@",
+                                         op, tn, owner, src, tn, tn, owner, src, tn, owner];
+    else
+        msg = [NSString stringWithFormat:@"'%@' writes into a temporary copy of %@ ('%@' returns %@ by value), so the write is lost; "
+                                         @"store it in a variable first (%@ t = ...;) and write through that, or have '%@' return a %@*",
+                                         op, tn, src, tn, tn, src, tn];
+    [self.diagnostics emitError:msg at:loc];
+    return YES;
+    }
+
 - (BOOL)resolveOperatorOfAssign:(XTAssignExprNode*)node
     {
     if (!self.hasOperatorMethods)
@@ -785,6 +884,8 @@ static void XTSharedLvalue(XTASTNode* lv, NSMutableArray<XTASTNode*>* out)
             }
         node.operatorCall = set;
         node.operatorShared = shared.count ? shared : nil;
+        if (set)
+            [self refuseOperatorWrite:bop ? cOpOf(bop) : setOp into:base at:node.location];
         return YES;
         }
 
@@ -838,6 +939,8 @@ static void XTSharedLvalue(XTASTNode* lv, NSMutableArray<XTASTNode*>* out)
                                          at:node.location];
             node.operatorCall = call;
             node.resolvedType = [XTType voidType];
+            if (call)
+                [self refuseOperatorWrite:cOp into:lhs at:node.location];
             return YES;
             }
         }
