@@ -528,6 +528,14 @@ static NSUInteger sUnderPointer = 0;
     // A category's method on an imported class (2026-11-01): exported only
     // when final, so a client calls its symbol directly and cannot override it.
     md.isFinal = [m[@"final"] boolValue];
+    // `:operator(pattern)`: "<shape> <names…>".
+    NSString* opPat = m[@"operator"];
+    if ([opPat isKindOfClass:[NSString class]] && opPat.length)
+        {
+        NSArray<NSString*>* parts = [opPat componentsSeparatedByString:@" "];
+        md.operatorShape = parts[0];
+        md.operatorOperands = [parts subarrayWithRange:NSMakeRange(1, parts.count - 1)];
+        }
     // The serialised `symbol` is the full export Class$method; lowering re-adds
     // the `Class$` prefix, so store only the bare (possibly overload-mangled)
     // method part here.

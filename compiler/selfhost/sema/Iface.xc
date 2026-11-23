@@ -995,6 +995,10 @@ class JsonVal
         // when final, so a client calls its symbol directly and cannot override it.
         if (m.memberBool((u8*)"final"))
             md.addFlag((u32)NF_FINAL);
+        // `:operator(pattern)`: "<shape> <names…>".
+        String* opPat = m.memberStr((u8*)"operator");
+        if (opPat != 0 && opPat.byteLength() > (u32)0)
+            md.setOpPat(String.withString(opPat));
         md.addFlag((u32)NF_EXTERNAL);
         JsonVal* ps = m.member((u8*)"params");
         if (ps != 0)

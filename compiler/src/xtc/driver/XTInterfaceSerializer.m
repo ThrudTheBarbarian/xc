@@ -122,6 +122,12 @@ static void appendCanonicalJSON(NSMutableString *out, id v) {
     // saw the class through its interface counted one more slot than the file
     // that defined it (#393).
     if (m.isFinal) d[@"final"] = @YES;
+    // `:operator(pattern)`, as "<shape> <names…>", so a client of a library
+    // class resolves its operators (and gives up pointer arithmetic for them)
+    // as the library itself does. Written only when set.
+    if (m.operatorShape)
+        d[@"operator"] = [[@[ m.operatorShape ] arrayByAddingObjectsFromArray:m.operatorOperands ?: @[]]
+                             componentsJoinedByString:@" "];
     return d;
 }
 

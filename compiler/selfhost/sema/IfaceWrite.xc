@@ -309,6 +309,11 @@ class IfaceWrite
         // interface counted one more slot than the file that defined it (#393).
         if (m.hasFlag((u32)NF_FINAL))
             IfaceWrite.kb(out, "final", true, true);
+        // `:operator(pattern)`, as "<shape> <names…>", so a client of a library
+        // class resolves its operators as the library itself does. Written only
+        // when set.
+        if (m.opShape() != (String*)0)
+            IfaceWrite.kv(out, "operator", m.opPat(), true);
         IfaceWrite.params(out, m);
         IfaceWrite.returnsList(out, m);
     }
