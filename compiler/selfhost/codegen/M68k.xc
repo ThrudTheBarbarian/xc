@@ -759,6 +759,11 @@ class M68k
             emitStore(fn, n);
             return;
             }
+        if (op == opMemSet)
+            {
+            emitMemSet(n);
+            return;
+            }
         if (op == opZExt)
             {
             emitZExt(n);
@@ -1557,6 +1562,26 @@ class M68k
     // A 16-bit refcount at obj-2. Values below 64 KB are skipped: the Map/Set
     // sentinels and any non-heap address are not refcounted objects, and real
     // heap objects live above the load base.
+    // MemSet [dst, fill, count, mem]: count bytes of fill from dst, a byte at
+    // a time (#617: a struct local's long zero tail). A count of 0 writes
+    // nothing.
+    void emitMemSet(IRInsn* n)
+        {
+        if (n.ops().count() < (u32)3)
+            {
+            unsupported(n.op());
+            return;
+            }
+        u32 lbl = _labelSeq;
+        _labelSeq = _labelSeq + (u32)1;
+        loadOperand((IROperand*)n.ops().get((u32)0), String.withCString("a0"));
+        loadOperand((IROperand*)n.ops().get((u32)1), String.withCString("d1"));
+        loadOperand((IROperand*)n.ops().get((u32)2), String.withCString("d0"));
+        _out.appendFormat("\ttst.l\td0\n\tbeq.s\t.Lms%lu_done\n.Lms%lu:\n", lbl, lbl);
+        _out.appendCString("\tmove.b\td1,(a0)+\n\tsubq.l\t#1,d0\n");
+        _out.appendFormat("\tbne.s\t.Lms%lu\n.Lms%lu_done:\n", lbl, lbl);
+        }
+
     void emitRetain(IRInsn* n)
         {
         if (n.ops().count() < (u32)1)
