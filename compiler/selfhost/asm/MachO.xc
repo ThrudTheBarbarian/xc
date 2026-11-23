@@ -1685,6 +1685,35 @@ class MachOSha256
         {
         return _objcSects == (Array*)0 ? (u32)0 : _objcSects.count();
         }
+    // MH_HAS_TLV_DESCRIPTORS when the image has thread-local descriptors:
+    // dyld sets up thread-local storage only for an image that says so.
+    u32 tlvHeaderFlag(void)
+        {
+        for (u32 i = (u32)0; _objcSects != (Array*)0 && i < _objcSects.count(); i = i + (u32)1)
+            if ((((MachOObjcRange*)_objcSects.get(i)).flags() & (u32)$FF) == (u32)$13)
+                return (u32)$800000;
+        return (u32)0;
+        }
+    // A thread-local descriptor's offset word (FIXUP_TLVOFF64): the target's
+    // offset from the start of the per-thread template, the __thread_data
+    // section. Written as is; dyld does not slide it.
+    void putTlvOffset(SectionBytes* dat, Arm64Fixup* f, u32 s, u32 dataProgOffset)
+        {
+        u32 t0 = (u32)0;
+        for (u32 i = (u32)0; _objcSects != (Array*)0 && i < _objcSects.count(); i = i + (u32)1)
+            {
+            MachOObjcRange* r = (MachOObjcRange*)_objcSects.get(i);
+            if ((r.flags() & (u32)$FF) == (u32)$11)
+                {
+                t0 = dataProgOffset + r.off();
+                break;
+                }
+            }
+        u32 v = s - t0;
+        for (u32 b = (u32)0; b < (u32)8; b = b + (u32)1)
+            dat.setByteAt(f.offset() + b, (u8)(b < (u32)4 ? ((v >> ((u32)8 * b)) & (u32)$FF) : (u32)0));
+        }
+
     // The ObjC sections sit between the ordinary data and the mod-init tail,
     // so __data ends where the first of them begins.
     u32 dataOnlyBefore(u32 dOnly)
@@ -2010,6 +2039,11 @@ class MachOSha256
                     dat.setByteAt(f.offset() + b, (u8)((v >> ((u32)8 * b)) & (u32)$FF));
                 continue;
                 }
+            if (f.kind() == (u32)FIXUP_TLVOFF64)
+                {
+                putTlvOffset(dat, f, symOffset(symbols, dataSyms, f.symbol(), textOffset, dataProgOffset) + (u32)f.addend(), dataProgOffset);
+                continue;
+                }
             if (f.kind() != (u32)FIXUP_POINTER64)
                 continue;
             bool dso = dsoFixup(f, symbols);
@@ -2276,6 +2310,11 @@ class MachOSha256
         for (u32 i = (u32)0; i < fixups.count(); i = i + (u32)1)
             {
             Arm64Fixup* f = (Arm64Fixup*)fixups.get(i);
+            if (f.kind() == (u32)FIXUP_TLVOFF64)
+                {
+                putTlvOffset(dat, f, symOffset(symbols, dataSyms, f.symbol(), textOffset, dataProgOffset) + (u32)f.addend(), dataProgOffset);
+                continue;
+                }
             if (f.kind() != (u32)FIXUP_POINTER64)
                 continue;
             bool dso = dsoFixup(f, symbols);
@@ -2402,7 +2441,7 @@ class MachOSha256
         put32((u32)6); // MH_DYLIB
         put32(ncmds);
         put32(sizeofcmds);
-        put32((u32)4 | (u32)$80); // MH_DYLDLINK | MH_TWOLEVEL
+        put32((u32)4 | (u32)$80 | tlvHeaderFlag()); // MH_DYLDLINK | MH_TWOLEVEL [| MH_HAS_TLV_DESCRIPTORS]
         put32((u32)0);
 
         // __TEXT (+ __text [+ __stubs])
@@ -3161,7 +3200,7 @@ class MachOSha256
         put32((u32)2); // MH_EXECUTE
         put32(L.ncmds);
         put32(L.sizeofcmds);
-        put32((u32)$1 | (u32)$4 | (u32)$80 | (u32)$200000); // NOUNDEFS|DYLDLINK|TWOLEVEL|PIE
+        put32((u32)$1 | (u32)$4 | (u32)$80 | (u32)$200000 | tlvHeaderFlag()); // NOUNDEFS|DYLDLINK|TWOLEVEL|PIE[|HAS_TLV_DESCRIPTORS]
         put32((u32)0);
 
         // __PAGEZERO — the whole low 4 GB, unmapped.

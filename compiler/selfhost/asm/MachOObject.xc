@@ -670,6 +670,18 @@ bool machoEhMerge(void) { return gMachOEhMerge; }
             if (s._name.hasPrefix(String.withCString("__objc_")))
                 o._objcRanges.add((Object*)MachOObjcRange.with(s._name, s._seg, s._flags,
                                                                o._data.length(), s._size));
+            // Thread-local storage keeps its sections too: the descriptors
+            // (S_THREAD_LOCAL_VARIABLES) dyld initialises, and the per-thread
+            // template. The template's zero-fill part joins its initialised
+            // part as one S_THREAD_LOCAL_REGULAR section (its zeros are in
+            // the blob already), so a variable's offset in the template is
+            // its offset in that one section.
+            if (stype == (u32)$13)
+                o._objcRanges.add((Object*)MachOObjcRange.with(String.withCString("__thread_vars"), String.withCString("__DATA"),
+                                                               (u32)$13, o._data.length(), s._size));
+            if (stype == (u32)$11 || stype == (u32)$12)
+                o._objcRanges.add((Object*)MachOObjcRange.with(String.withCString("__thread_data"), String.withCString("__DATA"),
+                                                               (u32)$11, o._data.length(), s._size));
             if (stype == (u32)1 || stype == (u32)$C || stype == (u32)$12)
                 MachOObject.zeros(o._data, s._size); // zero-fill
             else

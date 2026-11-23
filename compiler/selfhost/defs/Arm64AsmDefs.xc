@@ -8,3 +8,4 @@
 #define FIXUP_GOTPAGEOFF12  5
 #define FIXUP_PREL32        6   // a 32-bit `target - here` word in DATA (an ELF jump table); the archive reader alone makes one
 #define FIXUP_PREL64        7   // a 64-bit `target - here` word in DATA (a C++ exception table's type entry, clang's)
+#define FIXUP_TLVOFF64      8   // a 64-bit word in a Mach-O thread-local descriptor: the target's offset in the thread-local template

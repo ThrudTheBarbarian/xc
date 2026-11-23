@@ -19,6 +19,7 @@ class MachOLink
     String* _why;
     u32 _rc;           // 0 merged; 1 error (reported in why); 2 a reloc the in-house link cannot express
     Array* _gotFixups; // Arm64Fixup@ — GOT refs, resolved after the pull settles
+    Array* _tlvFixups; // Arm64Fixup@ — thread-local descriptor refs, resolved as the GOT's
     Map* _slots;       // symbol -> its pointer slot's name (a data GOT entry)
     Array* _slotOrder; // the symbols in _slots, in the order first asked for
     Array* _unwind;    // MachOUnwindRec@, the merged image's
@@ -32,6 +33,7 @@ class MachOLink
         {
         _rc = (u32)0;
         _gotFixups = new Array();
+        _tlvFixups = new Array();
         _slots = new Map();
         _slotOrder = new Array();
         _unwind = new Array();
@@ -417,6 +419,29 @@ class MachOLink
                         _gotFixups.add((Object*)gf);
                         continue;
                         }
+                    // ARM64_RELOC_TLVP_LOAD_PAGE21 / _PAGEOFF12: `adrp x0,
+                    // v@TLVPPAGE; ldr x0, [x0, v@TLVPPAGEOFF]` loads the
+                    // address of v's descriptor, whose thunk the code then
+                    // calls. A descriptor defined here is addressed directly,
+                    // as a GOT reference to a defined symbol is (below).
+                    if ((r.type() == (u32)8 || r.type() == (u32)9) && r.ext() != (u32)0)
+                        {
+                        if (r.symnum() >= obj.symnames().count())
+                            {
+                            _why = String.withCString("bad TLV symnum");
+                            _rc = (u32)1;
+                            return;
+                            }
+                        MachOSymDef* sd = (MachOSymDef*)obj.symdefs().get(r.symnum());
+                        Arm64Fixup* tf = Arm64Fixup.make(base + r.off(),
+                                                         r.type() == (u32)8 ? (u32)FIXUP_GOTPAGE21 : (u32)FIXUP_GOTPAGEOFF12,
+                                                         MachOLink.taggedSym(sd, oi), (u32)0);
+                        tf.setAddend(pendAddend);
+                        pendAddend = (i32)0;
+                        mfix.add((Object*)tf);
+                        _tlvFixups.add((Object*)tf);
+                        continue;
+                        }
                     Arm64Fixup* f = MachOLink.relocFixup(r, base, obj, oi);
                     if (f != (Arm64Fixup*)0)
                         {
@@ -442,7 +467,11 @@ class MachOLink
                     if (r.type() == (u32)0 && r.ext() != (u32)0 && r.symnum() < obj.symnames().count())
                         {
                         MachOSymDef* sd = (MachOSymDef*)obj.symdefs().get(r.symnum());
-                        Arm64Fixup* pf = Arm64Fixup.make(dbase + r.off(), (u32)FIXUP_POINTER64,
+                        // A thread-local descriptor is {thunk, key, offset}:
+                        // its third word is the variable's offset in the
+                        // per-thread template, not an address.
+                        u32 kind = MachOLink.inTlvOffsetWord(obj, r.off()) ? (u32)FIXUP_TLVOFF64 : (u32)FIXUP_POINTER64;
+                        Arm64Fixup* pf = Arm64Fixup.make(dbase + r.off(), kind,
                                                          MachOLink.taggedSym(sd, oi), (u32)0);
                         u32 ro = r.off();
                         pf.setAddend((i32)((u32)od.byteAt(ro) | ((u32)od.byteAt(ro + (u32)1) << (u32)8)
@@ -564,6 +593,49 @@ class MachOLink
             mtext.setByteAt(o + (u32)2, (u8)((add >> (u32)16) & (u32)$FF));
             mtext.setByteAt(o + (u32)3, (u8)((add >> (u32)24) & (u32)$FF));
             }
+        // Thread-local descriptor references: relaxed the same way. One
+        // defined in a dylib would need a __thread_ptrs slot dyld binds;
+        // C and C++ programs reach a library's thread-locals through its
+        // functions, so none is made yet.
+        for (u32 i = (u32)0; i < _tlvFixups.count(); i = i + (u32)1)
+            {
+            Arm64Fixup* tf = (Arm64Fixup*)_tlvFixups.get(i);
+            if (msyms.get((Hashable*)tf.symbol()) == (Object*)0)
+                {
+                _why = String.withCString("thread-local '").appending(tf.symbol()).appending(String.withCString("' is not defined in this image"));
+                _rc = (u32)1;
+                return;
+                }
+            if (tf.kind() == (u32)FIXUP_GOTPAGE21)
+                {
+                tf.setKind((u32)FIXUP_PAGE21);
+                continue;
+                }
+            tf.setKind((u32)FIXUP_PAGEOFF12);
+            tf.setScale((u32)0);
+            u32 o = tf.offset();
+            u32 insn = (u32)mtext.byteAt(o) | ((u32)mtext.byteAt(o + (u32)1) << (u32)8) | ((u32)mtext.byteAt(o + (u32)2) << (u32)16) | ((u32)mtext.byteAt(o + (u32)3) << (u32)24);
+            u32 add = (u32)$91000000 | (((insn >> (u32)5) & (u32)$1F) << (u32)5) | (insn & (u32)$1F);
+            mtext.setByteAt(o, (u8)(add & (u32)$FF));
+            mtext.setByteAt(o + (u32)1, (u8)((add >> (u32)8) & (u32)$FF));
+            mtext.setByteAt(o + (u32)2, (u8)((add >> (u32)16) & (u32)$FF));
+            mtext.setByteAt(o + (u32)3, (u8)((add >> (u32)24) & (u32)$FF));
+            }
+        }
+
+    // Whether blob offset `off` of `obj` is a thread-local descriptor's
+    // offset word: the third of the three words of a descriptor in one of
+    // its S_THREAD_LOCAL_VARIABLES sections.
+    static bool inTlvOffsetWord(MachOObject* obj, u32 off)
+        {
+        Array* rs = obj.objcRanges();
+        for (u32 k = (u32)0; k < rs.count(); k = k + (u32)1)
+            {
+            MachOObjcRange* r = (MachOObjcRange*)rs.get(k);
+            if (r.flags() == (u32)$13 && off >= r.off() && off < r.off() + r.size())
+                return (off - r.off()) % (u32)24 == (u32)16;
+            }
+        return false;
         }
 
     static void appendWord(SectionBytes* t, u32 w)
@@ -806,7 +878,11 @@ class MachOLink
         for (u32 k = (u32)0; k < order.count(); k = k + (u32)1)
             {
             String* nm = (String*)order.get(k);
-            MachOLink.padArray(out, (u32)7);
+            // A thread-local template's runs each start on 16, as the
+            // objects' sections did (a variable keeps its alignment in the
+            // template, which dyld copies to a 16-aligned block per thread).
+            bool tlv = nm.equals(String.withCString("__thread_data"));
+            MachOLink.padArray(out, tlv ? (u32)15 : (u32)7);
             u32 start = out.length();
             Array* runs = (Array*)byName.get((Hashable*)nm);
             MachOObjcRange* first = (MachOObjcRange*)runs.get((u32)0);
@@ -815,6 +891,8 @@ class MachOLink
                 MachOObjcRange* r = (MachOObjcRange*)runs.get(q);
                 if (r.size() == (u32)0)
                     continue;
+                if (tlv)
+                    MachOLink.padArray(out, (u32)15);
                 MachOLink.addMove(moves, r.off(), r.size(), out.length());
                 for (u32 b = r.off(); b < r.off() + r.size(); b = b + (u32)1)
                     out.appendByte(mdata.byteAt(b));
@@ -842,7 +920,7 @@ class MachOLink
         for (u32 k = (u32)0; k < mfix.count(); k = k + (u32)1)
             {
             Arm64Fixup* f = (Arm64Fixup*)mfix.get(k);
-            if (f.kind() != (u32)FIXUP_POINTER64 && f.kind() != (u32)FIXUP_PREL32)
+            if (f.kind() != (u32)FIXUP_POINTER64 && f.kind() != (u32)FIXUP_PREL32 && f.kind() != (u32)FIXUP_TLVOFF64)
                 continue; // the data-addressing kinds (PREL32: an exception table's)
             u32 nv = MachOLink.remap(moves, f.offset());
             if (nv != (u32)$FFFFFFFF)
