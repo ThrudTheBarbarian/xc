@@ -1,6 +1,6 @@
 ---
 title: Operators
-description: Full operator precedence table including the rotate and byte-extract operators.
+description: Full operator precedence table including the rotate and byte-extract operators, and operators defined by classes.
 ---
 
 xcc operators are mostly a subset of C's, with two additions: a pair of **rotate** operators (`<:` and `:>`) that map to the 6502's `ROL` / `ROR` instructions, and four **byte-extract** prefix operators (`<`, `>`, `>>`, `>>>`) that select individual bytes of wider constants and symbols. The byte-extract operators apply only inside [`asm { ... }`](/compiler/language/inline-asm/) blocks.
@@ -98,6 +98,115 @@ asm {
 ```
 
 Outside an `asm` block these tokens have their normal meaning: `<` and `>` are relational comparisons and `>>` is the shift operator. Inside a block the byte-extract reading is unambiguous, because the assembler grammar accepts only constants and symbols after the prefix.
+
+### Prefix `+`
+
+Prefix `+` has no meaning of its own. It is accepted only on an instance of a
+class that defines it with `:operator(+self)` (next section); on a number it is
+an error.
+
+## Operators defined by a class
+
+A method becomes an operator by carrying `:operator(pattern)`. The pattern is
+the operator written out with the method's own names as its operands: `self`
+for the receiver and the parameter names for the arguments.
+
+```c
+class Vec2
+    {
+    float x;
+    float y;
+
+    static Vec2* make(float a, float b) { Vec2* v = new Vec2(); v.x = a; v.y = b; return v; }
+
+    Vec2* plus(Vec2* o)   :operator(self + o) { return Vec2.make(x + o.x, y + o.y); }
+    Vec2* minus(Vec2* o)  :operator(self - o) { return Vec2.make(x - o.x, y - o.y); }
+    Vec2* negated()       :operator(-self)    { return Vec2.make(-x, -y); }
+    Vec2* scaled(float k) :operator(self * k) { return Vec2.make(x * k, y * k); }
+    static Vec2* scaledBy(float k, Vec2* v) :operator(k * v) { return v.scaled(k); }
+    bool less(Vec2* o)    :operator(self < o) { return x * x + y * y < o.x * o.x + o.y * o.y; }
+    }
+
+Vec2* c = a + b * 2.0 - -d;    // a.plus(b.scaled(2.0)).minus(d.negated())
+Vec2* e = 2.0 * a;             // Vec2.scaledBy(2.0, a)
+```
+
+An operator is an ordinary method call. The method keeps its name, so
+`a.plus(b)` still works, and the name is what stack traces and errors show.
+Operators work on every target.
+
+### What can be defined
+
+| Group | Operators |
+|-------|-----------|
+| Arithmetic | `+ - * / %` |
+| Prefix | `-x`, `+x`, `~x`, `!x` |
+| Bitwise and shift | `& \| ^ << >>` |
+| Rotate | `<: :>` |
+| Relational | `< <= > >=` |
+
+A relational operator returns whatever its method returns, so a class can
+return a mask or a flag object rather than a `bool`.
+
+These operators keep their fixed meaning and cannot be defined: `&&`, `||`,
+`? :`, `=`, `.`, `->`, prefix `&` and `*`, `,`, calls, the byte-extract
+prefixes, `++` and `--`. `==` and `!=` compare identity on objects; value
+equality is the `equals` method. Index operators (`self[i]`) and compound
+assignment (`self += o`) cannot be defined yet.
+
+Precedence and associativity are the built-in ones. Defining `*` does not
+change how `a + b * c` groups.
+
+### Rules for a pattern
+
+- The pattern is one operator applied to names: `self + o`, `-self`, `k * v`.
+- Each name is `self` or a parameter of the method, and appears once. Every
+  parameter appears.
+- An instance method's pattern uses `self`. A static method's pattern does not,
+  and one of its parameters is of its own class (or a subclass).
+- The method returns one value. It takes no `...`.
+- Operators are methods: a free function or a protocol method cannot carry
+  `:operator`.
+
+A static method is how a value of another type goes on the left: `:operator(k * v)`
+on `scaledBy(float k, Vec2* v)` gives `2.0 * a`.
+
+### How an operator expression is resolved
+
+An operator applies when one of its operands is a class instance (a pointer to
+one, or an instance by value) whose class, or an ancestor, defines that operator.
+The candidates are the instance methods of the left operand's class whose
+pattern is `self OP _`, then the static methods of either operand's class whose
+pattern is `_ OP _`. They are ranked as the overloads of a call are, by how well
+the operands convert to the parameters. Two candidates that fit equally well
+are an error that names both.
+
+Operators are inherited and can be overridden like any method, with or without
+repeating the pattern. Through a parent pointer the call dispatches on the
+object, as any method call does.
+
+### Classes without operators keep pointer arithmetic
+
+Defining an operator is a choice per class and per operator. A class that
+defines no operator keeps C's meaning for every operator on its pointers:
+`p + 1` steps one instance and `p < q` compares addresses. A class that defines
+`+`, or inherits it, gives up the built-in `+` for its pointers. An unmatched
+`+` on it is then an error, never a pointer step:
+
+```
+error: 'Vec2' has no '+' taking 'i32'
+```
+
+It keeps the built-in meaning of the operators it does not define, so its
+pointers still compare with `<` unless it defines `<` too.
+
+### Results and memory
+
+The result of an operator is the result of its method call. A class pointer
+returned by the method is released at the end of the full expression, unless it
+is stored. A method that returns its instance by value
+(`Vec2 plus(Vec2 o) :operator(self + o)`) needs no heap allocation: in
+`a + b + c` each intermediate gets its own slot in the caller's frame.
 
 ## Compound assignment
 

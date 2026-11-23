@@ -166,6 +166,15 @@ annotation      ::= 'banked' | 'main' | 'shadow'
                   | 'cloaked' ('(' IDENT ')')?
                   | 'naked' | 'irq' | 'vbi' | 'action'
                   | 'hwstack' | 'xtcstack' | 'needsos'
+                  | 'operator' '(' operator-pattern ')'   // methods only
+
+operator-pattern ::= IDENT binary-op IDENT
+                  | prefix-op IDENT
+
+binary-op       ::= '+' | '-' | '*' | '/' | '%' | '&' | '|' | '^'
+                  | '<<' | '>>' | '<:' | ':>' | '<' | '<=' | '>' | '>='
+
+prefix-op       ::= '-' | '+' | '~' | '!'
 ```
 
 `{ }` is the only bracket for a body, an initialiser, an `enum` body and a
@@ -348,7 +357,7 @@ rotate          ::= additive    (('<:' | ':>') additive)*
 additive        ::= multiplicative (('+' | '-') multiplicative)*
 multiplicative  ::= unary (('*' | '/' | '%') unary)*
 
-unary           ::= ('~' | '!' | '-' | '*' | '&' | '++' | '--') unary
+unary           ::= ('~' | '!' | '-' | '+' | '*' | '&' | '++' | '--') unary
                   | postfix
 
 postfix         ::= primary postfix-op*
