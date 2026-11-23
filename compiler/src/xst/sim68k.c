@@ -37,10 +37,13 @@ typedef long off_t;
 #define open _open
 #define close _close
 #define lseek _lseek
+#include <direct.h> // _mkdir
+#define mkdir(path, mode) _mkdir(path)
 #else
 #include <unistd.h>
 #endif
 #include <errno.h>
+#include <sys/stat.h>
 #include <math.h>
 
 #ifndef XTC_VERSION
@@ -2301,6 +2304,25 @@ static void gemdos_call(void)
             && (mem_count == 0 || kept_end <= mem_blocks[0].addr))
             heap_ptr = kept_end;
         D[0] = 0;
+        break;
+        }
+    /* Dcreate: a directory at the path, on the host filesystem the other file
+       calls map to. GEMDOS errors: EACCDN (-36) when it exists or may not be
+       made, EPTHNF (-34) when a parent is missing. Without it a program that
+       made its own directory (Settings, Bundle, a test's scratch tree) failed
+       at the first Fcreate inside it. */
+    case 0x39:
+        {
+        char path[1024];
+        uint32_t p = arg32(2);
+        int i = 0;
+        while (i < 1023 && (path[i] = rd8(p + i)))
+            i++;
+        path[i] = 0;
+        if (mkdir(path, 0755) == 0)
+            D[0] = 0;
+        else
+            D[0] = (uint32_t)(errno == ENOENT ? -34 : -36);
         break;
         }
     /* Fcreate */
