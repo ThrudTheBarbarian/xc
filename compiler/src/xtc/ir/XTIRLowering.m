@@ -3760,6 +3760,64 @@ static NSString* XTDescribeNodeKind(XTASTNodeKind k)
         }
     }
 
+// The end of a conditional arm (`c ? a : b`): the `+1` temps it made that are
+// not its value come apart here, on the only path that made them (#575). Left
+// pending they leaked, since the join cannot know which arm ran. A scalar value
+// cannot point into them. A class-pointer value that is not itself a temp may
+// (an element read from a temporary container), so it is retained first, which
+// makes the arm's value one more temp the ternary's own ownership handling
+// settles. Any other pointer or an aggregate leaves them pending, as before.
+// Only the temps registered since `mark`, when the arm began, are its own: the
+// other arm's value may be pending at the same depth.
+- (XTIRValue*)ownedArmEnd:(XTIRValue*)v type:(nullable XTType*)ty since:(NSUInteger)mark
+    {
+    if (![self hasOwnedTempsAtDepth:self.condDepth since:mark])
+        return v;
+    BOOL own = [self.ownedTemps indexOfObjectIdenticalTo:v] != NSNotFound;
+    if (!own && [self irValueIsPointer:v] && [self astTypeIsClassPointer:ty])
+        {
+        [self emitRetain:v];
+        [self registerOwnedTemp:v];
+        own = YES;
+        }
+    if (own || (![self irValueIsPointer:v] && v.type.kind != XTIRTypeKindAgg))
+        [self releaseOwnedTempsAtDepth:self.condDepth since:mark except:(own ? v : nil)];
+    return v;
+    }
+
+- (BOOL)hasOwnedTempsAtDepth:(NSInteger)depth since:(NSUInteger)mark
+    {
+    for (NSUInteger i = mark; i < self.ownedTemps.count; i++)
+        {
+        NSInteger d = (i < self.ownedTempDepths.count) ? self.ownedTempDepths[i].integerValue : self.condDepth;
+        if (d == depth)
+            return YES;
+        }
+    return NO;
+    }
+
+// releaseOwnedTempsAtDepth:'s owned half, for the temps from `mark` on, sparing
+// `keep`.
+- (void)releaseOwnedTempsAtDepth:(NSInteger)depth since:(NSUInteger)mark except:(nullable XTIRValue*)keep
+    {
+    if (self.currentBlock.terminator != nil)
+        return;
+    for (NSInteger i = (NSInteger)self.ownedTemps.count - 1; i >= (NSInteger)mark; i--)
+        {
+        NSInteger d = ((NSUInteger)i < self.ownedTempDepths.count)
+                          ? self.ownedTempDepths[(NSUInteger)i].integerValue
+                          : self.condDepth;
+        if (d != depth || self.ownedTemps[(NSUInteger)i] == keep)
+            continue;
+        [self emitRelease:self.ownedTemps[(NSUInteger)i]];
+        [self.ownedTemps removeObjectAtIndex:(NSUInteger)i];
+        if ((NSUInteger)i < self.ownedTempDepths.count)
+            [self.ownedTempDepths removeObjectAtIndex:(NSUInteger)i];
+        if ((NSUInteger)i < self.ownedTempBlocks.count)
+            [self.ownedTempBlocks removeObjectAtIndex:(NSUInteger)i];
+        }
+    }
+
 // Release (and forget) every pending owned temp registered since `mark`, last
 // first: the temps of one sub-expression whose value has already been adopted
 // (a for-in subject's arguments, 2026-10-31).
@@ -16408,6 +16466,7 @@ static NSString* XTIRTypeKindName(XTIRTypeKind k)
     self.condDepth += 1;
     self.currentBlock = thenBlock;
     [self restoreLocals:entrySnap];
+    NSUInteger thenMark = self.ownedTemps.count;
     XTIRValue* thenVal = [self lowerExpression:node.thenExpr];
     if (!thenVal)
         {
@@ -16424,6 +16483,7 @@ static NSString* XTIRTypeKindName(XTIRTypeKind k)
         return nil;
         }
     thenVal = [self valueArmEnd:thenVal type:node.resolvedType];
+    thenVal = [self ownedArmEnd:thenVal type:node.resolvedType since:thenMark];
     XTIRBlock* thenExit = self.currentBlock;
     XTIRLocalSnapshot* thenSnap = [self snapshotLocals];
     // The branch is NOT emitted yet. Ownership of the arms cannot be settled
@@ -16434,6 +16494,7 @@ static NSString* XTIRTypeKindName(XTIRTypeKind k)
     // ELSE arm.
     self.currentBlock = elseBlock;
     [self restoreLocals:entrySnap];
+    NSUInteger elseMark = self.ownedTemps.count;
     XTIRValue* elseVal = [self lowerExpression:node.elseExpr];
     if (!elseVal)
         {
@@ -16450,6 +16511,7 @@ static NSString* XTIRTypeKindName(XTIRTypeKind k)
         return nil;
         }
     elseVal = [self valueArmEnd:elseVal type:node.resolvedType];
+    elseVal = [self ownedArmEnd:elseVal type:node.resolvedType since:elseMark];
     XTIRBlock* elseExit = self.currentBlock;
     XTIRLocalSnapshot* elseSnap = [self snapshotLocals];
 

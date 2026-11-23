@@ -2224,6 +2224,7 @@ class ClassInfo
         String* ty = n.ty();
         _blk = thenB;
         _condDepth = _condDepth + (u32)1;
+        u32 markA = _ownedTemps == 0 ? (u32)0 : _ownedTemps.count();
         IRValue* a = lowerExpr(n.kid((u32)1));
         if (_failed)
             {
@@ -2232,6 +2233,7 @@ class ClassInfo
             }
         a = coerce(a, n.kid((u32)1).ty(), ty);
         a = valueArmEnd(a, ty);
+        a = ownedArmEnd(a, ty, markA);
         _condDepth = _condDepth - (u32)1;
         IRBlock* thenExit = _blk;
         IRInsn* b1 = IRInsn.with(String.withCString("Branch"));
@@ -2240,6 +2242,7 @@ class ClassInfo
 
         _blk = elseB;
         _condDepth = _condDepth + (u32)1;
+        u32 markB = _ownedTemps == 0 ? (u32)0 : _ownedTemps.count();
         IRValue* b = lowerExpr(n.kid((u32)2));
         if (_failed)
             {
@@ -2248,6 +2251,7 @@ class ClassInfo
             }
         b = coerce(b, n.kid((u32)2).ty(), ty);
         b = valueArmEnd(b, ty);
+        b = ownedArmEnd(b, ty, markB);
         _condDepth = _condDepth - (u32)1;
         IRBlock* elseExit = _blk;
 
@@ -13889,6 +13893,68 @@ class ClassInfo
             }
         // LAST registered, first released — the original walks its pending list
         // backwards, and two temps in one arm come out in that order.
+        for (u32 i = doomed.count(); i > (u32)0; i = i - (u32)1)
+            refOp(String.withCString("Release"), (IRValue*)doomed.get(i - (u32)1));
+        _ownedTemps = keepT;
+        _ownedBlocks = keepB;
+        }
+
+    // The end of a conditional arm (`c ? a : b`): the `+1` temps it made
+    // that are not its value come apart here, on the only path that made them
+    // (#575). Left pending they leaked, since the join cannot know which arm
+    // ran. A scalar value cannot point into them. A class-pointer value that
+    // is not itself a temp may (an element read from a temporary container),
+    // so it is retained first, which makes the arm's value one more temp the
+    // ternary's own ownership handling settles. Any other pointer or an
+    // aggregate leaves them pending, as before. Only the temps registered
+    // since `mark`, when the arm began, are its own: the other arm's value
+    // may be pending at the same depth.
+    IRValue* ownedArmEnd(IRValue* v, String* ty, u32 mark)
+        {
+        if (!hasOwnedTempsAtDepth(_condDepth, mark))
+            return v;
+        bool own = isOwnedTemp(v);
+        if (!own && isPtrIr(v.ty()) && isClassPointer(ty))
+            {
+            refOp(String.withCString("Retain"), v);
+            noteOwnedTemp(v, ty);
+            own = true;
+            }
+        if (own || (!isPtrIr(v.ty()) && !IRType.isAgg(v.ty())))
+            releaseOwnedTempsAtDepthExcept(_condDepth, mark, own ? v : (IRValue*)0);
+        return v;
+        }
+
+    bool hasOwnedTempsAtDepth(u32 depth, u32 mark)
+        {
+        if (_ownedTemps == 0)
+            return false;
+        for (u32 i = mark; i < _ownedTemps.count(); i = i + (u32)1)
+            if (((Number*)_ownedBlocks.get(i)).asU32() == depth)
+                return true;
+        return false;
+        }
+
+    // releaseOwnedTempsAtDepth's owned half, for the temps from `mark` on,
+    // sparing `keep`.
+    void releaseOwnedTempsAtDepthExcept(u32 depth, u32 mark, IRValue* keep)
+        {
+        if (_blk.term() != 0)
+            return;
+        Array* keepT = new Array();
+        Array* keepB = new Array();
+        Array* doomed = new Array();
+        for (u32 i = (u32)0; i < _ownedTemps.count(); i = i + (u32)1)
+            {
+            IRValue* v = (IRValue*)_ownedTemps.get(i);
+            if (i < mark || v == keep || ((Number*)_ownedBlocks.get(i)).asU32() != depth)
+                {
+                keepT.add((Object*)v);
+                keepB.add(_ownedBlocks.get(i));
+                continue;
+                }
+            doomed.add((Object*)v);
+            }
         for (u32 i = doomed.count(); i > (u32)0; i = i - (u32)1)
             refOp(String.withCString("Release"), (IRValue*)doomed.get(i - (u32)1));
         _ownedTemps = keepT;

@@ -1,0 +1,9 @@
+receiver 4950 live 0
+element 45
+both arms 1090 live 0
+nested 5025 live 0
+condition 25 live 0
+value 1 4 live 2
+read out 5 live 3
+mixed 6 live 3
+end live 0
