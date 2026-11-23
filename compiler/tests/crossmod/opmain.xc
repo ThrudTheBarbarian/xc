@@ -10,5 +10,12 @@ i32 main(void)
     Stdio.printf("sum %d\n", (a + b).cents);
     Stdio.printf("neg %d\n", (-a).cents);
     Stdio.printf("scaled %d\n", (3 * b).cents);
+    a += b;
+    Stdio.printf("compound %d\n", a.cents);
+    Ledger* l = new Ledger();
+    l[0, 1] = 5;
+    l[1, 2] = 7;
+    l[1, 2] += 3;
+    Stdio.printf("index %d %d %d\n", l[0, 1], l[1, 2], l[1..6]);
     return 0;
     }
