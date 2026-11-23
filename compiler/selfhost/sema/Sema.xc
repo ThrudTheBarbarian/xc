@@ -4454,6 +4454,94 @@ class Sema
         return opClassDefines(lc, cShape) || opClassDefines(lc, pShape);
         }
 
+    // Does a value of this type hold a pointer or reference, directly or in a
+    // by-value member? A struct member counts as one.
+    bool opTypeHoldsRef(String* t, u32 depth)
+        {
+        if (t == 0)
+            return false;
+        for (u32 i = 0; i < t.byteLength(); i++)
+            {
+            if (t.byteAt(i) == (u8)'*')
+                return true;
+            if (t.byteAt(i) == (u8)'[')
+                return opTypeHoldsRef(t.substringBytes(0, i), depth);
+            }
+        if (_isOp(t, "string"))
+            return true;
+        if (_structs.get((Hashable*)t) != 0)
+            return true;
+        Node* c = (Node*)_classes.get((Hashable*)t);
+        if (c == 0)
+            return false;
+        return depth > 8 || opClassHoldsRefs(c, depth + 1);
+        }
+
+    bool opClassHoldsRefs(Node* cls, u32 depth)
+        {
+        for (Node* c = cls; c != 0; c = parentOf(c))
+            for (u32 i = 0; i < c.kidCount(); i++)
+                {
+                Node* iv = c.kid(i);
+                if (iv.kind() == (u16)nkVariableDecl && opTypeHoldsRef(iv.op(), depth))
+                    return true;
+                }
+        return false;
+        }
+
+    // `g[1][0] = 7` where g's `[]` returns a Row by value: the set would write
+    // into a temporary copy and be lost. Reports it, and returns true, when
+    // `recv` is a call's by-value class result and the class holds no pointer
+    // or reference (one that does may be a view into its owner, and passes).
+    // Mirrors the reference's refuseOperatorWrite:into:at:.
+    bool refuseOpWrite(String* op, Node* recv, Node* at)
+        {
+        String* t = recv.ty();
+        if (t == 0 || t.byteLength() == 0 || t.byteAt(t.byteLength() - 1) == (u8)'*')
+            return false;
+        Node* cls = (Node*)_classes.get((Hashable*)t);
+        if (cls == 0)
+            return false;
+        String* src = (String*)0;
+        String* owner = (String*)0;
+        u16 k = recv.kind();
+        Node* oc = Node.opCallOf(recv);
+        if (oc != 0 && oc.kind() == (u16)nkMethodCall)
+            {
+            Node* oo = oc.kidCount() > 0 ? opClassOf(oc.kid(0).ty()) : (Node*)0;
+            if (oo != 0)
+                owner = oo.name();
+            if (k == (u16)nkSubscript)
+                src = String.withCString("[]");
+            else if (k == (u16)nkSlice)
+                src = String.withCString(recv.hasFlag((u32)NF_INCLUSIVE) ? "[...]" : "[..]");
+            else
+                src = recv.op();
+            }
+        else if (k == (u16)nkMethodCall)
+            {
+            Node* ro = recv.kidCount() > 0 ? opClassOf(recv.kid(0).ty()) : (Node*)0;
+            if (ro != 0)
+                owner = ro.name();
+            src = recv.name();
+            }
+        else if (k == (u16)nkCall)
+            src = recv.name();
+        if (src == 0 || opClassHoldsRefs(cls, 0))
+            return false;
+        String* tn = cls.name();
+        String* msg = (String*)0;
+        if (owner != 0)
+            msg = String.withFormat("'%s' writes into a temporary copy of %s (%s's '%s' returns %s by value), so the write is lost; store it in a variable first (%s t = ...;) and write through that, or have %s's '%s' return a %s* or a view that points into %s",
+                                    op.cString(), tn.cString(), owner.cString(), src.cString(), tn.cString(), tn.cString(),
+                                    owner.cString(), src.cString(), tn.cString(), owner.cString());
+        else
+            msg = String.withFormat("'%s' writes into a temporary copy of %s ('%s' returns %s by value), so the write is lost; store it in a variable first (%s t = ...;) and write through that, or have '%s' return a %s*",
+                                    op.cString(), tn.cString(), src.cString(), tn.cString(), tn.cString(), src.cString(), tn.cString());
+        _errorAt(msg, at);
+        return true;
+        }
+
     // An assignment through an operator: the index set (`m[i] = v`), get, op
     // and set for `m[i] += v`, the compound operator (`a += b`), or `a = a + b`
     // when the class defines `+` and no `+=` that matches. false when none
@@ -4528,6 +4616,7 @@ class Sema
             n.addFlag((u32)NF_OPCALL);
             for (u32 i = 0; i < shared.count(); i++)
                 n.add((Node*)shared.get(i));
+            refuseOpWrite(bop != 0 ? aop : setOp, base, n);
             return true;
             }
 
@@ -4582,12 +4671,13 @@ class Sema
                 if (call == 0 && !_opAmbig)
                     _errorAt(String.withFormat("'%s' has no '%s' taking '%s'", lc.name().cString(), aop.cString(),
                                                opTypes(cops, 1).cString()), n);
+                n.setTy(String.withCString("void"));
                 if (call != 0)
                     {
                     n.add(call);
                     n.addFlag((u32)NF_OPCALL);
+                    refuseOpWrite(aop, lhs, n);
                     }
-                n.setTy(String.withCString("void"));
                 return true;
                 }
             }
