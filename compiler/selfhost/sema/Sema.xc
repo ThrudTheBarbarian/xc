@@ -1256,6 +1256,7 @@ class Sema
         collectDeclarations(program);
         checkParents();
         findCycles();
+        findValueRings();
         _vt.setCyclic(_cyclic);
         synthesiseDescriptions();
         Mangle.setTables(_classes, _structs);
@@ -7776,6 +7777,71 @@ class Sema
                     }
                 }
             }
+        }
+
+    // A class that holds an instance of itself by value (#564), directly or
+    // through the classes it holds or inherits from, has no size. Each class
+    // whose ivar leads into such a ring is refused there.
+    void findValueRings(void)
+        {
+        Array* names = new Array();
+        Array* raw = _classes.allKeys();
+        for (u32 i = (u32)0; i < raw.count(); i = i + (u32)1)
+            names.add(raw.get(i));
+        Vtable.sortStrings(names);
+        for (u32 i = (u32)0; i < names.count(); i = i + (u32)1)
+            {
+            String* n = (String*)names.get(i);
+            Node* cls = (Node*)_classes.get((Hashable*)n);
+            if (cls == 0)
+                continue;
+            for (u32 j = (u32)0; j < cls.kidCount(); j = j + (u32)1)
+                {
+                Node* iv = cls.kid(j);
+                if (iv.kind() != (u16)nkVariableDecl || iv.hasFlag((u32)NF_STATIC))
+                    continue;
+                Node* held = heldByValue(iv.op());
+                if (held == 0 || !holdsByValue(held, n, new Map()))
+                    continue;
+                _errorAt(String.withFormat("class '%s' holds an instance of itself by value through ivar '%s': declare it '%s* %s;'",
+                                           n.cString(), iv.name().cString(), held.name().cString(), iv.name().cString()), iv);
+                break;
+                }
+            }
+        }
+
+    // The class an ivar of this type holds by value, or 0.
+    Node* heldByValue(String* ty)
+        {
+        if (ty == 0 || ty.byteLength() == (u32)0 || ty.byteAt(ty.byteLength() - (u32)1) == (u8)'*')
+            return (Node*)0;
+        for (u32 i = (u32)0; i < ty.byteLength(); i = i + (u32)1)
+            if (ty.byteAt(i) == (u8)'[' || ty.byteAt(i) == (u8)':')
+                return (Node*)0;
+        return (Node*)_classes.get((Hashable*)ty);
+        }
+
+    // Does an instance of `c` contain one of `target`?
+    bool holdsByValue(Node* c, String* target, Map* seen)
+        {
+        if (c.name().equals(target))
+            return true;
+        if (seen.get((Hashable*)c.name()) != 0)
+            return false;
+        seen.set((Hashable*)c.name(), (Object*)c.name());
+        Node* p = parentOf(c);
+        if (p != 0 && holdsByValue(p, target, seen))
+            return true;
+        for (u32 j = (u32)0; j < c.kidCount(); j = j + (u32)1)
+            {
+            Node* iv = c.kid(j);
+            if (iv.kind() != (u16)nkVariableDecl || iv.hasFlag((u32)NF_STATIC))
+                continue;
+            Node* held = heldByValue(iv.op());
+            if (held != 0 && holdsByValue(held, target, seen))
+                return true;
+            }
+        return false;
         }
 
     bool providesMatching(Node* cls, Node* want, String* meth)

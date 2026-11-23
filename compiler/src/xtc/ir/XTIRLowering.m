@@ -37,6 +37,8 @@
 @property(nonatomic) XTIRLayout* vtableLayout;
 @property(nonatomic) XTIRSymbolId vtableSymbolId;
 @property(nonatomic) XTIRType* selfPtrType; // Ptr(Agg(instanceLayout), unbanked)
+// The alignment an instance gets when another class holds it by value (#564).
+@property(nonatomic) NSUInteger instanceAlign;
 // ivar name → (field-index, AST type). Field 0 is the vtable pointer,
 // so ivars start at index 1; inherited ivars keep their parent-side
 // indices.
@@ -2552,6 +2554,9 @@ static NSString* XTDescribeNodeKind(XTASTNodeKind k)
             [self emitIvarArrayARCAt:instance fieldIndex:idx.unsignedIntegerValue type:(XTArrayType*)ivarAST zero:YES];
             continue;
             }
+        // An instance held by value is set up on its own.
+        if ([self valueIvarClassFor:ivarAST])
+            continue;
         XTIRType* fieldIRType = [self irTypeForASTTypeQuiet:ivarAST];
         // Only scalar / pointer ivars get a single-Store zero. Aggregate
         // ivars (nested struct/array) are left untouched — none of the
@@ -4346,6 +4351,12 @@ static NSString* XTDescribeNodeKind(XTASTNodeKind k)
             }
         if (slot && ivarAST)
             {
+            // An instance held by value is its address, as a stack instance is.
+            XTIRClassInfo* vic = [self valueIvarClassFor:ivarAST];
+            if (vic)
+                return [self emitFieldAddr:self.currentSelf
+                                fieldIndex:slot.unsignedIntegerValue
+                                resultType:vic.selfPtrType];
             XTIRType* fieldIRType = [self irTypeForASTType:ivarAST at:node.location];
             if (!fieldIRType)
                 return nil;
@@ -6532,6 +6543,12 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
     XTIRValue* basePtr = [self selfPointerForClassBase:base];
     if (!basePtr)
         return nil;
+    XTIRClassInfo* mvc = [self valueIvarClassFor:ivarAST];
+    if (mvc)
+        {
+        [self valueIvarAssignInto:basePtr slot:slot.unsignedIntegerValue class:mvc rhs:rhsNode];
+        return nil;
+        }
     if (lhs == self.compoundLhs)
         self.compoundLhsAddr = basePtr;
     XTIRValue* rhsVal = [self lowerExpression:rhsNode];
@@ -7422,6 +7439,13 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
                                                @"lowering: ivar '%@' not found", ivarName]];
         return nil;
         }
+    // `m = v` of an ivar held by value, named bare in a method.
+    XTIRClassInfo* bvc = [self valueIvarClassFor:ivarAST];
+    if (bvc)
+        {
+        [self valueIvarAssignInto:self.currentSelf slot:slot.unsignedIntegerValue class:bvc rhs:rhsNode];
+        return nil;
+        }
 
     XTIRValue* rhsVal = [self lowerExpression:rhsNode];
     if (!rhsVal)
@@ -7937,6 +7961,12 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
                              : [self selfPointerForClassBase:base];
     if (!basePtr)
         return nil;
+    // An instance held by value is its address, as a stack instance is.
+    XTIRClassInfo* vic = [self valueIvarClassFor:ivarAST];
+    if (vic)
+        return [self emitFieldAddr:basePtr
+                        fieldIndex:slot.unsignedIntegerValue
+                        resultType:vic.selfPtrType];
     XTIRType* fieldIRType = [self irTypeForASTType:ivarAST at:node.location];
     if (!fieldIRType)
         return nil;
@@ -8037,6 +8067,115 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
     if (t && t.kind == XTTypeKindClass && ![t isKindOfClass:[XTPointerType class]])
         return self.classesByName[t.displayName];
     return nil;
+    }
+
+#pragma mark - Instances held by value inside another (#564)
+
+// An ivar whose type names a class without `*` (`Inner inner;`) is an instance
+// laid out inside its owner: set up with the owner, torn down by the owner's
+// dealloc, and copied with it. Its class, or nil for any other ivar. The port
+// has the same functions, under the same names.
+- (nullable XTIRClassInfo*)valueIvarClassFor:(nullable XTType*)t
+    {
+    if (!t || [self astTypeIsWeakSlot:t])
+        return nil;
+    return [self valueClassForASTType:t];
+    }
+
+- (BOOL)namesClassByValue:(nullable XTType*)t
+    {
+    if (!t || t.kind != XTTypeKindClass || [t isKindOfClass:[XTPointerType class]] || [self astTypeIsWeakSlot:t])
+        return NO;
+    return self.classDeclsByName[t.displayName] != nil;
+    }
+
+// The layout of the class an ivar holds by value, built now if it has not been.
+// A class that would hold itself has no size, and is refused.
+- (nullable XTIRClassInfo*)valueIvarLayoutFor:(XTVariableDeclNode*)ivar owner:(NSString*)owner
+    {
+    XTType* t = ivar.declaredType;
+    if (![self namesClassByValue:t])
+        return nil;
+    XTIRClassInfo* ci = [self classInfoResolvingName:t.displayName];
+    if (!ci)
+        [self softFailLoweringAt:ivar.location
+                     withMessage:[NSString stringWithFormat:
+                                               @"ivar '%@' of class '%@' holds a '%@' by value, which contains it: declare it '%@* %@;'",
+                                               ivar.varName, owner, t.displayName, t.displayName, ivar.varName]];
+    return ci;
+    }
+
+// The ivar `name` of `ci` (its ancestors' included) when it holds an instance by
+// value, with its field index in `slotOut`.
+- (nullable XTIRClassInfo*)valueIvarNamed:(NSString*)name inClass:(nullable XTIRClassInfo*)ci slot:(NSUInteger*)slotOut
+    {
+    for (XTIRClassInfo* c = ci; c != nil; c = c.parent)
+        {
+        NSNumber* slot = c.ivarFieldIndex[name];
+        if (!slot)
+            continue;
+        XTIRClassInfo* vc = [self valueIvarClassFor:c.ivarASTType[name]];
+        if (vc && slotOut)
+            *slotOut = slot.unsignedIntegerValue;
+        return vc;
+        }
+    return nil;
+    }
+
+// Each instance the class holds by value, its ancestors' included, set up as a
+// stack instance is: ivars zeroed, vtable seeded, its own members, then its
+// zero-argument init. The owner's init runs after.
+- (void)setUpValueMembersAt:(XTIRValue*)addr class:(XTIRClassInfo*)ci
+    {
+    for (NSString* name in [self stackIvarNamesOf:ci])
+        {
+        XTIRClassInfo* mc = [self valueIvarClassFor:ci.ivarASTType[name]];
+        if (!mc)
+            continue;
+        NSUInteger slot = ci.ivarFieldIndex[name].unsignedIntegerValue;
+        XTIRValue* ma = [self emitFieldAddr:addr fieldIndex:slot resultType:mc.selfPtrType];
+        [self emitZeroInitIvarsFor:ma class:mc];
+        [self stackZeroStructsAt:ma class:mc];
+        [self emitVtableInitFor:ma class:mc];
+        [self setUpValueMembersAt:ma class:mc];
+        XTClassDeclNode* cls = self.classDeclsByName[mc.className];
+        XTMethodDeclNode* zeroArgInit = nil;
+        for (XTMethodDeclNode* m in cls.methods)
+            {
+            if ([m.methodName isEqualToString:@"init"] && m.parameters.count == 0)
+                {
+                zeroArgInit = m;
+                break;
+                }
+            }
+        if (!zeroArgInit)
+            continue;
+        NSString* mangled = zeroArgInit.mangledName ?: zeroArgInit.methodName;
+        XTIRSymbol* sym = [self.module symbolForName:[NSString stringWithFormat:@"%@$%@", mc.className, mangled]];
+        if (!sym)
+            continue;
+        XTIRSymbolId sid = [self.module.symbols indexOfObjectIdenticalTo:sym];
+        XTIRCallConv* conv = sym.attributes[@"cloaked"].boolValue  ? [XTIRCallConv cloaked]
+                             : sym.attributes[@"banked"].boolValue ? [XTIRCallConv banked]
+                                                                   : [XTIRCallConv standard];
+        (void)[self emitCall:sid callConv:conv argValues:@[ ma ] resultType:nil];
+        }
+    }
+
+// `obj.m = v` / `m = v` of an instance held by value: a copy into the member's
+// bytes, retaining what it refers to, after the old member comes apart.
+- (void)valueIvarAssignInto:(XTIRValue*)recv slot:(NSUInteger)slot class:(XTIRClassInfo*)mc rhs:(XTASTNode*)rhs
+    {
+    XTIRValue* src = [self lowerExpression:rhs];
+    if (!src)
+        return;
+    if (![self irValueIsPointer:src])
+        {
+        [self softFailLoweringAt:rhs.location withMessage:@"an instance held by value takes an instance"];
+        return;
+        }
+    XTIRValue* dst = [self emitFieldAddr:recv fieldIndex:slot resultType:mc.selfPtrType];
+    [self valueCopyFrom:src into:dst pinned:nil class:mc assign:YES];
     }
 
 // A bare class return type is ambiguous: `Node init() { return self; }` hands
@@ -8222,6 +8361,13 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
         NSUInteger slot = ci.ivarFieldIndex[name].unsignedIntegerValue;
         if (!t || [self astTypeIsWeakSlot:t])
             continue;
+        XTIRClassInfo* cvc = [self valueIvarClassFor:t];
+        if (cvc)
+            {
+            if ([self stackDeallocSymbolFor:cvc])
+                [self stackClaimAt:[self emitFieldAddr:addr fieldIndex:slot resultType:cvc.selfPtrType] class:cvc];
+            continue;
+            }
         if (t.kind == XTTypeKindStruct && [t isKindOfClass:[XTStructType class]])
             {
             if ([self structTypeContainsStrongPointer:(XTStructType*)t])
@@ -8302,6 +8448,15 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
         {
         XTType* t = ci.ivarASTType[name];
         NSUInteger pidx = ci.ivarFieldIndex[name].unsignedIntegerValue;
+        XTIRClassInfo* wvc = [self valueIvarClassFor:t];
+        if (wvc)
+            {
+            if ([self stackDeallocSymbolFor:wvc])
+                [self stackWeakLinksAt:[self emitFieldAddr:addr fieldIndex:pidx resultType:wvc.selfPtrType]
+                                 class:wvc
+                                relink:relink];
+            continue;
+            }
         if (!t || ![self astTypeIsWeakSlot:t] || pidx < 2)
             continue;
         XTIRType* payloadIR = [self irTypeForASTTypeQuiet:t];
@@ -9280,6 +9435,7 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
             [self emitZeroInitIvarsFor:instance class:ci];
         // Stamp the RTTI class id so a later downcast can read the type.
         [self emitClassIdStampFor:instance class:ci];
+        [self setUpValueMembersAt:instance class:ci];
 
         // Resolve the init symbol, walking parents for an inherited
         // init (mirrors lowerMethodCallExpr:).
@@ -9369,7 +9525,10 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
         [self emitZeroInitIvarsFor:instance class:ci];
     // Stamp the RTTI class id so a later downcast can read the type.
     if (ci)
+        {
         [self emitClassIdStampFor:instance class:ci];
+        [self setUpValueMembersAt:instance class:ci];
+        }
     // Track only a class instance (+1); a non-class `new T[N]`/`new u16`
     // buffer is not ARC-managed.
     if (ci)
@@ -9410,7 +9569,25 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
     if ([t isKindOfClass:[XTPointerType class]])
         return NO;
     if ([base isKindOfClass:[XTIdentifierNode class]])
-        return self.valueClassLocals[((XTIdentifierNode*)base).identName] != nil;
+        {
+        NSString* name = ((XTIdentifierNode*)base).identName;
+        if (self.valueClassLocals[name] != nil)
+            return YES;
+        // An ivar held by value, named bare in a method.
+        return !self.locals[name] && !self.pinnedLocals[name] && self.currentSelf
+            && [self valueIvarNamed:name inClass:self.currentClassInfo slot:NULL] != nil;
+        }
+    // `obj.m` where m is an ivar held by value.
+    if (base.nodeKind == XTASTNodeKindMemberAccess)
+        {
+        XTMemberAccessNode* m = (XTMemberAccessNode*)base;
+        XTType* bt = m.base.resolvedType;
+        if (bt && [bt isKindOfClass:[XTPointerType class]])
+            bt = ((XTPointerType*)bt).pointeeType;
+        if (!bt || bt.kind != XTTypeKindClass)
+            return NO;
+        return [self valueIvarNamed:m.memberName inClass:self.classesByName[bt.displayName] slot:NULL] != nil;
+        }
     return base.nodeKind == XTASTNodeKindSubscriptExpr;
     }
 
@@ -14305,6 +14482,16 @@ typedef NS_ENUM(NSInteger, XTStructARCMode) {
             [self emitRelease:ivarVal];
             continue;
             }
+        // An instance held by value comes apart with its owner: its class's
+        // dealloc runs on it.
+        XTIRClassInfo* tvc = [self valueIvarClassFor:ivarAST];
+        if (tvc)
+            {
+            if ([self stackDeallocSymbolFor:tvc])
+                [self stackTeardownAt:[self emitFieldAddr:self.currentSelf fieldIndex:slot resultType:tvc.selfPtrType]
+                                class:tvc];
+            continue;
+            }
         // Struct-typed ivar (e.g. `Node inner;`) — recurse into the
         // embedded struct and release any strong class-pointer fields it
         // (transitively) holds. The struct's address within the instance
@@ -15215,6 +15402,7 @@ typedef NS_ENUM(NSInteger, XTStructARCMode) {
                     [self emitZeroInitIvarsFor:addr class:vci];
                     [self stackZeroStructsAt:addr class:vci];
                     [self emitVtableInitFor:addr class:vci];
+                    [self setUpValueMembersAt:addr class:vci];
                     // Auto-init: if the class defines a zero-arg `init()`,
                     // call it automatically after the slot is set up — same
                     // shape as a parameterised `<C> g(args)` desugaring,
@@ -19668,10 +19856,13 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
             if (ivar.isStatic)
                 continue;
             XTType* ivarType = ivar.declaredType ?: [XTType u8Type];
-            XTIRType* fieldIRType = [self irTypeForASTTypeQuiet:ivarType];
+            XTIRClassInfo* vic = [self valueIvarLayoutFor:ivar owner:ancestor.className];
+            if (!vic && [self namesClassByValue:ivarType])
+                return info;
+            XTIRType* fieldIRType = vic ? [XTIRType aggWithLayout:vic.instanceLayout] : [self irTypeForASTTypeQuiet:ivarType];
             if (!fieldIRType)
                 continue; // skip unsupported-type ivars
-            NSUInteger fa = [XTStructType fieldAlignmentForType:ivarType];
+            NSUInteger fa = vic ? vic.instanceAlign : [XTStructType fieldAlignmentForType:ivarType];
             if (fa > instAlign)
                 instAlign = fa;
             instOffset = (uint32_t)((instOffset + fa - 1) & ~(fa - 1));
@@ -19690,7 +19881,7 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
                                                                          type:fieldIRType]];
             info.ivarFieldIndex[ivar.varName] = @(fieldIndex++);
             info.ivarASTType[ivar.varName] = ivarType;
-            instOffset += (uint32_t)ivarType.byteWidth;
+            instOffset += vic ? (uint32_t)vic.instanceLayout.size : (uint32_t)ivarType.byteWidth;
             }
         }
     for (XTVariableDeclNode* ivar in cls.ivars)
@@ -19703,7 +19894,10 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
             continue;
             }
         XTType* ivarType = ivar.declaredType ?: [XTType u8Type];
-        XTIRType* fieldIRType = [self irTypeForASTTypeQuiet:ivarType];
+        XTIRClassInfo* vic = [self valueIvarLayoutFor:ivar owner:cls.className];
+        if (!vic && [self namesClassByValue:ivarType])
+            return info;
+        XTIRType* fieldIRType = vic ? [XTIRType aggWithLayout:vic.instanceLayout] : [self irTypeForASTTypeQuiet:ivarType];
         if (!fieldIRType)
             {
             // Tolerate-and-skip: an ivar with an unsupported type
@@ -19715,7 +19909,7 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
             // disappears until float lowering lands.
             continue;
             }
-        NSUInteger fa = [XTStructType fieldAlignmentForType:ivarType];
+        NSUInteger fa = vic ? vic.instanceAlign : [XTStructType fieldAlignmentForType:ivarType];
         if (fa > instAlign)
             instAlign = fa;
         instOffset = (uint32_t)((instOffset + fa - 1) & ~(fa - 1));
@@ -19730,7 +19924,7 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
                                                                      type:fieldIRType]];
         info.ivarFieldIndex[ivar.varName] = @(fieldIndex++);
         info.ivarASTType[ivar.varName] = ivarType;
-        instOffset += (uint32_t)ivarType.byteWidth;
+        instOffset += vic ? (uint32_t)vic.instanceLayout.size : (uint32_t)ivarType.byteWidth;
         }
     // Record the names this class declares (vs inherited), so the dealloc
     // teardown releases only OWN strong ivars and leaves the rest to the
@@ -19747,6 +19941,7 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
     // alignment, capped) so `new T[N]` / `delete obj[]` stride correctly.
     // Cap 1 → instAlign 1 → no rounding, the historical layout.
     instOffset = (uint32_t)((instOffset + instAlign - 1) & ~(instAlign - 1));
+    info.instanceAlign = instAlign;
     info.instanceLayout = [[XTIRLayout alloc] initWithSize:instOffset
                                                  alignment:1
                                                     fields:instanceFields];
@@ -19800,6 +19995,17 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
             [self preScanClassRest:parentDecl
                               info:[self preScanClassLayout:parentDecl]];
             }
+        }
+    // The classes it holds by value first, so their deallocs are known when
+    // this class's is decided.
+    for (XTVariableDeclNode* ivar in cls.ivars)
+        {
+        if (ivar.isStatic)
+            continue;
+        XTIRClassInfo* pvc = [self valueIvarClassFor:ivar.declaredType];
+        XTClassDeclNode* pdecl = pvc ? self.classDeclsByName[pvc.className] : nil;
+        if (pdecl)
+            [self preScanClassRest:pdecl info:pvc];
         }
     XTIRClassInfo* parentInfo = info.parent;
 
@@ -20265,6 +20471,14 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
             if (ivar.isStatic)
                 continue; // class-level storage outlives instances
             if ([self astTypeIsClassPointer:ivar.declaredType] || [self astTypeIsClassPtrArray:ivar.declaredType])
+                {
+                hasStrongOwnIvar = YES;
+                break;
+                }
+            // An instance held by value whose class has a dealloc: the owner's
+            // runs it.
+            XTIRClassInfo* rvc = [self valueIvarClassFor:ivar.declaredType];
+            if (rvc && [self stackDeallocSymbolFor:rvc])
                 {
                 hasStrongOwnIvar = YES;
                 break;

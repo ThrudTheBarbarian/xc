@@ -1,0 +1,20 @@
+issue 1 5 sum 6
+deep 1 2 3 4
+heap deep 9 17
+vtable 42 42
+stack box n 7 tag 1 live 1
+replaced live 1
+stack scope live 0
+loop live 0
+heap box n 7 live 2
+heap scope live 0
+copy live 1 same 1
+copy split live 2 tag 2
+member copy 70 7 live 2
+member assign 70 live 1
+self assign 70 live 1
+copy scope live 0
+returned 5 7 live 1
+temp 7
+temp live 1
+end live 0 inits 9 deallocs 13

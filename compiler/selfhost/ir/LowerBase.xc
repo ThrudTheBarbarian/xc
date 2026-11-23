@@ -54,6 +54,7 @@ class ClassInfo
     String* _agg;     // `Agg(N)` — the instance layout
     String* _selfPtr; // `Ptr(Agg(N), unbanked)` — what a reference is
     u32 _instSize;
+    u32 _instAlign;      // the alignment an instance held by value gets
     Map* _ivarIndex;     // ivar name -> its FIELD index in the instance
     Map* _ivarType;      // ivar name -> its declared type spelling
     Map* _methodSlot;    // method name -> its vtable slot
@@ -69,6 +70,7 @@ class ClassInfo
         _classId = (u32)0;
         _needsVtable = false;
         _instSize = (u32)0;
+        _instAlign = (u32)1;
         _ivarIndex = new Map();
         _ivarType = new Map();
         _methodSlot = new Map();
@@ -108,6 +110,10 @@ class ClassInfo
     u32 instSize(void)
         {
         return _instSize;
+        }
+    u32 instAlign(void)
+        {
+        return _instAlign;
         }
     Map* ivarIndex(void)
         {
@@ -175,6 +181,10 @@ class ClassInfo
     void setInstSize(u32 v)
         {
         _instSize = v;
+        }
+    void setInstAlign(u32 v)
+        {
+        _instAlign = v;
         }
     }
 
@@ -3991,7 +4001,7 @@ class ClassInfo
             if (_failed)
                 return (IRValue*)0;
             String* ft = (String*)ci.ivarType().get((Hashable*)n.name());
-            return fieldAddr(recv, ((Number*)idx).asU32(), ptrTo(irType(ft)));
+            return fieldAddr(recv, ((Number*)idx).asU32(), ivarFieldPtr(ft));
             }
         Node* st = structDeclFor(pointeeOf(bt));
         if (st == 0)
@@ -4605,6 +4615,9 @@ class ClassInfo
             IRValue* fa = memberAddr(n);
             if (_failed)
                 return (IRValue*)0;
+            // An instance held by value is its address, as a stack instance is.
+            if (valueIvarClass(ft) != 0 && classFor(pointeeOf(n.kid((u32)0).ty())) != 0)
+                return fa;
             return loadThrough(fa, ft);
             }
         if (k == (u16)nkUnary)
@@ -4923,6 +4936,8 @@ class ClassInfo
         if (ivarIndexOf(n.name()) >= (i32)0)
             {
             String* ity = (String*)_curClass.ivarType().get((Hashable*)n.name());
+            if (valueIvarClass(ity) != 0)
+                return ivarAddr(n.name(), n);
             return loadThrough(ivarAddr(n.name(), n), ity);
             }
         Object* ec = _enumConsts.get((Hashable*)n.name());
@@ -5481,6 +5496,15 @@ class ClassInfo
             Node* base = lhs.kid((u32)0);
             String* bt = base.ty();
             ClassInfo* ci = classFor(pointeeOf(bt));
+            ClassInfo* mvc = ci != 0 ? valueIvarClass(ft) : (ClassInfo*)0;
+            if (mvc != 0)
+                {
+                IRValue* vrecv = lowerExpr(base);
+                if (_failed)
+                    return (IRValue*)0;
+                valueIvarAssign(vrecv, ((Number*)ci.ivarIndex().get((Hashable*)lhs.name())).asU32(), mvc, n.kid((u32)1));
+                return (IRValue*)0;
+                }
             i32 fidx = (i32)0;
             IRValue* baseAddr = (IRValue*)0;
             if (ci != 0)
@@ -5747,6 +5771,17 @@ class ClassInfo
             return (IRValue*)0;
         if (_failed)
             return (IRValue*)0;
+        // `m = v` of an ivar held by value, named bare in a method.
+        if (lhs.kind() == (u16)nkIdent && pinOf(lhs.name()) == 0 && _locals.get((Hashable*)lhs.name()) == 0
+            && _localTypes.get((Hashable*)lhs.name()) == 0 && _curClass != 0 && ivarIndexOf(lhs.name()) >= (i32)0)
+            {
+            ClassInfo* bvc = valueIvarClass((String*)_curClass.ivarType().get((Hashable*)lhs.name()));
+            if (bvc != 0)
+                {
+                valueIvarAssign(_self, (u32)ivarIndexOf(lhs.name()), bvc, n.kid((u32)1));
+                return (IRValue*)0;
+                }
+            }
         structAdoptARC(lhs, n.kid((u32)1));
         IRValue* v = lowerExpr(n.kid((u32)1));
         if (_failed)
@@ -10867,6 +10902,13 @@ class ClassInfo
             u32 slot = ((Number*)ci.ivarIndex().get((Hashable*)nm)).asU32();
             if (ty == (String*)0 || isWeakSlot(ty))
                 continue;
+            ClassInfo* cvc = valueIvarClass(ty);
+            if (cvc != 0)
+                {
+                if (stackDeallocSym(cvc) != (String*)0)
+                    stackClaim(fieldAddr(addr, slot, cvc.selfPtr()), cvc);
+                continue;
+                }
             if (structDeclFor(ty) != 0)
                 {
                 if (structHasStrongPointer(ty))
@@ -10930,6 +10972,13 @@ class ClassInfo
             String* nm = (String*)names.get(i);
             String* ty = (String*)ci.ivarType().get((Hashable*)nm);
             u32 pidx = ((Number*)ci.ivarIndex().get((Hashable*)nm)).asU32();
+            ClassInfo* wvc = valueIvarClass(ty);
+            if (wvc != 0)
+                {
+                if (stackDeallocSym(wvc) != (String*)0)
+                    stackWeakLinks(fieldAddr(addr, pidx, wvc.selfPtr()), wvc, relink);
+                continue;
+                }
             if (ty == (String*)0 || !isWeakSlot(ty) || pidx < (u32)2)
                 continue;
             if (!relink)
@@ -11153,6 +11202,7 @@ class ClassInfo
         zeroInitIvars(addr, ci);
         stackZeroStructs(addr, ci);
         stampInstanceIdentity(addr, ci);
+        setUpValueMembers(addr, ci);
         Node* init = zeroArgInit(ci);
         if (init != 0)
             emitMethodCall(methodSymbolName(ci.decl(), init), addr,
@@ -11233,6 +11283,9 @@ class ClassInfo
                     ivarArrayARC(addr, slot, ty, true);
                     continue;
                     }
+                // An instance held by value is set up on its own.
+                if (valueIvarClass(ty) != 0)
+                    continue;
                 String* ir = irType(ty);
                 if (IRType.isAgg(ir))
                     continue;
@@ -11812,6 +11865,7 @@ class ClassInfo
         if (classHasStrongIvar(ci))
             zeroInitIvars(inst, ci);
         stampClassId(inst, ci);
+        setUpValueMembers(inst, ci);
         // The allocator does not run the constructor: an ivar read before init
         // would see whatever the block last held. An array of class
         // (`new C[n]`) runs none, as in the reference: it used to call init on
@@ -13122,7 +13176,7 @@ class ClassInfo
             errorAtNode(msg, at);
             }
         String* ty = (String*)_curClass.ivarType().get((Hashable*)name);
-        return fieldAddr(_self, (u32)ivarIndexOf(name), ptrTo(irType(ty)));
+        return fieldAddr(_self, (u32)ivarIndexOf(name), ivarFieldPtr(ty));
         }
 
     // Does the class declare an instance method of its own, other than init?
@@ -13270,6 +13324,102 @@ class ClassInfo
         if (ast == 0 || Types.isPointer(ast))
             return (ClassInfo*)0;
         return classFor(stripQual(ast));
+        }
+
+    // ── instances held by value inside another (#564) ────────────────────
+    // An ivar whose type names a class without `*` (`Inner inner;`) is an
+    // instance laid out inside its owner: set up with the owner, torn down by
+    // the owner's dealloc, and copied with it. Its class, or 0 for any other
+    // ivar.
+    ClassInfo* valueIvarClass(String* ty)
+        {
+        if (ty == 0 || Types.isPointer(ty) || isArrayLike(ty) || isWeakSlot(ty))
+            return (ClassInfo*)0;
+        return classFor(stripQual(ty));
+        }
+
+    // A field of the instance as the instance pointer an ivar held by value
+    // is, or as a pointer to any other ivar's type.
+    String* ivarFieldPtr(String* ty)
+        {
+        ClassInfo* vc = valueIvarClass(ty);
+        if (vc != 0)
+            return vc.selfPtr();
+        return ptrTo(irType(ty));
+        }
+
+    // The layout of the class an ivar holds by value, built now if it has not
+    // been. A class that would hold itself has no size, and is refused.
+    bool namesClassByValue(String* ty)
+        {
+        if (ty == 0 || Types.isPointer(ty) || isArrayLike(ty) || isWeakSlot(ty))
+            return false;
+        return _classDecls.get((Hashable*)stripQual(ty)) != 0;
+        }
+
+    ClassInfo* valueIvarLayout(Node* owner, Node* iv)
+        {
+        if (!namesClassByValue(iv.op()))
+            return (ClassInfo*)0;
+        String* key = stripQual(iv.op());
+        ClassInfo* ci = classResolving(key);
+        if (ci == 0)
+            {
+            String* m = String.withCString("ivar '");
+            m.append(iv.name());
+            m.appendCString("' of class '");
+            m.append(owner.name());
+            m.appendCString("' holds a '");
+            m.append(key);
+            m.appendCString("' by value, which contains it: declare it '");
+            m.append(key);
+            m.appendCString("* ");
+            m.append(iv.name());
+            m.appendCString(";'");
+            giveUp(m);
+            }
+        return ci;
+        }
+
+    // Each instance the class holds by value, its ancestors' included, set up
+    // as a stack instance is: ivars zeroed, vtable seeded, its own members,
+    // then its zero-argument init. The owner's init runs after.
+    void setUpValueMembers(IRValue* addr, ClassInfo* ci)
+        {
+        Array* names = sortedByIvarIndex(ci);
+        for (u32 i = (u32)0; i < names.count(); i = i + (u32)1)
+            {
+            String* nm = (String*)names.get(i);
+            ClassInfo* mc = valueIvarClass((String*)ci.ivarType().get((Hashable*)nm));
+            if (mc == 0)
+                continue;
+            u32 slot = ((Number*)ci.ivarIndex().get((Hashable*)nm)).asU32();
+            IRValue* ma = fieldAddr(addr, slot, mc.selfPtr());
+            zeroInitIvars(ma, mc);
+            stackZeroStructs(ma, mc);
+            stampInstanceIdentity(ma, mc);
+            setUpValueMembers(ma, mc);
+            Node* init = zeroArgInit(mc);
+            if (init != 0)
+                emitMethodCall(methodSymbolName(mc.decl(), init), ma,
+                               new Array(), (String*)0, false);
+            }
+        }
+
+    // `obj.m = v` / `m = v` of an instance held by value: a copy into the
+    // member's bytes, retaining what it refers to, after the old member
+    // comes apart.
+    void valueIvarAssign(IRValue* recv, u32 slot, ClassInfo* mc, Node* rhs)
+        {
+        IRValue* src = lowerExpr(rhs);
+        if (_failed)
+            return;
+        if (src == 0 || !isPtrIr(src.ty()))
+            {
+            giveUpAt(String.withCString("an instance held by value takes an instance"), rhs);
+            return;
+            }
+        valueCopyInto(src, fieldAddr(recv, slot, mc.selfPtr()), (IRPinned*)0, mc, true);
         }
 
     // A call that handed back a class instance by value: its aggregate goes
@@ -13860,6 +14010,15 @@ class ClassInfo
                        fieldAddr(pairAddr, (u32)0, pp), (IRValue*)0);
                 continue;
                 }
+            // An instance held by value comes apart with its owner: its
+            // class's dealloc runs on it.
+            ClassInfo* tvc = valueIvarClass(ty);
+            if (tvc != 0)
+                {
+                if (stackDeallocSym(tvc) != (String*)0)
+                    stackTeardown(fieldAddr(_self, slot, tvc.selfPtr()), tvc);
+                continue;
+                }
             // A STRUCT-typed ivar owns whatever strong pointers it holds,
             // however deep — the object owns the struct, and the struct owns
             // them. Skipped when it holds none, so nothing emits a dead
@@ -14334,6 +14493,17 @@ class ClassInfo
             {
             preScanRest(objectDecl(), preScanLayout(objectDecl()));
             }
+        // The classes it holds by value first, so their deallocs are known
+        // when this class's is decided.
+        for (u32 i = (u32)0; i < cls.kidCount(); i = i + (u32)1)
+            {
+            Node* iv = cls.kid(i);
+            if (iv.kind() != (u16)nkVariableDecl || iv.hasFlag((u32)NF_STATIC))
+                continue;
+            ClassInfo* pvc = valueIvarClass(iv.op());
+            if (pvc != 0)
+                preScanRest(pvc.decl(), pvc);
+            }
         ClassInfo* parent = info.parent();
 
         // The method name -> symbol suffix map, inherited then own.
@@ -14545,8 +14715,11 @@ class ClassInfo
                 tys.add((Object*)ptrTo(String.withCString("Void")));
                 fieldIndex = fieldIndex + (u32)2;
                 }
+            ClassInfo* vic = valueIvarLayout(owner, iv);
+            if (vic == 0 && namesClassByValue(iv.op()))
+                return fieldIndex;
             offs.add((Object*)Number.with((u32)0));
-            tys.add((Object*)irType(iv.op()));
+            tys.add((Object*)(vic != 0 ? vic.agg() : irType(iv.op())));
             info.ivarIndex().set((Hashable*)iv.name(), (Object*)Number.with(fieldIndex));
             info.ivarType().set((Hashable*)iv.name(), (Object*)iv.op());
             fieldIndex = fieldIndex + (u32)1;
@@ -14636,7 +14809,8 @@ class ClassInfo
         for (u32 i = (u32)0; i < order.count(); i = i + (u32)1)
             {
             String* ty = (String*)order.get(i);
-            u32 fa = fieldAlignFor(ty);
+            ClassInfo* vic = valueIvarClass(ty);
+            u32 fa = vic != 0 ? vic.instAlign() : fieldAlignFor(ty);
             if (fa > instAlign)
                 instAlign = fa;
             off = (off + fa - (u32)1) & ~(fa - (u32)1);
@@ -14649,10 +14823,11 @@ class ClassInfo
                 fi = fi + (u32)2;
                 }
             offs.set(fi, (Object*)Number.with(off));
-            off = off + sizeOf(ty);
+            off = off + (vic != 0 ? vic.instSize() : sizeOf(ty));
             fi = fi + (u32)1;
             }
         off = (off + instAlign - (u32)1) & ~(instAlign - (u32)1);
+        info.setInstAlign(instAlign);
         return off;
         }
 
@@ -15046,6 +15221,14 @@ class ClassInfo
             if (iv.kind() != (u16)nkVariableDecl || iv.hasFlag((u32)NF_STATIC))
                 continue;
             if (isClassPointer(iv.op()) || isClassPtrArray(iv.op()))
+                {
+                ownsStrong = true;
+                break;
+                }
+            // An instance held by value whose class has a dealloc: the
+            // owner's runs it.
+            ClassInfo* rvc = valueIvarClass(iv.op());
+            if (rvc != 0 && stackDeallocSym(rvc) != (String*)0)
                 {
                 ownsStrong = true;
                 break;

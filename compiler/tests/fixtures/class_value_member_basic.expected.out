@@ -1,0 +1,7 @@
+issue 1 5
+deep 3
+stack n 7 live 1
+copy live 2
+stack scope live 0
+heap n 7 live 1
+heap gone live 0

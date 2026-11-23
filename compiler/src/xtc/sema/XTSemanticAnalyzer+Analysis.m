@@ -1187,6 +1187,35 @@
 |* On either error, `parentClass` is left nil — later passes treat
 |* "declared parent but parentClass == nil" as "already diagnosed".
 \****************************************************************************/
+// The class an ivar of this type holds by value (#564), or nil.
+- (nullable XTClassDeclNode*)classHeldByValue:(nullable XTType*)t
+    {
+    if (!t || t.kind != XTTypeKindClass || [t isKindOfClass:[XTPointerType class]])
+        return nil;
+    return self.classesByName[t.displayName];
+    }
+
+// Does an instance of `c` contain one of `target`?
+- (BOOL)classDecl:(XTClassDeclNode*)c holdsByValue:(NSString*)target seen:(NSMutableSet<NSString*>*)seen
+    {
+    if ([c.className isEqualToString:target])
+        return YES;
+    if ([seen containsObject:c.className])
+        return NO;
+    [seen addObject:c.className];
+    if (c.parentClass && [self classDecl:c.parentClass holdsByValue:target seen:seen])
+        return YES;
+    for (XTVariableDeclNode* ivar in c.ivars)
+        {
+        if (ivar.isStatic)
+            continue;
+        XTClassDeclNode* held = [self classHeldByValue:ivar.declaredType];
+        if (held && [self classDecl:held holdsByValue:target seen:seen])
+            return YES;
+        }
+    return NO;
+    }
+
 - (void)resolveClassHierarchy
     {
     // PR7: ensure the universal `Object` root class is registered.
@@ -1283,6 +1312,26 @@
                 }
             [seen addObject:cur.className];
             cur = cur.parentClass;
+            }
+        }
+    // A class that holds an instance of itself by value (#564), directly or
+    // through the classes it holds or inherits from, has no size. Each class
+    // whose ivar leads into such a ring is refused there.
+    for (NSString* ringName in cycleOrder)
+        {
+        XTClassDeclNode* cls = self.classesByName[ringName];
+        for (XTVariableDeclNode* ivar in cls.ivars)
+            {
+            if (ivar.isStatic)
+                continue;
+            XTClassDeclNode* held = [self classHeldByValue:ivar.declaredType];
+            if (!held || ![self classDecl:held holdsByValue:ringName seen:[NSMutableSet set]])
+                continue;
+            [self.diagnostics emitError:[NSString stringWithFormat:
+                                                      @"class '%@' holds an instance of itself by value through ivar '%@': declare it '%@* %@;'",
+                                                      ringName, ivar.varName, held.className, ivar.varName]
+                                     at:ivar.location ?: cls.location];
+            break;
             }
         }
     // Ivar name uniqueness across the chain. A subclass ivar shadowing

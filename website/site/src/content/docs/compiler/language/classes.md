@@ -79,6 +79,33 @@ This allocates on the heap and returns a pointer to a block whose **reference co
 
 Use this form when the instance must outlive the scope that created it. The full lifecycle is on [Heap, ARC & weak refs](/compiler/language/memory/).
 
+### An instance inside another
+
+```c
+class Inner { i32 v; }
+class Outer {
+    Inner  inner;      // an instance, laid out inside each Outer
+    Inner* other;      // a reference to an instance somewhere else
+}
+```
+
+An ivar whose type names a class without `*` holds an instance of that class
+inside its owner, as a struct member is held. It follows its owner, whether
+the owner is a stack instance or a heap instance:
+
+- When the owner is created, the member is zero-filled and its own
+  parameterless `init()` runs, before the owner's.
+- When the owner comes apart, the owner's `dealloc()` runs the member's.
+- Copying the owner copies the member, retaining each object it refers to.
+- `o.inner = x;` copies `x` into the member, as `b = a;` does for a stack
+  instance, and `Inner c = o.inner;` copies the member out.
+- `o.inner` used as a value, for a member access or a method call, is the
+  member itself, so `o.inner.v = 5;` changes `o`.
+
+A class cannot hold an instance of itself this way, directly or through
+another class, because it would have no size. Use a pointer (`Node* next;`)
+for that.
+
 ### Parameterised construction
 
 Both forms accept an argument list, which is dispatched to a matching `init(...)` on the class. A class may declare several `init` overloads with different parameter types; the compiler picks the one whose signature matches the call.
