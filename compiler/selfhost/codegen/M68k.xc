@@ -270,7 +270,7 @@ class M68k
         _out.appendCString("\tmove.l\t12(a0),d0\n"); // p_tlen
         _out.appendCString("\tadd.l\t20(a0),d0\n");  // + p_dlen
         _out.appendCString("\tadd.l\t28(a0),d0\n");  // + p_blen
-        _out.appendCString("\tadd.l\t#$4100,d0\n");  // + basepage + 16K stack
+        _out.appendCString("\tadd.l\t#$10100,d0\n");  // + basepage + 64K stack (#596)
         _out.appendCString("\tmove.l\ta0,d1\n\tadd.l\td0,d1\n\tmove.l\td1,sp\n");
         _out.appendCString("\tmove.l\td0,-(sp)\n\tmove.l\ta0,-(sp)\n\tclr.w\t-(sp)\n");
         _out.appendCString("\tmove.w\t#$4a,-(sp)\n\ttrap\t#1\n\tlea\t12(sp),sp\n");

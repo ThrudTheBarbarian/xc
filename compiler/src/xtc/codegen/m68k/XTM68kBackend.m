@@ -148,7 +148,7 @@ static NSString* m68kSym(NSString* name)
         [out appendString:@"\tmove.l\t12(a0),d0\n"];                              // p_tlen
         [out appendString:@"\tadd.l\t20(a0),d0\n"];                               // + p_dlen
         [out appendString:@"\tadd.l\t28(a0),d0\n"];                               // + p_blen
-        [out appendString:@"\tadd.l\t#$4100,d0\n"];                               // + basepage(256) + 16K stack
+        [out appendString:@"\tadd.l\t#$10100,d0\n"];                              // + basepage(256) + 64K stack (#596)
         [out appendString:@"\tmove.l\ta0,d1\n\tadd.l\td0,d1\n\tmove.l\td1,sp\n"]; // SP = top of kept region
         [out appendString:@"\tmove.l\td0,-(sp)\n\tmove.l\ta0,-(sp)\n\tclr.w\t-(sp)\n"
                           @"\tmove.w\t#$4a,-(sp)\n\ttrap\t#1\n\tlea\t12(sp),sp\n"]; // Mshrink(0,bp,keep)
