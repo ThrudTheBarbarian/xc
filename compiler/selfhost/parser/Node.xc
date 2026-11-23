@@ -831,6 +831,37 @@ class Node
             out.add(parts.get(i));
         return out;
         }
+    // The call an overloaded operator node became (NF_OPCALL), hung past its
+    // operands: a binary's third kid, a prefix operator's second, a
+    // subscript's or slice's last, an assignment's third. 0 for any other node.
+    static Node* opCallOf(Node* n)
+        {
+        if (n == 0 || !n.hasFlag((u32)NF_OPCALL))
+            return (Node*)0;
+        u16 k = n.kind();
+        u32 c = n.kidCount();
+        if (k == (u16)nkBinary && c > 2)
+            return n.kid(2);
+        if (k == (u16)nkUnary && c > 1)
+            return n.kid(1);
+        if ((k == (u16)nkSubscript || k == (u16)nkSlice) && c > 1)
+            return n.kid(c - 1);
+        if (k == (u16)nkAssign && c > 2)
+            return n.kid(2);
+        return (Node*)0;
+        }
+    // On an assignment: the operands an operator reads twice, evaluated once
+    // and first. They hang past the target, the value and any call.
+    u32 opSharedFrom(void)
+        {
+        return hasFlag((u32)NF_OPCALL) ? 3 : 2;
+        }
+    u32 opSharedCount(void)
+        {
+        if (_kind != (u16)nkAssign || kidCount() <= opSharedFrom())
+            return 0;
+        return kidCount() - opSharedFrom();
+        }
     void setSince(String* s)
         {
         _since = s;

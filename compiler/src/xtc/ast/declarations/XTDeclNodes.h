@@ -147,8 +147,10 @@ typedef NS_ENUM(NSInteger, XTStackConvention) {
 /****************************************************************************\
 |* `:operator(pattern)`: the operator this method implements, as a shape with
 |* `_` for each operand (`_+_`, `-_`), and the operand names in pattern order
-|* (`self`, `o`). Index and compound forms and user-defined shapes will use
-|* the same two fields. nil when the method is not an operator.
+|* (`self`, `o`). An index spells its indices out (`_[_]`, `_[_,_]`,
+|* `_[_.._]`, and `=_` after a set form); a compound one is `_+=_`.
+|* User-defined shapes will use the same two fields. nil when the method is
+|* not an operator.
 \****************************************************************************/
 @property(nonatomic, copy, nullable) NSString* operatorShape;
 @property(nonatomic, copy, nullable) NSArray<NSString*>* operatorOperands;
@@ -455,8 +457,10 @@ typedef NS_ENUM(NSInteger, XTPlacement) {
 /****************************************************************************\
 |* `:operator(pattern)`: the operator this method implements, as a shape with
 |* `_` for each operand (`_+_`, `-_`), and the operand names in pattern order
-|* (`self`, `o`). Index and compound forms and user-defined shapes will use
-|* the same two fields. nil when the method is not an operator.
+|* (`self`, `o`). An index spells its indices out (`_[_]`, `_[_,_]`,
+|* `_[_.._]`, and `=_` after a set form); a compound one is `_+=_`.
+|* User-defined shapes will use the same two fields. nil when the method is
+|* not an operator.
 \****************************************************************************/
 @property(nonatomic, copy, nullable) NSString* operatorShape;
 @property(nonatomic, copy, nullable) NSArray<NSString*>* operatorOperands;

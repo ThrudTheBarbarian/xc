@@ -129,6 +129,9 @@
 // Some class in the program defines an operator (`:operator(pattern)`); until
 // one does, no operator expression needs resolving.
 @property(nonatomic) BOOL hasOperatorMethods;
+// The subscript (or slice) on the left of the assignment being analysed: on a
+// class with an index operator it is the target of the set form, not read.
+@property(nonatomic, weak, nullable) XTASTNode* operatorIndexTarget;
 // Format wrappers (a function's name, or `Class.method`) → the index of the
 // format parameter. See -collectFormatWrappers:.
 @property(nonatomic) NSMutableDictionary<NSString*, NSNumber*>* formatWrappers;

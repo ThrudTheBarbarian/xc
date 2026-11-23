@@ -112,6 +112,8 @@ class Sema
     Node* _opForced;          // the method an operator resolved to, for the call typed next
     Node* _opPick;            // …while that call picks its method (methodOverload)
     bool _anyOps;             // some class defines an operator: until one does, none resolves
+    bool _opAmbig;            // the last opPick reported a tie
+    Node* _opIndexTarget;     // the subscript on the left of the assignment being typed
     bool _tieToFloat;         // pickOverload may settle a return-type tie on
                               // the float form (explicit and free calls only)
     Array* _used;             // classes named by `use X;` — their statics are
@@ -190,6 +192,8 @@ class Sema
         _opForced = (Node*)0;
         _opPick = (Node*)0;
         _anyOps = false;
+        _opAmbig = false;
+        _opIndexTarget = (Node*)0;
         _used = new Array();
         _vt = new Vtable();
         _cyclic = new Map();
@@ -2964,6 +2968,10 @@ class Sema
                 return;
             pushScope();
             typeExpr(n.kid((u32)1));
+            // A range index through an operator is a call's result, not a
+            // slice of the base to step through.
+            if (n.kid(1).kind() == (u16)nkSlice && n.kid(1).hasFlag((u32)NF_OPCALL))
+                _errorAt(String.withCString("'for ... in' cannot iterate a range index made by an operator; assign it to a variable first"), n.kid(1));
             Node* lv = n.kid((u32)0);
             if (lv.kind() == (u16)nkVariableDecl && (lv.op() == 0 || _isOp(lv.op(), "-") || _isOp(lv.op(), "auto")))
                 {
@@ -3206,7 +3214,34 @@ class Sema
         // return-type-only overload can be chosen there too.
         if (k == (u16)nkAssign && n.kidCount() >= (u32)2)
             {
+            // Already made a call or rewrite by an operator.
+            if (n.hasFlag((u32)NF_OPCALL) || n.hasFlag((u32)NF_OPFALLBACK))
+                return;
+            // A subscript on the left is the target of an index operator's set
+            // form, if its base's class has one, and is not read.
+            Node* prevTarget = _opIndexTarget;
+            _opIndexTarget = n.kid(0);
             typeExpr(n.kid((u32)0));
+            _opIndexTarget = prevTarget;
+            // A compound assignment on a class that defines the operator (in
+            // place, or as `a = a op b`) is decided before a property write.
+            if (opCompoundApplies(n))
+                {
+                Node* tgt = n.kid(0);
+                // The target is written, not read: no getter, as the reference
+                // types a left side.
+                if (tgt.kind() == (u16)nkMember)
+                    tgt.setGetter((String*)0, (String*)0);
+                String* csave = _expected;
+                _expected = tgt.ty();
+                typeExpr(n.kid(1));
+                _expected = csave;
+                checkNil(n.kid(1), tgt.ty());
+                if (tgt.ty() != 0)
+                    n.setTy(tgt.ty());
+                resolveOpAssign(n);
+                return;
+                }
             // Assigning to a member with no ivar behind it is a PROPERTY WRITE:
             // it becomes `recv.set<Name>(rhs)`, so the ASSIGNMENT carries the
             // setter and takes ITS return type — and the member on the left is
@@ -3272,6 +3307,10 @@ class Sema
             _expected = save;
             // `n = nil` into anything but a pointer.
             checkNil(n.kid((u32)1), n.kid((u32)0).ty());
+            // An index operator's set form: the assignment is the call it
+            // becomes.
+            if (resolveOpAssign(n))
+                return;
             // A boxed value assigned into a primitive unboxes, exactly as it
             // does at a declaration. Only a plain `=`: a compound assignment
             // needs the whole read-modify-write, which the original leaves
@@ -3426,6 +3465,10 @@ class Sema
             {
             if (n.kidCount() > (u32)0)
                 n.setTy(n.kid((u32)0).ty());
+            // An element an index operator reads is a call's result, with no
+            // slot to step.
+            if (n.kidCount() > 0 && Sema.isOpIndex(n.kid(0)))
+                _errorAt(String.withCString("'++' and '--' cannot step an element read through an index operator; use '+= 1' or '-= 1'"), n.kid(0));
             return;
             }
         if (k == (u16)nkTernary)
@@ -3466,6 +3509,11 @@ class Sema
             }
         if (k == (u16)nkSubscript || k == (u16)nkSlice)
             {
+            // A class with an index operator: `m[i]` is its get call.
+            if (resolveIndexOperator(n, _opIndexTarget == n))
+                return;
+            if (k == (u16)nkSubscript && n.kidCount() > 2)
+                _errorAt(String.withCString("only a class with an index operator takes several indices, as in :operator(self[i, j])"), n);
             // A slice yields the same element type as an index does — what
             // differs is how many of them, which is not a type question here.
             if (n.kidCount() > (u32)0)
@@ -3772,6 +3820,33 @@ class Sema
         return false;
         }
 
+    // Does the class or an ancestor define any operator?
+    bool opClassHasOperators(Node* cls)
+        {
+        for (Node* c = cls; c != 0; c = parentOf(c))
+            for (u32 i = 0; i < c.kidCount(); i++)
+                {
+                Node* m = c.kid(i);
+                if (m.kind() == (u16)nkMethodDecl && m.opShape() != 0)
+                    return true;
+                }
+        return false;
+        }
+
+    // Does the class or an ancestor define an index operator of any shape? One
+    // that does gives up the built-in index for its pointers.
+    bool opClassDefinesIndex(Node* cls)
+        {
+        for (Node* c = cls; c != 0; c = parentOf(c))
+            for (u32 i = 0; i < c.kidCount(); i++)
+                {
+                Node* m = c.kid(i);
+                if (m.kind() == (u16)nkMethodDecl && opIsIndex(m.opShape()))
+                    return true;
+                }
+        return false;
+        }
+
     // The first thing wrong with one operator method's pattern, or 0.
     String* opPatternFault(Node* m, Node* cls)
         {
@@ -3785,7 +3860,13 @@ class Sema
             for (u32 i = (u32)0; i < rt.byteLength(); i = i + (u32)1)
                 if (rt.byteAt(i) == (u8)',')
                     several = true;
-        if (rt == 0 || several || _isOp(rt, "void"))
+        // An index set and a compound assignment are statements.
+        String* shp = m.opShape();
+        bool statement = opIsIndexSet(shp) || opIsCompound(shp);
+        bool isVoid = rt == 0 || _isOp(rt, "void");
+        if (statement && !isVoid)
+            return String.withFormat("operator method '%s' must return void: an index set or compound assignment is a statement", name.cString());
+        if (!statement && (several || isVoid))
             return String.withFormat("operator method '%s' must return one value", name.cString());
         Array* names = m.opNames();
         Map* seen = new Map();
@@ -3833,7 +3914,62 @@ class Sema
             if (!own)
                 return String.withFormat("static operator '%s' needs an operand of its own class '%s'", name.cString(), cls.name().cString());
             }
+        // An index or a compound assignment applies to the receiver.
+        if ((opIsIndex(shp) || opIsCompound(shp))
+            && (names.count() == 0 || !_isOp((String*)names.get(0), "self")))
+            return String.withFormat("the :operator pattern of '%s' must apply its operator to self, as in (self[i]) or (self += o)", name.cString());
         return (String*)0;
+        }
+
+    // Compound assignments: `_+=_` and the rest. (`_<=_` and `_>=_` compare.)
+    bool opIsCompound(String* shape)
+        {
+        if (shape == 0)
+            return false;
+        return _isOp(shape, "_+=_") || _isOp(shape, "_-=_") || _isOp(shape, "_*=_") || _isOp(shape, "_/=_")
+            || _isOp(shape, "_%=_") || _isOp(shape, "_&=_") || _isOp(shape, "_|=_") || _isOp(shape, "_^=_")
+            || _isOp(shape, "_<<=_") || _isOp(shape, "_>>=_") || _isOp(shape, "_<:=_") || _isOp(shape, "_:>=_");
+        }
+
+    // Index operators: `_[_]`, `_[_,_]`, `_[_.._]`, `_[_..._]`, and their set forms.
+    bool opIsIndex(String* shape)
+        {
+        return shape != 0 && shape.byteLength() > 1 && shape.byteAt(0) == (u8)'_' && shape.byteAt(1) == (u8)'[';
+        }
+
+    bool opIsIndexSet(String* shape)
+        {
+        if (!opIsIndex(shape))
+            return false;
+        u32 len = shape.byteLength();
+        return shape.byteAt(len - 1) == (u8)'_' && shape.byteAt(len - 2) == (u8)'=';
+        }
+
+    // The shape of an index over `count` indices, or over a range (`..`, `...`).
+    static String* indexShape(u32 count, String* range, bool set)
+        {
+        String* sh = String.withCString("_[");
+        if (range != 0)
+            {
+            sh.appendCString("_");
+            sh.append(range);
+            sh.appendCString("_");
+            }
+        else
+            for (u32 i = 0; i < count; i++)
+                sh.appendCString(i > 0 ? ",_" : "_");
+        sh.appendCString(set ? "]=_" : "]");
+        return sh;
+        }
+
+    // How an index is named in a message: `[]`, `[..]`, `[...]`, then `=`.
+    static String* indexSpelling(String* range, bool set)
+        {
+        String* sp = String.withCString("[");
+        if (range != 0)
+            sp.append(range);
+        sp.appendCString(set ? "]=" : "]");
+        return sp;
         }
 
     // Check every `:operator(pattern)` in the program against its method,
@@ -3982,6 +4118,66 @@ class Sema
         return describeArgTypes(list, (u32)0);
         }
 
+    // Choose among the operator methods of shape `shape` for typed operands:
+    // the instance and static ones of `lc` and the static ones of `rc`. The
+    // typed call, or 0: with _opAmbig false when nothing matches (nothing is
+    // reported), true after reporting a tie between the best.
+    Node* opPick(String* shape, String* op, Array* ops, Node* at, Node* lc, Node* rc)
+        {
+        _opAmbig = false;
+        Array* cands = new Array();
+        Array* owners = new Array();
+        if (lc != 0)
+            {
+            addOpCandidates(lc, shape, false, cands, owners);
+            addOpCandidates(lc, shape, true, cands, owners);
+            }
+        if (rc != 0)
+            addOpCandidates(rc, shape, true, cands, owners);
+
+        u32 best = Overload.noMatch();
+        Array* tied = new Array();
+        Array* calls = new Array();
+        for (u32 i = 0; i < cands.count(); i++)
+            {
+            Node* call = opCallOf((Node*)cands.get(i), (Node*)owners.get(i), ops, at);
+            calls.add((Object*)call);
+            u32 sc = scoreCandidate((Node*)cands.get(i), call, 1);
+            if (sc == Overload.noMatch())
+                continue;
+            if (sc < best)
+                {
+                best = sc;
+                tied = new Array();
+                }
+            if (sc == best)
+                tied.add((Object*)Number.with(i));
+            }
+        if (tied.count() == 0)
+            return (Node*)0;
+        if (tied.count() > 1)
+            {
+            u32 a = ((Number*)tied.get(0)).asU32();
+            u32 b = ((Number*)tied.get(1)).asU32();
+            String* msg = String.withFormat("operator '%s' on (%s) is ambiguous: '%s.%s' and '%s.%s' both match",
+                                            op.cString(), opTypes(ops, 0).cString(),
+                                            ((Node*)owners.get(a)).name().cString(), ((Node*)cands.get(a)).name().cString(),
+                                            ((Node*)owners.get(b)).name().cString(), ((Node*)cands.get(b)).name().cString());
+            _errorAt(msg, at);
+            _opAmbig = true;
+            return (Node*)0;
+            }
+        u32 w = ((Number*)tied.get(0)).asU32();
+        Node* call = (Node*)calls.get(w);
+        Node* chosen = (Node*)cands.get(w);
+        if (chosen.hasFlag((u32)NF_STATIC))
+            typeExpr(call.kid(0));
+        _opForced = chosen;
+        typeMethodCall(call);
+        _opForced = (Node*)0;
+        return call;
+        }
+
     // Resolve the operator node `n` (binary or prefix) over its typed operands.
     // false when no operand's class defines the operator: the built-in meaning
     // applies. true when the node now has its call, or an error was reported.
@@ -4016,73 +4212,27 @@ class Sema
         if (!optL && !optR)
             return false;
 
-        Array* cands = new Array();
-        Array* owners = new Array();
-        if (lc != 0)
+        Node* call = opPick(shape, op, ops, n, lc, rc);
+        if (call == 0)
             {
-            addOpCandidates(lc, shape, false, cands, owners);
-            addOpCandidates(lc, shape, true, cands, owners);
-            }
-        if (rc != 0)
-            addOpCandidates(rc, shape, true, cands, owners);
-
-        u32 best = Overload.noMatch();
-        Array* tied = new Array();
-        Array* calls = new Array();
-        for (u32 i = (u32)0; i < cands.count(); i = i + (u32)1)
-            {
-            Node* call = opCallOf((Node*)cands.get(i), (Node*)owners.get(i), ops, n);
-            calls.add((Object*)call);
-            u32 sc = scoreCandidate((Node*)cands.get(i), call, (u32)1);
-            if (sc == Overload.noMatch())
-                continue;
-            if (sc < best)
+            if (!_opAmbig)
                 {
-                best = sc;
-                tied = new Array();
+                String* msg = (String*)0;
+                if (!binary)
+                    msg = String.withFormat("'%s' has no prefix '%s' taking '%s'", lc.name().cString(), op.cString(), opTypes(ops, 0).cString());
+                else if (optL)
+                    msg = String.withFormat("'%s' has no '%s' taking '%s'", lc.name().cString(), op.cString(), opTypes(ops, 1).cString());
+                else
+                    {
+                    Array* left = new Array();
+                    left.add(ops.get(0));
+                    msg = String.withFormat("'%s' has no '%s' taking '%s' on the left", rc.name().cString(), op.cString(), opTypes(left, 0).cString());
+                    }
+                _errorAt(msg, n);
                 }
-            if (sc == best)
-                tied.add((Object*)Number.with(i));
-            }
-
-        String* types = opTypes(ops, (u32)0);
-        if (tied.count() == (u32)0)
-            {
-            String* msg = (String*)0;
-            if (!binary)
-                msg = String.withFormat("'%s' has no prefix '%s' taking '%s'", lc.name().cString(), op.cString(), types.cString());
-            else if (optL)
-                msg = String.withFormat("'%s' has no '%s' taking '%s'", lc.name().cString(), op.cString(), opTypes(ops, (u32)1).cString());
-            else
-                {
-                Array* left = new Array();
-                left.add(ops.get((u32)0));
-                msg = String.withFormat("'%s' has no '%s' taking '%s' on the left", rc.name().cString(), op.cString(), opTypes(left, (u32)0).cString());
-                }
-            _errorAt(msg, n);
             n.setTy(String.withCString("u8"));
             return true;
             }
-        if (tied.count() > (u32)1)
-            {
-            u32 a = ((Number*)tied.get((u32)0)).asU32();
-            u32 b = ((Number*)tied.get((u32)1)).asU32();
-            String* msg = String.withFormat("operator '%s' on (%s) is ambiguous: '%s.%s' and '%s.%s' both match",
-                                            op.cString(), types.cString(),
-                                            ((Node*)owners.get(a)).name().cString(), ((Node*)cands.get(a)).name().cString(),
-                                            ((Node*)owners.get(b)).name().cString(), ((Node*)cands.get(b)).name().cString());
-            _errorAt(msg, n);
-            n.setTy(String.withCString("u8"));
-            return true;
-            }
-        u32 w = ((Number*)tied.get((u32)0)).asU32();
-        Node* call = (Node*)calls.get(w);
-        Node* chosen = (Node*)cands.get(w);
-        if (chosen.hasFlag((u32)NF_STATIC))
-            typeExpr(call.kid((u32)0));
-        _opForced = chosen;
-        typeMethodCall(call);
-        _opForced = (Node*)0;
         // Hung past the operands; a node typed twice replaces its call.
         u32 slot = binary ? (u32)2 : (u32)1;
         if (n.hasFlag((u32)NF_OPCALL) && n.kidCount() > slot)
@@ -4091,6 +4241,368 @@ class Sema
             n.add(call);
         n.addFlag((u32)NF_OPCALL);
         n.setTy(call.ty() != 0 ? call.ty() : String.withCString("u8"));
+        return true;
+        }
+
+    // ── INDEX OPERATORS AND ASSIGNMENT ───────────────────────────────
+    // Mirrors the reference's XTSemanticAnalyzer+Operators.m. A subscript's
+    // kids are the base and its indices; a slice's the base and the bounds it
+    // has. The call an index operator becomes hangs past them (NF_OPCALL).
+
+    // The indices of a subscript, or the bounds of a slice, without the call.
+    Array* opIndexList(Node* n)
+        {
+        Array* out = new Array();
+        u32 end = n.kidCount();
+        if (n.hasFlag((u32)NF_OPCALL) && end > 0)
+            end--;
+        for (u32 i = 1; i < end; i++)
+            out.add((Object*)n.kid(i));
+        return out;
+        }
+
+    // A slice's range spelling, `..` or `...`; 0 for a subscript.
+    String* opIndexRange(Node* n)
+        {
+        if (n.kind() != (u16)nkSlice)
+            return (String*)0;
+        return String.withCString(n.hasFlag((u32)NF_INCLUSIVE) ? "..." : "..");
+        }
+
+    // The class with an index operator that an index node's base belongs to, or 0.
+    Node* indexOperatorClassOf(Node* n)
+        {
+        if (!_anyOps || n == 0 || (n.kind() != (u16)nkSubscript && n.kind() != (u16)nkSlice) || n.kidCount() == 0)
+            return (Node*)0;
+        Node* cls = opClassOf(n.kid(0).ty());
+        if (cls != 0 && opClassDefinesIndex(cls))
+            return cls;
+        return (Node*)0;
+        }
+
+    // The get call of an index node on a class with an index operator, or 0
+    // after reporting why there is none.
+    Node* indexGetCallOf(Node* n, Node* cls)
+        {
+        Array* idx = opIndexList(n);
+        String* range = opIndexRange(n);
+        if (range != 0 && idx.count() != 2)
+            {
+            _errorAt(String.withFormat("a range index on '%s' needs both bounds", cls.name().cString()), n);
+            return (Node*)0;
+            }
+        String* shape = Sema.indexShape(idx.count(), range, false);
+        String* op = Sema.indexSpelling(range, false);
+        if (!opClassDefines(cls, shape) && opClassDefines(cls, Sema.indexShape(idx.count(), range, true)))
+            {
+            _errorAt(String.withFormat("'%s' has '%s=' but no '%s' to read an element with",
+                                       cls.name().cString(), op.cString(), op.cString()), n);
+            return (Node*)0;
+            }
+        Array* ops = new Array();
+        ops.add((Object*)n.kid(0));
+        for (u32 i = 0; i < idx.count(); i++)
+            ops.add(idx.get(i));
+        Node* call = opPick(shape, op, ops, n, cls, (Node*)0);
+        if (call == 0 && !_opAmbig)
+            _errorAt(String.withFormat("'%s' has no '%s' taking '%s'", cls.name().cString(), op.cString(),
+                                       opTypes(idx, 0).cString()), n);
+        return call;
+        }
+
+    // `m[i]`, `m[i, j]` or `m[a..b]` on a class with an index operator: the
+    // get call, or nothing yet for the target of an assignment. false when the
+    // base's class has no index operator, so the built-in index applies.
+    bool resolveIndexOperator(Node* n, bool target)
+        {
+        Node* cls = indexOperatorClassOf(n);
+        if (cls == 0)
+            return false;
+        // The target of an assignment is not read: the assignment resolves it.
+        if (target)
+            return true;
+        Node* call = indexGetCallOf(n, cls);
+        if (call == 0)
+            {
+            n.setTy(String.withCString("u8"));
+            return true;
+            }
+        // Hung past the operands; a node typed twice replaces its call.
+        if (n.hasFlag((u32)NF_OPCALL))
+            n.setKid(n.kidCount() - 1, call);
+        else
+            n.add(call);
+        n.addFlag((u32)NF_OPCALL);
+        n.setTy(call.ty() != 0 ? call.ty() : String.withCString("u8"));
+        return true;
+        }
+
+    // A subscript or slice an index operator made a call of.
+    static bool isOpIndex(Node* n)
+        {
+        return n != 0 && (n.kind() == (u16)nkSubscript || n.kind() == (u16)nkSlice) && n.hasFlag((u32)NF_OPCALL);
+        }
+
+    // An operand read twice is evaluated once, first, unless reading it again
+    // costs nothing and changes nothing: a name or a literal.
+    static void opSharedRvalue(Node* e, Array* out)
+        {
+        if (e == 0)
+            return;
+        u16 k = e.kind();
+        if (k == (u16)nkIdent || k == (u16)nkInt || k == (u16)nkFloat || k == (u16)nkStr || k == (u16)nkChar || k == (u16)nkBool)
+            return;
+        out.add((Object*)e);
+        }
+
+    // The operands of an lvalue that its address is computed from: a pointer's
+    // value is shared, an inline array or struct is reached through its own
+    // lvalue.
+    static void opSharedLvalue(Node* lv, Array* out)
+        {
+        if (lv == 0)
+            return;
+        u16 k = lv.kind();
+        if (k == (u16)nkSubscript && !lv.hasFlag((u32)NF_OPCALL) && lv.kidCount() > 1)
+            {
+            Node* b = lv.kid(0);
+            if (b.ty() != 0 && Types.isPointer(b.ty()))
+                Sema.opSharedRvalue(b, out);
+            else
+                Sema.opSharedLvalue(b, out);
+            Sema.opSharedRvalue(lv.kid(1), out);
+            }
+        else if (k == (u16)nkMember && lv.kidCount() > 0)
+            {
+            Node* b = lv.kid(0);
+            if (lv.hasFlag((u32)NF_ARROW) || (b.ty() != 0 && Types.isPointer(b.ty())))
+                Sema.opSharedRvalue(b, out);
+            else
+                Sema.opSharedLvalue(b, out);
+            }
+        else if (k == (u16)nkUnary && lv.op() != 0 && lv.op().byteLength() == 1 && lv.op().byteAt(0) == (u8)'*' && lv.kidCount() > 0)
+            Sema.opSharedRvalue(lv.kid(0), out);
+        }
+
+    // `obj.p` where obj's class (or an ancestor) has a one-parameter `setP`:
+    // an assignment to it is a property write. The type of the setter's
+    // parameter, or 0 for anything else.
+    String* opPropertyType(Node* lv)
+        {
+        if (lv.kind() != (u16)nkMember || lv.kidCount() == 0 || lv.name() == 0 || lv.name().byteLength() == 0)
+            return (String*)0;
+        Node* cls = opClassOf(lv.kid(0).ty());
+        if (cls == 0)
+            return (String*)0;
+        String* setter = String.withCString("set");
+        u8 c0 = lv.name().byteAt(0);
+        if (c0 >= (u8)'a' && c0 <= (u8)'z')
+            c0 = c0 - (u8)32;
+        setter.appendByte(c0);
+        setter.append(lv.name().substringBytes(1, lv.name().byteLength() - 1));
+        for (Node* c = cls; c != 0; c = parentOf(c))
+            for (u32 i = 0; i < c.kidCount(); i++)
+                {
+                Node* m = c.kid(i);
+                if (m.kind() != (u16)nkMethodDecl || m.name() == 0 || !m.name().equals(setter))
+                    continue;
+                Node* only = (Node*)0;
+                u32 params = 0;
+                for (u32 j = 0; j < m.kidCount(); j++)
+                    if (m.kid(j).kind() == (u16)nkParam)
+                        {
+                        params++;
+                        only = m.kid(j);
+                        }
+                if (params == 1)
+                    return only.op();
+                }
+        return (String*)0;
+        }
+
+    // `l OP r` over typed operands, typed: an operator's call or the built-in.
+    Node* opBinary(String* op, Node* l, Node* r, Node* at)
+        {
+        Node* bin = Node.with((u16)nkBinary);
+        bin.setOp(op);
+        bin.add(l);
+        bin.add(r);
+        bin.setPos(at.fileId(), at.line(), at.col());
+        typeBinary(bin);
+        return bin;
+        }
+
+    // A compound assignment whose target (not through an index operator)
+    // belongs to a class that defines the compound operator or its plain one.
+    bool opCompoundApplies(Node* n)
+        {
+        if (!_anyOps || n.op() == 0 || n.op().byteLength() < 2 || _isOp(n.op(), "=="))
+            return false;
+        Node* lhs = n.kid(0);
+        if (indexOperatorClassOf(lhs) != 0)
+            return false;
+        String* propT = opPropertyType(lhs);
+        Node* lc = opClassOf(propT != 0 ? propT : lhs.ty());
+        if (lc == 0)
+            return false;
+        String* cShape = String.withCString("_");
+        cShape.append(n.op());
+        cShape.appendCString("_");
+        String* pShape = String.withCString("_");
+        pShape.append(n.op().substringBytes(0, n.op().byteLength() - 1));
+        pShape.appendCString("_");
+        return opClassDefines(lc, cShape) || opClassDefines(lc, pShape);
+        }
+
+    // An assignment through an operator: the index set (`m[i] = v`), get, op
+    // and set for `m[i] += v`, the compound operator (`a += b`), or `a = a + b`
+    // when the class defines `+` and no `+=` that matches. false when none
+    // applies. Both sides are typed.
+    bool resolveOpAssign(Node* n)
+        {
+        if (!_anyOps || n.kidCount() < 2)
+            return false;
+        Node* lhs = n.kid(0);
+        String* aop = n.op();
+        String* bop = (String*)0;
+        if (aop != 0 && aop.byteLength() > 1)
+            bop = aop.substringBytes(0, aop.byteLength() - 1);
+
+        // Through an index operator: `m[i] = v`, or `m[i] op= v` as get, op, set.
+        Node* icls = indexOperatorClassOf(lhs);
+        if (icls != 0)
+            {
+            Node* base = lhs.kid(0);
+            Array* idx = opIndexList(lhs);
+            String* range = opIndexRange(lhs);
+            n.setTy(String.withCString("void"));
+            if (range != 0 && idx.count() != 2)
+                {
+                _errorAt(String.withFormat("a range index on '%s' needs both bounds", icls.name().cString()), lhs);
+                return true;
+                }
+            String* setShape = Sema.indexShape(idx.count(), range, true);
+            String* setOp = Sema.indexSpelling(range, true);
+            Node* value = n.kid(1);
+            Array* shared = new Array();
+            if (bop != 0)
+                {
+                Node* get = indexGetCallOf(lhs, icls);
+                if (get == 0)
+                    return true;
+                Node* bin = opBinary(bop, get, n.kid(1), n);
+                // Built-in arithmetic is done at the element's type, as `x op= y` is.
+                if (!bin.hasFlag((u32)NF_OPCALL) && get.ty() != 0)
+                    bin.setTy(get.ty());
+                value = bin;
+                if (base.ty() != 0 && Types.isPointer(base.ty()))
+                    Sema.opSharedRvalue(base, shared);
+                else
+                    Sema.opSharedLvalue(base, shared);
+                for (u32 i = 0; i < idx.count(); i++)
+                    Sema.opSharedRvalue((Node*)idx.get(i), shared);
+                }
+            if (!opClassDefines(icls, setShape) && opClassDefines(icls, Sema.indexShape(idx.count(), range, false)))
+                {
+                _errorAt(String.withFormat("'%s' has '%s' but no '%s' to assign an element with", icls.name().cString(),
+                                           Sema.indexSpelling(range, false).cString(), setOp.cString()), lhs);
+                return true;
+                }
+            Array* ops = new Array();
+            ops.add((Object*)base);
+            for (u32 i = 0; i < idx.count(); i++)
+                ops.add(idx.get(i));
+            ops.add((Object*)value);
+            Node* set = opPick(setShape, setOp, ops, n, icls, (Node*)0);
+            if (set == 0)
+                {
+                if (!_opAmbig)
+                    {
+                    idx.add((Object*)value);
+                    _errorAt(String.withFormat("'%s' has no '%s' taking '%s'", icls.name().cString(), setOp.cString(),
+                                               opTypes(idx, 0).cString()), n);
+                    }
+                return true;
+                }
+            n.add(set);
+            n.addFlag((u32)NF_OPCALL);
+            for (u32 i = 0; i < shared.count(); i++)
+                n.add((Node*)shared.get(i));
+            return true;
+            }
+
+        // A compound assignment on a class that defines the operator, in place
+        // or in its plain form.
+        if (bop == 0)
+            return false;
+        // A property's class is its setter's parameter's.
+        String* propT = opPropertyType(lhs);
+        Node* lc = opClassOf(propT != 0 ? propT : lhs.ty());
+        if (lc == 0)
+            return false;
+        String* cShape = String.withCString("_");
+        cShape.append(aop);
+        cShape.appendCString("_");
+        String* pShape = String.withCString("_");
+        pShape.append(bop);
+        pShape.appendCString("_");
+        bool hasC = opClassDefines(lc, cShape);
+        bool hasP = opClassDefines(lc, pShape);
+        if (!hasC && !hasP)
+            {
+            // The built-in compound on a class pointer steps it by an integer.
+            // A class that defines operators gets no silent `p += q` of two
+            // pointers.
+            if (opClassHasOperators(lc) && !Types.isInteger(n.kid(1).ty()) && propT == 0)
+                {
+                Array* rops = new Array();
+                rops.add((Object*)n.kid(1));
+                _errorAt(String.withFormat("'%s' has no '%s' or '%s' taking '%s'", lc.name().cString(), aop.cString(),
+                                           bop.cString(), opTypes(rops, 0).cString()), n);
+                n.setTy(String.withCString("void"));
+                return true;
+                }
+            return false;
+            }
+        if (propT != 0)
+            {
+            _errorAt(String.withFormat("'%s' through an operator cannot assign to the property '%s'; write the assignment out",
+                                       aop.cString(), lhs.name().cString()), n);
+            n.setTy(String.withCString("void"));
+            return true;
+            }
+        if (hasC)
+            {
+            Array* cops = new Array();
+            cops.add((Object*)lhs);
+            cops.add((Object*)n.kid(1));
+            Node* call = opPick(cShape, aop, cops, n, lc, (Node*)0);
+            if (call != 0 || _opAmbig || !hasP)
+                {
+                if (call == 0 && !_opAmbig)
+                    _errorAt(String.withFormat("'%s' has no '%s' taking '%s'", lc.name().cString(), aop.cString(),
+                                               opTypes(cops, 1).cString()), n);
+                if (call != 0)
+                    {
+                    n.add(call);
+                    n.addFlag((u32)NF_OPCALL);
+                    }
+                n.setTy(String.withCString("void"));
+                return true;
+                }
+            }
+        // `a op= b` is `a = a op b`, with what the target's address is computed
+        // from evaluated once.
+        Node* bin = opBinary(bop, lhs, n.kid(1), n);
+        Array* shared = new Array();
+        Sema.opSharedLvalue(lhs, shared);
+        n.setKid(1, bin);
+        n.setOp(String.withCString("="));
+        n.addFlag((u32)NF_OPFALLBACK);
+        for (u32 i = 0; i < shared.count(); i++)
+            n.add((Node*)shared.get(i));
+        n.setTy(lhs.ty() != 0 ? lhs.ty() : String.withCString("u8"));
+        checkClassPointerAssignAt(lhs.ty(), bin.ty(), bin, "assignment", n);
         return true;
         }
 
@@ -4308,6 +4820,15 @@ class Sema
         String* op = n.op();
         if (resolveOperator(n))
             return;
+        // An element an index operator reads is a call's result: no address,
+        // no slot to step.
+        if (Sema.isOpIndex(n.kid(0)))
+            {
+            if (_isOp(op, "&"))
+                _errorAt(String.withCString("'&' cannot take the address of an element read through an index operator"), n);
+            else if (_isOp(op, "++") || _isOp(op, "--"))
+                _errorAt(String.withCString("'++' and '--' cannot step an element read through an index operator; use '+= 1' or '-= 1'"), n);
+            }
         // Prefix `+` has no built-in meaning.
         if (_isOp(op, "+"))
             {

@@ -125,24 +125,20 @@ class AstDump
             }
         if (n.protoIdx() >= (i32)0)
             a.appendFormat(" protoidx=%ld", (u32)n.protoIdx());
-        // An overloaded operator: the method call it became.
-        if ((n.kind() == (u16)nkBinary || n.kind() == (u16)nkUnary) && n.hasFlag((u32)NF_OPCALL))
+        // An overloaded operator: the method call it became. On an
+        // assignment, also `a += b` that became `a = a + b`, and the operands
+        // evaluated once, first.
+        u16 ok = n.kind();
+        if ((ok == (u16)nkBinary || ok == (u16)nkUnary || ok == (u16)nkSubscript || ok == (u16)nkSlice
+             || ok == (u16)nkAssign) && n.hasFlag((u32)NF_OPCALL))
+            AstDump.opCallField(Node.opCallOf(n), a);
+        if (ok == (u16)nkAssign)
             {
-            Node* oc = n.kid(n.kind() == (u16)nkBinary ? (u32)2 : (u32)1);
-            a.appendCString(" opcall=");
-            a.append(oc.name());
-            if (oc.sym() != 0)
-                {
-                a.appendCString(" opsym=");
-                a.append(oc.sym());
-                }
-            if (oc.cls() != 0)
-                {
-                a.appendCString(" opcls=");
-                a.append(oc.cls());
-                }
-            if (oc.vslot() >= (i32)0)
-                a.appendFormat(" opvslot=%ld", (u32)oc.vslot());
+            if (n.hasFlag((u32)NF_OPFALLBACK))
+                a.appendCString(" opfallback=1");
+            u32 shared = n.opSharedCount();
+            if (shared > 0)
+                a.appendFormat(" opshared=%lu", shared);
             }
         // Order matters as much as content: these follow sym= on their node in
         // the original's switch, and a differential dump compares lines.
@@ -236,6 +232,28 @@ class AstDump
         return (u8)((u8)'A' + (nibble - (u8)10));
         }
 
+    // ` opcall=plus opsym=… opcls=… opvslot=…` for the method call an
+    // operator became; nothing when it became something else.
+    static void opCallField(Node* oc, String* a)
+        {
+        if (oc == 0 || oc.kind() != (u16)nkMethodCall)
+            return;
+        a.appendCString(" opcall=");
+        a.append(oc.name());
+        if (oc.sym() != 0)
+            {
+            a.appendCString(" opsym=");
+            a.append(oc.sym());
+            }
+        if (oc.cls() != 0)
+            {
+            a.appendCString(" opcls=");
+            a.append(oc.cls());
+            }
+        if (oc.vslot() >= 0)
+            a.appendFormat(" opvslot=%ld", (u32)oc.vslot());
+        }
+
     // ` operator=_+_ operands=self,o` for an operator method, else nothing.
     static void operatorField(Node* n, String* out)
         {
@@ -251,6 +269,17 @@ class AstDump
                 out.appendByte((u8)',');
             out.append((String*)names.get(i));
             }
+        }
+
+    // A subscript's or slice's kids, without the call an index operator hung
+    // past them.
+    static void emitOperands(Node* n, String* out, u32 depth)
+        {
+        u32 shown = n.kidCount();
+        if (n.hasFlag((u32)NF_OPCALL) && shown > 0)
+            shown--;
+        for (u32 i = 0; i < shown; i++)
+            AstDump.emit(n.kid(i), out, depth);
         }
 
     static void indent(String* out, u32 depth)
@@ -643,7 +672,9 @@ class AstDump
             {
             AstDump.indent(out, depth);
             out.appendCString("Subscript\n");
-            AstDump.emitKids(n, out, depth + (u32)1, (u32)0);
+            // The base and indices: the call an index operator became hangs
+            // past them, and the original does not print it either.
+            AstDump.emitOperands(n, out, depth + (u32)1);
             return;
             }
 
@@ -676,7 +707,10 @@ class AstDump
             {
             AstDump.indent(out, depth);
             out.appendFormat("Assign op=%s\n", n.op().cString());
-            AstDump.emitKids(n, out, depth + (u32)1, (u32)0);
+            // The target and value only; what an operator made of the
+            // assignment hangs past them.
+            for (u32 i = 0; i < n.kidCount() && i < 2; i++)
+                AstDump.emit(n.kid(i), out, depth + (u32)1);
             return;
             }
         if (k == (u16)nkCall)
@@ -707,7 +741,7 @@ class AstDump
             {
             AstDump.indent(out, depth);
             out.appendFormat("Slice inclusive=%lu\n", AstDump.flag(n, (u32)NF_INCLUSIVE));
-            AstDump.emitKids(n, out, depth + (u32)1, (u32)0);
+            AstDump.emitOperands(n, out, depth + (u32)1);
             return;
             }
         if (k == (u16)nkRange)

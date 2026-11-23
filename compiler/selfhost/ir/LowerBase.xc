@@ -520,6 +520,11 @@ class ClassInfo
     // so the index or pointer expression is evaluated once.
     Node* _cmpLhs;
     IRValue* _cmpAddr;
+    // The operands an operator assignment reads twice (Node.opSharedCount),
+    // each lowered once, first: the node and its value, side by side. A
+    // lowering of one of these nodes takes the value.
+    Array* _opSharedNodes;
+    Array* _opSharedValues;
     Array* _shadowScopes;     // per arc scope: ShadowSave@ for names it shadowed
     Map* _staticIvar;         // "<Class>.<ivar>" -> its module global's name
     Map* _staticIvarTy;       // …and its declared type
@@ -848,6 +853,8 @@ class ClassInfo
         _vtSite = (Node*)0;
         _cmpLhs = (Node*)0;
         _cmpAddr = (IRValue*)0;
+        _opSharedNodes = new Array();
+        _opSharedValues = new Array();
         _debugInfo = false;
         _dbgPin = true;
         _threadSafeStatics = false;
@@ -3957,7 +3964,7 @@ class ClassInfo
             }
         if (e.kind() == (u16)nkMember)
             return memberAddr(e);
-        if (e.kind() == (u16)nkSubscript)
+        if (e.kind() == (u16)nkSubscript && !e.hasFlag((u32)NF_OPCALL))
             return elementAddr(e);
         // `(@p).x` — the deref's OPERAND is already the address, and reading
         // through it first only to take the address again would be one
@@ -4078,7 +4085,7 @@ class ClassInfo
     // and no cast is needed.
     IRValue* decayArrayBase(Node* base, String* elemPtr)
         {
-        if (base.kind() == (u16)nkSubscript)
+        if (base.kind() == (u16)nkSubscript && !base.hasFlag((u32)NF_OPCALL))
             return elementAddr(base);
         if (base.kind() == (u16)nkMember)
             {
@@ -4396,6 +4403,42 @@ class ClassInfo
         return fieldAddr(ea, (u32)2, ptrTo(irType(n.ty())));
         }
 
+    // An operator assignment whose operands are read twice — `f()[g()] += h()`
+    // is get, op and set on the same base and index, and `a[g()] += b`
+    // through a class's `+` is `a[g()] = a[g()] + b` — evaluates each of them
+    // once, in source order, before anything else, and every later lowering
+    // of the node takes that value. Mirrors the reference's
+    // lowerSharingOperandsOf:.
+    IRValue* lowerSharingOperands(Node* n)
+        {
+        u32 mark = _opSharedNodes.count();
+        IRValue* result = (IRValue*)0;
+        bool ok = true;
+        for (u32 i = n.opSharedFrom(); i < n.kidCount(); i++)
+            {
+            Node* e = n.kid(i);
+            IRValue* v = lowerExpr(e);
+            if (v == 0 || _failed)
+                {
+                ok = false;
+                break;
+                }
+            _opSharedNodes.add((Object*)e);
+            _opSharedValues.add((Object*)v);
+            }
+        if (ok)
+            {
+            Node* oc = Node.opCallOf(n);
+            result = oc != 0 ? lowerExpr(oc) : lowerAssign(n);
+            }
+        while (_opSharedNodes.count() > mark)
+            {
+            _opSharedNodes.removeLast();
+            _opSharedValues.removeLast();
+            }
+        return result;
+        }
+
     IRValue* lowerExpr(Node* n)
         {
         if (n == 0 || _failed)
@@ -4403,6 +4446,14 @@ class ClassInfo
             giveUp(String.withCString("null expression"));
             return (IRValue*)0;
             }
+        // An operand an operator assignment reads twice was lowered once, first.
+        for (u32 si = _opSharedNodes.count(); si > 0; si--)
+            if ((Node*)_opSharedNodes.get(si - 1) == n)
+                return (IRValue*)_opSharedValues.get(si - 1);
+        // An assignment that reads operands twice lowers them first, in source
+        // order, then itself with each one's value reused.
+        if (n.opSharedCount() > 0)
+            return lowerSharingOperands(n);
         // An overloaded operator is the method call sema resolved it to.
         n = Lower.opCallOrSelf(n);
         u16 k = n.kind();
@@ -10713,7 +10764,7 @@ class ClassInfo
             {
             if (n.kind() == (u16)nkIdent)
                 return _strongStruct.get((Hashable*)n.name()) != 0;
-            if (n.kind() == (u16)nkMember || n.kind() == (u16)nkSubscript)
+            if (n.kind() == (u16)nkMember || (n.kind() == (u16)nkSubscript && !n.hasFlag((u32)NF_OPCALL)))
                 {
                 n = n.kid((u32)0);
                 continue;
@@ -13579,13 +13630,8 @@ class ClassInfo
     // operands, NF_OPCALL), or the node itself.
     static Node* opCallOrSelf(Node* n)
         {
-        if (n == 0 || !n.hasFlag((u32)NF_OPCALL))
-            return n;
-        if (n.kind() == (u16)nkBinary && n.kidCount() > (u32)2)
-            return n.kid((u32)2);
-        if (n.kind() == (u16)nkUnary && n.kidCount() > (u32)1)
-            return n.kid((u32)1);
-        return n;
+        Node* oc = Node.opCallOf(n);
+        return oc != 0 ? oc : n;
         }
 
     bool rhsIsBorrowed(Node* rhs)

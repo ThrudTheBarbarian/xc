@@ -535,6 +535,11 @@ static NSString* plAddrRoot(XTASTNode* _Nullable e)
         [self plExpr:s.base];
         [self plTok:XTTokenLBracket value:@"["];
         [self plExpr:s.index];
+        for (XTASTNode* x in s.extraIndices)
+            {
+            [self plTok:XTTokenComma value:@","];
+            [self plExpr:x];
+            }
         [self plTok:XTTokenRBracket value:@"]"];
         return;
         }

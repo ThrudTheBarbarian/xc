@@ -2085,7 +2085,8 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
 
     NSUInteger n = t.count;
     NSString* refused = nil; // an operator with a fixed meaning
-    BOOL later = NO;         // an index or compound-assignment form
+    BOOL noIndex = NO;       // `self[]`
+    BOOL noValue = NO;       // `self[i] =` with nothing to assign
     NSString* shape = nil;
     NSArray<NSString*>* names = nil;
     BOOL name0 = n > 0 && t[0].type == XTTokenIdentifier;
@@ -2135,7 +2136,8 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
         case XTTokenShrAssign:
         case XTTokenRolAssign:
         case XTTokenRorAssign:
-            later = YES;
+            shape = [NSString stringWithFormat:@"_%@_", t[1].value];
+            names = @[ t[0].value, t[2].value ];
             break;
         default:
             break;
@@ -2170,7 +2172,66 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
     else if (n == 2 && name0 && (t[1].type == XTTokenPlusPlus || t[1].type == XTTokenMinusMinus))
         refused = t[1].value;
     else if (n >= 2 && name0 && t[1].type == XTTokenLBracket)
-        later = YES;
+        {
+        // An index: `self[i]`, `self[i, j]`, `self[lo..hi]` or `self[lo...hi]`,
+        // then `= v` for the set form. The shape spells the indices out:
+        // `_[_]`, `_[_,_]`, `_[_.._]`, with `=_` after a set.
+        NSMutableString* sh = [NSMutableString stringWithString:@"_["];
+        NSMutableArray<NSString*>* nm = [NSMutableArray arrayWithObject:t[0].value];
+        NSUInteger i = 2;
+        BOOL ok = YES;
+        if (i < n && t[i].type == XTTokenRBracket)
+            noIndex = YES;
+        else if (i + 2 < n && t[i].type == XTTokenIdentifier
+                 && (t[i + 1].type == XTTokenDotDot || t[i + 1].type == XTTokenEllipsis)
+                 && t[i + 2].type == XTTokenIdentifier)
+            {
+            [sh appendFormat:@"_%@_", t[i + 1].value];
+            [nm addObject:t[i].value];
+            [nm addObject:t[i + 2].value];
+            i += 3;
+            }
+        else
+            {
+            while (ok)
+                {
+                if (i >= n || t[i].type != XTTokenIdentifier)
+                    ok = NO;
+                else
+                    {
+                    [sh appendString:@"_"];
+                    [nm addObject:t[i].value];
+                    i++;
+                    if (i < n && t[i].type == XTTokenComma)
+                        {
+                        [sh appendString:@","];
+                        i++;
+                        }
+                    else
+                        break;
+                    }
+                }
+            }
+        if (!noIndex && ok && i < n && t[i].type == XTTokenRBracket)
+            {
+            [sh appendString:@"]"];
+            i++;
+            if (i == n)
+                {
+                shape = sh;
+                names = nm;
+                }
+            else if (t[i].type == XTTokenAssign && i + 1 == n)
+                noValue = YES;
+            else if (t[i].type == XTTokenAssign && i + 2 == n && t[i + 1].type == XTTokenIdentifier)
+                {
+                [sh appendString:@"=_"];
+                [nm addObject:t[i + 1].value];
+                shape = sh;
+                names = nm;
+                }
+            }
+        }
     else if (n >= 2 && name0 && t[1].type == XTTokenLParen)
         refused = @"()";
     else if (n == 5 && t[1].type == XTTokenQuestion && t[3].type == XTTokenColon)
@@ -2183,8 +2244,10 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
         return nil;
         }
     NSString* msg = nil;
-    if (later)
-        msg = @"':operator' cannot define an index or compound-assignment operator yet";
+    if (noIndex)
+        msg = @"an index operator needs an index, such as (self[i])";
+    else if (noValue)
+        msg = @"an index-set operator needs a value after '=', such as (self[i] = v)";
     else if ([refused isEqualToString:@"=="] || [refused isEqualToString:@"!="])
         msg = [NSString stringWithFormat:@"'%@' cannot be overloaded: it compares identity (equals compares values)", refused];
     else if (refused)

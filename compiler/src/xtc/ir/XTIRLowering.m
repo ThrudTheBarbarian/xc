@@ -265,6 +265,11 @@
 // desugared `lhs op rhs` loads through it instead of forming it again, so the
 // index or pointer expression is evaluated once.
 @property(nonatomic, nullable) XTASTNode* compoundLhs;
+// The operands an operator assignment reads twice (XTAssignExprNode's
+// operatorShared), each lowered once, first: the node and its value, side by
+// side. A lowering of one of these nodes takes the value.
+@property(nonatomic, nullable) NSMutableArray<XTASTNode*>* operatorSharedNodes;
+@property(nonatomic, nullable) NSMutableArray<XTIRValue*>* operatorSharedValues;
 @property(nonatomic, nullable) XTIRValue* compoundLhsAddr;
 // ARC 2d self-retain: set by the method-lowering callers when the method
 // must retain `self` on entry (every call site is a heap receiver, and
@@ -587,7 +592,19 @@ static XTASTNode* XTOperatorCallOrSelf(XTASTNode* node)
         return ((XTBinaryExprNode*)node).operatorCall;
     if (node.nodeKind == XTASTNodeKindUnaryExpr && ((XTUnaryExprNode*)node).operatorCall)
         return ((XTUnaryExprNode*)node).operatorCall;
+    if (node.nodeKind == XTASTNodeKindSubscriptExpr && ((XTSubscriptExprNode*)node).operatorCall)
+        return ((XTSubscriptExprNode*)node).operatorCall;
+    if (node.nodeKind == XTASTNodeKindSliceExpr && ((XTSliceExprNode*)node).operatorCall)
+        return ((XTSliceExprNode*)node).operatorCall;
+    if (node.nodeKind == XTASTNodeKindAssignExpr && ((XTAssignExprNode*)node).operatorCall)
+        return ((XTAssignExprNode*)node).operatorCall;
     return node;
+    }
+
+// A subscript with its built-in meaning: not one an index operator made a call of.
+static BOOL XTIsBuiltinSubscript(XTASTNode* node)
+    {
+    return node.nodeKind == XTASTNodeKindSubscriptExpr && !((XTSubscriptExprNode*)node).operatorCall;
     }
 
 @implementation XTIRLowering
@@ -3903,10 +3920,57 @@ static NSString* XTDescribeNodeKind(XTASTNodeKind k)
 
 #pragma mark - Expression dispatch
 
+/****************************************************************************\
+|* An operator assignment whose operands are read twice — `f()[g()] += h()`
+|* is get, op and set on the same base and index, and `a[g()] += b` through a
+|* class's `+` is `a[g()] = a[g()] + b` — evaluates each of them once, in
+|* source order, before anything else, and every later lowering of the node
+|* takes that value.
+\****************************************************************************/
+- (nullable XTIRValue*)lowerSharingOperandsOf:(XTAssignExprNode*)node
+    {
+    if (!self.operatorSharedNodes)
+        {
+        self.operatorSharedNodes = [NSMutableArray array];
+        self.operatorSharedValues = [NSMutableArray array];
+        }
+    NSUInteger mark = self.operatorSharedNodes.count;
+    XTIRValue* result = nil;
+    BOOL ok = YES;
+    for (XTASTNode* e in node.operatorShared)
+        {
+        XTIRValue* v = [self lowerExpression:e];
+        if (!v)
+            {
+            ok = NO;
+            break;
+            }
+        [self.operatorSharedNodes addObject:e];
+        [self.operatorSharedValues addObject:v];
+        }
+    if (ok)
+        {
+        XTASTNode* oc = XTOperatorCallOrSelf(node);
+        result = oc != node ? [self lowerExpression:oc] : [self lowerAssignExpr:node];
+        }
+    NSRange drop = NSMakeRange(mark, self.operatorSharedNodes.count - mark);
+    [self.operatorSharedNodes removeObjectsInRange:drop];
+    [self.operatorSharedValues removeObjectsInRange:drop];
+    return result;
+    }
+
 - (nullable XTIRValue*)lowerExpression:(XTASTNode*)node
     {
     if (self.aborted)
         return nil;
+    // An operand an operator assignment reads twice was lowered once, first.
+    for (NSUInteger i = self.operatorSharedNodes.count; i > 0; i--)
+        if (self.operatorSharedNodes[i - 1] == node)
+            return self.operatorSharedValues[i - 1];
+    // An assignment that reads operands twice lowers them first, in source
+    // order, then itself with each one's value reused.
+    if (node.nodeKind == XTASTNodeKindAssignExpr && ((XTAssignExprNode*)node).operatorShared.count)
+        return [self lowerSharingOperandsOf:(XTAssignExprNode*)node];
     // An overloaded operator is the method call sema resolved it to.
     node = XTOperatorCallOrSelf(node);
     switch (node.nodeKind)
@@ -7751,7 +7815,7 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
     // Subscript expression `arr[i]` where the element type is a struct:
     // delegate to emitSubscriptAddress: which handles both array-decay
     // and pointer bases.
-    if (expr.nodeKind == XTASTNodeKindSubscriptExpr)
+    if (XTIsBuiltinSubscript(expr))
         {
         XTSubscriptExprNode* sub = (XTSubscriptExprNode*)expr;
         return [self emitSubscriptAddress:sub.base
@@ -9661,7 +9725,7 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
             return NO;
         return [self valueIvarNamed:m.memberName inClass:self.classesByName[bt.displayName] slot:NULL] != nil;
         }
-    return base.nodeKind == XTASTNodeKindSubscriptExpr;
+    return XTIsBuiltinSubscript(base);
     }
 
 /****************************************************************************\
@@ -9672,7 +9736,7 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
 \****************************************************************************/
 - (nullable XTIRValue*)selfPointerForClassBase:(XTASTNode*)base
     {
-    if (base.nodeKind == XTASTNodeKindSubscriptExpr && [self isValueInstanceBase:base])
+    if (XTIsBuiltinSubscript(base) && [self isValueInstanceBase:base])
         {
         XTSubscriptExprNode* sub = (XTSubscriptExprNode*)base;
         return [self emitSubscriptAddress:sub.base
@@ -9879,7 +9943,7 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
     // via emitSubscriptAddress, which gives us a pointer to the
     // element at m[i]; the enclosing ElementAddr j scales by
     // sizeof(elem) internally, so we can return the raw pointer.
-    if (base.nodeKind == XTASTNodeKindSubscriptExpr)
+    if (XTIsBuiltinSubscript(base))
         {
         XTSubscriptExprNode* sub = (XTSubscriptExprNode*)base;
         return [self emitSubscriptAddress:sub.base
@@ -14299,7 +14363,7 @@ typedef NS_ENUM(NSInteger, XTStructARCMode) {
             n = ((XTMemberAccessNode*)n).base;
             continue;
             }
-        if (n.nodeKind == XTASTNodeKindSubscriptExpr)
+        if (XTIsBuiltinSubscript(n))
             {
             n = ((XTSubscriptExprNode*)n).base;
             continue;
@@ -17350,6 +17414,8 @@ static NSString* XTIRTypeKindName(XTIRTypeKind k)
         XTSubscriptExprNode* sub = (XTSubscriptExprNode*)node;
         [self collectAssignedLocalsIn:sub.base into:out];
         [self collectAssignedLocalsIn:sub.index into:out];
+        for (XTASTNode* x in sub.extraIndices)
+            [self collectAssignedLocalsIn:x into:out];
         break;
         }
     case XTASTNodeKindMemberAccess:
@@ -17638,6 +17704,8 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
         XTSubscriptExprNode* s = (XTSubscriptExprNode*)node;
         [self collectAddressTakenIn:s.base into:out];
         [self collectAddressTakenIn:s.index into:out];
+        for (XTASTNode* x in s.extraIndices)
+            [self collectAddressTakenIn:x into:out];
         break;
         }
     case XTASTNodeKindMemberAccess:

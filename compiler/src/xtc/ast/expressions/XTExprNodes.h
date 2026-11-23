@@ -83,6 +83,8 @@ typedef NS_ENUM(NSInteger, XTAssignOp) {
 |* operator with its built-in meaning. Not printed by the parse dump.
 \****************************************************************************/
 @property(nonatomic, nullable) XTASTNode* operatorCall;
+// Its operands are analysed already (the get call and value of `m[i] += v`).
+@property(nonatomic) BOOL operandsAnalysed;
 /****************************************************************************\
 |* Create a binary expression node (e.g. a + b, x == y).
 |* @param op        The binary operator.
@@ -145,6 +147,18 @@ typedef NS_ENUM(NSInteger, XTAssignOp) {
 @property(nonatomic, strong, nullable) id resolvedSetterMethod;
 @property(nonatomic, copy, nullable) NSString* resolvedSetterName;
 @property(nonatomic, copy, nullable) NSString* resolvedSetterClass;
+/****************************************************************************\
+|* Overloaded operators. `operatorCall` is what the assignment became: the
+|* index-set call (`m[i] = v`, and `m[i] += v` as get, op, set) or the
+|* compound operator's call (`a += b`). Lowering lowers it in its place.
+|* `operatorShared` lists the operands that expression reads twice (the base
+|* and indices of `m[i] += v`, the parts of `a[i]` in `a[i] = a[i] + b`), in
+|* source order: lowering evaluates each once, first, and reuses the value.
+|* `operatorFallback` is set when `a += b` became `a = a + b`.
+\****************************************************************************/
+@property(nonatomic, nullable) XTASTNode* operatorCall;
+@property(nonatomic, copy, nullable) NSArray<XTASTNode*>* operatorShared;
+@property(nonatomic) BOOL operatorFallback;
 /****************************************************************************\
 |* Create an assignment expression node (=, +=, -=, etc.).
 |* @param op        The assignment operator variant.
@@ -383,6 +397,16 @@ typedef NS_ENUM(NSInteger, XTAssignOp) {
 @property(nonatomic, readonly) XTASTNode* base;
 @property(nonatomic, readonly) XTASTNode* index;
 /****************************************************************************\
+|* `m[i, j]`: the indices after the first, nil for one index. Only a class
+|* with an index operator (`:operator(self[i, j])`) takes more than one.
+\****************************************************************************/
+@property(nonatomic, copy, nullable) NSArray<XTASTNode*>* extraIndices;
+/****************************************************************************\
+|* The method call an overloaded index operator became (`:operator(self[i])`).
+|* Lowering lowers it in place of the subscript. nil for a built-in index.
+\****************************************************************************/
+@property(nonatomic, nullable) XTASTNode* operatorCall;
+/****************************************************************************\
 |* Create a subscript (array indexing) expression node.
 |* @param base      The array or pointer expression.
 |* @param index     The index expression.
@@ -410,6 +434,8 @@ typedef NS_ENUM(NSInteger, XTAssignOp) {
 @property(nonatomic, readonly, nullable) XTASTNode* startExpr;
 @property(nonatomic, readonly, nullable) XTASTNode* endExpr;
 @property(nonatomic, readonly) BOOL inclusive;
+// The method call an overloaded range index became (`:operator(self[a..b])`).
+@property(nonatomic, nullable) XTASTNode* operatorCall;
 
 - (instancetype)initWithBase:(XTASTNode*)base
                    startExpr:(nullable XTASTNode*)startExpr
@@ -700,5 +726,18 @@ typedef NS_ENUM(NSInteger, XTAssignOp) {
 \****************************************************************************/
 - (instancetype)initWithOperand:(id)operand location:(XTSourceLocation*)location;
 @end
+
+/****************************************************************************\
+|* A subscript or slice that an index operator made a call of
+|* (`:operator(self[i])`): its value is the call's result, with no address.
+\****************************************************************************/
+static inline BOOL XTIsOperatorIndex(XTASTNode* _Nullable n)
+    {
+    if ([n isKindOfClass:[XTSubscriptExprNode class]])
+        return ((XTSubscriptExprNode*)n).operatorCall != nil;
+    if ([n isKindOfClass:[XTSliceExprNode class]])
+        return ((XTSliceExprNode*)n).operatorCall != nil;
+    return NO;
+    }
 
 NS_ASSUME_NONNULL_END
