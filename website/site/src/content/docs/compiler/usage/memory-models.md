@@ -179,6 +179,12 @@ to a multiple of 4:
 xcc -A atarist -ss 0x8000 app.xc -o app.prg      # a 32 KB stack
 ```
 
+The bottom 256 bytes of the reserve are a guard, filled with a pattern at start-up and
+checked when `main` returns, when the program exits and at every allocation. If the stack
+has run into it, the program prints `stack overflow: the 64 KB stack was exceeded; raise it
+with -ss` (naming its own size) and exits with status 1. The check comes after the fact:
+an overflow that reaches past the program's data into its code can crash before then.
+
 ## Libraries resolve by architecture × platform
 
 The standard library is selected on **two** axes: the backend's CPU tree
