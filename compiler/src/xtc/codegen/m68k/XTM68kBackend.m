@@ -1911,6 +1911,69 @@ static NSString* m68kSym(NSString* name)
 // differential fuzzer; guard: tests/fixtures/int64_return_dispatch.xc).
 // One predicate now, so the three sites cannot drift apart again.
 // Returns YES when it stored the result, NO when the caller's own path applies.
+// An aggregate return travels through an sret buffer, pushed first as a
+// hidden trailing argument. Every call form passes it: the callee writes its
+// result through it however it was reached. Returns the bytes pushed.
++ (NSUInteger)pushSret:(XTIRInsn*)insn
+                 slots:(NSDictionary<NSNumber*, NSNumber*>*)slots
+                  into:(NSMutableString*)out
+    {
+    if (!(insn.result && insn.result.type.kind == XTIRTypeKindAgg && insn.result.type.layout))
+        return 0;
+    int rbase = slots[@(insn.result.valueId)].intValue;
+    [out appendFormat:@"\tlea\t%d(a6),a0\n\tmove.l\ta0,-(sp)\n", rbase];
+    return 4;
+    }
+
+// A call's arguments, operands[first .. first+argc), pushed right to left,
+// each by its type. Every call form pushes them alike: a direct call, a call
+// through a pointer and a dispatched one reach the same callees. Returns the
+// bytes pushed.
++ (NSUInteger)pushArgs:(XTIRInsn*)insn
+                 first:(NSUInteger)first
+                 count:(NSUInteger)argc
+                    fn:(XTIRFunction*)fn
+                 slots:(NSDictionary<NSNumber*, NSNumber*>*)slots
+                  into:(NSMutableString*)out
+    {
+    NSUInteger popBytes = 0;
+    for (NSInteger i = (NSInteger)argc - 1; i >= 0; i--)
+        {
+        XTIROperand* ao = insn.operands[first + (NSUInteger)i];
+        XTIRValue* av = (ao.kind == XTIROperandKindUse)
+                            ? [fn valueForId:ao.valueId]
+                            : nil;
+        if (av && av.type.kind == XTIRTypeKindAgg && av.type.layout)
+            {
+            // Aggregate by value: push the whole struct (high long first so
+            // byte 0 lands at the lowest pushed address = the param offset).
+            int abase = slots[@(ao.valueId)].intValue;
+            NSUInteger asz = ([self m68kAggSize:av.type.layout] + 3) & ~3u;
+            for (int o = (int)asz - 4; o >= 0; o -= 4)
+                [out appendFormat:@"\tmove.l\t%d(a6),-(sp)\n", abase + o];
+            popBytes += asz;
+            }
+        else if (av && (av.type.kind == XTIRTypeKindF64 || av.type.kind == XTIRTypeKindI64 || av.type.kind == XTIRTypeKindU64))
+            {
+            // double AND i64 occupy two longs: push the low long first so
+            // the high long lands at the lower (param) address — big-endian
+            // order. Without the i64 arm an eight-byte argument was pushed
+            // as one long and every later argument shifted with it.
+            int doff = slots[@(ao.valueId)].intValue;
+            [out appendFormat:@"\tmove.l\t%d(a6),-(sp)\n\tmove.l\t%d(a6),-(sp)\n",
+                              doff + 4, doff];
+            popBytes += 8;
+            }
+        else
+            {
+            [self loadOperand:ao intoReg:@"d0" slots:slots into:out];
+            [out appendString:@"\tmove.l\td0,-(sp)\n"];
+            popBytes += 4;
+            }
+        }
+    return popBytes;
+    }
+
 + (BOOL)storeWideReturn:(XTIRInsn*)insn
                   slots:(NSDictionary<NSNumber*, NSNumber*>*)slots
                    into:(NSMutableString*)out
@@ -3778,14 +3841,13 @@ static NSString* m68kRefusePredicate(int p, NSString* dflt)
         XTIROperand* recv = insn.operands[0];
         int slot = (int)insn.operands[1].intValue;
         NSUInteger argc = insn.operands.count >= 3 ? insn.operands.count - 3 : 0;
-        // extra args R→L
-        for (NSInteger i = (NSInteger)argc - 1; i >= 0; i--)
-            {
-            [self loadOperand:insn.operands[2 + i] intoReg:@"d0" slots:slots into:out];
-            [out appendString:@"\tmove.l\td0,-(sp)\n"];
-            }
+        // The sret buffer and the arguments as a direct call pushes them: the
+        // same methods are reached either way.
+        NSUInteger popBytes = [self pushSret:insn slots:slots into:out];
+        popBytes += [self pushArgs:insn first:2 count:argc fn:fn slots:slots into:out];
         [self loadOperand:recv intoReg:@"d0" slots:slots into:out]; // self (last)
         [out appendString:@"\tmove.l\td0,-(sp)\n"];
+        popBytes += 4;
         [self loadOperand:recv intoReg:@"a0" slots:slots into:out]; // receiver
         [out appendString:@"\tmove.l\t(a0),a1\n"];                  // vtable base (runtime addr)
         // PIC vtable: slot holds (method - vtable_base); method = base + offset.
@@ -3794,7 +3856,9 @@ static NSString* m68kRefusePredicate(int p, NSString* dflt)
         else
             [out appendString:@"\tmove.l\t(a1),d0\n"];       // offset
         [out appendString:@"\tadd.l\td0,a1\n\tjsr\t(a1)\n"]; // a1 = method
-        [out appendFormat:@"\tlea\t%lu(sp),sp\n", (unsigned long)(4 * (argc + 1))];
+        [out appendFormat:@"\tlea\t%lu(sp),sp\n", (unsigned long)popBytes];
+        if (insn.result && insn.result.type.kind == XTIRTypeKindAgg && insn.result.type.layout)
+            break; // the callee already wrote it through the sret
         if (![self storeWideReturn:insn slots:slots into:out] && insn.result && insn.result.type.kind != XTIRTypeKindMemory)
             [self storeReg:@"d0" toResult:insn.result slots:slots into:out];
         break;
@@ -3841,26 +3905,21 @@ static NSString* m68kRefusePredicate(int p, NSString* dflt)
         {
         // operands: [funcptr, arg0..argN, mem]
         NSUInteger argc = insn.operands.count >= 2 ? insn.operands.count - 2 : 0;
-        for (NSInteger i = (NSInteger)argc - 1; i >= 0; i--)
-            {
-            [self loadOperand:insn.operands[i + 1] intoReg:@"d0" slots:slots into:out];
-            [out appendString:@"\tmove.l\td0,-(sp)\n"];
-            }
+        // The sret buffer and the arguments as a direct call pushes them: the
+        // callee is an ordinary function, reached through a pointer.
+        NSUInteger popBytes = [self pushSret:insn slots:slots into:out];
+        popBytes += [self pushArgs:insn first:1 count:argc fn:fn slots:slots into:out];
         [self loadOperand:insn.operands[0] intoReg:@"a1" slots:slots into:out];
         [out appendString:@"\tjsr\t(a1)\n"];
-        if (argc)
-            [out appendFormat:@"\tlea\t%lu(sp),sp\n", (unsigned long)(4 * argc)];
+        if (popBytes)
+            [out appendFormat:@"\tlea\t%lu(sp),sp\n", (unsigned long)popBytes];
         if ([self storeWideReturn:insn slots:slots into:out])
             {
             // stored: an eight-byte scalar comes back in d0:d1
             }
         else if (insn.result && insn.result.type.kind == XTIRTypeKindAgg && insn.result.type.layout)
             {
-            int base = slots[@(insn.result.valueId)].intValue;
-            NSUInteger sz = [self m68kAggSize:insn.result.type.layout];
-            [out appendFormat:@"\tmove.l\td0,%d(a6)\n", base];
-            if (sz > 4)
-                [out appendFormat:@"\tmove.l\td1,%d(a6)\n", base + 4];
+            // the callee already wrote it through the sret
             }
         else if (insn.result && insn.result.type.kind != XTIRTypeKindMemory)
             [self storeReg:@"d0" toResult:insn.result slots:slots into:out];
