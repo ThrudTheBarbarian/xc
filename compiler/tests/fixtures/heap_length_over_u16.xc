@@ -1,3 +1,4 @@
+//xtc-na: m68k — the Atari ST keeps a 16-bit count by design (countWidth 2), so 70,000 elements are out of range
 //xtc-flags: target=arm64
 // `.length` must carry the whole element count, not its low 16 bits. It was
 // typed u16 in all THREE lowering paths, so any array of more than 65535

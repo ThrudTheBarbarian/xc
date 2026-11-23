@@ -1,3 +1,4 @@
+//xtc-na: m68k — megabytes of globals do not fit the Atari ST's 4 MB
 //xtc-flags: target=arm64
 // wasm_big_globals.xc — globals larger than the 1 MiB the heap used to start
 // at (bug 627): on wasm32 the module did not load ("data segment out of

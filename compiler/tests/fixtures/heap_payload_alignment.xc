@@ -1,4 +1,4 @@
-//xtc-na: xt6502 — its heap is byte-addressed and has no alignment rule
+//xtc-na: xt6502, m68k — the 6502 heap is byte-addressed and has no alignment rule; the 68000 aligns to 2
 // heap_payload_alignment.xc — bug 598. Every heap payload starts 8-aligned.
 // On wasm32 the object header was 38 bytes, so every `new u32[n]` (and every
 // object) sat at 2 mod 4: xc's own loads were fine, but JavaScript that views

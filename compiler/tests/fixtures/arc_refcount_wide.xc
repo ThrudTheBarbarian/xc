@@ -1,4 +1,4 @@
-//xtc-na: xt6502, arm9 — both keep a 16-bit count by design (rt.c: two bytes an object matter there), so 70,000 references are out of range
+//xtc-na: xt6502, arm9, m68k — all keep a 16-bit count by design (rt.c: two bytes an object matter there), so 70,000 references are out of range
 // arc_refcount_wide.xc — bug 598. One object held by 70,000 references is
 // freed exactly once, when the last goes. On wasm32 the count was 16-bit and
 // SATURATED at 65,535 (bug 261), so this object leaked for good: dealloc never
