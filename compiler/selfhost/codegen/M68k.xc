@@ -1194,19 +1194,46 @@ class M68k
             return;
             }
 
-        // An aggregate return travels through an sret buffer — d0:d1 cannot
-        // hold a struct larger than 8 bytes — passed as a hidden trailing
-        // argument, so it is pushed FIRST.
         bool aggRet = n.res() != (IRValue*)0 && isAggTy(n.res().ty());
-        u32 popBytes = (u32)0;
-        if (aggRet)
+        u32 popBytes = pushSret(n);
+        popBytes = popBytes + pushArgs(n, (u32)1, argc);
+        _out.appendFormat("\tjsr\t%s\n", m68kSym(name).cString());
+        if (popBytes != (u32)0)
+            _out.appendFormat("\tlea\t%lu(sp),sp\n", popBytes);
+        if (n.res() != (IRValue*)0 && (isF64(n.res().ty()) || isI64(n.res().ty())))
             {
-            _out.appendFormat("\tlea\t%ld(a6),a0\n\tmove.l\ta0,-(sp)\n", slotOf(n.res()));
-            popBytes = popBytes + (u32)4;
+            i32 base = slotOf(n.res());
+            _out.appendFormat("\tmove.l\td0,%ld(a6)\n\tmove.l\td1,%ld(a6)\n", base, base + (i32)4);
+            return;
             }
+        if (aggRet)
+            return; // the callee already wrote it through the sret
+        captureScalarResult(n);
+        }
+
+    // An aggregate return travels through an sret buffer — d0:d1 cannot hold
+    // a struct larger than 8 bytes — passed as a hidden trailing argument, so
+    // it is pushed FIRST. Every call form passes it: the callee writes its
+    // result through it however it was reached (emitAggReturn). Returns the
+    // bytes pushed.
+    u32 pushSret(IRInsn* n)
+        {
+        if (n.res() == (IRValue*)0 || !isAggTy(n.res().ty()))
+            return (u32)0;
+        _out.appendFormat("\tlea\t%ld(a6),a0\n\tmove.l\ta0,-(sp)\n", slotOf(n.res()));
+        return (u32)4;
+        }
+
+    // A call's arguments, ops[first .. first+argc), pushed RIGHT TO LEFT, each
+    // by its type. Every call form pushes them alike: a direct call, a call
+    // through a pointer and a dispatched one reach the same callees. Returns
+    // the bytes pushed.
+    u32 pushArgs(IRInsn* n, u32 first, u32 argc)
+        {
+        u32 popBytes = (u32)0;
         for (u32 k = argc; k > (u32)0; k = k - (u32)1)
             {
-            IROperand* ao = (IROperand*)n.ops().get(k);
+            IROperand* ao = (IROperand*)n.ops().get(first + k - (u32)1);
             String* at = ao.kind() == (u8)OPK_USE && ao.val() != (IRValue*)0
                              ? ao.val().ty()
                              : ao.ty();
@@ -1239,18 +1266,7 @@ class M68k
                 popBytes = popBytes + (u32)4;
                 }
             }
-        _out.appendFormat("\tjsr\t%s\n", m68kSym(name).cString());
-        if (popBytes != (u32)0)
-            _out.appendFormat("\tlea\t%lu(sp),sp\n", popBytes);
-        if (n.res() != (IRValue*)0 && (isF64(n.res().ty()) || isI64(n.res().ty())))
-            {
-            i32 base = slotOf(n.res());
-            _out.appendFormat("\tmove.l\td0,%ld(a6)\n\tmove.l\td1,%ld(a6)\n", base, base + (i32)4);
-            return;
-            }
-        if (aggRet)
-            return; // the callee already wrote it through the sret
-        captureScalarResult(n);
+        return popBytes;
         }
 
     void captureScalarResult(IRInsn* n)
@@ -1739,13 +1755,13 @@ class M68k
         IROperand* recv = (IROperand*)n.ops().get((u32)0);
         i32 slot = ((IROperand*)n.ops().get((u32)1)).imm();
         u32 argc = n.ops().count() >= (u32)3 ? n.ops().count() - (u32)3 : (u32)0;
-        for (u32 k = argc; k > (u32)0; k = k - (u32)1)
-            {
-            loadOperand((IROperand*)n.ops().get((u32)1 + k), String.withCString("d0"));
-            _out.appendCString("\tmove.l\td0,-(sp)\n");
-            }
+        // The sret buffer and the arguments as a direct call pushes them: the
+        // same methods are reached either way.
+        u32 popBytes = pushSret(n);
+        popBytes = popBytes + pushArgs(n, (u32)2, argc);
         loadOperand(recv, String.withCString("d0")); // self goes last, so lowest
         _out.appendCString("\tmove.l\td0,-(sp)\n");
+        popBytes = popBytes + (u32)4;
         loadOperand(recv, String.withCString("a0"));
         _out.appendCString("\tmove.l\t(a0),a1\n"); // the vtable's runtime address
         if (slot != (i32)0)
@@ -1753,7 +1769,9 @@ class M68k
         else
             _out.appendCString("\tmove.l\t(a1),d0\n");
         _out.appendCString("\tadd.l\td0,a1\n\tjsr\t(a1)\n");
-        _out.appendFormat("\tlea\t%lu(sp),sp\n", (u32)4 * (argc + (u32)1));
+        _out.appendFormat("\tlea\t%lu(sp),sp\n", popBytes);
+        if (n.res() != (IRValue*)0 && isAggTy(n.res().ty()))
+            return; // the callee already wrote it through the sret
         captureScalarResult(n);
         }
 
@@ -1821,32 +1839,16 @@ class M68k
             return;
             }
         u32 argc = n.ops().count() >= (u32)2 ? n.ops().count() - (u32)2 : (u32)0;
-        for (u32 k = argc; k > (u32)0; k = k - (u32)1)
-            {
-            loadOperand((IROperand*)n.ops().get(k), String.withCString("d0"));
-            _out.appendCString("\tmove.l\td0,-(sp)\n");
-            }
+        // The sret buffer and the arguments as a direct call pushes them: the
+        // callee is an ordinary function, reached through a pointer.
+        u32 popBytes = pushSret(n);
+        popBytes = popBytes + pushArgs(n, (u32)1, argc);
         loadOperand((IROperand*)n.ops().get((u32)0), String.withCString("a1"));
         _out.appendCString("\tjsr\t(a1)\n");
-        if (argc != (u32)0)
-            _out.appendFormat("\tlea\t%lu(sp),sp\n", (u32)4 * argc);
-        if (n.res() == (IRValue*)0)
-            return;
-        String* rt = n.res().ty();
-        if (isF64(rt) || isI64(rt))
-            {
-            i32 base = slotOf(n.res());
-            _out.appendFormat("\tmove.l\td0,%ld(a6)\n\tmove.l\td1,%ld(a6)\n", base, base + (i32)4);
-            return;
-            }
-        if (isAggTy(rt))
-            {
-            i32 base = slotOf(n.res());
-            _out.appendFormat("\tmove.l\td0,%ld(a6)\n", base);
-            if (aggSize(layoutOf(rt)) > (u32)4)
-                _out.appendFormat("\tmove.l\td1,%ld(a6)\n", base + (i32)4);
-            return;
-            }
+        if (popBytes != (u32)0)
+            _out.appendFormat("\tlea\t%lu(sp),sp\n", popBytes);
+        if (n.res() == (IRValue*)0 || isAggTy(n.res().ty()))
+            return; // an aggregate: the callee already wrote it through the sret
         captureScalarResult(n);
         }
 
