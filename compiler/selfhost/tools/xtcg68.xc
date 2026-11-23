@@ -6,7 +6,7 @@
 // -O0 (where what is being compared is the CODE GENERATOR alone).
 //
 //   xtcg68 <file.ir> [-o out.s] [--cpu 68000|68030] [--hard-float] [--pic]
-//          [--stack-size <bytes>]
+//          [--stack-size <bytes>] [--stack-check]
 
 #import "Foundation.xc"
 #import "Stdio.xc"
@@ -28,6 +28,7 @@ void main(void)
     bool hardFloat = false;
     bool pic = false;
     u32 stackReserve = (u32)0;
+    bool stackCheck = false;
     // --partial writes whatever WAS emitted alongside the refusal, so progress
     // can be measured per function while opcodes are still missing. The exit
     // status stays 3, so no harness mistakes it for success.
@@ -60,6 +61,12 @@ void main(void)
             for (u32 k = (u32)0; k < v.byteLength(); k = k + (u32)1)
                 stackReserve = stackReserve * (u32)10 + (u32)(v.byteAt(k) - (u8)'0');
             i = i + (u32)2;
+            continue;
+            }
+        if (a.equals(String.withCString("--stack-check")))
+            {
+            stackCheck = true;
+            i = i + (u32)1;
             continue;
             }
         if (a.equals(String.withCString("--hard-float")))
@@ -141,6 +148,7 @@ void main(void)
     be.setHardFloat(hardFloat);
     be.setPic(pic);
     be.setStackReserve(stackReserve);
+    be.setStackCheck(stackCheck);
     be.setDumpHomes(dumpHomes);
     String* asmText = be.assembly(m);
     if (be.failed())

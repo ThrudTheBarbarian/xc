@@ -426,6 +426,10 @@ cover -fnew-ir --with-ir --self-host --migrate=
 same "-fbounds-check"       $A -fbounds-check -o @OUT@ ret.xc
 same "-fno-bounds-check"    $A -fno-bounds-check -o @OUT@ ret.xc
 same "-fbounds-check=light" $A -fbounds-check=light -o @OUT@ ret.xc
+# The Atari ST takes both (#596); the 6502 refuses the full form, in one text.
+same "-fbounds-check (-A atarist)"       -q -A atarist -fbounds-check -o @OUT@.s ret.xc
+same "-fbounds-check=light (-A atarist)" -q -A atarist -fbounds-check=light -o @OUT@.s ret.xc
+same "-fbounds-check (-A 6502, refused)" -q -A 6502 -fbounds-check -o @OUT@ ret.xc
 for v in never auto always bogus; do same "-fauto-cloak=$v" $A -fauto-cloak=$v -o @OUT@ ret.xc; done
 same "-farc"                $A -farc -o @OUT@ ret.xc
 same "-farc=off"            $A -farc=off -o @OUT@ ret.xc
