@@ -1072,6 +1072,11 @@
     // silently never ran (bug 036). A loop that quietly does nothing reads as
     // "the collection was empty", which is the worst way for this to fail.
     [self analyzeNode:node.collection];
+    // A range index through an operator is a call's result, not a slice of
+    // the base to step through.
+    if ([node.collection isKindOfClass:[XTSliceExprNode class]] && ((XTSliceExprNode*)node.collection).operatorCall)
+        [self.diagnostics emitError:@"'for ... in' cannot iterate a range index made by an operator; assign it to a variable first"
+                                 at:node.collection.location];
     XTVariableDeclNode* lv = [node.loopVar isKindOfClass:[XTVariableDeclNode class]]
                                  ? (XTVariableDeclNode*)node.loopVar
                                  : nil;
@@ -2081,8 +2086,11 @@
     // context (e.g. `double x = 2.0d * Math.PI();`). Operands are
     // analysed independently; their per-operand resolved types
     // still drive the widened result type below.
-    [self analyzeNode:node.left];
-    [self analyzeNode:node.right];
+    if (!node.operandsAnalysed)
+        {
+        [self analyzeNode:node.left];
+        [self analyzeNode:node.right];
+        }
     // An operand that reads a primitive element out of a typed collection is
     // the BOX until it is unboxed, and the operator below types itself from
     // its operands — so this has to happen before that, not after (bug 046).
@@ -2664,6 +2672,17 @@
     XTType* ot = node.operand.resolvedType;
     if ([self resolveOperatorOfUnary:node])
         return;
+    // An element an index operator reads is a call's result: no address, no
+    // slot to step.
+    if (XTIsOperatorIndex(node.operand))
+        {
+        if (node.op == XTUnaryOpAddrOf)
+            [self.diagnostics emitError:@"'&' cannot take the address of an element read through an index operator"
+                                     at:node.location];
+        else if (node.op == XTUnaryOpPreInc || node.op == XTUnaryOpPreDec)
+            [self.diagnostics emitError:@"'++' and '--' cannot step an element read through an index operator; use '+= 1' or '-= 1'"
+                                     at:node.location];
+        }
     switch (node.op)
         {
     case XTUnaryOpPlus:
@@ -2820,6 +2839,11 @@
     {
     [self analyzeNode:node.operand];
     node.resolvedType = node.operand.resolvedType ?: [XTType u8Type];
+    // An element an index operator reads is a call's result, with no slot to
+    // step.
+    if (XTIsOperatorIndex(node.operand))
+        [self.diagnostics emitError:@"'++' and '--' cannot step an element read through an index operator; use '+= 1' or '-= 1'"
+                                 at:node.operand.location];
     }
 
 /****************************************************************************\
@@ -2828,11 +2852,19 @@
 \****************************************************************************/
 - (void)visitAssignExpr:(XTAssignExprNode*)node
     {
+    // Already made a call or rewrite by an operator.
+    if (node.operatorCall || node.operatorFallback)
+        return;
     // Property-accessor feature: suppress the getter rewrite while
     // resolving the LHS — the LHS is a write target, not a read.
     BOOL prevLV = self.memberAccessAsLValue;
     self.memberAccessAsLValue = YES;
+    // A subscript on the left is the target of an index operator's set form,
+    // if its base's class has one, and is not read.
+    XTASTNode* prevTarget = self.operatorIndexTarget;
+    self.operatorIndexTarget = node.lhs;
     [self analyzeNode:node.lhs];
+    self.operatorIndexTarget = prevTarget;
     self.memberAccessAsLValue = prevLV;
 
     // Analyse the RHS first. We need a resolved type on it to
@@ -2847,6 +2879,10 @@
     [self checkNilLiteral:node.rhs against:node.lhs.resolvedType];
     node.resolvedType = node.lhs.resolvedType ?: node.rhs.resolvedType ?
                                                                        : [XTType u8Type];
+    // An index operator's set, or a compound operator (in place, or as
+    // `a = a op b`): the assignment is the call or rewrite it becomes.
+    if ([self resolveOperatorOfAssign:node])
+        return;
 
     // Unboxing: `v = arr.get(0);` where v is a primitive numeric
     // and the RHS resolved to a class pointer. Splice the

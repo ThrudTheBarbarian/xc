@@ -2671,7 +2671,8 @@ class Parser
     //
     // The pattern is kept on the node as "<shape> <name> <name>": the shape
     // has `_` for each operand (`_+_`, `-_`), the names follow in pattern
-    // order. Index and compound forms and user-defined shapes will use it too.
+    // order. An index spells its indices out (`_[_]`, `_[_,_]`, `_[_.._]`, and
+    // `=_` after a set form); a compound one is `_+=_`.
     // A pattern that is not one of them is not a parse error: the parse goes
     // on, and the node keeps "? <what is wrong>" for sema to report with the
     // method's other faults, at the method.
@@ -2691,7 +2692,8 @@ class Parser
 
         u32 n = t.count();
         String* refused = (String*)0;   // an operator with a fixed meaning
-        bool later = false;             // an index or compound-assignment form
+        bool noIndex = false;           // `self[]`
+        bool noValue = false;           // `self[i] =` with nothing to assign
         String* pat = (String*)0;
         bool name0 = n > (u32)0 && ((Token*)t.get((u32)0)).type() == (u16)tokIdentifier;
         bool name1 = n > (u32)1 && ((Token*)t.get((u32)1)).type() == (u16)tokIdentifier;
@@ -2717,7 +2719,12 @@ class Parser
                        || ot == (u16)tokSlashAssign || ot == (u16)tokPercentAssign || ot == (u16)tokAmpAssign
                        || ot == (u16)tokPipeAssign || ot == (u16)tokCaretAssign || ot == (u16)tokShlAssign
                        || ot == (u16)tokShrAssign || ot == (u16)tokRolAssign || ot == (u16)tokRorAssign) {
-                later = true;
+                pat = String.withCString("_");
+                pat.append(o.value());
+                pat.appendCString("_ ");
+                pat.append(((Token*)t.get((u32)0)).value());
+                pat.appendByte((u8)' ');
+                pat.append(((Token*)t.get((u32)2)).value());
             }
         } else if (n == (u32)2 && name1) {
             Token* o = (Token*)t.get((u32)0);
@@ -2735,7 +2742,65 @@ class Parser
                                            || ((Token*)t.get((u32)1)).type() == (u16)tokMinusMinus)) {
             refused = ((Token*)t.get((u32)1)).value();
         } else if (n >= (u32)2 && name0 && ((Token*)t.get((u32)1)).type() == (u16)tokLBracket) {
-            later = true;
+            // An index: `self[i]`, `self[i, j]`, `self[lo..hi]` or
+            // `self[lo...hi]`, then `= v` for the set form. The shape spells
+            // the indices out: `_[_]`, `_[_,_]`, `_[_.._]`, with `=_` after a
+            // set.
+            String* sh = String.withCString("_[");
+            String* nm = String.withString(((Token*)t.get((u32)0)).value());
+            u32 i = 2;
+            bool ok = true;
+            if (i < n && ((Token*)t.get(i)).type() == (u16)tokRBracket) {
+                noIndex = true;
+            } else if (i + 2 < n && ((Token*)t.get(i)).type() == (u16)tokIdentifier
+                       && (((Token*)t.get(i + 1)).type() == (u16)tokDotDot
+                           || ((Token*)t.get(i + 1)).type() == (u16)tokEllipsis)
+                       && ((Token*)t.get(i + 2)).type() == (u16)tokIdentifier) {
+                sh.appendCString("_");
+                sh.append(((Token*)t.get(i + 1)).value());
+                sh.appendCString("_");
+                nm.appendByte((u8)' ');
+                nm.append(((Token*)t.get(i)).value());
+                nm.appendByte((u8)' ');
+                nm.append(((Token*)t.get(i + 2)).value());
+                i = i + 3;
+            } else {
+                while (ok) {
+                    if (i >= n || ((Token*)t.get(i)).type() != (u16)tokIdentifier) {
+                        ok = false;
+                    } else {
+                        sh.appendCString("_");
+                        nm.appendByte((u8)' ');
+                        nm.append(((Token*)t.get(i)).value());
+                        i = i + 1;
+                        if (i < n && ((Token*)t.get(i)).type() == (u16)tokComma) {
+                            sh.appendCString(",");
+                            i = i + 1;
+                        } else {
+                            break;
+                        }
+                    }
+                }
+            }
+            if (!noIndex && ok && i < n && ((Token*)t.get(i)).type() == (u16)tokRBracket) {
+                sh.appendCString("]");
+                i = i + 1;
+                if (i == n) {
+                    pat = sh;
+                } else if (((Token*)t.get(i)).type() == (u16)tokAssign && i + 1 == n) {
+                    noValue = true;
+                } else if (((Token*)t.get(i)).type() == (u16)tokAssign && i + 2 == n
+                           && ((Token*)t.get(i + 1)).type() == (u16)tokIdentifier) {
+                    sh.appendCString("=_");
+                    nm.appendByte((u8)' ');
+                    nm.append(((Token*)t.get(i + 1)).value());
+                    pat = sh;
+                }
+                if (pat != 0) {
+                    pat.appendByte((u8)' ');
+                    pat.append(nm);
+                }
+            }
         } else if (n >= (u32)2 && name0 && ((Token*)t.get((u32)1)).type() == (u16)tokLParen) {
             refused = String.withCString("()");
         } else if (n == (u32)5 && ((Token*)t.get((u32)1)).type() == (u16)tokQuestion
@@ -2748,8 +2813,10 @@ class Parser
             return;
         }
         String* msg = (String*)0;
-        if (later)
-            msg = String.withCString("':operator' cannot define an index or compound-assignment operator yet");
+        if (noIndex)
+            msg = String.withCString("an index operator needs an index, such as (self[i])");
+        else if (noValue)
+            msg = String.withCString("an index-set operator needs a value after '=', such as (self[i] = v)");
         else if (refused != 0 && (Parser._same(refused, "==") || Parser._same(refused, "!="))) {
             msg = String.withCString("'");
             msg.append(refused);
@@ -5162,6 +5229,11 @@ class Parser
             plExpr(e.kid(0));
             plTok(tokLBracket, "[");
             plExpr(e.kid(1));
+            // `m[i, j]`: the indices after the first.
+            for (u32 xi = 2; xi < e.kidCount(); xi++) {
+                plTok(tokComma, ",");
+                plExpr(e.kid(xi));
+            }
             plTok(tokRBracket, "]");
             return;
         }
@@ -10031,6 +10103,7 @@ class Parser
                 Node* endE = (Node*)0;
                 bool isSlice = false;
                 bool inclusive = false;
+                Array* extra = (Array*)0;
                 if (check((u16)tokDotDot) || check((u16)tokEllipsis)) {
                     inclusive = check((u16)tokEllipsis);
                     advance();
@@ -10038,7 +10111,16 @@ class Parser
                     if (!check((u16)tokRBracket)) endE = parseExpression();
                 } else {
                     startE = parseExpression();
-                    if (check((u16)tokDotDot) || check((u16)tokEllipsis)) {
+                    // `m[i, j]`: more indices, for a class with an index
+                    // operator taking several (`:operator(self[i, j])`).
+                    while (check((u16)tokComma)) {
+                        advance();
+                        Node* more = parseExpression();
+                        if (more == 0) break;
+                        if (extra == 0) extra = new Array();
+                        extra.add((Object*)more);
+                    }
+                    if (extra == 0 && (check((u16)tokDotDot) || check((u16)tokEllipsis))) {
                         inclusive = check((u16)tokEllipsis);
                         advance();
                         isSlice = true;
@@ -10061,6 +10143,9 @@ class Parser
                 n.add(node);
                 n.add(startE);
                 n.add(endE);
+                if (extra != 0)
+                    for (u32 xi = 0; xi < extra.count(); xi++)
+                        n.add((Node*)extra.get(xi));
                 node = n;
             } else if (t == (u16)tokDot || t == (u16)tokArrow) {
                 bool arrow = (t == (u16)tokArrow);

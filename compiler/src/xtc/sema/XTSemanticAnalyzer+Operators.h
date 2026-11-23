@@ -9,6 +9,7 @@
 @class XTProgramNode;
 @class XTBinaryExprNode;
 @class XTUnaryExprNode;
+@class XTAssignExprNode;
 
 NS_ASSUME_NONNULL_BEGIN
 
@@ -32,6 +33,19 @@ NS_ASSUME_NONNULL_BEGIN
 |* The same for a prefix operator `OP a`.
 \****************************************************************************/
 - (BOOL)resolveOperatorOfUnary:(XTUnaryExprNode*)node;
+/****************************************************************************\
+|* `m[i]`, `m[i, j]` or `m[a..b]` on a class with an index operator: the get
+|* call, or nothing yet for the target of an assignment (`target`). Returns NO
+|* when the base's class has no index operator, so the built-in index applies.
+\****************************************************************************/
+- (BOOL)resolveIndexOperatorOf:(XTASTNode*)node target:(BOOL)target;
+/****************************************************************************\
+|* An assignment through an operator: the index set (`m[i] = v`), get, op and
+|* set for `m[i] += v`, the compound operator (`a += b`), or `a = a + b` when
+|* the class defines `+` and no `+=` that matches. Returns NO when none
+|* applies. Operands are analysed.
+\****************************************************************************/
+- (BOOL)resolveOperatorOfAssign:(XTAssignExprNode*)node;
 @end
 
 NS_ASSUME_NONNULL_END

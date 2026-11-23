@@ -3980,8 +3980,17 @@ static NSInteger XTFmtWrapperIndex(BOOL isVarArgs, NSArray<XTParamNode*>* params
 \****************************************************************************/
 - (void)visitSubscriptExpr:(XTSubscriptExprNode*)node
     {
+    BOOL target = self.operatorIndexTarget == node;
     [self analyzeNode:node.base];
     [self analyzeNode:node.index];
+    for (XTASTNode* x in node.extraIndices)
+        [self analyzeNode:x];
+    // A class with an index operator: `m[i]` is its get call.
+    if ([self resolveIndexOperatorOf:node target:target])
+        return;
+    if (node.extraIndices.count)
+        [self.diagnostics emitError:@"only a class with an index operator takes several indices, as in :operator(self[i, j])"
+                                 at:node.location];
     XTType* baseType = node.base.resolvedType;
     if ([baseType isKindOfClass:[XTArrayType class]])
         {
@@ -4008,11 +4017,15 @@ static NSInteger XTFmtWrapperIndex(BOOL isVarArgs, NSArray<XTParamNode*>* params
 \****************************************************************************/
 - (void)visitSliceExpr:(XTSliceExprNode*)node
     {
+    BOOL target = self.operatorIndexTarget == node;
     [self analyzeNode:node.base];
     if (node.startExpr)
         [self analyzeNode:node.startExpr];
     if (node.endExpr)
         [self analyzeNode:node.endExpr];
+    // A class with a range index operator: `m[a..b]` is its get call.
+    if ([self resolveIndexOperatorOf:node target:target])
+        return;
     XTType* baseType = node.base.resolvedType;
     if ([baseType isKindOfClass:[XTArrayType class]])
         {

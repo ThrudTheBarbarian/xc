@@ -27,10 +27,15 @@
 #define NF_VAFWD $400000
 #define NF_PACKED $800000
 #define NF_FIELDCALL $1000000
-// An operator node (nkBinary / nkUnary) that became a call of a
-// `:operator(pattern)` method: the call is the kid past its operands. Shares
+// An operator node (nkBinary / nkUnary / nkSubscript / nkSlice / nkAssign)
+// that became a call of a `:operator(pattern)` method: the call is the kid
+// past its operands (see Node.opCallOf). Shares
 // NF_FIELDCALL's bit, which only a call node carries.
 #define NF_OPCALL $1000000
+// On an nkAssign only: `a += b` that became `a = a + b` because a's class
+// defines `+` and no `+=` that takes b. Shares NF_STATIC's bit, which only a
+// declaration carries.
+#define NF_OPFALLBACK $0001
 #define NF_SYNTH $100000
 #define NF_EXTERNAL $2000000
 #define NF_CHAINM $4000000

@@ -477,6 +477,7 @@ static BOOL parPlainDecimal(NSString* t)
             XTASTNode* endExpr = nil;
             BOOL isSlice = NO;
             BOOL inclusive = NO;
+            NSMutableArray<XTASTNode*>* extra = nil;
             if ([self check:XTTokenDotDot] || [self check:XTTokenEllipsis])
                 {
                 inclusive = [self check:XTTokenEllipsis];
@@ -490,7 +491,19 @@ static BOOL parPlainDecimal(NSString* t)
             else
                 {
                 startExpr = [self parseExpression];
-                if ([self check:XTTokenDotDot] || [self check:XTTokenEllipsis])
+                // `m[i, j]`: more indices, for a class with an index operator
+                // taking several (`:operator(self[i, j])`).
+                while ([self check:XTTokenComma])
+                    {
+                    [self advance];
+                    XTASTNode* more = [self parseExpression];
+                    if (!more)
+                        break;
+                    if (!extra)
+                        extra = [NSMutableArray array];
+                    [extra addObject:more];
+                    }
+                if (!extra && ([self check:XTTokenDotDot] || [self check:XTTokenEllipsis]))
                     {
                     inclusive = [self check:XTTokenEllipsis];
                     [self advance];
@@ -508,11 +521,13 @@ static BOOL parPlainDecimal(NSString* t)
                                                    startExpr:startExpr
                                                      endExpr:endExpr
                                                    inclusive:inclusive
-                                                    location:cur.location];
+                                                    location:lbLoc];
                 }
             else
                 {
-                base = [[XTSubscriptExprNode alloc] initWithBase:base index:startExpr location:lbLoc];
+                XTSubscriptExprNode* sub = [[XTSubscriptExprNode alloc] initWithBase:base index:startExpr location:lbLoc];
+                sub.extraIndices = extra;
+                base = sub;
                 }
             }
         else if (cur.type == XTTokenDot)

@@ -56,6 +56,34 @@ static NSString* binOpName(XTBinaryOp op)
     return @"?";
     }
 
+// The method call an overloaded operator node became, or nil.
+static XTASTNode* XTDumpOperatorCall(XTASTNode* node)
+    {
+    switch (node.nodeKind)
+        {
+    case XTASTNodeKindBinaryExpr: return ((XTBinaryExprNode*)node).operatorCall;
+    case XTASTNodeKindUnaryExpr: return ((XTUnaryExprNode*)node).operatorCall;
+    case XTASTNodeKindSubscriptExpr: return ((XTSubscriptExprNode*)node).operatorCall;
+    case XTASTNodeKindSliceExpr: return ((XTSliceExprNode*)node).operatorCall;
+    default: return nil;
+        }
+    }
+
+// ` opcall=plus opsym=… opcls=… opvslot=…` for the call an operator became.
+static void appendOperatorCall(NSMutableString* a, XTASTNode* oc)
+    {
+    if (![oc isKindOfClass:[XTMethodCallExprNode class]])
+        return;
+    XTMethodCallExprNode* n = (XTMethodCallExprNode*)oc;
+    [a appendFormat:@" opcall=%@", n.methodName];
+    if (n.resolvedMangledName)
+        [a appendFormat:@" opsym=%@", n.resolvedMangledName];
+    if (n.resolvedClassName)
+        [a appendFormat:@" opcls=%@", n.resolvedClassName];
+    if (n.resolvedVirtualSlot)
+        [a appendFormat:@" opvslot=%@", n.resolvedVirtualSlot];
+    }
+
 // ` operator=_+_ operands=self,o` for an operator method, else nothing.
 static NSString* operatorField(NSString* shape, NSArray<NSString*>* names)
     {
@@ -231,23 +259,11 @@ static NSString* semaAnnotation(XTASTNode* node)
         }
     case XTASTNodeKindBinaryExpr:
     case XTASTNodeKindUnaryExpr:
-        {
+    case XTASTNodeKindSubscriptExpr:
+    case XTASTNodeKindSliceExpr:
         // An overloaded operator: the method call it resolved to.
-        XTASTNode* oc = node.nodeKind == XTASTNodeKindBinaryExpr ? ((XTBinaryExprNode*)node).operatorCall
-                                                                 : ((XTUnaryExprNode*)node).operatorCall;
-        if ([oc isKindOfClass:[XTMethodCallExprNode class]])
-            {
-            XTMethodCallExprNode* n = (XTMethodCallExprNode*)oc;
-            [a appendFormat:@" opcall=%@", n.methodName];
-            if (n.resolvedMangledName)
-                [a appendFormat:@" opsym=%@", n.resolvedMangledName];
-            if (n.resolvedClassName)
-                [a appendFormat:@" opcls=%@", n.resolvedClassName];
-            if (n.resolvedVirtualSlot)
-                [a appendFormat:@" opvslot=%@", n.resolvedVirtualSlot];
-            }
+        appendOperatorCall(a, XTDumpOperatorCall(node));
         break;
-        }
     case XTASTNodeKindNewExpr:
         {
         XTNewExprNode* n = (XTNewExprNode*)node;
@@ -285,6 +301,13 @@ static NSString* semaAnnotation(XTASTNode* node)
             [a appendFormat:@" set=%@", n.resolvedSetterName];
         if (n.resolvedSetterClass)
             [a appendFormat:@" setcls=%@", n.resolvedSetterClass];
+        // An index set or compound operator: the call it became; `a += b`
+        // that became `a = a + b`; the operands evaluated once, first.
+        appendOperatorCall(a, n.operatorCall);
+        if (n.operatorFallback)
+            [a appendString:@" opfallback=1"];
+        if (n.operatorShared.count)
+            [a appendFormat:@" opshared=%lu", (unsigned long)n.operatorShared.count];
         break;
         }
     case XTASTNodeKindFunctionDecl:
@@ -788,6 +811,7 @@ static NSString* semaAnnotation(XTASTNode* node)
         [self line:@"Subscript" into:out indent:ind];
         [self emit:n.base into:out indent:ind + 1];
         [self emit:n.index into:out indent:ind + 1];
+        [self emitChildren:n.extraIndices ?: @[] into:out indent:ind + 1];
         break;
         }
     case XTASTNodeKindSliceExpr:
