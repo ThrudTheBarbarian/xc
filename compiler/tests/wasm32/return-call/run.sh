@@ -25,7 +25,7 @@ fi
 #    over the 16 KB arm64 frame budget — same note as wasm-diff.sh.)
 "$BIN/xcc-fe" -A wasm32 -H "$ROOT" "$SRC" -o a.ir -q >/dev/null 2>&1
 "$BIN/xcc" -O1 -A arm64 -H "$ROOT" -q -o xtcgwasm "$ROOT/selfhost/tools/xtcgwasm.xc" \
-    -I "$ROOT/selfhost/ir" -I "$ROOT/selfhost/opt" -I "$ROOT/selfhost/codegen" -I "$ROOT/selfhost/defs"
+    -I "$ROOT/selfhost/ir" -I "$ROOT/selfhost/opt" -I "$ROOT/selfhost/codegen" -I "$ROOT/selfhost/asm" -I "$ROOT/selfhost/defs"
 "$BIN/xcc" -O1 -A arm64 -H "$ROOT" -q -o xtlnwasm "$ROOT/selfhost/tools/xtlnwasm.xc" \
     -I "$ROOT/selfhost/asm" -I "$ROOT/selfhost/defs"
 for O in 0 2; do

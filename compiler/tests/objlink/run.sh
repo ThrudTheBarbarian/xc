@@ -1197,8 +1197,15 @@ rec tbl[9];
 i64 zsml;
 i64 useSml(void) { return tbl[0].a + zsml; }
 EOF
+# A program needs a main to link: a third object holds it, after the two.
+cat > "$W/cmain.xc" <<'EOF'
+void useBig(void);
+i64 useSml(void);
+i32 main(void) { useBig(); return (i32)useSml(); }
+EOF
 "$XCC" -q -O0 -c -o "$W/cbig.o" "$W/cbig.xc" 2>/dev/null
 "$XCC" -q -O0 -c -o "$W/csml.o" "$W/csml.xc" 2>/dev/null
+"$XCC" -q -O0 -c -o "$W/cmain.o" "$W/cmain.xc" 2>/dev/null
 tblroom() {  # $1 = binary → prints the byte gap from _tbl to the next symbol
     local lines a b
     lines="$(nm -n "$1" 2>/dev/null | grep -A1 ' _tbl$')"
@@ -1207,7 +1214,7 @@ tblroom() {  # $1 = binary → prints the byte gap from _tbl to the next symbol
     [ -n "$a" ] && [ -n "$b" ] && echo $(( 0x$b - 0x$a ))
 }
 for order in "cbig.o csml.o" "csml.o cbig.o"; do
-    if "$XCC" -q -o "$W/cw" $(echo "$order" | sed "s#[a-z0-9]*\.o#$W/&#g") 2>/dev/null; then
+    if "$XCC" -q -o "$W/cw" $(echo "$order" | sed "s#[a-z0-9]*\.o#$W/&#g") "$W/cmain.o" 2>/dev/null; then
         r="$(tblroom "$W/cw")"
         [ "$r" = "1328" ] && ok "common largest-wins ($order → tbl 1328)" \
                           || bad "common largest-wins ($order → tbl '$r', want 1328)"
