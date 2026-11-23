@@ -3977,6 +3977,8 @@ void emitM68k(DriverOptions* d, IRModule* mod)
     be.setCpu(d.caps().m68kCpu());
     be.setHardFloat(d.caps().hardFloat());
     be.setPic(d.caps().pic());
+    // -ss: the stack _start reserves (a library has no _start).
+    if (!d.emitLib()) be.setStackReserve(d.stackSize());
     String* prog = be.assembly(mod);
     if (be.failed()) {
         String* list = String.withCString("");
@@ -7233,7 +7235,8 @@ void usage(void)
     Stdio.printf("  -fauto-cloak=never|auto|always\n");
     Stdio.printf("                             Checked; no effect, as no layout has a cloaked\n");
     Stdio.printf("                             region\n");
-    Stdio.printf("  -ss, --stack-size <n>      wasm32: the shadow stack's size in bytes\n");
+    Stdio.printf("  -ss, --stack-size <n>      wasm32: the shadow stack's size in bytes;\n"
+                 "                             atarist: the stack reserve (default 65536)\n");
     Stdio.printf("                             (decimal, $hex or 0xhex; default 1 MiB, at\n");
     Stdio.printf("                             most 1 GiB). No effect on other targets\n");
     Stdio.printf("\n");
@@ -8272,7 +8275,6 @@ Array* driverOptions(void)
     driverOption((u32)doptAutoCloak, (u32)doptkPrefix, "-fauto-cloak=", (u32)0);
     inertOption((u32)doptiName);
     driverOption((u32)doptStackSize, (u32)doptkCustom, "-ss --stack-size -ss= --stack-size=", (u32)0);
-    inertOption((u32)doptiBeforeEq);
     driverOption((u32)doptSelfHost, (u32)doptkExact, "--self-host", (u32)0);
     driverOption((u32)doptNewIr, (u32)doptkExact, "-fnew-ir --with-ir", (u32)0);
     inertOption((u32)doptiArgument);
@@ -8807,7 +8809,7 @@ u32 applyOption(DriverOptions* d, u32 id, String* a, u32 i, u32 argc)
         return (u32)1;
     }
     // -ss / --stack-size <n>, also joined with `=`: the wasm32 shadow
-    // stack's size; no other target has a stack this sets.
+    // stack's size, and the Atari ST's stack reserve.
     if (id == (u32)doptStackSize) {
         u32 i0 = i;
         String* v = (String*)0;
