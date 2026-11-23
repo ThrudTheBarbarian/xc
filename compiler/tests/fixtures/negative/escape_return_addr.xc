@@ -1,6 +1,6 @@
 // Returning the address of a stack-allocated instance is a hard
 // error — the storage dies at the closing brace.
-// xtc: error "cannot return address or value derived from stack-allocated instance 'p'"
+// xtc: error "returning '&p', the address of a stack instance that ends with this function; return the instance by value ('Point') or allocate it with new"
 
 class Point
 {

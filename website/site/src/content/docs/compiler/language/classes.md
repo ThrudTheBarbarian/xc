@@ -56,6 +56,13 @@ When it goes out of scope (the end of the block, each loop iteration, or a
 A local array of class instances (`MyClass arr[4];`) is not supported. Declare
 an array of references (`MyClass* arr[4];`) instead.
 
+A stack instance has no reference count, so a strong pointer cannot hold its
+address. Passing `&mine` to a strong parameter, storing it in a strong local,
+field or global, or returning it is a compile error, and so is the address of a
+class instance held by value inside it (`&mine.part`). A `weak:` pointer can
+hold the address (`weak:MyClass* p = &mine;`). It does not retain the instance,
+and it is not cleared when the instance goes out of scope.
+
 Where local storage lives depends on the target. It matters only when you are
 counting bytes:
 

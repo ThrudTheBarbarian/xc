@@ -1082,10 +1082,16 @@ static int xtVersionGT(NSString* a, NSString* b)
     if ([node isKindOfClass:[XTReturnNode class]])
         {
         XTReturnNode* r = (XTReturnNode*)node;
-        for (XTASTNode* v in r.values)
+        for (NSUInteger i = 0; i < r.values.count; i++)
             {
+            XTASTNode* v = r.values[i];
             [self escWalkExpr:v];
             NSString* origin = [self escOriginOfExpr:v];
+            // `return &y;` into a strong class pointer has its own message
+            // (checkStackAddressInStrongSlot); one error is enough.
+            if (origin && i < _currentReturnTypes.count &&
+                [self isStackAddress:v inStrongSlot:_currentReturnTypes[i]])
+                origin = nil;
             if (origin)
                 {
                 [_diagnostics emitError:[NSString stringWithFormat:

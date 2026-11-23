@@ -101,6 +101,7 @@ class Sema
     Map* _structs;            // struct name -> StructDecl node
     Node* _curMethod;         // the declaration whose body is being walked
     Node* _curClass;          // the class whose body is being walked, or 0
+    u32 _fnScopeAt;           // the index in _scopes of that callable's own scope
     String* _getterOwner;     // …and the same for a getter
     String* _setterOwner;     // where propertySetter found it — see the note there
     String* _curReturn;       // the return type of the function being walked
@@ -184,6 +185,7 @@ class Sema
         _structs = new Map();
         _curClass = (Node*)0;
         _curMethod = (Node*)0;
+        _fnScopeAt = (u32)0;
         _getterOwner = (String*)0;
         _setterOwner = (String*)0;
         _curReturn = (String*)0;
@@ -1615,6 +1617,7 @@ class Sema
         _curThrows = decl.hasFlag((u32)NF_THROWS);
         _tryDepth = (u32)0;
         pushScope();
+        _fnScopeAt = _scopes.count() - (u32)1;
         // `self` is the receiver: a pointer to the class whose method this is.
         if (owner != 0 && owner.name() != 0)
             {
@@ -2153,6 +2156,14 @@ class Sema
                 {
                 escWalk(n.kid(i));
                 String* origin = escOrigin(n.kid(i));
+                // `return &y;` into a strong class pointer has its own message
+                // (checkStackAddrStrong); one error is enough.
+                if (origin != 0 && _curReturn != 0)
+                    {
+                    Array* rets = commaSplit(_curReturn);
+                    if (i < rets.count() && isStackAddrStrong((String*)rets.get(i), n.kid(i)))
+                        origin = (String*)0;
+                    }
                 if (origin != 0)
                     {
                     String* m = String.withCString("cannot return address or value derived from stack-allocated instance '");
@@ -2286,6 +2297,206 @@ class Sema
             m.appendCString(".clone()` instead");
             _errorAt(m, call);
             }
+        }
+
+    // What a name is where it is used: 1 a local or a parameter, 2 a field
+    // (an ivar, read by bare name in a method), 3 a global. The callable's own
+    // scope holds its parameters, `self` and the ivars; the blocks above it
+    // hold locals.
+    u32 nameKindOf(String* name)
+        {
+        u32 i = _scopes.count();
+        while (i > (u32)0)
+            {
+            i = i - (u32)1;
+            Map* sc = (Map*)_scopes.get(i);
+            if (sc.get((Hashable*)name) == 0)
+                continue;
+            if (_curMethod == 0 || i != _fnScopeAt || _isOp(name, "self"))
+                return (u32)1;
+            for (u32 p = (u32)0; p < _curMethod.kidCount(); p = p + (u32)1)
+                {
+                Node* pn = _curMethod.kid(p);
+                if (pn.kind() == (u16)nkParam && pn.name() != 0 && pn.name().equals(name))
+                    return (u32)1;
+                }
+            return (u32)2;
+            }
+        if (_globals.get((Hashable*)name) != 0)
+            return (u32)3;
+        return (u32)2;
+        }
+
+    // The source spelling of an lvalue for a diagnostic: `y`, `q.inner`, `g[1]`.
+    String* stackAddrText(Node* e)
+        {
+        if (e.kind() == (u16)nkIdent && e.name() != 0)
+            return e.name();
+        if (e.kind() == (u16)nkMember && e.kidCount() > (u32)0)
+            {
+            String* s = String.withString(stackAddrText(e.kid((u32)0)));
+            s.appendCString(e.hasFlag((u32)NF_ARROW) ? "->" : ".");
+            s.append(e.name());
+            return s;
+            }
+        if (e.kind() == (u16)nkSubscript && e.kidCount() > (u32)1)
+            {
+            String* s = String.withString(stackAddrText(e.kid((u32)0)));
+            s.appendByte((u8)'[');
+            Node* ix = e.kid((u32)1);
+            if (ix.kind() == (u16)nkIdent && ix.name() != 0)
+                s.append(ix.name());
+            else if (ix.kind() == (u16)nkInt)
+                s.append(String.withI64(ix.num()));
+            else
+                s.appendCString("...");
+            s.appendByte((u8)']');
+            return s;
+            }
+        return String.withCString("...");
+        }
+
+    // Where an instance held by value lives, for a diagnostic: a local or a
+    // parameter (or a member of one) is "a stack instance".
+    string stackAddrWhere(Node* e)
+        {
+        if (e.kind() == (u16)nkIdent && e.name() != 0)
+            {
+            u32 nk = nameKindOf(e.name());
+            if (nk == (u32)1)
+                return "a stack instance";
+            if (nk == (u32)3)
+                return "a global instance";
+            return "an instance held inside an object";
+            }
+        if (e.kind() == (u16)nkMember && e.kidCount() > (u32)0)
+            {
+            if (!e.hasFlag((u32)NF_ARROW) && isStackClassType(e.kid((u32)0).ty()))
+                return stackAddrWhere(e.kid((u32)0));
+            return "an instance held inside an object";
+            }
+        if (e.kind() == (u16)nkSubscript && e.kidCount() > (u32)0)
+            {
+            if (isArrayLike(e.kid((u32)0).ty()))
+                return stackAddrWhere(e.kid((u32)0));
+            return "an instance held inside an array";
+            }
+        return "an instance held by value";
+        }
+
+    // `&x` of an instance held by value, stored where a strong class pointer
+    // would retain it: the store checkStackAddrStrong refuses.
+    bool isStackAddrStrong(String* slot, Node* value)
+        {
+        if (slot == 0 || value == 0 || !Types.isPointer(slot)
+            || slot.byteIndexOf(String.withCString("weak:")) != (u32)$FFFFFFFF)
+            return false;
+        if (_classes.get((Hashable*)classNameOf(slot)) == 0)
+            return false;
+        if (value.kind() != (u16)nkUnary || !_isOp(value.op(), "&") || value.kidCount() == (u32)0)
+            return false;
+        return isStackClassType(value.kid((u32)0).ty());
+        }
+
+    // `P* r = &y;` of a stack instance (#604), as the reference's
+    // checkStackAddressInStrongSlot: the instance has no header and so no
+    // reference count, and the retain landed on the word before it. An
+    // initialiser, an assignment or a return into a strong class pointer;
+    // the argument form is checkStackStrongArgs.
+    void checkStackAddrStrong(String* slot, Node* value, string site, Node* lhs, String* declName, Node* at)
+        {
+        if (!isStackAddrStrong(slot, value))
+            return;
+        Node* operand = value.kid((u32)0);
+        String* cls = classNameOf(slot);
+        String* obj = stackAddrText(operand);
+        string where = stackAddrWhere(operand);
+        bool onStack = String.withCString(where).equals(String.withCString("a stack instance"));
+        String* siteName = String.withCString(site);
+        String* m = String.withCString("'&");
+        if (siteName.equals(String.withCString("return")) && onStack)
+            {
+            m = String.withCString("returning '&");
+            m.append(obj);
+            m.appendCString("', the address of a stack instance that ends with this function; return the instance by value ('");
+            m.append(cls);
+            m.appendCString("') or allocate it with new");
+            _errorAt(m, at);
+            return;
+            }
+        m.append(obj);
+        m.appendCString("' is the address of ");
+        m.appendCString(where);
+        m.appendCString(", which has no reference count, so ");
+        if (siteName.equals(String.withCString("return")))
+            {
+            m.appendCString("a strong '");
+            m.append(cls);
+            m.appendCString("*' return cannot hold it; return the instance by value ('");
+            m.append(cls);
+            m.appendCString("') or allocate it with new");
+            _errorAt(m, at);
+            return;
+            }
+        if (siteName.equals(String.withCString("initialiser")))
+            {
+            m.appendCString("a strong '");
+            m.append(cls);
+            m.appendCString("*' cannot hold it; declare it 'weak:");
+            m.append(cls);
+            m.appendCString("* ");
+            if (declName != 0)
+                m.append(declName);
+            else
+                m.appendCString("p");
+            m.appendCString(" = &");
+            m.append(obj);
+            m.appendCString(";', which does not retain it, or use ");
+            m.append(obj);
+            m.appendCString(" directly");
+            _errorAt(m, at);
+            return;
+            }
+        string noun = "";
+        String* name = (String*)0;
+        if (lhs != 0 && lhs.kind() == (u16)nkIdent && lhs.name() != 0)
+            {
+            name = lhs.name();
+            u32 nk = nameKindOf(name);
+            noun = nk == (u32)1 ? "local" : (nk == (u32)3 ? "global" : "field");
+            }
+        else if (lhs != 0 && lhs.kind() == (u16)nkMember && lhs.name() != 0)
+            {
+            name = lhs.name();
+            noun = "field";
+            }
+        if (name != 0)
+            {
+            m.appendCString("the strong '");
+            m.append(cls);
+            m.appendCString("*' ");
+            m.appendCString(noun);
+            m.appendCString(" '");
+            m.append(name);
+            m.appendCString("' cannot hold it; declare '");
+            m.append(name);
+            m.appendCString("' as 'weak:");
+            m.append(cls);
+            m.appendCString("* ");
+            m.append(name);
+            m.appendCString("', which does not retain it, or use ");
+            }
+        else
+            {
+            m.appendCString("a strong '");
+            m.append(cls);
+            m.appendCString("*' cannot hold it; store it in a 'weak:");
+            m.append(cls);
+            m.appendCString("*', which does not retain it, or use ");
+            }
+        m.append(obj);
+        m.appendCString(" directly");
+        _errorAt(m, at);
         }
 
     // A callee declared `throws`, called outside a try's guarded block from a
@@ -2939,6 +3150,10 @@ class Sema
                         n.setOp(inferred);
                     }
                 }
+            // `P* r = &y;` of a stack instance (#604). After the inference
+            // above, as `auto r = &y;` is a strong `P*` too.
+            if (n.kidCount() > (u32)0)
+                checkStackAddrStrong(n.op(), n.kid((u32)0), "initialiser", (Node*)0, n.name(), n);
             // `u16 v = a.get(0)` — a boxed value arriving in a primitive
             // slot unboxes on the way in.
             if (n.kidCount() > (u32)0 && canUnboxType(n.kid((u32)0).ty(), n.op()))
@@ -3172,6 +3387,7 @@ class Sema
                                                                               : (String*)0);
                     if (want == 0)
                         continue;
+                    checkStackAddrStrong(want, n.kid(i), "return", (Node*)0, (String*)0, n);
                     checkClassPointerAssignAt(want, n.kid(i).ty(), n.kid(i), "return", n);
                     }
                 }
@@ -3327,8 +3543,11 @@ class Sema
             // assignment is a read-modify-write on a value that already has
             // the slot's type, so there is nothing to check there.
             if (_isOp(n.op(), "="))
+                {
+                checkStackAddrStrong(n.kid((u32)0).ty(), n.kid((u32)1), "assignment", n.kid((u32)0), (String*)0, n);
                 checkClassPointerAssignAt(n.kid((u32)0).ty(), n.kid((u32)1).ty(),
                                           n.kid((u32)1), "assignment", n);
+                }
             return;
             }
         // A printf VARARG is typed with the format's expectation in hand:

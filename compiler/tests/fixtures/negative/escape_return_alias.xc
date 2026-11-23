@@ -1,5 +1,6 @@
 // Returning through a short pointer-alias chain is still a hard
-// error — the analyser traces `q = &p` and flags `return q`.
+// error — the analyser traces `q = &p` and flags `return q`. The alias is
+// weak: a strong one is refused where it takes the address.
 // xtc: error "cannot return address or value derived from stack-allocated instance 'p'"
 
 class Point
@@ -13,7 +14,7 @@ Point* leak(void)
 {
     Point p;
     p.set(1, 2);
-    Point* q = &p;
+    weak:Point* q = &p;
     return q;
 }
 
