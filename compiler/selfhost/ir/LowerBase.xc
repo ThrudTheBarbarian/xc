@@ -7154,6 +7154,37 @@ class ClassInfo
     // ordinary expression and coerced to what it lands in. A nested `{ … }`
     // recurses on the element's own address, which is how `{30, 40, {5, 6}}`
     // reaches the inner struct.
+    // The bytes of one element a zero run may MemSet: an integer, a float or
+    // a bool, whose width is the same on every target; 0 for anything else.
+    static u32 zeroRunWidth(String* ir)
+        {
+        if (IRType.isPtr(ir) || IRType.isAgg(ir) || IRType.isVec(ir))
+            return (u32)0;
+        return IRType.bytes(ir);
+        }
+
+    // The first `listed` elements of an array byte-list, as the element loop
+    // in lowerAggregateByteList writes them.
+    void lowerListedElements(IRValue* eBase, String* elem, String* elemPtr, Node* list, u32 listed)
+        {
+        for (u32 i = (u32)0; i < listed; i = i + (u32)1)
+            {
+            IRValue* addr = byteSlotAddr(eBase, i, elemPtr);
+            Node* entry = list.kid(i);
+            if (entry.kind() == (u16)nkBlock)
+                {
+                lowerAggregateByteList(addr, elem, entry);
+                if (_failed)
+                    return;
+                continue;
+                }
+            IRValue* v = lowerExpr(entry);
+            if (_failed)
+                return;
+            storeThrough(addr, coerce(v, entry.ty(), elem));
+            }
+        }
+
     void lowerAggregateByteList(IRValue* base, String* astTy, Node* list)
         {
         if (isArrayLike(astTy))
@@ -7173,6 +7204,29 @@ class ClassInfo
                 cops.add((Object*)IROperand.useVal(base));
                 eBase = emit(String.withCString("Bitcast"), elemPtr, cops);
                 }
+            // A long zero tail of fixed-width scalars is one MemSet of its
+            // bytes (#617): a store apiece made `u8 pad[4200]` 4,205
+            // instructions. A pointer's width is the target's, not the IR's,
+            // so its elements keep their stores, as short tails do.
+            u32 zw = zeroRunWidth(elemIr);
+            u32 listed = list.kidCount() < count ? list.kidCount() : count;
+            if (zw != (u32)0 && count - listed >= (u32)ZERO_RUN_MEMSET)
+                {
+                lowerListedElements(eBase, elem, elemPtr, list, listed);
+                if (_failed)
+                    return;
+                IRValue* zaddr = byteSlotAddr(eBase, listed, elemPtr);
+                IRInsn* ms = IRInsn.with(String.withCString("MemSet"));
+                IRValue* nextMem = new IRValue(String.withCString("Mem"));
+                ms.setMemRes(nextMem);
+                ms.add(IROperand.useVal(zaddr));
+                ms.add(IROperand.immI((i32)0, String.withCString("U8")));
+                ms.add(IROperand.immI((i32)((count - listed) * zw), String.withCString("U32")));
+                ms.add(IROperand.useVal(_mem));
+                _blk.add(ms);
+                _mem = nextMem;
+                return;
+                }
             for (u32 i = (u32)0; i < count; i = i + (u32)1)
                 {
                 IRValue* addr = byteSlotAddr(eBase, i, elemPtr);
@@ -7190,6 +7244,16 @@ class ClassInfo
                     if (_failed)
                         return;
                     storeThrough(addr, coerce(v, entry.ty(), elem));
+                    }
+                else if (isArrayLike(elem) || structDeclFor(elem) != (Node*)0)
+                    {
+                    // An aggregate element is zeroed field by field, as an
+                    // omitted struct member is: a scalar Const of an Agg
+                    // type wrote nothing at -O0, so `Inner in[2]` kept the
+                    // stack's bytes (#617).
+                    lowerAggregateByteList(addr, elem, Node.with((u16)nkBlock));
+                    if (_failed)
+                        return;
                     }
                 else
                     {

@@ -3732,6 +3732,23 @@ static NSString* m68kRefusePredicate(int p, NSString* dflt)
         break;
         }
 
+    // MemSet [dst, fill, count, mem]: count bytes of fill from dst, a byte at
+    // a time (#617: a struct local's long zero tail). A count of 0 writes
+    // nothing.
+    case XTIROpMemSet:
+        {
+        if (insn.operands.count < 3)
+            break;
+        int n = gLabelSeq++;
+        [self loadOperand:insn.operands[0] intoReg:@"a0" slots:slots into:out];
+        [self loadOperand:insn.operands[1] intoReg:@"d1" slots:slots into:out];
+        [self loadOperand:insn.operands[2] intoReg:@"d0" slots:slots into:out];
+        [out appendFormat:@"\ttst.l\td0\n\tbeq.s\t.Lms%d_done\n.Lms%d:\n", n, n];
+        [out appendString:@"\tmove.b\td1,(a0)+\n\tsubq.l\t#1,d0\n"];
+        [out appendFormat:@"\tbne.s\t.Lms%d\n.Lms%d_done:\n", n, n];
+        break;
+        }
+
     case XTIROpRetain:
         {
         // 16-bit refcount at obj-2; skip null / <64KB sentinels (real heap

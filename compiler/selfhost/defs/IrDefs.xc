@@ -37,3 +37,7 @@
 #define RT_TRAP_RETURNS $04
 #define RT_HELPER $05
 #define RT_DATA $06
+
+// A byte-list zero tail of at least this many fixed-width scalar elements is
+// one MemSet of its bytes, not a store apiece (#617). Both compilers.
+#define ZERO_RUN_MEMSET 16
