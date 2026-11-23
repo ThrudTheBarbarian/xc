@@ -3275,11 +3275,15 @@ static NSInteger XTFmtWrapperIndex(BOOL isVarArgs, NSArray<XTParamNode*>* params
         return;
         }
 
-    [self analyzeNode:node.receiver];
+    // The call an overloaded operator became has its operands analysed
+    // already: they are the receiver and the arguments.
+    BOOL operandsDone = node.operatorMethod != nil;
+    if (!operandsDone)
+        [self analyzeNode:node.receiver];
 
     // Not a method call at all — the member is a field holding a callback or
     // a function pointer. private:docs/bugs/074.
-    if ([self rewriteFieldCallIfNeeded:node])
+    if (!operandsDone && [self rewriteFieldCallIfNeeded:node])
         return;
 
     // Stdio.printf / Stdio.printfAt with a literal format string:
@@ -3341,7 +3345,10 @@ static NSInteger XTFmtWrapperIndex(BOOL isVarArgs, NSArray<XTParamNode*>* params
             }
         }
 
-    if (fmtArgTypes)
+    if (operandsDone)
+        {
+        }
+    else if (fmtArgTypes)
         {
         for (NSUInteger i = 0; i < node.arguments.count; i++)
             {
@@ -3613,6 +3620,9 @@ static NSInteger XTFmtWrapperIndex(BOOL isVarArgs, NSArray<XTParamNode*>* params
                 {
                 if ([m.methodName isEqualToString:node.methodName])
                     {
+                    // An operator resolved to one method; only it is a candidate.
+                    if (node.operatorMethod && m != node.operatorMethod)
+                        continue;
                     if (![self memberVisibleUnderMigrate:m ofClass:c])
                         continue;
                     [mcands addObject:m];

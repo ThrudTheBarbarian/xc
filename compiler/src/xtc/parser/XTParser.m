@@ -1255,6 +1255,9 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
                 method.sinceVersion = sinceVersion;
                 method.placement = fn.placement;
                 method.cloakedRegionId = fn.cloakedRegionId;
+                method.operatorShape = fn.operatorShape;
+                method.operatorOperands = fn.operatorOperands;
+                method.operatorFault = fn.operatorFault;
                 [methods addObject:method];
                 }
             }
@@ -1456,6 +1459,9 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
                         body:nil
                     location:fn.location];
             m.isOptional = isOptional;
+            m.operatorShape = fn.operatorShape;
+            m.operatorOperands = fn.operatorOperands;
+            m.operatorFault = fn.operatorFault;
             [methods addObject:m];
             }
         }
@@ -1879,6 +1885,9 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
     BOOL isAction = NO;
     XTPlacement placement = XTPlacementDefault;
     NSString* cloakedRegionId = nil;
+    NSString* operatorShape = nil;
+    NSArray<NSString*>* operatorOperands = nil;
+    NSString* operatorFault = nil;
     if ([self match:XTTokenColon])
         {
         while ([self check:XTTokenIdentifier])
@@ -1926,6 +1935,10 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
             else if ([annotName isEqualToString:@"main"])
                 {
                 placement = XTPlacementMain;
+                }
+            else if ([annotName isEqualToString:@"operator"])
+                {
+                operatorFault = [self parseOperatorPatternShape:&operatorShape operands:&operatorOperands];
                 }
             else if ([annotName isEqualToString:@"cloaked"])
                 {
@@ -2029,7 +2042,156 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
     fn.isAction = isAction;
     fn.placement = placement;
     fn.cloakedRegionId = cloakedRegionId;
+    fn.operatorShape = operatorShape;
+    fn.operatorOperands = operatorOperands;
+    fn.operatorFault = operatorFault;
     return fn;
+    }
+
+/****************************************************************************\
+|* `:operator(pattern)`: the operator written out with the method's own names
+|* as its operands — `self + o`, `-self`, `k * v`. The pattern is read as
+|* tokens, not as an expression, so each shape is recognised exactly and the
+|* operators that keep their fixed meaning are named in the refusal. Whether
+|* each name is `self` or a parameter is sema's to check: it knows whether
+|* the method is static.
+|*
+|* The shape keeps `_` for each operand: `_+_` for a binary operator, `-_`
+|* for a prefix one. A pattern that is not one of them is not a parse error:
+|* the parse goes on, and what is wrong comes back for sema to report with the
+|* method's other faults, at the method. Mirrored in the port
+|* (Parser.parseOperatorPattern).
+|* @return  nil, or what is wrong with the pattern.
+\****************************************************************************/
+- (nullable NSString*)parseOperatorPatternShape:(NSString* _Nullable* _Nonnull)shapeOut
+                                       operands:(NSArray<NSString*>* _Nullable* _Nonnull)namesOut
+    {
+    if (![self expect:XTTokenLParen])
+        return nil;
+    NSMutableArray<XTToken*>* t = [NSMutableArray array];
+    NSInteger depth = 0;
+    while (![self check:XTTokenEOF])
+        {
+        XTTokenType ty = [self currentToken].type;
+        if (ty == XTTokenRParen && depth == 0)
+            break;
+        if (ty == XTTokenLParen || ty == XTTokenLBracket)
+            depth++;
+        else if ((ty == XTTokenRParen || ty == XTTokenRBracket) && depth > 0)
+            depth--;
+        [t addObject:[self advance]];
+        }
+    [self expect:XTTokenRParen];
+
+    NSUInteger n = t.count;
+    NSString* refused = nil; // an operator with a fixed meaning
+    BOOL later = NO;         // an index or compound-assignment form
+    NSString* shape = nil;
+    NSArray<NSString*>* names = nil;
+    BOOL name0 = n > 0 && t[0].type == XTTokenIdentifier;
+    BOOL name1 = n > 1 && t[1].type == XTTokenIdentifier;
+    if (n == 3 && name0 && t[2].type == XTTokenIdentifier)
+        {
+        switch (t[1].type)
+            {
+        case XTTokenPlus:
+        case XTTokenMinus:
+        case XTTokenStar:
+        case XTTokenSlash:
+        case XTTokenPercent:
+        case XTTokenAmpersand:
+        case XTTokenPipe:
+        case XTTokenCaret:
+        case XTTokenShiftLeft:
+        case XTTokenShiftRight:
+        case XTTokenRotateLeft:
+        case XTTokenRotateRight:
+        case XTTokenLess:
+        case XTTokenLessEq:
+        case XTTokenGreater:
+        case XTTokenGreaterEq:
+            shape = [NSString stringWithFormat:@"_%@_", t[1].value];
+            names = @[ t[0].value, t[2].value ];
+            break;
+        case XTTokenEqual:
+        case XTTokenNotEqual:
+        case XTTokenLogicalAnd:
+        case XTTokenLogicalOr:
+        case XTTokenAssign:
+        case XTTokenDot:
+        case XTTokenArrow:
+        case XTTokenComma:
+            refused = t[1].value;
+            break;
+        case XTTokenPlusAssign:
+        case XTTokenMinusAssign:
+        case XTTokenStarAssign:
+        case XTTokenSlashAssign:
+        case XTTokenPercentAssign:
+        case XTTokenAmpAssign:
+        case XTTokenPipeAssign:
+        case XTTokenCaretAssign:
+        case XTTokenShlAssign:
+        case XTTokenShrAssign:
+        case XTTokenRolAssign:
+        case XTTokenRorAssign:
+            later = YES;
+            break;
+        default:
+            break;
+            }
+        }
+    else if (n == 2 && name1)
+        {
+        switch (t[0].type)
+            {
+        case XTTokenMinus:
+        case XTTokenPlus:
+        case XTTokenTilde:
+        case XTTokenBang:
+            shape = [NSString stringWithFormat:@"%@_", t[0].value];
+            names = @[ t[1].value ];
+            break;
+        case XTTokenAmpersand:
+        case XTTokenStar:
+        case XTTokenAt:
+        case XTTokenPlusPlus:
+        case XTTokenMinusMinus:
+        case XTTokenLess:
+        case XTTokenGreater:
+        case XTTokenShiftRight:
+        case XTTokenByte3:
+            refused = t[0].value;
+            break;
+        default:
+            break;
+            }
+        }
+    else if (n == 2 && name0 && (t[1].type == XTTokenPlusPlus || t[1].type == XTTokenMinusMinus))
+        refused = t[1].value;
+    else if (n >= 2 && name0 && t[1].type == XTTokenLBracket)
+        later = YES;
+    else if (n >= 2 && name0 && t[1].type == XTTokenLParen)
+        refused = @"()";
+    else if (n == 5 && t[1].type == XTTokenQuestion && t[3].type == XTTokenColon)
+        refused = @"?:";
+
+    if (shape)
+        {
+        *shapeOut = shape;
+        *namesOut = names;
+        return nil;
+        }
+    NSString* msg = nil;
+    if (later)
+        msg = @"':operator' cannot define an index or compound-assignment operator yet";
+    else if ([refused isEqualToString:@"=="] || [refused isEqualToString:@"!="])
+        msg = [NSString stringWithFormat:@"'%@' cannot be overloaded: it compares identity (equals compares values)", refused];
+    else if (refused)
+        msg = [NSString stringWithFormat:@"'%@' cannot be overloaded", refused];
+    else
+        msg = @"':operator' takes one operator applied to the method's own names, such as (self + o) or (-self)";
+    return msg;
     }
 
 #pragma mark - Type Parsing

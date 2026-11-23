@@ -125,6 +125,25 @@ class AstDump
             }
         if (n.protoIdx() >= (i32)0)
             a.appendFormat(" protoidx=%ld", (u32)n.protoIdx());
+        // An overloaded operator: the method call it became.
+        if ((n.kind() == (u16)nkBinary || n.kind() == (u16)nkUnary) && n.hasFlag((u32)NF_OPCALL))
+            {
+            Node* oc = n.kid(n.kind() == (u16)nkBinary ? (u32)2 : (u32)1);
+            a.appendCString(" opcall=");
+            a.append(oc.name());
+            if (oc.sym() != 0)
+                {
+                a.appendCString(" opsym=");
+                a.append(oc.sym());
+                }
+            if (oc.cls() != 0)
+                {
+                a.appendCString(" opcls=");
+                a.append(oc.cls());
+                }
+            if (oc.vslot() >= (i32)0)
+                a.appendFormat(" opvslot=%ld", (u32)oc.vslot());
+            }
         // Order matters as much as content: these follow sym= on their node in
         // the original's switch, and a differential dump compares lines.
         if (n.heapRecv())
@@ -215,6 +234,23 @@ class AstDump
         if (nibble < (u8)10)
             return (u8)((u8)'0' + nibble);
         return (u8)((u8)'A' + (nibble - (u8)10));
+        }
+
+    // ` operator=_+_ operands=self,o` for an operator method, else nothing.
+    static void operatorField(Node* n, String* out)
+        {
+        if (n.opShape() == 0)
+            return;
+        out.appendCString(" operator=");
+        out.append(n.opShape());
+        out.appendCString(" operands=");
+        Array* names = n.opNames();
+        for (u32 i = (u32)0; i < names.count(); i = i + (u32)1)
+            {
+            if (i > (u32)0)
+                out.appendByte((u8)',');
+            out.append((String*)names.get(i));
+            }
         }
 
     static void indent(String* out, u32 depth)
@@ -308,9 +344,12 @@ class AstDump
         if (k == (u16)nkFunctionDecl)
             {
             AstDump.indent(out, depth);
-            out.appendFormat("FunctionDecl name=%s ret=%s varargs=%lu throws=%lu\n",
+            out.appendFormat("FunctionDecl name=%s ret=%s varargs=%lu throws=%lu",
                              AstDump.escField(n.name()).cString(), AstDump.tyField(n.op()).cString(),
                              AstDump.flag(n, (u32)NF_VARARGS), AstDump.flag(n, (u32)NF_THROWS));
+            // The operator pattern prints only when written.
+            AstDump.operatorField(n, out);
+            out.appendCString("\n");
             AstDump.emitKids(n, out, depth + (u32)1, (u32)0);
             return;
             }
@@ -325,6 +364,7 @@ class AstDump
             // `since` prints only when set, so pre-0.4 dumps byte-match.
             if (n.since() != (String*)0 && n.since().byteLength() > (u32)0)
                 out.appendFormat(" since=%s", n.since().cString());
+            AstDump.operatorField(n, out);
             out.appendCString("\n");
             AstDump.emitKids(n, out, depth + (u32)1, (u32)0);
             return;
@@ -611,14 +651,18 @@ class AstDump
             {
             AstDump.indent(out, depth);
             out.appendFormat("Binary op=%s\n", n.op().cString());
-            AstDump.emitKids(n, out, depth + (u32)1, (u32)0);
+            // The operands only: the call an overloaded operator became hangs
+            // past them, and the original does not print it either.
+            for (u32 i = (u32)0; i < n.kidCount() && i < (u32)2; i = i + (u32)1)
+                AstDump.emit(n.kid(i), out, depth + (u32)1);
             return;
             }
         if (k == (u16)nkUnary)
             {
             AstDump.indent(out, depth);
             out.appendFormat("Unary op=%s\n", n.op().cString());
-            AstDump.emitKids(n, out, depth + (u32)1, (u32)0);
+            if (n.kidCount() > (u32)0)
+                AstDump.emit(n.kid((u32)0), out, depth + (u32)1);
             return;
             }
         if (k == (u16)nkPostfix)

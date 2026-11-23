@@ -346,6 +346,7 @@ class Node
     Array* _slotSyms;    // slot -> the impl symbol this class puts there ("")
     u32 _vslots;         // the table's width (the program-wide total)
     String* _since;      // since("V") on a member: version that introduced it
+    String* _opPat;      // `:operator(pattern)` on a method: "<shape> <names…>"
     String* _category;   // category/extension marker (see setCategory)
     String* _catHost;    // §4.2: on a METHOD a category added to an
                          // EXTERNAL class — the extended class's name.
@@ -359,6 +360,7 @@ class Node
         _kind = (u16)0;
         _name = (String*)0;
         _since = (String*)0;
+        _opPat = (String*)0;
         _op = (String*)0;
         _extra = (String*)0;
         _num = (i64)0;
@@ -789,6 +791,45 @@ class Node
     String* since(void)
         {
         return _since;
+        }
+    // `:operator(pattern)`: "_+_ self o" — the shape, `_` for each operand,
+    // then the operand names in pattern order. 0 when not an operator.
+    String* opPat(void)
+        {
+        return _opPat;
+        }
+    void setOpPat(String* p)
+        {
+        _opPat = p;
+        }
+    // The shape alone: "_+_". 0 when not an operator, or for a pattern the
+    // parser could not take (opFault).
+    String* opShape(void)
+        {
+        if (_opPat == 0 || _opPat.byteAt((u32)0) == (u8)'?')
+            return (String*)0;
+        for (u32 i = (u32)0; i < _opPat.byteLength(); i = i + (u32)1)
+            if (_opPat.byteAt(i) == (u8)' ')
+                return _opPat.substringBytes((u32)0, i);
+        return _opPat;
+        }
+    // A pattern the parser could not take: what is wrong with it, or 0.
+    String* opFault(void)
+        {
+        if (_opPat == 0 || _opPat.byteLength() < (u32)2 || _opPat.byteAt((u32)0) != (u8)'?')
+            return (String*)0;
+        return _opPat.substringBytes((u32)2, _opPat.byteLength() - (u32)2);
+        }
+    // The operand names, in pattern order.
+    Array* opNames(void)
+        {
+        Array* out = new Array();
+        if (_opPat == 0)
+            return out;
+        Array* parts = _opPat.splitOnByte((u8)' ');
+        for (u32 i = (u32)1; i < parts.count(); i = i + (u32)1)
+            out.add(parts.get(i));
+        return out;
         }
     void setSince(String* s)
         {

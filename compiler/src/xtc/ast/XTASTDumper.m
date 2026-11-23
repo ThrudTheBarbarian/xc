@@ -56,6 +56,15 @@ static NSString* binOpName(XTBinaryOp op)
     return @"?";
     }
 
+// ` operator=_+_ operands=self,o` for an operator method, else nothing.
+static NSString* operatorField(NSString* shape, NSArray<NSString*>* names)
+    {
+    if (!shape)
+        return @"";
+    return [NSString stringWithFormat:@" operator=%@ operands=%@", shape,
+                                      [names componentsJoinedByString:@","]];
+    }
+
 static NSString* unOpName(XTUnaryOp op)
     {
     switch (op)
@@ -82,6 +91,8 @@ static NSString* unOpName(XTUnaryOp op)
         return @">>";
     case XTUnaryOpByte3:
         return @">>>";
+    case XTUnaryOpPlus:
+        return @"+";
         }
     return @"?";
     }
@@ -216,6 +227,25 @@ static NSString* semaAnnotation(XTASTNode* node)
             [a appendFormat:@" proto=%@", n.resolvedProtocolName];
         if (n.resolvedProtocolIndex)
             [a appendFormat:@" protoidx=%@", n.resolvedProtocolIndex];
+        break;
+        }
+    case XTASTNodeKindBinaryExpr:
+    case XTASTNodeKindUnaryExpr:
+        {
+        // An overloaded operator: the method call it resolved to.
+        XTASTNode* oc = node.nodeKind == XTASTNodeKindBinaryExpr ? ((XTBinaryExprNode*)node).operatorCall
+                                                                 : ((XTUnaryExprNode*)node).operatorCall;
+        if ([oc isKindOfClass:[XTMethodCallExprNode class]])
+            {
+            XTMethodCallExprNode* n = (XTMethodCallExprNode*)oc;
+            [a appendFormat:@" opcall=%@", n.methodName];
+            if (n.resolvedMangledName)
+                [a appendFormat:@" opsym=%@", n.resolvedMangledName];
+            if (n.resolvedClassName)
+                [a appendFormat:@" opcls=%@", n.resolvedClassName];
+            if (n.resolvedVirtualSlot)
+                [a appendFormat:@" opvslot=%@", n.resolvedVirtualSlot];
+            }
         break;
         }
     case XTASTNodeKindNewExpr:
@@ -406,9 +436,11 @@ static NSString* semaAnnotation(XTASTNode* node)
                 [rets appendString:@","];
             [rets appendString:typeName(t)];
             }
-        [self line:[NSString stringWithFormat:@"FunctionDecl name=%@ ret=%@ varargs=%d throws=%d",
+        // The operator pattern prints only when written, so other dumps are unchanged.
+        [self line:[NSString stringWithFormat:@"FunctionDecl name=%@ ret=%@ varargs=%d throws=%d%@",
                                               esc(n.funcName), rets.length ? rets : @"-", n.isVarArgs ? 1 : 0,
-                                              n.throwsError ? 1 : 0]
+                                              n.throwsError ? 1 : 0,
+                                              operatorField(n.operatorShape, n.operatorOperands)]
               into:out
             indent:ind];
         [self emitChildren:n.parameters into:out indent:ind + 1];
@@ -524,9 +556,9 @@ static NSString* semaAnnotation(XTASTNode* node)
                                  esc(n.methodName), rets.length ? rets : @"-", n.isStatic ? 1 : 0,
                                  n.isVarArgs ? 1 : 0, n.throwsError ? 1 : 0, n.isOptional ? 1 : 0,
                                  n.isFinal ? 1 : 0,
-                                 n.sinceVersion.length
-                                     ? [NSString stringWithFormat:@" since=%@", n.sinceVersion]
-                                     : @""]
+                                 [(n.sinceVersion.length
+                                       ? [NSString stringWithFormat:@" since=%@", n.sinceVersion]
+                                       : @"") stringByAppendingString:operatorField(n.operatorShape, n.operatorOperands)]]
               into:out
             indent:ind];
         [self emitChildren:n.parameters into:out indent:ind + 1];

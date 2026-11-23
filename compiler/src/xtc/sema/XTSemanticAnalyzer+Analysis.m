@@ -602,6 +602,10 @@
     // is safely re-used.
     [self assignVarargsSlots:program];
 
+    // `:operator(pattern)` against its method, before any expression can
+    // resolve to one.
+    [self checkOperatorMethods:program];
+
     // Second pass: analyse bodies
     [self analyzeNode:program];
 

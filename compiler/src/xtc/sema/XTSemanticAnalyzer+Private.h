@@ -126,6 +126,9 @@
 // analysis so nested assigns don't lose context.
 @property(nonatomic) BOOL memberAccessAsLValue;
 @property(nonatomic) NSMutableDictionary<NSString*, XTClassDeclNode*>* classesByName;
+// Some class in the program defines an operator (`:operator(pattern)`); until
+// one does, no operator expression needs resolving.
+@property(nonatomic) BOOL hasOperatorMethods;
 // Format wrappers (a function's name, or `Class.method`) → the index of the
 // format parameter. See -collectFormatWrappers:.
 @property(nonatomic) NSMutableDictionary<NSString*, NSNumber*>* formatWrappers;

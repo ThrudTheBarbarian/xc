@@ -109,6 +109,9 @@ class Sema
                               // `Math.rand()` has five zero-argument overloads
                               // that differ only in return type, so the context
                               // is the only thing that can choose between them.
+    Node* _opForced;          // the method an operator resolved to, for the call typed next
+    Node* _opPick;            // …while that call picks its method (methodOverload)
+    bool _anyOps;             // some class defines an operator: until one does, none resolves
     bool _tieToFloat;         // pickOverload may settle a return-type tie on
                               // the float form (explicit and free calls only)
     Array* _used;             // classes named by `use X;` — their statics are
@@ -184,6 +187,9 @@ class Sema
         _curReturn = (String*)0;
         _expected = (String*)0;
         _tieToFloat = false;
+        _opForced = (Node*)0;
+        _opPick = (Node*)0;
+        _anyOps = false;
         _used = new Array();
         _vt = new Vtable();
         _cyclic = new Map();
@@ -1280,6 +1286,9 @@ class Sema
         checkFinalMethods(program);
         checkConformance();
         collectFormatWrappers(program);
+        // `:operator(pattern)` against its method, before any expression can
+        // resolve to one.
+        checkOperatorMethods(program);
         typeProgram(program);
         checkCloaked();
         checkVariadicReentrance();
@@ -3710,6 +3719,381 @@ class Sema
         return false;
         }
 
+    // ── OVERLOADED OPERATORS ──────────────────────────────────────────
+    // A method becomes an operator by carrying `:operator(pattern)`; the
+    // parser kept the pattern as a shape (`_+_`, `-_`) and the operand names.
+    // Here the pattern is checked against its method, and an operator
+    // expression whose operand's class defines that operator becomes a call
+    // of the chosen method. The rules, word for word with the reference's
+    // XTSemanticAnalyzer+Operators.m:
+    //
+    //   * An operator applies when an operand is a class instance (a pointer
+    //     to one, or one by value) whose class or an ancestor defines it. Such
+    //     a class gives up the built-in meaning of THAT operator for its
+    //     pointers: an unmatched use is an error, never pointer arithmetic.
+    //   * Candidates: instance methods of the left operand's class, then
+    //     static methods of either operand's class, each class walked up its
+    //     parents, a nearer method hiding an ancestor's with the same
+    //     parameter types. An override of an instance operator is the
+    //     operator, with its pattern or without. Scored as any call's
+    //     candidates; a tie between the best is an error naming both.
+    //   * The chosen method is called as an ordinary method call, hung on the
+    //     operator node past its operands (NF_OPCALL), and lowering lowers it
+    //     in the operator's place.
+
+    // The class an operand belongs to: a pointer to a class instance, or an
+    // instance by value. 0 for anything else, a protocol-typed pointer too.
+    Node* opClassOf(String* t)
+        {
+        if (t == 0)
+            return (Node*)0;
+        String* c = Vtable.canonical(t);
+        u32 len = c.byteLength();
+        if (len > (u32)1 && c.byteAt(len - (u32)1) == (u8)'*')
+            {
+            String* b = c.substringBytes((u32)0, len - (u32)1);
+            if (b.byteAt(b.byteLength() - (u32)1) == (u8)'*')
+                return (Node*)0;
+            return (Node*)_classes.get((Hashable*)b);
+            }
+        return (Node*)_classes.get((Hashable*)c);
+        }
+
+    // Does the class or an ancestor define an operator of this shape?
+    bool opClassDefines(Node* cls, String* shape)
+        {
+        for (Node* c = cls; c != 0; c = parentOf(c))
+            for (u32 i = (u32)0; i < c.kidCount(); i = i + (u32)1)
+                {
+                Node* m = c.kid(i);
+                if (m.kind() == (u16)nkMethodDecl && m.opShape() != 0 && m.opShape().equals(shape))
+                    return true;
+                }
+        return false;
+        }
+
+    // The first thing wrong with one operator method's pattern, or 0.
+    String* opPatternFault(Node* m, Node* cls)
+        {
+        String* name = m.name();
+        bool isStatic = m.hasFlag((u32)NF_STATIC);
+        if (m.hasFlag((u32)NF_VARARGS))
+            return String.withFormat("operator method '%s' cannot take '...'", name.cString());
+        String* rt = m.op();
+        bool several = false;
+        if (rt != 0)
+            for (u32 i = (u32)0; i < rt.byteLength(); i = i + (u32)1)
+                if (rt.byteAt(i) == (u8)',')
+                    several = true;
+        if (rt == 0 || several || _isOp(rt, "void"))
+            return String.withFormat("operator method '%s' must return one value", name.cString());
+        Array* names = m.opNames();
+        Map* seen = new Map();
+        bool usesSelf = false;
+        for (u32 i = (u32)0; i < names.count(); i = i + (u32)1)
+            {
+            String* op = (String*)names.get(i);
+            if (seen.get((Hashable*)op) != 0)
+                return String.withFormat("'%s' appears twice in the :operator pattern of '%s'", op.cString(), name.cString());
+            seen.set((Hashable*)op, (Object*)op);
+            if (_isOp(op, "self"))
+                {
+                if (isStatic)
+                    return String.withFormat("the :operator pattern of static method '%s' cannot use self", name.cString());
+                usesSelf = true;
+                continue;
+                }
+            bool isParam = false;
+            for (u32 j = (u32)0; j < m.kidCount(); j = j + (u32)1)
+                if (m.kid(j).kind() == (u16)nkParam && m.kid(j).name().equals(op))
+                    isParam = true;
+            if (!isParam)
+                return String.withFormat("'%s' in the :operator pattern of '%s' is neither self nor one of its parameters", op.cString(), name.cString());
+            }
+        for (u32 j = (u32)0; j < m.kidCount(); j = j + (u32)1)
+            {
+            Node* p = m.kid(j);
+            if (p.kind() == (u16)nkParam && seen.get((Hashable*)p.name()) == 0)
+                return String.withFormat("parameter '%s' of '%s' does not appear in its :operator pattern", p.name().cString(), name.cString());
+            }
+        if (!isStatic && !usesSelf)
+            return String.withFormat("the :operator pattern of instance method '%s' must use self", name.cString());
+        if (isStatic)
+            {
+            bool own = false;
+            for (u32 j = (u32)0; j < m.kidCount(); j = j + (u32)1)
+                {
+                Node* p = m.kid(j);
+                if (p.kind() != (u16)nkParam)
+                    continue;
+                Node* pc = opClassOf(p.op());
+                if (pc != 0 && classInheritsOrEquals(pc.name(), cls.name()))
+                    own = true;
+                }
+            if (!own)
+                return String.withFormat("static operator '%s' needs an operand of its own class '%s'", name.cString(), cls.name().cString());
+            }
+        return (String*)0;
+        }
+
+    // Check every `:operator(pattern)` in the program against its method,
+    // refuse it on a free function or a protocol method, and report a pattern
+    // the parser could not take.
+    void checkOperatorMethods(Node* program)
+        {
+        for (u32 i = (u32)0; i < program.kidCount(); i = i + (u32)1)
+            {
+            Node* d = program.kid(i);
+            u16 k = d.kind();
+            if (k == (u16)nkFunctionDecl)
+                {
+                if (d.opPat() != 0)
+                    _errorAt(String.withFormat("'%s' is not a method: an operator is defined by a method of one of its operands' classes", d.name().cString()), d);
+                }
+            else if (k == (u16)nkProtocolDecl)
+                {
+                for (u32 j = (u32)0; j < d.kidCount(); j = j + (u32)1)
+                    {
+                    Node* m = d.kid(j);
+                    if (m.kind() == (u16)nkMethodDecl && m.opPat() != 0)
+                        {
+                        _errorAt(String.withFormat("protocol method '%s' cannot be an operator yet", m.name().cString()), m);
+                        m.setOpPat((String*)0);
+                        }
+                    }
+                }
+            else if (k == (u16)nkClassDecl)
+                {
+                for (u32 j = (u32)0; j < d.kidCount(); j = j + (u32)1)
+                    {
+                    Node* m = d.kid(j);
+                    if (m.kind() != (u16)nkMethodDecl || m.opPat() == 0)
+                        continue;
+                    if (m.opFault() != 0)
+                        {
+                        _errorAt(m.opFault(), m);
+                        continue;
+                        }
+                    String* fault = opPatternFault(m, d);
+                    if (fault != 0)
+                        {
+                        _errorAt(fault, m);
+                        m.setOpPat((String*)0);
+                        }
+                    else
+                        _anyOps = true;
+                    }
+                }
+            }
+        }
+
+    // Add the operator methods of `cls` and its ancestors — the instance ones
+    // or the static ones — to the candidates. A method hides an ancestor's
+    // with the same parameter types, and one already present is not added
+    // twice (the two operands may share a class).
+    void addOpCandidates(Node* cls, String* shape, bool wantStatic, Array* cands, Array* owners)
+        {
+        u32 first = cands.count();
+        for (Node* c = cls; c != 0; c = parentOf(c))
+            {
+            u32 nearer = cands.count();
+            for (u32 i = (u32)0; i < c.kidCount(); i = i + (u32)1)
+                {
+                Node* m = c.kid(i);
+                if (m.kind() != (u16)nkMethodDecl || m.opShape() == 0 || !m.opShape().equals(shape))
+                    continue;
+                if (m.hasFlag((u32)NF_STATIC) != wantStatic)
+                    continue;
+                // An override in a nearer class is the operator too, written
+                // with its pattern or not: the call names it, as `a.plus(b)`
+                // would.
+                Node* use = m;
+                Node* useOwner = c;
+                for (Node* nc = cls; !wantStatic && nc != 0 && nc != c && use == m; nc = parentOf(nc))
+                    for (u32 q = (u32)0; q < nc.kidCount() && use == m; q = q + (u32)1)
+                        {
+                        Node* o = nc.kid(q);
+                        if (o.kind() == (u16)nkMethodDecl && !o.hasFlag((u32)NF_STATIC) && o.name() != 0
+                            && o.name().equals(m.name()) && Vtable.sameParams(o, m))
+                            {
+                            use = o;
+                            useOwner = nc;
+                            }
+                        }
+                bool present = false;
+                for (u32 j = (u32)0; j < cands.count(); j = j + (u32)1)
+                    if ((Node*)cands.get(j) == use)
+                        present = true;
+                if (present)
+                    continue;
+                bool hidden = false;
+                for (u32 j = first; j < nearer; j = j + (u32)1)
+                    if (Vtable.sameParams((Node*)cands.get(j), use))
+                        hidden = true;
+                if (hidden)
+                    continue;
+                cands.add((Object*)use);
+                owners.add((Object*)useOwner);
+                }
+            }
+        }
+
+    // The call one candidate makes of the operands: an instance method on the
+    // first operand with the rest as arguments; a static one on its class with
+    // the operands as arguments, in the order its parameters name them.
+    Node* opCallOf(Node* m, Node* owner, Array* ops, Node* at)
+        {
+        Node* call = Node.withName((u16)nkMethodCall, m.name());
+        call.setPos(at.fileId(), at.line(), at.col());
+        if (!m.hasFlag((u32)NF_STATIC))
+            {
+            for (u32 i = (u32)0; i < ops.count(); i = i + (u32)1)
+                call.add((Node*)ops.get(i));
+            call.setNum((i64)(ops.count() - (u32)1));
+            return call;
+            }
+        Node* recv = Node.withName((u16)nkIdent, owner.name());
+        recv.setPos(at.fileId(), at.line(), at.col());
+        call.add(recv);
+        Array* names = m.opNames();
+        u32 argc = (u32)0;
+        for (u32 j = (u32)0; j < m.kidCount(); j = j + (u32)1)
+            {
+            Node* p = m.kid(j);
+            if (p.kind() != (u16)nkParam)
+                continue;
+            u32 idx = (u32)0;
+            for (u32 q = (u32)0; q < names.count(); q = q + (u32)1)
+                if (((String*)names.get(q)).equals(p.name()))
+                    idx = q;
+            call.add((Node*)ops.get(idx < ops.count() ? idx : (u32)0));
+            argc = argc + (u32)1;
+            }
+        call.setNum((i64)argc);
+        return call;
+        }
+
+    // The argument types of some operands, as a call's are described.
+    String* opTypes(Array* ops, u32 from)
+        {
+        Node* list = Node.with((u16)nkMethodCall);
+        for (u32 i = from; i < ops.count(); i = i + (u32)1)
+            list.add((Node*)ops.get(i));
+        return describeArgTypes(list, (u32)0);
+        }
+
+    // Resolve the operator node `n` (binary or prefix) over its typed operands.
+    // false when no operand's class defines the operator: the built-in meaning
+    // applies. true when the node now has its call, or an error was reported.
+    bool resolveOperator(Node* n)
+        {
+        if (!_anyOps)
+            return false;
+        bool binary = n.kind() == (u16)nkBinary;
+        String* op = n.op();
+        if (op == 0)
+            return false;
+        bool overloadable = binary
+            ? (_isOp(op, "+") || _isOp(op, "-") || _isOp(op, "*") || _isOp(op, "/") || _isOp(op, "%")
+               || _isOp(op, "&") || _isOp(op, "|") || _isOp(op, "^") || _isOp(op, "<<") || _isOp(op, ">>")
+               || _isOp(op, "<:") || _isOp(op, ":>") || _isOp(op, "<") || _isOp(op, ">")
+               || _isOp(op, "<=") || _isOp(op, ">="))
+            : (_isOp(op, "-") || _isOp(op, "+") || _isOp(op, "~") || _isOp(op, "!"));
+        if (!overloadable)
+            return false;
+        String* shape = binary ? String.withCString("_") : String.withString(op);
+        if (binary)
+            shape.append(op);
+        shape.appendCString("_");
+        Array* ops = new Array();
+        ops.add((Object*)n.kid((u32)0));
+        if (binary)
+            ops.add((Object*)n.kid((u32)1));
+        Node* lc = opClassOf(n.kid((u32)0).ty());
+        Node* rc = binary ? opClassOf(n.kid((u32)1).ty()) : (Node*)0;
+        bool optL = lc != 0 && opClassDefines(lc, shape);
+        bool optR = rc != 0 && opClassDefines(rc, shape);
+        if (!optL && !optR)
+            return false;
+
+        Array* cands = new Array();
+        Array* owners = new Array();
+        if (lc != 0)
+            {
+            addOpCandidates(lc, shape, false, cands, owners);
+            addOpCandidates(lc, shape, true, cands, owners);
+            }
+        if (rc != 0)
+            addOpCandidates(rc, shape, true, cands, owners);
+
+        u32 best = Overload.noMatch();
+        Array* tied = new Array();
+        Array* calls = new Array();
+        for (u32 i = (u32)0; i < cands.count(); i = i + (u32)1)
+            {
+            Node* call = opCallOf((Node*)cands.get(i), (Node*)owners.get(i), ops, n);
+            calls.add((Object*)call);
+            u32 sc = scoreCandidate((Node*)cands.get(i), call, (u32)1);
+            if (sc == Overload.noMatch())
+                continue;
+            if (sc < best)
+                {
+                best = sc;
+                tied = new Array();
+                }
+            if (sc == best)
+                tied.add((Object*)Number.with(i));
+            }
+
+        String* types = opTypes(ops, (u32)0);
+        if (tied.count() == (u32)0)
+            {
+            String* msg = (String*)0;
+            if (!binary)
+                msg = String.withFormat("'%s' has no prefix '%s' taking '%s'", lc.name().cString(), op.cString(), types.cString());
+            else if (optL)
+                msg = String.withFormat("'%s' has no '%s' taking '%s'", lc.name().cString(), op.cString(), opTypes(ops, (u32)1).cString());
+            else
+                {
+                Array* left = new Array();
+                left.add(ops.get((u32)0));
+                msg = String.withFormat("'%s' has no '%s' taking '%s' on the left", rc.name().cString(), op.cString(), opTypes(left, (u32)0).cString());
+                }
+            _errorAt(msg, n);
+            n.setTy(String.withCString("u8"));
+            return true;
+            }
+        if (tied.count() > (u32)1)
+            {
+            u32 a = ((Number*)tied.get((u32)0)).asU32();
+            u32 b = ((Number*)tied.get((u32)1)).asU32();
+            String* msg = String.withFormat("operator '%s' on (%s) is ambiguous: '%s.%s' and '%s.%s' both match",
+                                            op.cString(), types.cString(),
+                                            ((Node*)owners.get(a)).name().cString(), ((Node*)cands.get(a)).name().cString(),
+                                            ((Node*)owners.get(b)).name().cString(), ((Node*)cands.get(b)).name().cString());
+            _errorAt(msg, n);
+            n.setTy(String.withCString("u8"));
+            return true;
+            }
+        u32 w = ((Number*)tied.get((u32)0)).asU32();
+        Node* call = (Node*)calls.get(w);
+        Node* chosen = (Node*)cands.get(w);
+        if (chosen.hasFlag((u32)NF_STATIC))
+            typeExpr(call.kid((u32)0));
+        _opForced = chosen;
+        typeMethodCall(call);
+        _opForced = (Node*)0;
+        // Hung past the operands; a node typed twice replaces its call.
+        u32 slot = binary ? (u32)2 : (u32)1;
+        if (n.hasFlag((u32)NF_OPCALL) && n.kidCount() > slot)
+            n.setKid(slot, call);
+        else
+            n.add(call);
+        n.addFlag((u32)NF_OPCALL);
+        n.setTy(call.ty() != 0 ? call.ty() : String.withCString("u8"));
+        return true;
+        }
+
     void typeBinary(Node* n)
         {
         if (n.kidCount() < (u32)2)
@@ -3740,6 +4124,11 @@ class Sema
         // operands — so it happens here, ahead of everything below.
         n.setKid((u32)0, unboxCollectionElement(n.kid((u32)0)));
         n.setKid((u32)1, unboxCollectionElement(n.kid((u32)1)));
+        // An operand whose class defines this operator makes the operator a
+        // call of the method (`:operator(self + o)`), and none of the built-in
+        // typing below applies.
+        if (resolveOperator(n))
+            return;
         // TWO CONSTANTS fold, and the folded VALUE is what types the result:
         // `1000 & $FF` is 232, so it is a u8 — not the u16 the widening of its
         // operands would give. An operand may itself be a constant CHAIN
@@ -3917,6 +4306,19 @@ class Sema
         if (n.kidCount() == (u32)0)
             return;
         String* op = n.op();
+        if (resolveOperator(n))
+            return;
+        // Prefix `+` has no built-in meaning.
+        if (_isOp(op, "+"))
+            {
+            String* ot = n.kid((u32)0).ty();
+            String* pm = String.withCString("prefix '+' is defined only by a class operator, not for '");
+            pm.append(ot != 0 ? Node.stripElem(ot) : String.withCString("?"));
+            pm.appendCString("'");
+            _errorAt(pm, n);
+            n.setTy(ot != 0 ? ot : String.withCString("u8"));
+            return;
+            }
         // `&obj.method` is a BOUND METHOD — the {receiver, code} pair — not the
         // address of a field. Only under `&` does a member access mean this,
         // which is why it is decided here rather than in typeMember.
@@ -4870,9 +5272,13 @@ class Sema
         {
         if (n.kidCount() == (u32)0)
             return;
+        // The call an overloaded operator became: one method is a candidate.
+        // Taken at once, so no call typed below this one sees it.
+        Node* opForced = _opForced;
+        _opForced = (Node*)0;
         // Not a method call at all — the member is a field holding a callback,
         // a function pointer or a block. private:docs/bugs/074.
-        if (rewriteFieldCall(n))
+        if (opForced == 0 && rewriteFieldCall(n))
             return;
         String* recv = n.kid((u32)0).ty();
         String* owner = (String*)0;
@@ -5034,6 +5440,7 @@ class Sema
         // the call records WHICH class it came from.
         Node* owner2 = cls;
         _tieToFloat = true;
+        _opPick = opForced;
         Node* m = methodOverload(cls, n, (u32)1);
         while (m == 0 && owner2 != 0)
             {
@@ -5042,6 +5449,7 @@ class Sema
                 break;
             m = methodOverload(owner2, n, (u32)1);
             }
+        _opPick = (Node*)0;
         _tieToFloat = false;
         if (m == 0)
             {
@@ -6704,6 +7112,9 @@ class Sema
             if (m.kind() != (u16)nkMethodDecl)
                 continue;
             if (m.name() == 0 || !m.name().equals(call.name()))
+                continue;
+            // An operator resolved to one method; only it is a candidate.
+            if (_opPick != 0 && m != _opPick)
                 continue;
             // --migrate: a member newer than the base is not in scope at all,
             // so a REUSED name resolves to nothing and reports, instead of

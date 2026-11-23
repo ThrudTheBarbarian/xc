@@ -39,6 +39,7 @@ typedef NS_ENUM(NSInteger, XTUnaryOp) {
     XTUnaryOpHiByte, // >
     XTUnaryOpByte2,  // >>
     XTUnaryOpByte3,  // >>>
+    XTUnaryOpPlus,   // +  (prefix; only a class operator gives it a meaning)
 };
 
 typedef NS_ENUM(NSInteger, XTPostfixOp) {
@@ -76,6 +77,13 @@ typedef NS_ENUM(NSInteger, XTAssignOp) {
 - (void)replaceLeft:(XTASTNode*)left;
 - (void)replaceRight:(XTASTNode*)right;
 /****************************************************************************\
+|* The method call an overloaded operator became (`:operator(self + o)`).
+|* Sema resolves the operator against the operands' classes and hangs the
+|* call here; lowering lowers it in place of the operator. nil for every
+|* operator with its built-in meaning. Not printed by the parse dump.
+\****************************************************************************/
+@property(nonatomic, nullable) XTASTNode* operatorCall;
+/****************************************************************************\
 |* Create a binary expression node (e.g. a + b, x == y).
 |* @param op        The binary operator.
 |* @param left      The left-hand operand expression.
@@ -90,6 +98,13 @@ typedef NS_ENUM(NSInteger, XTAssignOp) {
 @interface XTUnaryExprNode : XTASTNode
 @property(nonatomic, readonly) XTUnaryOp op;
 @property(nonatomic, readonly) XTASTNode* operand;
+/****************************************************************************\
+|* The method call an overloaded operator became (`:operator(self + o)`).
+|* Sema resolves the operator against the operands' classes and hangs the
+|* call here; lowering lowers it in place of the operator. nil for every
+|* operator with its built-in meaning. Not printed by the parse dump.
+\****************************************************************************/
+@property(nonatomic, nullable) XTASTNode* operatorCall;
 /****************************************************************************\
 |* Create a unary (prefix) expression node (e.g. -x, !flag, &var).
 |* @param op        The unary operator.
@@ -285,6 +300,12 @@ typedef NS_ENUM(NSInteger, XTAssignOp) {
 |* call on non-class receiver". private:docs/bugs/074.
 \****************************************************************************/
 @property(nonatomic, nullable) XTASTNode* indirectRewrite;
+/****************************************************************************\
+|* Set on the call an overloaded operator became: the method the operator
+|* resolved to. Resolution considers that method alone, and the receiver and
+|* arguments, which are the operator's operands, are already analysed.
+\****************************************************************************/
+@property(nonatomic, weak, nullable) XTASTNode* operatorMethod;
 /****************************************************************************\
 |* Sema stamps the resolved-overload label here.
 \****************************************************************************/

@@ -451,6 +451,7 @@ static NSString* plAddrRoot(XTASTNode* _Nullable e)
         case XTUnaryOpHiByte: [self plTok:XTTokenGreater value:@">"]; break;
         case XTUnaryOpByte2: [self plTok:XTTokenShiftRight value:@">>"]; break;
         case XTUnaryOpByte3: [self plTok:XTTokenByte3 value:@">>>"]; break;
+        case XTUnaryOpPlus: [self plTok:XTTokenPlus value:@"+"]; break;
             }
         [self plExpr:u.operand];
         return;

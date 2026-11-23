@@ -27,6 +27,10 @@
 #define NF_VAFWD $400000
 #define NF_PACKED $800000
 #define NF_FIELDCALL $1000000
+// An operator node (nkBinary / nkUnary) that became a call of a
+// `:operator(pattern)` method: the call is the kid past its operands. Shares
+// NF_FIELDCALL's bit, which only a call node carries.
+#define NF_OPCALL $1000000
 #define NF_SYNTH $100000
 #define NF_EXTERNAL $2000000
 #define NF_CHAINM $4000000

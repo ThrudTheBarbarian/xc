@@ -336,6 +336,14 @@ static XTOpInfo operatorInfo(XTTokenType type)
         XTASTNode* operand = [self parseUnary];
         return [[XTUnaryExprNode alloc] initWithOp:XTUnaryOpNeg operand:operand location:cur.location];
         }
+    // Prefix `+` has no built-in meaning: it exists for a class that defines
+    // `:operator(+self)`, and sema refuses it on anything else.
+    if (cur.type == XTTokenPlus)
+        {
+        [self advance];
+        XTASTNode* operand = [self parseUnary];
+        return [[XTUnaryExprNode alloc] initWithOp:XTUnaryOpPlus operand:operand location:cur.location];
+        }
     if (cur.type == XTTokenTilde)
         {
         [self advance];

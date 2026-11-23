@@ -2088,6 +2088,11 @@
     // its operands — so this has to happen before that, not after (bug 046).
     [node replaceLeft:[self unboxCollectionElement:node.left]];
     [node replaceRight:[self unboxCollectionElement:node.right]];
+    // An operand whose class defines this operator makes the operator a call
+    // of the method (`:operator(self + o)`), and none of the built-in typing
+    // below applies.
+    if ([self resolveOperatorOfBinary:node])
+        return;
 
     XTType* lt = node.left.resolvedType;
     XTType* rt = node.right.resolvedType;
@@ -2657,8 +2662,17 @@
         }
     [self analyzeNode:node.operand];
     XTType* ot = node.operand.resolvedType;
+    if ([self resolveOperatorOfUnary:node])
+        return;
     switch (node.op)
         {
+    case XTUnaryOpPlus:
+        // Prefix `+` has no built-in meaning.
+        [self.diagnostics emitError:[NSString stringWithFormat:@"prefix '+' is defined only by a class operator, not for '%@'",
+                                                               ot.displayName ?: @"?"]
+                                 at:node.location];
+        node.resolvedType = ot ?: [XTType u8Type];
+        break;
     case XTUnaryOpNeg:
         {
         // Negating a literal: pick the narrowest signed type that

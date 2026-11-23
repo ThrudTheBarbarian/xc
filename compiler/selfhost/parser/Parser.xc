@@ -2622,6 +2622,14 @@ class Parser
         // different call opcode than an ordinary one.
         while (check((u16)tokIdentifier) && !checkBlockOpen()) {
             String* w = cur().value();
+            // `:operator(pattern)` is read here, not skipped: the pattern is
+            // part of the declaration.
+            if (owner != 0 && Parser._same(w.lowercased(), "operator")) {
+                advance();
+                parseOperatorPattern(owner);
+                match((u16)tokColon);
+                continue;
+            }
             if (owner != 0) {
                 // Spelled `:xtcStack` / `:hwStack`; annotations are
                 // case-insensitive, as the original's are.
@@ -2651,6 +2659,110 @@ class Parser
             }
             match((u16)tokColon);
         }
+    }
+
+    // `:operator(pattern)`: the operator written out with the method's own
+    // names as its operands — `self + o`, `-self`, `k * v`. Read as tokens,
+    // not as an expression, so each shape is recognised exactly and the
+    // operators that keep their fixed meaning are named in the refusal.
+    // Whether each name is `self` or a parameter is sema's to check: it knows
+    // whether the method is static. Mirrors the reference's
+    // parseOperatorPatternAt:.
+    //
+    // The pattern is kept on the node as "<shape> <name> <name>": the shape
+    // has `_` for each operand (`_+_`, `-_`), the names follow in pattern
+    // order. Index and compound forms and user-defined shapes will use it too.
+    // A pattern that is not one of them is not a parse error: the parse goes
+    // on, and the node keeps "? <what is wrong>" for sema to report with the
+    // method's other faults, at the method.
+    void parseOperatorPattern(Node* owner)
+    {
+        if (expect((u16)tokLParen) == 0) return;
+        Array* t = new Array();
+        u32 depth = (u32)0;
+        while (!check((u16)tokEOF)) {
+            u16 ty = curType();
+            if (ty == (u16)tokRParen && depth == (u32)0) break;
+            if (ty == (u16)tokLParen || ty == (u16)tokLBracket) depth = depth + (u32)1;
+            else if ((ty == (u16)tokRParen || ty == (u16)tokRBracket) && depth > (u32)0) depth = depth - (u32)1;
+            t.add((Object*)advance());
+        }
+        expect((u16)tokRParen);
+
+        u32 n = t.count();
+        String* refused = (String*)0;   // an operator with a fixed meaning
+        bool later = false;             // an index or compound-assignment form
+        String* pat = (String*)0;
+        bool name0 = n > (u32)0 && ((Token*)t.get((u32)0)).type() == (u16)tokIdentifier;
+        bool name1 = n > (u32)1 && ((Token*)t.get((u32)1)).type() == (u16)tokIdentifier;
+        if (n == (u32)3 && name0 && ((Token*)t.get((u32)2)).type() == (u16)tokIdentifier) {
+            Token* o = (Token*)t.get((u32)1);
+            u16 ot = o.type();
+            if (ot == (u16)tokPlus || ot == (u16)tokMinus || ot == (u16)tokStar || ot == (u16)tokSlash
+                || ot == (u16)tokPercent || ot == (u16)tokAmpersand || ot == (u16)tokPipe || ot == (u16)tokCaret
+                || ot == (u16)tokShiftLeft || ot == (u16)tokShiftRight || ot == (u16)tokRotateLeft
+                || ot == (u16)tokRotateRight || ot == (u16)tokLess || ot == (u16)tokLessEq
+                || ot == (u16)tokGreater || ot == (u16)tokGreaterEq) {
+                pat = String.withCString("_");
+                pat.append(o.value());
+                pat.appendCString("_ ");
+                pat.append(((Token*)t.get((u32)0)).value());
+                pat.appendByte((u8)' ');
+                pat.append(((Token*)t.get((u32)2)).value());
+            } else if (ot == (u16)tokEqual || ot == (u16)tokNotEqual || ot == (u16)tokLogicalAnd
+                       || ot == (u16)tokLogicalOr || ot == (u16)tokAssign || ot == (u16)tokDot
+                       || ot == (u16)tokArrow || ot == (u16)tokComma) {
+                refused = o.value();
+            } else if (ot == (u16)tokPlusAssign || ot == (u16)tokMinusAssign || ot == (u16)tokStarAssign
+                       || ot == (u16)tokSlashAssign || ot == (u16)tokPercentAssign || ot == (u16)tokAmpAssign
+                       || ot == (u16)tokPipeAssign || ot == (u16)tokCaretAssign || ot == (u16)tokShlAssign
+                       || ot == (u16)tokShrAssign || ot == (u16)tokRolAssign || ot == (u16)tokRorAssign) {
+                later = true;
+            }
+        } else if (n == (u32)2 && name1) {
+            Token* o = (Token*)t.get((u32)0);
+            u16 ot = o.type();
+            if (ot == (u16)tokMinus || ot == (u16)tokPlus || ot == (u16)tokTilde || ot == (u16)tokBang) {
+                pat = String.withString(o.value());
+                pat.appendCString("_ ");
+                pat.append(((Token*)t.get((u32)1)).value());
+            } else if (ot == (u16)tokAmpersand || ot == (u16)tokStar || ot == (u16)tokAt
+                       || ot == (u16)tokPlusPlus || ot == (u16)tokMinusMinus || ot == (u16)tokLess
+                       || ot == (u16)tokGreater || ot == (u16)tokShiftRight || ot == (u16)tokByte3) {
+                refused = o.value();
+            }
+        } else if (n == (u32)2 && name0 && (((Token*)t.get((u32)1)).type() == (u16)tokPlusPlus
+                                           || ((Token*)t.get((u32)1)).type() == (u16)tokMinusMinus)) {
+            refused = ((Token*)t.get((u32)1)).value();
+        } else if (n >= (u32)2 && name0 && ((Token*)t.get((u32)1)).type() == (u16)tokLBracket) {
+            later = true;
+        } else if (n >= (u32)2 && name0 && ((Token*)t.get((u32)1)).type() == (u16)tokLParen) {
+            refused = String.withCString("()");
+        } else if (n == (u32)5 && ((Token*)t.get((u32)1)).type() == (u16)tokQuestion
+                   && ((Token*)t.get((u32)3)).type() == (u16)tokColon) {
+            refused = String.withCString("?:");
+        }
+
+        if (pat != 0) {
+            owner.setOpPat(pat);
+            return;
+        }
+        String* msg = (String*)0;
+        if (later)
+            msg = String.withCString("':operator' cannot define an index or compound-assignment operator yet");
+        else if (refused != 0 && (Parser._same(refused, "==") || Parser._same(refused, "!="))) {
+            msg = String.withCString("'");
+            msg.append(refused);
+            msg.appendCString("' cannot be overloaded: it compares identity (equals compares values)");
+        } else if (refused != 0) {
+            msg = String.withCString("'");
+            msg.append(refused);
+            msg.appendCString("' cannot be overloaded");
+        } else
+            msg = String.withCString("':operator' takes one operator applied to the method's own names, such as (self + o) or (-self)");
+        String* fault = String.withCString("? ");
+        fault.append(msg);
+        owner.setOpPat(fault);
     }
 
     // A top-level function or variable declaration. Both start with a type.
@@ -9867,7 +9979,10 @@ class Parser
         if (t == (u16)tokMinus || t == (u16)tokTilde || t == (u16)tokBang
             || t == (u16)tokAmpersand || isPointerSigil(t)
             || t == (u16)tokPlusPlus || t == (u16)tokMinusMinus
-            || t == (u16)tokLess || t == (u16)tokByte3) {
+            || t == (u16)tokLess || t == (u16)tokByte3
+            // Prefix `+` has no built-in meaning: it exists for a class that
+            // defines `:operator(+self)`, and sema refuses it on anything else.
+            || t == (u16)tokPlus) {
             Token* op = advance();
             refuseAtSigil(op);
             // The OPERATOR's position. mk() takes the token the parser is

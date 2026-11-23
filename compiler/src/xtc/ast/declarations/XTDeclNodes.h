@@ -145,6 +145,17 @@ typedef NS_ENUM(NSInteger, XTStackConvention) {
 \****************************************************************************/
 @property(nonatomic) BOOL isAction;
 /****************************************************************************\
+|* `:operator(pattern)`: the operator this method implements, as a shape with
+|* `_` for each operand (`_+_`, `-_`), and the operand names in pattern order
+|* (`self`, `o`). Index and compound forms and user-defined shapes will use
+|* the same two fields. nil when the method is not an operator.
+\****************************************************************************/
+@property(nonatomic, copy, nullable) NSString* operatorShape;
+@property(nonatomic, copy, nullable) NSArray<NSString*>* operatorOperands;
+// A pattern the parser could not take: what is wrong with it. Sema reports
+// it with the method's other faults, so a bad pattern stops at one message.
+@property(nonatomic, copy, nullable) NSString* operatorFault;
+/****************************************************************************\
 |* A load-time constructor: its name is recorded in the module's
 |* moduleInitFunctionNames so each backend emits a pointer to it in the
 |* target constructor list, running it before `main`. Set on the
@@ -441,6 +452,17 @@ typedef NS_ENUM(NSInteger, XTPlacement) {
 \****************************************************************************/
 @property(nonatomic) BOOL needsOS;
 @property(nonatomic) BOOL isAction; // `:action` — XG-NIB designable target/action method
+/****************************************************************************\
+|* `:operator(pattern)`: the operator this method implements, as a shape with
+|* `_` for each operand (`_+_`, `-_`), and the operand names in pattern order
+|* (`self`, `o`). Index and compound forms and user-defined shapes will use
+|* the same two fields. nil when the method is not an operator.
+\****************************************************************************/
+@property(nonatomic, copy, nullable) NSString* operatorShape;
+@property(nonatomic, copy, nullable) NSArray<NSString*>* operatorOperands;
+// A pattern the parser could not take: what is wrong with it. Sema reports
+// it with the method's other faults, so a bad pattern stops at one message.
+@property(nonatomic, copy, nullable) NSString* operatorFault;
 /****************************************************************************\
 |* Separate-compilation §4.2: the class this method was added to by a
 |* `class C (Cat) { … }` whose C came from ANOTHER module. nil for every
