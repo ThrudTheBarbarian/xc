@@ -5188,6 +5188,10 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
             [NSString stringWithFormat:@"%ld", (long)opts.m68kCpu]]];
         if (opts.m68kHardFloat) [cgArgs addObject:@"--hard-float"];
         if (opts.m68kPic) [cgArgs addObject:@"--pic"];
+        // -ss: the stack _start reserves (a library has no _start).
+        if (opts.stackSize && !opts.emitLib)
+            [cgArgs addObjectsFromArray:@[@"--stack-size",
+                [NSString stringWithFormat:@"%lu", (unsigned long)opts.stackSize]]];
     }
     if (opts.optimisationLevel > 0) {
         [cgArgs addObject:[NSString stringWithFormat:@"-O%ld",

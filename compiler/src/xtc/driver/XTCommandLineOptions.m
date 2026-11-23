@@ -1361,8 +1361,8 @@ static NSString* sExecutablePath = nil;
                         val.UTF8String);
                 return nil;
                 }
-            // The wasm32 shadow stack's size; no other target has a stack
-            // this sets.
+            // The wasm32 shadow stack's size, and the Atari ST's stack
+            // reserve.
             opts.stackSize = (NSUInteger)n;
             }
         else if ([arg hasPrefix:@"-Wno-"])
@@ -1885,7 +1885,8 @@ static NSString* sExecutablePath = nil;
             "                             when 'Cannot find include file' fires on a new\n"
             "                             install or alien platform.\n"
             "  -v, --version              Print version and exit\n"
-            "  -ss, --stack-size <n>      wasm32: the shadow stack's size in bytes\n"
+            "  -ss, --stack-size <n>      wasm32: the shadow stack's size in bytes;\n"
+            "                             atarist: the stack reserve (default 65536)\n"
             "                             (decimal, $hex or 0xhex; default 1 MiB, at\n"
             "                             most 1 GiB). No effect on other targets.\n"
             "\n"
