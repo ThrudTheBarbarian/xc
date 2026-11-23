@@ -576,46 +576,88 @@ class Array<Enumerable, Copying>
         _qsort((u32)0, _count - (u32)1, cmp);
         }
 
+    // The comparator's answer for two cells, 0 when it has gone: a `^` goes
+    // null the instant its receiver dies (private:docs/Design/bound-methods.md 6).
+    i8 _cmpCells(callback cmp i8(Object* a, Object* b), pointer a, pointer b)
+        {
+        if (cmp)
+            return cmp((Object*)a, (Object*)b);
+        return (i8)0;
+        }
+
+    void _swapCells(u32 a, u32 b)
+        {
+        pointer t = _slots[a];
+        _slots[a] = _slots[b];
+        _slots[b] = t;
+        }
+
+    // Quicksort over [lo, hi]: the median of the first, middle and last cells
+    // as the pivot, Hoare's partition (a run of equal keys splits in the
+    // middle rather than all to one side), insertion sort below 16 cells, and
+    // recursion on the smaller side only, so the depth is O(log n). The
+    // Lomuto partition with the last cell as pivot this replaces went
+    // quadratic, and as deep as the array is long, on input already in
+    // order: an object's symbol names, which spent most of a -c build here.
     void _qsort(u32 lo, u32 hi, callback cmp i8(Object* a, Object* b))
         {
-        // sortUsing checks it, but this helper recurses and is reachable on its
-        // own — and a `^` goes null the instant its receiver dies, so the check
-        // belongs where the call is (private:docs/Design/bound-methods.md 6).
         if (!cmp)
             return;
-        if (lo >= hi)
-            return;
         pointer* s = _slots;
-
-        // Lomuto partition, pivot at hi.
-        pointer pivot = s[hi];
-        u32 i = lo;
-        for (u32 j = lo; j < hi; j = j + (u32)1)
+        while (lo < hi)
             {
-            // Guarded not because cmp can be null here (_qsort is only
-            // reached through sort, which sets it) but because the
-            // unguarded-action warning is RIGHT as a rule — and a library
-            // must not teach every hello-world to ignore warnings.
-            i8 c = (i8)0;
-            if (cmp)
+            if (hi - lo < (u32)16)
                 {
-                c = cmp((Object*)s[j], (Object*)pivot);
+                for (u32 k = lo + (u32)1; k <= hi; k = k + (u32)1)
+                    {
+                    pointer v = s[k];
+                    u32 m = k;
+                    while (m > lo && _cmpCells(cmp, s[m - (u32)1], v) > (i8)0)
+                        {
+                        s[m] = s[m - (u32)1];
+                        m = m - (u32)1;
+                        }
+                    s[m] = v;
+                    }
+                return;
                 }
-            if (c <= (i8)0)
+            u32 mid = lo + (hi - lo) / (u32)2;
+            if (_cmpCells(cmp, s[mid], s[lo]) < (i8)0)
+                _swapCells(mid, lo);
+            if (_cmpCells(cmp, s[hi], s[lo]) < (i8)0)
+                _swapCells(hi, lo);
+            if (_cmpCells(cmp, s[hi], s[mid]) < (i8)0)
+                _swapCells(hi, mid);
+            pointer pivot = s[mid];
+            // Hoare: i and j start one outside [lo, hi] (kept as i64 so lo - 1
+            // cannot wrap) and meet at the split point j.
+            i64 i = (i64)lo - (i64)1;
+            i64 j = (i64)hi + (i64)1;
+            while (true)
                 {
-                pointer t = s[i];
-                s[i] = s[j];
-                s[j] = t;
-                i = i + (u32)1;
+                i = i + (i64)1;
+                while (_cmpCells(cmp, s[(u32)i], pivot) < (i8)0)
+                    i = i + (i64)1;
+                j = j - (i64)1;
+                while (_cmpCells(cmp, s[(u32)j], pivot) > (i8)0)
+                    j = j - (i64)1;
+                if (i >= j)
+                    break;
+                _swapCells((u32)i, (u32)j);
+                }
+            u32 p = (u32)j;
+            // Recurse into the smaller half; the larger one is the next turn.
+            if (p - lo < hi - p)
+                {
+                _qsort(lo, p, cmp);
+                lo = p + (u32)1;
+                }
+            else
+                {
+                _qsort(p + (u32)1, hi, cmp);
+                hi = p;
                 }
             }
-        pointer t = s[i];
-        s[i] = s[hi];
-        s[hi] = t;
-
-        if (i > lo)
-            _qsort(lo, i - (u32)1, cmp);
-        _qsort(i + (u32)1, hi, cmp);
         }
 
     // Sort by the elements' OWN order — Comparable's optional `compare` slot.
