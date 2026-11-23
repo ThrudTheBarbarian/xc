@@ -1,0 +1,7 @@
+all 0 1 4 9 16 25 36 49
+mid 4 9 16
+closed 4 9 16 25
+twice 4 9 16
+one 9
+filled 7 7 7 9 16 25 36 49
+live 0

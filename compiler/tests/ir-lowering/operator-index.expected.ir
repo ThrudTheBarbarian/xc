@@ -1,0 +1,83 @@
+module "operator-index" {
+  layout 0: size=2 align=1 fields=[(0:Ptr(Void, unbanked))]
+  layout 1: size=4 align=1 array=(U8 x 4)
+  layout 2: size=6 align=1 fields=[(0:Ptr(Void, unbanked)), (2:Agg(1))]
+  layout 3: size=0 align=1
+  layout 4: size=8 align=1 fields=[(0:Ptr(Void, unbanked)), (2:Ptr(Void, unbanked)), (4:Ptr(Void, unbanked)), (6:Ptr(Void, unbanked))]
+  symbol V$at: function (Ptr(Agg(2), unbanked), U8) -> U8
+    attributes: { banked: false, cloaked: false, static: false, variadic: false }
+  symbol V$put: function (Ptr(Agg(2), unbanked), U8, U8) -> Void
+    attributes: { banked: false, cloaked: false, static: false, variadic: false }
+  symbol V$addIn: function (Ptr(Agg(2), unbanked), Ptr(Agg(2), unbanked)) -> Void
+    attributes: { banked: false, cloaked: false, static: false, variadic: false }
+  symbol V$minus: function (Ptr(Agg(2), unbanked), Ptr(Agg(2), unbanked)) -> Ptr(Agg(2), unbanked)
+    attributes: { banked: false, cloaked: false, static: false, variadic: false }
+  symbol pick: function (Ptr(Agg(2), unbanked)) -> Ptr(Agg(2), unbanked)
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  symbol run: function (Ptr(Agg(2), unbanked), Ptr(Agg(2), unbanked), U8) -> U8
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  function V$at(%0: Ptr(Agg(2), unbanked), %1: U8, %2: Mem) -> (U8, Mem) {
+    bb_entry:
+      preds: -
+      %3 = Retain %0, %2
+      %4:Ptr(U8, unbanked) = FieldAddr %0, #1:U8
+      %5:U16 = ZExt %1
+      %6:Ptr(U8, unbanked) = ElementAddr %4, %5
+      %7:U8, %8 = Load %6, %3
+      %9 = Release %0, %8
+      Return %7, %9
+  }
+  function V$put(%0: Ptr(Agg(2), unbanked), %1: U8, %2: U8, %3: Mem) -> Mem {
+    bb_entry:
+      preds: -
+      %4 = Retain %0, %3
+      %5:Ptr(U8, unbanked) = FieldAddr %0, #1:U8
+      %6:U16 = ZExt %1
+      %7:Ptr(U8, unbanked) = ElementAddr %5, %6
+      %8 = Store %7, %2, %4
+      %9 = Release %0, %8
+      Return %9
+  }
+  function V$addIn(%0: Ptr(Agg(2), unbanked), %1: Ptr(Agg(2), unbanked), %2: Mem) -> Mem {
+    bb_entry:
+      preds: -
+      %3 = Retain %0, %2
+      %4 = Release %0, %3
+      Return %4
+  }
+  function V$minus(%0: Ptr(Agg(2), unbanked), %1: Ptr(Agg(2), unbanked), %2: Mem) -> (Ptr(Agg(2), unbanked), Mem) {
+    bb_entry:
+      preds: -
+      %3 = Retain %0, %2
+      %4 = Retain %1, %3
+      %5 = Release %0, %4
+      Return %1, %5
+  }
+  function pick(%0: Ptr(Agg(2), unbanked), %1: Mem) -> (Ptr(Agg(2), unbanked), Mem) {
+    bb_entry:
+      preds: -
+      %2 = Retain %0, %1
+      Return %0, %2
+  }
+  function run(%0: Ptr(Agg(2), unbanked), %1: Ptr(Agg(2), unbanked), %2: U8, %3: Mem) -> (U8, Mem) {
+    bb_entry:
+      preds: -
+      %4 = Retain %0, %3
+      %5:U8 = Const #3:U8
+      %6 = Call @V$put, [%0, %2, %5], CallConv::Standard, %4
+      %7:U8 = Const #1:U8
+      %8:U8 = Add %2, %7
+      %9:U8, %10 = Call @V$at, [%0, %8], CallConv::Standard, %6
+      %11:Ptr(Agg(2), unbanked), %12 = Call @pick, [%0], CallConv::Standard, %10
+      %13:U8, %14 = Call @V$at, [%11, %2], CallConv::Standard, %12
+      %15:U8 = Const #2:U8
+      %16:U8 = Add %13, %15
+      %17 = Call @V$put, [%11, %2, %16], CallConv::Standard, %14
+      %18 = Release %11, %17
+      %19 = Call @V$addIn, [%0, %1], CallConv::Standard, %18
+      %20:Ptr(Agg(2), unbanked), %21 = Call @V$minus, [%0, %1], CallConv::Standard, %19
+      %22 = Release %0, %21
+      %23 = Release %20, %22
+      Return %9, %23
+  }
+}

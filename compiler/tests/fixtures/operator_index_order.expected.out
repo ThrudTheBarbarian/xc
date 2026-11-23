@@ -1,0 +1,21 @@
+compound
+  f
+  g
+  get 2
+  h
+  set 2 5
+again
+  f
+  g
+  get 2
+  h
+  set 2 25
+  get 2
+value 25
+set
+  f
+  g
+  h
+  set 2 5
+pts 0 21 2 picks 2
+live 0
