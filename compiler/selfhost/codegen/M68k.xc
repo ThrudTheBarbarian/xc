@@ -40,6 +40,8 @@ class M68k
     bool _hardFloat; // 68881 FPU codegen rather than soft-float
     bool _pic;       // -mpic: the GOT/a5 model for >32KB 68000
     u32 _stackReserve; // -ss: the stack _start keeps, in bytes (0 = 64 KB)
+    bool _stackCheck;  // -fbounds-check: every prologue checks its frame fits
+    bool _hasMain;     // this module defines main (its _start keeps the limits)
     u32 _labelSeq;   // unique local labels, reset per MODULE
     bool _failed;
     String* _why;
@@ -54,6 +56,8 @@ class M68k
         _hardFloat = false;
         _pic = false;
         _stackReserve = (u32)0;
+        _stackCheck = false;
+        _hasMain = false;
         _labelSeq = (u32)0;
         }
 
@@ -72,6 +76,10 @@ class M68k
     void setStackReserve(u32 n)
         {
         _stackReserve = n;
+        }
+    void setStackCheck(bool v)
+        {
+        _stackCheck = v;
         }
 
     bool failed(void)
@@ -268,6 +276,7 @@ class M68k
                 hasMain = true;
         if (!hasMain)
             return;
+        _hasMain = true;
         _out.appendCString("\t.globl\t_start\n_start:\n");
         // Mshrink the TPA down to basepage + text + data + bss + a stack
         // reserve, releasing the rest so the OS can reuse it — essential under
@@ -285,6 +294,10 @@ class M68k
         // reserve, just above bss, which __xtc_stack_check looks at.
         _out.appendCString("\tmove.l\t24(a0),a1\t; p_bbase\n\tadd.l\t28(a0),a1\t; + p_blen: the reserve's bottom\n");
         _out.appendCString("\tmoveq\t#64,d2\n.Lguard:\n\tmove.l\t#$5354434B,(a1)+\n\tsubq.w\t#1,d2\n\tbne.s\t.Lguard\n");
+        // -fbounds-check: the lowest sp a frame may reach (the guard's top)
+        // and the stack's top, which the prologue check and its report read.
+        if (_stackCheck)
+            _out.appendCString("\tmove.l\ta1,__xtc_stack_limit\n\tmove.l\td1,__xtc_stack_top\n");
         _out.appendCString("\tmove.l\td0,-(sp)\n\tmove.l\ta0,-(sp)\n\tclr.w\t-(sp)\n");
         _out.appendCString("\tmove.w\t#$4a,-(sp)\n\ttrap\t#1\n\tlea\t12(sp),sp\n");
         if (_pic)
@@ -300,6 +313,82 @@ class M68k
         _out.appendCString("\tmove.w\t#$4c,-(sp)\t; Pterm\n");
         _out.appendCString("\ttrap\t#1\n\n");
         emitStackCheck(reserve);
+        if (_stackCheck)
+            emitStackOverflowAt(reserve);
+        }
+
+    // The stack's size as the reports name it: KB when it is a whole number
+    // of them, else bytes.
+    static String* stackSizeText(u32 reserve)
+        {
+        String* s = new String();
+        if ((reserve & (u32)1023) == (u32)0)
+            s.appendFormat("%u KB", reserve >> (u32)10);
+        else
+            s.appendFormat("%u-byte", reserve);
+        return s;
+        }
+
+    // Text as .dc.b lines of decimal bytes, NUL-terminated, then .even.
+    void appendCStringBytes(String* msg)
+        {
+        u32 i = (u32)0;
+        while (i <= msg.byteLength())
+            {
+            _out.appendCString("\t.dc.b\t");
+            for (u32 j = i; j <= msg.byteLength() && j < i + (u32)16; j = j + (u32)1)
+                {
+                if (j > i)
+                    _out.appendCString(",");
+                _out.appendFormat("%u", j < msg.byteLength() ? (u32)msg.byteAt(j) : (u32)0);
+                }
+            _out.appendCString("\n");
+            i = i + (u32)16;
+            }
+        _out.appendCString("\t.even\n");
+        }
+
+    // __xtc_stack_overflow_at(name): a prologue found its frame would pass the
+    // stack's limit (-fbounds-check). It moves sp back to the stack's top, so
+    // the report has room, prints "stack overflow in <name>: …" and exits with
+    // status 1. Never returns.
+    void emitStackOverflowAt(u32 reserve)
+        {
+        _out.appendCString("; runtime: __xtc_stack_overflow_at(name) : a frame would pass the stack's limit (#596)\n");
+        _out.appendCString("\t.globl\t__xtc_stack_overflow_at\n__xtc_stack_overflow_at:\n");
+        // Reached by `pea name; jmp`, not a call: the name is at 0(sp).
+        _out.appendCString("\tmove.l\t(sp),a3\t; the function's name\n\tmove.l\t__xtc_stack_top,sp\n");
+        _out.appendCString("\tpea\t.Lso_pre\n\tmove.w\t#9,-(sp)\t; Cconws\n\ttrap\t#1\n\taddq.l\t#6,sp\n");
+        _out.appendCString("\tmove.l\ta3,-(sp)\n\tmove.w\t#9,-(sp)\n\ttrap\t#1\n\taddq.l\t#6,sp\n");
+        _out.appendCString("\tpea\t.Lso_post\n\tmove.w\t#9,-(sp)\n\ttrap\t#1\n\taddq.l\t#6,sp\n");
+        _out.appendCString("\tmove.w\t#1,-(sp)\n\tmove.w\t#$4c,-(sp)\t; Pterm(1)\n\ttrap\t#1\n");
+        _out.appendCString(".Lso_pre:\n");
+        appendCStringBytes(String.withCString("stack overflow in "));
+        _out.appendCString(".Lso_post:\n");
+        String* post = String.withCString(": the ");
+        post.append(M68k.stackSizeText(reserve));
+        post.appendCString(" stack was exceeded; raise it with -ss\r\n");
+        appendCStringBytes(post);
+        _out.appendCString("\n");
+        }
+
+    // -fbounds-check (#596): before `link` writes anything, the sp this frame
+    // will reach (its locals, saves and the saved a6) against the limit
+    // _start recorded; below it, __xtc_stack_overflow_at reports this
+    // function by name. a0 is free at entry: every argument is on the stack.
+    void emitFrameCheck(IRFunc* fn)
+        {
+        u32 lbl = _labelSeq;
+        _labelSeq = _labelSeq + (u32)1;
+        i32 need = _frameSize + (i32)4;
+        if (need <= (i32)32768)
+            _out.appendFormat("\tlea\t-%ld(sp),a0\n", need);
+        else
+            _out.appendFormat("\tmove.l\tsp,a0\n\tsuba.l\t#%ld,a0\n", need);
+        _out.appendFormat("\tcmpa.l\t__xtc_stack_limit,a0\n\tbcc.s\t.Lsk%lu\n", lbl);
+        _out.appendFormat("\tpea\t.Lskn%lu\n\tjmp\t__xtc_stack_overflow_at\n.Lskn%lu:\n", lbl, lbl);
+        appendCStringBytes(fn.name());
+        _out.appendFormat(".Lsk%lu:\n", lbl);
         }
 
     // __xtc_stack_check: the guard _start wrote is intact, or the program
@@ -320,26 +409,11 @@ class M68k
         _out.appendCString("\tpea\t.Lsc_msg\n\tmove.w\t#9,-(sp)\t; Cconws\n\ttrap\t#1\n\taddq.l\t#6,sp\n");
         _out.appendCString("\tmove.w\t#1,-(sp)\n\tmove.w\t#$4c,-(sp)\t; Pterm(1)\n\ttrap\t#1\n");
         String* msg = String.withCString("stack overflow: the ");
-        if ((reserve & (u32)1023) == (u32)0)
-            msg.appendFormat("%u KB", reserve >> (u32)10);
-        else
-            msg.appendFormat("%u-byte", reserve);
+        msg.append(M68k.stackSizeText(reserve));
         msg.appendCString(" stack was exceeded; raise it with -ss\r\n");
         _out.appendCString(".Lsc_msg:\n");
-        u32 i = (u32)0;
-        while (i <= msg.byteLength())
-            {
-            _out.appendCString("\t.dc.b\t");
-            for (u32 j = i; j <= msg.byteLength() && j < i + (u32)16; j = j + (u32)1)
-                {
-                if (j > i)
-                    _out.appendCString(",");
-                _out.appendFormat("%u", j < msg.byteLength() ? (u32)msg.byteAt(j) : (u32)0);
-                }
-            _out.appendCString("\n");
-            i = i + (u32)16;
-            }
-        _out.appendCString("\t.even\n\n");
+        appendCStringBytes(msg);
+        _out.appendCString("\n");
         }
 
     // ── Frame layout ─────────────────────────────────────────────────────
@@ -592,6 +666,8 @@ class M68k
                 }
             }
         _out.appendFormat("\t.globl\t%s\n%s:\n", m68kSym(fn.name()).cString(), m68kSym(fn.name()).cString());
+        if (_stackCheck)
+            emitFrameCheck(fn);
         _out.appendFormat("\tlink\ta6,#-%ld\n", _frameSize);
         for (u32 i = (u32)0; i < _homeSaves.count(); i = i + (u32)1)
             {
@@ -4722,6 +4798,18 @@ class M68k
                 }
             else
                 bss.append(tbl);
+            }
+        // -fbounds-check: the limits _start records (#596).
+        if (_stackCheck && _hasMain)
+            {
+            String* lim = String.withCString("\t.even\n__xtc_stack_limit:\n\t.space\t4\n__xtc_stack_top:\n\t.space\t4\n");
+            if (_pic)
+                {
+                dataHeader();
+                _out.append(lim);
+                }
+            else
+                bss.append(lim);
             }
         if (bss.byteLength() > (u32)0)
             {

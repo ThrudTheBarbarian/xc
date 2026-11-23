@@ -11,7 +11,13 @@
 // the compiler knows). Nothing here allocates or takes a lock, so a check is
 // safe anywhere a subscript is, a par block's threads included.
 
+#if ARCH_m68k
+// TOS has no write(): the report goes to the console a byte at a time, where
+// the Atari ST's Stdio.error sends a diagnostic (#596).
+void _putc(u8 c);
+#else
 i32 write(i32 fd, u8* buf, i32 len);   // as Stdio declares it
+#endif
 void _xt_exit(i32 code);
 
 // The heap block header (rt.c, rt-freestanding.c): the magic at payload-8,
@@ -24,10 +30,15 @@ void _xt_exit(i32 code);
 
 void _xt_check_put(u8* s)
 {
+#if ARCH_m68k
+    for (u32 i = (u32)0; s[i] != (u8)0; i++)
+        _putc(s[i]);
+#else
     u64 n = (u64)0;
     while (s[n] != (u8)0)
         n = n + (u64)1;
     write((i32)2, s, (i32)n);
+#endif
 }
 
 void _xt_check_putNum(u64 v)
