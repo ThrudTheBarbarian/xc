@@ -32,6 +32,8 @@ static int gLabelSeq;   // unique local-label counter (reset per module)
 static BOOL gHardFloat; // 68881 FPU codegen vs soft-float (set per module)
 static BOOL gPic;       // -mpic: GOT/a5 model for base-68000 >32KB programs
 static NSUInteger gStackReserve; // -ss: the stack _start reserves, bytes (0 = 64 KB)
+static BOOL gStackCheck;         // -fbounds-check: every prologue checks its frame fits
+static BOOL gHasMain;            // this module defines main (its _start keeps the limits)
 
 // Register homing (set per function). A homed value lives in a data register
 // and is single-written there (its frame slot is NOT mirrored — the direct-slot
@@ -73,6 +75,31 @@ static NSDictionary<NSString*, NSNumber*>* gPtrARegSaveOff = nil;
 // bytes before TEXT, so it needs no storage, and it uses only a0, a1 and d1,
 // which every caller already gives up. A guard detects an overflow after the
 // fact: a frame that steps over it without writing there goes unseen.
+// The stack's size as the reports name it: KB when it is a whole number of
+// them, else bytes.
+static NSString* m68kStackSizeText(NSUInteger reserve)
+    {
+    return (reserve & 1023) == 0
+               ? [NSString stringWithFormat:@"%lu KB", (unsigned long)(reserve >> 10)]
+               : [NSString stringWithFormat:@"%lu-byte", (unsigned long)reserve];
+    }
+
+// Text as .dc.b lines of decimal bytes, NUL-terminated, then .even.
+static void m68kAppendCStringBytes(NSMutableString* out, NSString* text)
+    {
+    NSData* msg = [text dataUsingEncoding:NSUTF8StringEncoding];
+    const uint8_t* b = msg.bytes;
+    NSUInteger n = msg.length;
+    for (NSUInteger i = 0; i <= n; i += 16)
+        {
+        [out appendString:@"\t.dc.b\t"];
+        for (NSUInteger j = i; j <= n && j < i + 16; j++)
+            [out appendFormat:@"%@%u", j > i ? @"," : @"", j < n ? (unsigned)b[j] : 0u];
+        [out appendString:@"\n"];
+        }
+    [out appendString:@"\t.even\n"];
+    }
+
 static void m68kEmitStackCheck(NSMutableString* out, NSUInteger reserve)
     {
     [out appendString:@"; runtime: __xtc_stack_check() : the stack guard is intact, or stop (#596)\n"];
@@ -83,22 +110,32 @@ static void m68kEmitStackCheck(NSMutableString* out, NSUInteger reserve)
     [out appendString:@".Lsc_bad:\n"];
     [out appendString:@"\tpea\t.Lsc_msg\n\tmove.w\t#9,-(sp)\t; Cconws\n\ttrap\t#1\n\taddq.l\t#6,sp\n"];
     [out appendString:@"\tmove.w\t#1,-(sp)\n\tmove.w\t#$4c,-(sp)\t; Pterm(1)\n\ttrap\t#1\n"];
-    NSString* size = (reserve & 1023) == 0
-                         ? [NSString stringWithFormat:@"%lu KB", (unsigned long)(reserve >> 10)]
-                         : [NSString stringWithFormat:@"%lu-byte", (unsigned long)reserve];
-    NSData* msg = [[NSString stringWithFormat:@"stack overflow: the %@ stack was exceeded; raise it with -ss\r\n", size]
-        dataUsingEncoding:NSUTF8StringEncoding];
-    const uint8_t* b = msg.bytes;
-    NSUInteger n = msg.length;
     [out appendString:@".Lsc_msg:\n"];
-    for (NSUInteger i = 0; i <= n; i += 16)
-        {
-        [out appendString:@"\t.dc.b\t"];
-        for (NSUInteger j = i; j <= n && j < i + 16; j++)
-            [out appendFormat:@"%@%u", j > i ? @"," : @"", j < n ? (unsigned)b[j] : 0u];
-        [out appendString:@"\n"];
-        }
-    [out appendString:@"\t.even\n\n"];
+    m68kAppendCStringBytes(out, [NSString stringWithFormat:@"stack overflow: the %@ stack was exceeded; raise it with -ss\r\n",
+                                                           m68kStackSizeText(reserve)]);
+    [out appendString:@"\n"];
+    }
+
+// __xtc_stack_overflow_at(name): a prologue found its frame would pass the
+// stack's limit (-fbounds-check). It moves sp back to the stack's top, so the
+// report has room, prints "stack overflow in <name>: …" and exits with status
+// 1. Never returns.
+static void m68kEmitStackOverflowAt(NSMutableString* out, NSUInteger reserve)
+    {
+    [out appendString:@"; runtime: __xtc_stack_overflow_at(name) : a frame would pass the stack's limit (#596)\n"];
+    [out appendString:@"\t.globl\t__xtc_stack_overflow_at\n__xtc_stack_overflow_at:\n"];
+    // Reached by `pea name; jmp`, not a call: the name is at 0(sp).
+    [out appendString:@"\tmove.l\t(sp),a3\t; the function's name\n\tmove.l\t__xtc_stack_top,sp\n"];
+    [out appendString:@"\tpea\t.Lso_pre\n\tmove.w\t#9,-(sp)\t; Cconws\n\ttrap\t#1\n\taddq.l\t#6,sp\n"];
+    [out appendString:@"\tmove.l\ta3,-(sp)\n\tmove.w\t#9,-(sp)\n\ttrap\t#1\n\taddq.l\t#6,sp\n"];
+    [out appendString:@"\tpea\t.Lso_post\n\tmove.w\t#9,-(sp)\n\ttrap\t#1\n\taddq.l\t#6,sp\n"];
+    [out appendString:@"\tmove.w\t#1,-(sp)\n\tmove.w\t#$4c,-(sp)\t; Pterm(1)\n\ttrap\t#1\n"];
+    [out appendString:@".Lso_pre:\n"];
+    m68kAppendCStringBytes(out, @"stack overflow in ");
+    [out appendString:@".Lso_post:\n"];
+    m68kAppendCStringBytes(out, [NSString stringWithFormat:@": the %@ stack was exceeded; raise it with -ss\r\n",
+                                                           m68kStackSizeText(reserve)]);
+    [out appendString:@"\n"];
     }
 
 @implementation XTM68kBackend
@@ -106,6 +143,11 @@ static void m68kEmitStackCheck(NSMutableString* out, NSUInteger reserve)
 + (void)setStackReserve:(NSUInteger)bytes
     {
     gStackReserve = bytes;
+    }
+
++ (void)setStackCheck:(BOOL)on
+    {
+    gStackCheck = on;
     }
 
 + (NSString*)assemblyFromModule:(XTIRModule*)mod
@@ -176,6 +218,7 @@ static NSString* m68kSym(NSString* name)
             hasMain = YES;
             break;
             }
+    gHasMain = hasMain;
     if (hasMain)
         {
         [out appendString:@"\t.globl\t_start\n_start:\n"];
@@ -198,6 +241,10 @@ static NSString* m68kSym(NSString* name)
         // reserve, just above bss, which __xtc_stack_check looks at.
         [out appendString:@"\tmove.l\t24(a0),a1\t; p_bbase\n\tadd.l\t28(a0),a1\t; + p_blen: the reserve's bottom\n"];
         [out appendString:@"\tmoveq\t#64,d2\n.Lguard:\n\tmove.l\t#$5354434B,(a1)+\n\tsubq.w\t#1,d2\n\tbne.s\t.Lguard\n"];
+        // -fbounds-check: the lowest sp a frame may reach (the guard's top) and
+        // the stack's top, which the prologue check and its report read.
+        if (gStackCheck)
+            [out appendString:@"\tmove.l\ta1,__xtc_stack_limit\n\tmove.l\td1,__xtc_stack_top\n"];
         [out appendString:@"\tmove.l\td0,-(sp)\n\tmove.l\ta0,-(sp)\n\tclr.w\t-(sp)\n"
                           @"\tmove.w\t#$4a,-(sp)\n\ttrap\t#1\n\tlea\t12(sp),sp\n"]; // Mshrink(0,bp,keep)
         if (gPic)
@@ -228,6 +275,8 @@ static NSString* m68kSym(NSString* name)
         [out appendString:@"\tmove.w\t#$4c,-(sp)\t; Pterm\n"];
         [out appendString:@"\ttrap\t#1\n\n"];
         m68kEmitStackCheck(out, reserve);
+        if (gStackCheck)
+            m68kEmitStackOverflowAt(out, reserve);
         }
 
     for (XTIRFunction* fn in mod.functions)
@@ -461,11 +510,28 @@ static NSString* m68kSym(NSString* name)
                 [out appendString:@"\n; ── data ──\n\t.data\n\t.even\n"];
                 }
             [out appendString:tbl];
+            anyData = YES;
             }
         else
             {
             [bss appendString:tbl];
             }
+        }
+    // -fbounds-check: the limits _start records (#596).
+    if (gStackCheck && gHasMain)
+        {
+        NSString* lim = @"\t.even\n__xtc_stack_limit:\n\t.space\t4\n__xtc_stack_top:\n\t.space\t4\n";
+        if (gPic)
+            {
+            if (!anyData)
+                {
+                [out appendString:@"\n; ── data ──\n\t.data\n\t.even\n"];
+                anyData = YES;
+                }
+            [out appendString:lim];
+            }
+        else
+            [bss appendString:lim];
         }
     if (bss.length)
         {
@@ -1676,6 +1742,23 @@ static NSString* m68kSym(NSString* name)
 
     NSUInteger fnStart = out.length;
     [out appendFormat:@"\t.globl\t%@\n%@:\n", m68kSym(fn.name), m68kSym(fn.name)];
+    // -fbounds-check (#596): before `link` writes anything, the sp this frame
+    // will reach (its locals, saves and the saved a6) against the limit _start
+    // recorded; below it, __xtc_stack_overflow_at reports this function by
+    // name. a0 is free at entry: every argument is on the stack.
+    if (gStackCheck)
+        {
+        int lbl = gLabelSeq++;
+        int need = frameSize + 4;
+        if (need <= 32768)
+            [out appendFormat:@"\tlea\t-%d(sp),a0\n", need];
+        else
+            [out appendFormat:@"\tmove.l\tsp,a0\n\tsuba.l\t#%d,a0\n", need];
+        [out appendFormat:@"\tcmpa.l\t__xtc_stack_limit,a0\n\tbcc.s\t.Lsk%d\n", lbl];
+        [out appendFormat:@"\tpea\t.Lskn%d\n\tjmp\t__xtc_stack_overflow_at\n.Lskn%d:\n", lbl, lbl];
+        m68kAppendCStringBytes(out, fn.name);
+        [out appendFormat:@".Lsk%d:\n", lbl];
+        }
     [out appendFormat:@"\tlink\ta6,#-%d\n", frameSize];
     for (NSString* r in gHomeSaves) // persist clobbered callee-saved homes
         [out appendFormat:@"\tmove.l\t%@,%@(a6)\n", r, gHomeSaveOff[r]];

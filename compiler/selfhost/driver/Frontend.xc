@@ -2746,7 +2746,10 @@ void predefine(Preprocessor* pp, FeOptions* o)
 
     // Checked.xc's interior-pointer lookup is the debug build's alone: under
     // =light its checks inline into loops, which must hold no call.
-    pp.define(String.withCString("XT_CHECK_FULL"), String.withCString(o.boundsCheck() && o.boundsReport() ? "1" : "0"));
+    // The Atari ST has no array-block table and no stack to report, so its
+    // -fbounds-check makes the short checks, as =light does (#596).
+    bool st68k = o.targetRow() != (TargetRow*)0 && o.targetRow().codegen().equals(String.withCString("68k"));
+    pp.define(String.withCString("XT_CHECK_FULL"), String.withCString(o.boundsCheck() && o.boundsReport() && !st68k ? "1" : "0"));
 
     // The xtc SOFTWARE stack exists only where the hardware one is too shallow
     // for the runtime's recursion frames. xt has a 4 KB hidden hardware stack

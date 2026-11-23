@@ -4018,6 +4018,8 @@ void emitM68k(DriverOptions* d, IRModule* mod)
     be.setPic(d.caps().pic());
     // -ss: the stack _start reserves (a library has no _start).
     if (!d.emitLib()) be.setStackReserve(d.stackSize());
+    // -fbounds-check, either spelling: every prologue checks its frame (#596).
+    be.setStackCheck(d.fe().boundsCheck());
     String* prog = be.assembly(mod);
     if (be.failed()) {
         String* list = String.withCString("");
@@ -5781,16 +5783,17 @@ void xccMain(void)
     }
     // macOS and iOS link the row's checked runtime (rt-checked: a backtrace
     // with arguments, from the parameter map the arm64 back end emits); every
-    // other arm64, x86-64 and win64 row takes its checks from Checked.xc, which
-    // the front end imports. Every other target is refused, as the reference
-    // refuses it.
+    // other arm64, x86-64 and win64 row, and the Atari ST, takes its checks from
+    // Checked.xc, which the front end imports (on the ST the prologues check
+    // the stack too, #596). Every other target is refused, with the
+    // reference's words and status. (=light needs no checked runtime.)
     String* ccg = d.targetRow() != (TargetRow*)0 ? d.targetRow().codegen() : String.withCString("");
     if (d.fe().boundsReport()
         && !ccg.equals(String.withCString("arm64")) && !ccg.equals(String.withCString("x86_64"))
-        && !ccg.equals(String.withCString("win64"))) {
-        Stdio.printf("xcc: error: -fbounds-check is implemented for arm64, x86_64 and win64 so far; "
-                     "'%s' has no checked runtime\n", d.arch().cString());
-        driverExit((i32)2); return;
+        && !ccg.equals(String.withCString("win64")) && !ccg.equals(String.withCString("68k"))) {
+        Stdio.printf("xcc: error: -fbounds-check is implemented for arm64, x86_64, win64 and m68k so far; "
+                     "'%s' has no checked runtime\n", ccg.cString());
+        driverExit((i32)1); return;
     }
     // --link-libs is a wasm32 app's mode; nothing else has one to switch on.
     if (d.linkLibs() && !isWasm(d)) {

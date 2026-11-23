@@ -5203,6 +5203,8 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
         if (opts.stackSize && !opts.emitLib)
             [cgArgs addObjectsFromArray:@[@"--stack-size",
                 [NSString stringWithFormat:@"%lu", (unsigned long)opts.stackSize]]];
+        // -fbounds-check, either spelling: every prologue checks its frame (#596).
+        if (opts.boundsCheck) [cgArgs addObject:@"--stack-check"];
     }
     if (opts.optimisationLevel > 0) {
         [cgArgs addObject:[NSString stringWithFormat:@"-O%ld",
