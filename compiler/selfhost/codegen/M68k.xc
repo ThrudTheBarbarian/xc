@@ -4544,7 +4544,11 @@ class M68k
             return (i32)2;
         if (t.equals(String.withCString("u32")) || t.equals(String.withCString("i32")) || t.equals(String.withCString("pointer")) || t.equals(String.withCString("string")) || t.equals(String.withCString("float")))
             return (i32)4;
-        if (t.equals(String.withCString("double")))
+        // i64/u64 too: missing here, `new u64[n]`'s shim took the STRUCT form
+        // and read a size argument the call never passes, so the array was
+        // allocated at whatever size the stack held and the next allocation
+        // overlapped it.
+        if (t.equals(String.withCString("double")) || t.equals(String.withCString("i64")) || t.equals(String.withCString("u64")))
             return (i32)8;
         return (i32)0;
         }
