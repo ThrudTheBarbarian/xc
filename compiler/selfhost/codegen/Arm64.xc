@@ -6239,7 +6239,22 @@ class Arm64
         bool fpB = (cb == (u8)'b' || cb == (u8)'h' || cb == (u8)'s'
                  || cb == (u8)'d' || cb == (u8)'q' || cb == (u8)'v');
         if (!((gpA && gpB) || (fpA && fpB))) return false;
-        return a.substringFromByte((u32)1).equals(b.substringFromByte((u32)1));
+        // A vector instruction names its register with an arrangement or a
+        // lane (`v31.4s`, `v31.s[1]`): that is still register 31. Comparing the
+        // whole text let a `str q31` fact survive `dup v31.4s, w20`, and the
+        // next `ldr q31` from that slot was dropped, so a spilled vector read
+        // whatever v31 last held (#601).
+        return Arm64.regNumText(a).equals(Arm64.regNumText(b));
+    }
+
+    // A register's number as written, without its view letter and without an
+    // arrangement or lane suffix.
+    static String* regNumText(String* r)
+    {
+        u32 e = (u32)1;
+        while (e < r.byteLength() && r.byteAt(e) != (u8)'.' && r.byteAt(e) != (u8)'[')
+            e = e + (u32)1;
+        return r.substringBytes((u32)1, e - (u32)1);
     }
 
     static bool isBranchy(String* m)

@@ -8663,6 +8663,15 @@ static BOOL isScratchDst(NSString *reg) {
 // the register drops the fact.
 // Same physical register, whatever view names it: writing `w16` zeroes the top
 // half of `x16`, so a fact recorded about one view must die with the other.
+// A register's number as written, without its view letter and without an
+// arrangement or lane suffix.
+static NSString *arm64RegNumText(NSString *r) {
+    NSUInteger e = 1;
+    while (e < r.length && [r characterAtIndex:e] != '.' && [r characterAtIndex:e] != '[')
+        e++;
+    return [r substringWithRange:NSMakeRange(1, e - 1)];
+}
+
 static BOOL sameArm64Reg(NSString *a, NSString *b) {
     if (!a || !b) return NO;
     if ([a isEqualToString:b]) return YES;
@@ -8676,7 +8685,12 @@ static BOOL sameArm64Reg(NSString *a, NSString *b) {
     BOOL fpA = (ca=='b'||ca=='h'||ca=='s'||ca=='d'||ca=='q'||ca=='v');
     BOOL fpB = (cb=='b'||cb=='h'||cb=='s'||cb=='d'||cb=='q'||cb=='v');
     if (!((gpA && gpB) || (fpA && fpB))) return NO;
-    return [[a substringFromIndex:1] isEqualToString:[b substringFromIndex:1]];
+    // A vector instruction names its register with an arrangement or a lane
+    // (`v31.4s`, `v31.s[1]`): that is still register 31. Comparing the whole
+    // text let a `str q31` fact survive `dup v31.4s, w20`, and the next
+    // `ldr q31` from that slot was dropped, so a spilled vector read whatever
+    // v31 last held (#601).
+    return [arm64RegNumText(a) isEqualToString:arm64RegNumText(b)];
 }
 
 // ── usra: a shifted term folded into its accumulator (#25) ─────────────
