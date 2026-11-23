@@ -1974,6 +1974,46 @@ static NSString* m68kSym(NSString* name)
     return popBytes;
     }
 
+// An eight-byte value (i64, u64, double) stored at a frame offset: two longs,
+// high first (big-endian), as such a value lives in a slot.
++ (void)storeWide:(XTIROperand*)op
+               at:(int)off
+            slots:(NSDictionary<NSNumber*, NSNumber*>*)slots
+             into:(NSMutableString*)out
+    {
+    if (op.kind == XTIROperandKindImmI)
+        {
+        int64_t v = op.intValue;
+        [out appendFormat:@"\tmove.l\t#%u,%d(a6)\n", (unsigned)((uint64_t)v >> 32), off];
+        [out appendFormat:@"\tmove.l\t#%u,%d(a6)\n", (unsigned)(uint32_t)v, off + 4];
+        return;
+        }
+    if (op.kind == XTIROperandKindImmF)
+        {
+        uint64_t bits = op.floatRawBytes;
+        [out appendFormat:@"\tmove.l\t#$%08X,%d(a6)\n", (uint32_t)(bits >> 32), off];
+        [out appendFormat:@"\tmove.l\t#$%08X,%d(a6)\n", (uint32_t)(bits & 0xFFFFFFFF), off + 4];
+        return;
+        }
+    [self copySlotBytesFrom:slots[@(op.valueId)].intValue to:off size:8 into:out];
+    }
+
+// `size` bytes from one frame offset to another, through d0: longs, then a
+// word and a byte for what is left.
++ (void)copySlotBytesFrom:(int)from to:(int)to size:(NSUInteger)size into:(NSMutableString*)out
+    {
+    NSUInteger o = 0;
+    for (; o + 4 <= size; o += 4)
+        [out appendFormat:@"\tmove.l\t%d(a6),d0\n\tmove.l\td0,%d(a6)\n", from + (int)o, to + (int)o];
+    if (o + 2 <= size)
+        {
+        [out appendFormat:@"\tmove.w\t%d(a6),d0\n\tmove.w\td0,%d(a6)\n", from + (int)o, to + (int)o];
+        o += 2;
+        }
+    if (o < size)
+        [out appendFormat:@"\tmove.b\t%d(a6),d0\n\tmove.b\td0,%d(a6)\n", from + (int)o, to + (int)o];
+    }
+
 + (BOOL)storeWideReturn:(XTIRInsn*)insn
                   slots:(NSDictionary<NSNumber*, NSNumber*>*)slots
                    into:(NSMutableString*)out
@@ -3795,9 +3835,23 @@ static NSString* m68kRefusePredicate(int p, NSString* dflt)
         int base = slots[@(insn.result.valueId)].intValue;
         for (NSUInteger i = 0; i < insn.operands.count; i++)
             {
-            [self loadOperand:insn.operands[i] intoReg:@"d0" slots:slots into:out];
+            XTIROperand* fo = insn.operands[i];
             NSUInteger foff = [self m68kFieldOffset:aggTy.layout index:i];
             XTIRType* fty = (i < aggTy.layout.fields.count) ? aggTy.layout.fields[i].type : nil;
+            // An eight-byte field is two longs and a nested aggregate its
+            // bytes: one long through d0 kept only the high half of an i64.
+            if (fty && (fty.kind == XTIRTypeKindF64 || fty.kind == XTIRTypeKindI64 || fty.kind == XTIRTypeKindU64))
+                {
+                [self storeWide:fo at:base + (int)foff slots:slots into:out];
+                continue;
+                }
+            if (fty && fty.kind == XTIRTypeKindAgg && fty.layout && fo.kind == XTIROperandKindUse)
+                {
+                [self copySlotBytesFrom:slots[@(fo.valueId)].intValue to:base + (int)foff
+                                   size:[self m68kAggSize:fty.layout] into:out];
+                continue;
+                }
+            [self loadOperand:fo intoReg:@"d0" slots:slots into:out];
             NSUInteger fw = [self m68kFieldWidth:fty];
             NSString* sfx = fw == 1 ? @"b" : fw == 2 ? @"w"
                                                      : @"l";
@@ -3819,6 +3873,19 @@ static NSString* m68kRefusePredicate(int p, NSString* dflt)
         uint32_t fw = rty ? rty.byteWidth : 4;
         BOOL sgn = rty && XTIRTypeKindIsSigned(rty.kind);
         int off = base + (int)foff;
+        // An eight-byte field is two longs and a nested aggregate its bytes,
+        // copied to the result's slot.
+        if (rty && (rty.kind == XTIRTypeKindF64 || rty.kind == XTIRTypeKindI64 || rty.kind == XTIRTypeKindU64))
+            {
+            [self copySlotBytesFrom:off to:slots[@(insn.result.valueId)].intValue size:8 into:out];
+            break;
+            }
+        if (rty && rty.kind == XTIRTypeKindAgg && rty.layout)
+            {
+            [self copySlotBytesFrom:off to:slots[@(insn.result.valueId)].intValue
+                               size:[self m68kAggSize:rty.layout] into:out];
+            break;
+            }
         if (fw == 1)
             [out appendFormat:sgn ? @"\tmove.b\t%d(a6),d0\n\text.w\td0\n\text.l\td0\n"
                                   : @"\tmoveq\t#0,d0\n\tmove.b\t%d(a6),d0\n",
