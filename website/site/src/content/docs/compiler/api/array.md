@@ -393,6 +393,11 @@ The comparator type is `cmp2_t`, `i8 (Object*, Object*)`, following the C /
 The in-place sorts move only the slot pointers, so no element is retained or
 released.
 
+The sorts are not stable: elements the comparator calls equal can come out in
+any order relative to each other. To keep records with equal keys in a fixed
+order, compare a second key (an index or a sequence number) when the first is
+equal.
+
 ### sortUsing
 ```c
 void sortUsing(callback cmp i8(Object* a, Object* b))
