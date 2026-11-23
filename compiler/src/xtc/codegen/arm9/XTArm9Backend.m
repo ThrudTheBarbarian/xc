@@ -37,6 +37,16 @@ static NSDictionary<NSNumber*, NSString*>* sHome = nil;
 // vectoriser only produces call-free inner loops — need no save/restore.
 static NSDictionary<NSNumber*, NSNumber*>* sVecReg = nil;
 
+// When the pool runs out (assignVectorRegsForFunction:'s retry): the values
+// given up. A remat value is a constant splat made again into a scratch
+// register at each read (valueId -> its VSplat); a spilled one lives in its
+// own frame slot, stored from q15 where it is made and loaded into q13/q14
+// where it is read. Both nil when the first pass fitted.
+static NSDictionary<NSNumber*, XTIRInsn*>* sVRemat = nil;
+static NSSet<NSNumber*>* sVSpill = nil;
+static NSDictionary<NSNumber*, XTIRInsn*>* sVRematCand = nil;
+static NSSet<NSNumber*>* sVSpillCand = nil;
+
 // valueId → defining instruction, for tracing operands (e.g. a VSplat scalar
 // back to a compile-time constant). Set at the top of emitFunction:.
 static NSDictionary<NSNumber*, XTIRInsn*>* sDefOf = nil;
@@ -938,11 +948,97 @@ static BOOL arm9TraceConst(XTIRValueId v, int64_t* out)
         }
     return NO;
     }
+// A VSplat's scalar operand as a constant: an immediate, or a value traced
+// back to one.
+static BOOL arm9SplatConst(XTIROperand* o, int64_t* out)
+    {
+    if (o.kind == XTIROperandKindImmI)
+        {
+        if (out)
+            *out = o.intValue;
+        return YES;
+        }
+    return o.kind == XTIROperandKindUse && arm9TraceConst(o.valueId, out);
+    }
+
 // q-register index (8..15) assigned to a vector value.
 + (NSInteger)vqForValue:(XTIRValueId)v
     {
     NSNumber* q = sVecReg[@(v)];
     return q ? q.integerValue : 8;
+    }
+
+// A vector operand's register, made ready: a remat value is splatted again into
+// q<scratch> and a spilled one loaded into it (scratch is 13 or 14, so two
+// operands of one instruction never share it).
++ (NSInteger)vqIn:(XTIRValueId)v
+          scratch:(NSInteger)scratch
+             slot:(NSDictionary<NSNumber*, NSNumber*>*)slot
+              out:(NSMutableString*)out
+    {
+    if (sVecReg && !sVecReg[@(v)])
+        {
+        XTIRInsn* sp = sVRemat[@(v)];
+        if (sp)
+            {
+            [self vectorRemat:sp into:scratch out:out];
+            return scratch;
+            }
+        if ([sVSpill containsObject:@(v)])
+            {
+            [self vectorSlot:NO q:scratch value:v slot:slot out:out];
+            return scratch;
+            }
+        }
+    return [self vqForValue:v];
+    }
+
+// The register a vector result is made in: q15 for a spilled value (stored to
+// its slot by vqOutDone:), else its own.
++ (NSInteger)vqOut:(XTIRValueId)v
+    {
+    return [sVSpill containsObject:@(v)] ? 15 : [self vqForValue:v];
+    }
+
++ (void)vqOutDone:(XTIRValueId)v slot:(NSDictionary<NSNumber*, NSNumber*>*)slot out:(NSMutableString*)out
+    {
+    if ([sVSpill containsObject:@(v)])
+        [self vectorSlot:YES q:15 value:v slot:slot out:out];
+    }
+
+// q<q> to or from v's frame slot, as its two D halves. vstr/vldr reach 1020
+// bytes from sp; past that the address goes through r12.
++ (void)vectorSlot:(BOOL)store
+                 q:(NSInteger)q
+             value:(XTIRValueId)v
+              slot:(NSDictionary<NSNumber*, NSNumber*>*)slot
+               out:(NSMutableString*)out
+    {
+    NSNumber* s = slot[@(v)];
+    long off = s ? s.longValue : -1;
+    NSString* m = store ? @"vstr" : @"vldr";
+    if (off + 8 <= 1020)
+        {
+        [out appendFormat:@"\t%@\td%ld, [sp, #%ld]\n\t%@\td%ld, [sp, #%ld]\n",
+                          m, (long)(2 * q), off, m, (long)(2 * q + 1), off + 8];
+        return;
+        }
+    [self emitAlu:@"add" dst:@"r12" lhs:@"sp" imm:(uint32_t)off scratch:@"r12" out:out];
+    [out appendFormat:@"\t%@\td%ld, [r12]\n\t%@\td%ld, [r12, #8]\n",
+                      m, (long)(2 * q), m, (long)(2 * q + 1)];
+    }
+
+// A remat value's constant splat, made into q<q> through r12.
++ (void)vectorRemat:(XTIRInsn*)sp into:(NSInteger)q out:(NSMutableString*)out
+    {
+    XTIRType* lane = sp.result.type.pointeeType;
+    int64_t c = 0;
+    arm9SplatConst(sp.operands[0], &c);
+    uint32_t w = lane ? XTIRTypeKindByteWidth(lane.kind) : 4;
+    uint32_t mask = w == 1 ? 0xFFu : w == 2 ? 0xFFFFu
+                                            : 0xFFFFFFFFu;
+    [self emitMovImm:(int64_t)((uint32_t)c & mask) reg:@"r12" into:out];
+    [out appendFormat:@"\tvdup.%@\tq%ld, r12\n", arm9NeonSz(lane), (long)q];
     }
 
 // Vector register allocation. Assigns q8..q15 to the vectoriser's Vec-typed SSA
@@ -1035,8 +1131,84 @@ static BOOL arm9TraceConst(XTIRValueId v, int64_t* out)
     NSArray<NSNumber*>* classes = [lo.allKeys sortedArrayUsingComparator:^NSComparisonResult(NSNumber* a, NSNumber* b) {
       return [lo[a] compare:lo[b]];
     }];
+    sVRemat = nil;
+    sVSpill = nil;
+    NSDictionary<NSNumber*, NSNumber*>* regOfClass = [self vectorScan:classes lo:lo hi:hi remat:nil spill:nil];
+    if (!regOfClass)
+        {
+        // Out of registers: again with q13-q15 held back as scratch, giving up
+        // a single-member class whenever the pool is empty — a constant splat
+        // (made again at each read) before any other (kept in its own frame
+        // slot, loaded where it is read and stored where it is made). As arm64
+        // does. Phi classes are never given up: their members have slots of
+        // their own, and moving one between them at an edge is the
+        // parallel-copy problem the q-register coalescing avoids.
+        NSMutableSet<NSNumber*>* inPhiClass = [NSMutableSet set];
+        for (NSNumber* k in canon)
+            {
+            [inPhiClass addObject:k];
+            [inPhiClass addObject:canon[k]];
+            }
+        for (XTIRBlock* bb in fn.blocks)
+            for (XTIRInsn* p in bb.phiNodes)
+                if (p.result)
+                    [inPhiClass addObject:@(p.result.valueId)];
+        NSMutableDictionary<NSNumber*, XTIRInsn*>* rematCand = [NSMutableDictionary dictionary];
+        NSMutableSet<NSNumber*>* spillCand = [NSMutableSet set];
+        for (XTIRBlock* bb in fn.blocks)
+            for (XTIRInsn* i in bb.instructions)
+                {
+                if (!i.result || i.result.type.kind != XTIRTypeKindVec || [inPhiClass containsObject:@(i.result.valueId)])
+                    continue;
+                [spillCand addObject:@(i.result.valueId)];
+                if (i.opcode == XTIROpVSplat && i.operands.count >= 1 && arm9SplatConst(i.operands[0], NULL))
+                    rematCand[@(i.result.valueId)] = i;
+                }
+        sVRematCand = rematCand;
+        sVSpillCand = spillCand;
+        NSMutableDictionary<NSNumber*, XTIRInsn*>* remat = [NSMutableDictionary dictionary];
+        NSMutableSet<NSNumber*>* spill = [NSMutableSet set];
+        regOfClass = [self vectorScan:classes lo:lo hi:hi remat:remat spill:spill];
+        if (regOfClass)
+            {
+            NSMutableDictionary<NSNumber*, XTIRInsn*>* r = [NSMutableDictionary dictionary];
+            for (NSNumber* v in remat)
+                r[v] = rematCand[v];
+            sVRemat = r;
+            sVSpill = spill;
+            }
+        }
+    if (!regOfClass)
+        {
+        fprintf(stderr, "xcc-cg-arm9: error: vector register pressure exceeded "
+                        "the 8-register NEON pool (q8-q15) in '%s'\n",
+                fn.name.UTF8String);
+        exit(1);
+        }
+    NSMutableDictionary<NSNumber*, NSNumber*>* out = [NSMutableDictionary dictionary];
+    for (NSNumber* v in vecVals)
+        {
+        NSNumber* r = regOfClass[@(classOf(v.unsignedIntegerValue))];
+        if (r)
+            out[v] = r;
+        }
+    return out;
+    }
+
+// A linear scan over the classes in order of interval start. The first pass
+// (remat nil) is the pool q8-q15 with nothing given up; nil when it runs out.
+// The retry keeps q13-q15 back as scratch and, when the pool is empty, gives up
+// the remat candidate that ends last, else the spill candidate that ends last
+// (recorded in remat/spill); nil when there is none.
++ (NSDictionary<NSNumber*, NSNumber*>*)vectorScan:(NSArray<NSNumber*>*)classes
+                                               lo:(NSDictionary<NSNumber*, NSNumber*>*)lo
+                                               hi:(NSDictionary<NSNumber*, NSNumber*>*)hi
+                                            remat:(NSMutableDictionary<NSNumber*, XTIRInsn*>*)remat
+                                            spill:(NSMutableSet<NSNumber*>*)spill
+    {
+    BOOL retry = remat != nil;
     NSMutableArray<NSNumber*>* freePool = [NSMutableArray array];
-    for (int r = 8; r <= 15; r++)
+    for (int r = 8; r <= (retry ? 12 : 15); r++)
         [freePool addObject:@(r)];
     NSMutableArray<NSNumber*>* active = [NSMutableArray array];
     NSMutableDictionary<NSNumber*, NSNumber*>* regOfClass = [NSMutableDictionary dictionary];
@@ -1052,15 +1224,30 @@ static BOOL arm9TraceConst(XTIRValueId v, int64_t* out)
                 [still addObject:a];
             }
         [active setArray:still];
-        // Exhaustion is a HARD error. The pool cannot grow (q0-q7 alias the
-        // scalar VFP d0-d15), and the old `?: @(15)` fallback silently reused
-        // a live register — a miscompile, not degraded code (#1198).
         if (freePool.count == 0)
             {
-            fprintf(stderr, "xcc-cg-arm9: error: vector register pressure exceeded "
-                            "the 8-register NEON pool (q8-q15) in '%s'\n",
-                    fn.name.UTF8String);
-            exit(1);
+            // Exhaustion. q0-q7 alias the scalar VFP d0-d15, so the pool cannot
+            // grow, and reusing a live register would be a miscompile (#1198).
+            // Without the retry the caller stops.
+            if (!retry)
+                return nil;
+            NSNumber* victim = [self vectorVictim:active cur:cls hi:hi in:[NSSet setWithArray:sVRematCand.allKeys]];
+            BOOL isRemat = victim != nil;
+            if (!isRemat)
+                victim = [self vectorVictim:active cur:cls hi:hi in:sVSpillCand];
+            if (!victim)
+                return nil;
+            if (isRemat)
+                remat[victim] = sVRematCand[victim];
+            else
+                [spill addObject:victim];
+            if ([victim isEqual:cls])
+                continue;
+            // The victim was holding a register: the current class takes it.
+            NSNumber* freed = regOfClass[victim];
+            [regOfClass removeObjectForKey:victim];
+            [active removeObject:victim];
+            [freePool addObject:freed];
             }
         NSNumber* reg = freePool.lastObject;
         [freePool removeLastObject];
@@ -1070,10 +1257,32 @@ static BOOL arm9TraceConst(XTIRValueId v, int64_t* out)
           return [hi[a] compare:hi[b]];
         }];
         }
-    NSMutableDictionary<NSNumber*, NSNumber*>* out = [NSMutableDictionary dictionary];
-    for (NSNumber* v in vecVals)
-        out[v] = regOfClass[@(classOf(v.unsignedIntegerValue))];
-    return out;
+    return regOfClass;
+    }
+
+// The candidate among the active classes and `cur` whose interval ends last
+// (the earlier in active order on a tie), or nil.
++ (NSNumber*)vectorVictim:(NSArray<NSNumber*>*)active
+                      cur:(NSNumber*)cur
+                       hi:(NSDictionary<NSNumber*, NSNumber*>*)hi
+                       in:(NSSet<NSNumber*>*)cand
+    {
+    NSNumber* best = nil;
+    NSInteger bestHi = 0;
+    NSMutableArray<NSNumber*>* all = [NSMutableArray arrayWithArray:active];
+    [all addObject:cur];
+    for (NSNumber* v in all)
+        {
+        if (![cand containsObject:v])
+            continue;
+        NSInteger h = hi[v].integerValue;
+        if (!best || h > bestHi)
+            {
+            best = v;
+            bestHi = h;
+            }
+        }
+    return best;
     }
 
 // How many words of variadic tail a forwarder relays. arm9 is the one target
@@ -2452,13 +2661,14 @@ static const NSUInteger kArm9VaForwardWords = 16;
         {
         if (ops.count < 1 || !res)
             return;
-        NSInteger q = [self vqForValue:res.valueId];
+        NSInteger q = [self vqOut:res.valueId];
         [self loadOperand:ops[0] into:@"r0" slot:slot out:out];
         XTIRInsn* ea = (sPostIncEA && ops[0].kind == XTIROperandKindUse)
                            ? sPostIncEA[@(ops[0].valueId)]
                            : nil;
         [out appendFormat:@"\tvld1.%@\t{d%ld, d%ld}, [r0]%@\n",
                           arm9NeonSz(res.type.pointeeType), (long)(2 * q), (long)(2 * q + 1), ea ? @"!" : @""];
+        [self vqOutDone:res.valueId slot:slot out:out];
         if (ea && ea.result)
             [self storeResult:ea.result from:@"r0" slot:slot out:out]; // advanced ptr
         return;
@@ -2468,7 +2678,7 @@ static const NSUInteger kArm9VaForwardWords = 16;
         {
         if (ops.count < 2 || ops[1].kind != XTIROperandKindUse)
             return;
-        NSInteger q = [self vqForValue:ops[1].valueId];
+        NSInteger q = [self vqIn:ops[1].valueId scratch:13 slot:slot out:out];
         XTIRType* lane = [fn valueForId:ops[1].valueId].type.pointeeType;
         [self loadOperand:ops[0] into:@"r0" slot:slot out:out];
         XTIRInsn* ea = (sPostIncEA && ops[0].kind == XTIROperandKindUse)
@@ -2485,7 +2695,9 @@ static const NSUInteger kArm9VaForwardWords = 16;
         {
         if (ops.count < 1 || !res)
             return;
-        NSInteger d = [self vqForValue:res.valueId];
+        if (sVRemat[@(res.valueId)])
+            return; // made again where it is read
+        NSInteger d = [self vqOut:res.valueId];
         int64_t c;
         // Constant splat: materialise the immediate straight into r0 (movw/movt)
         // and vdup — skip the naive Const→slot→ZExt→mask→slot→reload chain.
@@ -2501,6 +2713,7 @@ static const NSUInteger kArm9VaForwardWords = 16;
             [self loadOperand:ops[0] into:@"r0" slot:slot out:out];
             }
         [out appendFormat:@"\tvdup.%@\tq%ld, r0\n", arm9NeonSz(res.type.pointeeType), (long)d];
+        [self vqOutDone:res.valueId slot:slot out:out];
         return;
         }
     case XTIROpVAdd:
@@ -2512,7 +2725,9 @@ static const NSUInteger kArm9VaForwardWords = 16;
         {
         if (ops.count < 2 || !res || ops[0].kind != XTIROperandKindUse || ops[1].kind != XTIROperandKindUse)
             return;
-        NSInteger a = [self vqForValue:ops[0].valueId], b = [self vqForValue:ops[1].valueId], d = [self vqForValue:res.valueId];
+        NSInteger a = [self vqIn:ops[0].valueId scratch:13 slot:slot out:out];
+        NSInteger b = [self vqIn:ops[1].valueId scratch:14 slot:slot out:out];
+        NSInteger d = [self vqOut:res.valueId];
         if (op == XTIROpVAnd || op == XTIROpVOr || op == XTIROpVXor)
             {
             NSString* m = op == XTIROpVAnd ? @"vand" : op == XTIROpVOr ? @"vorr"
@@ -2525,6 +2740,7 @@ static const NSUInteger kArm9VaForwardWords = 16;
                                                                         : @"vmul";
             [out appendFormat:@"\t%@.%@\tq%ld, q%ld, q%ld\n", m, arm9NeonI(res.type.pointeeType), (long)d, (long)a, (long)b];
             }
+        [self vqOutDone:res.valueId slot:slot out:out];
         return;
         }
     case XTIROpVMax:
@@ -2532,9 +2748,12 @@ static const NSUInteger kArm9VaForwardWords = 16;
         {
         if (ops.count < 2 || !res || ops[0].kind != XTIROperandKindUse || ops[1].kind != XTIROperandKindUse)
             return;
-        NSInteger a = [self vqForValue:ops[0].valueId], b = [self vqForValue:ops[1].valueId], d = [self vqForValue:res.valueId];
+        NSInteger a = [self vqIn:ops[0].valueId scratch:13 slot:slot out:out];
+        NSInteger b = [self vqIn:ops[1].valueId scratch:14 slot:slot out:out];
+        NSInteger d = [self vqOut:res.valueId];
         [out appendFormat:@"\t%@.%@\tq%ld, q%ld, q%ld\n", op == XTIROpVMax ? @"vmax" : @"vmin",
                           arm9NeonU(res.type.pointeeType), (long)d, (long)a, (long)b];
+        [self vqOutDone:res.valueId slot:slot out:out];
         return;
         }
     // vpaddl.<u> qD, qA  (widen pairwise ×2)
@@ -2542,9 +2761,11 @@ static const NSUInteger kArm9VaForwardWords = 16;
         {
         if (ops.count < 1 || ops[0].kind != XTIROperandKindUse || !res)
             return;
-        NSInteger a = [self vqForValue:ops[0].valueId], d = [self vqForValue:res.valueId];
+        NSInteger a = [self vqIn:ops[0].valueId scratch:13 slot:slot out:out];
+        NSInteger d = [self vqOut:res.valueId];
         [out appendFormat:@"\tvpaddl.%@\tq%ld, q%ld\n",
                           arm9NeonU([fn valueForId:ops[0].valueId].type.pointeeType), (long)d, (long)a];
+        [self vqOutDone:res.valueId slot:slot out:out];
         return;
         }
     // vcgt/vcge/vceq → 0/-1 lane mask
@@ -2552,7 +2773,9 @@ static const NSUInteger kArm9VaForwardWords = 16;
         {
         if (ops.count < 2 || !res || ops[0].kind != XTIROperandKindUse || ops[1].kind != XTIROperandKindUse)
             return;
-        NSInteger a = [self vqForValue:ops[0].valueId], b = [self vqForValue:ops[1].valueId], d = [self vqForValue:res.valueId];
+        NSInteger a = [self vqIn:ops[0].valueId scratch:13 slot:slot out:out];
+        NSInteger b = [self vqIn:ops[1].valueId scratch:14 slot:slot out:out];
+        NSInteger d = [self vqOut:res.valueId];
         NSString* cm = nil;
         BOOL swap = NO, invert = NO;
         switch (in.predicate)
@@ -2592,6 +2815,7 @@ static const NSUInteger kArm9VaForwardWords = 16;
         [out appendFormat:@"\t%@.%@\tq%ld, q%ld, q%ld\n", cm, suf, (long)d, (long)lhs, (long)rhs];
         if (invert)
             [out appendFormat:@"\tvmvn\tq%ld, q%ld\n", (long)d, (long)d];
+        [self vqOutDone:res.valueId slot:slot out:out];
         return;
         }
     // horizontal add of 4×i32 → GP scalar
@@ -2599,7 +2823,7 @@ static const NSUInteger kArm9VaForwardWords = 16;
         {
         if (ops.count < 1 || ops[0].kind != XTIROperandKindUse || !res)
             return;
-        NSInteger q = [self vqForValue:ops[0].valueId];
+        NSInteger q = [self vqIn:ops[0].valueId scratch:13 slot:slot out:out];
         [out appendFormat:@"\tvadd.i32\td%ld, d%ld, d%ld\n", (long)(2 * q), (long)(2 * q), (long)(2 * q + 1)];
         [out appendFormat:@"\tvpadd.i32\td%ld, d%ld, d%ld\n", (long)(2 * q), (long)(2 * q), (long)(2 * q)];
         [out appendFormat:@"\tvmov.32\tr0, d%ld[0]\n", (long)(2 * q)];
@@ -2612,7 +2836,7 @@ static const NSUInteger kArm9VaForwardWords = 16;
         {
         if (ops.count < 1 || ops[0].kind != XTIROperandKindUse || !res)
             return;
-        NSInteger q = [self vqForValue:ops[0].valueId];
+        NSInteger q = [self vqIn:ops[0].valueId scratch:13 slot:slot out:out];
         NSString* mx = op == XTIROpVReduceMax ? @"vmax" : @"vmin";
         NSString* pmx = op == XTIROpVReduceMax ? @"vpmax" : @"vpmin";
         NSString* su = arm9NeonU(res.type);
@@ -3161,7 +3385,6 @@ typedef NS_ENUM(NSUInteger, XTArm9PhiKind) {
                                                               excluded:wide];
         sHome = hr.homeReg;
         }
-    sVecReg = hasAsm ? nil : [self assignVectorRegsForFunction:fn];
         {
         NSMutableDictionary<NSNumber*, XTIRInsn*>* dm = [NSMutableDictionary dictionary];
         for (XTIRBlock* ab in fn.blocks)
@@ -3169,6 +3392,10 @@ typedef NS_ENUM(NSUInteger, XTArm9PhiKind) {
                 if (ai.result)
                     dm[@(ai.result.valueId)] = ai;
         sDefOf = dm;
+        // After the def map: the allocator's retry traces splats to constants.
+        sVRemat = nil;
+        sVSpill = nil;
+        sVecReg = hasAsm ? nil : [self assignVectorRegsForFunction:fn];
 
         // Backend DCE for constant chains orphaned by the VSplat const-inline:
         // an insn is skippable iff it's a pure Const/ext whose result is consumed
@@ -3454,7 +3681,11 @@ typedef NS_ENUM(NSUInteger, XTArm9PhiKind) {
         slot[@(v.valueId)] = @(cur);
         NSUInteger w = [self fieldWidth:v.type];
         if (w < 4)
-            w = 4;                    // min register-width slot
+            w = 4; // min register-width slot
+        // A spilled vector is all four lanes (vstr/vldr of both D halves); the
+        // type's own width is not that on this target.
+        if ([sVSpill containsObject:@(v.valueId)] && w < 16)
+            w = 16;
         w = (w + 3) & ~(NSUInteger)3; // round up to 4
         cur += w;
         }

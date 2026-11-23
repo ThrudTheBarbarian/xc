@@ -1104,6 +1104,10 @@ class Arm9
             u32 w = fieldWidth(val.ty());
             if (w < (u32)4)
                 w = (u32)4; // minimum register-width slot
+            // A spilled vector is all four lanes (vstr/vldr of both D halves);
+            // the type's own width is not that on this target.
+            if (vSpilled(val) && w < (u32)16)
+                w = (u32)16;
             w = (w + (u32)3) & ~(u32)3;
             cur = cur + w;
             }
@@ -3916,6 +3920,15 @@ class Arm9
     // nothing saw it until `--emit-lib` (which keeps every function) was run
     // through the shipped driver.
     Map* _vecReg;     // vector value -> q index
+    // When the pool runs out (allocateVectorRegisters' retry): the values given
+    // up. A remat value is a constant splat made again into a scratch register
+    // at each read (value -> its VSplat); a spilled one lives in its own frame
+    // slot, stored from q15 where it is made and loaded into q13/q14 where it
+    // is read. Both null when the first pass fitted.
+    Map* _vRemat;
+    Map* _vSpill;
+    Map* _vRematCand;
+    Map* _vSpillCand;
     Map* _vecClass;   // vector value -> its coalescing class
     Map* _postIncEA;  // pointer value -> the ElementAddr folded into `!`
     BitSet* _vecSkip; // …and the advance instructions that therefore vanish
@@ -3999,6 +4012,82 @@ class Arm9
         return r == (Object*)0 ? (u32)8 : ((Number*)r).asU32();
         }
 
+    // A vector operand's register, made ready: a remat value is splatted again
+    // into q<scratch> and a spilled one loaded into it (scratch is 13 or 14, so
+    // two operands of one instruction never share it).
+    u32 vqIn(IRValue* v, u32 scratch)
+        {
+        if (v != (IRValue*)0 && _vecReg != (Map*)0 && _vecReg.get((Hashable*)v) == (Object*)0)
+            {
+            IRValue* c = classOfVec(v);
+            if (_vRemat != (Map*)0 && _vRemat.get((Hashable*)c) != (Object*)0)
+                {
+                vRemat((IRInsn*)_vRemat.get((Hashable*)c), scratch);
+                return scratch;
+                }
+            if (_vSpill != (Map*)0 && _vSpill.get((Hashable*)c) != (Object*)0)
+                {
+                vSlot(false, scratch, v);
+                return scratch;
+                }
+            }
+        return vq(v);
+        }
+
+    // The register a vector result is made in: q15 for a spilled value (stored
+    // to its slot by vqOutDone), else its own.
+    u32 vqOut(IRValue* v)
+        {
+        return vSpilled(v) ? (u32)15 : vq(v);
+        }
+
+    void vqOutDone(IRValue* v)
+        {
+        if (vSpilled(v))
+            vSlot(true, (u32)15, v);
+        }
+
+    bool vSpilled(IRValue* v)
+        {
+        return v != (IRValue*)0 && _vSpill != (Map*)0 && _vSpill.get((Hashable*)classOfVec(v)) != (Object*)0;
+        }
+
+    bool vIsRemat(IRValue* v)
+        {
+        return v != (IRValue*)0 && _vRemat != (Map*)0 && _vRemat.get((Hashable*)classOfVec(v)) != (Object*)0;
+        }
+
+    // q<q> to or from v's frame slot, as its two D halves. vstr/vldr reach 1020
+    // bytes from sp; past that the address goes through r12.
+    void vSlot(bool store, u32 q, IRValue* v)
+        {
+        i32 off = slotOf(v);
+        String* m = String.withCString(store ? "vstr" : "vldr");
+        if (off + (i32)8 <= (i32)1020)
+            {
+            _out.appendFormat("\t%s\td%lu, [sp, #%ld]\n\t%s\td%lu, [sp, #%ld]\n",
+                              m.cString(), (u32)2 * q, off,
+                              m.cString(), (u32)2 * q + (u32)1, off + (i32)8);
+            return;
+            }
+        emitAlu(String.withCString("add"), String.withCString("r12"), String.withCString("sp"),
+                (u32)off, String.withCString("r12"));
+        _out.appendFormat("\t%s\td%lu, [r12]\n\t%s\td%lu, [r12, #8]\n",
+                          m.cString(), (u32)2 * q, m.cString(), (u32)2 * q + (u32)1);
+        }
+
+    // A remat value's constant splat, made into q<q> through r12.
+    void vRemat(IRInsn* sp, u32 q)
+        {
+        String* lane = Arm9.laneOf(sp.res().ty());
+        Array* c = new Array();
+        traceConst((IROperand*)sp.ops().get((u32)0), c);
+        u32 w = lane == (String*)0 ? (u32)4 : fieldWidth(lane);
+        u32 mask = w == (u32)1 ? (u32)$FF : (w == (u32)2 ? (u32)$FFFF : (u32)$FFFF_FFFF);
+        emitMovImm((i32)(((Number*)c.get((u32)0)).asU32() & mask), String.withCString("r12"));
+        _out.appendFormat("\tvdup.%s\tq%lu, r12\n", neonSz(lane).cString(), q);
+        }
+
     bool dispatchVector(IRInsn* n, u16 op, Array* ops, IRValue* res)
         {
         if (op == opVLoad)
@@ -4059,7 +4148,7 @@ class Arm9
             giveUp(n.op());
             return;
             }
-        u32 q = vq(res);
+        u32 q = vqOut(res);
         IROperand* p = (IROperand*)ops.get((u32)0);
         loadOperand(p, String.withCString("r0"));
         IRInsn* ea = postIncFor(p);
@@ -4067,6 +4156,7 @@ class Arm9
                           neonSz(Arm9.laneOf(res.ty())).cString(),
                           (u32)2 * q, (u32)2 * q + (u32)1,
                           ea != (IRInsn*)0 ? "!" : "");
+        vqOutDone(res);
         if (ea != (IRInsn*)0 && ea.res() != (IRValue*)0)
             storeResult(ea.res(), String.withCString("r0")); // the advanced pointer
         }
@@ -4084,7 +4174,7 @@ class Arm9
             giveUp(n.op());
             return;
             }
-        u32 q = vq(v.val());
+        u32 q = vqIn(v.val(), (u32)13);
         IROperand* p = (IROperand*)ops.get((u32)0);
         loadOperand(p, String.withCString("r0"));
         IRInsn* ea = postIncFor(p);
@@ -4103,6 +4193,8 @@ class Arm9
             giveUp(n.op());
             return;
             }
+        if (vIsRemat(res))
+            return; // made again where it is read
         String* lane = Arm9.laneOf(res.ty());
         IROperand* src = (IROperand*)ops.get((u32)0);
         // Constant splat: materialise the immediate straight into r0 (movw/movt)
@@ -4119,7 +4211,8 @@ class Arm9
             {
             loadOperand(src, String.withCString("r0"));
             }
-        _out.appendFormat("\tvdup.%s\tq%lu, r0\n", neonSz(lane).cString(), vq(res));
+        _out.appendFormat("\tvdup.%s\tq%lu, r0\n", neonSz(lane).cString(), vqOut(res));
+        vqOutDone(res);
         }
 
     // Trace an operand back to a compile-time constant through ZExt/SExt/
@@ -4172,21 +4265,24 @@ class Arm9
             giveUp(IROp.name(op));
             return;
             }
-        u32 a = vq(o0.val());
-        u32 b = vq(o1.val());
-        u32 d = vq(res);
+        u32 a = vqIn(o0.val(), (u32)13);
+        u32 b = vqIn(o1.val(), (u32)14);
+        u32 d = vqOut(res);
         if (op == opVAnd || op == opVOr || op == opVXor)
             {
             // 128-bit bitwise: no size suffix.
             string m = op == opVAnd ? "vand"
                                                              : (op == opVOr ? "vorr" : "veor");
             _out.appendFormat("\t%s\tq%lu, q%lu, q%lu\n", m, d, a, b);
-            return;
             }
-        string m = op == opVAdd ? "vadd"
-                                                         : (op == opVSub ? "vsub" : "vmul");
-        _out.appendFormat("\t%s.%s\tq%lu, q%lu, q%lu\n", m,
-                          neonI(Arm9.laneOf(res.ty())).cString(), d, a, b);
+        else
+            {
+            string m = op == opVAdd ? "vadd"
+                                                             : (op == opVSub ? "vsub" : "vmul");
+            _out.appendFormat("\t%s.%s\tq%lu, q%lu, q%lu\n", m,
+                              neonI(Arm9.laneOf(res.ty())).cString(), d, a, b);
+            }
+        vqOutDone(res);
         }
 
     void emitVMinMax(u16 op, Array* ops, IRValue* res)
@@ -4203,10 +4299,13 @@ class Arm9
             giveUp(IROp.name(op));
             return;
             }
+        u32 a = vqIn(o0.val(), (u32)13);
+        u32 b = vqIn(o1.val(), (u32)14);
         _out.appendFormat("\t%s.%s\tq%lu, q%lu, q%lu\n",
                           op == opVMax ? "vmax" : "vmin",
                           neonU(Arm9.laneOf(res.ty())).cString(),
-                          vq(res), vq(o0.val()), vq(o1.val()));
+                          vqOut(res), a, b);
+        vqOutDone(res);
         }
 
     void emitVAddLP(Array* ops, IRValue* res)
@@ -4225,9 +4324,11 @@ class Arm9
             }
         // The suffix is the SOURCE lane width — vpaddl widens ×2, so reading it
         // off the result would name the wrong element size.
+        u32 a = vqIn(o0.val(), (u32)13);
         _out.appendFormat("\tvpaddl.%s\tq%lu, q%lu\n",
                           neonU(Arm9.laneOf(o0.val().ty())).cString(),
-                          vq(res), vq(o0.val()));
+                          vqOut(res), a);
+        vqOutDone(res);
         }
 
     void emitVICmp(IRInsn* n, Array* ops, IRValue* res)
@@ -4279,9 +4380,9 @@ class Arm9
             giveUp(String.withCString("VICmp:pred"));
             return;
             }
-        u32 a = vq(o0.val());
-        u32 b = vq(o1.val());
-        u32 d = vq(res);
+        u32 a = vqIn(o0.val(), (u32)13);
+        u32 b = vqIn(o1.val(), (u32)14);
+        u32 d = vqOut(res);
         // vceq takes the size-only suffix (i8/i16/i32); vcgt/vcge take sign+size.
         String* lane = Arm9.laneOf(res.ty());
         String* suf = cm.equals(String.withCString("vceq")) ? neonI(lane) : neonU(lane);
@@ -4289,6 +4390,7 @@ class Arm9
                           d, swap ? b : a, swap ? a : b);
         if (invert)
             _out.appendFormat("\tvmvn\tq%lu, q%lu\n", d, d);
+        vqOutDone(res);
         }
 
     // Horizontal add / max / min of 4×i32 down to a GP scalar.
@@ -4305,7 +4407,7 @@ class Arm9
             giveUp(IROp.name(op));
             return;
             }
-        u32 q = vq(o0.val());
+        u32 q = vqIn(o0.val(), (u32)13);
         u32 dl = (u32)2 * q;
         u32 dh = dl + (u32)1;
         if (op == opVReduceAdd)
@@ -4409,11 +4511,57 @@ class Arm9
             }
 
         vSortByKey(classes, lo);
+        _vRemat = (Map*)0;
+        _vSpill = (Map*)0;
+        Map* regOf = vScan(classes, lo, hi, false);
+        if (regOf == (Map*)0)
+            {
+            // Out of registers: again with q13-q15 held back as scratch, giving
+            // up a single-member class whenever the pool is empty — a constant
+            // splat (made again at each read) before any other (kept in its own
+            // frame slot, loaded where it is read and stored where it is made).
+            // As arm64 does. Phi classes are never given up: their members have
+            // slots of their own, and moving one between them at an edge is the
+            // parallel-copy problem the q-register coalescing avoids.
+            computeDefMap();
+            vCandidates(fn, vecVals);
+            regOf = vScan(classes, lo, hi, true);
+            }
+        if (regOf == (Map*)0)
+            {
+            Stdio.printf("xcc-cg-arm9: error: vector register pressure exceeded "
+                         "the 8-register NEON pool (q8-q15) in '%s'\n",
+                         fn.name().cString());
+            Process.exit((i32)1);
+            }
+        for (u32 i = (u32)0; i < vecVals.count(); i = i + (u32)1)
+            {
+            IRValue* v = (IRValue*)vecVals.get(i);
+            Object* r = regOf.get((Hashable*)classOfVec(v));
+            if (r == (Object*)0)
+                continue;
+            _vecReg.set((Hashable*)v, r);
+            }
+        }
+
+    // A linear scan over the classes in order of interval start. The first pass
+    // is the pool q8-q15 with nothing given up; null when it runs out. The
+    // retry pass keeps q13-q15 back as scratch and gives up a candidate
+    // (vCandidates) when the pool is empty: the remat candidate that ends last,
+    // else the spill candidate that ends last; null when there is none.
+    Map* vScan(Array* classes, Map* lo, Map* hi, bool retry)
+        {
         Array* freePool = new Array();
-        for (u32 r = (u32)8; r <= (u32)15; r = r + (u32)1)
+        u32 top = retry ? (u32)12 : (u32)15;
+        for (u32 r = (u32)8; r <= top; r = r + (u32)1)
             freePool.add((Object*)Number.with(r));
         Array* active = new Array();
         Map* regOf = new Map();
+        if (retry)
+            {
+            _vRemat = new Map();
+            _vSpill = new Map();
+            }
         for (u32 c = (u32)0; c < classes.count(); c = c + (u32)1)
             {
             IRValue* cls = (IRValue*)classes.get(c);
@@ -4428,15 +4576,34 @@ class Arm9
                     still.add((Object*)av);
                 }
             active = still;
-            // Exhaustion is a HARD error. The pool cannot grow (q0-q7 alias the
-            // scalar VFP d0-d15), and a silent fallback to one fixed register
-            // reuses a LIVE one — a miscompile, not degraded code (#1198).
             if (freePool.count() == (u32)0)
                 {
-                Stdio.printf("xcc-cg-arm9: error: vector register pressure exceeded "
-                             "the 8-register NEON pool (q8-q15) in '%s'\n",
-                             fn.name().cString());
-                Process.exit((i32)1);
+                // Exhaustion. q0-q7 alias the scalar VFP d0-d15, so the pool
+                // cannot grow, and reusing a live register would be a
+                // miscompile (#1198). Without the retry the caller stops.
+                if (!retry)
+                    return (Map*)0;
+                IRValue* victim = vVictim(active, cls, hi, _vRematCand);
+                bool remat = victim != (IRValue*)0;
+                if (!remat)
+                    victim = vVictim(active, cls, hi, _vSpillCand);
+                if (victim == (IRValue*)0)
+                    return (Map*)0;
+                if (remat)
+                    _vRemat.set((Hashable*)victim, _vRematCand.get((Hashable*)victim));
+                else
+                    _vSpill.set((Hashable*)victim, (Object*)victim);
+                if (victim == cls)
+                    continue;
+                // The victim was holding a register: the current class takes it.
+                Object* freed = regOf.get((Hashable*)victim);
+                regOf.remove((Hashable*)victim);
+                Array* rest = new Array();
+                for (u32 a = (u32)0; a < active.count(); a = a + (u32)1)
+                    if ((IRValue*)active.get(a) != victim)
+                        rest.add(active.get(a));
+                active = rest;
+                freePool.add(freed);
                 }
             Object* reg = freePool.get(freePool.count() - (u32)1);
             freePool.removeAt(freePool.count() - (u32)1);
@@ -4444,13 +4611,71 @@ class Arm9
             active.add((Object*)cls);
             vSortByKey(active, hi);
             }
+        return regOf;
+        }
+
+    // The candidate among the active classes and `cur` whose interval ends
+    // last (the earlier in class order on a tie), or null.
+    IRValue* vVictim(Array* active, IRValue* cur, Map* hi, Map* cand)
+        {
+        IRValue* best = (IRValue*)0;
+        i32 bestHi = (i32)0;
+        for (u32 a = (u32)0; a <= active.count(); a = a + (u32)1)
+            {
+            IRValue* v = a < active.count() ? (IRValue*)active.get(a) : cur;
+            if (cand.get((Hashable*)v) == (Object*)0)
+                continue;
+            i32 h = ((Number*)hi.get((Hashable*)v)).asI32();
+            if (best == (IRValue*)0 || h > bestHi)
+                {
+                best = v;
+                bestHi = h;
+                }
+            }
+        return best;
+        }
+
+    // The classes the retry may give up: single-member (no phi), so the value
+    // is its own class. A remat candidate is a splat of a constant (the VSplat
+    // that makes it, by value); every single-member class may be spilled.
+    void vCandidates(IRFunc* fn, Array* vecVals)
+        {
+        Map* inPhiClass = new Map();
         for (u32 i = (u32)0; i < vecVals.count(); i = i + (u32)1)
             {
             IRValue* v = (IRValue*)vecVals.get(i);
-            Object* r = regOf.get((Hashable*)classOfVec(v));
-            if (r == (Object*)0)
-                continue;
-            _vecReg.set((Hashable*)v, r);
+            IRValue* c = classOfVec(v);
+            if (c != v)
+                {
+                inPhiClass.set((Hashable*)v, (Object*)v);
+                inPhiClass.set((Hashable*)c, (Object*)c);
+                }
+            }
+        _vRematCand = new Map();
+        _vSpillCand = new Map();
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            for (u32 i = (u32)0; i < bb.phis().count(); i = i + (u32)1)
+                {
+                IRValue* r = ((IRInsn*)bb.phis().get(i)).res();
+                if (r != (IRValue*)0)
+                    inPhiClass.set((Hashable*)r, (Object*)r);
+                }
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)bb.insns().get(i);
+                IRValue* r = n.res();
+                if (r == (IRValue*)0 || !Arm9.isVecTy(r.ty()) || inPhiClass.get((Hashable*)r) != (Object*)0)
+                    continue;
+                _vSpillCand.set((Hashable*)r, (Object*)r);
+                if (n.isOp(opVSplat) && n.ops().count() >= (u32)1)
+                    {
+                    Array* k = new Array();
+                    if (traceConst((IROperand*)n.ops().get((u32)0), k))
+                        _vRematCand.set((Hashable*)r, (Object*)n);
+                    }
+                }
             }
         }
 
