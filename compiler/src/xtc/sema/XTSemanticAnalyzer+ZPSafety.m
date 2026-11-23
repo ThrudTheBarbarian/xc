@@ -779,6 +779,16 @@
             }
         }
 
+    // `P* r = &y;` of a stack instance (#604). After the inference above, as
+    // `auto r = &y;` is a strong `P*` too.
+    if (node.initialiser)
+        [self checkStackAddressInStrongSlot:node.declaredType
+                                      value:node.initialiser
+                                       site:@"initialiser"
+                                     target:nil
+                                   declName:node.varName
+                                   location:node.location];
+
     // Infer a sizeless array's length from its initialiser list:
     // `u8 a[] = {10,20,30}` parses to an XTArrayType with elementCount 0
     // and an XTBlockNode initialiser. Without this the count stays 0, so
@@ -1399,6 +1409,12 @@
     // keyed on the function's declared return type tuple.
     for (NSUInteger i = 0; i < node.values.count && i < retTypes.count; i++)
         {
+        [self checkStackAddressInStrongSlot:retTypes[i]
+                                      value:node.values[i]
+                                       site:@"return"
+                                     target:nil
+                                   declName:nil
+                                   location:node.location];
         [self checkClassPointerAssign:retTypes[i]
                               rhsType:node.values[i].resolvedType
                               rhsNode:node.values[i]
@@ -3077,6 +3093,12 @@
     // bypasses the check.
     if (node.assignOp == XTAssignOpAssign)
         {
+        [self checkStackAddressInStrongSlot:node.lhs.resolvedType
+                                      value:node.rhs
+                                       site:@"assignment"
+                                     target:node.lhs
+                                   declName:nil
+                                   location:node.location];
         [self checkClassPointerAssign:node.lhs.resolvedType
                               rhsType:node.rhs.resolvedType
                               rhsNode:node.rhs
