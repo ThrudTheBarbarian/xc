@@ -1686,12 +1686,66 @@ class M68k
         i32 base = slotOf(n.res());
         for (u32 i = (u32)0; i < n.ops().count(); i = i + (u32)1)
             {
-            loadOperand((IROperand*)n.ops().get(i), String.withCString("d0"));
-            u32 fw = fieldWidth(l.typeAt(i));
+            IROperand* fo = (IROperand*)n.ops().get(i);
+            String* ft = l.typeAt(i);
+            i32 foff = base + (i32)fieldOffset(l, i);
+            // An eight-byte field is two longs and a nested aggregate its
+            // bytes: one long through d0 kept only the high half of an i64
+            // (a tuple's `5000000000` came back as 2^32).
+            if (isF64(ft) || isI64(ft))
+                {
+                storeWideAt(fo, foff);
+                continue;
+                }
+            if (isAggTy(ft) && fo.kind() == (u8)OPK_USE && fo.val() != (IRValue*)0)
+                {
+                copySlotBytes(slotOf(fo.val()), foff, aggSize(layoutOf(ft)));
+                continue;
+                }
+            loadOperand(fo, String.withCString("d0"));
+            u32 fw = fieldWidth(ft);
             String* sfx = String.withCString(fw == (u32)1 ? "b" : (fw == (u32)2 ? "w" : "l"));
-            _out.appendFormat("\tmove.%s\td0,%ld(a6)\n", sfx.cString(),
-                              base + (i32)fieldOffset(l, i));
+            _out.appendFormat("\tmove.%s\td0,%ld(a6)\n", sfx.cString(), foff);
             }
+        }
+
+    // An eight-byte value (i64, u64, double) stored at a frame offset: two
+    // longs, high first (big-endian), as such a value lives in a slot.
+    void storeWideAt(IROperand* op, i32 off)
+        {
+        if (op.kind() == (u8)OPK_IMMI)
+            {
+            i64 v = op.imm();
+            _out.appendFormat("\tmove.l\t#%lu,%ld(a6)\n", (u32)(v >> (i64)32), off);
+            _out.appendFormat("\tmove.l\t#%lu,%ld(a6)\n", (u32)v, off + (i32)4);
+            return;
+            }
+        if (op.kind() == (u8)OPK_IMMF)
+            {
+            String* hx = op.fpHex();
+            _out.appendFormat("\tmove.l\t#$%s,%ld(a6)\n",
+                              upperHex(hx.substringBytes((u32)0, (u32)8)).cString(), off);
+            _out.appendFormat("\tmove.l\t#$%s,%ld(a6)\n",
+                              upperHex(hx.substringBytes((u32)8, (u32)8)).cString(), off + (i32)4);
+            return;
+            }
+        copySlotBytes(slotOfOperand(op), off, (u32)8);
+        }
+
+    // `size` bytes from one frame offset to another, through d0: longs, then
+    // a word and a byte for what is left.
+    void copySlotBytes(i32 from, i32 to, u32 size)
+        {
+        u32 o = (u32)0;
+        for (; o + (u32)4 <= size; o = o + (u32)4)
+            _out.appendFormat("\tmove.l\t%ld(a6),d0\n\tmove.l\td0,%ld(a6)\n", from + (i32)o, to + (i32)o);
+        if (o + (u32)2 <= size)
+            {
+            _out.appendFormat("\tmove.w\t%ld(a6),d0\n\tmove.w\td0,%ld(a6)\n", from + (i32)o, to + (i32)o);
+            o = o + (u32)2;
+            }
+        if (o < size)
+            _out.appendFormat("\tmove.b\t%ld(a6),d0\n\tmove.b\td0,%ld(a6)\n", from + (i32)o, to + (i32)o);
         }
 
     void emitAggExtract(IRInsn* n)
@@ -1716,6 +1770,18 @@ class M68k
         u32 idx = (u32)((IROperand*)n.ops().get((u32)1)).imm();
         i32 off = slotOf(src.val()) + (i32)fieldOffset(l, idx);
         String* rty = n.res().ty();
+        // An eight-byte field is two longs and a nested aggregate its bytes,
+        // copied to the result's slot.
+        if (isF64(rty) || isI64(rty))
+            {
+            copySlotBytes(off, slotOf(n.res()), (u32)8);
+            return;
+            }
+        if (isAggTy(rty))
+            {
+            copySlotBytes(off, slotOf(n.res()), aggSize(layoutOf(rty)));
+            return;
+            }
         u32 fw = irWidth(rty);
         if (fw == (u32)0)
             fw = (u32)4;
