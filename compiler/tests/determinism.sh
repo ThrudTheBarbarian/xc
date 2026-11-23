@@ -11,58 +11,68 @@
 # the compiler be deterministic. A non-determinism found here is cheap; the same
 # fault found as an intermittent bootstrap failure is not. The discipline this
 # enforces (emit from sorted or insertion-ordered sequences, never raw hash
-# order) is also what carries over to the self-hosted compiler, since it lives in
-# the emitting code rather than in the container.
+# order) lives in the emitting code rather than in the container.
 #
-# Usage:  tests/determinism.sh [-A arch] [-n count]
-#   -A    target arch (default arm64); repeatable targets are the point of -S
-#   -n    limit fixtures (default: all)
+# It checks the shipped compiler (bin/<host>/xcc-xc, or XCC=...), optimised, for
+# each target asked for. A fixture that does not compile for a target is skipped
+# for it; one marked `skip` is skipped everywhere.
+#
+# Usage:  tests/determinism.sh [-A arch]... [-O level] [-n count]
+#   -A    a target (repeatable; default arm64)
+#   -O    optimisation level (default 2)
+#   -n    limit fixtures per target (default: all)
 set -e
 cd "$(dirname "$0")/.."
 
-ARCH=arm64
+ARCHS=""
+OPT=2
 LIMIT=0
 while [ $# -gt 0 ]; do
     case "$1" in
-        -A) ARCH=$2; shift 2 ;;
+        -A) ARCHS="$ARCHS $2"; shift 2 ;;
+        -O) OPT=$2; shift 2 ;;
         -n) LIMIT=$2; shift 2 ;;
-        *)  echo "usage: $0 [-A arch] [-n count]" >&2; exit 2 ;;
+        *)  echo "usage: $0 [-A arch]... [-O level] [-n count]" >&2; exit 2 ;;
     esac
 done
+[ -n "$ARCHS" ] || ARCHS=arm64
 
-XTC=./bin/osx/xcc
-[ -x "$XTC" ] || XTC=./bin/linux/xcc
-[ -x "$XTC" ] || { echo "determinism: no xtc binary built"; exit 1; }
+XCC=${XCC:-}
+[ -n "$XCC" ] || XCC=./bin/osx/xcc-xc
+[ -x "$XCC" ] || XCC=./bin/linux/xcc-xc
+[ -x "$XCC" ] || { echo "determinism: no shipped compiler built (bin/<host>/xcc-xc, or set XCC)"; exit 1; }
 
 W=$(mktemp -d); trap 'rm -rf "$W"' EXIT
-same=0; diffn=0; skip=0; n=0
-FAILED=""
+status=0
 
-for f in tests/fixtures/*.xc; do
-    b=$(basename "$f" .xc)
-    # Fixtures pinned to another target, or expected to fail sema, tell us nothing.
-    grep -qE '^//xtc-flags:.*(skip|target=)' "$f" && { skip=$((skip+1)); continue; }
-    grep -q 'expect=sema-error' "$f" && { skip=$((skip+1)); continue; }
-    [ "$LIMIT" -gt 0 ] && [ "$n" -ge "$LIMIT" ] && break
+for ARCH in $ARCHS; do
+    same=0; diffn=0; skip=0; n=0
+    FAILED=""
+    for f in tests/fixtures/*.xc; do
+        b=$(basename "$f" .xc)
+        grep -qE '^//xtc-flags:[[:space:]]*(.*,[[:space:]]*)?skip' "$f" && { skip=$((skip+1)); continue; }
+        [ "$LIMIT" -gt 0 ] && [ "$n" -ge "$LIMIT" ] && break
 
-    if ! "$XTC" -A "$ARCH" -S -q "$f" -o "$W/a.s" 2>/dev/null; then skip=$((skip+1)); continue; fi
-    if ! "$XTC" -A "$ARCH" -S -q "$f" -o "$W/b.s" 2>/dev/null; then skip=$((skip+1)); continue; fi
-    n=$((n+1))
+        if ! "$XCC" -q -O"$OPT" -A "$ARCH" -H . -S -o "$W/a.s" "$f" >/dev/null 2>&1; then skip=$((skip+1)); continue; fi
+        if ! "$XCC" -q -O"$OPT" -A "$ARCH" -H . -S -o "$W/b.s" "$f" >/dev/null 2>&1; then skip=$((skip+1)); continue; fi
+        n=$((n+1))
 
-    if cmp -s "$W/a.s" "$W/b.s"; then
-        same=$((same+1))
-    else
-        diffn=$((diffn+1)); FAILED="$FAILED $b"
-        # Keep the first offender's pair for diagnosis.
-        [ -f /tmp/determinism-a.s ] || { cp "$W/a.s" /tmp/determinism-a.s; cp "$W/b.s" /tmp/determinism-b.s; }
+        if cmp -s "$W/a.s" "$W/b.s"; then
+            same=$((same+1))
+        else
+            diffn=$((diffn+1)); FAILED="$FAILED $b"
+            # Keep the first offender's pair per target for diagnosis.
+            [ -f "/tmp/determinism-$ARCH-a.s" ] || { cp "$W/a.s" "/tmp/determinism-$ARCH-a.s"; cp "$W/b.s" "/tmp/determinism-$ARCH-b.s"; }
+        fi
+        rm -f "$W/a.s" "$W/b.s"
+    done
+
+    echo "determinism ($ARCH, -O$OPT): $same identical, $diffn differing, $skip skipped"
+    if [ "$diffn" -gt 0 ]; then
+        echo "NON-DETERMINISTIC ($ARCH):"
+        for x in $FAILED; do echo "    $x"; done
+        echo "first offender's outputs kept at /tmp/determinism-$ARCH-{a,b}.s"
+        status=1
     fi
-    rm -f "$W/a.s" "$W/b.s"
 done
-
-echo "determinism ($ARCH): $same identical, $diffn differing, $skip skipped"
-if [ "$diffn" -gt 0 ]; then
-    echo "NON-DETERMINISTIC:"
-    for x in $FAILED; do echo "    $x"; done
-    echo "first offender's outputs kept at /tmp/determinism-{a,b}.s"
-    exit 1
-fi
+exit $status
