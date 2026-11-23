@@ -73,6 +73,11 @@ else
     XC_DRIVER_LIB=support/arm64/lib
     XC_DRIVER_LAUNCH="$XC_ARM64_LAUNCH"
 fi
+# A driver given with XC_DRIVER is built for this host (the split build's
+# bin/linux/xcc-xc) and runs as it is: the launcher is for the Android driver
+# this script builds itself. Decided here, before the --one worker below
+# re-enters, so every worker sees it.
+[ -n "${XC_DRIVER:-}" ] && XC_DRIVER_LAUNCH=""
 export XC_DRIVER_LAUNCH
 
 # ---- the one-fixture worker (re-entrant: xargs calls us back with --one) ----
