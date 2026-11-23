@@ -1,0 +1,13 @@
+sum 111 222
+chain 121 242
+left 3 6
+direct 112 224
+dot 50
+inside live 4 tracked 4
+r 333
+live 0 tracked 0
+loop 0 0
+loop 3 6
+loop 6 12
+loop 9 18
+live 0 tracked 0

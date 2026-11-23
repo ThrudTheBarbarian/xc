@@ -1,0 +1,16 @@
+chain 75 102
+left 20 40
+neg -10 -20
+named 40 60
+grouped 120 180
+less 1 0
+a is shorter
+keep 45 62
+again 35 42
+live 4
+loop 65 102
+live 4
+pick 40 60
+pick2 -20 -20
+live 4
+live 0

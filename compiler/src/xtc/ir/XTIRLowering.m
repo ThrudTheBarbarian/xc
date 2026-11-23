@@ -580,6 +580,16 @@ static BOOL XTProgramDeclaresThreadCreate(XTProgramNode* program)
     return NO;
     }
 
+// The method call an overloaded operator became, or the node itself.
+static XTASTNode* XTOperatorCallOrSelf(XTASTNode* node)
+    {
+    if (node.nodeKind == XTASTNodeKindBinaryExpr && ((XTBinaryExprNode*)node).operatorCall)
+        return ((XTBinaryExprNode*)node).operatorCall;
+    if (node.nodeKind == XTASTNodeKindUnaryExpr && ((XTUnaryExprNode*)node).operatorCall)
+        return ((XTUnaryExprNode*)node).operatorCall;
+    return node;
+    }
+
 @implementation XTIRLowering
 
 + (void)setItableProtocols:(BOOL)on
@@ -3641,6 +3651,8 @@ static NSString* XTDescribeNodeKind(XTASTNodeKind k)
     {
     if (!rhs)
         return NO;
+    // An overloaded operator's result is its method call's.
+    rhs = XTOperatorCallOrSelf(rhs);
     switch (rhs.nodeKind)
         {
     // The ONLY +1 producers. `new T` hands back an owned temporary, and a
@@ -3895,6 +3907,8 @@ static NSString* XTDescribeNodeKind(XTASTNodeKind k)
     {
     if (self.aborted)
         return nil;
+    // An overloaded operator is the method call sema resolved it to.
+    node = XTOperatorCallOrSelf(node);
     switch (node.nodeKind)
         {
     case XTASTNodeKindLiteralInt:
@@ -8930,7 +8944,8 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
     BOOL isStaticCall = (baseType && baseType.kind == XTTypeKindClass && ![baseType isKindOfClass:[XTPointerType class]] && !isValueInstance);
     // A call's result is an instance, returned by value (`make().sum()`), and
     // never names the class.
-    if (receiver.nodeKind == XTASTNodeKindCallExpr || receiver.nodeKind == XTASTNodeKindMethodCallExpr)
+    if (receiver.nodeKind == XTASTNodeKindCallExpr || receiver.nodeKind == XTASTNodeKindMethodCallExpr
+        || XTOperatorCallOrSelf(receiver) != receiver)
         isStaticCall = NO;
     // …but a class-typed LOCAL VARIABLE is a heap instance receiver
     // (`Counter c = new Counter(); c.set(x)`), whose declared type is a bare

@@ -4403,6 +4403,8 @@ class ClassInfo
             giveUp(String.withCString("null expression"));
             return (IRValue*)0;
             }
+        // An overloaded operator is the method call sema resolved it to.
+        n = Lower.opCallOrSelf(n);
         u16 k = n.kind();
 
         if (k == (u16)nkFloat)
@@ -13498,10 +13500,25 @@ class ClassInfo
     // `m.get(k)`. Everything else is BORROWED, and the default has to say so —
     // getting "borrowed" wrong leaks, getting "owned" wrong frees an object
     // that is still reachable, and the second is much harder to find.
+    // The method call an overloaded operator became (sema hung it past the
+    // operands, NF_OPCALL), or the node itself.
+    static Node* opCallOrSelf(Node* n)
+        {
+        if (n == 0 || !n.hasFlag((u32)NF_OPCALL))
+            return n;
+        if (n.kind() == (u16)nkBinary && n.kidCount() > (u32)2)
+            return n.kid((u32)2);
+        if (n.kind() == (u16)nkUnary && n.kidCount() > (u32)1)
+            return n.kid((u32)1);
+        return n;
+        }
+
     bool rhsIsBorrowed(Node* rhs)
         {
         if (rhs == 0)
             return true;
+        // An overloaded operator's result is its method call's.
+        rhs = Lower.opCallOrSelf(rhs);
         u16 k = rhs.kind();
         if (k == (u16)nkNew)
             return false;
