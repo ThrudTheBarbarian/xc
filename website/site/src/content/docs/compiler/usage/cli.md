@@ -241,7 +241,7 @@ is reported and ignored.
 | Flag | Effect |
 |------|--------|
 | `-flto` | Link-time optimisation: recompile the whole program from its IR as one module. |
-| `-fbounds-check` | Build with subscript bounds checking and a stack report on failure; see [Checked builds](#checked-builds). arm64, x86_64 and win64. |
+| `-fbounds-check` | Build with subscript bounds checking and a stack report on failure; see [Checked builds](#checked-builds). arm64, x86_64, win64 and the Atari ST, where every function also checks its frame against the stack. |
 | `-fbounds-check=light` | The same checks with a short report and no stack, and so a smaller cost; see [Checked builds](#checked-builds). |
 | `-fno-bounds-check` | No subscript checks: the default. |
 | `--sign <identity.pem>` | Sign the output with a developer identity (iOS/macOS); pair with `--sign-entitlements <plist>`. See also the standalone `xcc-sign`. |
@@ -286,6 +286,12 @@ inside loops are compiled into the loop rather than called: a loop that
 indexes through a lookup table ran 1.67 times faster checked, and checked
 binaries are about 40% larger. `-fbounds-check` keeps them calls, so its stack
 report has a frame for each.
+
+On the Atari ST both spellings also check the stack: each function, on entry,
+checks that its frame fits in what is left of the stack reserve, and if it does
+not the program stops with `stack overflow in <function>: the 64 KB stack was
+exceeded; raise it with -ss` and exit status 1. The subscript reports print the
+short form.
 
 What each kind of subscript is checked against:
 

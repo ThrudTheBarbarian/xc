@@ -43,6 +43,10 @@ NS_ASSUME_NONNULL_BEGIN
 /// The stack `_start` reserves, in bytes (-ss); 0 keeps the 64 KB default.
 + (void)setStackReserve:(NSUInteger)bytes;
 
+/// -fbounds-check: every prologue checks its frame stays above the stack's
+/// limit, and reports the function by name when it would not.
++ (void)setStackCheck:(BOOL)on;
+
 @end
 
 NS_ASSUME_NONNULL_END
