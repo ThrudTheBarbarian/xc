@@ -587,6 +587,10 @@ equiv "-S (keep assembly)"  "$A -o refout.s ret.xc"  "$A -S -o xcout.s ret.xc"
 for v in "-ss 512" "-ss=\$200" "--stack-size 0x200" "--stack-size=512" "-ss 0" "-ss 70000" "-ss 0x40000001"; do
     same "$v"               $A $v -o @OUT@ ret.xc
 done
+# The Atari ST's stack reserve (#596): the same _start from both.
+for v in "-ss 32768" "--stack-size=0x8000" "-ss 30001"; do
+    same "$v (-A atarist)"  -q -A atarist $v -o @OUT@.s ret.xc
+done
 same "-fnew-ir"             $A -fnew-ir -o @OUT@ ret.xc
 same "--with-ir"            $A --with-ir -o @OUT@ ret.xc
 same "--self-host"          $A --self-host -o @OUT@ ret.xc

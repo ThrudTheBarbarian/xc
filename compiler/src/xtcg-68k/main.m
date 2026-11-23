@@ -37,6 +37,7 @@ static void usage(void)
             "  -o <path>             Output .s path (stdout if omitted).\n"
             "  -O0..-O3              IR opt-pass level.\n"
             "  --cpu <n>             68000 (default) or 68030.\n"
+            "  --stack-size <n>      Stack bytes _start reserves (default 65536).\n"
             "  -q, --quiet           Suppress informational stderr.\n"
             "  --dump-opt-ir         Print the IR after the opt pipeline and stop.\n"
             "  -v, --version         Print version and exit.\n");
@@ -56,6 +57,7 @@ int main(int argc, const char* argv[])
         NSInteger cpu = 68000;
         BOOL hardFloat = NO;
         BOOL pic = NO;
+        NSUInteger stackReserve = 0;
         BOOL quiet = NO;
         BOOL dumpOptIR = NO;
 
@@ -87,6 +89,10 @@ int main(int argc, const char* argv[])
             else if ([arg isEqualToString:@"--pic"])
                 {
                 pic = YES;
+                }
+            else if ([arg isEqualToString:@"--stack-size"] && i + 1 < argc)
+                {
+                stackReserve = (NSUInteger)strtoul(argv[++i], NULL, 10);
                 }
             else if ([arg isEqualToString:@"-m"] && i + 1 < argc)
                 {
@@ -212,6 +218,7 @@ int main(int argc, const char* argv[])
         NSString* asmText = nil;
         @try
             {
+            [XTM68kBackend setStackReserve:stackReserve];
             asmText = [XTM68kBackend assemblyFromModule:mod
                                                     cpu:cpu
                                               hardFloat:hardFloat

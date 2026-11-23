@@ -220,7 +220,7 @@ is reported and ignored.
 | Flag | Effect |
 |------|--------|
 | `--xtc-stack` | xt6502: every function keeps its return address and saved registers in a frame on the xcc software stack instead of on the hardware stack. A function marked `:hwStack` keeps the hardware-stack convention; `:xtcStack` selects the software stack for one function without the flag. See [Functions](/compiler/language/functions/#default-calling-convention). |
-| `-ss <n>`, `--stack-size <n>` | wasm32: the shadow stack's size in bytes (decimal, `$hex` or `0xhex`; default 1 MiB, at most 1 GiB). A frame that would pass the bottom of the stack traps. No effect on other targets. See [The wasm32 layout](/compiler/usage/memory-models/#the-wasm32-layout). |
+| `-ss <n>`, `--stack-size <n>` | The stack's size in bytes (decimal, `$hex` or `0xhex`; at most 1 GiB). wasm32: the shadow stack, default 1 MiB; a frame that would pass the bottom of the stack traps. See [The wasm32 layout](/compiler/usage/memory-models/#the-wasm32-layout). Atari ST: the stack reserve kept at start-up, default 64 KB. See [The Atari ST stack](/compiler/usage/memory-models/#the-atari-st-stack). No effect on other targets. |
 
 ## Runtime behaviour
 
