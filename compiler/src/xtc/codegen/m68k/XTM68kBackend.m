@@ -67,6 +67,40 @@ static NSDictionary<NSNumber*, XTIROperand*>* gPtrBase = nil; // p valueId → P
 static NSArray<NSString*>* gPtrARegSaves = nil;               // used a2-a4 (callee-saved)
 static NSDictionary<NSString*, NSNumber*>* gPtrARegSaveOff = nil;
 
+// __xtc_stack_check: the guard _start wrote is intact, or the program stops
+// with "stack overflow" and exit status 1 (#596). Called when main returns,
+// from _xt_exit and from _xtc_alloc. It finds the guard from the basepage, 256
+// bytes before TEXT, so it needs no storage, and it uses only a0, a1 and d1,
+// which every caller already gives up. A guard detects an overflow after the
+// fact: a frame that steps over it without writing there goes unseen.
+static void m68kEmitStackCheck(NSMutableString* out, NSUInteger reserve)
+    {
+    [out appendString:@"; runtime: __xtc_stack_check() : the stack guard is intact, or stop (#596)\n"];
+    [out appendString:@"\t.globl\t__xtc_stack_check\n__xtc_stack_check:\n"];
+    [out appendString:@"\tlea\t_start,a0\n\tlea\t-256(a0),a0\t; basepage\n"];
+    [out appendString:@"\tmove.l\t24(a0),a1\n\tadd.l\t28(a0),a1\n"];
+    [out appendString:@"\tmoveq\t#64,d1\n.Lsc_loop:\n\tcmp.l\t#$5354434B,(a1)+\n\tbne.s\t.Lsc_bad\n\tsubq.w\t#1,d1\n\tbne.s\t.Lsc_loop\n\trts\n"];
+    [out appendString:@".Lsc_bad:\n"];
+    [out appendString:@"\tpea\t.Lsc_msg\n\tmove.w\t#9,-(sp)\t; Cconws\n\ttrap\t#1\n\taddq.l\t#6,sp\n"];
+    [out appendString:@"\tmove.w\t#1,-(sp)\n\tmove.w\t#$4c,-(sp)\t; Pterm(1)\n\ttrap\t#1\n"];
+    NSString* size = (reserve & 1023) == 0
+                         ? [NSString stringWithFormat:@"%lu KB", (unsigned long)(reserve >> 10)]
+                         : [NSString stringWithFormat:@"%lu-byte", (unsigned long)reserve];
+    NSData* msg = [[NSString stringWithFormat:@"stack overflow: the %@ stack was exceeded; raise it with -ss\r\n", size]
+        dataUsingEncoding:NSUTF8StringEncoding];
+    const uint8_t* b = msg.bytes;
+    NSUInteger n = msg.length;
+    [out appendString:@".Lsc_msg:\n"];
+    for (NSUInteger i = 0; i <= n; i += 16)
+        {
+        [out appendString:@"\t.dc.b\t"];
+        for (NSUInteger j = i; j <= n && j < i + 16; j++)
+            [out appendFormat:@"%@%u", j > i ? @"," : @"", j < n ? (unsigned)b[j] : 0u];
+        [out appendString:@"\n"];
+        }
+    [out appendString:@"\t.even\n\n"];
+    }
+
 @implementation XTM68kBackend
 
 + (void)setStackReserve:(NSUInteger)bytes
@@ -159,6 +193,10 @@ static NSString* m68kSym(NSString* name)
         NSUInteger reserve = gStackReserve ? (gStackReserve + 3) & ~(NSUInteger)3 : 0x10000;
         [out appendFormat:@"\tadd.l\t#$%lX,d0\n", (unsigned long)(reserve + 0x100)];
         [out appendString:@"\tmove.l\ta0,d1\n\tadd.l\td0,d1\n\tmove.l\td1,sp\n"]; // SP = top of kept region
+        // The stack guard (#596): 256 bytes of a pattern at the bottom of the
+        // reserve, just above bss, which __xtc_stack_check looks at.
+        [out appendString:@"\tmove.l\t24(a0),a1\t; p_bbase\n\tadd.l\t28(a0),a1\t; + p_blen: the reserve's bottom\n"];
+        [out appendString:@"\tmoveq\t#64,d2\n.Lguard:\n\tmove.l\t#$5354434B,(a1)+\n\tsubq.w\t#1,d2\n\tbne.s\t.Lguard\n"];
         [out appendString:@"\tmove.l\td0,-(sp)\n\tmove.l\ta0,-(sp)\n\tclr.w\t-(sp)\n"
                           @"\tmove.w\t#$4a,-(sp)\n\ttrap\t#1\n\tlea\t12(sp),sp\n"]; // Mshrink(0,bp,keep)
         if (gPic)
@@ -169,9 +207,11 @@ static NSString* m68kSym(NSString* name)
                               @"\tadd.l\t#_GOT-.Lpicpc,a5\n"];
             }
         [out appendString:@"\tjsr\tmain\n"];
+        [out appendString:@"\tjsr\t__xtc_stack_check\n"];
         [out appendString:@"\tmove.w\td0,-(sp)\t; exit code\n"];
         [out appendString:@"\tmove.w\t#$4c,-(sp)\t; Pterm\n"];
         [out appendString:@"\ttrap\t#1\n\n"];
+        m68kEmitStackCheck(out, reserve);
         }
 
     for (XTIRFunction* fn in mod.functions)
@@ -666,6 +706,7 @@ static NSString* m68kSym(NSString* name)
         [out appendString:@"; runtime: _xt_exit(code) : GEMDOS Pterm, never returns\n"];
         [out appendString:@"\t.globl\t_xt_exit\n"];
         [out appendString:@"_xt_exit:\n"];
+        [out appendString:@"\tjsr\t__xtc_stack_check\n"];
         [out appendString:@"\tmove.w\t6(sp),-(sp)\t\t; low word of the code\n"];
         [out appendString:@"\tmove.w\t#$4C,-(sp)\t\t; Pterm\n"];
         [out appendString:@"\ttrap\t#1\n"];
@@ -851,6 +892,7 @@ static NSString* m68kSym(NSString* name)
                   "; it sits BEFORE the refcount so refcount stays at obj-2 and not one line of\n"
                   "; the inline ARC changes. See private:docs/Design/weak-refs-intrusive.md.\n"
                   "\t.globl\t_xtc_alloc\n_xtc_alloc:\n"
+                  "\tjsr\t__xtc_stack_check\n"
                   "\tmove.l\t4(sp),d0\n\tmove.l\t8(sp),d1\n\tjsr\t__mulsi3\n" // d0 = count*stride
                   "\tmove.l\td0,d1\n\tadd.l\t#14,d0\n"                        // d1 = body size; d0 += header
                   // Save the body size ACROSS the GEMDOS Malloc trap on the stack — GEMDOS

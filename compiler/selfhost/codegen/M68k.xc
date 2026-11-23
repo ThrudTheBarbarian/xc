@@ -281,6 +281,10 @@ class M68k
         u32 reserve = _stackReserve == (u32)0 ? (u32)$10000 : (_stackReserve + (u32)3) & ~(u32)3;
         _out.appendFormat("\tadd.l\t#$%X,d0\n", reserve + (u32)$100);
         _out.appendCString("\tmove.l\ta0,d1\n\tadd.l\td0,d1\n\tmove.l\td1,sp\n");
+        // The stack guard (#596): 256 bytes of a pattern at the bottom of the
+        // reserve, just above bss, which __xtc_stack_check looks at.
+        _out.appendCString("\tmove.l\t24(a0),a1\t; p_bbase\n\tadd.l\t28(a0),a1\t; + p_blen: the reserve's bottom\n");
+        _out.appendCString("\tmoveq\t#64,d2\n.Lguard:\n\tmove.l\t#$5354434B,(a1)+\n\tsubq.w\t#1,d2\n\tbne.s\t.Lguard\n");
         _out.appendCString("\tmove.l\td0,-(sp)\n\tmove.l\ta0,-(sp)\n\tclr.w\t-(sp)\n");
         _out.appendCString("\tmove.w\t#$4a,-(sp)\n\ttrap\t#1\n\tlea\t12(sp),sp\n");
         if (_pic)
@@ -291,9 +295,51 @@ class M68k
             _out.appendCString("\tadd.l\t#_GOT-.Lpicpc,a5\n");
             }
         _out.appendCString("\tjsr\tmain\n");
+        _out.appendCString("\tjsr\t__xtc_stack_check\n");
         _out.appendCString("\tmove.w\td0,-(sp)\t; exit code\n");
         _out.appendCString("\tmove.w\t#$4c,-(sp)\t; Pterm\n");
         _out.appendCString("\ttrap\t#1\n\n");
+        emitStackCheck(reserve);
+        }
+
+    // __xtc_stack_check: the guard _start wrote is intact, or the program
+    // stops with "stack overflow" and exit status 1. Called when main returns,
+    // from _xt_exit and from _xtc_alloc. It finds the guard from the basepage,
+    // 256 bytes before TEXT, so it needs no storage, and it uses only a0, a1
+    // and d1, which every caller already gives up. A guard detects an overflow
+    // after the fact: a frame that steps over it without writing there goes
+    // unseen.
+    void emitStackCheck(u32 reserve)
+        {
+        _out.appendCString("; runtime: __xtc_stack_check() : the stack guard is intact, or stop (#596)\n");
+        _out.appendCString("\t.globl\t__xtc_stack_check\n__xtc_stack_check:\n");
+        _out.appendCString("\tlea\t_start,a0\n\tlea\t-256(a0),a0\t; basepage\n");
+        _out.appendCString("\tmove.l\t24(a0),a1\n\tadd.l\t28(a0),a1\n");
+        _out.appendCString("\tmoveq\t#64,d1\n.Lsc_loop:\n\tcmp.l\t#$5354434B,(a1)+\n\tbne.s\t.Lsc_bad\n\tsubq.w\t#1,d1\n\tbne.s\t.Lsc_loop\n\trts\n");
+        _out.appendCString(".Lsc_bad:\n");
+        _out.appendCString("\tpea\t.Lsc_msg\n\tmove.w\t#9,-(sp)\t; Cconws\n\ttrap\t#1\n\taddq.l\t#6,sp\n");
+        _out.appendCString("\tmove.w\t#1,-(sp)\n\tmove.w\t#$4c,-(sp)\t; Pterm(1)\n\ttrap\t#1\n");
+        String* msg = String.withCString("stack overflow: the ");
+        if ((reserve & (u32)1023) == (u32)0)
+            msg.appendFormat("%u KB", reserve >> (u32)10);
+        else
+            msg.appendFormat("%u-byte", reserve);
+        msg.appendCString(" stack was exceeded; raise it with -ss\r\n");
+        _out.appendCString(".Lsc_msg:\n");
+        u32 i = (u32)0;
+        while (i <= msg.byteLength())
+            {
+            _out.appendCString("\t.dc.b\t");
+            for (u32 j = i; j <= msg.byteLength() && j < i + (u32)16; j = j + (u32)1)
+                {
+                if (j > i)
+                    _out.appendCString(",");
+                _out.appendFormat("%u", j < msg.byteLength() ? (u32)msg.byteAt(j) : (u32)0);
+                }
+            _out.appendCString("\n");
+            i = i + (u32)16;
+            }
+        _out.appendCString("\t.even\n\n");
         }
 
     // ── Frame layout ─────────────────────────────────────────────────────
@@ -4114,6 +4160,7 @@ class M68k
                 _out.appendCString("; runtime: _xt_exit(code) : GEMDOS Pterm, never returns\n");
                 _out.appendCString("\t.globl\t_xt_exit\n");
                 _out.appendCString("_xt_exit:\n");
+                _out.appendCString("\tjsr\t__xtc_stack_check\n");
                 _out.appendCString("\tmove.w\t6(sp),-(sp)\t\t; low word of the code\n");
                 _out.appendCString("\tmove.w\t#$4C,-(sp)\t\t; Pterm\n");
                 _out.appendCString("\ttrap\t#1\n");
@@ -4261,7 +4308,7 @@ class M68k
             _out.appendCString("; obj=base+14. weak_head is the intrusive weak-reference chain (no table);\n");
             _out.appendCString("; it sits BEFORE the refcount so refcount stays at obj-2 and not one line of\n");
             _out.appendCString("; the inline ARC changes. See private:docs/Design/weak-refs-intrusive.md.\n\t.globl\t_xtc_alloc\n");
-            _out.appendCString("_xtc_alloc:\n\tmove.l\t4(sp),d0\n\tmove.l\t8(sp),d1\n\tjsr\t__mulsi3\n\tmove.l\td0,d1\n");
+            _out.appendCString("_xtc_alloc:\n\tjsr\t__xtc_stack_check\n\tmove.l\t4(sp),d0\n\tmove.l\t8(sp),d1\n\tjsr\t__mulsi3\n\tmove.l\td0,d1\n");
             _out.appendCString("\tadd.l\t#14,d0\n\tmove.l\td1,-(sp)\n\tmove.l\td0,-(sp)\n\tmove.w\t#$48,-(sp)\n");
             _out.appendCString("\ttrap\t#1\n\taddq.l\t#6,sp\n\tmove.l\t(sp)+,d2\n\ttst.l\td0\n\tble.s\t.xa_fail\n");
             _out.appendCString("\tmove.l\td0,a0\n\tmove.w\t6(sp),(a0)\n\tmove.w\t10(sp),2(a0)\n\tmove.l\t12(sp),4(a0)\n");
