@@ -2263,6 +2263,8 @@ class AsmSymbol
         // `vmov` by its type suffix, which the scalar form never carries.
         if (b.equals(String.withCString("vmov")) && parts.count() > (u32)1)
             return neonMoveLane(parts, ops);
+        if (b.equals(String.withCString("vmvn")))
+            return neonMvn(ops);
         if (neonThreeSame(b, parts, ops))
             return true;
         if (b.equals(String.withCString("vmov")))
@@ -2400,6 +2402,10 @@ class AsmSymbol
         u32 b4 = (u32)0;
         bool sizeFromSuffix = true;
         bool dOnly = false;
+        // max/min and the ordered compares take U from the suffix: `.u32` is
+        // U=1, `.s32` U=0. Fixed at 0, every unsigned max/min assembled as the
+        // SIGNED instruction (vmax.u32 came out as vmax.s32).
+        bool signFromSuffix = false;
         if (b.equals(String.withCString("vadd")))
             {
             u = (u32)0;
@@ -2427,12 +2433,14 @@ class AsmSymbol
         else if (b.equals(String.withCString("vmax")))
             {
             u = (u32)0;
+            signFromSuffix = true;
             opc = (u32)6;
             b4 = (u32)0;
             }
         else if (b.equals(String.withCString("vmin")))
             {
             u = (u32)0;
+            signFromSuffix = true;
             opc = (u32)6;
             b4 = (u32)1;
             }
@@ -2446,6 +2454,7 @@ class AsmSymbol
         else if (b.equals(String.withCString("vpmax")))
             {
             u = (u32)0;
+            signFromSuffix = true;
             opc = (u32)$A;
             b4 = (u32)0;
             dOnly = true;
@@ -2453,13 +2462,35 @@ class AsmSymbol
         else if (b.equals(String.withCString("vpmin")))
             {
             u = (u32)0;
+            signFromSuffix = true;
             opc = (u32)$A;
             b4 = (u32)1;
             dOnly = true;
             }
+        else if (b.equals(String.withCString("vcgt")))
+            {
+            u = (u32)0;
+            opc = (u32)3;
+            b4 = (u32)0;
+            signFromSuffix = true;
+            }
+        else if (b.equals(String.withCString("vcge")))
+            {
+            u = (u32)0;
+            opc = (u32)3;
+            b4 = (u32)1;
+            signFromSuffix = true;
+            }
         else if (b.equals(String.withCString("vand")))
             {
             u = (u32)0;
+            opc = (u32)1;
+            b4 = (u32)1;
+            sizeFromSuffix = false;
+            }
+        else if (b.equals(String.withCString("veor")))
+            {
+            u = (u32)1;
             opc = (u32)1;
             b4 = (u32)1;
             sizeFromSuffix = false;
@@ -2474,10 +2505,13 @@ class AsmSymbol
         else
             return false;
 
-        // A `.f32` suffix means the FLOATING-point form, a different encoding —
-        // leave it to the VFP path rather than assembling nonsense.
+        // A `.f32` suffix means the FLOATING-point form, a different encoding.
+        // On D or Q registers it is NEON's (the vectoriser's float lanes); on
+        // S registers it is VFP's scalar form, left to the VFP path.
         if (parts.count() > (u32)1 && ((String*)parts.get((u32)1)).hasPrefix(String.withCString("f")))
-            return false;
+            return neonFloatThreeSame(b, parts, ops);
+        if (signFromSuffix && parts.count() > (u32)1 && ((String*)parts.get((u32)1)).hasPrefix(String.withCString("u")))
+            u = (u32)1;
         u32 size = (u32)0;
         if (sizeFromSuffix)
             {
@@ -2490,6 +2524,8 @@ class AsmSymbol
             }
         else
             {
+            // The bitwise ops' size field selects the operation: VAND/VEOR 00,
+            // VORR 10.
             size = b.equals(String.withCString("vorr")) ? (u32)2 : (u32)0;
             }
         if (ops.count() < (u32)3)
@@ -2510,6 +2546,62 @@ class AsmSymbol
         if (dOnly && qd == (u32)1)
             return false; // pairwise ops are D-only
         word((u32)$F2000000 | (u << 24) | ((((u32)vd >> 4) & (u32)1) << 22) | (size << 20) | (((u32)vn & (u32)$F) << 16) | (((u32)vd & (u32)$F) << 12) | (opc << 8) | ((((u32)vn >> 4) & (u32)1) << 7) | (qd << 6) | ((((u32)vm >> 4) & (u32)1) << 5) | (b4 << 4) | ((u32)vm & (u32)$F));
+        return true;
+        }
+
+    // `vadd.f32 q8, q9, q10` (and vsub, vmul): NEON's float lanes, on D or Q
+    // registers. vsub sets bit 21 and vmul is the U=1, bit-4 form of the same
+    // opcode. Only f32 exists; a scalar S-register form is VFP's, not this.
+    bool neonFloatThreeSame(String* b, Array* parts, Array* ops)
+        {
+        if (!((String*)parts.get((u32)1)).equals(String.withCString("f32")) || ops.count() < (u32)3)
+            return false;
+        u32 u = (u32)0;
+        u32 sz = (u32)0;
+        u32 b4 = (u32)0;
+        if (b.equals(String.withCString("vadd")))
+            {
+            }
+        else if (b.equals(String.withCString("vsub")))
+            sz = (u32)2;
+        else if (b.equals(String.withCString("vmul")))
+            {
+            u = (u32)1;
+            b4 = (u32)1;
+            }
+        else
+            return false;
+        Array* q1 = new Array();
+        Array* q2 = new Array();
+        Array* q3 = new Array();
+        i32 vd = Arm32.neonRegNumber((String*)ops.get((u32)0), q1);
+        i32 vn = Arm32.neonRegNumber((String*)ops.get((u32)1), q2);
+        i32 vm = Arm32.neonRegNumber((String*)ops.get((u32)2), q3);
+        if (vd < (i32)0 || vn < (i32)0 || vm < (i32)0)
+            return false;
+        u32 qd = ((Number*)q1.get((u32)0)).asU32();
+        if (qd != ((Number*)q2.get((u32)0)).asU32() || qd != ((Number*)q3.get((u32)0)).asU32())
+            return false;
+        word((u32)$F2000D00 | (u << 24) | ((((u32)vd >> 4) & (u32)1) << 22) | (sz << 20) | (((u32)vn & (u32)$F) << 16) | (((u32)vd & (u32)$F) << 12) | ((((u32)vn >> 4) & (u32)1) << 7) | (qd << 6) | ((((u32)vm >> 4) & (u32)1) << 5) | (b4 << 4) | ((u32)vm & (u32)$F));
+        return true;
+        }
+
+    // `vmvn q8, q9` — bitwise NOT, D or Q (the vectoriser inverts a compare's
+    // mask with it for `!=`).
+    bool neonMvn(Array* ops)
+        {
+        if (ops.count() < (u32)2)
+            return false;
+        Array* q1 = new Array();
+        Array* q2 = new Array();
+        i32 vd = Arm32.neonRegNumber((String*)ops.get((u32)0), q1);
+        i32 vm = Arm32.neonRegNumber((String*)ops.get((u32)1), q2);
+        if (vd < (i32)0 || vm < (i32)0)
+            return false;
+        u32 qd = ((Number*)q1.get((u32)0)).asU32();
+        if (qd != ((Number*)q2.get((u32)0)).asU32())
+            return false;
+        word((u32)$F3B00580 | ((((u32)vd >> 4) & (u32)1) << 22) | (((u32)vd & (u32)$F) << 12) | (qd << 6) | ((((u32)vm >> 4) & (u32)1) << 5) | ((u32)vm & (u32)$F));
         return true;
         }
 

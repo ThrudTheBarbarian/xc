@@ -2115,6 +2115,8 @@ static uint32_t vfpFields(int vd, int vm, int vn, BOOL dbl)
     // `vmov` by its type suffix, which the scalar form never carries.
     if ([b isEqualToString:@"vmov"] && parts.count > 1)
         return [self neonMoveLane:parts ops:ops];
+    if ([b isEqualToString:@"vmvn"])
+        return [self neonMvn:ops];
     if ([self neonThreeSame:b parts:parts ops:ops])
         return YES;
     if ([b isEqualToString:@"vmov"])
@@ -2230,6 +2232,10 @@ static int neonSizeBits(NSString* ty)
     uint32_t u, opc, b4;
     BOOL sizeFromSuffix = YES;
     BOOL dOnly = NO; // no quad form emitted
+    // max/min and the ordered compares take U from the suffix: `.u32` is U=1,
+    // `.s32` U=0. Fixed at 0, every unsigned max/min assembled as the SIGNED
+    // instruction (vmax.u32 came out as vmax.s32).
+    BOOL signFromSuffix = NO;
     if ([b isEqualToString:@"vadd"])
         {
         u = 0;
@@ -2257,12 +2263,14 @@ static int neonSizeBits(NSString* ty)
     else if ([b isEqualToString:@"vmax"])
         {
         u = 0;
+        signFromSuffix = YES;
         opc = 0x6;
         b4 = 0;
         }
     else if ([b isEqualToString:@"vmin"])
         {
         u = 0;
+        signFromSuffix = YES;
         opc = 0x6;
         b4 = 1;
         }
@@ -2276,6 +2284,7 @@ static int neonSizeBits(NSString* ty)
     else if ([b isEqualToString:@"vpmax"])
         {
         u = 0;
+        signFromSuffix = YES;
         opc = 0xA;
         b4 = 0;
         dOnly = YES;
@@ -2283,6 +2292,7 @@ static int neonSizeBits(NSString* ty)
     else if ([b isEqualToString:@"vpmin"])
         {
         u = 0;
+        signFromSuffix = YES;
         opc = 0xA;
         b4 = 1;
         dOnly = YES;
@@ -2290,9 +2300,30 @@ static int neonSizeBits(NSString* ty)
     // The bitwise ops carry no element size: the "size" field selects WHICH
     // bitwise operation — 00 VAND, 01 VBIC, 10 VORR, 11 VORN. (It is 10 for
     // VORR, not 01; the test caught that.)
+    else if ([b isEqualToString:@"vcgt"])
+        {
+        u = 0;
+        opc = 0x3;
+        b4 = 0;
+        signFromSuffix = YES;
+        }
+    else if ([b isEqualToString:@"vcge"])
+        {
+        u = 0;
+        opc = 0x3;
+        b4 = 1;
+        signFromSuffix = YES;
+        }
     else if ([b isEqualToString:@"vand"])
         {
         u = 0;
+        opc = 0x1;
+        b4 = 1;
+        sizeFromSuffix = NO;
+        }
+    else if ([b isEqualToString:@"veor"])
+        {
+        u = 1;
         opc = 0x1;
         b4 = 1;
         sizeFromSuffix = NO;
@@ -2307,10 +2338,13 @@ static int neonSizeBits(NSString* ty)
     else
         return NO;
 
-    // A `.f32` suffix means the FLOATING-point form, which is a different
-    // encoding — leave it to the VFP path rather than assembling nonsense.
+    // A `.f32` suffix means the FLOATING-point form, a different encoding. On
+    // D or Q registers it is NEON's (the vectoriser's float lanes); on S
+    // registers it is VFP's scalar form, left to the VFP path.
     if (parts.count > 1 && [parts[1] hasPrefix:@"f"])
-        return NO;
+        return [self neonFloatThreeSame:b parts:parts ops:ops];
+    if (signFromSuffix && parts.count > 1 && [parts[1] hasPrefix:@"u"])
+        u = 1;
     uint32_t size;
     if (sizeFromSuffix)
         {
@@ -2338,6 +2372,52 @@ static int neonSizeBits(NSString* ty)
     if (dOnly && qd)
         return NO; // pairwise ops are D-only
     [self word:0xF2000000u | (u << 24) | ((((uint32_t)vd >> 4) & 1u) << 22) | (size << 20) | (((uint32_t)vn & 0xFu) << 16) | (((uint32_t)vd & 0xFu) << 12) | (opc << 8) | ((((uint32_t)vn >> 4) & 1u) << 7) | ((qd ? 1u : 0u) << 6) | ((((uint32_t)vm >> 4) & 1u) << 5) | (b4 << 4) | ((uint32_t)vm & 0xFu)];
+    return YES;
+    }
+
+// `vadd.f32 q8, q9, q10` (and vsub, vmul): NEON's float lanes, on D or Q
+// registers. vsub sets bit 21 and vmul is the U=1, bit-4 form of the same
+// opcode. Only f32 exists; a scalar S-register form is VFP's, not this.
+- (BOOL)neonFloatThreeSame:(NSString*)b parts:(NSArray<NSString*>*)parts
+                       ops:(NSArray<NSString*>*)ops
+    {
+    if (![parts[1] isEqualToString:@"f32"] || ops.count < 3)
+        return NO;
+    uint32_t u = 0, sz = 0, b4 = 0;
+    if ([b isEqualToString:@"vadd"])
+        {
+        }
+    else if ([b isEqualToString:@"vsub"])
+        sz = 2;
+    else if ([b isEqualToString:@"vmul"])
+        {
+        u = 1;
+        b4 = 1;
+        }
+    else
+        return NO;
+    BOOL qd = NO, qn = NO, qm = NO;
+    int vd = neonRegNumber(ops[0], &qd);
+    int vn = neonRegNumber(ops[1], &qn);
+    int vm = neonRegNumber(ops[2], &qm);
+    if (vd < 0 || vn < 0 || vm < 0 || qd != qn || qd != qm)
+        return NO;
+    [self word:0xF2000D00u | (u << 24) | ((((uint32_t)vd >> 4) & 1u) << 22) | (sz << 20) | (((uint32_t)vn & 0xFu) << 16) | (((uint32_t)vd & 0xFu) << 12) | ((((uint32_t)vn >> 4) & 1u) << 7) | ((qd ? 1u : 0u) << 6) | ((((uint32_t)vm >> 4) & 1u) << 5) | (b4 << 4) | ((uint32_t)vm & 0xFu)];
+    return YES;
+    }
+
+// `vmvn q8, q9` — bitwise NOT, D or Q (the vectoriser inverts a compare's mask
+// with it for `!=`).
+- (BOOL)neonMvn:(NSArray<NSString*>*)ops
+    {
+    if (ops.count < 2)
+        return NO;
+    BOOL qd = NO, qm = NO;
+    int vd = neonRegNumber(ops[0], &qd);
+    int vm = neonRegNumber(ops[1], &qm);
+    if (vd < 0 || vm < 0 || qd != qm)
+        return NO;
+    [self word:0xF3B00580u | ((((uint32_t)vd >> 4) & 1u) << 22) | (((uint32_t)vd & 0xFu) << 12) | ((qd ? 1u : 0u) << 6) | ((((uint32_t)vm >> 4) & 1u) << 5) | ((uint32_t)vm & 0xFu)];
     return YES;
     }
 
