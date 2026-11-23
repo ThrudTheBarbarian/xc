@@ -360,9 +360,13 @@ static NSString *renameMainSymbol(NSString *asmText) {
 //
 // Line-wise and skipping string data, because unlike the Mach-O `_main` the
 // ELF symbol is spelled exactly like the word a `.asciz` might contain.
+//
+// A word is letters, digits, `_`, `$` and `.`, as the port's isWordByte has
+// it: a method named `main` (`Operation$main`) is not the entry and keeps its
+// name. `\b` stopped at the `$` and renamed it on this side only.
 static NSString *renameArm9MainSymbol(NSString *asmText) {
     NSRegularExpression *re = [NSRegularExpression
-        regularExpressionWithPattern:@"\\bmain\\b" options:0 error:NULL];
+        regularExpressionWithPattern:@"(?<![A-Za-z0-9_$.])main(?![A-Za-z0-9_$.])" options:0 error:NULL];
     if (!re) return asmText;
     NSMutableArray<NSString *> *out = [NSMutableArray array];
     for (NSString *line in [asmText componentsSeparatedByString:@"\n"]) {
