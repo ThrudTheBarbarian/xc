@@ -62,11 +62,26 @@ class ElfSharedInfo
     bool _failed;
     String* _why;
     Array* _depLibs;    // String@: the libraries an object asks its link for (.deplibs)
+    // A dynamic executable's thread-local template (setTls): where it lies in
+    // the data, its size and alignment. The loader gives each thread a copy.
+    u32 _tlsOff;
+    u32 _tlsSize;
+    u32 _tlsAlign;
 
     void init(void)
         {
         _out = new Data();
         _failed = false;
+        _tlsSize = (u32)0;
+        }
+
+    // The thread-local template of the executable sharedObject writes next:
+    // `size` bytes at data offset `off`, aligned to `align`. It gets a PT_TLS.
+    void setTls(u32 off, u32 size, u32 align)
+        {
+        _tlsOff = off;
+        _tlsSize = size;
+        _tlsAlign = align;
         }
 
     // The libraries the next object asks its link for, each as `-l` would
@@ -703,6 +718,8 @@ class ElfSharedInfo
         for (u32 i = (u32)0; i < fixups.count(); i = i + (u32)1)
             {
             X86Fixup* f = (X86Fixup*)fixups.get(i);
+            if (f.kind() == (u32)X86FIX_TPOFF32)
+                continue; // a constant (setTls), no symbol
             if (symbols.get((Hashable*)f.symbol()) != (Object*)0)
                 continue;
             bool isGot = f.kind() == (u32)X86FIX_GOTLOAD || f.kind() == (u32)X86FIX_GOTREF;
@@ -891,7 +908,7 @@ class ElfSharedInfo
 
         // The class tables' run (#34) adds one more.
         Array* vt = Elf64.vtblRun(symbols);
-        u32 nphdr = (isExec ? (u32)7 : (u32)5) + (vt != (Array*)0 ? (u32)1 : (u32)0);
+        u32 nphdr = (isExec ? (u32)7 : (u32)5) + (vt != (Array*)0 ? (u32)1 : (u32)0) + (_tlsSize > (u32)0 ? (u32)1 : (u32)0);
         u32 interpOff = roundUpTo((u32)EHDR_SZ + nphdr * (u32)PHDR_SZ, (u32)8);
         u32 interpSz = isExec ? (u32)28 : (u32)0; // "/lib64/ld-linux-x86-64.so.2" + NUL
         u32 roOff = roundUpTo(interpOff + interpSz, (u32)8);
@@ -931,6 +948,18 @@ class ElfSharedInfo
         for (u32 i = (u32)0; i < fixups.count(); i = i + (u32)1)
             {
             X86Fixup* f = (X86Fixup*)fixups.get(i);
+            // TPOFF32: the addend is already the %fs-relative offset.
+            if (f.kind() == (u32)X86FIX_TPOFF32)
+                {
+                if (f.offset() + (u32)4 > text.length())
+                    {
+                    failWith(String.withCString("tpoff fixup past the end of text"), f.symbol());
+                    return;
+                    }
+                for (u32 b = (u32)0; b < (u32)4; b = b + (u32)1)
+                    text.setByteAt(f.offset() + b, (u8)(((u32)f.addend() >> ((u32)8 * b)) & (u32)$FF));
+                continue;
+                }
             Object* off = symbols.get((Hashable*)f.symbol());
             bool isGot = f.kind() == (u32)X86FIX_GOTLOAD || f.kind() == (u32)X86FIX_GOTREF;
             u32 target;
@@ -1063,6 +1092,9 @@ class ElfSharedInfo
             u32 vhi = ((Number*)vt.get((u32)1)).asU32();
             phdr((u32)$60787476, (u32)PF_R, dataAddr + vlo, vhi - vlo, (u32)8);
             }
+        // The thread-local template (setTls), inside the RW segment.
+        if (_tlsSize > (u32)0)
+            phdr((u32)7, (u32)PF_R, dataAddr + _tlsOff, _tlsSize, _tlsAlign); // PT_TLS
 
         if (isExec)
             {

@@ -10,8 +10,10 @@
 #   bash tests/par/c-tls.sh
 set -u
 cd "$(dirname "$0")/../.." || exit 1
-if [ "$(uname -s)" != Darwin ]; then echo "--- c-tls: skipped (arm64 macOS only for now, #611) ---"; exit 0; fi
-XC=${XC:-bin/osx/xcc-xc}
+PLAT=$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )
+if [ $PLAT = linux ] && [ "$(uname -m)" != x86_64 ]; then echo "--- c-tls: skipped (not yet on arm64 Linux, #611) ---"; exit 0; fi
+XC=${XC:-bin/$PLAT/xcc-xc}
+PT=$( [ $PLAT = linux ] && echo -pthread )
 if ! clang++ --version >/dev/null 2>&1; then echo "--- c-tls: skipped (no clang) ---"; exit 0; fi
 W=$(mktemp -d); trap 'rm -rf "${W:?}"' EXIT
 fail=0
@@ -22,8 +24,8 @@ check() { # name, xcc's binary, clang's binary
 }
 C=tests/par/c-tls/threads.c
 CXX=tests/par/c-tls/threads.cpp
-clang -O2 -o "$W/ref.c" "$C" || { echo "FAIL c-tls: clang does not build threads.c"; exit 1; }
-clang++ -std=c++20 -O2 -o "$W/ref.cpp" "$CXX" || { echo "FAIL c-tls: clang++ does not build threads.cpp"; exit 1; }
+clang -O2 $PT -o "$W/ref.c" "$C" || { echo "FAIL c-tls: clang does not build threads.c"; exit 1; }
+clang++ -std=c++20 -O2 $PT -o "$W/ref.cpp" "$CXX" || { echo "FAIL c-tls: clang++ does not build threads.cpp"; exit 1; }
 if "$XC" -q -O2 -H . -o "$W/x.c" "$C" > "$W/b" 2>&1; then check threads.c "$W/x.c" "$W/ref.c"
 else echo "FAIL c-tls: threads.c does not build"; grep -v warning "$W/b" | head -3; fail=1; fi
 if "$XC" -q -O2 -H . -c -o "$W/t.o" "$C" > "$W/b" 2>&1 && "$XC" -q -o "$W/x.o" "$W/t.o" >> "$W/b" 2>&1; then check "threads.c (-c, then linked)" "$W/x.o" "$W/ref.c"

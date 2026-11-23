@@ -150,6 +150,7 @@ class MergedImage
     Data* _text;
     SectionBytes* _data;
     Data* _tls;
+    u32 _tlsAlignMax;  // the largest alignment any object's TLS asked for
     Map* _syms;        // name -> Number(offset into text, or into data)
     Array* _dataSyms;  // String@ — names whose offset is a DATA offset
     Array* _globals;   // String@ — names this image exports
@@ -181,6 +182,7 @@ class MergedImage
         _text = new Data();
         _data = new SectionBytes();
         _tls = new Data();
+        _tlsAlignMax = (u32)1;
         _syms = new Map();
         _dataSyms = new Array();
         _globals = new Array();
@@ -215,6 +217,15 @@ class MergedImage
     SectionBytes* data(void)
         {
         return _data;
+        }
+    u32 tlsAlignMax(void)
+        {
+        return _tlsAlignMax;
+        }
+    void noteTlsAlign(u32 a)
+        {
+        if (a > _tlsAlignMax)
+            _tlsAlignMax = a;
         }
     Data* tls(void)
         {
@@ -1848,6 +1859,7 @@ class MergedImage
         if (o.tls().length() > (u32)0)
             {
             u32 la = o.tlsAlign() < (u32)1 ? (u32)1 : o.tlsAlign();
+            im.noteTlsAlign(la);
             ElfMerge._padTo(im.tls(), la);
             lbase = im.tls().length();
             im.tls().append(o.tls());
@@ -2009,15 +2021,31 @@ class MergedImage
                 im.fail(String.withCString("bad relocation symbol index in ").appending(label));
                 return;
                 }
+            // 22 GOTTPOFF (initial-exec TLS): an executable holds every
+            // thread-local it reaches, so the load of the variable's offset
+            // from a GOT slot becomes that offset as an immediate (local-exec)
+            // as other linkers do it: `mov x@GOTTPOFF(%rip), %r` → `mov $x@TPOFF,
+            // %r`, and `add x@GOTTPOFF(%rip), %r` → `add $x@TPOFF, %r`.
+            if (rt == (u32)22)
+                {
+                u32 at = tbase + r.off();
+                if (r.off() < (u32)3 || !ElfMerge._relaxGotTpoff(im.text(), at))
+                    {
+                    im.fail(String.withCString("an initial-exec TLS access that is not a mov or add from its GOT slot in ").appending(label));
+                    return;
+                    }
+                im.fixups().add((Object*)X86Fixup.make(at, (u32)X86FIX_TPOFF32, ElfMerge.tagged(o, r.sym(), tag), (i32)0));
+                continue;
+                }
             //  2 PC32   4 PLT32   9 GOTPCREL (not relaxable — read as data)
             // 23 TPOFF32 (local-exec TLS)   41/42 [REX_]GOTPCRELX (relaxable)
             if (rt != (u32)2 && rt != (u32)4 && rt != (u32)9 && rt != (u32)23 && rt != (u32)41 && rt != (u32)42)
                 {
                 String* w = String.withCString("unhandled text relocation type in ");
                 w.append(label);
-                if (rt == (u32)19 || rt == (u32)20 || rt == (u32)22)
-                    w.appendCString(" (general/initial-exec TLS: build the library"
-                                    " with -ftls-model=local-exec)");
+                if (rt == (u32)19 || rt == (u32)20)
+                    w.appendCString(" (general-dynamic TLS: build the library"
+                                    " with -ftls-model=initial-exec)");
                 im.fail(w);
                 return;
                 }
@@ -2034,6 +2062,31 @@ class MergedImage
                                                    ElfMerge.tagged(o, r.sym(), tag),
                                                    (i32)r.addend()));
             }
+        }
+
+    // The GOTTPOFF instruction ending at `at` (its 4-byte displacement), as
+    // REX, opcode, ModRM before it: `mov`/`add` of a RIP-relative slot into
+    // a register become the same operation on an immediate. False when it is
+    // neither.
+    static bool _relaxGotTpoff(Data* text, u32 at)
+        {
+        u32 rex = (u32)text.byteAt(at - (u32)3);
+        u32 op = (u32)text.byteAt(at - (u32)2);
+        u32 modrm = (u32)text.byteAt(at - (u32)1);
+        if ((rex & (u32)$F0) != (u32)$40 || (modrm & (u32)$C7) != (u32)5)
+            return false;
+        u32 reg = (modrm >> (u32)3) & (u32)7;
+        u32 nrex = (rex & ~(u32)4) | ((rex & (u32)4) != (u32)0 ? (u32)1 : (u32)0); // REX.R → REX.B
+        if (op == (u32)$8B)
+            op = (u32)$C7;      // mov $imm32, r/m64
+        else if (op == (u32)$03)
+            op = (u32)$81;      // add $imm32, r/m64 (/0)
+        else
+            return false;
+        text.setByteAt(at - (u32)3, (u8)nrex);
+        text.setByteAt(at - (u32)2, (u8)op);
+        text.setByteAt(at - (u32)1, (u8)((u32)$C0 | reg));
+        return true;
         }
 
     static void _dataRelocs(MergedImage* im, ElfObject* o, String* label, u32 tag, u32 dbase)

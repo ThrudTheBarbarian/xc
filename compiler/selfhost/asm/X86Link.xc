@@ -301,7 +301,7 @@ class X86Link
                     return (Data*)0;
                     }
                 }
-            if (!applyStaticTls(im))
+            if (_glibc ? !applyDynamicTls(im, e) : !applyStaticTls(im))
                 return (Data*)0;
             // The heap's exports (setCAlloc): each a second name for its
             // function, in the dynamic symbol table.
@@ -698,6 +698,51 @@ class X86Link
             TlsAbsReloc* r = (TlsAbsReloc*)im.tlsAbs().get(i);
             fix.add((Object*)X86Fixup.make(ho + (u32)8 + r.off(), (u32)X86FIX_ABS64, r.sym(), (i32)r.addend()));
             }
+        return true;
+        }
+
+    // ── a glibc executable's TLS ────────────────────────────────────────
+    // The template goes at the end of the data, on its alignment, with a
+    // PT_TLS that tells ld.so to give every thread a copy: for the
+    // executable that block sits at [%fs - R, %fs), R = the template's size
+    // rounded up to its alignment (variant II, as for the static runtime,
+    // with no size cap). Each TPOFF32 becomes the constant tlsOff - R;
+    // a pointer inside the template is an ABS64 in the data like any other
+    // (ld.so relocates the template before it copies it).
+    bool applyDynamicTls(MergedImage* im, Elf64* e)
+        {
+        Array* fix = im.fixups();
+        u32 n = im.tls().length();
+        if (n == (u32)0)
+            return applyStaticTls(im); // nothing to place; its checks still hold
+        u32 al = im.tlsAlignMax() < (u32)16 ? (u32)16 : im.tlsAlignMax();
+        SectionBytes* d = im.data();
+        while ((d.length() & (al - (u32)1)) != (u32)0)
+            d.appendByte((u8)0);
+        u32 t0 = d.length();
+        for (u32 i = (u32)0; i < n; i = i + (u32)1)
+            d.appendByte(im.tls().byteAt(i));
+        u32 R = (n + al - (u32)1) & ~(al - (u32)1);
+        for (u32 i = (u32)0; i < fix.count(); i = i + (u32)1)
+            {
+            X86Fixup* f = (X86Fixup*)fix.get(i);
+            if (f.kind() != (u32)X86FIX_TPOFF32)
+                continue;
+            Object* lo = im.tlsSyms().get((Hashable*)f.symbol());
+            if (lo == (Object*)0)
+                {
+                fail(String.withCString("undefined TLS symbol '").appending(f.symbol()).appending(String.withCString("'")));
+                return false;
+                }
+            i32 a = (i32)((Number*)lo).asU32() - (i32)R + f.addend();
+            fix.set(i, (Object*)X86Fixup.make(f.offset(), (u32)X86FIX_TPOFF32, String.withCString(""), a));
+            }
+        for (u32 i = (u32)0; i < im.tlsAbs().count(); i = i + (u32)1)
+            {
+            TlsAbsReloc* r = (TlsAbsReloc*)im.tlsAbs().get(i);
+            fix.add((Object*)X86Fixup.make(t0 + r.off(), (u32)X86FIX_ABS64, r.sym(), (i32)r.addend()));
+            }
+        e.setTls(t0, n, al);
         return true;
         }
 
