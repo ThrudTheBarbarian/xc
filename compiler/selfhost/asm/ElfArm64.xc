@@ -35,6 +35,20 @@
 #import "ElfArm64Defs.xc"
 #import "ElfLinkArm64Defs.xc"
 
+// A linked executable's thread-local template, from the link
+// (ElfLinkArm64.placeTls) to the writer: [data offset, size, alignment], or
+// 0 for none. The writer takes it, and clears it, in `image`.
+class ElfTlsPending
+    {
+    static Array* _pending;
+
+    void init(void)
+        {
+        }
+    static Array* pending(void) { return _pending; }
+    static void setPending(Array* a) { _pending = a; }
+    }
+
 class ElfArm64
     {
     Data* _out;
@@ -760,6 +774,8 @@ class ElfArm64
         NameSet* dataSet = NameSet.of(dataSyms);
         bool isExec = entry != (String*)0 && entry.byteLength() > (u32)0;
         bool hasIface = iface != (Array*)0 && iface.count() > (u32)0;
+        Array* tlsP = ElfTlsPending.pending();
+        ElfTlsPending.setPending((Array*)0);
         if (isExec && (symbols.get((Hashable*)entry) == (Object*)0 || dataSet.has(entry)))
             {
             failWith(String.withCString("entry symbol is not defined in .text:"), entry);
@@ -903,7 +919,7 @@ class ElfArm64
         u32 nRela = absFixups.count() + imports.count();
 
         Array* vt = ElfArm64.vtblRun(symbols);
-        u32 nphdr = (isExec ? (u32)7 : (u32)5) + (vt != (Array*)0 ? (u32)1 : (u32)0);
+        u32 nphdr = (isExec ? (u32)7 : (u32)5) + (vt != (Array*)0 ? (u32)1 : (u32)0) + (tlsP != (Array*)0 ? (u32)1 : (u32)0);
         u32 interpOff = roundUpTo((u32)AEHDR_SZ + nphdr * (u32)APHDR_SZ, (u32)8);
         u32 interpSz = isExec ? _interp.byteLength() + (u32)1 : (u32)0; // the path + NUL
         u32 roOff = roundUpTo(interpOff + interpSz, (u32)8);
@@ -1099,6 +1115,10 @@ class ElfArm64
             u32 vhi = ((Number*)vt.get((u32)1)).asU32();
             phdr((u32)$60787476, (u32)4, dataAddr + vlo, vhi - vlo, (u32)8);
             }
+        // The thread-local template (ElfTlsPending), inside the RW segment.
+        if (tlsP != (Array*)0)
+            phdr((u32)7, (u32)4, dataAddr + ((Number*)tlsP.get((u32)0)).asU32(),
+                 ((Number*)tlsP.get((u32)1)).asU32(), ((Number*)tlsP.get((u32)2)).asU32()); // PT_TLS
 
         if (isExec)
             {

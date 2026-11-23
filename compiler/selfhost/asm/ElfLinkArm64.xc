@@ -51,10 +51,28 @@ class ElfLinkArm64
     // as MachOLink hands over the __mod_init_func of Mach-O objects.
     SectionBytes* _objModInit;
     Array* _objModInitFix;
+    // Thread-local storage: the objects' templates one after another, each
+    // on its alignment; each thread-local's offset there; the text
+    // relocations against them (ElfReloc@ with merged offsets, resolved once
+    // the template is placed); and the pointers inside the template.
+    SectionBytes* _tls;
+    u32 _tlsAlign;
+    Map* _tlsSyms;
+    Array* _tlsRefs;
+    Array* _tlsRefSyms;
+    Array* _tlsAbs;
+    Array* _tlsAbsSyms;
 
     void init(void)
         {
         _rc = (u32)0;
+        _tls = new SectionBytes();
+        _tlsAlign = (u32)16;
+        _tlsSyms = new Map();
+        _tlsRefs = new Array();
+        _tlsRefSyms = new Array();
+        _tlsAbs = new Array();
+        _tlsAbsSyms = new Array();
         _gotFixups = new Array();
         _objModInit = new SectionBytes();
         _objModInitFix = new Array();
@@ -229,6 +247,12 @@ class ElfLinkArm64
                     continue;
                 needed.set((Hashable*)f.symbol(), (Object*)Number.withU32((u32)1));
                 }
+            for (u32 i = (u32)0; i < _tlsRefSyms.count(); i = i + (u32)1)
+                {
+                String* s = (String*)_tlsRefSyms.get(i);
+                if (_tlsSyms.get((Hashable*)s) == (Object*)0)
+                    needed.set((Hashable*)s, (Object*)Number.withU32((u32)1));
+                }
             if (needed.count() == (u32)0 && forced.count() == (u32)0)
                 break;
             progress = false;
@@ -247,10 +271,16 @@ class ElfLinkArm64
                 forced.remove((Hashable*)key);
                 pulled.set((Hashable*)key, (Object*)Number.withU32((u32)1));
                 String* label = (String*)labels.get(oi);
-                if (obj.tls().length() > (u32)0 || obj.tlsRelocs().count() > (u32)0)
+                // Its thread-local template after the others', on its alignment.
+                u32 lbase = (u32)0;
+                if (obj.tls().length() > (u32)0)
                     {
-                    fail(String.withCString("thread-local storage in ").appending(label).appending(String.withCString(" (an android link takes none)")));
-                    return;
+                    u32 la = obj.tlsAlign() < (u32)1 ? (u32)1 : obj.tlsAlign();
+                    if (la > _tlsAlign)
+                        _tlsAlign = la;
+                    ElfLinkArm64.padArray(_tls, la - (u32)1);
+                    lbase = _tls.length();
+                    ElfLinkArm64.appendData(_tls, obj.tls());
                     }
                 // The blobs: text 16-aligned, data at the largest alignment
                 // any of its sections asked for.
@@ -300,6 +330,15 @@ class ElfLinkArm64
                             }
                         // strong over weak: fall through and replace
                         }
+                    if (sd.where() == (u32)3)
+                        {
+                        // A thread-local: its offset in the template.
+                        if (!have || _tlsSyms.get((Hashable*)nm) == (Object*)0)
+                            _tlsSyms.set((Hashable*)nm, (Object*)Number.withU32(lbase + sd.off()));
+                        if (sd.ext() && !sd.weak())
+                            strongDefs.set((Hashable*)nm, (Object*)Number.withU32((u32)1));
+                        continue;
+                        }
                     if (sd.where() == (u32)5)
                         {
                         // COMMON: one zeroed slot per name, where the first
@@ -337,6 +376,15 @@ class ElfLinkArm64
                         fail(String.withCString("a relocation names no symbol in ").appending(label));
                         return;
                         }
+                    if (ElfLinkArm64.isTlsReloc(r.type()))
+                        {
+                        ElfSymDef* td = (ElfSymDef*)sdefs.get(r.sym());
+                        ElfReloc* mr = new ElfReloc();
+                        mr.set(base + r.off(), r.sym(), r.type(), r.addend());
+                        _tlsRefs.add((Object*)mr);
+                        _tlsRefSyms.add((Object*)ElfLinkArm64.taggedSym(td, oi, r.sym()));
+                        continue;
+                        }
                     u32 kind = ElfLinkArm64.kindOf(r.type());
                     if (kind == (u32)$FFFFFFFF)
                         {
@@ -355,6 +403,21 @@ class ElfLinkArm64
                     mfix.add((Object*)f);
                     if (kind == (u32)FIXUP_GOTPAGE21 || kind == (u32)FIXUP_GOTPAGEOFF12)
                         _gotFixups.add((Object*)f);
+                    }
+                // Pointers inside the thread-local template.
+                Array* tl = obj.tlsRelocs();
+                for (u32 k = (u32)0; k < tl.count(); k = k + (u32)1)
+                    {
+                    ElfReloc* r = (ElfReloc*)tl.get(k);
+                    if (r.type() != (u32)RA64_ABS64 || r.sym() >= sdefs.count())
+                        {
+                        fail(String.withCString("a thread-local initialiser that is not a pointer in ").appending(label));
+                        return;
+                        }
+                    ElfReloc* mr = new ElfReloc();
+                    mr.set(lbase + r.off(), r.sym(), r.type(), r.addend());
+                    _tlsAbs.add((Object*)mr);
+                    _tlsAbsSyms.add((Object*)ElfLinkArm64.taggedSym((ElfSymDef*)sdefs.get(r.sym()), oi, r.sym()));
                     }
                 // Data relocations: a pointer word, or an .eh_frame entry
                 // left alone.
@@ -501,5 +564,97 @@ class ElfLinkArm64
             mtext.setByteAt(o + (u32)2, (u8)((add >> (u32)16) & (u32)$FF));
             mtext.setByteAt(o + (u32)3, (u8)((add >> (u32)24) & (u32)$FF));
             }
+        placeTls(mtext, mdata, mfix);
+        }
+
+    static bool isTlsReloc(u32 type)
+        {
+        return type == (u32)RA64_TLSIE_ADR_GOTTPREL_PAGE21 || type == (u32)RA64_TLSIE_LD64_GOTTPREL_LO12_NC
+               || (type >= (u32)RA64_TLSLE_MOVW_TPREL_G2 && type <= (u32)RA64_TLSLE_LDST128_TPREL_LO12_NC);
+        }
+
+    static u32 rdw(SectionBytes* t, u32 o)
+        {
+        return (u32)t.byteAt(o) | ((u32)t.byteAt(o + (u32)1) << (u32)8) | ((u32)t.byteAt(o + (u32)2) << (u32)16) | ((u32)t.byteAt(o + (u32)3) << (u32)24);
+        }
+    static void wrw(SectionBytes* t, u32 o, u32 w)
+        {
+        t.setByteAt(o, (u8)(w & (u32)$FF));
+        t.setByteAt(o + (u32)1, (u8)((w >> (u32)8) & (u32)$FF));
+        t.setByteAt(o + (u32)2, (u8)((w >> (u32)16) & (u32)$FF));
+        t.setByteAt(o + (u32)3, (u8)((w >> (u32)24) & (u32)$FF));
+        }
+
+    // The thread-local template at the end of the data, on its alignment,
+    // with a PT_TLS (ElfTlsPending) the loader copies for each thread. The
+    // executable's block sits at tp + 16 rounded up to that alignment
+    // (variant I: the thread pointer addresses a 16-byte control block), so a
+    // thread-local's tp-relative offset is a constant, written straight into
+    // its instructions: local-exec as they ask, and initial-exec relaxed to
+    // local-exec as other linkers do (`adrp x, :gottprel:v` / `ldr x, [x,
+    // :gottprel_lo12:v]` become `movz x, #hi, lsl 16` / `movk x, #lo`).
+    void placeTls(SectionBytes* mtext, SectionBytes* mdata, Array* mfix)
+        {
+        ElfTlsPending.setPending((Array*)0);
+        if (_tls.length() == (u32)0 && _tlsRefs.count() == (u32)0)
+            return;
+        ElfLinkArm64.padArray(mdata, _tlsAlign - (u32)1);
+        u32 t0 = mdata.length();
+        ElfLinkArm64.appendData(mdata, _tls.toData());
+        u32 tcb = ((u32)16 + _tlsAlign - (u32)1) & ~(_tlsAlign - (u32)1);
+        for (u32 i = (u32)0; i < _tlsRefs.count(); i = i + (u32)1)
+            {
+            ElfReloc* r = (ElfReloc*)_tlsRefs.get(i);
+            String* s = (String*)_tlsRefSyms.get(i);
+            Object* lo = _tlsSyms.get((Hashable*)s);
+            if (lo == (Object*)0)
+                {
+                fail(String.withCString("thread-local '").appending(s).appending(String.withCString("' is not defined in this image")));
+                return;
+                }
+            u32 v = tcb + ((Number*)lo).asU32() + (u32)r.addend();
+            u32 o = r.off();
+            u32 w = ElfLinkArm64.rdw(mtext, o);
+            u32 ty = r.type();
+            if (ty == (u32)RA64_TLSIE_ADR_GOTTPREL_PAGE21)
+                w = (u32)$D2A00000 | (((v >> (u32)16) & (u32)$FFFF) << (u32)5) | (w & (u32)$1F);
+            else if (ty == (u32)RA64_TLSIE_LD64_GOTTPREL_LO12_NC)
+                w = (u32)$F2800000 | ((v & (u32)$FFFF) << (u32)5) | (w & (u32)$1F);
+            else if (ty >= (u32)RA64_TLSLE_MOVW_TPREL_G2 && ty <= (u32)RA64_TLSLE_MOVW_TPREL_G0_NC)
+                {
+                u32 g = ty == (u32)RA64_TLSLE_MOVW_TPREL_G2 ? (u32)2 : (ty <= (u32)RA64_TLSLE_MOVW_TPREL_G1_NC ? (u32)1 : (u32)0);
+                u32 imm = g == (u32)2 ? (u32)0 : ((v >> ((u32)16 * g)) & (u32)$FFFF);
+                w = (w & ~((u32)$FFFF << (u32)5)) | (imm << (u32)5);
+                }
+            else if (ty == (u32)RA64_TLSLE_ADD_TPREL_HI12)
+                w = (w & ~((u32)$FFF << (u32)10)) | (((v >> (u32)12) & (u32)$FFF) << (u32)10);
+            else if (ty == (u32)RA64_TLSLE_ADD_TPREL_LO12 || ty == (u32)RA64_TLSLE_ADD_TPREL_LO12_NC)
+                w = (w & ~((u32)$FFF << (u32)10)) | ((v & (u32)$FFF) << (u32)10);
+            else
+                {
+                // LDST8..LDST64 (552..559) and LDST128 (570, 571): the low
+                // 12 bits scaled by the access size.
+                u32 sc = ty >= (u32)570 ? (u32)4 : (ty - (u32)RA64_TLSLE_LDST8_TPREL_LO12) / (u32)2;
+                if (ty > (u32)559 && ty < (u32)570)
+                    {
+                    fail(String.withCString("unhandled aarch64 thread-local relocation ").appending(Number.withU32(ty).description()));
+                    return;
+                    }
+                w = (w & ~((u32)$FFF << (u32)10)) | (((v & (u32)$FFF) >> sc) << (u32)10);
+                }
+            ElfLinkArm64.wrw(mtext, o, w);
+            }
+        for (u32 i = (u32)0; i < _tlsAbs.count(); i = i + (u32)1)
+            {
+            ElfReloc* r = (ElfReloc*)_tlsAbs.get(i);
+            Arm64Fixup* f = Arm64Fixup.make(t0 + r.off(), (u32)FIXUP_POINTER64, (String*)_tlsAbsSyms.get(i), (u32)0);
+            f.setAddend((i32)r.addend());
+            mfix.add((Object*)f);
+            }
+        Array* p = new Array();
+        p.add((Object*)Number.withU32(t0));
+        p.add((Object*)Number.withU32(_tls.length()));
+        p.add((Object*)Number.withU32(_tlsAlign));
+        ElfTlsPending.setPending(p);
         }
     }

@@ -11,7 +11,6 @@
 set -u
 cd "$(dirname "$0")/../.." || exit 1
 PLAT=$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )
-if [ $PLAT = linux ] && [ "$(uname -m)" != x86_64 ]; then echo "--- c-tls: skipped (not yet on arm64 Linux, #611) ---"; exit 0; fi
 XC=${XC:-bin/$PLAT/xcc-xc}
 PT=$( [ $PLAT = linux ] && echo -pthread )
 if ! clang++ --version >/dev/null 2>&1; then echo "--- c-tls: skipped (no clang) ---"; exit 0; fi
