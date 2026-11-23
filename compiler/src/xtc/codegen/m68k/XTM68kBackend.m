@@ -31,6 +31,7 @@
 static int gLabelSeq;   // unique local-label counter (reset per module)
 static BOOL gHardFloat; // 68881 FPU codegen vs soft-float (set per module)
 static BOOL gPic;       // -mpic: GOT/a5 model for base-68000 >32KB programs
+static NSUInteger gStackReserve; // -ss: the stack _start reserves, bytes (0 = 64 KB)
 
 // Register homing (set per function). A homed value lives in a data register
 // and is single-written there (its frame slot is NOT mirrored — the direct-slot
@@ -67,6 +68,11 @@ static NSArray<NSString*>* gPtrARegSaves = nil;               // used a2-a4 (cal
 static NSDictionary<NSString*, NSNumber*>* gPtrARegSaveOff = nil;
 
 @implementation XTM68kBackend
+
++ (void)setStackReserve:(NSUInteger)bytes
+    {
+    gStackReserve = bytes;
+    }
 
 + (NSString*)assemblyFromModule:(XTIRModule*)mod
     {
@@ -149,7 +155,10 @@ static NSString* m68kSym(NSString* name)
         [out appendString:@"\tmove.l\t12(a0),d0\n"];                              // p_tlen
         [out appendString:@"\tadd.l\t20(a0),d0\n"];                               // + p_dlen
         [out appendString:@"\tadd.l\t28(a0),d0\n"];                               // + p_blen
-        [out appendString:@"\tadd.l\t#$10100,d0\n"];                              // + basepage(256) + 64K stack (#596)
+        // + basepage (256) + the stack: 64 KB unless -ss sets it, rounded up to
+        // a long word so sp stays aligned (#596).
+        NSUInteger reserve = gStackReserve ? (gStackReserve + 3) & ~(NSUInteger)3 : 0x10000;
+        [out appendFormat:@"\tadd.l\t#$%lX,d0\n", (unsigned long)(reserve + 0x100)];
         [out appendString:@"\tmove.l\ta0,d1\n\tadd.l\td0,d1\n\tmove.l\td1,sp\n"]; // SP = top of kept region
         [out appendString:@"\tmove.l\td0,-(sp)\n\tmove.l\ta0,-(sp)\n\tclr.w\t-(sp)\n"
                           @"\tmove.w\t#$4a,-(sp)\n\ttrap\t#1\n\tlea\t12(sp),sp\n"]; // Mshrink(0,bp,keep)

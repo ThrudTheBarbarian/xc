@@ -39,6 +39,7 @@ class M68k
     u32 _cpu;        // 68000 or 68030
     bool _hardFloat; // 68881 FPU codegen rather than soft-float
     bool _pic;       // -mpic: the GOT/a5 model for >32KB 68000
+    u32 _stackReserve; // -ss: the stack _start keeps, in bytes (0 = 64 KB)
     u32 _labelSeq;   // unique local labels, reset per MODULE
     bool _failed;
     String* _why;
@@ -52,6 +53,7 @@ class M68k
         _cpu = (u32)68000;
         _hardFloat = false;
         _pic = false;
+        _stackReserve = (u32)0;
         _labelSeq = (u32)0;
         }
 
@@ -66,6 +68,10 @@ class M68k
     void setPic(bool v)
         {
         _pic = v;
+        }
+    void setStackReserve(u32 n)
+        {
+        _stackReserve = n;
         }
 
     bool failed(void)
@@ -271,7 +277,10 @@ class M68k
         _out.appendCString("\tmove.l\t12(a0),d0\n"); // p_tlen
         _out.appendCString("\tadd.l\t20(a0),d0\n");  // + p_dlen
         _out.appendCString("\tadd.l\t28(a0),d0\n");  // + p_blen
-        _out.appendCString("\tadd.l\t#$10100,d0\n");  // + basepage + 64K stack (#596)
+        // + basepage (256) + the stack: 64 KB unless -ss sets it, rounded up
+        // to a long word so sp stays aligned (#596).
+        u32 reserve = _stackReserve == (u32)0 ? (u32)$10000 : (_stackReserve + (u32)3) & ~(u32)3;
+        _out.appendFormat("\tadd.l\t#$%X,d0\n", reserve + (u32)$100);
         _out.appendCString("\tmove.l\ta0,d1\n\tadd.l\td0,d1\n\tmove.l\td1,sp\n");
         _out.appendCString("\tmove.l\td0,-(sp)\n\tmove.l\ta0,-(sp)\n\tclr.w\t-(sp)\n");
         _out.appendCString("\tmove.w\t#$4a,-(sp)\n\ttrap\t#1\n\tlea\t12(sp),sp\n");

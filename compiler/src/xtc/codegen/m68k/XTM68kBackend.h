@@ -40,6 +40,9 @@ NS_ASSUME_NONNULL_BEGIN
 /// Convenience: 68000.
 + (NSString*)assemblyFromModule:(XTIRModule*)mod;
 
+/// The stack `_start` reserves, in bytes (-ss); 0 keeps the 64 KB default.
++ (void)setStackReserve:(NSUInteger)bytes;
+
 @end
 
 NS_ASSUME_NONNULL_END
