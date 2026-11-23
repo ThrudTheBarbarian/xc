@@ -1655,27 +1655,21 @@ static NSString* sExecutablePath = nil;
     // anyway would produce a link failure at best and a checked build that
     // checks nothing at worst — and a flag that quietly does nothing is what
     // made "verified with ARC off" mean nothing during bug 025.
+    // macOS and iOS link the row's checked runtime (rt-checked's reporter);
+    // every other arm64, x86-64 and win64 row, and the Atari ST, takes the
+    // checks from Checked.xc, which the front end imports (on the ST the
+    // prologues check the stack too, #596). arm9, wasm32 and the 6502 have
+    // neither, and are refused, in the port's words. (=light needs no checked
+    // runtime.)
     if (opts.boundsReport)
         {
-        BOOL nativeTarget = opts.useArm64Backend || opts.useArm9Backend || opts.useX86_64Backend || opts.useWin64Backend;
-        if (!nativeTarget)
+        NSString *ccg = opts.effectiveTarget.codegen ?: @"";
+        if (![ccg isEqualToString:@"arm64"] && ![ccg isEqualToString:@"x86_64"] && ![ccg isEqualToString:@"win64"]
+            && ![ccg isEqualToString:@"68k"])
             {
             fprintf(stderr,
-                    "xcc: error: -fbounds-check is native-only (arm64, arm9, x86_64,\n"
-                    "  win64). The checked runtime needs a symbol table to name frames,\n"
-                    "  a frame chain to walk and somewhere to print a trace — the 6502\n"
-                    "  has none of those. See private:docs/Design/memory-safety.md.\n");
-            return nil;
-            }
-        // macOS and iOS link the row's checked runtime (rt-checked's reporter);
-        // every other arm64, x86-64 and win64 row takes the checks from
-        // Checked.xc, which the front end imports. arm9 has neither.
-        NSString *ccg = opts.effectiveTarget.codegen;
-        if (![ccg isEqualToString:@"arm64"] && ![ccg isEqualToString:@"x86_64"] && ![ccg isEqualToString:@"win64"])
-            {
-            fprintf(stderr,
-                    "xcc: error: -fbounds-check is implemented for arm64, x86_64 and\n"
-                    "  win64 so far.\n");
+                    "xcc: error: -fbounds-check is implemented for arm64, x86_64, win64 and m68k so far; "
+                    "'%s' has no checked runtime\n", ccg.UTF8String);
             return nil;
             }
         }
