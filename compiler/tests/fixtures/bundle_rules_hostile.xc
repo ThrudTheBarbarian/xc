@@ -1,3 +1,4 @@
+//xtc-na: m68k — its 1.2 MB manifest case needs more than the Atari ST's 4 MB (it passes in 14 MB, a TT)
 // bundle_rules_hostile.xc — BundleRules (bundles-and-plugins.md §4 steps 1-2,
 // reviews 3, 5, 16, 17) against hostile input: paths with dot segments,
 // absolute and drive-letter paths, backslashes, NUL and non-ASCII; names with
