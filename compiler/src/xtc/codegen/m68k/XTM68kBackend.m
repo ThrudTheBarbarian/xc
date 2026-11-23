@@ -801,7 +801,7 @@ static NSString* m68kSym(NSString* name)
     // the release-to-zero path can dispatch it.
     // Primitive element sizes (m68k): primitive `_xtc_new_<T>(count)` take
     // only count; class `_xtc_new_<Class>(count, size)` take both.
-    NSDictionary* primSize = @{@"u8" : @1, @"i8" : @1, @"bool" : @1, @"u16" : @2, @"i16" : @2, @"u32" : @4, @"i32" : @4, @"pointer" : @4, @"string" : @4, @"float" : @4, @"double" : @8};
+    NSDictionary* primSize = @{@"u8" : @1, @"i8" : @1, @"bool" : @1, @"u16" : @2, @"i16" : @2, @"u32" : @4, @"i32" : @4, @"pointer" : @4, @"string" : @4, @"float" : @4, @"double" : @8, @"i64" : @8, @"u64" : @8};
     NSSet* defNames = defined;
     (void)defNames;
     // B1: a CLASS `new T` lowers to the generic `_xtc_alloc(count, stride,
