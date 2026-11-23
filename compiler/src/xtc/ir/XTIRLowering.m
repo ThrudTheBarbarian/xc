@@ -14955,6 +14955,15 @@ typedef NS_ENUM(NSInteger, XTStructARCMode) {
                                   result:elemPtrIR
                                 operands:@[ [XTIROperand useWithValueId:base.valueId] ]];
             }
+        // A long zero tail of fixed-width scalars is one MemSet of its bytes
+        // (#617): a store apiece made `u8 pad[4200]` 4,205 instructions. A
+        // pointer's width is the target's, not the IR's, so its elements keep
+        // their stores, as short tails do.
+        uint32_t zw = XTIRTypeKindByteWidth(elemIR.kind);
+        NSUInteger listed = MIN(entries.count, count);
+        BOOL zeroRun = zw != 0 && count - listed >= 16;
+        if (zeroRun)
+            count = listed;
         for (NSUInteger i = 0; i < count; i++)
             {
             XTIRValue* idx = [self allocateValueOfType:[XTIRType u16Type] atSite:self.currentBlock];
@@ -14985,6 +14994,17 @@ typedef NS_ENUM(NSInteger, XTStructARCMode) {
                 v = [self coerceValue:v fromType:entry.resolvedType toType:elemAST location:loc];
                 [self emitStore:elemAddr value:v];
                 }
+            else if (elemAST.kind == XTTypeKindStruct || elemAST.kind == XTTypeKindArray)
+                {
+                // An aggregate element is zeroed field by field, as an omitted
+                // struct member is: a scalar Const of an Agg type wrote nothing
+                // at -O0, so `Inner in[2]` kept the stack's bytes (#617).
+                if (![self lowerAggregateByteListInitAt:elemAddr
+                                               declType:elemAST
+                                                   list:[[XTBlockNode alloc] initWithStatements:@[] location:loc]
+                                               location:loc])
+                    return NO;
+                }
             else
                 {
                 XTIRValue* v = [self allocateValueOfType:elemIR atSite:self.currentBlock];
@@ -14995,6 +15015,30 @@ typedef NS_ENUM(NSInteger, XTStructARCMode) {
                 [self.currentBlock appendInstruction:cz];
                 [self emitStore:elemAddr value:v];
                 }
+            }
+        if (zeroRun)
+            {
+            NSUInteger total = at.elementCount ?: entries.count;
+            XTIRValue* idx = [self allocateValueOfType:[XTIRType u16Type] atSite:self.currentBlock];
+            [self.currentBlock appendInstruction:[[XTIRInsn alloc] initWithOpcode:XTIROpConst
+                                                                           result:idx
+                                                                         operands:@[ [XTIROperand immIWithType:[XTIRType u16Type] value:(int64_t)listed] ]
+                                                                           dbgLoc:nil]];
+            XTIRValue* zaddr = [self emitInsnOpcode:XTIROpElementAddr
+                                             result:elemPtrIR
+                                           operands:@[ [XTIROperand useWithValueId:eBase.valueId],
+                                                       [XTIROperand useWithValueId:idx.valueId] ]];
+            XTIRValue* newMem = [self allocateValueOfType:[XTIRType memoryType] atSite:self.currentBlock];
+            XTIRInsn* ms = [[XTIRInsn alloc] initWithOpcode:XTIROpMemSet
+                                                     result:nil
+                                                   operands:@[ [XTIROperand useWithValueId:zaddr.valueId],
+                                                               [XTIROperand immIWithType:[XTIRType u8Type] value:0],
+                                                               [XTIROperand immIWithType:[XTIRType u32Type] value:(int64_t)((total - listed) * zw)],
+                                                               [XTIROperand useWithValueId:self.memToken.valueId] ]
+                                                     dbgLoc:nil];
+            ms.memoryResult = newMem;
+            [self.currentBlock appendInstruction:ms];
+            self.memToken = newMem;
             }
         return YES;
         }
