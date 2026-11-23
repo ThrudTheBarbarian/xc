@@ -1475,6 +1475,7 @@ class IRType
     String* _simdBaseName;
     bool _simdDispatch;
     bool _noInline;    // never inlined (C's noinline), printed `inline: never`
+    bool _sretParam;   // the first parameter is the hidden result pointer (C's sret), printed `abi: sret`
     // A par block's kernel (PARK_BLOCK: the run of the class the parser made
     // of a block; PARK_OUTLINED: the run the IR outliner made of a loop), set
     // where it is made and printed as `par: kernel` / `par: outlined`. The
@@ -1501,6 +1502,7 @@ class IRType
         _simdBaseName = (String*)0;
         _simdDispatch = false;
         _noInline = false;
+        _sretParam = false;
         _parKernel = (u8)PARK_NONE;
         _ret = String.withCString("Void");
         _pinnedSize = (u32)0;
@@ -1518,6 +1520,8 @@ class IRType
     void setParKernel(u8 k)            { _parKernel = k; }
     bool noInline(void)                { return _noInline; }
     void setNoInline(bool b)           { _noInline = b; }
+    bool sretParam(void)               { return _sretParam; }
+    void setSretParam(bool b)          { _sretParam = b; }
     bool hasDbg(void)                  { return _dbg; }
     u32 dbgFile(void)                  { return _dbgFile; }
     u32 dbgLine(void)                  { return _dbgLine; }
@@ -1982,6 +1986,10 @@ class IRType
         // (C's noinline, from the C/C++ reader).
         if (_noInline)
             out.appendCString("    inline: never\n");
+        // `abi: sret`, after `inline:`: the first parameter arrives where the
+        // target's C ABI puts a hidden result pointer (x8 on arm64).
+        if (_sretParam)
+            out.appendCString("    abi: sret\n");
 
         Map* preds = predsAll();
         for (u32 b = (u32)0; b < _blocks.count(); b = b + (u32)1)

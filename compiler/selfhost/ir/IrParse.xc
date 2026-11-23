@@ -751,6 +751,7 @@ class IrParser
         speedLine();
         parLine();
         inlineLine();
+        abiLine();
         collectDefs(_li, end);
         while (!_failed && _li < end)
             blockOrInsn();
@@ -864,6 +865,21 @@ class IrParser
             _fn.setParKernel((u8)PARK_BLOCK);
         else if (expectWord("outlined"))
             _fn.setParKernel((u8)PARK_OUTLINED);
+        nextLine();
+        }
+
+    // `abi: sret` — the first parameter is the hidden result pointer.
+    void abiLine(void)
+        {
+        u32 save = _ci;
+        if (!expectWord("abi"))
+            {
+            _ci = save;
+            return;
+            }
+        expectChar((u8)':');
+        if (expectWord("sret"))
+            _fn.setSretParam(true);
         nextLine();
         }
 

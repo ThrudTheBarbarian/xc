@@ -37,6 +37,8 @@ class LlvmReader
     Map* _negOf;            // a value read from `fneg x` -> x
     Map* _retTy;            // "@name" -> the function's IR return type
     bool _sawZext;          // the last skipAttrs() passed a `zeroext`
+    bool _sawSret;          // ... or an `sret(T)`: the hidden result pointer
+    IRValue* _sretParam;    // the function's sret parameter, which it returns
     Array* _zxParams;       // a function's zeroext parameters: name, value
     Map* _aggParams;        // a function's [N x iK] parameters: name -> Array of its N values
     bool _readHandlers;     // read invoke / landingpad / resume (a target whose back end writes their tables)
@@ -667,6 +669,7 @@ class LlvmReader
     void skipAttrs(void)
         {
         _sawZext = false;
+        _sawSret = false;
         bool again = true;
         while (again)
             {
@@ -685,6 +688,15 @@ class LlvmReader
                 {
                 if (w.equals(String.withCString("zeroext")))
                     _sawZext = true;
+                again = true;
+                }
+            else if (w.equals(String.withCString("sret")))
+                {
+                // `sret(%T)`: the pointer a large result is written through.
+                _sawSret = true;
+                ws();
+                if (peek() == (u8)'(')
+                    skipParens();
                 again = true;
                 }
             else if (w.equals(String.withCString("align")) || w.equals(String.withCString("dereferenceable"))
@@ -1270,6 +1282,7 @@ class LlvmReader
         Array* ptys = new Array();
         Array* llps = new Array();      // the LLVM parameter types, for a `declare`
         bool variadic = false;
+        bool sret0 = false;             // the first parameter is `sret`
         if (eat("("))
             {
             while (more() && peek() != (u8)')')
@@ -1283,6 +1296,8 @@ class LlvmReader
                 if (pt == (String*)0)
                     return;
                 skipAttrs();
+                if (_sawSret && ptys.count() == (u32)0)
+                    sret0 = true;
                 // A zeroext narrow parameter is the unsigned type (eatZeroExt).
                 ptys.add((Object*)(_sawZext ? unsignedOf(irOf(pt)) : irOf(pt)));
                 llps.add((Object*)(_sawZext ? String.withFormat("%s zeroext", pt.cString()) : pt));
@@ -1304,6 +1319,13 @@ class LlvmReader
                 dl.appendCString(llps.count() > (u32)0 ? ", ..." : "...");
             dl.appendCString(")");
             _declOf.set((Hashable*)name, (Object*)dl);
+            }
+        // A function xcc defines with a hidden result pointer returns it
+        // (readFunction), as its symbol says.
+        if (!decl && sret0 && irRet.equals(String.withCString("Void")) && ptys.count() > (u32)0)
+            {
+            irRet = (String*)ptys.get((u32)0);
+            _retTy.set((Hashable*)name, (Object*)irRet);
             }
         String* sig = String.withCString("(");
         for (u32 i = (u32)0; i < ptys.count(); i = i + (u32)1)
@@ -1431,6 +1453,7 @@ class LlvmReader
         _fnWhy = (String*)0;
         _zxParams = new Array();
         _aggParams = new Map();
+        _sretParam = (IRValue*)0;
         _pendingInvoke = (IRInsn*)0;
         _invokeAfter = new Array();
         _lastPad = (IRInsn*)0;
@@ -1475,6 +1498,20 @@ class LlvmReader
                     return;
                     }
                 skipAttrs();
+                // The hidden result pointer (a C++ std::string returned, a
+                // large struct): the first parameter, arriving where the
+                // ABI puts it (x8 on arm64), and returned (rax on x86-64,
+                // as both its ABIs ask). Anywhere else (the MSVC C++ ABI's
+                // `this` first) the function is clang's.
+                bool sretHere = _sawSret;
+                if (sretHere && nParams != (u32)0)
+                    {
+                    fail("an sret parameter after the first");
+                    noteUnread(name);
+                    if (_split)
+                        _bad = false;
+                    return;
+                    }
                 String* pn = word();
                 String* ut = _sawZext ? unsignedOf(irOf(pt)) : irOf(pt);
                 if (!ut.hasPrefix(String.withCString("F")))
@@ -1482,6 +1519,13 @@ class LlvmReader
                 IRValue* v = new IRValue(ut);
                 _fn.addParam(v);
                 _vals.set((Hashable*)pn, (Object*)v);
+                if (sretHere)
+                    {
+                    _sretParam = v;
+                    _fn.setSretParam(true);
+                    if (_fn.ret().equals(String.withCString("Void")))
+                        _fn.setRet(ut);
+                    }
                 if (!ut.equals(irOf(pt)))
                     {
                     // Narrowed to the signed type before the first instruction.
@@ -2188,7 +2232,12 @@ class LlvmReader
         if (op.equals(String.withCString("ret")))
             {
             IRInsn* r = IRInsn.with(String.withCString("Return"));
-            if (!eat("void"))
+            if (eat("void"))
+                {
+                if (_sretParam != (IRValue*)0)
+                    r.add(IROperand.useVal(_sretParam));
+                }
+            else
                 {
                 IRValue* v = typedOperand();
                 if (v == (IRValue*)0)
@@ -2936,6 +2985,7 @@ class LlvmReader
             return;
         Array* args = new Array();
         Array* zxArg = new Array();
+        bool sretCall = false;
         if (eat("("))
             {
             while (more() && peek() != (u8)')')
@@ -2948,6 +2998,17 @@ class LlvmReader
                     }
                 skipAttrs();
                 bool z = _sawZext;
+                if (_sawSret)
+                    {
+                    // First, and to a function of fixed arguments: a variadic
+                    // one with a hidden result pointer is clang's.
+                    if (args.count() != (u32)0 || fnTy)
+                        {
+                        fail(args.count() != (u32)0 ? "an sret operand after the first" : "an sret operand to a variadic function");
+                        return;
+                        }
+                    sretCall = true;
+                    }
                 IRValue* a = operand(at);
                 if (a == (IRValue*)0)
                     return;
@@ -3225,7 +3286,7 @@ class LlvmReader
         if (fptr != (IRValue*)0)
             {
             c = IRInsn.with(String.withCString("CallIndirect"));
-            c.setCc(String.withCString("CallConv::Standard"));
+            c.setCc(String.withCString(sretCall ? "CallConv::Sret" : "CallConv::Standard"));
             c.add(IROperand.useVal(fptr));
             }
         else
@@ -3237,7 +3298,8 @@ class LlvmReader
                 return;
                 }
             c = IRInsn.with(String.withCString("Call"));
-            c.setCc(String.withCString("CallConv::Standard"));
+            // CallConv::Sret: the first operand is the hidden result pointer.
+            c.setCc(String.withCString(sretCall ? "CallConv::Sret" : "CallConv::Standard"));
             c.add(IROperand.sym(sym));
             }
         // A zeroext narrow argument goes as the unsigned type, as the callee

@@ -1,9 +1,11 @@
 #!/bin/bash
 # c-reads.sh — what the C/C++ reader takes rather than leaving to clang
 # (2026-11-22): local arrays (`alloca [256 x double]`, of arrays too, as one
-# slot of their elements), llvm.memset / llvm.memcpy (the C library's), and
+# slot of their elements), llvm.memset / llvm.memcpy (the C library's),
 # calls through a pointer (a function pointer, a table of them as a C++
-# vtable is) as CallIndirect. llvm.experimental.noalias.scope.decl, which
+# vtable is) as CallIndirect, and a large struct returned through a hidden
+# pointer (`sret`: x8 on arm64; the first argument, and rax on return, on
+# x86-64) (2026-11-23). llvm.experimental.noalias.scope.decl, which
 # clang's passes write in the C++ row, is a hint and skipped (the C++
 # corpus's strings.cpp has one).
 #

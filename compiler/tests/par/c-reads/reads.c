@@ -1,8 +1,8 @@
 // What the C/C++ reader takes rather than leaving to clang
 // (tests/par/c-reads.sh): local arrays (`alloca [256 x double]`, of arrays
-// too), a struct zeroed and copied (llvm.memset, llvm.memcpy), and calls
-// through a pointer: a function pointer, and a table of them as a C++
-// vtable is.
+// too), a struct zeroed and copied (llvm.memset, llvm.memcpy), calls
+// through a pointer (a function pointer, and a table of them as a C++
+// vtable is), and a large struct returned through a hidden pointer (sret).
 #include <stdio.h>
 #include <string.h>
 
@@ -34,6 +34,15 @@ static long apply(long (*f)(long), int n) {
     for (int i = 0; i < n; i++)
         t += f(i);
     return t;
+}
+
+struct Big { long a, b, c, d; };
+
+static struct Big big(long k) {
+    struct Big r = { k, 2 * k, 3 * k, 0 };
+    for (long i = 0; i < k; i++)
+        r.d += i * r.c;
+    return r;
 }
 
 static void stats(struct Stats* s, const int* v, int n) {
@@ -73,6 +82,8 @@ int main(void) {
     struct Shape r1 = { &rectOps, 3, 4 }, t1 = { &triOps, 7, 6 }, r2 = { &rectOps, 5, 6 };
     struct Shape* sh[3] = { &r1, &t1, &r2 };
     long (*fs[2])(long) = { twice, cube };
+    struct Big bg = big(9);
+    printf("%ld %ld %ld %ld\n", bg.a, bg.b, bg.c, bg.d);
     printf("%.1f %ld %ld %ld %ld %ld %ld %ld %ld %ld %ld\n", da, gs, s.n, s.sum, s.min, s.max, s.hist[3], c.hist[0],
            s.hist[0], total(sh, 3), apply(fs[0], 10) + apply(fs[1], 10));
     return 0;

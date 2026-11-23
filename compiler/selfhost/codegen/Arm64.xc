@@ -1141,18 +1141,25 @@ class Arm64
         u32 user = n;
         if (n > (u32)0 && isMemTy(((IRValue*)fn.params().get(n - (u32)1)).ty()))
             user = n - (u32)1;
+        // `abi: sret` (C's hidden result pointer): the first parameter is
+        // x8, and the rest are laid out from x0 as if it were not there. It
+        // is taken last, once the others have left x0..x7 (its home may be
+        // one of them).
+        u32 first = (u32)0;
+        if (fn.sretParam() && user > (u32)0)
+            first = (u32)1;
         Array* types = new Array();
-        for (u32 i = (u32)0; i < user; i = i + (u32)1)
+        for (u32 i = first; i < user; i = i + (u32)1)
             types.add((Object*)((IRValue*)fn.params().get(i)).ty());
         // A parameter that arrived on the stack lives in the CALLER's outgoing
         // area, which sits just above this frame — hence the frameSize bias.
         Array* offs = offsetsForTypes(types, (u32)0);
         u32 gp = (u32)0;
         u32 fp = (u32)0;
-        for (u32 i = (u32)0; i < user; i = i + (u32)1) {
+        for (u32 i = first; i < user; i = i + (u32)1) {
             IRValue* p = (IRValue*)fn.params().get(i);
             String* t = p.ty();
-            i32 so = ((Number*)offs.get(i)).asI32();
+            i32 so = ((Number*)offs.get(i - first)).asI32();
             if (CgCommon.isFloatTy(t)) {
                 if (so >= (i32)0) {
                     String* sc = fregName((u32)16, t);
@@ -1220,6 +1227,8 @@ class Arm64
             storeReg(r, p);
             gp = gp + (u32)1;
         }
+        if (first == (u32)1)
+            storeReg(String.withCString("x8"), (IRValue*)fn.params().get((u32)0));
     }
 
     // -g: the line the last `.loc` named (file -1 = none yet, this function).
@@ -2273,6 +2282,11 @@ class Arm64
     {
         Array* offs = argStackOffsets(n, first, argc, startGP);
         if (offs == (Array*)0) return false;
+        if (isSretCall(n) && argc > (u32)0) {
+            materialise((IROperand*)n.ops().get(first), String.withCString("x8"));
+            first = first + (u32)1;
+            argc = argc - (u32)1;
+        }
         u32 gp = startGP;
         u32 fp = (u32)0;
         for (u32 i = (u32)0; i < argc; i = i + (u32)1) {
@@ -5806,8 +5820,20 @@ class Arm64
 
     // Where each argument goes: −1 for a register, else its byte offset in the
     // outgoing-argument area. Null when an argument shape is not ported yet.
+    // CallConv::Sret (a C call whose first operand is the hidden result
+    // pointer, from the C/C++ reader): that operand goes in x8, outside the
+    // argument registers, and the rest are laid out as if it were not there.
+    static bool isSretCall(IRInsn* n)
+    {
+        return n.cc() != (String*)0 && n.cc().equals(String.withCString("CallConv::Sret"));
+    }
+
     Array* argStackOffsets(IRInsn* n, u32 first, u32 argc, u32 startGP)
     {
+        if (isSretCall(n) && argc > (u32)0) {
+            first = first + (u32)1;
+            argc = argc - (u32)1;
+        }
         Array* types = new Array();
         for (u32 i = (u32)0; i < argc; i = i + (u32)1) {
             String* t = argType((IROperand*)n.ops().get(first + i));
