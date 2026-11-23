@@ -119,6 +119,41 @@ _start:
 	# OpenSSL registers a key-cleanup via atexit and it faulted at exit.
 	mov	[rax + 16], rax
 	mov	[rax + 24], rax
+	# musl's thread state as its __init_tp and static __init_tls leave it, so
+	# a C program's pthread_create (musl's, from the pool) starts threads
+	# rather than answering ENOSYS (#613). can_do_threads (byte 0 of
+	# __libc); the thread-local template as musl's one module, _xt_main_tls
+	# ({next, image, len, size, align, offset}: the image __xt_tls_hdr holds,
+	# R bytes at alignment 16, offset R, which is where the linker's TPOFF32
+	# puts it below each thread's tcb); tls_head (16), tls_cnt (40),
+	# tls_align (32) and tls_size (24) = 2*8 + sizeof(struct pthread) [200]
+	# + R + align + MIN_TLS_ALIGN-1 [7], rounded down to 8 — musl 1.2.5's
+	# formula. The offsets and sizes are musl 1.2.5's, taken from its source
+	# (src/internal/libc.h, src/internal/pthread_impl.h, src/env/__init_tls.c);
+	# the static link refuses any other musl (muslPoolIsMirrored, xcc.xc).
+	# rdx (envp) is still live: only r8-r11 are used.
+	lea	r8, [rip + __libc]
+	mov	byte ptr [r8], 1		# can_do_threads
+	lea	r9, [rip + __xt_tls_hdr]
+	mov	r10, [r9]			# R
+	mov	r11d, 8				# MIN_TLS_ALIGN
+	test	r10, r10
+	jz	.Lno_tls_module
+	add	r9, 8				# the image
+	lea	r11, [rip + _xt_main_tls]
+	mov	[r11 + 8], r9
+	mov	[r11 + 16], r10
+	mov	[r11 + 24], r10
+	mov	qword ptr [r11 + 32], 16
+	mov	[r11 + 40], r10
+	mov	[r8 + 16], r11			# tls_head
+	mov	qword ptr [r8 + 40], 1		# tls_cnt
+	mov	r11d, 16
+.Lno_tls_module:
+	mov	[r8 + 32], r11			# tls_align
+	lea	r9, [r10 + r11 + 223]
+	and	r9, -8
+	mov	[r8 + 24], r9			# tls_size
 	mov	[rip + _xt_saved_argc], edi	# Process.arguments() reads these back
 	mov	[rip + _xt_saved_argv], rsi	#   (rtfiles-linux.s, CI task #81)
 	and	rsp, -16		# the ABI wants rsp 16-aligned before a call,
@@ -223,6 +258,12 @@ __xt_tls_hdr:
 	.zero	248
 	.size	__xt_tls_hdr, 248
 
+# The thread-local template as musl's tls_module (filled at startup when
+# the program has one; musl's pthread_create copies it for each thread).
+	.p2align	3, 0x0
+_xt_main_tls:
+	.zero	48
+	.size	_xt_main_tls, 48
 # The main thread's pthread_setspecific slots (PTHREAD_KEYS_MAX = 128).
 	.globl	_xt_main_tsd
 	.p2align	3, 0x0

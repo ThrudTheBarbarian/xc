@@ -3228,6 +3228,36 @@ void linkX86_64Glibc(DriverOptions* d, String* prog)
     Files.setExecutable(d.fe().output());
 }
 
+// The musl whose layout the static runtime mirrors. crt-linux.s fills in
+// musl's own thread state (struct __libc, struct pthread and struct
+// tls_module offsets, sizeof(struct pthread)) as taken from musl 1.2.5's
+// source (src/internal/libc.h, src/internal/pthread_impl.h,
+// src/env/__init_tls.c), so that musl's pthread_create works (#613).
+// Another version may lay them out differently: the link checks the pool's
+// __libc_version (its version.lo) and stops rather than build a program
+// whose threads would write into the wrong fields.
+bool muslPoolIsMirrored(String* libdir)
+{
+    String* p = String.withString(libdir); p.appendCString("/libc.a");
+    Array* ms = ArArchive.membersOfFile(p);
+    if (ms == (Array*)0) return false;
+    String* want = String.withCString("1.2.5");
+    u32 n = want.byteLength();
+    for (u32 i = (u32)0; i < ms.count(); i = i + (u32)1) {
+        ArMember* m = (ArMember*)ms.get(i);
+        if (!m.name().equals(String.withCString("version.lo")) && !m.name().equals(String.withCString("version.o"))) continue;
+        Data* b = m.data();
+        for (u32 at = (u32)0; at + n + (u32)1 <= b.length(); at = at + (u32)1) {
+            bool hit = at == (u32)0 || b.byteAt(at - (u32)1) == (u8)0;
+            for (u32 k = (u32)0; k < n && hit; k = k + (u32)1)
+                if (b.byteAt(at + k) != want.byteAt(k)) hit = false;
+            if (hit && b.byteAt(at + n) == (u8)0) return true;
+        }
+        return false;
+    }
+    return false;
+}
+
 void linkX86_64(DriverOptions* d, String* prog)
 {
     String* libdir = muslLibDir(d.fe());
@@ -3235,6 +3265,12 @@ void linkX86_64(DriverOptions* d, String* prog)
         Stdio.printf("xcc: error: the x86-64 static link needs musl's libc.a and no copy was found.\n"
                      "  looked in $XTC_MUSL_ROOT/lib, /opt/clang/linux/x86_64-linux-musl/lib,\n"
                      "  and <support>/x86_64-sysroot\n");
+        driverExit((i32)1); return;
+    }
+    if (!muslPoolIsMirrored(libdir)) {
+        Stdio.printf("xcc: error: '%s/libc.a' is not musl 1.2.5, the version whose thread and TLS\n"
+                     "  layout the static runtime (crt-linux.s) mirrors; update crt-linux.s for it first\n",
+                     libdir.cString());
         driverExit((i32)1); return;
     }
 
