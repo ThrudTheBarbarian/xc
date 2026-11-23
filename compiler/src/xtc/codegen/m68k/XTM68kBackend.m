@@ -145,6 +145,7 @@ static NSString* m68kSym(NSString* name)
         // own stack at the top of the kept region; the heap comes from
         // Malloc, above it. The basepage ptr is at 4(sp) on entry.
         [out appendString:@"\tmove.l\t4(sp),a0\n"];                               // a0 = basepage
+        [out appendString:@"\tmove.l\ta0,a3\n"];                                  // kept for argv (GEMDOS clobbers a0)
         [out appendString:@"\tmove.l\t12(a0),d0\n"];                              // p_tlen
         [out appendString:@"\tadd.l\t20(a0),d0\n"];                               // + p_dlen
         [out appendString:@"\tadd.l\t28(a0),d0\n"];                               // + p_blen
@@ -159,6 +160,21 @@ static NSString* m68kSym(NSString* name)
             [out appendString:@"\tbsr\t.Lpicpc\n.Lpicpc:\n\tmove.l\t(sp)+,a5\n"
                               @"\tadd.l\t#_GOT-.Lpicpc,a5\n"];
             }
+        // argc and argv, as every hosted target gives main: the basepage's
+        // command tail (a length byte at 128, the text from 129, at most 126
+        // bytes) split at spaces, after an empty argv[0], since TOS passes no
+        // program name. 128 bytes of text and 66 pointers, on the stack.
+        [out appendString:@"\tlea\t-392(sp),sp\n\tmove.l\tsp,a1\n\tlea\t128(sp),a2\n"];
+        [out appendString:@"\tclr.b\t(a1)\n\tmove.l\ta1,(a2)+\n\taddq.l\t#1,a1\n\tmoveq\t#1,d1\n"];
+        [out appendString:@"\tmoveq\t#0,d0\n\tmove.b\t128(a3),d0\n\tlea\t129(a3),a0\n"];
+        [out appendString:@"\tcmp.w\t#126,d0\n\tbls\t.Lxcargs\n\tmoveq\t#126,d0\n.Lxcargs:\n\tmoveq\t#0,d2\n"];
+        [out appendString:@".Lxcargnext:\n\tsubq.w\t#1,d0\n\tbmi\t.Lxcargend\n\tmove.b\t(a0)+,d3\n"];
+        [out appendString:@"\tcmp.b\t#32,d3\n\tbls\t.Lxcargsep\n\ttst.b\td2\n\tbne\t.Lxcargcopy\n"];
+        [out appendString:@"\tmove.l\ta1,(a2)+\n\taddq.l\t#1,d1\n\tmoveq\t#1,d2\n"];
+        [out appendString:@".Lxcargcopy:\n\tmove.b\td3,(a1)+\n\tbra\t.Lxcargnext\n"];
+        [out appendString:@".Lxcargsep:\n\ttst.b\td2\n\tbeq\t.Lxcargnext\n\tclr.b\t(a1)+\n\tmoveq\t#0,d2\n\tbra\t.Lxcargnext\n"];
+        [out appendString:@".Lxcargend:\n\ttst.b\td2\n\tbeq\t.Lxcargterm\n\tclr.b\t(a1)+\n"];
+        [out appendString:@".Lxcargterm:\n\tclr.l\t(a2)\n\tlea\t128(sp),a2\n\tmove.l\ta2,-(sp)\n\tmove.l\td1,-(sp)\n"];
         [out appendString:@"\tjsr\tmain\n"];
         [out appendString:@"\tmove.w\td0,-(sp)\t; exit code\n"];
         [out appendString:@"\tmove.w\t#$4c,-(sp)\t; Pterm\n"];
