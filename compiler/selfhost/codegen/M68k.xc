@@ -267,6 +267,7 @@ class M68k
         // reserve, releasing the rest so the OS can reuse it — essential under
         // MiNT multitasking. The basepage pointer is at 4(sp) on entry.
         _out.appendCString("\tmove.l\t4(sp),a0\n");  // a0 = basepage
+        _out.appendCString("\tmove.l\ta0,a3\n");     // kept for argv (GEMDOS clobbers a0)
         _out.appendCString("\tmove.l\t12(a0),d0\n"); // p_tlen
         _out.appendCString("\tadd.l\t20(a0),d0\n");  // + p_dlen
         _out.appendCString("\tadd.l\t28(a0),d0\n");  // + p_blen
@@ -281,6 +282,21 @@ class M68k
             _out.appendCString("\tbsr\t.Lpicpc\n.Lpicpc:\n\tmove.l\t(sp)+,a5\n");
             _out.appendCString("\tadd.l\t#_GOT-.Lpicpc,a5\n");
             }
+        // argc and argv, as every hosted target gives main: the basepage's
+        // command tail (a length byte at 128, the text from 129, at most 126
+        // bytes) split at spaces, after an empty argv[0], since TOS passes no
+        // program name. 128 bytes of text and 66 pointers, on the stack.
+        _out.appendCString("\tlea\t-392(sp),sp\n\tmove.l\tsp,a1\n\tlea\t128(sp),a2\n");
+        _out.appendCString("\tclr.b\t(a1)\n\tmove.l\ta1,(a2)+\n\taddq.l\t#1,a1\n\tmoveq\t#1,d1\n");
+        _out.appendCString("\tmoveq\t#0,d0\n\tmove.b\t128(a3),d0\n\tlea\t129(a3),a0\n");
+        _out.appendCString("\tcmp.w\t#126,d0\n\tbls\t.Lxcargs\n\tmoveq\t#126,d0\n.Lxcargs:\n\tmoveq\t#0,d2\n");
+        _out.appendCString(".Lxcargnext:\n\tsubq.w\t#1,d0\n\tbmi\t.Lxcargend\n\tmove.b\t(a0)+,d3\n");
+        _out.appendCString("\tcmp.b\t#32,d3\n\tbls\t.Lxcargsep\n\ttst.b\td2\n\tbne\t.Lxcargcopy\n");
+        _out.appendCString("\tmove.l\ta1,(a2)+\n\taddq.l\t#1,d1\n\tmoveq\t#1,d2\n");
+        _out.appendCString(".Lxcargcopy:\n\tmove.b\td3,(a1)+\n\tbra\t.Lxcargnext\n");
+        _out.appendCString(".Lxcargsep:\n\ttst.b\td2\n\tbeq\t.Lxcargnext\n\tclr.b\t(a1)+\n\tmoveq\t#0,d2\n\tbra\t.Lxcargnext\n");
+        _out.appendCString(".Lxcargend:\n\ttst.b\td2\n\tbeq\t.Lxcargterm\n\tclr.b\t(a1)+\n");
+        _out.appendCString(".Lxcargterm:\n\tclr.l\t(a2)\n\tlea\t128(sp),a2\n\tmove.l\ta2,-(sp)\n\tmove.l\td1,-(sp)\n");
         _out.appendCString("\tjsr\tmain\n");
         _out.appendCString("\tmove.w\td0,-(sp)\t; exit code\n");
         _out.appendCString("\tmove.w\t#$4c,-(sp)\t; Pterm\n");
