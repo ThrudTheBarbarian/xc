@@ -13,8 +13,8 @@ xcc -m xt app.xc -o app.xex
 Memory models apply to the **6502 backend only**. The other six targets
 (`arm64`, `x86_64`, `win64`, `arm9`, `m68k`, `wasm32`) are native platforms, or a
 managed runtime in the case of `wasm32`, with their own loaders. They have no layout
-to choose, and `-m` does not apply. The fixed wasm32 layout is described
-[below](#the-wasm32-layout).
+to choose, and `-m` does not apply. The fixed wasm32 layout and the Atari ST's stack are
+described [below](#the-wasm32-layout).
 
 `-m xt` implies `-A 6502`, so it selects the target on its own.
 
@@ -162,6 +162,22 @@ When an app imports wasm libraries, the loader places each library's data after
 library before the program runs. The ARC runtime treats an address below `__heap_base` as
 static or stack storage and an address above it as a heap object. Library data must
 therefore sit below the heap.
+
+## The Atari ST stack
+
+At start-up a GEMDOS program (`-A atarist`) keeps the memory it needs and gives the rest
+back to TOS: its text, data and bss, the 256-byte basepage, and a stack reserve above
+them. The stack starts at the top of that block and grows down. The heap is allocated from
+TOS separately, so the reserve is all the stack there is. A program that recurses deeply,
+or keeps large local arrays, needs a bigger reserve; one for a 512 KB machine may want a
+smaller one.
+
+The reserve is 64 KB unless `-ss <n>` (`--stack-size <n>`) sets it, in bytes, rounded up
+to a multiple of 4:
+
+```bash
+xcc -A atarist -ss 0x8000 app.xc -o app.prg      # a 32 KB stack
+```
 
 ## Libraries resolve by architecture × platform
 
