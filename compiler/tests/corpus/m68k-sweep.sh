@@ -22,6 +22,9 @@ XCC=${XCC:-bin/$XC_PLAT/xcc-xc}
 SIM=${SIM:-bin/$XC_PLAT/xcc-sim-68k}
 [ -x "$XCC" ] || { echo "m68k-sweep: no compiler at $XCC"; exit 1; }
 [ -x "$SIM" ] || { echo "m68k-sweep: no simulator at $SIM"; exit 1; }
+# Each program runs in the scratch directory (its files land there), so the
+# simulator is named by an absolute path.
+case "$SIM" in /*) ;; *) SIM="$PWD/$SIM" ;; esac
 JOBS=${JOBS:-$(( $( (nproc || sysctl -n hw.ncpu) 2>/dev/null || echo 4) / 4 ))}
 [ "$JOBS" -ge 1 ] 2>/dev/null || JOBS=1
 TIMEOUT=${TIMEOUT:-30}
@@ -47,7 +50,7 @@ one() {  # <fixture> -> one result line
         if ! limit 300 "$XCC" -q -O$O -A atarist -H . -o "$W/$b.$O.prg" "$f" > "$W/$b.$O.log" 2>&1; then
             r="$r O$O=BUILD"; continue
         fi
-        ( cd "$W" && limit "$TIMEOUT" "$OLDPWD/$SIM" -d "$W/$b.$O.prg" < /dev/null 2>/dev/null ) | tr -d '\r' > "$W/$b.$O.got"
+        ( cd "$W" && limit "$TIMEOUT" "$SIM" -d "$W/$b.$O.prg" < /dev/null 2>/dev/null ) | tr -d '\r' > "$W/$b.$O.got"
         if tr -d '\r' < "$exp" | cmp -s - "$W/$b.$O.got"; then r="$r O$O=PASS"; else r="$r O$O=FAIL"; fi
     done
     echo "$r"
