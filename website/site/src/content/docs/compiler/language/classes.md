@@ -94,6 +94,34 @@ on xt6502 a large stack instance competes for a scarce resource, so a class
 with many ivars often belongs on the heap. On the register machines a stack
 frame is cheap.
 
+### Global instance
+
+```c
+MyClass shared;        // at file scope: set up before main, never torn down
+```
+
+A bare `MyClass shared;` at file scope is an instance that lives for the whole
+run. Its storage is in the program's data, zero-filled, and it is set up before
+`main` runs: its vtable is set, the instances it holds by value are set up, and
+its parameterless `init()` runs. Global instances are set up in declaration
+order, together with the globals whose initialisers run at startup. In a library
+they are set up when the library loads, before the program's `main`.
+
+A global instance is never torn down: its `dealloc()` does not run at exit, and
+the objects its ivars refer to stay referenced.
+
+It has the same header as a heap instance, with a reference count that never
+reaches zero, so `&shared` is a reference like any other. It can go into a
+strong or `weak:` pointer, a field, a container or a strong parameter; retaining
+and releasing it has no effect on its lifetime, and a `weak:` pointer to it is
+never cleared. Member access, method calls with virtual dispatch,
+`MyClass b = shared;` and `shared = b;` behave as for a stack instance. C code
+sees the global's symbol as the address of its fields, as for a reference to a
+heap instance.
+
+A global array of class instances (`MyClass all[4];`) is not supported. Declare
+an array of references (`MyClass* all[4];`) instead.
+
 ### Heap instance
 
 ```c
