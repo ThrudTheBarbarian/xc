@@ -32,8 +32,9 @@ MyClass mine;          // zero-filled, init() runs, dealloc() runs at scope exit
 A bare `MyClass mine;` allocates the instance in the enclosing scope's local
 storage. It is zero-filled on entry to the scope, the parameterless `init()`
 (if present) runs automatically, and the bytes are reused when the scope
-closes. It does **not touch the heap**, so it is safe to declare inside a loop
-body; the same storage serves every iteration.
+closes. It does **not touch the heap** unless its address is taken (see
+below), so it is safe to declare inside a loop body; the same storage serves
+every iteration.
 
 A stack instance owns the objects its ivars refer to, as a heap instance does.
 When it goes out of scope (the end of the block, each loop iteration, or a
@@ -56,12 +57,29 @@ When it goes out of scope (the end of the block, each loop iteration, or a
 A local array of class instances (`MyClass arr[4];`) is not supported. Declare
 an array of references (`MyClass* arr[4];`) instead.
 
-A stack instance has no reference count, so a strong pointer cannot hold its
-address. Passing `&mine` to a strong parameter, storing it in a strong local,
-field or global, or returning it is a compile error, and so is the address of a
-class instance held by value inside it (`&mine.part`). A `weak:` pointer can
-hold the address (`weak:MyClass* p = &mine;`). It does not retain the instance,
-and it is not cleared when the instance goes out of scope.
+A local stack instance whose address is taken moves to the heap. If `&mine`
+appears anywhere in the function, `mine` is allocated as an ordinary
+reference-counted object instead of in local storage, and the variable holds a
+strong reference to it. The reference is released when the variable goes out of
+scope, so `dealloc()` still runs there unless something else holds the
+instance:
+
+- `&mine` can go into a strong or `weak:` pointer, a field, a global, a
+  container, a strong parameter or a return value. The instance lives as long
+  as anything holds it.
+- A `weak:` pointer to it is cleared when the last strong reference goes, as
+  for any heap object.
+- `mine` keeps its value semantics. Member access, method calls,
+  `MyClass b = mine;` and `mine = b;` behave as for any stack instance.
+
+The instance moves only when the target has a heap, which every current target
+has. On a target built without one, `&mine` is a compile error.
+
+A pointer into an instance or an array cannot be counted, so a strong pointer
+cannot hold the address of a class instance held by value inside another
+(`&mine.part`), of an element of an array of instances (`&arr[i]`), or of a
+by-value parameter. Copy the member or the element out (`Part c = mine.part;`),
+copy the parameter into a local, or allocate the instance with `new`.
 
 Where local storage lives depends on the target. It matters only when you are
 counting bytes:
