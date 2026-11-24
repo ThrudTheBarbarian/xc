@@ -55,7 +55,14 @@
 // shared layer rather than being copied.
 
 #import "Foundation.xc"
-#import "ParSync.xc"
+// A system call given an array a GPU run kept on its device (#15, its pages
+// no-access until the host touches them) fails with EFAULT instead of
+// faulting into the par runtime, which would bring it back. So a buffer is
+// read once at each end, through the C library, before it is handed to one:
+// a read faults like any other host access and brings the array back first.
+#if ARCH_arm64 || ARCH_x86_64 || OS_windows
+pointer memchr(pointer s, i32 c, u64 n);
+#endif
 
 // Host primitives — standardised `_xt_` names, provided per host; see
 // support/arm64/runtime/libxt.c and support/x86_64/runtime/sys-linux.s.
@@ -168,9 +175,15 @@ class Files
         if (h < (i32)0)
             return false;
         u32 n = data.length();
-        // Data over an array a GPU run kept on its device: back first, as
-        // the system call fails on it instead of faulting (#15).
-        parSync((pointer)data.bytes(), (u64)n);
+        u8* p = data.bytes();
+        // Data over an array a GPU run kept on its device: back first (#15).
+#if ARCH_arm64 || ARCH_x86_64 || OS_windows
+        if (n > (u32)0)
+            {
+            memchr((pointer)p, (i32)0, (u64)1);
+            memchr((pointer)(p + (n - (u32)1)), (i32)0, (u64)1);
+            }
+#endif
         i32 put = (n > (u32)0) ? _xt_file_write(h, data.bytes(), n) : (i32)0;
         _xt_file_close(h);
         return put == (i32)n;
