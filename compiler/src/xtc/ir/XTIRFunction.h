@@ -92,6 +92,10 @@ typedef NS_ENUM(uint8_t, XTIRParKernelKind) {
 // Headers of the loops lowered under `:goal(speed)` (a loop's own, or one
 // around it). Printed as `speed: [...]` when non-empty.
 @property(nonatomic, readonly) NSMutableSet<NSString*>* speedLoopHeaders;
+// Headers of the loops under an explicit `:goal(accuracy)` (the loop's own,
+// one around it, `#goal accuracy` or -fgoal=accuracy), not the default: strict
+// ISO results (#569). Printed as `accuracy: [...]` when non-empty.
+@property(nonatomic, readonly) NSMutableSet<NSString*>* accuracyLoopHeaders;
 
 /// Runtime SIMD dispatch (x86-64). A clone made for a wider vector level has
 /// its own lane width (0 = the target profile's), its level name ("avx2") and

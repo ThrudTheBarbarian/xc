@@ -19,6 +19,8 @@
 @property(nonatomic) XTIRBlock* exit;      // Ei
 // The k loop's FAdd (nil for an integer nest): marked `contract` by apply.
 @property(nonatomic) XTIRInsn* acc;
+// The k loop's header: a nest left as a loop is not recognised again (#569).
+@property(nonatomic, copy) NSString* kHeader;
 @property(nonatomic) BOOL f64;
 // "f32", "f64", "u32" or "i32": the element type, and the kernel's name.
 @property(nonatomic, copy) NSString* elem;
@@ -55,6 +57,11 @@
 @implementation XTMatMulDefs
 @end
 
+@interface XTIROptIdiomMatMul ()
+// The k loop headers of the nests left as loops in the function being run (#569).
+@property(nonatomic, strong, nullable) NSMutableSet<NSString*>* leftHeaders;
+@end
+
 @implementation XTIROptIdiomMatMul
 
 - (NSString*)passName
@@ -71,20 +78,38 @@
              errors:(NSMutableArray<NSString*>* _Nullable* _Nullable)outErrors
     {
     (void)outErrors;
-    if (!self.profile || !self.profile.matMulPrefix)
+    // On every arm64 row a float nest fuses as the SME kernel does
+    // (matMulContract, #569), whether or not the row has the kernel, so an
+    // arm64 answer does not depend on the OS, -fno-matmul or which rows ran
+    // as a par block. A nest under an explicit `:goal(accuracy)` is strict
+    // ISO: no SME kernel and nothing fused (owner, 2026-11-24).
+    BOOL kernel = self.profile && self.profile.matMulPrefix;
+    if (!self.profile || (!kernel && !self.profile.matMulContract))
         return YES;
+    BOOL sme = kernel && [self.profile.matMulPrefix hasPrefix:@"__xt_sme_"];
     for (XTIRFunction* fn in mod.functions)
         {
         // Each rewrite leaves the nest in place behind the call, so a nest
         // that has been given its call is skipped by the preheader check
-        // (its preheader no longer ends in a plain Branch).
+        // (its preheader no longer ends in a plain Branch). One left as a
+        // loop is skipped by its k loop's header.
+        self.leftHeaders = [NSMutableSet set];
         for (NSUInteger iter = 0; iter < 64; iter++)
             {
             XTMatMulCand* c = [self recognise:fn];
             if (!c)
                 break;
-            [self apply:c inFunction:fn module:mod];
+            BOOL accuracy = c.header.name && [fn.accuracyLoopHeaders containsObject:c.header.name];
+            if (kernel && !(sme && accuracy))
+                {
+                [self apply:c inFunction:fn module:mod];
+                continue;
+                }
+            if (!accuracy && self.profile.matMulContract && c.acc)
+                c.acc.predicate = XTIRFpContract;
+            [self.leftHeaders addObject:c.kHeader];
             }
+        self.leftHeaders = nil;
         }
     return YES;
     }
@@ -408,10 +433,16 @@ static BOOL onlyConstsBesides(XTIRBlock* b, NSArray<XTIRInsn*>* allowed, XTMatMu
       return o.kind == XTIROperandKindUse && fn.values[@(o.valueId)].type.kind == XTIRTypeKindU32;
     };
 
+    NSUInteger hkIndex = 0;
     for (XTIRBlock* Hk in fn.blocks)
         {
+        NSUInteger hb = hkIndex++;
         // ── innermost: k loop with the accumulator phi ──
         if (Hk.phiNodes.count != 2)
+            continue;
+        // A nest the pass left as a loop (#569).
+        NSString* leftKey = Hk.name ?: [NSString stringWithFormat:@"#%lu", (unsigned long)hb];
+        if ([self.leftHeaders containsObject:leftKey])
             continue;
         // the latch is the block that loops back; find it from the phis
         XTIRBlock* Bk = nil;
@@ -713,6 +744,7 @@ static BOOL onlyConstsBesides(XTIRBlock* b, NSArray<XTIRInsn*>* allowed, XTMatMu
             continue;
 
         XTMatMulCand* c = [XTMatMulCand new];
+        c.kHeader = leftKey;
         c.acc = fadd && fadd.opcode == XTIROpFAdd ? fadd : nil;
         c.preheader = Pi;
         c.header = Hi;
@@ -787,10 +819,10 @@ static BOOL onlyConstsBesides(XTIRBlock* b, NSArray<XTIRInsn*>* allowed, XTMatMu
 - (void)apply:(XTMatMulCand*)c inFunction:(XTIRFunction*)fn module:(XTIRModule*)mod
     {
     XTIRBlock* P = c.preheader;
-    // The kernel fuses each multiply into its add (FMOPA, fmla), whatever the
-    // goal, and the nest it stands in for is its fallback (no SME, a NaN in
-    // C): the nest fuses too, so the two give one answer, the documented
-    // exception to :goal(accuracy) (owner, 2026-11-07).
+    // The kernel fuses each multiply into its add (FMOPA, fmla), and the nest
+    // it stands in for is its fallback (no SME, a NaN in C): the nest fuses
+    // too, so the two give one answer. Under an explicit :goal(accuracy) the
+    // kernel is not called at all (runOnModule, #569).
     // arm64's kernels only: x86-64's multiplies then adds, as its loop does.
     if (c.acc && [self.profile.matMulPrefix hasPrefix:@"__xt_sme_"])
         c.acc.predicate = XTIRFpContract;

@@ -11725,6 +11725,8 @@ static const NSUInteger kVarargSlotBytes = 8;
     // matrix-multiply idiom's NaN check).
     if (self.loopGoal == 1 && headerBlock.name)
         [self.currentFunction.speedLoopHeaders addObject:headerBlock.name];
+    else if (self.loopGoal == 2 && headerBlock.name)
+        [self.currentFunction.accuracyLoopHeaders addObject:headerBlock.name];
     XTIRBlock* bodyBlock = [self addBlockWithName:[prefix stringByAppendingString:@"_for_body"]];
     XTIRBlock* exitBlock = [self addBlockWithName:[prefix stringByAppendingString:@"_for_exit"]];
 
@@ -12242,6 +12244,8 @@ static const NSUInteger kVarargSlotBytes = 8;
     XTIRBlock* headerBlock = [self addBlockWithName:[prefix stringByAppendingString:@"_forin_header"]];
     if (self.loopGoal == 1 && headerBlock.name)
         [self.currentFunction.speedLoopHeaders addObject:headerBlock.name];
+    else if (self.loopGoal == 2 && headerBlock.name)
+        [self.currentFunction.accuracyLoopHeaders addObject:headerBlock.name];
     XTIRBlock* bodyBlock = [self addBlockWithName:[prefix stringByAppendingString:@"_forin_body"]];
     XTIRBlock* exitBlock = [self addBlockWithName:[prefix stringByAppendingString:@"_forin_exit"]];
 
@@ -17060,6 +17064,8 @@ static NSString* XTIRTypeKindName(XTIRTypeKind k)
     // only through its own (2026-11-07).
     if (self.loopGoal == 1 && headerBlock.name)
         [self.currentFunction.speedLoopHeaders addObject:headerBlock.name];
+    else if (self.loopGoal == 2 && headerBlock.name)
+        [self.currentFunction.accuracyLoopHeaders addObject:headerBlock.name];
     XTIRBlock* bodyBlock = [self addBlockWithName:[prefix stringByAppendingString:@"_body"]];
     XTIRBlock* exitBlock = [self addBlockWithName:[prefix stringByAppendingString:@"_exit"]];
 

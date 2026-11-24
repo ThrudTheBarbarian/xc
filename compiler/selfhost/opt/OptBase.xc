@@ -177,6 +177,7 @@ class OptProfile
     String* _matMulSuffix;
     String* _matMulFastSuffix;  // appended under `:goal(speed)`: arm64 "_fast"
     bool _matMulInts;           // integer kernels too (prefix + "u32"/"i32"): arm64
+    bool _matMulContract;       // a recognised float nest fuses, kernel or not: every arm64 row (#569)
     bool _loopRotate;      // top-tested loops become bottom-tested
     bool _loopRotateChain; // and loops whose test is a short-circuit chain
     u32 _inlineMax;        // the largest callee (IR instructions) the inliner splices
@@ -192,6 +193,7 @@ class OptProfile
         _matMulSuffix = String.withCString("");
         _matMulFastSuffix = (String*)0;
         _matMulInts = false;
+        _matMulContract = false;
         _inlineMax = (u32)64;
         _dceTrace = false;
         _inlineChecks = false;
@@ -249,6 +251,8 @@ class OptProfile
     void setMatMulFastSuffix(String* s) { _matMulFastSuffix = s; }
     bool matMulInts(void) { return _matMulInts; }
     void setMatMulInts(bool b) { _matMulInts = b; }
+    bool matMulContract(void) { return _matMulContract; }
+    void setMatMulContract(bool b) { _matMulContract = b; }
     bool inlineChecks(void) { return _inlineChecks; }
     void setInlineChecks(bool b) { _inlineChecks = b; }
 
@@ -324,6 +328,9 @@ class OptProfile
         // vectoriser also requires the source to grant it (see floatRedux).
         p._floatReduce = wide;
         p._orderedFloat = arm64;
+        // A recognised float matrix-multiply nest fuses on every arm64 row, as
+        // the SME kernel does, kernel or not (#569).
+        p._matMulContract = arm64;
         // bsl/bit/bif and shl+usra on arm64. x86 would need AVX-512's
         // vpternlogd/vprold for a gain, and its AVX2 copies cannot use them.
         p._bitSelect = arm64;
@@ -1887,6 +1894,8 @@ class BeFact : Object
     IROperand* _mxStartOf;
     IRValue* _mxMem;
     IRInsn* _mxAcc;      // the k loop's FAdd, marked `contract` (0 for an integer nest)
+    Map* _mmLeft;        // k loop headers of the nests left as loops (#569), during idiomMatMul
+    String* _mmLeftKey;  // the k loop header of the nest just recognised
     // The constant value of each of M, N, K, lda, ldb, ldc, or -1 (a value).
     i64* _mxConsts;
     // countedHeader's outputs

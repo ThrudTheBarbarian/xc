@@ -749,6 +749,7 @@ class IrParser
         frameLine();
         unrollLine();
         speedLine();
+        accuracyLine();
         parLine();
         inlineLine();
         abiLine();
@@ -826,6 +827,30 @@ class IrParser
     // Emitted only when non-empty, so this returns untouched on the vast
     // majority of functions — `_ci = save` and no line advance, exactly as
     // frameLine does when there is no frame.
+    // `accuracy: [...]` — read back as `speed:` is (#569).
+    void accuracyLine(void)
+        {
+        u32 save = _ci;
+        if (!expectWord("accuracy"))
+            {
+            _ci = save;
+            return;
+            }
+        expectChar((u8)':');
+        expectChar((u8)'[');
+        while (!atChar((u8)']') && !atEnd())
+            {
+            String* nm = word();
+            if (nm == (String*)0)
+                break;
+            _fn.addAccuracyHeader(nm);
+            if (!expectChar((u8)','))
+                break;
+            }
+        expectChar((u8)']');
+        nextLine();
+        }
+
     // `speed: [...]` — read back as `unroll:` is.
     void speedLine(void)
         {

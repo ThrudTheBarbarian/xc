@@ -1462,6 +1462,7 @@ class IRType
     // one bit.
     Array* _unrollHeaders; // of String@
     Array* _speedHeaders;  // of String@: loops lowered under `:goal(speed)`
+    Array* _accuracyHeaders; // of String@: loops under an explicit `:goal(accuracy)` (#569)
     // Value id -> IRValue@, sparse, indexed by the id itself. The PRINTER never
     // needs this (an operand holds its value), but a BACK END does: a frame slot
     // is assigned to every value in id order, pinned locals included, and those
@@ -1496,6 +1497,7 @@ class IRType
         _pinned = new Array();
         _unrollHeaders = new Array();
         _speedHeaders = new Array();
+        _accuracyHeaders = new Array();
         _byId = new Array();
         _simdLaneBytes = (u32)0;
         _simdLevel = (String*)0;
@@ -1626,6 +1628,24 @@ class IRType
         {
         for (u32 i = (u32)0; i < _speedHeaders.count(); i = i + (u32)1)
             if (((String*)_speedHeaders.get(i)).equals(n))
+                return true;
+        return false;
+        }
+    // Loops whose goal is accuracy because the program said so (the loop's
+    // `:goal(accuracy)`, one around it, `#goal accuracy` or -fgoal=accuracy),
+    // not by default: strict ISO results (#569).
+    Array* accuracyHeaders(void)
+        {
+        return _accuracyHeaders;
+        }
+    void addAccuracyHeader(String* n)
+        {
+        _accuracyHeaders.add((Object*)String.withString(n));
+        }
+    bool isAccuracyHeader(String* n)
+        {
+        for (u32 i = (u32)0; i < _accuracyHeaders.count(); i = i + (u32)1)
+            if (((String*)_accuracyHeaders.get(i)).equals(n))
                 return true;
         return false;
         }
@@ -1968,6 +1988,20 @@ class IRType
             {
             Array* sorted = sortedNames(_speedHeaders);
             out.appendCString("    speed: [");
+            for (u32 i = (u32)0; i < sorted.count(); i = i + (u32)1)
+                {
+                if (i > (u32)0)
+                    out.appendCString(", ");
+                out.append((String*)sorted.get(i));
+                }
+            out.appendCString("]\n");
+            }
+        // `accuracy: [...]`, the loops under an explicit `:goal(accuracy)`:
+        // after `speed:`, only when non-empty, sorted. As the reference.
+        if (_accuracyHeaders.count() > (u32)0)
+            {
+            Array* sorted = sortedNames(_accuracyHeaders);
+            out.appendCString("    accuracy: [");
             for (u32 i = (u32)0; i < sorted.count(); i = i + (u32)1)
                 {
                 if (i > (u32)0)

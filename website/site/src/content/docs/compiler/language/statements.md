@@ -391,11 +391,17 @@ away (`s + a * b`, `a * b - c`) becomes one fused multiply-add under `speed`,
 rounding once instead of twice, in vectorised loops as in scalar code: on
 arm64, and on x86-64 wherever the processor has FMA (the compiler's AVX2 and
 AVX-512 code). An exact loop keeps the two operations, on every CPU and every
-GPU, so its answer does not depend on the machine. The matrix kernels that
-stand in for a matrix-multiply nest (on the SME unit, and in NEON) fuse
-whatever the goal, as the hardware's outer-product and multiply-add
-instructions do: such a nest's result can differ from the separately rounded
-loop's in its last bits.
+GPU, so its answer does not depend on the machine.
+
+A matrix-multiply nest is the one case where a loop that sets no goal can
+fuse. On arm64 such a nest fuses each multiply into its add, as the SME unit's
+outer-product instructions do, whether or not the machine has SME, the
+operating system or `-fno-matmul`. So every arm64 machine gives the same
+answer, which can differ from the separately rounded loop's in its last bits.
+An explicit `:goal(accuracy)` (on the nest, a loop around it, `#goal
+accuracy` or `-fgoal=accuracy`) keeps the nest exact: the SME unit is not used
+and nothing is fused, even where that is slower. On x86-64 the matrix kernels
+give the loop's own result.
 
 On a Mac with SME, the compiler runs a
 matrix multiply like the one above on the SME unit, then checks the result for
