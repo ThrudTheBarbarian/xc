@@ -127,11 +127,12 @@ enum TokenType = {
     tokI64            = 113,
     tokU64            = 114,
     tokGoto           = 115,
-    tokNil            = 116
+    tokNil            = 116,
+    tokMathOp         = 117
 };
 
 // The count, for a bounds check on a dumped stream.
-#import "TokenTypeDefs.xc"
+#define TOKEN_TYPE_COUNT 118
 
 // The human name of each token kind, as XTTokenTypeName spells it — for
 // diagnostics only. A kind the reference does not name comes back as `?`.
@@ -258,6 +259,7 @@ class TokenNames
         if (t == (u16)tokFinal) return "final";
         if (t == (u16)tokOptional) return "optional";
         if (t == (u16)tokEOF) return "EOF";
+        if (t == (u16)tokMathOp) return "operator";
         return "?";
     }
 }

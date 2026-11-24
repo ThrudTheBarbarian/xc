@@ -591,9 +591,21 @@ class Lexer
             else
                 break;
             }
+        // No digits: an error at the prefix (`$ ` in `:operator(self $ o)`,
+        // say). It was counted and not said, so the compile went on without
+        // the `$`.
         if (raw.isEmpty())
             {
             _errors = _errors + (u32)1;
+            String* out = String.withCString("");
+            out.append(_file != (String*)0 ? _file : String.withCString("?"));
+            out.appendByte((u8)':');
+            out.append(String.withU32(line));
+            out.appendByte((u8)':');
+            out.append(String.withU32(col));
+            out.appendCString(": error: Expected hex digits after ");
+            out.append(displayPrefix);
+            _diags.add((Object*)out);
             return;
             }
 
@@ -1278,6 +1290,21 @@ class Lexer
         if (c1 == (u8)39)
             {
             _emit((u16)tokIdentifier, "'", (u32)1, line, col);
+            return;
+            }
+
+        // A character of the Unicode Mathematical Operators block (U+2200 to
+        // U+22FF, E2 88 80 to E2 8B BF in UTF-8): one token, which the parser
+        // joins into an operator a class defines.
+        if (c1 == (u8)$E2 && c2 >= (u8)$88 && c2 <= (u8)$8B && c3 >= (u8)$80 && c3 <= (u8)$BF)
+            {
+            String* ch = String.withCString("");
+            ch.appendByte(c1);
+            ch.appendByte(c2);
+            ch.appendByte(c3);
+            for (u32 i = (u32)0; i < (u32)3; i = i + (u32)1) : serial
+                _advance();
+            _add(Token.with((u16)tokMathOp, ch, line, col));
             return;
             }
 

@@ -311,6 +311,13 @@ static NSDictionary<NSString *, NSNumber *> *sKeywordMap = nil;
         // Not a valid char literal — fall through to scanOperatorOrPunct.
     }
 
+    // A mathematical operator (U+2200 to U+22FF), before the ctype tests,
+    // which are not defined for characters past 255.
+    if (ch >= 0x2200 && ch <= 0x22FF) {
+        [self scanOperatorOrPunct:loc];
+        return;
+    }
+
     // Numeric literal: decimal, hex ($ or 0x), binary (%)
     if (ch == '$') {
         [self scanHexLiteral:loc prefixLength:1 display:@"$"];
@@ -827,6 +834,10 @@ static NSDictionary<NSString *, NSNumber *> *sKeywordMap = nil;
             EMIT(XTTokenIdentifier, @"'");
 
         default: {
+            // The Unicode Mathematical Operators block: one token a character,
+            // which the parser joins into an operator a class defines.
+            if (ch >= 0x2200 && ch <= 0x22FF)
+                EMIT(XTTokenMathOp, ([NSString stringWithCharacters:&ch length:1]));
             NSString *msg = [NSString stringWithFormat:@"Unexpected character '%C'", ch];
             [_diagnostics emitError:msg at:loc];
             [self advance];
