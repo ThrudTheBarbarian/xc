@@ -64,7 +64,7 @@ int runParserTests(void) {
     {
         NSUInteger errors = 0;
         parseSourceCollecting(@"struct S { i16 a; }\n"
-                              @"void f(u8@ p) { ((S@)p).a = (i16)7; }", &errors);
+                              @"void f(u8* p) { ((S*)p).a = (i16)7; }", &errors);
         ASSERT_TRUE(errors == 0, "Cast as an lvalue at statement start parses");
     }
 
