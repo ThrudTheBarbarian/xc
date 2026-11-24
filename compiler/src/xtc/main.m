@@ -855,6 +855,29 @@ static BOOL linkJoinsObjects(XTCommandLineOptions *opts) {
     return NO;
 }
 
+// Whether that link takes an xcc object or archive (one that names the
+// runtime): the program is then numbered as a -c object is, so the two lay
+// out every class's vtable alike (#654). A C or Objective-C object does not
+// decide it. Not on arm9, whose back end does not yet pass a variadic tail
+// through a virtual call: numbered so, the program's own Stdio.printf would
+// make one. As the port.
+static BOOL linkJoinsXcObjects(XTCommandLineOptions *opts) {
+    if (opts.useArm9Backend) return NO;
+    NSMutableArray<NSString *> *toks = [NSMutableArray array];
+    for (NSString *arg in opts.linkerArgs) {
+        if ([arg hasPrefix:@"-Wl,"])
+            [toks addObjectsFromArray:[[arg substringFromIndex:4] componentsSeparatedByString:@","]];
+        else [toks addObject:arg];
+    }
+    const char *ld = getenv("XTC_LDFLAGS");
+    if (ld && *ld)
+        [toks addObjectsFromArray:[@(ld) componentsSeparatedByCharactersInSet:
+                                   [NSCharacterSet whitespaceCharacterSet]]];
+    for (NSString *t in toks)
+        if (t.length && ![t hasPrefix:@"-"] && x86LinkTokenIsFileInput(t) && namesRuntime(t)) return YES;
+    return NO;
+}
+
 // Resolve every `-l<name>` on the command line into a static archive the
 // in-house x86-64 linker can pull from (finding #15). The old behaviour sent
 // ANY -l to the clang fallback — which links the C library but NOT the
@@ -4982,6 +5005,8 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
     // -c wants the same sidecar (stage 3): the front end is a separate process,
     // so it has to be told, or compileOnly is simply false over there.
     if (opts.compileOnly) [feArgs addObject:@"-c"];
+    // A program linked with an xcc object is numbered as that object (#654).
+    else if (!opts.emitLib && linkJoinsXcObjects(opts)) [feArgs addObject:@"--link-joins-objects"];
     if (opts.verbose) [feArgs addObject:@"-V"];
     if (opts.xtcHome) [feArgs addObjectsFromArray:@[@"-H", opts.xtcHome]];
     // Nothing to forward for ARC: the flag is retired (bug 026) and ARC is

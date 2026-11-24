@@ -707,6 +707,24 @@ bool namesRuntime(String* path)
     return false;
 }
 
+// Whether a program's link takes an xcc object or archive (one that names the
+// runtime): the program is then numbered as a -c object is, so the two lay out
+// every class's vtable alike (#654). A C or Objective-C object does not decide
+// it. Not on arm9, whose back end does not yet pass a variadic tail through a
+// virtual call: numbered so, the program's own Stdio.printf would make one. As
+// the reference.
+bool linkJoinsXcObjects(DriverOptions* d)
+{
+    if (isArm9(d)) return false;
+    Array* li = d.linkInputs();
+    for (u32 i = (u32)0; i < li.count(); i = i + (u32)1) {
+        String* t = (String*)li.get(i);
+        if (t.hasPrefix(String.withCString("-"))) continue;
+        if ((t.hasSuffix(String.withCString(".o")) || t.hasSuffix(String.withCString(".a"))) && namesRuntime(t)) return true;
+    }
+    return false;
+}
+
 // Whether a shared library this link names depends on libRuntime: an xc
 // library. A C or C++ program linking one keeps libRuntime, so the process
 // has one object runtime, not that library's and libRuntimeSupport's (#278).
@@ -5723,6 +5741,17 @@ void xccMain(void)
         d.fe().setEmitIface(false);
         d.fe().setLibraryBuild(false);
     }
+    // A program linked with an xcc object (-Wl,x.o) is numbered as that object
+    // is (#654). The object carries its own copy of every class it uses, the
+    // prelude's included, and the link keeps one definition of each symbol: a
+    // String method from one module then fills in or dispatches through the
+    // other's `String$vtbl`. Numbered as a whole program, the program's tables
+    // held only the slots it calls itself, at numbers of its own, and the
+    // object's call through its slot read past the end of them. Numbered per
+    // class, from each class's ancestry, both modules lay every vtable out
+    // alike, so either copy serves both. As the reference.
+    if (!d.compileOnly() && !d.emitLib() && linkJoinsXcObjects(d))
+        d.fe().setLibraryBuild(true);
     checkCapabilities(d);
     // `--emit-lib` on a target with no library form is REFUSED, never run
     // down the executable path: a library that is silently not a library is

@@ -1,11 +1,11 @@
 // giob.xc — a second object built with -c for giorder.xc (#649), with a
 // global instance of its own.
-extern i32 gLog;
+#import "Stdio.xc"
 
 class Circle : Object
     {
     i32 r;
-    void init(void) { r = 3; gLog = gLog * 10 + 2; }
+    void init(void) { r = 3; Stdio.printf("circle set up\n"); }
     i32 radius(void) { return r; }
     }
 

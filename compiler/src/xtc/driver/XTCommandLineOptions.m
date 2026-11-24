@@ -31,6 +31,7 @@
 @property(nonatomic, readwrite) BOOL noXcArgs;
 @property(nonatomic, readwrite, copy, nullable) NSString* runtimeMembersFile;
 @property(nonatomic, readwrite, copy, nullable) NSString* runtimeLibFile;
+@property(nonatomic, readwrite) BOOL linkJoinsXcObjects;
 @property(nonatomic, readwrite) BOOL emitIface;
 @property(nonatomic, readwrite) NSArray<NSString*>* withLibs;
 @property(nonatomic, readwrite, nullable) NSString* libName;
@@ -1033,6 +1034,10 @@ static NSString* sExecutablePath = nil;
         else if ([arg isEqualToString:@"--runtime-members"] && i + 1 < argc)
             {
             opts.runtimeMembersFile = [NSString stringWithUTF8String:argv[++i]];
+            }
+        else if ([arg isEqualToString:@"--link-joins-objects"])
+            {
+            opts.linkJoinsXcObjects = YES;
             }
         else if ([arg isEqualToString:@"--runtime-lib"] && i + 1 < argc)
             {

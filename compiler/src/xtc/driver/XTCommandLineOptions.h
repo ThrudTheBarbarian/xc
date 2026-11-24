@@ -49,6 +49,9 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, readonly) BOOL noXcArgs;
 @property(nonatomic, readonly, copy, nullable) NSString* runtimeMembersFile;
 @property(nonatomic, readonly, copy, nullable) NSString* runtimeLibFile;
+// The program's link takes an xcc object or archive (the driver tells the
+// front end with --link-joins-objects): it is numbered as a -c object is.
+@property(nonatomic, readonly) BOOL linkJoinsXcObjects;
 // --emit-iface: write the module INTERFACE and stop — no codegen, no link.
 // The designer (Rocks) lists a class's outlets and actions to draw the wiring
 // UI, and its input is an APP source, not a library; without this the only way

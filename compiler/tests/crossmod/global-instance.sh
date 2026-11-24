@@ -23,10 +23,10 @@
 #            Both compilers' programs are compared byte for byte and run on
 #            $XTC_X86_HOST / $XTC_LINUX_HOST.
 #   order    giorder.xc linked with gioa.o and giob.o (-c, #649), each with
-#            a global instance whose init logs to the program's gLog: the
-#            objects' instances are set up before main in link order, then
-#            the program's (129, and 219 with the objects swapped), and a
-#            virtual call on gioa's instance reaches its override. arm64,
+#            a global instance whose init prints a line: the objects'
+#            instances are set up before main in link order, then the
+#            program's, and a virtual call on gioa's instance reaches its
+#            override. arm64,
 #            x86-64 -static and dynamic, and win64; both compilers' objects
 #            and programs are compared byte for byte.
 #
@@ -110,8 +110,8 @@ fi
 
 # order <target> <tag> <link flags...>: both compilers build gioa.o and giob.o
 # and link giorder in both object orders into $TMP/order-<tag>/<cc>-<ab|ba>.
-WANT_O_AB=$'order 129\narea 49 radius 3 mark 9'
-WANT_O_BA=$'order 219\narea 49 radius 3 mark 9'
+WANT_O_AB=$'square set up\ncircle set up\nmark set up\narea 49 radius 3 mark 9'
+WANT_O_BA=$'circle set up\nsquare set up\nmark set up\narea 49 radius 3 mark 9'
 order() {
     local a=$1 tag=$2; shift 2
     local d=$TMP/order-$tag c

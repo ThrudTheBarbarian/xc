@@ -976,7 +976,7 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     if (!haveObject)
         return ast;
     BOOL m68k = _options.m68kPlatform;
-    BOOL isLib = _options.emitLib || _options.compileOnly;
+    BOOL isLib = _options.emitLib || _options.compileOnly || _options.linkJoinsXcObjects;
     BOOL emit = named || (!m68k && (isLib || ifaceJsons.count > 0));
     if (switchable)
         *switchable = !emit;
@@ -1769,7 +1769,7 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
         // numbers the prelude per class, from each class's ancestry alone, so
         // two libraries agree and a client program adopts the numbers. A
         // library build numbers them the same way itself and does not need to.
-        BOOL clientProgram = !(_options.emitLib || _options.compileOnly) &&
+        BOOL clientProgram = !(_options.emitLib || _options.compileOnly || _options.linkJoinsXcObjects) &&
                              (_options.useArm64Backend || _options.useX86_64Backend || _options.useWin64Backend
                               || _options.useArm9Backend);
         if (_options.useWasm32Backend || clientProgram)
@@ -2155,7 +2155,17 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     // The cost is bigger objects: every instance method earns a slot whether or
     // not this translation unit can see an override. That is what correctness
     // costs, and it is the same trade `--emit-lib` already makes.
-    sema.libraryBuild = _options.emitLib || _options.compileOnly;
+    //
+    // A program whose link takes an xcc object (-Wl,x.o, #654) is numbered the
+    // same way. The object carries its own copy of every class it uses, the
+    // prelude's included, and the link keeps one definition of each symbol: a
+    // String method from one module then fills in or dispatches through the
+    // other's `String$vtbl`. Numbered as a whole program, the program's tables
+    // hold only the slots it calls itself, at numbers of its own, and the
+    // object's call through its slot read past the end of them. Numbered per
+    // class, from each class's ancestry, both modules lay every vtable out
+    // alike, so either copy serves both.
+    sema.libraryBuild = _options.emitLib || _options.compileOnly || _options.linkJoinsXcObjects;
     // NOT the same question. `emittingLibrary` asks "is this compilation THE
     // library?", which a `-c` object is not — it is still part of a final link,
     // and is allowed to extend an imported class (separate-compilation §4.2)
