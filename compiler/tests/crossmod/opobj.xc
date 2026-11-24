@@ -36,3 +36,14 @@ class Pow
     static Pow* scaled(i32 k, Pow* p) :operator(k * p) { return Pow.of(k * p.v); }
     Pow* kron(Pow* o) :operator(self ⊗ o) { return Pow.of(v * 100 + o.v); }
     }
+
+// Bracket operators: `|v|` and the static `⌊x⌋`. The interface carries their
+// shapes, so a `|` where the program's operand starts opens a bar.
+class Span
+    {
+    i32 lo;
+    i32 hi;
+    static Span* of(i32 a, i32 b) { Span* s = new Span(); s.lo = a; s.hi = b; return s; }
+    i32 width() :operator(|self|) { return hi - lo; }
+    static i32 low(Span* s) :operator(⌊s⌋) { return s.lo; }
+    }
