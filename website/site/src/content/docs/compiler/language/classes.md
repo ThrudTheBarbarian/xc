@@ -105,7 +105,9 @@ run. Its storage is in the program's data, zero-filled, and it is set up before
 `main` runs: its vtable is set, the instances it holds by value are set up, and
 its parameterless `init()` runs. Global instances are set up in declaration
 order, together with the globals whose initialisers run at startup. In a library
-they are set up when the library loads, before the program's `main`.
+they are set up when the library loads, before the program's `main`. In an object
+built with `-c`, they are set up before `main` and before the program's own, one
+object after another in link order.
 
 A global instance is never torn down: its `dealloc()` does not run at exit, and
 the objects its ivars refer to stay referenced.
