@@ -4334,10 +4334,10 @@ class Sema
         if (m.opShape() == 0)
             return String.withFormat("':precedence' on '%s' needs ':operator' on the same method", m.name().cString());
         if (!Node.isUserShape(m.opShape()))
-            return String.withFormat("'%s' keeps the precedence of the built-in operator: ':precedence' is for an operator of a class's own shape",
+            return String.withFormat("'%s' keeps the precedence of the built-in operator: ':precedence' is for an operator of a class's own shape; remove ':precedence'",
                                      Node.shapeCore(m.opShape()).cString());
         if (!Node.shapeIsInfix(m.opShape()))
-            return String.withFormat("':precedence' is for an operator between two operands: the prefix '%s' binds as the built-in prefix operators do",
+            return String.withFormat("':precedence' is for an operator between two operands: the prefix '%s' binds as the built-in prefix operators do; remove ':precedence'",
                                      Node.shapeCore(m.opShape()).cString());
         return (String*)0;
         }
@@ -4427,7 +4427,7 @@ class Sema
                         msg.append(d.name());
                         msg.appendCString(".");
                         msg.append(m.name());
-                        msg.appendCString("': an operator has one precedence");
+                        msg.appendCString("': an operator has one precedence; give both the same ':precedence', or leave it off one of them");
                         _errorAt(msg, m);
                         }
                     }
@@ -4649,7 +4649,7 @@ class Sema
             m.append(op);
             m.appendCString("' for (");
             m.append(opTypes(ops, 0));
-            m.appendCString(")");
+            m.appendCString(ops.count() == 1 ? "); the operand must be an instance of a class that defines it with :operator(...)" : "); one operand must be an instance of a class that defines it with :operator(...)");
             _errorAt(m, n);
             }
         return true;

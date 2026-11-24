@@ -1,7 +1,7 @@
 //xtc-flags: expect=sema-error
 // A shape that starts with an assignment and goes on with prefix operators
 // already reads as the assignment between two operands: `a =- b` is `a = -b`.
-// Refused: '=-' cannot be an operator: between two operands it already reads as '=' followed by a prefix operator
+// Refused: '=-' cannot be an operator: between two operands it already reads as '=' followed by a prefix operator; start the operator with another character
 #import <Stdio.xc>
 
 class V

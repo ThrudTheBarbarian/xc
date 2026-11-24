@@ -2877,7 +2877,7 @@ class Parser
         } else if (refused != 0) {
             msg = String.withCString("'");
             msg.append(refused);
-            msg.appendCString("' cannot be overloaded");
+            msg.appendCString("' cannot be overloaded; it keeps its built-in meaning, so choose another shape");
         } else
             msg = String.withCString("':operator' takes one operator applied to the method's own names, such as (self + o) or (-self)");
         String* fault = String.withCString("? ");
@@ -3078,7 +3078,7 @@ class Parser
         if (k == 1 && t0.type() != tokAt && t0.type() != tokMathOp) {
             String* m = String.withCString("? '");
             m.append(t0.value());
-            m.appendCString("' cannot be overloaded");
+            m.appendCString("' cannot be overloaded; it keeps its built-in meaning, so choose another shape");
             return m;
         }
         for (u32 q = from + 1; q < to; q++) : serial
@@ -3096,7 +3096,7 @@ class Parser
                 m.append(text);
                 m.appendCString("' cannot be an operator: between two operands it already reads as '");
                 m.append(t0.value());
-                m.appendCString("' followed by a prefix operator");
+                m.appendCString("' followed by a prefix operator; start the operator with another character");
                 return m;
             }
         }

@@ -323,7 +323,7 @@ static NSString* _Nullable XTUserShapeOf(NSArray<XTToken*>* t, NSUInteger from, 
         }
     if (k == 1 && t[from].type != XTTokenAt && t[from].type != XTTokenMathOp)
         {
-        *fault = [NSString stringWithFormat:@"'%@' cannot be overloaded", t[from].value];
+        *fault = [NSString stringWithFormat:@"'%@' cannot be overloaded; it keeps its built-in meaning, so choose another shape", t[from].value];
         return nil;
         }
     for (NSUInteger q = from + 1; q < to; q++)
@@ -344,7 +344,7 @@ static NSString* _Nullable XTUserShapeOf(NSArray<XTToken*>* t, NSUInteger from, 
         if (rest)
             {
             *fault = [NSString stringWithFormat:@"'%@' cannot be an operator: between two operands it already reads as "
-                                                @"'%@' followed by a prefix operator",
+                                                @"'%@' followed by a prefix operator; start the operator with another character",
                                                 text, t[from].value];
             return nil;
             }
