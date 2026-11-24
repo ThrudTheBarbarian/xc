@@ -160,18 +160,27 @@ param-list      ::= 'void'
 
 param           ::= type IDENT?
 
-annotations     ::= ':' annotation (',' annotation)*
+annotations     ::= ':' annotation ((',' | ':') annotation)*
 
 annotation      ::= 'banked' | 'main' | 'shadow'
                   | 'cloaked' ('(' IDENT ')')?
                   | 'naked' | 'irq' | 'vbi' | 'action'
                   | 'hwstack' | 'xtcstack' | 'needsos'
                   | 'operator' '(' operator-pattern ')'   // methods only
+                  | 'precedence' '(' precedence-spec ')'  // beside 'operator'
 
 operator-pattern ::= IDENT binary-op IDENT
                   | prefix-op IDENT
                   | IDENT compound-op IDENT
                   | IDENT '[' index-names ']' ('=' IDENT)?
+                  | IDENT shape IDENT
+                  | shape IDENT
+
+shape           ::= shape-char+          // written together, not a built-in operator
+shape-char      ::= '+' | '-' | '*' | '/' | '%' | '<' | '>' | '=' | '!' | '&'
+                  | '|' | '^' | '~' | '?' | ':' | '@' | U+2200 … U+22FF
+
+precedence-spec ::= ('above' | 'below')? binary-op (',' 'right')?
 
 index-names     ::= IDENT (',' IDENT)*
                   | IDENT ('..' | '...') IDENT
@@ -339,7 +348,10 @@ for-in loop; there are no first-class slice values.
 ## Expressions
 
 Listed highest precedence first. All levels are left-associative except
-assignment and the conditional, which are right-associative.
+assignment and the conditional, which are right-associative. An infix operator
+of a class's own shape (`a ** b`) sits at the level of its first character, or
+where its `:precedence` puts it, between two of these levels
+([Operators of your own](/compiler/language/operators/#operators-of-your-own)).
 
 ```bnf
 expr            ::= assignment
@@ -366,6 +378,7 @@ additive        ::= multiplicative (('+' | '-') multiplicative)*
 multiplicative  ::= unary (('*' | '/' | '%') unary)*
 
 unary           ::= ('~' | '!' | '-' | '+' | '*' | '&' | '++' | '--') unary
+                  | shape unary                       // a class's prefix operator
                   | postfix
 
 postfix         ::= primary postfix-op*
