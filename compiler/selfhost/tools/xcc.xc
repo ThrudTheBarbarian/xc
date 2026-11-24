@@ -2619,6 +2619,7 @@ void linkWin64(DriverOptions* d, String* prog)
     for (u32 i = (u32)0; i < pool.count(); i = i + (u32)1) ars.add(pool.get(i));
     if (objs.count() > (u32)0 || ars.count() > (u32)0) {
         PeLink* pl = new PeLink();
+        pl.setDll(shared);
         pl.merge(objs, ars, a.text(), a.data(), a.symbols(), a.dataSyms(), a.fixups());
         if (pl.rc() != (u32)0) {
             Stdio.printf("xcc: error: win64 link: %s\n", pl.why() == 0 ? "?" : pl.why().cString());

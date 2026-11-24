@@ -1,13 +1,15 @@
 #!/bin/bash
 # c-tls.sh — C and C++ thread-local variables (#611). Four threads each
 # change their own copy of an initialised and a zero-initialised thread-local
-# (and, in C++, one with a constructor and destructor); the main thread's
-# copies stay as they were. Each program is built by xcc as a whole, and the
-# C one also with -c and a separate link; each must print what clang's build
-# prints. Natively on arm64 macOS and Linux; with Wine and the mingw root,
-# also for win64: the C program with Windows threads (threads-win.c) against
-# clang's build of threads.c. (The C++ one's thread_local with a destructor
-# is not yet linked for win64: #611.) Skipped without clang.
+# (and, in C++, one with a constructor and destructor, which each thread
+# runs as it ends); the main thread's copies stay as they were. exit-order.cpp:
+# a thread's two thread_locals are destroyed once each, newest first, as it
+# ends, and the main thread's at exit, before the statics.
+# Each program is built by xcc as a whole, and the C one also with -c and a
+# separate link; each must print what clang's build prints. Natively on arm64
+# macOS and Linux; with Wine and the mingw root, also for win64 (the C program
+# with Windows threads, threads-win.c, against clang's build of threads.c).
+# Skipped without clang.
 #
 #   bash tests/par/c-tls.sh
 set -u
@@ -27,12 +29,16 @@ C=tests/par/c-tls/threads.c
 CXX=tests/par/c-tls/threads.cpp
 clang -O2 $PT -o "$W/ref.c" "$C" || { echo "FAIL c-tls: clang does not build threads.c"; exit 1; }
 clang++ -std=c++20 -O2 $PT -o "$W/ref.cpp" "$CXX" || { echo "FAIL c-tls: clang++ does not build threads.cpp"; exit 1; }
+EO=tests/par/c-tls/exit-order.cpp
+clang++ -std=c++20 -O2 $PT -o "$W/ref.eo" "$EO" || { echo "FAIL c-tls: clang++ does not build exit-order.cpp"; exit 1; }
 if "$XC" -q -O2 -H . -o "$W/x.c" "$C" > "$W/b" 2>&1; then check threads.c "$W/x.c" "$W/ref.c"
 else echo "FAIL c-tls: threads.c does not build"; grep -v warning "$W/b" | head -3; fail=1; fi
 if "$XC" -q -O2 -H . -c -o "$W/t.o" "$C" > "$W/b" 2>&1 && "$XC" -q -o "$W/x.o" "$W/t.o" >> "$W/b" 2>&1; then check "threads.c (-c, then linked)" "$W/x.o" "$W/ref.c"
 else echo "FAIL c-tls: threads.c with -c does not build"; grep -v warning "$W/b" | head -3; fail=1; fi
 if "$XC" -q -O2 -H . -o "$W/x.cpp" "$CXX" > "$W/b" 2>&1; then check threads.cpp "$W/x.cpp" "$W/ref.cpp"
 else echo "FAIL c-tls: threads.cpp does not build"; grep -v warning "$W/b" | head -3; fail=1; fi
+if "$XC" -q -O2 -H . -o "$W/x.eo" "$EO" > "$W/b" 2>&1; then check exit-order.cpp "$W/x.eo" "$W/ref.eo"
+else echo "FAIL c-tls: exit-order.cpp does not build"; grep -v warning "$W/b" | head -3; fail=1; fi
 # win64 under Wine.
 ROOT=/opt/clang/win64/x86_64-w64-mingw32
 if command -v wine >/dev/null 2>&1 && [ -f "$ROOT/lib/libc++.a" ]; then
@@ -43,6 +49,14 @@ if command -v wine >/dev/null 2>&1 && [ -f "$ROOT/lib/libc++.a" ]; then
         got=$(wrun "$W/xw.exe")
         [ "$got" = "$want" ] || { echo "FAIL c-tls: threads-win.c (win64) gives '$got', clang's threads.c '$want'"; fail=1; }
     else echo "FAIL c-tls: threads-win.c does not build for win64"; grep -v warning "$W/b" | head -3; fail=1; fi
+    for p in "$CXX ref.cpp" "$EO ref.eo"; do
+        set -- $p
+        want=$("$W/$2" 2>&1)
+        if "$XC" -q -O2 -H . -A win64 -o "$W/xw.exe" "$1" > "$W/b" 2>&1; then
+            got=$(wrun "$W/xw.exe")
+            [ "$got" = "$want" ] || { echo "FAIL c-tls: $(basename "$1") (win64) gives '$got', clang's '$want'"; fail=1; }
+        else echo "FAIL c-tls: $(basename "$1") does not build for win64"; grep -v warning "$W/b" | head -3; fail=1; fi
+    done
 fi
 [ $fail = 0 ] && echo "--- c-tls: pass ---" || echo "--- c-tls: FAIL ---"
 exit $fail
