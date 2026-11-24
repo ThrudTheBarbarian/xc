@@ -25,10 +25,12 @@ class PeLink
     Map* _tlsSyms;        // name -> Number(offset in _tls), defined when placed
     SectionBytes* _ctors; // the objects' .ctors: constructors, run by __main
     Array* _ctorsFix;     // X86Fixup@ against it
+    bool _dll;            // the image is a DLL (setDll), not an executable
 
     void init(void)
         {
         _rc = (u32)0;
+        _dll = false;
         _pdata = new SectionBytes();
         _pdataFix = new Array();
         _tls = new SectionBytes();
@@ -36,6 +38,12 @@ class PeLink
         _tlsSyms = new Map();
         _ctors = new SectionBytes();
         _ctorsFix = new Array();
+        }
+    // The image being linked is a DLL: what PeLink writes for it differs
+    // where an executable and a DLL do (placeThreadAtexit).
+    void setDll(bool v)
+        {
+        _dll = v;
         }
     u32 rc(void)
         {
@@ -265,7 +273,7 @@ class PeLink
     // data directory 9.
     void placeTls(SectionBytes* mdata, Map* msyms, Array* mdataSyms, Array* mfix)
         {
-        if (_tls.length() == (u32)0)
+        if (_tls.length() == (u32)0 && msyms.get((Hashable*)String.withCString("__xc_tl_exit")) == (Object*)0)
             return;
         PeLink.padArray(mdata, (u32)15);
         u32 base = mdata.length();
@@ -293,7 +301,16 @@ class PeLink
             for (u32 b = (u32)0; b < (u32)8; b = b + (u32)1)
                 mdata.appendByte((u8)0);
             }
+        // The callback list, null-ended: the thread-exit destructors'
+        // callback when placeThreadAtexit wrote it.
+        String* cb = String.withCString("__xc_tl_exit");
         PeLink.defineData(msyms, mdataSyms, String.withCString("__xc_tls_callbacks"), mdata.length());
+        if (msyms.get((Hashable*)cb) != (Object*)0)
+            {
+            mfix.add((Object*)X86Fixup.make(mdata.length(), (u32)X86FIX_ABS64, cb, (i32)0));
+            for (u32 b = (u32)0; b < (u32)8; b = b + (u32)1)
+                mdata.appendByte((u8)0);
+            }
         for (u32 b = (u32)0; b < (u32)8; b = b + (u32)1)
             mdata.appendByte((u8)0);
         u32 dir = mdata.length();
@@ -304,6 +321,124 @@ class PeLink
         mfix.add((Object*)X86Fixup.make(dir + (u32)8, (u32)X86FIX_ABS64, String.withCString("__xc_tls_end"), (i32)0));
         mfix.add((Object*)X86Fixup.make(dir + (u32)16, (u32)X86FIX_ABS64, idx, (i32)0));
         mfix.add((Object*)X86Fixup.make(dir + (u32)24, (u32)X86FIX_ABS64, String.withCString("__xc_tls_callbacks"), (i32)0));
+        }
+
+    // Whether a fixup names nm.
+    static bool named(Array* mfix, String* nm)
+        {
+        for (u32 i = (u32)0; i < mfix.count(); i = i + (u32)1)
+            {
+            String* s = ((X86Fixup*)mfix.get(i)).symbol();
+            if (s != (String*)0 && s.equals(nm))
+                return true;
+            }
+        return false;
+        }
+
+    // __dso_handle, when something names it and no object defines it: the
+    // image's own handle, which C++ passes to __cxa_thread_atexit (a
+    // thread_local with a destructor) so its destructors are this image's.
+    // Only its address matters: a word in the data.
+    static void placeDsoHandle(SectionBytes* mdata, Map* msyms, Array* mdataSyms, Array* mfix)
+        {
+        String* nm = String.withCString("__dso_handle");
+        if (msyms.get((Hashable*)nm) != (Object*)0 || !PeLink.named(mfix, nm))
+            return;
+        PeLink.padArray(mdata, (u32)7);
+        PeLink.defineData(msyms, mdataSyms, nm, mdata.length());
+        for (u32 b = (u32)0; b < (u32)8; b = b + (u32)1)
+            mdata.appendByte((u8)0);
+        }
+
+    // __cxa_thread_atexit, when something names it and no object defines
+    // it (clang's code for a C++ thread_local with a destructor calls it;
+    // mingw keeps it in libmingw32, which an xcc link does not take). It
+    // pushes {destructor, object, next} on the calling thread's list, kept
+    // in a TlsAlloc slot. __xc_tl_exit, a TLS callback (placeTls lists it),
+    // allocates the slot at process attach and runs the thread's list,
+    // newest first, when a thread ends. An executable's main thread runs
+    // its list from ucrt's exit, before the atexit handlers (C++ destroys
+    // thread_locals before statics): the callback registers itself there.
+    // A DLL runs it at process detach.
+    void placeThreadAtexit(SectionBytes* mtext, SectionBytes* mdata, Map* msyms, Array* mdataSyms, Array* mfix)
+        {
+        String* nm = String.withCString("__cxa_thread_atexit");
+        if (msyms.get((Hashable*)nm) != (Object*)0 || !PeLink.named(mfix, nm))
+            return;
+        PeLink.padArray(mdata, (u32)7);
+        PeLink.defineData(msyms, mdataSyms, String.withCString("__xc_tl_slot"), mdata.length());
+        for (u32 b = (u32)0; b < (u32)8; b = b + (u32)1)
+            mdata.appendByte((u8)0);
+        String* src = String.withCString(
+            "\t.intel_syntax noprefix\n\t.text\n"
+            "__cxa_thread_atexit:\n"
+            "\tpush rsi\n\tpush rdi\n\tsub rsp, 40\n"
+            "\tmov rsi, rcx\n\tmov rdi, rdx\n"
+            "\tmov ecx, 24\n\tcall malloc\n"
+            "\ttest rax, rax\n\tje .Lxc_tla_fail\n"
+            "\tmov qword ptr [rax], rsi\n\tmov qword ptr [rax + 8], rdi\n\tmov rsi, rax\n"
+            "\tmov ecx, dword ptr [rip + __xc_tl_slot]\n\tcall TlsGetValue\n"
+            "\tmov qword ptr [rsi + 16], rax\n"
+            "\tmov ecx, dword ptr [rip + __xc_tl_slot]\n\tmov rdx, rsi\n\tcall TlsSetValue\n"
+            "\txor eax, eax\n\tjmp .Lxc_tla_ret\n"
+            ".Lxc_tla_fail:\n\tmov eax, -1\n"
+            ".Lxc_tla_ret:\n\tadd rsp, 40\n\tpop rdi\n\tpop rsi\n\tret\n"
+            // (module, reason, reserved): 1 process attach, 0 process
+            // detach, 3 thread detach.
+            "__xc_tl_exit:\n"
+            "\tpush rsi\n\tsub rsp, 32\n"
+            "\tcmp edx, 1\n\tjne .Lxc_tlx_detach\n"
+            "\tcall TlsAlloc\n\tmov dword ptr [rip + __xc_tl_slot], eax\n");
+        if (!_dll)
+            src.appendCString("\tlea rcx, [rip + __xc_tl_exit]\n\tcall _register_thread_local_exe_atexit_callback\n");
+        src.appendCString(
+            "\tjmp .Lxc_tlx_ret\n"
+            ".Lxc_tlx_detach:\n"
+            "\tcmp edx, 3\n\tje .Lxc_tlx_run\n"
+            "\ttest edx, edx\n\tjne .Lxc_tlx_ret\n"
+            ".Lxc_tlx_run:\n"
+            "\tmov ecx, dword ptr [rip + __xc_tl_slot]\n\tcall TlsGetValue\n"
+            "\ttest rax, rax\n\tje .Lxc_tlx_ret\n"
+            "\tmov rsi, rax\n"
+            "\tmov ecx, dword ptr [rip + __xc_tl_slot]\n\tmov rdx, qword ptr [rsi + 16]\n\tcall TlsSetValue\n"
+            "\tmov rcx, qword ptr [rsi + 8]\n\tcall qword ptr [rsi]\n"
+            "\tmov rcx, rsi\n\tcall free\n"
+            "\tjmp .Lxc_tlx_run\n"
+            ".Lxc_tlx_ret:\n\tadd rsp, 32\n\tpop rsi\n\tret\n");
+        self.appendCode(src, mtext, msyms, mfix);
+        }
+
+    // Text assembled here and appended to the image's: its global labels
+    // join the symbols, the references the assembler left join the fixups.
+    // Text only (its jumps are resolved by the assembler); data it names is
+    // defined by the caller.
+    void appendCode(String* src, SectionBytes* mtext, Map* msyms, Array* mfix)
+        {
+        X86Asm* a = new X86Asm();
+        a.assemble(src);
+        if (a.failed() || a.data().length() > (u32)0)
+            {
+            fail(String.withCString("the link's own code does not assemble: ").appending(a.why() == (String*)0 ? String.withCString("data in it") : a.why()));
+            return;
+            }
+        PeLink.padArray(mtext, (u32)15);
+        u32 base = mtext.length();
+        SectionBytes* t = a.text();
+        for (u32 i = (u32)0; i < t.length(); i = i + (u32)1)
+            mtext.appendByte(t.byteAt(i));
+        Array* names = a.symbols().allKeys();
+        for (u32 i = (u32)0; i < names.count(); i = i + (u32)1)
+            {
+            String* n = (String*)names.get(i);
+            if (!n.hasPrefix(String.withCString(".L")))
+                msyms.set((Hashable*)n, (Object*)Number.withU32(base + ((Number*)a.symbols().get((Hashable*)n)).asU32()));
+            }
+        Array* fx = a.fixups();
+        for (u32 i = (u32)0; i < fx.count(); i = i + (u32)1)
+            {
+            X86Fixup* f = (X86Fixup*)fx.get(i);
+            mfix.add((Object*)X86Fixup.make(base + f.offset(), f.kind(), f.symbol(), f.addend()));
+            }
         }
 
     // The constructor list (__xc_ctors_start .. __xc_ctors_end) and, when
@@ -492,9 +627,7 @@ class PeLink
             }
         if (archives.count() == (u32)0)
             {
-            self.placeTls(mdata, msyms, mdataSyms, mfix);
-            self.placeCtors(mtext, mdata, msyms, mdataSyms, mfix);
-            self.placePdata(mdata, msyms, mdataSyms, mfix);
+            self.placeLast(mtext, mdata, msyms, mdataSyms, mfix);
             return;
             }
         Array* pool = new Array();
@@ -561,6 +694,18 @@ class PeLink
                     return;
                 }
             }
+        self.placeLast(mtext, mdata, msyms, mdataSyms, mfix);
+        }
+
+    // What the link adds once every object and archive member is in: the
+    // thread-exit destructors and __dso_handle (when named), the TLS
+    // directory, the constructor list and the exception directory.
+    void placeLast(SectionBytes* mtext, SectionBytes* mdata, Map* msyms, Array* mdataSyms, Array* mfix)
+        {
+        self.placeThreadAtexit(mtext, mdata, msyms, mdataSyms, mfix);
+        if (_rc != (u32)0)
+            return;
+        PeLink.placeDsoHandle(mdata, msyms, mdataSyms, mfix);
         self.placeTls(mdata, msyms, mdataSyms, mfix);
         self.placeCtors(mtext, mdata, msyms, mdataSyms, mfix);
         self.placePdata(mdata, msyms, mdataSyms, mfix);
