@@ -268,6 +268,46 @@ static NSDictionary<NSString*, NSData*>* _Nullable XTElfDwarfSections(BOOL isExe
         };
     NSData* data = dataIn ?: [NSData data];
 
+    // The module's load-time constructors (the back end's table between
+    // __xt_ctors_start and __xt_ctors_end): in an object without main they
+    // are its .init_array, which a link adds to the program's table after the
+    // program's own entries, in link order. The bounds are not written, so
+    // they cannot stand in for the program's. The entry module keeps its
+    // table in .data, where its start-up code finds it.
+    NSMutableData* ctors = [NSMutableData data];
+    NSMutableArray<XAX86_64Fixup*>* ctorFix = [NSMutableArray array];
+    if (symbols[@"__xt_ctors_start"] && symbols[@"__xt_ctors_end"] && !symbols[@"main"])
+        {
+        uint64_t c0 = symbols[@"__xt_ctors_start"].unsignedLongLongValue;
+        uint64_t c1 = symbols[@"__xt_ctors_end"].unsignedLongLongValue;
+        [ctors appendData:[data subdataWithRange:NSMakeRange((NSUInteger)c0, (NSUInteger)(c1 - c0))]];
+        // The table ends the data (the back end emits it last): cut it off.
+        BOOL atEnd = c1 == data.length;
+        NSMutableDictionary<NSString*, NSNumber*>* syms2 = [symbols mutableCopy];
+        [syms2 removeObjectForKey:@"__xt_ctors_start"];
+        [syms2 removeObjectForKey:@"__xt_ctors_end"];
+        symbols = syms2;
+        NSMutableArray<XAX86_64Fixup*>* fx2 = [NSMutableArray array];
+        for (XAX86_64Fixup* f in fixups)
+            {
+            BOOL inTable = f.kind == XAX86FixupAbs64 && f.offset >= c0 && f.offset < c1;
+            if (inTable)
+                {
+                XAX86_64Fixup* g = [XAX86_64Fixup new];
+                g.offset = f.offset - c0;
+                g.kind = f.kind;
+                g.symbol = f.symbol;
+                g.addend = f.addend;
+                [ctorFix addObject:g];
+                }
+            if (!inTable || !atEnd)
+                [fx2 addObject:f];
+            }
+        fixups = fx2;
+        if (atEnd)
+            data = [data subdataWithRange:NSMakeRange(0, (NSUInteger)c0)];
+        }
+
     // ── symbol table ──────────────────────────────────────────────────────
     // ELF requires every STB_LOCAL symbol to precede every global, and
     // sh_info of .symtab to be the index of the first global — so the order is
@@ -350,7 +390,7 @@ static NSDictionary<NSString*, NSData*>* _Nullable XTElfDwarfSections(BOOL isExe
     for (NSUInteger i = 0; i < dnames.count; i++)
         {
         uint64_t o0 = symbols[dnames[i]].unsignedLongLongValue;
-        uint64_t o1 = dataIn.length;
+        uint64_t o1 = data.length;
         for (NSUInteger j = i + 1; j < dnames.count; j++)
             if (symbols[dnames[j]].unsignedLongLongValue > o0)
                 {
@@ -438,9 +478,26 @@ static NSDictionary<NSString*, NSData*>* _Nullable XTElfDwarfSections(BOOL isExe
         put64v(textRel, (uint64_t)f.addend);
         }
 
+    // The constructors' pointers, each an R_X86_64_64 against its function.
+    NSMutableData* initRel = [NSMutableData data];
+    for (XAX86_64Fixup* f in ctorFix)
+        {
+        NSNumber* si = symIndex[f.symbol];
+        if (!si)
+            continue;
+        put64v(initRel, f.offset);
+        put64v(initRel, ((uint64_t)si.unsignedIntValue << 32) | 1 /*R_X86_64_64*/);
+        put64v(initRel, (uint64_t)f.addend);
+        }
+    BOOL hasInit = ctors.length > 0;
+
     // ── section names, then file offsets ──────────────────────────────────
+    // .init_array and its RELA table come last, after .shstrtab, so no other
+    // section's index moves.
     NSArray<NSString*>* secNames = @[ @"", @".text", @".data", @".rela.text",
                                       @".rela.data", @".symtab", @".strtab", @".shstrtab" ];
+    if (hasInit)
+        secNames = [secNames arrayByAddingObjectsFromArray:@[ @".init_array", @".rela.init_array" ]];
     NSMutableData* shstr = [NSMutableData data];
     put8v(shstr, 0);
     NSMutableArray<NSNumber*>* shName = [NSMutableArray array];
@@ -471,6 +528,13 @@ static NSDictionary<NSString*, NSData*>* _Nullable XTElfDwarfSections(BOOL isExe
     off += strtab.length;
     uint64_t shstOff = off;
     off += shstr.length;
+    uint64_t initOff = off, irelOff = off;
+    if (hasInit)
+        {
+        initOff = roundUpTo(off, 8);
+        irelOff = roundUpTo(initOff + ctors.length, 8);
+        off = irelOff + initRel.length;
+        }
     uint64_t shOff = roundUpTo(off, 8);
 
     NSMutableData* out = [NSMutableData data];
@@ -487,7 +551,7 @@ static NSDictionary<NSString*, NSData*>* _Nullable XTElfDwarfSections(BOOL isExe
     put16v(out, 0);
     put16v(out, 0); // no program headers
     put16v(out, 64 /*e_shentsize*/);
-    put16v(out, SEC_COUNT);
+    put16v(out, (uint16_t)secNames.count);
     put16v(out, SEC_SHSTRTAB);
 
     void (^pad)(uint64_t) = ^(uint64_t to) {
@@ -508,6 +572,13 @@ static NSDictionary<NSString*, NSData*>* _Nullable XTElfDwarfSections(BOOL isExe
     [out appendData:strtab];
     pad(shstOff);
     [out appendData:shstr];
+    if (hasInit)
+        {
+        pad(initOff);
+        [out appendData:ctors];
+        pad(irelOff);
+        [out appendData:initRel];
+        }
     pad(shOff);
 
     // name, type, flags, addr, offset, size, link, info, align, entsize
@@ -535,6 +606,12 @@ static NSDictionary<NSString*, NSData*>* _Nullable XTElfDwarfSections(BOOL isExe
          (uint32_t)firstGlobal, 8, SYM_SZ);
     shdr(SEC_STRTAB, SHT_STRTAB, 0, strOff, strtab.length, 0, 0, 1, 0);
     shdr(SEC_SHSTRTAB, SHT_STRTAB, 0, shstOff, shstr.length, 0, 0, 1, 0);
+    // SHT_INIT_ARRAY, SHF_ALLOC|SHF_WRITE; its RELA table (SHF_INFO_LINK).
+    if (hasInit)
+        {
+        shdr(SEC_COUNT, 14 /*SHT_INIT_ARRAY*/, SHF_ALLOC | SHF_WRITE, initOff, ctors.length, 0, 0, 8, 8);
+        shdr(SEC_COUNT + 1, SHT_RELA, 0x40 /*SHF_INFO_LINK*/, irelOff, initRel.length, SEC_SYMTAB, SEC_COUNT, 8, RELA_SZ);
+        }
     return out;
     }
 
@@ -834,12 +911,27 @@ static NSDictionary<NSString*, NSData*>* _Nullable XTElfDwarfSections(BOOL isExe
     // thread, and a few zero bytes cost nothing at these sizes).
     NSMutableData* tls = [NSMutableData data];
     NSMutableDictionary<NSNumber*, NSNumber*>* tlsOffOf = [NSMutableDictionary dictionary];
+    // The constructors an object asks the loader to run (.init_array, 8-byte
+    // pointers), kept apart for the link to add to the program's table.
+    NSMutableData* init = [NSMutableData data];
+    NSMutableDictionary<NSNumber*, NSNumber*>* initOffOf = [NSMutableDictionary dictionary];
     for (NSUInteger i = 1; i < secs.count; i++)
         {
         if (textOffOf[@(i)])
             continue;
         if (!(sflg(i) & SHF_ALLOC))
             continue;
+        if (styp(i) == 14 /*SHT_INIT_ARRAY*/)
+            {
+            while (init.length % 8)
+                {
+                uint8_t z = 0;
+                [init appendBytes:&z length:1];
+                }
+            initOffOf[@(i)] = @(init.length);
+            [init appendBytes:b + soff(i) length:(NSUInteger)ssz(i)];
+            continue;
+            }
         // SHT_X86_64_UNWIND: x86-64's .eh_frame, kept for an object link
         // (a C++ program's exceptions read it), as the port keeps it.
         BOOL unwind = styp(i) == 0x70000001;
@@ -965,6 +1057,7 @@ static NSDictionary<NSString*, NSData*>* _Nullable XTElfDwarfSections(BOOL isExe
     NSMutableArray<NSDictionary*>* relocs = [NSMutableArray array];
     NSMutableArray<NSDictionary*>* datarelocs = [NSMutableArray array];
     NSMutableArray<NSDictionary*>* tlsrelocs = [NSMutableArray array];
+    NSMutableArray<NSDictionary*>* initrelocs = [NSMutableArray array];
     for (NSUInteger i = 1; i < secs.count; i++)
         {
         if (styp(i) != SHT_RELA)
@@ -973,11 +1066,13 @@ static NSDictionary<NSString*, NSData*>* _Nullable XTElfDwarfSections(BOOL isExe
         NSNumber* tOff = textOffOf[@(applies)];
         NSNumber* dOff = blobOff[@(applies)];
         NSNumber* lOff = tlsOffOf[@(applies)]; // .rela.tdata
+        NSNumber* iOff = initOffOf[@(applies)]; // .rela.init_array
         BOOL toText = (tOff != nil);
-        if (!toText && !dOff && !lOff)
+        if (!toText && !dOff && !lOff && !iOff)
             continue; // e.g. .rela.eh_frame
         uint64_t base = (toText ? tOff : dOff ? dOff
-                                              : lOff)
+                                     : lOff ? lOff
+                                            : iOff)
                             .unsignedLongLongValue;
         uint64_t n = ssz(i) / RELA_SZ;
         for (uint64_t r = 0; r < n; r++)
@@ -989,7 +1084,8 @@ static NSDictionary<NSString*, NSData*>* _Nullable XTElfDwarfSections(BOOL isExe
                                   @"type" : @(rinfo & 0xFFFFFFFFu),
                                   @"addend" : @((int64_t)rd64(e + 16))};
             [(toText ? relocs : dOff ? datarelocs
-                                     : tlsrelocs) addObject:rec];
+                                : lOff ? tlsrelocs
+                                       : initrelocs) addObject:rec];
             }
         }
     uint64_t maxData = commonAlign;
@@ -1006,7 +1102,7 @@ static NSDictionary<NSString*, NSData*>* _Nullable XTElfDwarfSections(BOOL isExe
         [textsecs addObject:textOffOf[k]];
     for (NSNumber* k in blobOff)
         [datasecs addObject:blobOff[k]];
-    return @{@"text" : text, @"data" : data, @"symbols" : syms, @"datasyms" : dsyms, @"textsecs" : textsecs, @"datasecs" : datasecs, @"symnames" : symnames, @"symdefs" : symdefs, @"relocs" : relocs, @"datarelocs" : datarelocs, @"tlsrelocs" : tlsrelocs, @"tls" : tls, @"tlsalign" : @(maxTls), @"dataalign" : @(maxData)};
+    return @{@"text" : text, @"data" : data, @"symbols" : syms, @"datasyms" : dsyms, @"textsecs" : textsecs, @"datasecs" : datasecs, @"symnames" : symnames, @"symdefs" : symdefs, @"relocs" : relocs, @"datarelocs" : datarelocs, @"tlsrelocs" : tlsrelocs, @"tls" : tls, @"tlsalign" : @(maxTls), @"dataalign" : @(maxData), @"init" : init, @"initrelocs" : initrelocs};
     }
 
 + (nullable NSData*)staticExecutableFromText:(NSData*)textIn

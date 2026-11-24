@@ -157,10 +157,10 @@ _start:
 	mov	[rip + _xt_saved_argc], edi	# Process.arguments() reads these back
 	mov	[rip + _xt_saved_argv], rsi	#   (rtfiles-linux.s, CI task #81)
 	and	rsp, -16		# the ABI wants rsp 16-aligned before a call,
-	# Load-time constructors (bug 134): the back end lays the module's
-	# pointers between __xt_ctors_start and __xt_ctors_end in .data; walk
-	# them before main, the way a libc start walks .init_array. argc/argv/envp
-	# ride in callee-saved registers across the calls.
+	# Load-time constructors: the program's table between __xt_ctors_start
+	# and __xt_ctors_end in .data, with each linked object's .init_array
+	# entries after its own; walked before main. argc/argv/envp ride in
+	# callee-saved registers across the calls.
 	mov	r12, rdi
 	mov	r13, rsi
 	mov	r14, rdx

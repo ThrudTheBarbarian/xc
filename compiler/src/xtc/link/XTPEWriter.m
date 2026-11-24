@@ -133,6 +133,45 @@ static uint64_t rawSizeOf(NSData* d)
         SCN_ALIGN_8 = 0x00400000
         };
     NSData* data = dataIn ?: [NSData data];
+    // The module's load-time constructors (the back end's table between
+    // __xt_ctors_start and __xt_ctors_end): in an object without main they
+    // are its .CRT$XCU section, which a link adds to the program's table
+    // after the program's own entries, in link order. The bounds are not
+    // written, so they cannot stand in for the program's. The entry module
+    // keeps its table in .data, where its start-up code finds it.
+    NSMutableData* ctors = [NSMutableData data];
+    NSMutableArray<XAX86_64Fixup*>* ctorFix = [NSMutableArray array];
+    if (symbols[@"__xt_ctors_start"] && symbols[@"__xt_ctors_end"] && !symbols[@"main"])
+        {
+        uint64_t c0 = symbols[@"__xt_ctors_start"].unsignedLongLongValue;
+        uint64_t c1 = symbols[@"__xt_ctors_end"].unsignedLongLongValue;
+        [ctors appendData:[data subdataWithRange:NSMakeRange((NSUInteger)c0, (NSUInteger)(c1 - c0))]];
+        // The table ends the data (the back end emits it last): cut it off.
+        BOOL atEnd = c1 == data.length;
+        NSMutableDictionary<NSString*, NSNumber*>* syms2 = [symbols mutableCopy];
+        [syms2 removeObjectForKey:@"__xt_ctors_start"];
+        [syms2 removeObjectForKey:@"__xt_ctors_end"];
+        symbols = syms2;
+        NSMutableArray<XAX86_64Fixup*>* fx2 = [NSMutableArray array];
+        for (XAX86_64Fixup* f in fixups)
+            {
+            BOOL inTable = f.kind == XAX86FixupAbs64 && f.offset >= c0 && f.offset < c1;
+            if (inTable)
+                {
+                XAX86_64Fixup* g = [XAX86_64Fixup new];
+                g.offset = f.offset - c0;
+                g.kind = f.kind;
+                g.symbol = f.symbol;
+                g.addend = f.addend;
+                [ctorFix addObject:g];
+                }
+            if (!inTable || !atEnd)
+                [fx2 addObject:f];
+            }
+        fixups = fx2;
+        if (atEnd)
+            data = [data subdataWithRange:NSMakeRange(0, (NSUInteger)c0)];
+        }
     NSMutableData *mtext = [text mutableCopy], *mdata = [data mutableCopy];
 
     // Symbols: defined (text then data) and then undefined, sorted within each
@@ -223,7 +262,28 @@ static uint64_t rawSizeOf(NSData* d)
             sb[i] = (uint8_t)(sz >> (8 * i));
         }
 
-    uint64_t off = 20 + 2 * PE_SECT_HDR_SIZE;
+    // The constructors' pointers, each an ADDR64 against its function with
+    // the addend in place.
+    NSMutableData* initRel = [NSMutableData data];
+    uint32_t nInitRel = 0;
+    uint8_t* ip = ctors.mutableBytes;
+    for (XAX86_64Fixup* f in ctorFix)
+        {
+        NSNumber* si = symIndex[f.symbol];
+        if (!si)
+            continue;
+        uint64_t v = (uint64_t)f.addend;
+        for (int i = 0; i < 8; i++)
+            ip[f.offset + i] = (uint8_t)(v >> (8 * i));
+        p32(initRel, (uint32_t)f.offset);
+        p32(initRel, si.unsignedIntValue);
+        p16(initRel, REL_ADDR64);
+        nInitRel++;
+        }
+    BOOL hasInit = ctors.length > 0;
+    uint16_t nsect = hasInit ? 3 : 2;
+
+    uint64_t off = 20 + nsect * PE_SECT_HDR_SIZE;
     uint64_t textOff = off;
     off += mtext.length;
     uint64_t dataOff = off;
@@ -232,12 +292,16 @@ static uint64_t rawSizeOf(NSData* d)
     off += textRel.length;
     uint64_t drelOff = off;
     off += dataRel.length;
+    uint64_t initOff = off;
+    off += ctors.length;
+    uint64_t irelOff = off;
+    off += initRel.length;
     uint64_t symOff = off;
     off += order.count * SYM_SZ;
 
     NSMutableData* out = [NSMutableData data];
     p16(out, PE_MACHINE_AMD64);
-    p16(out, 2 /*NumberOfSections*/);
+    p16(out, nsect /*NumberOfSections*/);
     p32(out, 0 /*TimeDateStamp — zero keeps the object reproducible*/);
     p32(out, (uint32_t)symOff);
     p32(out, (uint32_t)order.count);
@@ -263,11 +327,16 @@ static uint64_t rawSizeOf(NSData* d)
          PE_SCN_CODE | PE_SCN_MEM_EXECUTE | PE_SCN_MEM_READ | SCN_ALIGN_16);
     sect(".data", mdata.length, dataOff, drelOff, nDataRel,
          PE_SCN_INITIALIZED_DATA | PE_SCN_MEM_READ | PE_SCN_MEM_WRITE | SCN_ALIGN_8);
+    if (hasInit)
+        sect(".CRT$XCU", ctors.length, initOff, irelOff, nInitRel,
+             PE_SCN_INITIALIZED_DATA | PE_SCN_MEM_READ | SCN_ALIGN_8);
 
     [out appendData:mtext];
     [out appendData:mdata];
     [out appendData:textRel];
     [out appendData:dataRel];
+    [out appendData:ctors];
+    [out appendData:initRel];
     for (NSUInteger i = 0; i < order.count; i++)
         {
         NSString* n = order[i];
@@ -440,6 +509,10 @@ static uint64_t rawSizeOf(NSData* d)
 
     NSMutableData* data = [NSMutableData data];
     NSMutableDictionary<NSNumber*, NSNumber*>* blobOff = [NSMutableDictionary dictionary];
+    // The constructors an object asks the program to run before main
+    // (.CRT$XCU, 8-byte pointers): an xc module built without main.
+    NSMutableData* init = [NSMutableData data];
+    NSMutableDictionary<NSNumber*, NSNumber*>* initOff = [NSMutableDictionary dictionary];
     uint32_t dataAlign = 8; // the strictest alignment a data section asks for
     NSMutableSet<NSNumber*>* bssSects = [NSMutableSet set];   // uninitialised (.bss) sections
     for (NSUInteger i = 1; i < secs.count; i++)
@@ -451,6 +524,18 @@ static uint64_t rawSizeOf(NSData* d)
             continue;
         if (skippable(secs[i]))
             continue;
+        if ([secs[i][@"name"] isEqualToString:@".CRT$XCU"])
+            {
+            while (init.length & 7)
+                {
+                uint8_t z = 0;
+                [init appendBytes:&z length:1];
+                }
+            initOff[@(i)] = @(init.length);
+            [init appendBytes:b + [secs[i][@"raw"] unsignedLongLongValue]
+                       length:[secs[i][@"size"] unsignedIntValue]];
+            continue;
+            }
         if (!(ch & (PE_SCN_INITIALIZED_DATA | PE_SCN_UNINIT_DATA)))
             continue;
         // The header's IMAGE_SCN_ALIGN field (bits 20-23, 2^(n-1) bytes).
@@ -532,6 +617,7 @@ static uint64_t rawSizeOf(NSData* d)
 
     NSMutableArray<NSDictionary*>* relocs = [NSMutableArray array];
     NSMutableArray<NSDictionary*>* datarelocs = [NSMutableArray array];
+    NSMutableArray<NSDictionary*>* initrelocs = [NSMutableArray array];
     for (NSUInteger i = 1; i < secs.count; i++)
         {
         uint32_t nrel = [secs[i][@"nrel"] unsignedIntValue];
@@ -540,7 +626,8 @@ static uint64_t rawSizeOf(NSData* d)
         NSNumber* tOff = textOff[@(i)];
         BOOL toText = (tOff != nil);
         NSNumber* dOff = blobOff[@(i)];
-        if (!toText && !dOff)
+        NSNumber* iOff = initOff[@(i)];
+        if (!toText && !dOff && !iOff)
             continue; // a skipped section relocates nothing
         uint64_t rbase = [secs[i][@"rel"] unsignedLongLongValue];
         uint64_t sraw = [secs[i][@"raw"] unsignedLongLongValue];
@@ -555,15 +642,16 @@ static uint64_t rawSizeOf(NSData* d)
                 addend = (int64_t)r64(sraw + roff);
             else
                 addend = (int32_t)r32(sraw + roff) - 4; // undo REL32's implied +4
-            [(toText ? relocs : datarelocs) addObject:
+            [(toText ? relocs : dOff ? datarelocs : initrelocs) addObject:
                                                 @{@"off" : @(roff + (toText ? tOff.unsignedLongLongValue
-                                                                            : dOff.unsignedLongLongValue)),
+                                                                     : dOff ? dOff.unsignedLongLongValue
+                                                                            : iOff.unsignedLongLongValue)),
                                                   @"sym" : @(rsym),
                                                   @"type" : @(rt),
                                                   @"addend" : @(addend)}];
             }
         }
-    return @{@"text" : text, @"data" : data, @"symbols" : syms, @"datasyms" : dsyms, @"symnames" : symnames, @"symdefs" : symdefs, @"relocs" : relocs, @"datarelocs" : datarelocs, @"dataAlign" : @(dataAlign)};
+    return @{@"text" : text, @"data" : data, @"symbols" : syms, @"datasyms" : dsyms, @"symnames" : symnames, @"symdefs" : symdefs, @"relocs" : relocs, @"datarelocs" : datarelocs, @"dataAlign" : @(dataAlign), @"init" : init, @"initrelocs" : initrelocs};
     }
 
 + (nullable NSData*)executableFromText:(NSData*)textIn

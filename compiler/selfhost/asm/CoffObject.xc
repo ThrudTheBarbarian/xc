@@ -124,6 +124,9 @@ bool gCoffKeepUnwind;
     Data* _ctors;        // the .ctors sections: constructor pointers (setKeepUnwind)
     Map* _ctorsOffOf;
     Array* _ctorsRelocs;
+    Data* _init;         // the .CRT$XCU sections: load-time constructors' pointers
+    Map* _initOffOf;     // section index -> offset+1 in it
+    Array* _initRelocs;  // ElfReloc@ against it
     Data* _pdata;        // the .pdata sections, one after another (setKeepUnwind)
     Map* _pdataOffOf;    // section index -> offset+1 in it
     Array* _pdataRelocs; // ElfReloc@ against it: ADDR32NB, three a function
@@ -146,6 +149,9 @@ bool gCoffKeepUnwind;
         _ctors = new Data();
         _ctorsOffOf = new Map();
         _ctorsRelocs = new Array();
+        _init = new Data();
+        _initOffOf = new Map();
+        _initRelocs = new Array();
         _pdata = new Data();
         _pdataOffOf = new Map();
         _pdataRelocs = new Array();
@@ -167,6 +173,16 @@ bool gCoffKeepUnwind;
     Array* ctorsRelocs(void)
         {
         return _ctorsRelocs;
+        }
+    // The constructors an object asks the program to run before main
+    // (.CRT$XCU, 8-byte pointers): an xc module built without main.
+    Data* initArray(void)
+        {
+        return _init;
+        }
+    Array* initRelocs(void)
+        {
+        return _initRelocs;
         }
     Array* pdataRelocs(void)
         {
@@ -335,6 +351,13 @@ bool gCoffKeepUnwind;
                     _copyInto(_tlsData, s.raw(), s.size());
                 continue;
                 }
+            if (s.name().equals(String.withCString(".CRT$XCU")))
+                {
+                _padTo(_init, (u32)8);
+                _initOffOf.set((Hashable*)Number.withU32(i), (Object*)Number.withU32(_init.length() + (u32)1));
+                _copyInto(_init, s.raw(), s.size());
+                continue;
+                }
             if (gCoffKeepUnwind && s.name().hasPrefix(String.withCString(".ctors")))
                 {
                 _padTo(_ctors, (u32)8);
@@ -466,10 +489,11 @@ bool gCoffKeepUnwind;
             u32 pd = _in(_pdataOffOf, i);
             u32 tl = _in(_tlsOffOf, i);
             u32 ct = _in(_ctorsOffOf, i);
-            if (t == (u32)0 && dd == (u32)0 && pd == (u32)0 && tl == (u32)0 && ct == (u32)0)
+            u32 ia = _in(_initOffOf, i);
+            if (t == (u32)0 && dd == (u32)0 && pd == (u32)0 && tl == (u32)0 && ct == (u32)0 && ia == (u32)0)
                 continue; // a skipped section relocates nothing
-            u32 base = (t != (u32)0 ? t : (dd != (u32)0 ? dd : (pd != (u32)0 ? pd : (tl != (u32)0 ? tl : ct)))) - (u32)1;
-            Array* into = t != (u32)0 ? _relocs : (dd != (u32)0 ? _dataRelocs : (pd != (u32)0 ? _pdataRelocs : (tl != (u32)0 ? _tlsDataRelocs : _ctorsRelocs)));
+            u32 base = (t != (u32)0 ? t : (dd != (u32)0 ? dd : (pd != (u32)0 ? pd : (tl != (u32)0 ? tl : (ct != (u32)0 ? ct : ia))))) - (u32)1;
+            Array* into = t != (u32)0 ? _relocs : (dd != (u32)0 ? _dataRelocs : (pd != (u32)0 ? _pdataRelocs : (tl != (u32)0 ? _tlsDataRelocs : (ct != (u32)0 ? _ctorsRelocs : _initRelocs))));
             for (u32 r = (u32)0; r < s.nrel(); r = r + (u32)1)
                 {
                 u32 e = s.rel() + r * (u32)COFF_RELOC_SZ;

@@ -45,7 +45,9 @@ static BOOL mergeElfObject(NSDictionary* obj, NSString* label, NSUInteger tag,
                            NSMutableData* mbss,
                            NSMutableArray<NSString*>* mbssSyms,
                            uint64_t* mbssAlign,
-                           XTElfGC* gc)
+                           XTElfGC* gc,
+                           NSMutableData* minit,
+                           NSMutableArray<XAX86_64Fixup*>* minitFix)
     {
     if (!gCommonSize)
         gCommonSize = [NSMutableDictionary dictionary];
@@ -333,6 +335,93 @@ static BOOL mergeElfObject(NSDictionary* obj, NSString* label, NSUInteger tag,
         f.addend = [r[@"addend"] longLongValue];
         [mfix addObject:f];
         }
+    // The object's constructors (.init_array: an xc module without main, or
+    // clang's half of a C program): kept for the program's table, which runs
+    // them after its own entries (placeCtors).
+    NSData* oinit = obj[@"init"];
+    if (oinit.length)
+        {
+        uint64_t ib = minit.length;
+        [minit appendData:oinit];
+        for (NSDictionary* r in obj[@"initrelocs"])
+            {
+            NSUInteger sn = [r[@"sym"] unsignedIntegerValue];
+            if ([r[@"type"] unsignedIntValue] != 1 /*R_X86_64_64*/ || sn >= snames.count)
+                {
+                fprintf(stderr, "xcc-ln-x86_64: error: an .init_array entry that is not a pointer in %s\n",
+                        label.UTF8String);
+                return NO;
+                }
+            XAX86_64Fixup* f = [XAX86_64Fixup new];
+            f.offset = ib + [r[@"off"] unsignedLongLongValue];
+            f.kind = XAX86FixupAbs64;
+            f.symbol = tagged(sn);
+            f.addend = [r[@"addend"] longLongValue];
+            [minitFix addObject:f];
+            }
+        }
+    return YES;
+    }
+
+// The program's constructor table (__xt_ctors_start .. __xt_ctors_end, which
+// the start code walks) rebuilt at the end of data: its own entries, then
+// every merged object's .init_array words, in link order. Nothing to do when
+// no object brought any.
+static BOOL placeCtors(NSMutableData* mdata, NSMutableDictionary<NSString*, NSNumber*>* msyms,
+                       NSMutableArray<XAX86_64Fixup*>* mfix, NSData* minit,
+                       NSArray<XAX86_64Fixup*>* minitFix)
+    {
+    if (!minit.length)
+        return YES;
+    NSNumber* so = msyms[@"__xt_ctors_start"];
+    NSNumber* eo = msyms[@"__xt_ctors_end"];
+    if (!so || !eo)
+        {
+        fprintf(stderr, "xcc-ln-x86_64: error: objects carry constructors (.init_array) and the "
+                        "program has no constructor table\n");
+        return NO;
+        }
+    uint64_t s0 = so.unsignedLongLongValue, s1 = eo.unsignedLongLongValue;
+    while (mdata.length % 8)
+        {
+        uint8_t z = 0;
+        [mdata appendBytes:&z length:1];
+        }
+    uint64_t nb = mdata.length;
+    // the program's own words, each with its fixup moved along
+    NSUInteger nfx = mfix.count;
+    for (uint64_t off = s0; off + 8 <= s1; off += 8)
+        {
+        uint64_t at = mdata.length;
+        uint8_t w[8];
+        memcpy(w, (const uint8_t*)mdata.bytes + off, 8);
+        [mdata appendBytes:w length:8];
+        for (NSUInteger i = 0; i < nfx; i++)
+            {
+            XAX86_64Fixup* f = mfix[i];
+            if (f.kind != XAX86FixupAbs64 || f.offset != off)
+                continue;
+            XAX86_64Fixup* g = [XAX86_64Fixup new];
+            g.offset = at;
+            g.kind = f.kind;
+            g.symbol = f.symbol;
+            g.addend = f.addend;
+            [mfix addObject:g];
+            }
+        }
+    uint64_t ob = mdata.length;
+    [mdata appendData:minit];
+    for (XAX86_64Fixup* f in minitFix)
+        {
+        XAX86_64Fixup* g = [XAX86_64Fixup new];
+        g.offset = ob + f.offset;
+        g.kind = f.kind;
+        g.symbol = f.symbol;
+        g.addend = f.addend;
+        [mfix addObject:g];
+        }
+    msyms[@"__xt_ctors_start"] = @(nb);
+    msyms[@"__xt_ctors_end"] = @(mdata.length);
     return YES;
     }
 
@@ -543,6 +632,9 @@ int main(int argc, const char* argv[])
         // what the objects and archives bring is GC'd after the merge.
         XTElfGC* gc = [XTElfGC new];
         uint64_t seedTextEnd = mtext.length, seedDataEnd = mdata.length;
+        // The objects' constructors (.init_array), for placeCtors.
+        NSMutableData* minit = [NSMutableData data];
+        NSMutableArray<XAX86_64Fixup*>* minitFix = [NSMutableArray array];
         for (NSUInteger oi = 0; oi < objInputs.count; oi++)
             {
             NSDictionary* obj = [XTElfWriter objectAtPath:objInputs[oi]];
@@ -554,7 +646,8 @@ int main(int argc, const char* argv[])
                 }
             if (!mergeElfObject(obj, objInputs[oi], oi, mtext, mdata, msyms,
                                 mdataSyms, mglobals, mfix, mweak, mweakdef,
-                                mtls, mtlsSyms, mtlsAbs, mbss, mbssSyms, &mbssAlign, gc))
+                                mtls, mtlsSyms, mtlsAbs, mbss, mbssSyms, &mbssAlign, gc,
+                                minit, minitFix))
                 return 1;
             }
         // ── shared-object dependencies: satisfy + export what they import ──────
@@ -676,7 +769,8 @@ int main(int argc, const char* argv[])
                     if (!mergeElfObject(obj, [NSString stringWithFormat:@"%@(%@)", poolFrom[mi].lastPathComponent, obj[@"member"]],
                                         1000 + mi, mtext, mdata, msyms, mdataSyms,
                                         mglobals, mfix, mweak, mweakdef,
-                                        mtls, mtlsSyms, mtlsAbs, mbss, mbssSyms, &mbssAlign, gc))
+                                        mtls, mtlsSyms, mtlsAbs, mbss, mbssSyms, &mbssAlign, gc,
+                                        minit, minitFix))
                         return 1;
                     }
                 }
@@ -793,6 +887,11 @@ int main(int argc, const char* argv[])
                         }
                 }
             }
+        // The objects' constructors join the program's table, after its own.
+        // A library hands only its own table to the program (libinit).
+        if ((objInputs.count || archives.count) && !shared
+            && !placeCtors(mdata, msyms, mfix, minit, minitFix))
+            return 1;
         if ((objInputs.count || archives.count) && !shared && !pie)
             {
             [gc runWithText:mtext

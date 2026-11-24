@@ -10075,11 +10075,14 @@ class X86_64
             _out.append(bss);
             }
         // Load-time constructors: a table in .data between __xt_ctors_start
-        // and __xt_ctors_end, walked by crt-linux.s / crt-win64.s before main
-        // (bug 134 — the .init_array entry this used to emit was folded into
-        // .data and never walked). The entry module always defines the
-        // bounds, empty or not; a module without main or constructors defines
-        // nothing. Mirrors the reference.
+        // and __xt_ctors_end. The entry module always defines it, empty or
+        // not, and crt-linux.s / crt-win64.s walk it before main. In an object
+        // built without main the object writer makes the table the object's
+        // .init_array (.CRT$XCU on win64), and the link adds every object's
+        // entries to the program's table after its own, in link order. A
+        // library hands its table to the program (libinit-linux.s) or runs it
+        // when it loads (dllmain-win64.s). A module without main or
+        // constructors defines nothing. Mirrors the reference.
         bool hasMain = false;
         for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
             if (((IRFunc*)m.funcs().get(f)).name().equals(String.withCString("main")))

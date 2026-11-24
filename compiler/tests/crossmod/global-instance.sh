@@ -22,10 +22,17 @@
 #            retains and releases of the instance leave its neighbour alone.
 #            Both compilers' programs are compared byte for byte and run on
 #            $XTC_X86_HOST / $XTC_LINUX_HOST.
+#   order    giorder.xc linked with gioa.o and giob.o (-c, #649), each with
+#            a global instance whose init logs to the program's gLog: the
+#            objects' instances are set up before main in link order, then
+#            the program's (129, and 219 with the objects swapped), and a
+#            virtual call on gioa's instance reaches its override. arm64,
+#            x86-64 -static and dynamic, and win64; both compilers' objects
+#            and programs are compared byte for byte.
 #
 #   arm64   built and run here (macOS arm64 host)
-#   win64   the library matrix under wine
-#   x86_64  the static link, run on $XTC_X86_HOST / $XTC_LINUX_HOST
+#   win64   the library matrix and the order links under wine
+#   x86_64  the static and order links, run on $XTC_X86_HOST / $XTC_LINUX_HOST
 XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
 export WINEDLLOVERRIDES="winedbg.exe=d;${WINEDLLOVERRIDES:-}"
 _root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null)
@@ -100,7 +107,51 @@ if [ -n "$HOST" ] && ssh -o ConnectTimeout=8 -o BatchMode=yes "$HOST" true 2>/de
     ssh "$HOST" "rm -rf $RD" </dev/null
     [ "$got" = "$WANT_S" ] && echo "PASS  x86_64: a -static link keeps a global instance's header with it" || { bad "x86_64: static gistatic"; echo "$got"; }
 fi
+
+# order <target> <tag> <link flags...>: both compilers build gioa.o and giob.o
+# and link giorder in both object orders into $TMP/order-<tag>/<cc>-<ab|ba>.
+WANT_O_AB=$'order 129\narea 49 radius 3 mark 9'
+WANT_O_BA=$'order 219\narea 49 radius 3 mark 9'
+order() {
+    local a=$1 tag=$2; shift 2
+    local d=$TMP/order-$tag c
+    for c in xcc xcc-xc; do
+        mkdir -p "$d/$c"
+        ( cd "$d/$c" && "$BIN/$c" -q -A "$a" -H "$ROOT" -c -o gioa.o "$T/gioa.xc" \
+            && "$BIN/$c" -q -A "$a" -H "$ROOT" -c -o giob.o "$T/giob.xc" \
+            && "$BIN/$c" -q -A "$a" -H "$ROOT" "$@" -o ab "$T/giorder.xc" -Wl,gioa.o -Wl,giob.o \
+            && "$BIN/$c" -q -A "$a" -H "$ROOT" "$@" -o ba "$T/giorder.xc" -Wl,giob.o -Wl,gioa.o ) \
+            || bad "$tag: $c could not build the order links"
+    done
+    for c in gioa.o giob.o ab ba; do
+        cmp -s "$d/xcc/$c" "$d/xcc-xc/$c" || bad "$tag: the two compilers' $c differ"
+    done
+}
+# check_order <tag> <ab output> <ba output>
+check_order() {
+    [ "$2" = "$WANT_O_AB" ] && [ "$3" = "$WANT_O_BA" ] \
+        && echo "PASS  $1: each object's global instance is set up before main, in link order" \
+        || { bad "$1: order"; echo "$2"; echo "$3"; }
+}
+if [ "$(uname -s)" = Darwin ]; then
+    order arm64 arm64
+    check_order arm64 "$("$TMP/order-arm64/xcc-xc/ab")" "$("$TMP/order-arm64/xcc-xc/ba")"
+fi
+order x86_64 x86-static -static
+order x86_64 x86-dynamic
+if [ -n "$HOST" ] && ssh -o ConnectTimeout=8 -o BatchMode=yes "$HOST" true 2>/dev/null; then
+    RD=/tmp/giorder.$$
+    ssh "$HOST" "rm -rf $RD && mkdir -p $RD/s $RD/d" </dev/null
+    scp -q "$TMP/order-x86-static/xcc-xc/ab" "$TMP/order-x86-static/xcc-xc/ba" "$HOST:$RD/s/"
+    scp -q "$TMP/order-x86-dynamic/xcc-xc/ab" "$TMP/order-x86-dynamic/xcc-xc/ba" "$HOST:$RD/d/"
+    check_order "x86_64 -static" "$(ssh "$HOST" "$RD/s/ab" </dev/null)" "$(ssh "$HOST" "$RD/s/ba" </dev/null)"
+    check_order "x86_64 dynamic" "$(ssh "$HOST" "$RD/d/ab" </dev/null)" "$(ssh "$HOST" "$RD/d/ba" </dev/null)"
+    ssh "$HOST" "rm -rf $RD" </dev/null
+fi
 if command -v wine >/dev/null 2>&1; then
     WINEDEBUG=-all matrix win64 dll wine
+    order win64 win64
+    check_order win64 "$(cd "$TMP/order-win64/xcc-xc" && WINEDEBUG=-all wine ./ab 2>/dev/null | tr -d '\r')" \
+        "$(cd "$TMP/order-win64/xcc-xc" && WINEDEBUG=-all wine ./ba 2>/dev/null | tr -d '\r')"
 fi
 [ $fail = 0 ] || exit 1
