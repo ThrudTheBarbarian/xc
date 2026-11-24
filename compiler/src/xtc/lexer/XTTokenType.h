@@ -165,6 +165,10 @@ typedef NS_ENUM(NSInteger, XTTokenType) {
                      // block (U+2200 to U+22FF): part of an operator a class
                      // defines (`:operator(self ⊗ o)`). The parser joins it
                      // with its neighbours as it joins `*` and `*` for `**`.
+    XTTokenMathBracket, // one of the brackets an operator a class defines can
+                     // use, besides `|`: ‖ (U+2016), ⌈ ⌉ ⌊ ⌋ (U+2308 to
+                     // U+230B) and ⟨ ⟩ (U+27E8, U+27E9), as in
+                     // `:operator(⌊self⌋)`. The set is fixed.
 };
 
 // Human-readable names for diagnostics / debugging
@@ -408,6 +412,8 @@ static inline NSString* XTTokenTypeName(XTTokenType type)
         return @"EOF";
     case XTTokenMathOp:
         return @"operator";
+    case XTTokenMathBracket:
+        return @"bracket";
         }
     return @"<unknown>";
     }

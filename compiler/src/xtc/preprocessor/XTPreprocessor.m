@@ -2,6 +2,12 @@
 #import "XTMacroDefinition.h"
 #import "../driver/XTInterfaceImporter.h"
 
+// The character tests, for ASCII only: the ctype functions are defined for 0
+// to 255, and past that glibc reads outside its table, so a character such as
+// ‖ after a macro's name was taken as part of the name. As the lexer's.
+static inline BOOL xt_pp_isalnum(unichar c) { return c < 0x80 && isalnum(c); }
+static inline BOOL xt_pp_isalpha(unichar c) { return c < 0x80 && isalpha(c); }
+
 /****************************************************************************\
 |* Per-#if-block state for the conditional-compilation stack. Three
 |* values suffice:
@@ -1681,7 +1687,7 @@ static BOOL fileExistsCaseSensitive(NSFileManager* fm, NSString* path)
                 for (NSString* d in [self definesOfLibrary:abs])
                     {
                     NSUInteger e = 0;
-                    while (e < d.length && (isalnum([d characterAtIndex:e]) || [d characterAtIndex:e] == '_'))
+                    while (e < d.length && (xt_pp_isalnum([d characterAtIndex:e]) || [d characterAtIndex:e] == '_'))
                         e++;
                     if (!_macros[[d substringToIndex:e]])
                         [self handleDefine:[@"define " stringByAppendingString:d] location:ifaceLoc];
@@ -1869,7 +1875,7 @@ static BOOL fileExistsCaseSensitive(NSFileManager* fm, NSString* path)
     while (idx < rest.length)
         {
         unichar ch = [rest characterAtIndex:idx];
-        if (isalnum(ch) || ch == '_')
+        if (xt_pp_isalnum(ch) || ch == '_')
             idx++;
         else
             break;
@@ -2062,13 +2068,13 @@ static BOOL fileExistsCaseSensitive(NSFileManager* fm, NSString* path)
             }
 
         // Identifier?
-        if (isalpha(ch) || ch == '_')
+        if (xt_pp_isalpha(ch) || ch == '_')
             {
             NSMutableString* ident = [NSMutableString string];
             while (pos < len)
                 {
                 unichar c = [text characterAtIndex:pos];
-                if (isalnum(c) || c == '_')
+                if (xt_pp_isalnum(c) || c == '_')
                     {
                     [ident appendFormat:@"%C", c];
                     pos++;
@@ -2346,13 +2352,13 @@ static BOOL isSpaceToken(NSString* tok)
             continue;
             }
 
-        if (isalpha(ch) || ch == '_')
+        if (xt_pp_isalpha(ch) || ch == '_')
             {
             NSUInteger start = pos;
             while (pos < len)
                 {
                 unichar c = [body characterAtIndex:pos];
-                if (!isalnum(c) && c != '_')
+                if (!xt_pp_isalnum(c) && c != '_')
                     break;
                 pos++;
                 }

@@ -1465,23 +1465,35 @@ class FeOptions
             return;
         String* srcLine = (String*)lines.get(line - (u32)1);
         // Tabs become four spaces on the shown line, and the caret column
-        // advances four for each tab before it.
+        // advances four for each tab before it. The line is copied byte for
+        // byte, so a character past ASCII shows as written; columns count
+        // UTF-16 units, as the lexer's do, so such a character advances the
+        // caret one (two outside the BMP).
         String* shown = String.withCString(" ");
         u32 adjusted = (u32)0;
+        u32 units = (u32)0;
         for (u32 i = (u32)0; i < srcLine.byteLength(); i = i + (u32)1)
             {
-            u32 ch = srcLine.charAtByte(i);
-            if (ch == (u32)9)
+            u8 b = srcLine.byteAt(i);
+            if ((b & (u8)$C0) == (u8)$80)
+                {
+                shown.appendByte(b);
+                continue;
+                }
+            u32 w = b >= (u8)$F0 ? (u32)2 : (u32)1;
+            bool before = units + (u32)1 < col;
+            units = units + w;
+            if (b == (u8)9)
                 {
                 shown.appendCString("    ");
-                if (i + (u32)1 < col)
+                if (before)
                     adjusted = adjusted + (u32)4;
                 }
             else
                 {
-                shown.appendByte((u8)ch);
-                if (i + (u32)1 < col)
-                    adjusted = adjusted + (u32)1;
+                shown.appendByte(b);
+                if (before)
+                    adjusted = adjusted + w;
                 }
             }
         Stdio.error(Frontend.withNewline(shown));
