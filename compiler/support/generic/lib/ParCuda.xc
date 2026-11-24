@@ -798,9 +798,22 @@ class ParCuda
     // are in flight a failure is reported and false returned after the
     // streams drain, and the host's arrays are then partly written, as a
     // failed single shot leaves them.
+    // Whether a footprinted output at host may be held whole on the device
+    // through a tiled run and left resident after it (#15): as the
+    // single-shot path's rule (a pinned, page-aligned block of its own, when
+    // the block may leave its outputs resident), within the budget.
+    static bool tileResident(ParChunk* proto, i64 n, pointer host, i64 bytes, i64* budget)
+        {
+        if (host == (pointer)0 || bytes > *budget || !ParDevice.residentFor(proto, n))
+            return false;
+        if (ParDevice.simdBase(host) != host || Par.spanOf(host, (i64)1, true) != bytes || !pinned(host, bytes))
+            return false;
+        *budget = *budget - bytes;
+        return true;
+        }
+
     static bool runTiled(ParChunk* proto, pointer fn, ParLayout* l, i64 lo, i64 hi, i64 started)
         {
-        ParDevice.fetchUsed(proto.objBytes(), l);
         i64 n = hi - lo;
         // One copy engine: a tile's download and the next tile's upload never
         // overlap, so a block whose kernel is cheap beside its copies gains
@@ -838,8 +851,12 @@ class ParCuda
         // A read-only footprinted array seen again unwritten (wholeAgain)
         // joins them, within a quarter of the card's free memory: resident,
         // it is not sent again while nothing writes it.
+        // A footprinted output that may stay resident is held whole too
+        // (resOut), and kept on the device after the run (#15).
         u64 whole[52];
         bool asWhole[52];
+        bool resOut[52];
+        bool anyRes = false;
         i64 budget = (i64)0;
         u64 memFree = (u64)0;
         u64 memTotal = (u64)0;
@@ -849,14 +866,28 @@ class ParCuda
         for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
             {
             pointer h = *(pointer*)(obj + l.bufOff[i]);
-            asWhole[nd] = l.bufFp[i] != (i64)0 && l.bufIn[i] != (i64)0 && wholeAgain(nd, h, l.bufLen[i], &budget);
-            whole[nd] = l.bufFp[i] != (i64)0 && !asWhole[nd] ? (u64)0 : uploadKeeping(nd, h, l.bufLen[i], true);
+            resOut[nd] = l.bufFp[i] != (i64)0 && l.bufIn[i] == (i64)0 && tileResident(proto, n, h, l.bufLen[i], &budget);
+            anyRes = anyRes || resOut[nd];
+            // Anything resident the tiles use comes back first, but an output
+            // this run keeps in its own slot (uploadKeeping finds it there).
+            if (!resOut[nd])
+                ParDevice.fetchResident(h, false);
+            asWhole[nd] = resOut[nd] || (l.bufFp[i] != (i64)0 && l.bufIn[i] != (i64)0 && wholeAgain(nd, h, l.bufLen[i], &budget));
+            // Written whole and not read, it is not sent, unless its slot
+            // already keeps it (then nothing is sent either).
+            if (resOut[nd])
+                whole[nd] = uploadKeeping(nd, l.bufOut[i] != (i64)0 && ParDevice.residentIn(owner(), nd) != h ? (pointer)0 : h,
+                                          l.bufLen[i], false);
+            else
+                whole[nd] = l.bufFp[i] != (i64)0 && !asWhole[nd] ? (u64)0 : uploadKeeping(nd, h, l.bufLen[i], true);
             if ((l.bufFp[i] == (i64)0 || asWhole[nd]) && whole[nd] == (u64)0)
                 return false;
             nd = nd + (u32)1;
             }
         for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
             {
+            resOut[nd] = false;
+            ParDevice.fetchResident(l.globPtr[i], false);
             asWhole[nd] = l.globFp[i] != (i64)0 && l.globIn[i] != (i64)0 && wholeAgain(nd, l.globPtr[i], l.globLen[i], &budget);
             whole[nd] = l.globFp[i] != (i64)0 && !asWhole[nd] ? (u64)0 : uploadKeeping(nd, l.globPtr[i], l.globLen[i], true);
             if ((l.globFp[i] == (i64)0 || asWhole[nd]) && whole[nd] == (u64)0)
@@ -998,7 +1029,7 @@ class ParCuda
                     u32 b = (u32)0;
                     for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
                         {
-                        if (l.bufFp[i] != (i64)0 && l.bufIn[i] == (i64)0)
+                        if (l.bufFp[i] != (i64)0 && l.bufIn[i] == (i64)0 && !asWhole[b + (u32)2])
                             {
                             i64 count = l.bufLen[i] / l.bufElem[i];
                             i64 e0 = sliceLo(l.bufFpK[i], l.bufFpLo[i], clo, count);
@@ -1153,7 +1184,7 @@ class ParCuda
             b = (u32)0;
             for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
                 {
-                if (l.bufFp[i] != (i64)0 && l.bufIn[i] == (i64)0)
+                if (l.bufFp[i] != (i64)0 && l.bufIn[i] == (i64)0 && !asWhole[b + (u32)2])
                     {
                     i64 count = l.bufLen[i] / l.bufElem[i];
                     i64 e0 = sliceLo(l.bufFpK[i], l.bufFpLo[i], tlo, count);
@@ -1214,6 +1245,36 @@ class ParCuda
         ParDevice.wroteAll(obj, l);
         if (snap != (u8*)0)
             free((pointer)snap);
+        // The outputs held whole stay on the device (#15), or come back now
+        // when they cannot be parked.
+        if (anyRes && ok)
+            {
+            _sync();
+            u32 k = (u32)2;
+            for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
+                {
+                if (resOut[k])
+                    {
+                    pointer h = *(pointer*)(obj + l.bufOff[i]);
+                    gParCuUpHost[k] = h;
+                    gParCuUpLen[k] = l.bufLen[i];
+                    gParCuUpGen[k] = ParDevice.generation(h);
+                    if (ParDevice.residentIn(owner(), k) == h)
+                        ParDevice.residentNowOf(h, proto);
+                    else if (!ParDevice.keepResident(h, owner(), k, l.bufLen[i], proto))
+                        {
+                        ok = _toHost(h, whole[k], (u64)l.bufLen[i]) == (i32)0;
+                        if (ok)
+                            gParCuUpGen[k] = ParDevice.generation(h);
+                        k = k + (u32)1;
+                        continue;
+                        }
+                    if (ParDevice.reporting())
+                        Log.info("par: %ld bytes kept on the GPU", l.bufLen[i]);
+                    }
+                k = k + (u32)1;
+                }
+            }
         if (!ok)
             return false;
         l.plan(lo, hi);
@@ -1261,7 +1322,7 @@ class ParCuda
         l.plan(lo, hi);
         // Kept on the GPU between runs (#15), an array has no copies for tiles
         // to overlap: the single-shot path, which keeps it.
-        if (tileable(l) && ParDevice.tilesWanted() && !ParDevice.residentFor(proto, hi - lo) && runTiled(proto, fn, l, lo, hi, started))
+        if (tileable(l) && ParDevice.tilesWanted() && runTiled(proto, fn, l, lo, hi, started))
             return true;
         u8* obj = proto.objBytes();
 
