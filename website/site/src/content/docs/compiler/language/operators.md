@@ -146,7 +146,7 @@ Operators work on every target.
 | Relational | `< <= > >=` |
 | Index | `self[i]` (get), `self[i] = v` (set), several indices `self[i, j]`, a range `self[lo..hi]` or `self[lo...hi]` |
 | Compound assignment | `+= -= *= /= %= &= \|= ^= <<= >>= <:= :>=` |
-| Of a class's own shape | infix and prefix operators the language does not have, such as `self ** o`, `self ⊗ o` or `√self` (see [Operators of your own](#operators-of-your-own)) |
+| Of a class's own shape | infix, prefix and bracket operators the language does not have, such as `self ** o`, `self ⊗ o`, `√self`, `\|self\|` or `⌊self⌋` (see [Operators of your own](#operators-of-your-own)) |
 
 A relational operator returns whatever its method returns, so a class can
 return a mask or a flag object rather than a `bool`.
@@ -317,7 +317,7 @@ something else, so a second meaning is a named method.
 An operator is made of the characters `+ - * / % < > = ! & | ^ ~ ? : @` and of the
 Unicode Mathematical Operators block, U+2200 to U+22FF (`⊗ ∘ ∙ √ ≡ ≤ ⊕` and the
 rest). Letters, digits, `$`, `#`, `.`, `,`, `;`, brackets, quotes and `\` are
-never part of one. Its characters are written together: `self * * o` is two
+never part of one; brackets make [bracket operators](#bracket-operators). Its characters are written together: `self * * o` is two
 operators.
 
 No operator of a class's own is spelt as a built-in one (`==`, `->`, `&&`, `=`,
@@ -385,11 +385,59 @@ error: '+%' reads two ways here and both type-check: as the operator of 'Money' 
 chosen together, so `a ** b + x ** p`, with `a` a class that defines `**` and
 `x` a number, is an error; parentheses make two expressions of it.
 
+### Bracket operators
+
+A bracket operator puts its one operand between two brackets: the same
+character on both sides, `|self|` or `‖self‖`, or an opening and closing pair,
+`⌊self⌋`, `⌈self⌉` or `⟨self⟩`. Those are the brackets an operator can use;
+another, such as `⟦`, is an error. A static method writes its parameter
+instead of `self`: `static i32 dollars(Amount* a) :operator(⌈a⌉)`.
+
+```c
+class Vec
+    {
+    i32 x;
+    i32 y;
+    i32 length2() :operator(|self|) { return x * x + y * y; }
+    i32 norm()    :operator(‖self‖) { … }
+    }
+
+i32 d = 2 * |a| + ‖b‖;         // 2 * a.length2() + b.norm()
+```
+
+A bracket operator binds as parentheses do, so it takes no `:precedence`.
+Postfix operators after it apply to its result: `|x|.t` is `(|x|).t`. Like
+the other operators of a class's own, it has no built-in meaning, and a class
+gives a bracket one meaning: `|M|` is the determinant or the norm, and the
+other is a named method.
+
+```
+error: no class defines |x| for 'i32'; the operand must be an instance of a class that defines it with :operator(|self|)
+```
+
+`|` is also bitwise or, and `||` logical or. Bars follow these rules:
+
+- A `|` opens a bar only where an operand starts. There, `|` has no other
+  meaning.
+- A `|` after an operand is bitwise or, except inside `|...|`, where the first
+  `|` after an operand closes the bar. Bitwise or inside bars is written in
+  parentheses: `|(a | b)|`. Inside parentheses, an argument list or an index,
+  `|` is an operator again.
+- A `||` where an operand starts is two opening bars: `||v||` is `|(|v|)|`. After
+  an operand inside `|...|` it closes two bars, so `||a| + |b||` is
+  `|(|a| + |b|)|`. Elsewhere it is logical or.
+- Bars open only in a program where a class defines `|self|`. Without one, `|`
+  and `||` keep their meaning everywhere.
+
+So `|a| + |b|` is two operands added, `|a| | n` is a bitwise or of `|a|` and
+`n`, and `|‖v‖|` is `|(‖v‖)|`. The other brackets mean nothing else, so they
+nest freely: `⌊|x|⌋`, `|⌊x⌋|`.
+
 ### Across modules
 
 A library's interface carries its classes' operator shapes and their
-precedence, so a program that imports the library reads `a ** b` as the
-library does.
+precedence, so a program that imports the library reads `a ** b` and `|v|` as
+the library does.
 
 ## Compound assignment
 

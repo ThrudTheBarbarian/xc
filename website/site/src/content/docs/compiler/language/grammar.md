@@ -175,10 +175,14 @@ operator-pattern ::= IDENT binary-op IDENT
                   | IDENT '[' index-names ']' ('=' IDENT)?
                   | IDENT shape IDENT
                   | shape IDENT
+                  | bracket-open IDENT bracket-close
 
 shape           ::= shape-char+          // written together, not a built-in operator
 shape-char      ::= '+' | '-' | '*' | '/' | '%' | '<' | '>' | '=' | '!' | '&'
                   | '|' | '^' | '~' | '?' | ':' | '@' | U+2200 … U+22FF
+
+bracket-open    ::= '|' | '‖' | '⌊' | '⌈' | '⟨'
+bracket-close   ::= '|' | '‖' | '⌋' | '⌉' | '⟩'   // the pair of the opening one
 
 precedence-spec ::= ('above' | 'below')? binary-op (',' 'right')?
 
@@ -398,11 +402,18 @@ primary         ::= INT_LIT | FLOAT_LIT | CHAR_LIT | STRING_LIT+
                   | '(' type ')' unary
                   | '(' type '?' ')' unary
                   | '(' expr ')'
+                  | bracket-open expr bracket-close   // a class's bracket operator
                   | 'inline' ':' postfix
 
 arg-list        ::= (expr (',' expr)*)?
 expr-list       ::= expr (',' expr)*
 ```
+
+A bracket operator is a primary, so it needs no precedence. A `|` opens a bar
+only where an operand starts and only when a class in the program defines
+`|self|`; inside `|...|` the first `|` after an operand closes it, and a `||`
+where an operand starts is two opening bars
+([Bracket operators](/compiler/language/operators/#bracket-operators)).
 
 `&` takes an address, and `&obj.method` also binds a method to its receiver to
 fill a `callback`. `->` is shorthand for `(*p).field`.
