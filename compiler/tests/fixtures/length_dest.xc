@@ -7,7 +7,10 @@
 #import "Stdio.xc"
 
 void pick(u32 n) { Stdio.printf("pick(u32) %u\n", n); }
-void pick(u64 n) { Stdio.printf("pick(u64) %llu\n", n); }
+// The 64-bit member is i64, not u64: where .length is u16 (m68k, and the
+// sema dump) the two compilers still rank u16 -> u64 differently, which is
+// the overload-ranking parity issue, not this one.
+void pick(i64 n) { Stdio.printf("pick(i64) %lld\n", n); }
 void wide(u64 n) { Stdio.printf("wide(u64) %llu\n", n); }
 void narrow(u16 n) { Stdio.printf("narrow(u16) %u\n", (u32)n); }
 
