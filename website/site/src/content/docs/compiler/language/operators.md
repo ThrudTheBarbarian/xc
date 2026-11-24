@@ -146,6 +146,7 @@ Operators work on every target.
 | Relational | `< <= > >=` |
 | Index | `self[i]` (get), `self[i] = v` (set), several indices `self[i, j]`, a range `self[lo..hi]` or `self[lo...hi]` |
 | Compound assignment | `+= -= *= /= %= &= \|= ^= <<= >>= <:= :>=` |
+| Of a class's own shape | infix and prefix operators the language does not have, such as `self ** o`, `self ⊗ o` or `√self` (see [Operators of your own](#operators-of-your-own)) |
 
 A relational operator returns whatever its method returns, so a class can
 return a mask or a flag object rather than a `bool`.
@@ -156,7 +157,8 @@ prefixes, `++` and `--`. `==` and `!=` compare identity on objects; value
 equality is the `equals` method.
 
 Precedence and associativity are the built-in ones. Defining `*` does not
-change how `a + b * c` groups.
+change how `a + b * c` groups. An operator of a class's own shape has its own
+precedence (see [Operators of your own](#operators-of-your-own)).
 
 ### Rules for a pattern
 
@@ -274,6 +276,120 @@ returned by the method is released at the end of the full expression, unless it
 is stored. A method that returns its instance by value
 (`Vec2 plus(Vec2 o) :operator(self + o)`) needs no heap allocation: in
 `a + b + c` each intermediate gets its own slot in the caller's frame.
+
+## Operators of your own
+
+A class can define an operator the language does not have by writing its shape
+in the pattern:
+
+```c
+class Num
+    {
+    i32 v;
+    static Num* of(i32 x) { Num* n = new Num(); n.v = x; return n; }
+
+    Num* pow(Num* e)     :operator(self ** e) :precedence(above *, right) { … }
+    Num* kron(Num* o)    :operator(self ⊗ o)   { … }
+    i32  cmp(Num* o)     :operator(self <=> o) { return v < o.v ? -1 : (v > o.v ? 1 : 0); }
+    Num* root()          :operator(√self)      { … }
+    Num* matmul(Num* o)  :operator(self @ o)   { … }
+    }
+
+Num* r = 2 * a ** b ** c;      // 2 * (a ** (b ** c))
+i32 s = a <=> b;               // a.cmp(b)
+Num* t = √a ⊗ b;               // a.root().kron(b)
+```
+
+Such an operator is resolved as the built-in ones are (see [How an operator
+expression is resolved](#how-an-operator-expression-is-resolved)), and it is
+inherited. It has no built-in meaning: where no operand's class defines it, it
+is an error.
+
+```
+error: no class defines the operator '⊗' for (i32, i32)
+```
+
+A shape means one thing per class: a class with `self ** o` cannot use `**` for
+something else, so a second meaning is a named method.
+
+### Characters
+
+An operator is made of the characters `+ - * / % < > = ! & | ^ ~ ? : @` and of the
+Unicode Mathematical Operators block, U+2200 to U+22FF (`⊗ ∘ ∙ √ ≡ ≤ ⊕` and the
+rest). Letters, digits, `$`, `#`, `.`, `,`, `;`, brackets, quotes and `\` are
+never part of one. Its characters are written together: `self * * o` is two
+operators.
+
+No operator of a class's own is spelt as a built-in one (`==`, `->`, `&&`, `=`,
+`++` and the rest). A longer shape that contains one, such as `==>` or `&&&`, is
+allowed. A shape that starts with an assignment, `?` or `:`, followed by
+characters that are prefix operators, is refused: between two operands `=-`
+already reads as `= -`.
+
+`@` is an operator character. `a @ b` is free for a class to define, as matrix
+multiplication is in Python and NumPy, with `*` element-wise.
+
+### Precedence
+
+An infix operator takes the precedence and associativity of its first
+character: `**` binds as `*` does, `<=>` as `<`, `|>` as `|`. All of them group
+from the left.
+
+| First character | Binds as |
+|-----------------|----------|
+| `*` `/` `%` `~` `?` `@`, and the Unicode block | `*` |
+| `+` `-` | `+` |
+| `:` | `:>` |
+| `<` `>` | `<` |
+| `=` `!` | `==` |
+| `&` | `&` |
+| `^` | `^` |
+| `\|` | `\|` |
+
+A prefix operator binds as the built-in prefix operators do.
+
+`:precedence(...)` beside `:operator(...)` sets an infix operator's precedence:
+
+- `:precedence(%)`: the level of a built-in binary operator.
+- `:precedence(above *)` or `:precedence(below |)`: a new level directly above
+  or below one. Every operator that says `above *` shares that level.
+- `, right` after either makes it group from the right: `:precedence(above *, right)`.
+
+The parser needs an operator's precedence before it knows any type, so a shape
+has one precedence in a program. Two classes that give the same shape different
+precedences are an error naming both; classes that agree, or leave it unset,
+are not. `:precedence` cannot change a built-in operator, and a prefix operator
+cannot take one.
+
+### Characters that also read as built-in operators
+
+Some shapes are also built-in operators written together: `a**b` is `a * *b`,
+`x-->0` is `x-- > 0`, `m +%101` is `m + %101` (a binary literal). Where an
+operator of a class's own could be read the old way, the operand types choose:
+
+- when the left operand's class, or the right operand's for a static pattern,
+  defines the shape, it is that operator;
+- otherwise the characters keep their built-in meaning, so code that does not use
+  the class means what it did.
+
+When both readings mean something, it is an error rather than a choice. The
+built-in reading means something when each of its operators is defined for its
+operands: arithmetic on numbers, pointer arithmetic and comparison, a
+dereference of a pointer, or a class's operator.
+
+```
+error: '+%' reads two ways here and both type-check: as the operator of 'Money' and as the built-in operators it is spelt with; write those operators apart, or call the method by name
+```
+
+`m +% 101` and `m + %101` each read one way, and so does a call of the method by its name. The readings of one expression are
+chosen together, so `a ** b + x ** p`, with `a` a class that defines `**` and
+`x` a number, is an error; parentheses make two expressions of it.
+
+### Across modules
+
+A library's interface carries its classes' operator shapes and their
+precedence, so a program that imports the library reads `a ** b` as the
+library does.
 
 ## Compound assignment
 
