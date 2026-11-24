@@ -16895,11 +16895,10 @@ class ClassInfo
     // margin). As the reference.
     void emitStaticInitGuard(ClassInfo* ci)
         {
-        // A class that is also `new`ed gets no guard, on any target: its init
-        // is an instance initialiser, and running it on the class's static
-        // block is a phantom instance (OperationQueue registered one).
-        if (ci.decl() != 0 && ci.decl().usedByNew())
-            return;
+        // A class that is also `new`ed gets no guard for an instance init, on
+        // any target: running it on the class's static block is a phantom
+        // instance (OperationQueue registered one). Tested below, once the
+        // init is found.
         String* initSym = (String*)0;
         for (ClassInfo* c = ci; c != 0 && initSym == 0; c = c.parent())
             {
@@ -16917,6 +16916,14 @@ class ClassInfo
         // still takes `self`; a static one takes nothing.
         IRSymbol* isym = symbolNamed(initSym);
         if (isym == 0 || sigParamCount(isym.signature()) != (isym.isStaticMethod() ? (u32)0 : (u32)1))
+            return;
+        // The instantiated-class rule is for an INSTANCE init. A `static void
+        // init` is never one: it runs whatever else the class is, so it is
+        // guarded even when sema saw a `new` of the class. That `new` may be
+        // the class-name table's, which names every class its module defines
+        // and is emitted in every object built with -c, in every library and
+        // in a program that asks for class names (#655). As the reference.
+        if (ci.decl() != 0 && ci.decl().usedByNew() && !isym.isStaticMethod())
             return;
 
         // Single-threaded: flagVal == 0 means "not yet run". Threaded: the flag
