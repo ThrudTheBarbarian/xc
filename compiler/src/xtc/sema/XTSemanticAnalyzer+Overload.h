@@ -100,6 +100,12 @@ NS_ASSUME_NONNULL_BEGIN
 - (nullable XTType*)parameterHintForMethodCall:(XTMethodCallExprNode*)node argument:(NSUInteger)idx;
 - (void)analyzeArgument:(XTASTNode*)arg withHint:(nullable XTType*)hint;
 - (void)checkNilLiteral:(XTASTNode*)expr against:(nullable XTType*)type;
+// `.length` by destination (#321).
+- (BOOL)isDualLength:(nullable XTASTNode*)e;
+- (XTType*)scoreTypeOf:(XTASTNode*)a;
+- (void)narrowLength:(nullable XTASTNode*)e to:(nullable XTType*)want;
+- (void)narrowLengthArgs:(NSArray<XTType*>*)paramTypes arguments:(NSArray<XTASTNode*>*)args;
+- (void)narrowLengthArgsOfMethod:(XTMethodDeclNode*)m arguments:(NSArray<XTASTNode*>*)args;
 - (NSString*)describeArgTypes:(NSArray<XTASTNode*>*)args;
 - (BOOL)checkArityOf:(NSString*)label
                fixed:(NSUInteger)fixed

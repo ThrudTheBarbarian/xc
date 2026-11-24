@@ -66,6 +66,9 @@ static BOOL XTIsErasedKeyType(XTType* t)
     return pointee && pointee.kind == XTTypeKindClass && [pointee.displayName isEqualToString:@"Hashable"];
     }
 
+// The `.length` nodes typed u64 that may narrow by destination (#321).
+static NSHashTable* gDualLength;
+
 @implementation XTSemanticAnalyzer (Overload)
 
 #pragma mark - Overload Resolution
@@ -821,7 +824,7 @@ static BOOL XTIsErasedKeyType(XTType* t)
         {
         XTType* pt = paramTypes[i];
         XTASTNode* arg = args[i];
-        XTType* at = arg.resolvedType;
+        XTType* at = [self scoreTypeOf:arg];
         BOOL isLit = [arg isKindOfClass:[XTLiteralIntNode class]];
         int64_t lv = isLit ? ((XTLiteralIntNode*)arg).intValue : 0;
         // nil is the null pointer of any pointer type and nothing else: it
@@ -1496,6 +1499,56 @@ static BOOL XTIsErasedKeyType(XTType* t)
 |* @param args  The call argument AST nodes.
 |* @return  A string like "u8, u16, pointer".
 \****************************************************************************/
+/****************************************************************************\
+|* `.length` by destination (#321). On the 64-bit rows a built-in `.length`
+|* (an array's or a heap pointer's) is u64, unless where it is used wants 32
+|* bits or fewer: assigned or initialising such an integer, returned as one,
+|* cast to one, or passed to a parameter of one. There it is the u32 form,
+|* which lowering checks: a count past 2^32-1 stops the program rather than
+|* wrap. A call resolves with it as u32, so every overload set picks what it
+|* always did. As the port's Sema.dualLength / narrowLength.
+\****************************************************************************/
+- (BOOL)isDualLength:(nullable XTASTNode*)e
+    {
+    return e && gDualLength && [gDualLength containsObject:e] && e.resolvedType.kind == XTTypeKindU64;
+    }
+
+- (XTType*)scoreTypeOf:(XTASTNode*)a
+    {
+    return [self isDualLength:a] ? [XTType u32Type] : a.resolvedType;
+    }
+
+- (void)narrowLength:(nullable XTASTNode*)e to:(nullable XTType*)want
+    {
+    if (!want || ![self isDualLength:e])
+        return;
+    switch (want.kind)
+        {
+    case XTTypeKindI8: case XTTypeKindU8: case XTTypeKindI16: case XTTypeKindU16:
+    case XTTypeKindI32: case XTTypeKindU32: case XTTypeKindBool:
+        e.resolvedType = [XTType u32Type];
+        break;
+    default:
+        break;
+        }
+    }
+
+- (void)narrowLengthArgs:(NSArray<XTType*>*)paramTypes arguments:(NSArray<XTASTNode*>*)args
+    {
+    if ([XTPointerType heapCountWidth] < 8)
+        return;
+    for (NSUInteger i = 0; i < paramTypes.count && i < args.count; i++)
+        [self narrowLength:args[i] to:paramTypes[i]];
+    }
+
+- (void)narrowLengthArgsOfMethod:(XTMethodDeclNode*)m arguments:(NSArray<XTASTNode*>*)args
+    {
+    NSMutableArray<XTType*>* pt = [NSMutableArray array];
+    for (XTParamNode* p in m.parameters)
+        [pt addObject:p.paramType];
+    [self narrowLengthArgs:pt arguments:args];
+    }
+
 - (NSString*)describeArgTypes:(NSArray<XTASTNode*>*)args
     {
     NSMutableArray* parts = [NSMutableArray array];
@@ -1504,7 +1557,7 @@ static BOOL XTIsErasedKeyType(XTType* t)
         if ([a isKindOfClass:[XTLiteralIntNode class]] && ((XTLiteralIntNode*)a).isNil)
             [parts addObject:@"nil"];
         else
-            [parts addObject:(a.resolvedType.displayName ?: @"?")];
+            [parts addObject:([self scoreTypeOf:a].displayName ?: @"?")];
         }
     return [parts componentsJoinedByString:@", "];
     }
@@ -2190,6 +2243,8 @@ static BOOL XTIsErasedKeyType(XTType* t)
             {
             node.resolvedMangledName = best.mangledName;
             XTFunctionType* ft = (XTFunctionType*)best.symbolType;
+            if ([ft isKindOfClass:[XTFunctionType class]])
+                [self narrowLengthArgs:ft.paramTypes arguments:node.arguments];
             node.resolvedType = ft.returnTypes.firstObject ?: [XTType voidType];
             [self applyAutoboxToArguments:node paramTypes:ft.paramTypes];
             [self applyUnboxToArguments:node paramTypes:ft.paramTypes];
@@ -2273,6 +2328,7 @@ static BOOL XTIsErasedKeyType(XTType* t)
                         return;
                         }
                     node.resolvedMangledName = s.mangledName;
+                    [self narrowLengthArgs:ft.paramTypes arguments:node.arguments];
                     node.resolvedType = ft.returnTypes.firstObject ?: [XTType voidType];
                     NSString* key = s.mangledName ?: node.calleeName;
                     NSString* calleeLbl = [@"_fn_" stringByAppendingString:key];
@@ -2432,6 +2488,7 @@ static BOOL XTIsErasedKeyType(XTType* t)
                             node.arguments = promoted;
                         }
                     [self checkThrowsEffectForMethod:bestM at:node.location];
+                    [self narrowLengthArgsOfMethod:bestM arguments:node.arguments];
                     node.resolvedMangledName = bestM.mangledName;
                     node.resolvedClassName = bestClass;
                     if (bestM.returnTypes.count > 0)
@@ -2529,6 +2586,7 @@ static BOOL XTIsErasedKeyType(XTType* t)
                 XTMethodDeclNode* chosen = nil;
                 if (bestM && !amb)
                     {
+                    [self narrowLengthArgsOfMethod:bestM arguments:node.arguments];
                     node.resolvedMangledName = bestM.mangledName;
                     if (bestM.returnTypes.count > 0)
                         node.resolvedType = bestM.returnTypes.firstObject;
@@ -2560,6 +2618,7 @@ static BOOL XTIsErasedKeyType(XTType* t)
                         node.resolvedType = [XTType u8Type];
                         return;
                         }
+                    [self narrowLengthArgsOfMethod:only arguments:node.arguments];
                     node.resolvedMangledName = only.mangledName;
                     if (only.returnTypes.count > 0)
                         node.resolvedType = only.returnTypes.firstObject;
@@ -3368,6 +3427,7 @@ static NSInteger XTFmtWrapperIndex(BOOL isVarArgs, NSArray<XTParamNode*>* params
             node.resolvedType = [XTType u8Type];
             return;
             }
+        [self narrowLengthArgsOfMethod:chosen arguments:node.arguments];
         node.resolvedMangledName = chosen.mangledName;
         node.resolvedClassName = ownerCls.className;
         // Same checked-effect rule as a free-function call: a method that can
@@ -3798,6 +3858,7 @@ static NSInteger XTFmtWrapperIndex(BOOL isVarArgs, NSArray<XTParamNode*>* params
             XTMethodDeclNode* chosen = nil;
             if (bestM && !amb)
                 {
+                [self narrowLengthArgsOfMethod:bestM arguments:node.arguments];
                 node.resolvedMangledName = bestM.mangledName;
                 if (bestM.returnTypes.count > 0)
                     resolved = bestM.returnTypes.firstObject;
@@ -3823,6 +3884,7 @@ static NSInteger XTFmtWrapperIndex(BOOL isVarArgs, NSArray<XTParamNode*>* params
                                    : (node.arguments.count == fixed);
                 if (countOK)
                     {
+                    [self narrowLengthArgsOfMethod:only arguments:node.arguments];
                     node.resolvedMangledName = only.mangledName;
                     if (only.returnTypes.count > 0)
                         resolved = only.returnTypes.firstObject;
@@ -4230,6 +4292,13 @@ static NSInteger XTFmtWrapperIndex(BOOL isVarArgs, NSArray<XTParamNode*>* params
         node.resolvedType = cw >= 8   ? [XTType u64Type]
                             : cw >= 4 ? [XTType u32Type]
                                       : [XTType u16Type];
+        // On the 64-bit rows it may narrow by destination (#321).
+        if (cw >= 8)
+            {
+            if (!gDualLength)
+                gDualLength = [NSHashTable hashTableWithOptions:NSPointerFunctionsObjectPointerPersonality];
+            [gDualLength addObject:node];
+            }
         return;
         }
 
@@ -4673,6 +4742,8 @@ static NSInteger XTFmtWrapperIndex(BOOL isVarArgs, NSArray<XTParamNode*>* params
                                                                   node.className]
                                                  at:node.location];
                         }
+                    if (!tied)
+                        [self narrowLengthArgsOfMethod:chosen arguments:node.arguments];
                     node.resolvedInitMangledName = chosen.mangledName;
                     NSString* initLabel = [NSString stringWithFormat:
                                                         @"_cls_%@_%@", node.className, chosen.mangledName];
@@ -4795,6 +4866,8 @@ static NSInteger XTFmtWrapperIndex(BOOL isVarArgs, NSArray<XTParamNode*>* params
     XTType* prev = self.expectedType;
     self.expectedType = node.castType;
     [self analyzeNode:(XTASTNode*)node.operand];
+    // `.length` by destination (#321).
+    [self narrowLength:node.operand to:node.castType];
     self.expectedType = prev;
     // `(u16)a.get(i)` converts the VALUE, so a boxed element read unboxes
     // first. Only for a cast to a PRIMITIVE: a cast to a class pointer is how

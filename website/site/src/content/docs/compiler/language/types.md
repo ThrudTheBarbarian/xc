@@ -171,14 +171,19 @@ u16 local[8];
 u16 n1 = local.length;        // compile-time constant: 8
 
 u16* heap = new u16[64];
-u32 n2 = heap.length;         // 64
+u64 n2 = heap.length;         // 64
 ```
 
 On a heap pointer, `.length` reads the element count from the allocation header.
-Its type is `u32` on `arm64`, `x86_64`, `win64`, `arm9` and `wasm32`, so an array
-of more than 65535 elements reports its full length. On `m68k` the header holds a
-16-bit count and `.length` is `u16`. The same width bounds `for (v in arr)` and
-slice loops over a heap array.
+Its type follows the target: `u64` on `arm64`, `x86_64` and `win64`, so an array of
+more than 2³² elements reports its whole length; `u32` on `arm9` and `wasm32`; `u16`
+on `m68k`, whose header holds a 16-bit count. A fixed-size array's `.length` has the
+same type. The same width counts `for (v in arr)` and slice loops over a heap array.
+
+Assigning `.length` to a narrower integer is allowed, as any narrowing is. Passing it
+to an overloaded function needs an overload that takes the full width, or a cast:
+with only `u16` and `u32` overloads, a `u64` argument matches neither without
+narrowing, and the call is ambiguous.
 
 `.length` on a pointer the compiler did not record a count for (one that crossed a
 function boundary, or came from anywhere but `new T[N]`) is a compile error, since

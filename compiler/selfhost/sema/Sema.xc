@@ -1736,6 +1736,8 @@ class Sema
             }
         if (fnBody != 0)
             escapeWalkBody(fnBody);
+        if (fnBody != 0 && _cntW >= (u32)8)
+            lengthWalk(fnBody, decl.op() != 0 ? firstReturn(decl.op()) : (String*)0);
         if (fnBody != 0)
             gcWalkStmt(fnBody, new Map());
         noteStackUse(decl, owner, fnBody);
@@ -2039,6 +2041,79 @@ class Sema
             return false;
             }
         return false;
+        }
+
+    // ── `.length` by destination (#321) ──────────────────────────────────
+    // On the 64-bit rows a built-in `.length` (an array's or a heap pointer's)
+    // is u64, unless where it is used wants 32 bits or fewer: assigned or
+    // initialising such an integer, returned as one, cast to one, or passed
+    // to a parameter of one. There it is the u32 form, which Lower checks: a
+    // count past 2^32-1 stops the program rather than wrap. A call resolves
+    // with it as u32, so every overload set picks what it always did.
+    bool dualLength(Node* e)
+        {
+        if (_cntW < (u32)8 || e == 0 || e.kind() != (u16)nkMember || !_isOp(e.name(), "length"))
+            return false;
+        if (e.ty() == 0 || !_isOp(e.ty(), "u64") || e.kidCount() == (u32)0)
+            return false;
+        String* recv = e.kid((u32)0).ty();
+        if (recv == 0)
+            return false;
+        return isArrayLike(recv) || (Types.isPointer(recv) && _classes.get((Hashable*)classNameOf(recv)) == 0
+                                     && _protocols.get((Hashable*)classNameOf(recv)) == 0);
+        }
+
+    // The type a call scores an argument at.
+    String* scoreTy(Node* a)
+        {
+        return dualLength(a) ? String.withCString("u32") : a.ty();
+        }
+
+    void narrowLength(Node* e, String* want)
+        {
+        if (want == 0 || !dualLength(e))
+            return;
+        String* w = Overload._unqualify(want);
+        if (w != 0 && Types.isInteger(w) && Types.byteWidth(w) <= (u32)4)
+            e.setTy(String.withCString("u32"));
+        }
+
+    void narrowLengthArgs(Node* decl, Node* call, u32 argBase)
+        {
+        if (_cntW < (u32)8 || decl == 0)
+            return;
+        u32 pi = (u32)0;
+        for (u32 i = (u32)0; i < decl.kidCount(); i = i + (u32)1)
+            {
+            Node* p = decl.kid(i);
+            if (p.kind() != (u16)nkParam)
+                continue;
+            u32 ai = argBase + pi;
+            if (ai < call.kidCount())
+                narrowLength(call.kid(ai), p.op());
+            pi = pi + (u32)1;
+            }
+        }
+
+    // After a body is typed: the declarations, assignments, returns and casts
+    // whose destination is narrower than 64 bits take the u32 form.
+    void lengthWalk(Node* n, String* ret)
+        {
+        if (n == 0)
+            return;
+        u16 k = n.kind();
+        if (k == (u16)nkMethodDecl || k == (u16)nkFunctionDecl)
+            return; // a nested body is walked with its own return type
+        if (k == (u16)nkVariableDecl && n.kidCount() > (u32)0)
+            narrowLength(n.kid((u32)0), n.op());
+        else if (k == (u16)nkAssign && n.kidCount() >= (u32)2 && _isOp(n.op(), "="))
+            narrowLength(n.kid((u32)1), n.kid((u32)0).ty());
+        else if (k == (u16)nkReturn && n.kidCount() > (u32)0)
+            narrowLength(n.kid((u32)0), ret);
+        else if (k == (u16)nkCast && n.kidCount() > (u32)0)
+            narrowLength(n.kid((u32)0), n.name());   // a cast names its type
+        for (u32 i = (u32)0; i < n.kidCount(); i = i + (u32)1)
+            lengthWalk(n.kid(i), ret);
         }
 
     // ── Stack instances whose address escapes ────────────────────────────
@@ -3749,6 +3824,7 @@ class Sema
                 Node* ini = initOverload(cls, n);
                 if (ini != 0)
                     {
+                    narrowLengthArgs(ini, n, (u32)0);
                     n.setSym(ini.sym());
                     noteCallEdge(clsLabel(n.name(), ini.sym() != 0 ? ini.sym() : ini.name()));
                     }
@@ -5453,6 +5529,7 @@ class Sema
                 // A call yields its FIRST value, as an explicit receiver's
                 // does (below) and as the reference types it.
                 n.setTy(firstReturn(m.op()));
+                narrowLengthArgs(m, n, (u32)0);
                 n.setSym(m.sym());
                 noteCallEdge(clsLabel(mOwner.name(), m.sym() != 0 ? m.sym() : m.name()));
                 noteClassNameUse(mOwner.name(), m);
@@ -5574,6 +5651,7 @@ class Sema
             if (fn != 0)
                 {
                 n.setTy(firstReturn(fn.op()));
+                narrowLengthArgs(fn, n, (u32)0);
                 n.setSym(fn.sym());
                 noteCallEdge(fnLabel(fn.sym() != 0 ? fn.sym() : n.name()));
                 checkStackStrongArgs(n, fn, (u32)0, quotedName((String*)0, n.name(), ""));
@@ -5605,6 +5683,7 @@ class Sema
             if (!arityFits(m, callArgc(n, (u32)0)) || scoreCandidate(m, n, (u32)0) == Overload.noMatch())
                 continue;
             n.setTy(firstReturn(m.op()));
+            narrowLengthArgs(m, n, (u32)0);
             n.setSym(m.sym());
             noteCallEdge(clsLabel(cls.name(), m.sym() != 0 ? m.sym() : m.name()));
             noteClassNameUse(cls.name(), m);
@@ -5948,7 +6027,7 @@ class Sema
                 pi = pi + (u32)1;
                 continue;
                 }
-            u32 r = Overload.rank(a.ty(), p.op(), isLit, a.num());
+            u32 r = Overload.rank(scoreTy(a), p.op(), isLit, a.num());
             // BOXING is the last resort, below every direct conversion: a
             // primitive can box into a Foundation wrapper (rank 8) and a
             // class pointer can unbox into a primitive (rank 9), so an
@@ -5985,7 +6064,7 @@ class Sema
             u32 ai = argBase + pi;
             if (ai >= call.kidCount())
                 return false;
-            String* at = call.kid(ai).ty();
+            String* at = scoreTy(call.kid(ai));
             if (at == 0 || p.op() == 0)
                 return false;
             if (!at.equals(p.op()))
@@ -6153,6 +6232,7 @@ class Sema
                         return;
                         }
                     n.setTy(best.op());
+                    narrowLengthArgs(best, n, (u32)1);
                     n.setSym(best.sym());
                     n.setCls(p.name());
                     noteCallEdge(clsLabel(p.name(), best.sym() != 0 ? best.sym() : best.name()));
@@ -6407,6 +6487,7 @@ class Sema
                 }
             }
         notePackOrForward(n, m, owner);
+        narrowLengthArgs(m, n, (u32)1);
         n.setSym(m.sym());
         noteCallEdge(clsLabel(owner2 != 0 ? owner2.name() : owner, m.sym() != 0 ? m.sym() : m.name()));
         noteClassNameUse(owner2 != 0 ? owner2.name() : owner, m);
@@ -7839,7 +7920,7 @@ class Sema
             if (i > argBase)
                 s.appendCString(", ");
             Node* a = call.kid(i);
-            String* t = a.ty();
+            String* t = scoreTy(a);
             if (a.kind() == (u16)nkInt && a.nilLit())
                 s.appendCString("nil");
             else

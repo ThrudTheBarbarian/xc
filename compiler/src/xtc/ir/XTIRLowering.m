@@ -8012,13 +8012,7 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
     if (pointeeAST && pointeeAST.kind == XTTypeKindArray && [pointeeAST isKindOfClass:[XTArrayType class]] && [node.memberName isEqualToString:@"length"])
         {
         NSUInteger n = ((XTArrayType*)pointeeAST).elementCount;
-        XTIRType* cty = [self countIRType];
-        XTIRValue* c = [self allocateValueOfType:cty atSite:self.currentBlock];
-        [self.currentBlock appendInstruction:[[XTIRInsn alloc] initWithOpcode:XTIROpConst
-                                                                       result:c
-                                                                     operands:@[ [XTIROperand immIWithType:cty value:(int64_t)n] ]
-                                                                       dbgLoc:nil]];
-        return c;
+        return [self lengthConst:node value:(int64_t)n];
         }
     // Heap-pointer `.length` — `T@ p = new T[N];` recorded N at decl
     // time. The runtime header isn't read; this is a static value
@@ -8029,16 +8023,7 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
         NSString* ln = ((XTIdentifierNode*)node.base).identName;
         NSNumber* nN = self.heapArrayLengthByLocal[ln];
         if (nN)
-            {
-            XTIRType* cty = [self countIRType];
-            XTIRValue* c = [self allocateValueOfType:cty atSite:self.currentBlock];
-            [self.currentBlock appendInstruction:[[XTIRInsn alloc] initWithOpcode:XTIROpConst
-                                                                           result:c
-                                                                         operands:@[ [XTIROperand immIWithType:cty
-                                                                                                         value:nN.longLongValue] ]
-                                                                           dbgLoc:nil]];
-            return c;
-            }
+            return [self lengthConst:node value:nN.longLongValue];
         }
     // `.length` on a pointer whose count the compiler did NOT record — a
     // runtime-sized `new T[n]`, a reassigned local, a pointer from another
@@ -8057,11 +8042,7 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
             XTIRValue* bv = [self lowerExpression:node.base];
             if (!bv)
                 return nil;
-            XTIRSymbolId sid = [self runtimeHelperSymbolNamed:@"_xtc_count"];
-            return [self emitCall:sid
-                         callConv:[XTIRCallConv standard]
-                        argValues:@[ bv ]
-                       resultType:[self countIRType]];
+            return [self lengthChecked:node count:[self heapCount:bv]];
             }
         [self softFailLoweringAt:node.location
                      withMessage:
@@ -9437,6 +9418,103 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
     {
     NSUInteger w = [XTPointerType heapCountWidth];
     return w >= 8 ? [XTIRType u64Type] : w >= 4 ? [XTIRType u32Type] : [XTIRType u16Type];
+    }
+
+/****************************************************************************\
+|* A heap pointer's element count. On the 64-bit rows it is read inline, the
+|* u64 eight bytes into the 40-byte allocation header (32 before the payload),
+|* as the bounds checks read it; elsewhere the runtime's _xtc_count answers,
+|* at the row's count width (#321). As the port's Lower.heapCount.
+\****************************************************************************/
+- (nullable XTIRValue*)heapCount:(XTIRValue*)p
+    {
+    if ([XTPointerType heapCountWidth] >= 8)
+        {
+        XTIRType* u64 = [XTIRType u64Type];
+        XTIRValue* pi = [self emitInsnOpcode:XTIROpPtrToInt result:u64
+                                    operands:@[ [XTIROperand useWithValueId:p.valueId] ]];
+        XTIRValue* hp = [self emitInsnOpcode:XTIROpSub result:u64
+                                    operands:@[ [XTIROperand useWithValueId:pi.valueId],
+                                                [XTIROperand immIWithType:u64 value:32] ]];
+        XTIRValue* ap = [self emitInsnOpcode:XTIROpIntToPtr
+                                      result:[XTIRType ptrToType:u64 window:XTIRWindowUnbanked]
+                                    operands:@[ [XTIROperand useWithValueId:hp.valueId] ]];
+        return [self emitLoad:ap pointeeType:u64];
+        }
+    XTIRSymbolId sid = [self runtimeHelperSymbolNamed:@"_xtc_count"];
+    return [self emitCall:sid
+                 callConv:[XTIRCallConv standard]
+                argValues:@[ p ]
+               resultType:[self countIRType]];
+    }
+
+// A constant `.length`: the u32 form where sema narrowed it (#321), else the
+// row's count type.
+- (XTIRValue*)lengthConst:(XTASTNode*)node value:(int64_t)n
+    {
+    XTIRType* cty = ([XTPointerType heapCountWidth] >= 8 && node.resolvedType.kind == XTTypeKindU32)
+                        ? [XTIRType u32Type]
+                        : [self countIRType];
+    XTIRValue* c = [self allocateValueOfType:cty atSite:self.currentBlock];
+    [self.currentBlock appendInstruction:[[XTIRInsn alloc] initWithOpcode:XTIROpConst
+                                                                   result:c
+                                                                 operands:@[ [XTIROperand immIWithType:cty value:n] ]
+                                                                   dbgLoc:nil]];
+    return c;
+    }
+
+// A run-time `.length` in its u32 form (sema narrowed it to a 32-bit
+// destination, #321): a count past 2^32-1 stops the program with the site and
+// the remedy, through write(2) and _xt_exit(134), rather than wrap. As the
+// port's Lower.lengthChecked.
+- (nullable XTIRValue*)lengthChecked:(XTASTNode*)node count:(nullable XTIRValue*)cnt
+    {
+    if (!cnt || [XTPointerType heapCountWidth] < 8 || node.resolvedType.kind != XTTypeKindU32)
+        return cnt;
+    XTIRType* u64 = [XTIRType u64Type];
+    XTIRValue* hi = [self emitInsnOpcode:XTIROpLShr result:u64
+                                operands:@[ [XTIROperand useWithValueId:cnt.valueId],
+                                            [XTIROperand immIWithType:u64 value:32] ]];
+    XTIRValue* big = [self allocateValueOfType:[XTIRType boolType] atSite:self.currentBlock];
+    [self.currentBlock appendInstruction:[[XTIRInsn alloc] initWithOpcode:XTIROpICmp
+                                                                   result:big
+                                                                 operands:@[ [XTIROperand useWithValueId:hi.valueId],
+                                                                             [XTIROperand immIWithType:u64 value:0] ]
+                                                                predicate:XTIRICmpNE
+                                                                   dbgLoc:nil]];
+    NSString* pfx = [NSString stringWithFormat:@"bb_%lu", (unsigned long)self.currentFunction.blocks.count];
+    XTIRBlock* ok = [self addBlockWithName:[pfx stringByAppendingString:@"_len32_ok"]];
+    XTIRBlock* trap = [self addBlockWithName:[pfx stringByAppendingString:@"_len32_trap"]];
+    [self emitTerminator:XTIROpCondBranch
+                operands:@[ [XTIROperand useWithValueId:big.valueId],
+                            [XTIROperand blockWithRef:trap],
+                            [XTIROperand blockWithRef:ok] ]];
+    // The trap's calls thread a memory token of their own; the ok path
+    // carries on from the one before the branch.
+    XTIRValue* memBefore = self.memToken;
+    self.currentBlock = trap;
+    XTSourceLocation* loc = node.location;
+    NSString* msg = [NSString stringWithFormat:@"xcc: %@:%lu:%lu: an array's length does not fit a u32; use u64\n",
+                                               loc.filename.lastPathComponent ?: @"?",
+                                               (unsigned long)loc.line, (unsigned long)loc.column];
+    XTIRValue* sv = [self internCString:msg];
+    XTIRType* i32 = [XTIRType i32Type];
+    XTIRSymbolId wsid = [self runtimeHelperSymbolNamed:@"write"];
+    XTIRValue* fd = [self emitInsnOpcode:XTIROpConst result:i32
+                                operands:@[ [XTIROperand immIWithType:i32 value:2] ]];
+    XTIRValue* len = [self emitInsnOpcode:XTIROpConst result:i32
+                                 operands:@[ [XTIROperand immIWithType:i32
+                                                                  value:(int64_t)[msg lengthOfBytesUsingEncoding:NSUTF8StringEncoding]] ]];
+    [self emitCall:wsid callConv:[XTIRCallConv standard] argValues:@[ fd, sv, len ] resultType:nil];
+    XTIRSymbolId xsid = [self runtimeHelperSymbolNamed:@"_xt_exit"];
+    XTIRValue* code = [self emitInsnOpcode:XTIROpConst result:i32
+                                  operands:@[ [XTIROperand immIWithType:i32 value:134] ]];
+    [self emitCall:xsid callConv:[XTIRCallConv standard] argValues:@[ code ] resultType:nil];
+    [self emitTerminator:XTIROpUnreachable operands:@[]];
+    self.currentBlock = ok;
+    self.memToken = memBefore;
+    return [self emitInsnOpcode:XTIROpTrunc result:[XTIRType u32Type]
+                       operands:@[ [XTIROperand useWithValueId:cnt.valueId] ]];
     }
 
 - (nullable XTIRValue*)lowerNewExpr:(XTNewExprNode*)node
@@ -12305,11 +12383,7 @@ static const NSUInteger kVarargSlotBytes = 8;
         XTIRValue* hv = [self lowerExpression:collection];
         if (!hv)
             return;
-        XTIRSymbolId sid = [self runtimeHelperSymbolNamed:@"_xtc_count"];
-        countVal = [self emitCall:sid
-                         callConv:[XTIRCallConv standard]
-                        argValues:@[ hv ]
-                       resultType:[self countIRType]];
+        countVal = [self heapCount:hv];
         isHeapPtrBase = YES;
         baseForAddr = collection;
         }

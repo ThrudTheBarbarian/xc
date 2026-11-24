@@ -4597,14 +4597,14 @@ class ClassInfo
             {
             String* bt = declaredTypeOf(n.kid((u32)0));
             if (isArrayLike(bt))
-                return countConst(arrayCount(bt));
+                return lengthConst(n, arrayCount(bt));
             Object* hl = n.kid((u32)0).kind() == (u16)nkIdent
                              ? _heapArrayLen.get((Hashable*)n.kid((u32)0).name())
                              : (Object*)0;
             // `T@ p = new T[N]` recorded N where it was bound — the fast
             // path: a compile-time constant.
             if (hl != 0)
-                return countConst(((Number*)hl).asU32());
+                return lengthConst(n, ((Number*)hl).asU32());
             // Runtime-sized: a REAL header read via the per-runtime
             // `_xtc_count`, on every target whose allocator writes a count
             // (pointer width >= 4 — the 6502 family is 2/3 and keeps the
@@ -4616,11 +4616,7 @@ class ClassInfo
                 IRValue* pv = lowerExpr(n.kid((u32)0));
                 if (_failed)
                     return (IRValue*)0;
-                Array* cargs = new Array();
-                cargs.add((Object*)pv);
-                return emitMethodCall(runtimeHelper(String.withCString("_xtc_count")),
-                                      (IRValue*)0, cargs,
-                                      countTyLower(), true);
+                return lengthChecked(n, heapCount(pv));
                 }
             }
         if (k == (u16)nkMember)
@@ -8208,11 +8204,7 @@ class ClassInfo
                 IRValue* hv = lowerExpr(coll);
                 if (_failed)
                     return;
-                Array* cargs = new Array();
-                cargs.add((Object*)hv);
-                IRValue* cnt = emitMethodCall(runtimeHelper(String.withCString("_xtc_count")),
-                                              (IRValue*)0, cargs,
-                                              countTyLower(), true);
+                IRValue* cnt = heapCount(hv);
                 IRValue* saved = _sliceLow;
                 _sliceLow = (IRValue*)0;
                 emitForInLoop(loopVar, n.kid((u32)2), cnt, countConst((u32)0),
@@ -12566,6 +12558,121 @@ class ClassInfo
             return String.withCString("u32");
         return String.withCString("u16");
         }
+    // A heap pointer's element count. On the 64-bit rows it is read inline,
+    // the u64 eight bytes into the 40-byte allocation header (32 before the
+    // payload), as the bounds checks read it; elsewhere the runtime's
+    // _xtc_count answers, at the row's count width (#321).
+    IRValue* heapCount(IRValue* p)
+        {
+        if (_cntW >= (u32)8)
+            {
+            Array* a = new Array();
+            a.add((Object*)IROperand.useVal(p));
+            IRValue* pi = emit(String.withCString("PtrToInt"), String.withCString("U64"), a);
+            Array* s = new Array();
+            s.add((Object*)IROperand.useVal(pi));
+            s.add((Object*)IROperand.immI((i32)32, String.withCString("U64")));
+            IRValue* hp = emit(String.withCString("Sub"), String.withCString("U64"), s);
+            Array* c = new Array();
+            c.add((Object*)IROperand.useVal(hp));
+            IRValue* ap = emit(String.withCString("IntToPtr"), ptrTo(String.withCString("U64")), c);
+            return loadThroughIr(ap, String.withCString("U64"));
+            }
+        Array* cargs = new Array();
+        cargs.add((Object*)p);
+        return emitMethodCall(runtimeHelper(String.withCString("_xtc_count")),
+                              (IRValue*)0, cargs, countTyLower(), true);
+        }
+
+    // A constant `.length`: the u32 form where sema narrowed it (#321), else
+    // the row's count type.
+    IRValue* lengthConst(Node* n, u32 v)
+        {
+        if (_cntW >= (u32)8 && n.ty() != 0 && isName(n.ty(), "u32"))
+            {
+            Array* ops = new Array();
+            ops.add((Object*)IROperand.immI((i32)v, String.withCString("U32")));
+            return emit(String.withCString("Const"), String.withCString("U32"), ops);
+            }
+        return countConst(v);
+        }
+
+    // A run-time `.length` in its u32 form (sema narrowed it to a 32-bit
+    // destination, #321): a count past 2^32-1 stops the program with the site
+    // and the remedy, through write(2) and _xt_exit(134), rather than wrap.
+    IRValue* lengthChecked(Node* n, IRValue* cnt)
+        {
+        if (_cntW < (u32)8 || n.ty() == 0 || !isName(n.ty(), "u32"))
+            return cnt;
+        Array* sh = new Array();
+        sh.add((Object*)IROperand.useVal(cnt));
+        sh.add((Object*)IROperand.immI((i32)32, String.withCString("U64")));
+        IRValue* hi = emit(String.withCString("LShr"), String.withCString("U64"), sh);
+        IRInsn* big = IRInsn.with(String.withCString("ICmp"));
+        big.setRes(new IRValue(String.withCString("Bool")));
+        big.setPred(String.withCString("NE"));
+        big.add(IROperand.useVal(hi));
+        big.add(IROperand.immI((i32)0, String.withCString("U64")));
+        _blk.add(big);
+        String* pre = blockPrefix();
+        String* okName = String.withString(pre);
+        okName.appendCString("_len32_ok");
+        IRBlock* okB = addBlock(okName);
+        String* trapName = String.withString(pre);
+        trapName.appendCString("_len32_trap");
+        IRBlock* trapB = addBlock(trapName);
+        IRInsn* t = IRInsn.with(String.withCString("CondBranch"));
+        t.add(IROperand.useVal(big.res()));
+        t.add(IROperand.block(trapB));
+        t.add(IROperand.block(okB));
+        _blk.setTerm(t);
+        // The trap's calls thread a memory token of their own; the ok path
+        // carries on from the one before the branch.
+        IRValue* memBefore = _mem;
+        _blk = trapB;
+        String* msg = String.withCString("xcc: ");
+        msg.append(boundsSite(n));
+        msg.appendCString(": an array's length does not fit a u32; use u64\n");
+        IRValue* sv = stringAddr(msg);
+        Array* w = new Array();
+        w.add((Object*)IROperand.sym(runtimeHelper(String.withCString("write"))));
+        w.add((Object*)IROperand.useVal(i32Const((i32)2)));
+        w.add((Object*)IROperand.useVal(sv));
+        w.add((Object*)IROperand.useVal(i32Const((i32)msg.byteLength())));
+        emitVoidCall(w);
+        Array* x = new Array();
+        x.add((Object*)IROperand.sym(runtimeHelper(String.withCString("_xt_exit"))));
+        x.add((Object*)IROperand.useVal(i32Const((i32)134)));
+        emitVoidCall(x);
+        _blk.setTerm(IRInsn.with(String.withCString("Unreachable")));
+        _blk = okB;
+        _mem = memBefore;
+        Array* tr = new Array();
+        tr.add((Object*)IROperand.useVal(cnt));
+        return emit(String.withCString("Trunc"), String.withCString("U32"), tr);
+        }
+
+    IRValue* i32Const(i32 v)
+        {
+        Array* ops = new Array();
+        ops.add((Object*)IROperand.immI(v, String.withCString("I32")));
+        return emit(String.withCString("Const"), String.withCString("I32"), ops);
+        }
+
+    // A call for its effect: [callee, args...], threading the memory token.
+    void emitVoidCall(Array* ops)
+        {
+        IRInsn* c = IRInsn.with(String.withCString("Call"));
+        for (u32 i = (u32)0; i < ops.count(); i = i + (u32)1)
+            c.add((IROperand*)ops.get(i));
+        c.add(IROperand.useVal(_mem));
+        IRValue* nm = new IRValue(String.withCString("Mem"));
+        c.setMemRes(nm);
+        c.setCc(String.withCString("CallConv::Standard"));
+        _blk.add(c);
+        _mem = nm;
+        }
+
     IRValue* countConst(u32 v)
         {
         Array* ops = new Array();
