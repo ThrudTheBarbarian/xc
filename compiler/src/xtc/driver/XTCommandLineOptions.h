@@ -31,6 +31,7 @@ NS_ASSUME_NONNULL_BEGIN
 // -fbounds-check: a CHECKED build. Every subscript gets a runtime bounds
 // check that reports and aborts. Debug-only — never shipped enabled.
 @property(nonatomic, readwrite) BOOL boundsCheck;   // subscripts checked: -fbounds-check or -fbounds-check=light
+@property(nonatomic, readwrite) BOOL pureProgram;   // --pure-program: the driver links an executable of xc alone (#15)
 @property(nonatomic, readwrite) BOOL boundsReport;  // -fbounds-check: the debug build (frames kept, a backtrace)
 // -g: debug information (DWARF line tables, subprograms, call frames) in the
 // output, so a debugger can break on a line, step and backtrace.

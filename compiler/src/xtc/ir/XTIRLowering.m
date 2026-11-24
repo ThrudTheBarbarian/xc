@@ -612,6 +612,7 @@ static XTIRType* XTCPackCarrierType(void)
 // instruction stream. Ungated this would re-baseline every differential and tax
 // xt6502/m68k for a race those targets cannot have.
 static int sThreadSafeStatics = -1;
+static BOOL sPureProgram = NO;
 
 // Does this program declare the thread-spawn primitive? `Thread.xc` declares
 // `pointer _xt_thread_create(pointer, pointer);` at FILE SCOPE, so the answer is
@@ -707,6 +708,10 @@ static void setDbgLocFromNode(XTASTNode* node)
 + (void)setCPackCarrier:(NSString*)carrier
     {
     sCPackCarrier = carrier ?: @"";
+    }
++ (void)setPureProgram:(BOOL)on
+    {
+    sPureProgram = on;
     }
 + (int)threadSafeStatics
     {
@@ -20588,6 +20593,16 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
             }
         }
 
+    // A program the driver links of xc alone, that uses par: main's first act
+    // tells the par runtime, which then learns per block whether to keep
+    // outputs on a GPU between runs (#15). As the port.
+    if (sPureProgram && [fn.name isEqualToString:@"main"])
+        {
+        XTIRSymbol* mp = [self.module symbolForName:@"Par$markPure"];
+        if (mp)
+            [self emitCall:[self.module.symbols indexOfObjectIdenticalTo:mp]
+                  callConv:[XTIRCallConv standard] argValues:@[] resultType:nil];
+        }
     // Deferred global initialisers (see pendingGlobalInits): main's prologue
     // is the earliest point every target reaches exactly once, before any
     // user statement can read the global. A class-typed initialiser's +1 is

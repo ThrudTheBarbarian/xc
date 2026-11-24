@@ -68,6 +68,7 @@ class FeOptions
     bool _verbose;
     bool _boundsCheck; // subscripts checked: -fbounds-check or -fbounds-check=light
     bool _noParFuse;   // -fno-par-fuse: adjacent par blocks are never fused (#147)
+    bool _pureProgram; // the driver links an executable of xc alone (#15: residency learned by default)
     bool _boundsReport; // -fbounds-check: the debug build (frames kept, a symbolised backtrace)
     bool _debugInfo;   // -g: source locations on the IR, for the line tables
     i32 _threadSafeArc; // -f[no-]thread-safe-arc: 1 on, 0 off, -1 decide per module
@@ -459,6 +460,14 @@ class FeOptions
         {
         _boundsCheck = b;
         }
+    bool pureProgram(void)
+        {
+        return _pureProgram;
+        }
+    void setPureProgram(bool b)
+        {
+        _pureProgram = b;
+        }
     bool boundsReport(void)
         {
         return _boundsReport;
@@ -549,6 +558,22 @@ class FeOptions
     {
     void init(void)
         {
+        }
+
+    // Whether every library the program imported is xcc's runtime itself
+    // (libRuntime): an imported library may be C (#import <tls>, GTK) that
+    // hands the program's buffers to the system, so it makes the program
+    // not all xc (#15).
+    static bool onlyRuntimeLibs(FeOptions* o)
+        {
+        Array* nl = o.neededLibs();
+        for (u32 i = (u32)0; nl != (Array*)0 && i < nl.count(); i = i + (u32)1)
+            {
+            String* b = ((String*)nl.get(i)).lastPathComponent();
+            if (!b.hasPrefix(String.withCString("libRuntime.")))
+                return false;
+            }
+        return true;
         }
 
     // Source in, IR module out. 0 on a failure that has already been reported.
@@ -1315,6 +1340,9 @@ class FeOptions
         lower.setThreadSafeStatics(o.threadSafeArc());
         lower.setBoundsCheck(o.boundsCheck());
         lower.setParFields(!o.warningSuppressed(String.withCString("par-fields")));
+        // An executable of xc alone (the driver's word) that imports no
+        // library but xcc's runtime: main tells the par runtime so (#15).
+        lower.setPureProgram(o.pureProgram() && Frontend.onlyRuntimeLibs(o));
         // -g, as the reference's driver sets it up: a fresh file table, and the
         // program's own source registered first, so it is file 0 and names the
         // compile unit (imports are lowered first and would otherwise take it).

@@ -767,6 +767,24 @@ bool linksXcLibrary(DriverOptions* d)
 // set while the objects' .deplibs are read (objectLinkDeps).
 bool gObjWantRuntimeSupport; // …and it is libRuntimeSupport (#278)
 
+// Whether this build links an executable of xc alone (#15): an xc source,
+// built and linked in this one invocation, with no C or C++ input, no object,
+// archive or library named for the link (-l, -Wl, -Xlinker, $XTC_LDFLAGS, a
+// framework), not a library or the runtime itself. The front end adds the
+// libraries the program imports (onlyRuntimeLibs). Such a program's par
+// blocks learn per block whether to keep outputs on a GPU between runs; any
+// other keeps none unless XC_PAR_RESIDENT says (owner, 2026-11-24): a C
+// function handed an array still on the GPU fails on it.
+bool programIsPureXc(DriverOptions* d)
+{
+    String* src = d.fe().input();
+    if (src == (String*)0 || Languages.forFile(src) != (LanguageRow*)0) return false;
+    if (d.compileOnly() || d.emitLib() || d.emitRuntime() || gCSplitOut != (String*)0) return false;
+    if (d.linkInputs().count() > (u32)0 || d.rawLinkFlags().count() > (u32)0) return false;
+    if (d.frameworks().count() > (u32)0 || d.objectInputs().count() > (u32)0) return false;
+    return true;
+}
+
 // libRuntime (owner, 2026-11-03): the runtime's files, prebuilt per target
 // as one shared library, at <support>/runtime-lib/<row>/libRuntime.<ext>
 // (lib/xc/runtime-lib/... in an install). Building it (--emit-runtime): the
@@ -5941,6 +5959,7 @@ void xccMain(void)
     if (isIos(d)) d.fe().setLibPlatform(d.arch());
     d.fe().setTargetRow(d.targetRow());
     resolveRuntimeLib(d);
+    d.fe().setPureProgram(programIsPureXc(d));
 
     // Objects as inputs: the link step. No front end runs — the runtime is
     // the primary input and the objects ride as extras, exactly the shape the

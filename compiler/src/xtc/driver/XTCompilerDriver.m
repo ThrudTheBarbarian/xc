@@ -2241,6 +2241,15 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     // program declares the thread-spawn primitive (threading.md §9.5).
     [XTIRLowering setThreadSafeStatics:(int)_options.threadSafeARC];
     [XTIRLowering setCPackCarrier:dispatchRow.cPackCarrier];
+    // An executable of xc alone (the dispatcher's word) that imports no
+    // library but xcc's runtime (#15), as the port's onlyRuntimeLibs.
+    {
+    BOOL pure = _options.pureProgram;
+    for (NSString* p in _neededLibraryPaths)
+        if (![p.lastPathComponent hasPrefix:@"libRuntime."])
+            pure = NO;
+    [XTIRLowering setPureProgram:pure];
+    }
     // --migrate=<base>:<to> — sema hides members newer than <base>.
     if (_options.migrateVersions.length)
         {

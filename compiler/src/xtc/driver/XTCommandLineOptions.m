@@ -1304,6 +1304,12 @@ static NSString* sExecutablePath = nil;
             opts->_boundsCheck = YES;
             opts->_boundsReport = NO;
             }
+        else if ([arg isEqualToString:@"--pure-program"])
+            {
+            // The dispatcher links an executable of xc alone (#15): main
+            // tells the par runtime, as the port's programIsPureXc decides.
+            opts->_pureProgram = YES;
+            }
         else if ([arg isEqualToString:@"-fno-bounds-check"])
             {
             opts->_boundsCheck = NO;

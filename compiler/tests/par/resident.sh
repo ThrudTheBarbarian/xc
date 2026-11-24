@@ -87,6 +87,16 @@ for C in xcc-xc xcc; do
             esac
         fi
     done
+    # The default (XC_PAR_RESIDENT unset): a program the driver links of xc
+    # alone learns per block, as auto; one linked with anything else (-lm
+    # here) keeps nothing (#15, owner 2026-11-24).
+    if [ "$cuda" -gt 0 ] && [ ! "$PLAT" = osx ] && [ "$C" = xcc-xc ]; then
+        "$XC" -q -O2 -H . -lm -o "$W/l.$C" "$F" > "$W/lb.$C" 2>&1 || { echo "FAIL resident ($C): no -lm build"; fail=1; }
+        k=$(run "XC_PAR=gpu XC_PAR_GPU=cuda XC_PAR_FORGET=1 XC_PAR_REPORT=1" "" 2>&1 | grep -c 'kept on the GPU')
+        [ "$k" -ge 10 ] || { echo "FAIL resident ($C, default): an all-xc program kept $k times, wanted 10 or more"; fail=1; }
+        k=$( (cd "$W" && XC_PAR=gpu XC_PAR_GPU=cuda XC_PAR_REPORT=1 ./l.$C) 2>&1 | grep -c 'kept on the GPU')
+        [ "$k" = 0 ] || { echo "FAIL resident ($C, default): a program linked with -lm kept $k times, wanted 0"; fail=1; }
+    fi
     # A kept array handed to a system call (Socket.write's send()): the
     # writer brings it back first instead of the call failing with EFAULT.
     if [ "$cuda" -gt 0 ] && [ ! "$PLAT" = osx ]; then

@@ -701,6 +701,7 @@ class ClassInfo
     bool _parFieldsOn;       // -Wpar-fields (#146): report the fields each block's struct arrays use
     Array* _mFieldReport;    // that report's lines for the block being filled, or 0
     String* _mFieldWhere;    // an outlined block's loop (file:line:col), where it is printed
+    bool _pureProgram;  // main tells the par runtime the program is all xc (#15)
 
     // ── the `par` kernel as Metal source (par-blocks.md §6) ─────────────────
     // The port of XTIRParMSL: the same kernel, byte for byte. Each GPU thread
@@ -1011,6 +1012,10 @@ class ClassInfo
     void setParFields(bool b)
         {
         _parFieldsOn = b;
+        }
+    void setPureProgram(bool b)
+        {
+        _pureProgram = b;
         }
     void setDebugInfo(bool b)
         {
@@ -18030,6 +18035,11 @@ class ClassInfo
             }
         pushArcScope();
         emitPinnedParamCopies();
+        // A program the driver links of xc alone, that uses par: main's first
+        // act tells the par runtime, which then learns per block whether to
+        // keep outputs on a GPU between runs (#15).
+        if (_pureProgram && isName(_fn.name(), "main") && symbolNamed(String.withCString("Par$markPure")) != (IRSymbol*)0)
+            emitMethodCall(String.withCString("Par$markPure"), (IRValue*)0, new Array(), String.withCString("void"), false);
         // Deferred global initialisers: main's prologue is the earliest point
         // every target reaches exactly once, before any user statement can
         // read the global. A class-typed initialiser's +1 is ADOPTED (plain

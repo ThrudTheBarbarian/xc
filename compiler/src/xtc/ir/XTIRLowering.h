@@ -68,6 +68,9 @@ NS_ASSUME_NONNULL_BEGIN
 |* before, so the corpus and the self-hosting differentials do not move.
 \****************************************************************************/
 + (void)setThreadSafeStatics:(int)mode;
+// An executable of xc alone that imports no library but xcc's runtime (#15):
+// main's prologue calls Par.markPure when the program has it.
++ (void)setPureProgram:(BOOL)on;
 + (int)threadSafeStatics;
 
 // How C passes a _Float16 or __bf16 on the target (XTTarget.cPackCarrier):
