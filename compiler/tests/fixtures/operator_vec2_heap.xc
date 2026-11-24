@@ -1,3 +1,4 @@
+//xtc-na: xt6502 — its operator methods and heap results take more code than the xt6502 layout's code regions hold
 // Operators on a class whose results live on the heap. `:operator(pattern)`
 // makes a method an operator; the method keeps its name. Precedence and
 // associativity are the built-in ones: `a + b * 2.0 - -d` is
