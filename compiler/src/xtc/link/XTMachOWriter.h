@@ -19,6 +19,11 @@ NS_ASSUME_NONNULL_BEGIN
 \****************************************************************************/
 + (void)setApplePlatform:(nullable NSString*)platform;
 
+// The LC_RPATH entries a shared library carries after @loader_path (#620):
+// the directories of the libraries it imports, libRuntime's among them.
+// Written only when the library imports one. Process-wide, as the platform.
++ (void)setDylibRpaths:(nullable NSArray<NSString*>*)rpaths;
+
 // The `.tbd` target triples the current platform's exports are listed under.
 // Exposed so a test can pin the mapping — reading the wrong triples yields an
 // EMPTY export set, which is silent until dyld refuses at launch (bugs/028).
