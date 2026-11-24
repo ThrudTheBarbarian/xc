@@ -23,5 +23,8 @@ i32 main(void)
     i32 x = 5;
     i32* p = &x;
     Stdio.printf("shapes %d %d %d\n", (2 * pa ** pb ** pc).v, (pa ⊗ pb).v, x**p);
+    Span* s = Span.of(3, 10);
+    i32 m = 6;
+    Stdio.printf("brackets %d %d %d\n", |s| * 2, ⌊Span.of(4, 5)⌋, |s| | m);
     return 0;
     }

@@ -1,5 +1,6 @@
 // The MODULE half for operators of a class's own shape: `**` above `*` and
-// grouping from the right, and `⊗` from the Unicode block. The shapes and the
+// grouping from the right, `⊗` from the Unicode block, and the brackets `|p|`
+// and `⌈p⌉`. The shapes and the
 // precedence travel in the .xtc.iface, so use-opshape.xc parses them as this
 // module does.
 class Pw
@@ -22,5 +23,13 @@ class Pw
     Pw* kron(Pw* o) :operator(self ⊗ o)
         {
         return Pw.of(v * 100 + o.v);
+        }
+    i32 size() :operator(|self|)
+        {
+        return v < 0 ? 0 - v : v;
+        }
+    static i32 up(Pw* p) :operator(⌈p⌉)
+        {
+        return p.v + 1;
         }
     }
