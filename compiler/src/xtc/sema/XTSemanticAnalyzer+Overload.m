@@ -949,7 +949,7 @@ static NSHashTable* gDualLength;
                 continue;
             // A local moves to the heap (#604); the other forms are refused
             // where they are stored (checkStackAddressInStrongSlot).
-            if ([self isPromotableAddress:u])
+            if ([self isPromotableAddress:u] || [self isGlobalInstanceAddress:u])
                 continue;
             if ([u.operand isKindOfClass:[XTIdentifierNode class]])
                 {
@@ -1001,9 +1001,10 @@ static NSHashTable* gDualLength;
 /****************************************************************************\
 |* `&x` of an instance held by value, stored where a strong class pointer
 |* would retain it (#604). A local stack instance moves to the heap instead
-|* (isPromotableAddress); what is left has no header and so no reference
-|* count: a member or an element, which point inside an instance or an array,
-|* a by-value parameter, and a global instance. An initialiser, an assignment
+|* (isPromotableAddress), and a global instance has an immortal count (#641);
+|* what is left has no header and so no reference count: a member or an
+|* element, which point inside an instance or an array, and a by-value
+|* parameter. An initialiser, an assignment
 |* or a return; the argument form is checkStackInstanceStrongParamArgs.
 |* @param slotType  The type of the slot that takes the value.
 |* @param value     The value stored.
@@ -1039,10 +1040,6 @@ static NSHashTable* gDualLength;
                                               "value and cannot move to the heap; copy it into a local (%@ c = %@;) "
                                               "and take the local's address",
                                              obj, obj, cls, obj];
-        else if (sym && sym == [self.globalScope lookupLocalSymbol:n])
-            msg = [NSString stringWithFormat:@"'&%@' is the address of a global instance, which has no reference "
-                                              "count; declare the global as a reference (%@* %@ = new %@();)",
-                                             obj, cls, obj, cls];
         else
             msg = [NSString stringWithFormat:@"'&%@' points inside self, and a pointer into an instance cannot be "
                                               "counted; copy the member out (%@ c = %@;), or allocate it with new",
@@ -1070,6 +1067,25 @@ static NSHashTable* gDualLength;
     }
 
 /****************************************************************************\
+|* YES when `value` is `&g` of a global instance (#641): it has a header with
+|* an immortal count, so a strong or weak pointer may hold it.
+\****************************************************************************/
+- (BOOL)isGlobalInstanceAddress:(nullable XTASTNode*)value
+    {
+    if (![value isKindOfClass:[XTUnaryExprNode class]] || ((XTUnaryExprNode*)value).op != XTUnaryOpAddrOf)
+        return NO;
+    XTASTNode* operand = ((XTUnaryExprNode*)value).operand;
+    if (![operand isKindOfClass:[XTIdentifierNode class]])
+        return NO;
+    XTType* ot = operand.resolvedType;
+    if (!ot || ot.kind != XTTypeKindClass || [ot isKindOfClass:[XTPointerType class]])
+        return NO;
+    NSString* n = ((XTIdentifierNode*)operand).identName;
+    XTSymbol* sym = [[self currentScope] lookupSymbol:n];
+    return sym && sym == [self.globalScope lookupLocalSymbol:n];
+    }
+
+/****************************************************************************\
 |* YES when `value` is `&x` of an instance held by value and `slotType` is a
 |* strong class pointer: the store checkStackAddressInStrongSlot refuses.
 \****************************************************************************/
@@ -1084,7 +1100,7 @@ static NSHashTable* gDualLength;
         return NO;
     XTType* ot = ((XTUnaryExprNode*)value).operand.resolvedType;
     return ot && ot.kind == XTTypeKindClass && ![ot isKindOfClass:[XTPointerType class]]
-           && ![self isPromotableAddress:value];
+           && ![self isPromotableAddress:value] && ![self isGlobalInstanceAddress:value];
     }
 
 /****************************************************************************\

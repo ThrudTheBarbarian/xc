@@ -473,7 +473,8 @@ class Arm9
             // A zero-init global is a `.comm` and needs no section of its own —
             // only a global with a PAYLOAD opens `.data`.
             Array* b = s.bytes();
-            if (b != 0 && b.count() > (u32)0 && !emitted)
+            bool inst = s.attr(String.withCString("instance"));
+            if (((b != 0 && b.count() > (u32)0) || inst) && !emitted)
                 {
                 _out.appendCString("\n\t.data\n");
                 emitted = true;
@@ -537,6 +538,17 @@ class Arm9
         u32 size = fieldWidth(s.dataType());
         if (size == (u32)0)
             size = (u32)4;
+        // A global instance (#641): the 24-byte header a heap block has
+        // (magic, stride, count, dealloc, weak-list head, count) before the
+        // label, which names the fields as a heap reference does. Its count is
+        // 0xFFFF, which retain and release leave alone (bug 261), so it is
+        // immortal at no cost.
+        if (s.attr(String.withCString("instance")))
+            {
+            _out.appendFormat("\t.p2align 3\n\t.word\t0x58544F42\n\t.word\t%lu\n\t.word\t1\n\t.word\t0\n\t.word\t0\n\t.word\t0xFFFF0000\n", size);
+            _out.appendFormat("\t.global\t%s\n%s:\n\t.space\t%lu\n", s.name().cString(), s.name().cString(), size);
+            return;
+            }
         Array* b = s.bytes();
         if (b == 0 || b.count() == (u32)0)
             {

@@ -4979,6 +4979,18 @@ class M68k
             u32 bw = irWidth(ty);
             w = mw > bw ? mw : bw;
             }
+        // A global instance (#641): the 14-byte header a heap block has
+        // (count, element size, dealloc, weak-list head, count) before the
+        // label, which names the fields as a heap reference does. Its count is
+        // $FFFF, which retain and release leave alone (bug 261), so it is
+        // immortal at no cost.
+        if (s.attr(String.withCString("instance")))
+            {
+            dataHeader();
+            _out.appendFormat("\t.even\n\t.dc.w\t1\n\t.dc.w\t%lu\n\t.dc.l\t0\n\t.dc.l\t0\n\t.dc.w\t$FFFF\n%s:\n\t.space\t%lu\n",
+                              w, m68kSym(s.name()).cString(), w);
+            return;
+            }
         Array* bytes = s.bytes();
         if (bytes != (Array*)0 && bytes.count() > (u32)0)
             {

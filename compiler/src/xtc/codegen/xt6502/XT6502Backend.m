@@ -4575,6 +4575,16 @@ static NSString *padLeft(NSString *s, NSUInteger width) {
             [out appendString:@"; Module data\n"];
             emittedHeader = YES;
         }
+        // A global instance (#641): the 7-byte header a heap block has (block
+        // size, weak-list head, count) before the label, which names the
+        // fields as a heap reference does. Its count is $FFFF, which retain
+        // and release leave alone, so it is immortal at no cost.
+        if ([sym.attributes[@"instance"] boolValue]) {
+            NSUInteger total = size + 7;
+            [out appendFormat:@"    .byte $%02X,$%02X,$00,$00,$00,$FF,$FF\n_%@: .space %u\n",
+                              (unsigned)(total & 0xFF), (unsigned)((total >> 8) & 0x7F), sym.name, (unsigned)size];
+            continue;
+        }
         BOOL isFloat = XTIRTypeKindIsFloating(sym.globalType.kind);
         if (sym.initialBytes.length > 0) {
             NSData *bytes = sym.initialBytes;

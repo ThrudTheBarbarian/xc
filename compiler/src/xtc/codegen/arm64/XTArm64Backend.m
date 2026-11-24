@@ -10413,6 +10413,27 @@ static BOOL sArm64LseAtomics = YES;  // Apple Silicon is ARMv8.5; Android's floo
         if (page)
             size = (size + 16383u) & ~16383u;
         BOOL isFloat = XTIRTypeKindIsFloating(sym.globalType.kind);
+        // A global instance (#641): the object header a heap instance has,
+        // magic and count, before the label, which names the fields as a heap
+        // reference does. The count is immortal: 0x40000000 is so far from 0
+        // and from the teardown marker 0x80000000 that no run's retains and
+        // releases reach either, and retain and release stay as they are.
+        if ([sym.attributes[@"instance"] boolValue]) {
+            if (!emittedInitHeader) {
+                [out appendString:@"\n// Module data (initialised)\n"];
+                [out appendString:@"    .section __DATA,__data\n"];
+                emittedInitHeader = YES;
+            }
+            unsigned ip2 = p2 > 3u ? p2 : 3u;
+            [out appendFormat:@"    .p2align %u\n", ip2];
+            if (ip2 > 3u)
+                [out appendFormat:@"    .space %u\n", (1u << ip2) - 8u];
+            [out appendString:@"    .long 0x58544F4E\n    .long 0x40000000\n"];
+            [out appendFormat:@"    .globl _%@\n", sym.name];
+            [out appendFormat:@"_%@:\n", sym.name];
+            [out appendFormat:@"    .space %u\n", (unsigned)size];
+            continue;
+        }
         if (sym.initialBytes.length > 0) {
             if (!emittedInitHeader) {
                 [out appendString:@"\n// Module data (initialised)\n"];

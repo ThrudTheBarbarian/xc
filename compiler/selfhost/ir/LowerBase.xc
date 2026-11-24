@@ -443,6 +443,12 @@ class ClassInfo
     // Globals whose initialiser could not constant-fold: run as ordinary
     // stores at the top of main (mirror of pendingGlobalInits).
     Array* _pendingGlobalInits;
+    // Global instances (#641), name -> class: `P g;` at file scope is the
+    // instance itself, in data behind a header with an immortal count, and is
+    // set up before main (by main's prologue, or in a module with no main by
+    // a load-time constructor of its own, named here).
+    Map* _valueGlobals;
+    String* _globalInitFn;
     IRModule* _m;
     IRFunc* _fn;
     IRBlock* _blk;
@@ -5020,6 +5026,10 @@ class ClassInfo
         // bytes, and every use of the name means the address anyway.
         if (g != 0 && isArrayLike((String*)g))
             return globalArrayAddr(n, (String*)g);
+        // A global instance (#641) is its address, as a stack instance is.
+        ClassInfo* gci = globalInstanceClass(n.name());
+        if (gci != 0)
+            return globalInstanceAddr(n.name(), gci);
         if (g != 0)
             return loadGlobal(n.name(), (String*)g);
         String* w = String.withCString("unbound identifier ");
@@ -10917,6 +10927,17 @@ class ClassInfo
         if (rhs.kind() == (u16)nkNew || valueClassOf(rhs.ty()) == 0)
             return false;
         IRPinned* vpin = pinOf(name);
+        // `g = c` of a global instance (#641) copies the bytes too.
+        ClassInfo* gci = globalInstanceClass(name);
+        if (vpin == 0 && gci != 0)
+            {
+            IRValue* src = lowerExpr(rhs);
+            if (_failed)
+                return true;
+            if (src != 0 && isPtrIr(src.ty()))
+                valueCopyInto(src, globalInstanceAddr(name, gci), (IRPinned*)0, gci, true);
+            return true;
+            }
         if (vpin == 0 || !isInstanceSlot(vpin))
             return false;
         Object* vco = _valueClass.get((Hashable*)name);
@@ -13753,16 +13774,43 @@ class ClassInfo
             if (mc == 0)
                 continue;
             u32 slot = ((Number*)ci.ivarIndex().get((Hashable*)nm)).asU32();
-            IRValue* ma = fieldAddr(addr, slot, mc.selfPtr());
+            setUpInstance(fieldAddr(addr, slot, mc.selfPtr()), mc, true);
+            }
+        }
+
+    // One instance held by value set up in place: ivars zeroed (unless its
+    // storage starts zeroed, as a global's does), vtable seeded, its own
+    // members, then its zero-argument init.
+    void setUpInstance(IRValue* ma, ClassInfo* mc, bool zero)
+        {
+        if (zero)
+            {
             zeroInitIvars(ma, mc);
             stackZeroStructs(ma, mc);
-            stampInstanceIdentity(ma, mc);
-            setUpValueMembers(ma, mc);
-            Node* init = zeroArgInit(mc);
-            if (init != 0)
-                emitMethodCall(methodSymbolName(mc.decl(), init), ma,
-                               new Array(), (String*)0, false);
             }
+        stampInstanceIdentity(ma, mc);
+        setUpValueMembers(ma, mc);
+        Node* init = zeroArgInit(mc);
+        if (init != 0)
+            emitMethodCall(methodSymbolName(mc.decl(), init), ma,
+                           new Array(), (String*)0, false);
+        }
+
+    // The class of the global instance `name` names (#641), or 0: a local of
+    // the same name hides it.
+    ClassInfo* globalInstanceClass(String* name)
+        {
+        if (name == 0 || _valueGlobals == 0 || pinOf(name) != 0 || _locals.get((Hashable*)name) != 0)
+            return (ClassInfo*)0;
+        return (ClassInfo*)_valueGlobals.get((Hashable*)name);
+        }
+
+    // The address of the global instance `name`, as the class.
+    IRValue* globalInstanceAddr(String* name, ClassInfo* ci)
+        {
+        Array* ops = new Array();
+        ops.add((Object*)IROperand.sym(globalSymName(name)));
+        return emit(String.withCString("AddrOf"), ci.selfPtr(), ops);
         }
 
     // `obj.m = v` / `m = v` of an instance held by value: a copy into the
@@ -17179,13 +17227,30 @@ class ClassInfo
         // every target reaches exactly once, before any user statement can
         // read the global. A class-typed initialiser's +1 is ADOPTED (plain
         // store, no retain) — the ownership a global holds to process exit.
-        if (isName(_fn.name(), "main") && _pendingGlobalInits.count() > (u32)0)
+        // A global instance (#641) is set up here too, in declaration order
+        // with the initialisers: its storage starts zeroed, so its vtable is
+        // seeded, its members are set up and its init runs. In a module with
+        // no main, the load-time constructor made for it sets up the
+        // instances alone.
+        bool globalInitFn = _globalInitFn != 0 && _fn.name().equals(_globalInitFn);
+        if ((isName(_fn.name(), "main") || globalInitFn) && _pendingGlobalInits.count() > (u32)0)
             {
             Array* pend = _pendingGlobalInits;
             _pendingGlobalInits = new Array();
             for (u32 gi = (u32)0; gi < pend.count(); gi = gi + (u32)1)
                 {
                 Node* g = (Node*)pend.get(gi);
+                ClassInfo* gci = (ClassInfo*)_valueGlobals.get((Hashable*)g.name());
+                if (gci != 0)
+                    {
+                    setUpInstance(globalInstanceAddr(g.name(), gci), gci, false);
+                    continue;
+                    }
+                if (globalInitFn)
+                    {
+                    _pendingGlobalInits.add((Object*)g);
+                    continue;
+                    }
                 String* aty = stripQual(g.op());
                 // An ARRAY initialiser `{ … }` whose elements aren't constant-
                 // foldable (symbol addresses): store each element, coercing per

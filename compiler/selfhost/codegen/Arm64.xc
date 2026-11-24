@@ -3597,6 +3597,24 @@ class Arm64
             u32 p2 = page ? (u32)14 : (u32)globalP2Align(size);
             if (page)
                 size = (size + (u32)16383) & ~(u32)16383;
+            // A global instance (#641): the object header a heap instance
+            // has, magic and count, before the label, which names the fields
+            // as a heap reference does. The count is immortal: 0x40000000 is
+            // so far from 0 and from the teardown marker 0x80000000 that no
+            // run's retains and releases reach either, and retain and release
+            // stay as they are.
+            if (sym.attr(String.withCString("instance"))) {
+                initHeader();
+                u32 ip2 = p2 > (u32)3 ? p2 : (u32)3;
+                _out.appendFormat("    .p2align %lu\n", ip2);
+                if (ip2 > (u32)3)
+                    _out.appendFormat("    .space %lu\n", ((u32)1 << ip2) - (u32)8);
+                _out.appendCString("    .long 0x58544F4E\n    .long 0x40000000\n");
+                _out.appendFormat("    .globl _%s\n_%s:\n", sym.name().cString(),
+                                  sym.name().cString());
+                _out.appendFormat("    .space %lu\n", size);
+                continue;
+            }
             Array* bytes = sym.bytes();
             if (bytes != (Array*)0 && bytes.count() > (u32)0) {
                 initHeader();

@@ -2509,6 +2509,22 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
             // on a 16 KB boundary within its section, padded to whole 16 KB
             // pages, as it registered it.
             BOOL page = [sym.attributes[@"gpupage"] boolValue];
+            // A global instance (#641): a heap instance's header, magic and
+            // count, before the label, which names the fields as a reference
+            // does. The count is immortal: 0x40000000 is so far from 0 and
+            // from the teardown marker 0x80000000 that no run's retains and
+            // releases reach either, and retain and release stay as they are.
+            if ([sym.attributes[@"instance"] boolValue])
+                {
+                NSUInteger sz = sym.globalType ? [self fieldWidth:sym.globalType] : 8;
+                if (sz >= 256)
+                    [data appendString:@"\t.p2align\t6\n\t.zero\t56\n"];
+                else
+                    [data appendString:@"\t.p2align\t3\n"];
+                [data appendString:@"\t.long\t0x58544F4E\n\t.long\t0x40000000\n"];
+                [data appendFormat:@"\t.globl\t%@\n%@:\n\t.zero\t%lu\n", [self safeSym:sym.name], [self safeSym:sym.name], (unsigned long)sz];
+                continue;
+                }
             if (sym.initialBytes)
                 {
                 NSData* bytes = sym.initialBytes;

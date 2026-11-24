@@ -2415,7 +2415,7 @@ class Sema
                 continue;
             // A local moves to the heap (#604); the other forms are refused
             // where they are stored (checkStackAddrStrong).
-            if (isPromotableAddr(a))
+            if (isPromotableAddr(a) || isGlobalInstAddr(a))
                 continue;
             String* inst = operand.kind() == (u16)nkIdent ? operand.name() : String.withCString("<stack instance>");
             String* m = String.withCString("cannot pass stack-allocated instance '");
@@ -2523,6 +2523,18 @@ class Sema
         return nameKindOf(operand.name()) == (u32)1 && !isParamName(operand.name());
         }
 
+    // `&g` of a global instance (#641): it has a header with an immortal
+    // count, so a strong or weak pointer may hold it.
+    bool isGlobalInstAddr(Node* value)
+        {
+        if (value == 0 || value.kind() != (u16)nkUnary || !_isOp(value.op(), "&") || value.kidCount() == (u32)0)
+            return false;
+        Node* operand = value.kid((u32)0);
+        if (operand.kind() != (u16)nkIdent || operand.name() == 0 || !isStackClassType(operand.ty()))
+            return false;
+        return nameKindOf(operand.name()) == (u32)3;
+        }
+
     // `&x` of an instance held by value, stored where a strong class pointer
     // would retain it: the store checkStackAddrStrong refuses.
     bool isStackAddrStrong(String* slot, Node* value)
@@ -2534,17 +2546,17 @@ class Sema
             return false;
         if (value.kind() != (u16)nkUnary || !_isOp(value.op(), "&") || value.kidCount() == (u32)0)
             return false;
-        return isStackClassType(value.kid((u32)0).ty()) && !isPromotableAddr(value);
+        return isStackClassType(value.kid((u32)0).ty()) && !isPromotableAddr(value) && !isGlobalInstAddr(value);
         }
 
     // `&x` of an instance held by value, stored where a strong class pointer
     // would retain it (#604), as the reference's
     // checkStackAddressInStrongSlot. A local stack instance moves to the heap
-    // instead (isPromotableAddr); what is left has no header and so no
-    // reference count: a member or an element, which point inside an instance
-    // or an array, a by-value parameter, and a global instance. An
-    // initialiser, an assignment or a return; the argument form is
-    // checkStackStrongArgs.
+    // instead (isPromotableAddr), and a global instance has an immortal count
+    // (#641); what is left has no header and so no reference count: a member
+    // or an element, which point inside an instance or an array, and a
+    // by-value parameter. An initialiser, an assignment or a return; the
+    // argument form is checkStackStrongArgs.
     void checkStackAddrStrong(String* slot, Node* value, Node* at)
         {
         if (!isStackAddrStrong(slot, value))
@@ -2578,18 +2590,6 @@ class Sema
                 m.appendCString(" c = ");
                 m.append(obj);
                 m.appendCString(";) and take the local's address");
-                _errorAt(m, at);
-                return;
-                }
-            if (nk == (u32)3)
-                {
-                m.appendCString("' is the address of a global instance, which has no reference count; declare the global as a reference (");
-                m.append(cls);
-                m.appendCString("* ");
-                m.append(obj);
-                m.appendCString(" = new ");
-                m.append(cls);
-                m.appendCString("();)");
                 _errorAt(m, at);
                 return;
                 }

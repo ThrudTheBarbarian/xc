@@ -371,6 +371,22 @@ static NSString* m68kSym(NSString* name)
                 uint32_t bw = s.globalType.byteWidth;
                 w = mw > bw ? mw : bw;
                 }
+            // A global instance (#641): the 14-byte header a heap block has
+            // (count, element size, dealloc, weak-list head, count) before the
+            // label, which names the fields as a heap reference does. Its
+            // count is $FFFF, which retain and release leave alone (bug 261),
+            // so it is immortal at no cost.
+            if ([s.attributes[@"instance"] boolValue])
+                {
+                if (!anyData)
+                    {
+                    [out appendString:@"\n; ── data ──\n\t.data\n\t.even\n"];
+                    anyData = YES;
+                    }
+                [out appendFormat:@"\t.even\n\t.dc.w\t1\n\t.dc.w\t%u\n\t.dc.l\t0\n\t.dc.l\t0\n\t.dc.w\t$FFFF\n%@:\n\t.space\t%u\n",
+                                  w, m68kSym(s.name), w];
+                continue;
+                }
             if (s.initialBytes)
                 {
                 if (!anyData)
