@@ -860,6 +860,7 @@ int main(int argc, const char *argv[]) {
             // to link the framework could not bind its symbols (bug 591).
             NSMutableArray<NSDictionary *> *dDylibs = [NSMutableArray array];
             NSMutableSet<NSString *> *dSeen = [NSMutableSet set];
+            NSMutableArray<NSString *> *dRpaths = [NSMutableArray array];
             for (int i = 7; i < argc; i++) {
                 NSString *p = @(argv[i]);
                 if ([p hasPrefix:@"-"]) continue;          // ld directives: not ours to honour here
@@ -876,8 +877,20 @@ int main(int argc, const char *argv[]) {
                     if ([dSeen containsObject:info[@"install"]]) continue;
                     [dSeen addObject:info[@"install"]];
                     [dDylibs addObject:info];
+                    // Its directory a run path after @loader_path, as an
+                    // executable's (#620): libRuntime's among them, so the
+                    // library loads into a program linked from objects, which
+                    // keeps the runtime its own. A .tbd names a shared-cache
+                    // library and a library in the current directory is found
+                    // through @loader_path already: neither adds one.
+                    NSString *dir = [[p stringByDeletingLastPathComponent] stringByStandardizingPath];
+                    if ([e isEqualToString:@"dylib"] && [p containsString:@"/"] && dir.length
+                        && ![dir isEqualToString:@"."] && ![dir isEqualToString:@"@loader_path"]
+                        && ![dRpaths containsObject:dir])
+                        [dRpaths addObject:dir];
                 }
             }
+            [XTMachOWriter setDylibRpaths:dRpaths];
             NSMutableData *mtext = [text mutableCopy];
             NSMutableDictionary<NSString *, NSNumber *> *msyms = [as.symbols mutableCopy];
             NSMutableArray<XAArm64Fixup *> *mfix = [as.fixups mutableCopy];
