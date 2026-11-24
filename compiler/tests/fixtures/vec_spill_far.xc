@@ -6,6 +6,7 @@
 // past the 1,020 bytes vstr/vldr reach from sp, so the address goes through a
 // register. Before #589 the arm9 build stopped ("vector register pressure
 // exceeded").
+//xtc-na: xt6502 — a 4096-element u32 array and the unrolled loop do not fit the 6502's code and data space
 #import "Stdio.xc"
 #define N 4096
 u32 xs[N];

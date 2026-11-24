@@ -4,6 +4,7 @@
 // took `dup v31.4s, …` for a write to some other register, kept believing v31
 // held the first spilled splat, and dropped the later reloads, so the loop
 // multiplied by the wrong constants.
+//xtc-na: xt6502 — a 4096-element u32 array and the unrolled loop do not fit the 6502's code and data space
 #import "Stdio.xc"
 #define N 4096
 u32 xs[N];
