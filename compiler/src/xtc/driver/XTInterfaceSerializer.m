@@ -128,6 +128,10 @@ static void appendCanonicalJSON(NSMutableString *out, id v) {
     if (m.operatorShape)
         d[@"operator"] = [[@[ m.operatorShape ] arrayByAddingObjectsFromArray:m.operatorOperands ?: @[]]
                              componentsJoinedByString:@" "];
+    // `:precedence(...)` on an operator of the class's own shape, as its spec
+    // (">*,right"), so a client parses the operator as the library does.
+    if (m.operatorShape && m.operatorPrecedence.length && ![m.operatorPrecedence hasPrefix:@"?"])
+        d[@"precedence"] = m.operatorPrecedence;
     return d;
 }
 

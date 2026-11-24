@@ -536,6 +536,10 @@ static NSUInteger sUnderPointer = 0;
         md.operatorShape = parts[0];
         md.operatorOperands = [parts subarrayWithRange:NSMakeRange(1, parts.count - 1)];
         }
+    // `:precedence(...)`: its spec (">*,right").
+    NSString* opPrec = m[@"precedence"];
+    if ([opPrec isKindOfClass:[NSString class]] && opPrec.length)
+        md.operatorPrecedence = opPrec;
     // The serialised `symbol` is the full export Class$method; lowering re-adds
     // the `Class$` prefix, so store only the bare (possibly overload-mangled)
     // method part here.

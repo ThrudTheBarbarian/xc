@@ -17,5 +17,11 @@ i32 main(void)
     l[1, 2] = 7;
     l[1, 2] += 3;
     Stdio.printf("index %d %d %d\n", l[0, 1], l[1, 2], l[1..6]);
+    Pow* pa = Pow.of(2);
+    Pow* pb = Pow.of(3);
+    Pow* pc = Pow.of(2);
+    i32 x = 5;
+    i32* p = &x;
+    Stdio.printf("shapes %d %d %d\n", (2 * pa ** pb ** pc).v, (pa ⊗ pb).v, x**p);
     return 0;
     }

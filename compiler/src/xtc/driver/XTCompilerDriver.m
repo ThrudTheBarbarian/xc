@@ -1800,6 +1800,9 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     XTParser* parser = [[XTParser alloc] initWithTokens:tokens
                                               typeTable:tt
                                             diagnostics:_diagnostics];
+    // The operators of their own shape (`:operator(self ** o)`) that imported
+    // classes define, so the parse reads them as it reads the unit's own.
+    [parser addImportedOperatorShapes:importedXtcDecls];
     // Loops become blocks only where a block has threads to run on: the
     // arm64, x86-64, win64 and wasm32 back ends. On xt6502, the Atari and
     // arm9 a block runs serially, and the lifting only moves the loop's code.

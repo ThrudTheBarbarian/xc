@@ -999,6 +999,10 @@ class JsonVal
         String* opPat = m.memberStr((u8*)"operator");
         if (opPat != 0 && opPat.byteLength() > (u32)0)
             md.setOpPat(String.withString(opPat));
+        // `:precedence(...)`: its spec (">*,right").
+        String* opPrec = m.memberStr((u8*)"precedence");
+        if (opPrec != 0 && opPrec.byteLength() > (u32)0)
+            md.setOpPrec(String.withString(opPrec));
         md.addFlag((u32)NF_EXTERNAL);
         JsonVal* ps = m.member((u8*)"params");
         if (ps != 0)

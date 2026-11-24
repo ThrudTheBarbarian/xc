@@ -808,6 +808,11 @@ class FeOptions
                     u16 k = d.kind();
                     if (k == (u16)nkClassDecl || k == (u16)nkProtocolDecl || k == (u16)nkEnumDecl || k == (u16)nkTypedefDecl)
                         parser.addTypeName(d.name());
+                    // The operators of their own shape (`:operator(self ** o)`)
+                    // an imported class defines, so the parse reads them as it
+                    // reads the unit's own.
+                    if (k == (u16)nkClassDecl)
+                        parser.addImportedOperatorShapes(d);
                     if (k == (u16)nkTypedefDecl)
                         parser.addTypedef(d.name(), d.op());
                     if (k == (u16)nkStructDecl)
