@@ -1,0 +1,60 @@
+module "operator-shape" {
+  layout 0: size=2 align=1 fields=[(0:Ptr(Void, unbanked))]
+  layout 1: size=3 align=1 fields=[(0:Ptr(Void, unbanked)), (2:U8)]
+  layout 2: size=0 align=1
+  layout 3: size=6 align=1 fields=[(0:Ptr(Void, unbanked)), (2:Ptr(Void, unbanked)), (4:Ptr(Void, unbanked))]
+  symbol V$pow: function (Ptr(Agg(1), unbanked), Ptr(Agg(1), unbanked)) -> Ptr(Agg(1), unbanked)
+    attributes: { banked: false, cloaked: false, static: false, variadic: false }
+  symbol V$kron: function (Ptr(Agg(1), unbanked), Ptr(Agg(1), unbanked)) -> Ptr(Agg(1), unbanked)
+    attributes: { banked: false, cloaked: false, static: false, variadic: false }
+  symbol V$root: function (Ptr(Agg(1), unbanked)) -> Ptr(Agg(1), unbanked)
+    attributes: { banked: false, cloaked: false, static: false, variadic: false }
+  symbol run: function (Ptr(Agg(1), unbanked), Ptr(Agg(1), unbanked), U8, Ptr(U8, unbanked)) -> U8
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  function V$pow(%0: Ptr(Agg(1), unbanked), %1: Ptr(Agg(1), unbanked), %2: Mem) -> (Ptr(Agg(1), unbanked), Mem) {
+    bb_entry:
+      preds: -
+      %3 = Retain %0, %2
+      %4 = Retain %1, %3
+      %5 = Release %0, %4
+      Return %1, %5
+  }
+  function V$kron(%0: Ptr(Agg(1), unbanked), %1: Ptr(Agg(1), unbanked), %2: Mem) -> (Ptr(Agg(1), unbanked), Mem) {
+    bb_entry:
+      preds: -
+      %3 = Retain %0, %2
+      %4 = Retain %0, %3
+      %5 = Release %0, %4
+      Return %0, %5
+  }
+  function V$root(%0: Ptr(Agg(1), unbanked), %1: Mem) -> (Ptr(Agg(1), unbanked), Mem) {
+    bb_entry:
+      preds: -
+      %2 = Retain %0, %1
+      %3 = Retain %0, %2
+      %4 = Release %0, %3
+      Return %0, %4
+  }
+  function run(%0: Ptr(Agg(1), unbanked), %1: Ptr(Agg(1), unbanked), %2: U8, %3: Ptr(U8, unbanked), %4: Mem) -> (U8, Mem) {
+    bb_entry:
+      preds: -
+      %5:Ptr(Agg(1), unbanked), %6 = Call @V$pow, [%0, %1], CallConv::Standard, %4
+      %7:Ptr(Agg(1), unbanked), %8 = Call @V$kron, [%0, %1], CallConv::Standard, %6
+      %9:Ptr(Agg(1), unbanked), %10 = Call @V$root, [%0], CallConv::Standard, %8
+      %11:Ptr(U8, unbanked) = FieldAddr %5, #1:U8
+      %12:U8, %13 = Load %11, %10
+      %14:Ptr(U8, unbanked) = FieldAddr %7, #1:U8
+      %15:U8, %16 = Load %14, %13
+      %17:U8 = Add %12, %15
+      %18:Ptr(U8, unbanked) = FieldAddr %9, #1:U8
+      %19:U8, %20 = Load %18, %16
+      %21:U8 = Add %17, %19
+      %22:U8, %23 = Load %3, %20
+      %24:U8 = Mul %2, %22
+      %25:U8 = Add %21, %24
+      %26 = Release %9, %23
+      %27 = Release %7, %26
+      %28 = Release %5, %27
+      Return %25, %28
+  }
+}
