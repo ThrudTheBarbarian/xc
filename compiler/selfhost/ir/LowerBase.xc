@@ -1764,7 +1764,7 @@ class ClassInfo
             if ((u64)w * (u64)n > (u64)$FFFFFFFF)
                 {
                 String* m = String.withCString("an array of ");
-                m.appendFormat("%u elements of %u bytes is %llu bytes, more than 4 GB", n, w, (u64)w * (u64)n);
+                m.appendFormat("%u elements of %u bytes is %llu bytes, past 4 GB; allocate it with new T[n] (heap arrays take any size on the 64-bit targets)", n, w, (u64)w * (u64)n);
                 errorAtNode(m, (Node*)0);
                 }
             arrayL = IRLayout.array(eIr, n, w, (u32)1);

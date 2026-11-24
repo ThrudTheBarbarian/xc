@@ -1157,7 +1157,7 @@ static NSString* XTDescribeNodeKind(XTASTNodeKind k)
     // Past 4 GB the size wrapped, and the storage with it, while .length
     // kept the count (#293). The port's layoutFor says the same.
     if ((uint64_t)elemW * (uint64_t)at.elementCount > 0xFFFFFFFFull)
-        [(self.diag ?: sQuietDiag) emitError:[NSString stringWithFormat:@"an array of %lu elements of %u bytes is %llu bytes, more than 4 GB",
+        [(self.diag ?: sQuietDiag) emitError:[NSString stringWithFormat:@"an array of %lu elements of %u bytes is %llu bytes, past 4 GB; allocate it with new T[n] (heap arrays take any size on the 64-bit targets)",
                                                         (unsigned long)at.elementCount, elemW,
                                                         (unsigned long long)elemW * (unsigned long long)at.elementCount]
                           at:nil];
