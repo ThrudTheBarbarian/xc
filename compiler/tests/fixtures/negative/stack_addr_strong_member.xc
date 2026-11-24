@@ -1,6 +1,7 @@
-// A class instance held by value inside a stack instance has no header
-// either, so its address cannot go into a strong pointer (#604).
-// xtc: error "'&o.inner' is the address of a stack instance, which has no reference count, so a strong 'P*' cannot hold it; declare it 'weak:P* r = &o.inner;', which does not retain it, or use o.inner directly"
+// A class instance held by value inside another has no header of its own, so
+// a strong pointer cannot hold its address, and the owner does not move to
+// the heap for it (#604).
+// xtc: error "'&o.inner' points inside o, and a pointer into an instance cannot be counted; copy the member out (P c = o.inner;), or allocate it with new"
 
 class P : Object { i32 a; i32 b; }
 class Outer : Object { i32 k; P inner; }

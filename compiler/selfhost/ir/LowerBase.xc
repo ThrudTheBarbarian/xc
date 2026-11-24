@@ -477,6 +477,8 @@ class ClassInfo
     Map* _pinNext;
     Map* _arrayElem;    // name -> element spelling, for the array locals
     NameList* _ampTaken;   // names an `&` was applied to
+    NameList* _ampWhole;   // names `&` was applied to directly (`&y`, not `&y.f`)
+    NameList* _promoted;   // stack instances on the heap: `&y` was taken (#604)
     NameList* _vaCursors;  // names handed to a va_* intrinsic as its cursor
     NameList* _asmNamed;   // names an inline-asm body mentions
     NameList* _weakLocals; // pinned names that are AUTO-ZEROING slots
@@ -878,6 +880,8 @@ class ClassInfo
         _pinNext = new Map();
         _arrayElem = new Map();
         _ampTaken = new NameList();
+        _ampWhole = new NameList();
+        _promoted = new NameList();
         _assignedNames = new NameList();
         _vaCursors = new NameList();
         _asmNamed = new NameList();
@@ -2474,6 +2478,17 @@ class ClassInfo
                 // the null prev link, not the pair's recv (bug 168).
                 if (_weakLocals.has(target.name()))
                     return pinAddrNamed(p, target.name());
+                // `&y` of a stack instance on the heap (#604) is the reference
+                // its slot holds.
+                Object* pco = _valueClass.get((Hashable*)target.name());
+                if (pco != 0 && _promoted.has(target.name()))
+                    return instanceAddr(p, (ClassInfo*)pco);
+                // …and `&p` of `P p = new P()`, a reference held under the
+                // class's name, is the reference.
+                String* past = (String*)_pinAst.get((Hashable*)target.name());
+                if (pco == 0 && past != 0 && !Types.isPointer(past) && !isArrayLike(past) && classFor(stripQual(past)) != 0
+                    && isPtrIr(p.ty()) && _pinnedParamInit.get((Hashable*)target.name()) == 0)
+                    return loadThroughIr(pinSlotAddr(p), p.ty());
                 Array* ops = new Array();
                 ops.add((Object*)IROperand.useVal(p.val()));
                 return emit(String.withCString("AddrOf"), irType(n.ty()), ops);
@@ -4975,11 +4990,7 @@ class ClassInfo
             // method dispatch reuse the class-pointer paths unchanged.
             Object* vco = _valueClass.get((Hashable*)n.name());
             if (vco != 0)
-                {
-                Array* vops = new Array();
-                vops.add((Object*)IROperand.useVal(p.val()));
-                return emit(String.withCString("AddrOf"), ((ClassInfo*)vco).selfPtr(), vops);
-                }
+                return instanceAddr(p, (ClassInfo*)vco);
             if (_arrayElem.get((Hashable*)n.name()) != 0)
                 return arrayDecayAddr(n.name(), p);
             return loadThrough(pinAddrNamed(p, n.name()), (String*)_pinAst.get((Hashable*)n.name()));
@@ -9942,14 +9953,17 @@ class ClassInfo
             Object* vco = _valueClass.get((Hashable*)n.name());
             if (vco != 0 && (n.kidCount() == (u32)0 || !isName(stripQual(n.kid((u32)0).ty()), n.op().cString())))
                 {
-                setUpStackInstance(n.name(), (ClassInfo*)vco);
+                if (_promoted.has(n.name()))
+                    setUpInstanceAt(allocPromoted(pin, (ClassInfo*)vco), (ClassInfo*)vco);
+                else
+                    setUpStackInstance(n.name(), (ClassInfo*)vco);
                 enrolStack(n.name(), n.op(), false);
                 return;
                 }
             // Any initialiser yielding the class: a call's result, or another
             // instance, whose bytes are copied (owner, 2026-10-28).
             if (vco != 0 && n.kidCount() > (u32)0 && n.kid((u32)0).kind() != (u16)nkNew && valueClassOf(n.kid((u32)0).ty()) != 0
-                && IRType.isAgg(pin.ty()))
+                && isInstanceSlot(pin))
                 {
                 if (valueClassInit(n.kid((u32)0), pin, (ClassInfo*)vco, false))
                     {
@@ -10911,7 +10925,7 @@ class ClassInfo
         if (rhs.kind() == (u16)nkNew || valueClassOf(rhs.ty()) == 0)
             return false;
         IRPinned* vpin = pinOf(name);
-        if (vpin == 0 || !IRType.isAgg(vpin.ty()))
+        if (vpin == 0 || !isInstanceSlot(vpin))
             return false;
         Object* vco = _valueClass.get((Hashable*)name);
         if (vco == 0)
@@ -10953,6 +10967,8 @@ class ClassInfo
             }
         if (layoutOfAgg(ci.agg()) == 0)
             return false;
+        if (!assign && isPromotedPin(pin))
+            allocPromoted(pin, ci);
         valueCopyInto(src, (IRValue*)0, pin, ci, assign);
         return true;
         }
@@ -10960,9 +10976,83 @@ class ClassInfo
     // The instance a value-class slot holds, addressed as the class.
     IRValue* instanceAddr(IRPinned* pin, ClassInfo* ci)
         {
+        // A stack instance whose address is taken lives on the heap (#604):
+        // its slot holds the reference.
+        if (isPromotedPin(pin))
+            {
+            Array* sops = new Array();
+            sops.add((Object*)IROperand.useVal(pin.val()));
+            IRValue* slot = emit(String.withCString("AddrOf"), ptrTo(ci.selfPtr()), sops);
+            return loadThroughIr(slot, ci.selfPtr());
+            }
         Array* aops = new Array();
         aops.add((Object*)IROperand.useVal(pin.val()));
         return emit(String.withCString("AddrOf"), ci.selfPtr(), aops);
+        }
+
+    // Is this the slot of a stack instance on the heap (#604)?
+    bool isPromotedPin(IRPinned* pin)
+        {
+        for (u32 i = (u32)0; i < _promoted.count(); i = i + (u32)1)
+            if (pinOf(_promoted.get(i)) == pin)
+                return true;
+        return false;
+        }
+
+    // A slot that holds an aggregate, or the reference to a stack instance
+    // that lives on the heap (#604).
+    bool isInstanceSlot(IRPinned* pin)
+        {
+        return IRType.isAgg(pin.ty()) || isPromotedPin(pin);
+        }
+
+    // A stack instance whose address is taken is allocated on the heap
+    // (#604), by the allocator `new` calls, and the reference goes into its
+    // slot. The caller sets the instance up, as it would one in the frame.
+    IRValue* allocPromoted(IRPinned* pin, ClassInfo* ci)
+        {
+        IRValue* count = u16Const((u32)1);
+        IRValue* stride = wordConst(ci.instSize());
+        String* dname = String.withString(ci.name());
+        dname.appendCString("$dealloc");
+        IRValue* deallocPtr = (IRValue*)0;
+        if (symbolExists(dname))
+            {
+            Array* dops = new Array();
+            dops.add((Object*)IROperand.sym(dname));
+            deallocPtr = emit(String.withCString("AddrOf"), ptrTo(String.withCString("Void")), dops);
+            }
+        else
+            {
+            Array* zops = new Array();
+            zops.add((Object*)IROperand.useVal(u16Const((u32)0)));
+            deallocPtr = emit(String.withCString("IntToPtr"), ptrTo(String.withCString("Void")), zops);
+            }
+        IRInsn* call = IRInsn.with(String.withCString("Call"));
+        if (_compactObjects && ci.needsVtable())
+            {
+            call.add(IROperand.sym(runtimeHelper(String.withCString("_xtc_alloc_object"))));
+            call.add(IROperand.useVal(stride));
+            }
+        else
+            {
+            call.add(IROperand.sym(runtimeHelper(String.withCString("_xtc_alloc"))));
+            call.add(IROperand.useVal(count));
+            call.add(IROperand.useVal(stride));
+            call.add(IROperand.useVal(deallocPtr));
+            }
+        call.add(IROperand.useVal(_mem));
+        IRValue* inst = new IRValue(ci.selfPtr());
+        call.setRes(inst);
+        IRValue* nextMem = new IRValue(String.withCString("Mem"));
+        call.setMemRes(nextMem);
+        call.setCc(String.withCString("CallConv::Standard"));
+        _blk.add(call);
+        _mem = nextMem;
+        Array* sops = new Array();
+        sops.add((Object*)IROperand.useVal(pin.val()));
+        storeThrough(emit(String.withCString("AddrOf"), ptrTo(ci.selfPtr()), sops), inst);
+        return inst;
         }
 
     // One instance's bytes into another's: `dst`, or the instance in `pin`.
@@ -11141,10 +11231,13 @@ class ClassInfo
     void enrolStack(String* name, String* ty, bool viaLocal)
         {
         ClassInfo* ci = valueClassOf(ty);
-        if (ci == 0 || stackDeallocSym(ci) == (String*)0 || _arcScopes.count() == (u32)0)
+        // One on the heap (#604) is released, whatever its class owns:
+        // `name^Type`.
+        bool promoted = !viaLocal && _promoted.has(name);
+        if (ci == 0 || (!promoted && stackDeallocSym(ci) == (String*)0) || _arcScopes.count() == (u32)0)
             return;
         String* key = String.withString(name);
-        key.appendByte(viaLocal ? (u8)'&' : (u8)'%');
+        key.appendByte(promoted ? (u8)'^' : (viaLocal ? (u8)'&' : (u8)'%'));
         key.append(stripQual(ty));
         _stackKeyName.set((Hashable*)key, (Object*)name);
         _stackKeyTy.set((Hashable*)key, (Object*)ty);
@@ -11191,6 +11284,13 @@ class ClassInfo
         if (p == 0)
             return;
         ClassInfo* ci = valueClassOf(ty);
+        // On the heap (#604): the slot's reference is released, and the
+        // instance comes apart when it was the last one.
+        if (key.byteAt(name.byteLength()) == (u8)'^')
+            {
+            refOp(String.withCString("Release"), instanceAddr(p, ci));
+            return;
+            }
         stackTeardown(instanceAddr(p, ci), ci);
         }
 
@@ -11203,6 +11303,10 @@ class ClassInfo
         if (stackDeallocSym(ci) == (String*)0)
             return;
         String* key = e.kind() == (u16)nkIdent ? stackKeyOf(e.name()) : (String*)0;
+        // One on the heap (#604) may be held elsewhere too: it is copied out,
+        // and its slot's reference released as usual.
+        if (key != (String*)0 && key.byteAt(e.name().byteLength()) == (u8)'^')
+            key = (String*)0;
         if (key != (String*)0)
             {
             _returnExemptValue = key;
@@ -11330,7 +11434,12 @@ class ClassInfo
         IRPinned* pin = pinOf(name);
         Array* aops = new Array();
         aops.add((Object*)IROperand.useVal(pin.val()));
-        IRValue* addr = emit(String.withCString("AddrOf"), ci.selfPtr(), aops);
+        setUpInstanceAt(emit(String.withCString("AddrOf"), ci.selfPtr(), aops), ci);
+        }
+
+    // A new instance's set-up, in its slot or on the heap (#604).
+    void setUpInstanceAt(IRValue* addr, ClassInfo* ci)
+        {
         zeroInitIvars(addr, ci);
         stackZeroStructs(addr, ci);
         stampInstanceIdentity(addr, ci);
@@ -15683,6 +15792,8 @@ class ClassInfo
     void preScanPinned(Node* body)
         {
         _ampTaken = new NameList();
+        _ampWhole = new NameList();
+        _promoted = new NameList();
         _assignedNames = new NameList();
         _vaCursors = new NameList();
         _asmNamed = new NameList();
@@ -15760,6 +15871,14 @@ class ClassInfo
         Array* aggNames = new Array();
         Map* aggTypes = new Map();
         collectAggregateLocals(body, aggNames, aggTypes);
+        // A stack instance whose address is taken (`&y`) lives on the heap
+        // instead (#604): its slot holds a strong reference.
+        for (u32 i = (u32)0; i < aggNames.count(); i = i + (u32)1)
+            {
+            String* nm = (String*)aggNames.get(i);
+            if (_valueClass.get((Hashable*)nm) != 0 && _ampWhole.has(nm))
+                _promoted.add(nm);
+            }
         for (u32 i = (u32)0; i < aggNames.count(); i = i + (u32)1)
             {
             String* nm = (String*)aggNames.get(i);
@@ -15892,7 +16011,7 @@ class ClassInfo
             String* irTy = (String*)0;
             if (oneSlot || decls == 0)
                 {
-                irTy = vco != 0 ? ((ClassInfo*)vco).agg() : irType(ast);
+                irTy = vco != 0 ? (_promoted.has(name) ? ((ClassInfo*)vco).selfPtr() : ((ClassInfo*)vco).agg()) : irType(ast);
                 if (_failed)
                     return;
                 if (isWeakSlot(ast))
@@ -16142,6 +16261,8 @@ class ClassInfo
                 {
                 addUnique(out, cur.name());
                 _ampTaken.add(cur.name());
+                if (cur == n.kid((u32)0))
+                    _ampWhole.add(cur.name());
                 }
             }
         // A plain `name = …` whose slot is a class pointer. A PARAMETER that
@@ -16244,7 +16365,10 @@ class ClassInfo
             // slot. `new` makes the name a heap pointer instead, and a value
             // returned by a STACK instance's method comes back in registers
             // and binds directly — neither needs storage of its own.
-            if (classFor(ty) != 0 && !Types.isPointer(ty) && (n.kidCount() == (u32)0 || !bindsWithoutSlot(n.kid((u32)0))))
+            // …and one whose address is taken moves to the heap (#604): its
+            // slot holds the reference, whatever the initialiser.
+            if (classFor(ty) != 0 && !Types.isPointer(ty) && (n.kidCount() == (u32)0 || !bindsWithoutSlot(n.kid((u32)0))
+                                                              || (_ampWhole.has(n.name()) && n.kid((u32)0).kind() != (u16)nkNew)))
                 {
                 addUnique(names, n.name());
                 types.set((Hashable*)n.name(), (Object*)ty);

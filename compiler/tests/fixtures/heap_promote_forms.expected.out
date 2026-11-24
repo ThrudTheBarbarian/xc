@@ -1,0 +1,10 @@
+locals 1 1 1 1 live 1
+outlives its scope 1 live 1
+released live 0
+field 2 live 1
+field released live 0
+global 3 live 1
+global released live 0
+returned 4 live 1
+returned released live 0
+box 1

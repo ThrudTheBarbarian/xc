@@ -355,6 +355,9 @@
 // to tell a real instance call (`a.describe()`) from a static call
 // (`Stdio.foo()`) when the receiver is a bare class type.
 @property(nonatomic) NSMutableDictionary<NSString*, XTIRClassInfo*>* valueClassLocals;
+// The stack instances whose address is taken (`&y`), which live on the heap
+// instead (#604): the slot holds a strong reference to the instance.
+@property(nonatomic) NSMutableSet<NSString*>* promotedLocals;
 
 // Names of pinned locals that were declared as ARRAY (not struct).
 // Populated by the same pre-scan that fills `pinnedLocals`. A bare
@@ -380,6 +383,8 @@
 // the pinned-local escapesViaPointer flag; the second excludes asm
 // locals from it. Reset at the start of each pre-scan.
 @property(nonatomic) NSMutableSet<NSString*>* preScanAmpTakenNames;
+// The names `&` was applied to directly (`&y`, not `&y.f`).
+@property(nonatomic) NSMutableSet<NSString*>* preScanAmpWholeNames;
 @property(nonatomic) NSMutableSet<NSString*>* preScanAsmNamedNames;
 
 // A scalar/pointer PARAMETER whose address is `&`-taken gets its own pinned
@@ -4414,11 +4419,7 @@ static NSString* XTDescribeNodeKind(XTASTNodeKind k)
         {
         XTIRPinnedLocal* vpl = self.pinnedLocals[node.identName];
         if (vpl)
-            {
-            return [self emitInsnOpcode:XTIROpAddrOf
-                                 result:vci.selfPtrType
-                               operands:@[ [XTIROperand useWithValueId:vpl.valueId] ]];
-            }
+            return [self instanceAddrOf:vpl class:vci];
         }
 
     // Pinned locals (`&x` was taken somewhere) live in a frame
@@ -5113,6 +5114,23 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
                 if ([self astTypeIsWeakSlot:self.pinnedLocalASTType[idn.identName]])
                     {
                     return [self pinnedAddr:pl name:idn.identName outType:NULL];
+                    }
+                // `&y` of a stack instance on the heap (#604) is the reference
+                // its slot holds.
+                XTIRClassInfo* pci = self.valueClassLocals[idn.identName];
+                if (pci && [self.promotedLocals containsObject:idn.identName])
+                    return [self instanceAddrOf:pl class:pci];
+                // …and `&p` of `P p = new P()`, a reference held under the
+                // class's name, is the reference.
+                XTType* past = self.pinnedLocalASTType[idn.identName];
+                if (!pci && past.kind == XTTypeKindClass && ![past isKindOfClass:[XTPointerType class]]
+                    && self.classesByName[past.displayName] && pl.type.kind == XTIRTypeKindPtr
+                    && !self.pinnedParamInit[idn.identName])
+                    {
+                    XTIRValue* slot = [self emitInsnOpcode:XTIROpAddrOf
+                                                    result:[XTIRType ptrToType:pl.type window:XTIRWindowUnbanked]
+                                                  operands:@[ [XTIROperand useWithValueId:pl.valueId] ]];
+                    return [self emitLoad:slot pointeeType:pl.type];
                     }
                 return [self emitInsnOpcode:XTIROpAddrOf
                                      result:resIR
@@ -6217,7 +6235,7 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
             // user-defined clone on recv's class — emit field-by-field
             // copy from recv's slot into the LHS slot. Mirrors the
             // lowerVarDecl decl-init clone intercept.
-            if (pl.type.kind == XTIRTypeKindAgg && node.rhs.nodeKind == XTASTNodeKindMethodCallExpr)
+            if ([self isInstanceSlot:pl] && node.rhs.nodeKind == XTASTNodeKindMethodCallExpr)
                 {
                 XTMethodCallExprNode* call = (XTMethodCallExprNode*)node.rhs;
                 XTIRClassInfo* vci = self.valueClassLocals[lhs.identName];
@@ -6277,7 +6295,7 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
             // fire when a user method is in play.
             // …and `b = a` of one stack instance to another copies the bytes,
             // as a struct assignment does (owner, 2026-10-28).
-            if (pl.type.kind == XTIRTypeKindAgg && node.rhs.nodeKind != XTASTNodeKindNewExpr
+            if ([self isInstanceSlot:pl] && node.rhs.nodeKind != XTASTNodeKindNewExpr
                 && [self valueClassForASTType:node.rhs.resolvedType])
                 {
                 XTIRClassInfo* vci = self.valueClassLocals[lhs.identName];
@@ -8630,9 +8648,63 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
 // The instance a value-class slot holds, addressed as the class.
 - (XTIRValue*)instanceAddrOf:(XTIRPinnedLocal*)pl class:(XTIRClassInfo*)ci
     {
+    // A stack instance whose address is taken lives on the heap (#604): its
+    // slot holds the reference.
+    if ([self.promotedLocals containsObject:pl.name])
+        {
+        XTIRValue* slot = [self emitInsnOpcode:XTIROpAddrOf
+                                        result:[XTIRType ptrToType:ci.selfPtrType window:XTIRWindowUnbanked]
+                                      operands:@[ [XTIROperand useWithValueId:pl.valueId] ]];
+        return [self emitLoad:slot pointeeType:ci.selfPtrType];
+        }
     return [self emitInsnOpcode:XTIROpAddrOf
                          result:ci.selfPtrType
                        operands:@[ [XTIROperand useWithValueId:pl.valueId] ]];
+    }
+
+// A slot that holds an aggregate, or the reference to a stack instance that
+// lives on the heap (#604).
+- (BOOL)isInstanceSlot:(XTIRPinnedLocal*)pl
+    {
+    return pl.type.kind == XTIRTypeKindAgg || [self.promotedLocals containsObject:pl.name];
+    }
+
+/****************************************************************************\
+|* A stack instance whose address is taken is allocated on the heap (#604),
+|* by the allocator `new` calls, and the reference goes into its slot. The
+|* caller sets the instance up, as it would one in the frame.
+\****************************************************************************/
+- (XTIRValue*)allocPromotedNamed:(XTIRPinnedLocal*)pl class:(XTIRClassInfo*)ci
+    {
+    XTIRValue* countVal = [self emitU16Const:1];
+    XTIRValue* strideVal = [self emitWordConst:(uint32_t)ci.instanceLayout.size];
+    XTIRType* dpTy = [XTIRType ptrToType:[XTIRType voidType] window:XTIRWindowUnbanked];
+    XTIRSymbol* deallocSym = [self.module symbolForName:[NSString stringWithFormat:@"%@$dealloc", ci.className]];
+    XTIRValue* deallocPtr = nil;
+    if (deallocSym)
+        deallocPtr = [self emitInsnOpcode:XTIROpAddrOf
+                                   result:dpTy
+                                 operands:@[ [XTIROperand symWithSymbolId:[self.module.symbols indexOfObjectIdenticalTo:deallocSym]] ]];
+    else
+        deallocPtr = [self emitInsnOpcode:XTIROpIntToPtr
+                                   result:dpTy
+                                 operands:@[ [XTIROperand useWithValueId:[self emitU16Const:0].valueId] ]];
+    NSArray<XTIRValue*>* args = @[ countVal, strideVal, deallocPtr ];
+    NSString* helper = @"_xtc_alloc";
+    if (sCompactObjects && ci.needsVtable)
+        {
+        args = @[ strideVal ];
+        helper = @"_xtc_alloc_object";
+        }
+    XTIRValue* inst = [self emitCall:[self runtimeHelperSymbolNamed:helper]
+                            callConv:[XTIRCallConv standard]
+                           argValues:args
+                          resultType:ci.selfPtrType];
+    XTIRValue* slot = [self emitInsnOpcode:XTIROpAddrOf
+                                    result:[XTIRType ptrToType:ci.selfPtrType window:XTIRWindowUnbanked]
+                                  operands:@[ [XTIROperand useWithValueId:pl.valueId] ]];
+    [self emitStore:slot value:inst];
+    return inst;
     }
 
 // One instance's bytes into another's: `dst`, or the instance in `pl`. An
@@ -8680,9 +8752,11 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
 - (void)enrolStackNamed:(NSString*)name type:(nullable XTType*)ty viaLocal:(BOOL)viaLocal
     {
     XTIRClassInfo* ci = [self valueClassForASTType:ty];
-    if (!ci || ![self stackDeallocSymbolFor:ci] || self.arcScopeStack.count == 0)
+    // One on the heap (#604) is released, whatever its class owns: `name^Type`.
+    BOOL promoted = !viaLocal && [self.promotedLocals containsObject:name];
+    if (!ci || (!promoted && ![self stackDeallocSymbolFor:ci]) || self.arcScopeStack.count == 0)
         return;
-    NSString* key = [NSString stringWithFormat:@"%@%@%@", name, viaLocal ? @"&" : @"%", ty.displayName];
+    NSString* key = [NSString stringWithFormat:@"%@%@%@", name, promoted ? @"^" : viaLocal ? @"&" : @"%", ty.displayName];
     if (!self.stackKeyName)
         self.stackKeyName = [NSMutableDictionary dictionary];
     if (!self.stackKeyType)
@@ -8729,6 +8803,13 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
     if (!pl)
         return YES;
     XTIRClassInfo* ci = [self valueClassForASTType:ty];
+    // On the heap (#604): the slot's reference is released, and the instance
+    // comes apart when it was the last one.
+    if ([key characterAtIndex:name.length] == '^')
+        {
+        [self emitRelease:[self instanceAddrOf:pl class:ci]];
+        return YES;
+        }
     [self stackTeardownAt:[self instanceAddrOf:pl class:ci] class:ci];
     return YES;
     }
@@ -8742,6 +8823,10 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
     if (![self stackDeallocSymbolFor:ci])
         return;
     NSString* key = e.nodeKind == XTASTNodeKindIdentifier ? [self stackKeyOf:((XTIdentifierNode*)e).identName] : nil;
+    // One on the heap (#604) may be held elsewhere too: it is copied out, and
+    // its slot's reference released as usual.
+    if (key && [key characterAtIndex:((XTIdentifierNode*)e).identName.length] == '^')
+        key = nil;
     if (key)
         {
         self.returnExemptValueKey = key;
@@ -15511,7 +15596,7 @@ typedef NS_ENUM(NSInteger, XTStructARCMode) {
         // same scalar FieldAddr+Load+Store pattern that already works
         // everywhere. A user-defined clone resolves as a normal method
         // call below and is unaffected.
-        if (pl.type.kind == XTIRTypeKindAgg && node.initialiser && node.initialiser.nodeKind == XTASTNodeKindMethodCallExpr)
+        if ([self isInstanceSlot:pl] && node.initialiser && node.initialiser.nodeKind == XTASTNodeKindMethodCallExpr)
             {
             XTMethodCallExprNode* call = (XTMethodCallExprNode*)node.initialiser;
             XTIRClassInfo* vci = self.valueClassLocals[node.varName];
@@ -15539,6 +15624,8 @@ typedef NS_ENUM(NSInteger, XTStructARCMode) {
                     XTIRValue* srcAddr = [self lowerExpression:call.receiver];
                     if (srcAddr)
                         {
+                        if ([self.promotedLocals containsObject:node.varName])
+                            [self allocPromotedNamed:pl class:vci];
                         [self valueCopyFrom:srcAddr into:nil pinned:pl class:vci assign:NO];
                         [self enrolStackNamed:node.varName type:node.declaredType viaLocal:NO];
                         return;
@@ -15558,7 +15645,7 @@ typedef NS_ENUM(NSInteger, XTStructARCMode) {
         // b.x / b.y. Field-copy from `*initVal` into b's slot instead.
         // Mirrors the no-user-clone field-copy branch above; together
         // the two cases cover every class-value-returning init.
-        if (pl.type.kind == XTIRTypeKindAgg && node.initialiser && node.initialiser.nodeKind != XTASTNodeKindNewExpr
+        if ([self isInstanceSlot:pl] && node.initialiser && node.initialiser.nodeKind != XTASTNodeKindNewExpr
             && [self valueClassForASTType:node.initialiser.resolvedType])
             {
             XTIRClassInfo* vci = self.valueClassLocals[node.varName];
@@ -15567,6 +15654,8 @@ typedef NS_ENUM(NSInteger, XTStructARCMode) {
                 XTIRValue* srcAddr = [self lowerExpression:node.initialiser];
                 if (srcAddr && srcAddr.type.kind == XTIRTypeKindPtr)
                     {
+                    if ([self.promotedLocals containsObject:node.varName])
+                        [self allocPromotedNamed:pl class:vci];
                     [self valueCopyFrom:srcAddr into:nil pinned:pl class:vci assign:NO];
                     [self enrolStackNamed:node.varName type:node.declaredType viaLocal:NO];
                     return;
@@ -15577,7 +15666,7 @@ typedef NS_ENUM(NSInteger, XTStructARCMode) {
         // via a single Const + Store — there's no scalar Const op for
         // Agg. An uninit struct decl simply leaves the slot un-stored;
         // sema requires every field read to be preceded by a write.
-        if (pl.type.kind == XTIRTypeKindAgg && !node.initialiser)
+        if ([self isInstanceSlot:pl] && !node.initialiser)
             {
             // Stack-allocated (value) class instance: take the slot
             // address typed as the class self-pointer and seed the
@@ -15587,9 +15676,11 @@ typedef NS_ENUM(NSInteger, XTStructARCMode) {
             XTIRClassInfo* vci = self.valueClassLocals[node.varName];
             if (vci)
                 {
-                XTIRValue* addr = [self emitInsnOpcode:XTIROpAddrOf
-                                                result:vci.selfPtrType
-                                              operands:@[ [XTIROperand useWithValueId:pl.valueId] ]];
+                XTIRValue* addr = [self.promotedLocals containsObject:node.varName]
+                                      ? [self allocPromotedNamed:pl class:vci]
+                                      : [self emitInsnOpcode:XTIROpAddrOf
+                                                      result:vci.selfPtrType
+                                                    operands:@[ [XTIROperand useWithValueId:pl.valueId] ]];
                 if (addr)
                     {
                     // Zero the ivars first (so a strong-pointer field's
@@ -17646,6 +17737,8 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
                 // pre-scan flags it escapesViaPointer (keeping it out of
                 // the call-clobbered shared ZP pinned-local pool).
                 [self.preScanAmpTakenNames addObject:nm];
+                if (cur == u.operand)
+                    [self.preScanAmpWholeNames addObject:nm];
                 }
             }
         [self collectAddressTakenIn:u.operand into:out];
@@ -17858,6 +17951,7 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
     {
     NSMutableSet<NSString*>* addressed = [NSMutableSet set];
     self.preScanAmpTakenNames = [NSMutableSet set];
+    self.preScanAmpWholeNames = [NSMutableSet set];
     self.preScanAsmNamedNames = [NSMutableSet set];
     self.preScanVarargCursorNames = [NSMutableSet set];
     self.preScanAssignedNames = [NSMutableSet set];
@@ -17985,6 +18079,11 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
         [NSMutableDictionary dictionary];
     [self collectClassValueLocalDeclsIn:body into:classValueLocals];
     [addressed addObjectsFromArray:classValueLocals.allKeys];
+    // A stack instance whose address is taken (`&y`) lives on the heap
+    // instead (#604): its slot holds a strong reference.
+    for (NSString* name in classValueLocals)
+        if ([self.preScanAmpWholeNames containsObject:name])
+            [self.promotedLocals addObject:name];
 
     // va_* cursors are var-decl locals (`u8 ap;`); union them in so the
     // pin loop allocates a frame slot and collectVarDeclTypesIn: below
@@ -18195,7 +18294,8 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
             {
             vci = self.classesByName[astTy.displayName];
             }
-        XTIRType* irTy = vci ? [XTIRType aggWithLayout:vci.instanceLayout]
+        XTIRType* irTy = vci ? ([self.promotedLocals containsObject:name] ? vci.selfPtrType
+                                                                           : [XTIRType aggWithLayout:vci.instanceLayout])
                              : [self irTypeForASTTypeQuiet:astTy];
         if (!irTy)
             continue;
@@ -18613,6 +18713,11 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
                         }
                     }
                 }
+            // An instance whose address is taken moves to the heap (#604),
+            // and its slot holds the reference, whatever the initialiser.
+            if (!needsPin && vd.initialiser.nodeKind != XTASTNodeKindNewExpr
+                && [self.preScanAmpWholeNames containsObject:vd.varName])
+                needsPin = YES;
             if (needsPin)
                 out[vd.varName] = ty;
             }
@@ -19419,6 +19524,7 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
     self.weakPinnedLocals = [NSMutableSet set];
     self.pinnedLocalsByType = [NSMutableDictionary dictionary];
     self.valueClassLocals = [NSMutableDictionary dictionary];
+    self.promotedLocals = [NSMutableSet set];
     self.valTemps = nil;
     self.valTempDepths = nil;
     self.valTempClasses = nil;
@@ -19797,6 +19903,7 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
     self.pinnedLocals = nil;
     self.pinnedLocalsByType = nil;
     self.valueClassLocals = nil;
+    self.promotedLocals = nil;
     }
 
 // Reset the current function's body to a single Unreachable-
