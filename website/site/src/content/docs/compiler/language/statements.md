@@ -394,10 +394,11 @@ AVX-512 code). An exact loop keeps the two operations, on every CPU and every
 GPU, so its answer does not depend on the machine.
 
 A matrix-multiply nest is the one case where a loop that sets no goal can
-fuse. On arm64 such a nest fuses each multiply into its add, as the SME unit's
-outer-product instructions do, whether or not the machine has SME, the
-operating system or `-fno-matmul`. So every arm64 machine gives the same
-answer, which can differ from the separately rounded loop's in its last bits.
+fuse. On arm64, at `-O2` and above, such a nest fuses each multiply into its
+add, as the SME unit's outer-product instructions do, whether or not the
+machine has SME, the operating system or `-fno-matmul`. So every arm64 machine
+gives the same answer, which can differ from the separately rounded loop's in
+its last bits. At `-O0` and `-O1` the nest is not recognised and stays exact.
 An explicit `:goal(accuracy)` (on the nest, a loop around it, `#goal
 accuracy` or `-fgoal=accuracy`) keeps the nest exact: the SME unit is not used
 and nothing is fused, even where that is slower. On x86-64 the matrix kernels
