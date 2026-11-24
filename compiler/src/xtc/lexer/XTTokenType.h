@@ -161,6 +161,10 @@ typedef NS_ENUM(NSInteger, XTTokenType) {
     XTTokenU64,      // u64 — 64-bit unsigned
     XTTokenGoto,     // 'goto' — a C-porting aid (undocumented language feature)
     XTTokenNil,      // 'nil'  — the null pointer, of any pointer type
+    XTTokenMathOp,   // one character of the Unicode Mathematical Operators
+                     // block (U+2200 to U+22FF): part of an operator a class
+                     // defines (`:operator(self ⊗ o)`). The parser joins it
+                     // with its neighbours as it joins `*` and `*` for `**`.
 };
 
 // Human-readable names for diagnostics / debugging
@@ -402,6 +406,8 @@ static inline NSString* XTTokenTypeName(XTTokenType type)
         return @"optional";
     case XTTokenEOF:
         return @"EOF";
+    case XTTokenMathOp:
+        return @"operator";
         }
     return @"<unknown>";
     }
