@@ -17,9 +17,15 @@
 #            immortal count sits in the word before them.
 #   leaks    tests/fixtures/global_instance.xc under leaks --atExit: a global
 #            instance is static data, never a leak.
+#   static   gistatic.xc linked -static for x86-64 with giextra.o (-c), whose
+#            dead array precedes a global instance: the header is intact and
+#            retains and releases of the instance leave its neighbour alone.
+#            Both compilers' programs are compared byte for byte and run on
+#            $XTC_X86_HOST / $XTC_LINUX_HOST.
 #
 #   arm64   built and run here (macOS arm64 host)
 #   win64   the library matrix under wine
+#   x86_64  the static link, run on $XTC_X86_HOST / $XTC_LINUX_HOST
 XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
 export WINEDLLOVERRIDES="winedbg.exe=d;${WINEDLLOVERRIDES:-}"
 _root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null)
@@ -76,6 +82,23 @@ if [ "$(uname -s)" = Darwin ]; then
     else
         bad "leaks: global_instance"
     fi
+fi
+WANT_S=$'header 58544f4e 40000000\nheld 400003e8\nreleased 40000000 next 99'
+for c in xcc xcc-xc; do
+    mkdir -p "$TMP/static-$c"
+    ( cd "$TMP/static-$c" && "$BIN/$c" -q -A x86_64 -H "$ROOT" -c -o giextra.o "$T/giextra.xc" \
+        && "$BIN/$c" -q -A x86_64 -H "$ROOT" -static -o gistatic "$T/gistatic.xc" -Wl,giextra.o ) \
+        || bad "x86_64: $c could not build the static link"
+done
+cmp -s "$TMP/static-xcc/gistatic" "$TMP/static-xcc-xc/gistatic" || bad "x86_64: the two compilers' static gistatic differs"
+HOST=${XTC_X86_HOST:-${XTC_LINUX_HOST:-}}
+if [ -n "$HOST" ] && ssh -o ConnectTimeout=8 -o BatchMode=yes "$HOST" true 2>/dev/null; then
+    RD=/tmp/gistatic.$$
+    ssh "$HOST" "rm -rf $RD && mkdir -p $RD" </dev/null
+    scp -q "$TMP/static-xcc-xc/gistatic" "$HOST:$RD/"
+    got=$(ssh "$HOST" "cd $RD && ./gistatic" </dev/null)
+    ssh "$HOST" "rm -rf $RD" </dev/null
+    [ "$got" = "$WANT_S" ] && echo "PASS  x86_64: a -static link keeps a global instance's header with it" || { bad "x86_64: static gistatic"; echo "$got"; }
 fi
 if command -v wine >/dev/null 2>&1; then
     WINEDEBUG=-all matrix win64 dll wine
