@@ -2707,24 +2707,21 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
         [out appendString:bss];
         }
     // Load-time constructors — static initialisers, XG-NIB factory
-    // self-registration, static-init guards. A table of pointers in .data
-    // between `__xt_ctors_start` and `__xt_ctors_end`, which crt-linux.s and
-    // crt-win64.s walk before calling main (bug 134). It used to be an ELF
-    // `.init_array` entry, which is right for a link that has an ld script
-    // and a libc start that walks it; this toolchain has neither. The
-    // in-house assembler folded the section into .data, the linker defined
-    // `__init_array_start == __init_array_end` on purpose (musl's archives
-    // carry none), and crt-linux.s called main directly — so the pointer
-    // sat in the image and nothing ever ran it. On win64 the mingw
-    // `__attribute__((constructor))` stub that used to carry it is gone with
-    // the mingw fallback. One table, both hosts, no object-format change.
+    // self-registration, the set-up of global instances in a module without
+    // main. A table of pointers in .data between `__xt_ctors_start` and
+    // `__xt_ctors_end`, which crt-linux.s and crt-win64.s walk before calling
+    // main. This toolchain has no ld script and no libc start that walks an
+    // `.init_array`, so the program's table is a plain run of data the start
+    // code finds by its bounds.
     //
     // The ENTRY module — the one defining main — always defines the bounds,
-    // empty or not, since the crt references them. A module that defines
-    // neither main nor a constructor defines nothing, so a library object
-    // adds no symbol; a second module WITH constructors linked into one
-    // executable is a duplicate-definition error, loudly, until the linkers
-    // collect per-object tables (the design in private:docs/bugs/134).
+    // empty or not, since the crt references them. In an object built
+    // without main the object writer turns the table into the object's
+    // `.init_array` (`.CRT$XCU` on win64) and drops the bounds, and the link
+    // adds every object's entries to the program's table after the program's
+    // own, in link order. A library hands its table to the program
+    // (libinit-linux.s) or runs it when it loads (dllmain-win64.s). A module
+    // that defines neither main nor a constructor defines nothing.
     BOOL hasMain = NO;
     for (XTIRFunction* fn in mod.functions)
         if ([fn.name isEqualToString:@"main"])

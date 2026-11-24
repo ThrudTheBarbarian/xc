@@ -232,6 +232,47 @@ class Pe
     Data* objectFromText(SectionBytes* text, SectionBytes* data, Map* symbols, Array* dataSyms,
                          Array* globalSyms, Array* fixups)
         {
+        // The module's load-time constructors (the back end's table between
+        // __xt_ctors_start and __xt_ctors_end): in an object without main they
+        // are its .CRT$XCU section, which a link adds to the program's table
+        // after the program's own entries, in link order. The bounds are not
+        // written, so they cannot stand in for the program's. The entry
+        // module keeps its table in .data, where its start-up code finds it.
+        Data* ctors = new Data();
+        Array* ctorFix = new Array();
+        Object* cso = symbols.get((Hashable*)String.withCString("__xt_ctors_start"));
+        Object* ceo = symbols.get((Hashable*)String.withCString("__xt_ctors_end"));
+        if (cso != (Object*)0 && ceo != (Object*)0 && symbols.get((Hashable*)String.withCString("main")) == (Object*)0)
+            {
+            u32 c0 = ((Number*)cso).asU32();
+            u32 c1 = ((Number*)ceo).asU32();
+            for (u32 b = c0; b < c1; b = b + (u32)1)
+                ctors.appendByte(data.byteAt(b));
+            // The table ends the data (the back end emits it last): cut it off.
+            bool atEnd = c1 == data.length();
+            Map* syms2 = new Map();
+            Array* ks = symbols.allKeys();
+            for (u32 i = (u32)0; i < ks.count(); i = i + (u32)1)
+                {
+                String* k = (String*)ks.get(i);
+                if (!k.equals(String.withCString("__xt_ctors_start")) && !k.equals(String.withCString("__xt_ctors_end")))
+                    syms2.set((Hashable*)k, symbols.get((Hashable*)k));
+                }
+            symbols = syms2;
+            Array* fx2 = new Array();
+            for (u32 i = (u32)0; i < fixups.count(); i = i + (u32)1)
+                {
+                X86Fixup* f = (X86Fixup*)fixups.get(i);
+                bool inTable = f.kind() == (u32)X86FIX_ABS64 && f.offset() >= c0 && f.offset() < c1;
+                if (inTable)
+                    ctorFix.add((Object*)X86Fixup.make(f.offset() - c0, f.kind(), f.symbol(), f.addend()));
+                if (!inTable || !atEnd)
+                    fx2.add((Object*)f);
+                }
+            fixups = fx2;
+            if (atEnd)
+                data = data.subrange((u32)0, c0);
+            }
         // The name lists as sets (#335): each was scanned once per symbol.
         NameSet* dataSet = NameSet.of(dataSyms);
         NameSet* globalSet = NameSet.of(globalSyms);
@@ -427,10 +468,33 @@ class Pe
             }
         _seh = (Array*)0;
         bool hasSeh = pdata.length() > (u32)0;
+        // The constructors' pointers, each an ADDR64 against its function with
+        // the addend in place.
+        Data* initRel = new Data();
+        u32 nInitRel = (u32)0;
+        for (u32 i = (u32)0; i < ctorFix.count(); i = i + (u32)1)
+            {
+            X86Fixup* f = (X86Fixup*)ctorFix.get(i);
+            Object* si = symIndex.get((Hashable*)f.symbol());
+            if (si == (Object*)0)
+                continue;
+            u32 v = (u32)f.addend();
+            u32 hi = f.addend() < (i32)0 ? (u32)$FFFFFFFF : (u32)0;
+            for (u32 b = (u32)0; b < (u32)4; b = b + (u32)1)
+                {
+                ctors.setByteAt(f.offset() + b, (u8)((v >> (b * (u32)8)) & (u32)$FF));
+                ctors.setByteAt(f.offset() + (u32)4 + b, (u8)((hi >> (b * (u32)8)) & (u32)$FF));
+                }
+            Pe.rel(initRel, f.offset(), ((Number*)si).asU32() - (u32)1, (u32)COFF_REL_ADDR64);
+            nInitRel = nInitRel + (u32)1;
+            }
+        bool hasInit = ctors.length() > (u32)0;
         u32 nsect = drectve.length() > (u32)0 ? (u32)3 : (u32)2;
         u32 secXdata = nsect + (u32)1;
         if (hasSeh)
             nsect = nsect + (u32)2;
+        if (hasInit)
+            nsect = nsect + (u32)1;
         u32 off = (u32)20 + nsect * (u32)PE_SECT_HDR_SIZE;
         u32 textOff = off;
         off = off + mtext.length();
@@ -450,6 +514,10 @@ class Pe
         off = off + pRel.length();
         u32 xrelOff = off;
         off = off + xRel.length();
+        u32 initOff = off;
+        off = off + ctors.length();
+        u32 irelOff = off;
+        off = off + initRel.length();
         u32 symOff = off;
         _out = new Data();
         p16((u32)COFF_MACHINE_AMD64);
@@ -475,6 +543,10 @@ class Pe
             Pe.sectHdr(self, String.withCString(".pdata"), pdata.length(), pOff, prelOff, nPRel,
                        (u32)$40300040);
             }
+        // IMAGE_SCN_CNT_INITIALIZED_DATA | MEM_READ | ALIGN_8BYTES
+        if (hasInit)
+            Pe.sectHdr(self, String.withCString(".CRT$XCU"), ctors.length(), initOff, irelOff, nInitRel,
+                       (u32)$40400040);
         appendSection(mtext);
         appendSection(mdata);
         appendAll(drectve);
@@ -484,6 +556,8 @@ class Pe
         appendAll(dataRel);
         appendAll(pRel);
         appendAll(xRel);
+        appendAll(ctors);
+        appendAll(initRel);
         for (u32 i = (u32)0; i < order.count(); i = i + (u32)1)
             {
             String* n = (String*)order.get(i);

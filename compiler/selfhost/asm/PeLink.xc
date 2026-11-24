@@ -27,6 +27,8 @@ class PeLink
     SectionBytes* _ctors; // the objects' .ctors: constructors, run by __main
     Array* _ctorsFix;     // X86Fixup@ against it
     bool _dll;            // the image is a DLL (setDll), not an executable
+    SectionBytes* _init;  // the objects' .CRT$XCU: constructors, run by the start code
+    Array* _initFix;      // X86Fixup@ against it
 
     void init(void)
         {
@@ -40,6 +42,8 @@ class PeLink
         _tentative = new Map();
         _ctors = new SectionBytes();
         _ctorsFix = new Array();
+        _init = new SectionBytes();
+        _initFix = new Array();
         }
     // The image being linked is a DLL: what PeLink writes for it differs
     // where an executable and a DLL do (placeThreadAtexit).
@@ -291,6 +295,25 @@ class PeLink
                                                      PeLink.taggedAt((ElfSymDef*)sdefs.get(r.sym()), oi, r.sym()), (i32)r.addend()));
                 }
             }
+        // .CRT$XCU (an xc module built without main): its constructors join
+        // the program's table (placeInit).
+        if (obj.initArray().length() > (u32)0)
+            {
+            u32 ib = _init.length();
+            PeLink.appendData(_init, obj.initArray());
+            Array* il = obj.initRelocs();
+            for (u32 k = (u32)0; k < il.count(); k = k + (u32)1)
+                {
+                ElfReloc* r = (ElfReloc*)il.get(k);
+                if (r.type() != (u32)COFF_REL_ADDR64 || r.sym() >= sdefs.count())
+                    {
+                    fail(String.withCString("unhandled .CRT$XCU relocation in ").appending(whence));
+                    return false;
+                    }
+                _initFix.add((Object*)X86Fixup.make(ib + r.off(), (u32)X86FIX_ABS64,
+                                                    PeLink.taggedAt((ElfSymDef*)sdefs.get(r.sym()), oi, r.sym()), (i32)r.addend()));
+                }
+            }
         // .pdata (a C++ program's): its function entries join the one table,
         // each word an image-relative address.
         if (obj.pdata().length() > (u32)0)
@@ -487,6 +510,50 @@ class PeLink
             X86Fixup* f = (X86Fixup*)fx.get(i);
             mfix.add((Object*)X86Fixup.make(base + f.offset(), f.kind(), f.symbol(), f.addend()));
             }
+        }
+
+    // The program's constructor table (__xt_ctors_start .. __xt_ctors_end,
+    // which crt-win64.s walks) rebuilt at the end of data: its own entries,
+    // then every merged object's .CRT$XCU words, in link order. Nothing to do
+    // when no object brought any.
+    void placeInit(SectionBytes* mdata, Map* msyms, Array* mfix)
+        {
+        if (_init.length() == (u32)0)
+            return;
+        Object* so = msyms.get((Hashable*)String.withCString("__xt_ctors_start"));
+        Object* eo = msyms.get((Hashable*)String.withCString("__xt_ctors_end"));
+        if (so == (Object*)0 || eo == (Object*)0)
+            {
+            fail(String.withCString("objects carry constructors (.CRT$XCU) and the program has no constructor table"));
+            return;
+            }
+        u32 s0 = ((Number*)so).asU32();
+        u32 s1 = ((Number*)eo).asU32();
+        PeLink.padArray(mdata, (u32)7);
+        u32 nb = mdata.length();
+        // the program's own words, each with its fixup moved along
+        u32 nfx = mfix.count();
+        for (u32 off = s0; off + (u32)8 <= s1; off = off + (u32)8)
+            {
+            u32 at = mdata.length();
+            for (u32 b = (u32)0; b < (u32)8; b = b + (u32)1)
+                mdata.appendByte(mdata.byteAt(off + b));
+            for (u32 i = (u32)0; i < nfx; i = i + (u32)1)
+                {
+                X86Fixup* f = (X86Fixup*)mfix.get(i);
+                if (f.kind() == (u32)X86FIX_ABS64 && f.offset() == off)
+                    mfix.add((Object*)X86Fixup.make(at, f.kind(), f.symbol(), f.addend()));
+                }
+            }
+        u32 ob = mdata.length();
+        mdata.append(_init);
+        for (u32 k = (u32)0; k < _initFix.count(); k = k + (u32)1)
+            {
+            X86Fixup* f = (X86Fixup*)_initFix.get(k);
+            mfix.add((Object*)X86Fixup.make(ob + f.offset(), f.kind(), f.symbol(), f.addend()));
+            }
+        msyms.set((Hashable*)String.withCString("__xt_ctors_start"), (Object*)Number.withU32(nb));
+        msyms.set((Hashable*)String.withCString("__xt_ctors_end"), (Object*)Number.withU32(mdata.length()));
         }
 
     // The constructor list (__xc_ctors_start .. __xc_ctors_end) and, when
@@ -754,6 +821,7 @@ class PeLink
         if (_rc != (u32)0)
             return;
         PeLink.placeDsoHandle(mdata, msyms, mdataSyms, mfix);
+        self.placeInit(mdata, msyms, mfix);
         self.placeTls(mdata, msyms, mdataSyms, mfix);
         self.placeCtors(mtext, mdata, msyms, mdataSyms, mfix);
         self.placePdata(mdata, msyms, mdataSyms, mfix);

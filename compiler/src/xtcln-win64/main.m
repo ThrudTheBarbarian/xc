@@ -56,7 +56,16 @@ static BOOL mergeCoffObject(NSDictionary* obj, NSString* whence, NSUInteger oi,
                             NSMutableData* mtext, NSMutableData* mdata,
                             NSMutableDictionary<NSString*, NSNumber*>* msyms,
                             NSMutableSet<NSString*>* mdataSyms,
-                            NSMutableArray<XAX86_64Fixup*>* mfix);
+                            NSMutableArray<XAX86_64Fixup*>* mfix,
+                            NSMutableData* minit,
+                            NSMutableArray<XAX86_64Fixup*>* minitFix);
+
+// The program's constructor table (__xt_ctors_start .. __xt_ctors_end, which
+// crt-win64.s walks) rebuilt at the end of data: its own entries, then every
+// merged object's .CRT$XCU words, in link order (defined below main).
+static BOOL placeInit(NSMutableData* mdata, NSMutableDictionary<NSString*, NSNumber*>* msyms,
+                      NSMutableArray<XAX86_64Fixup*>* mfix, NSData* minit,
+                      NSArray<XAX86_64Fixup*>* minitFix);
 
 int main(int argc, const char* argv[])
     {
@@ -326,6 +335,9 @@ int main(int argc, const char* argv[])
         NSMutableDictionary<NSString*, NSNumber*>* msyms = [as.symbols mutableCopy];
         NSMutableSet<NSString*>* mdataSyms = [as.dataSymbols mutableCopy] ?: [NSMutableSet set];
         NSMutableArray<XAX86_64Fixup*>* mfix = [as.fixups mutableCopy] ?: [NSMutableArray array];
+        // The objects' constructors (.CRT$XCU), for placeInit.
+        NSMutableData* minit = [NSMutableData data];
+        NSMutableArray<XAX86_64Fixup*>* minitFix = [NSMutableArray array];
         for (NSUInteger oi = 0; oi < objInputs.count; oi++)
             {
             NSDictionary* obj = [XTPEWriter objectAtPath:objInputs[oi]];
@@ -335,7 +347,8 @@ int main(int argc, const char* argv[])
                         objInputs[oi].UTF8String);
                 return 1;
                 }
-            if (!mergeCoffObject(obj, objInputs[oi], oi, mtext, mdata, msyms, mdataSyms, mfix))
+            if (!mergeCoffObject(obj, objInputs[oi], oi, mtext, mdata, msyms, mdataSyms, mfix,
+                                 minit, minitFix))
                 return 1;
             }
         // ── pull from static archives, on demand ──────────────────────────────
@@ -389,13 +402,16 @@ int main(int argc, const char* argv[])
                     [taken addObject:@(mi)];
                     progress = YES;
                     if (!mergeCoffObject(obj, [NSString stringWithFormat:@"%@(%@)", poolFrom[mi].lastPathComponent, obj[@"member"]],
-                                         1000 + mi, mtext, mdata, msyms, mdataSyms, mfix))
+                                         1000 + mi, mtext, mdata, msyms, mdataSyms, mfix,
+                                         minit, minitFix))
                         return 1;
                     }
                 }
             }
         if (objInputs.count || archives.count)
             text = mtext;
+        if (!placeInit(mdata, msyms, mfix, minit, minitFix))
+            return 1;
 
         NSData* iface = nil;
         if (ifacePath && ![ifacePath isEqualToString:@"-"])
@@ -454,7 +470,9 @@ static BOOL mergeCoffObject(NSDictionary* obj, NSString* whence, NSUInteger oi,
                             NSMutableData* mtext, NSMutableData* mdata,
                             NSMutableDictionary<NSString*, NSNumber*>* msyms,
                             NSMutableSet<NSString*>* mdataSyms,
-                            NSMutableArray<XAX86_64Fixup*>* mfix)
+                            NSMutableArray<XAX86_64Fixup*>* mfix,
+                            NSMutableData* minit,
+                            NSMutableArray<XAX86_64Fixup*>* minitFix)
     {
     if (!gTentative)
         gTentative = [NSMutableSet set];
@@ -584,6 +602,88 @@ static BOOL mergeCoffObject(NSDictionary* obj, NSString* whence, NSUInteger oi,
             f.addend = [r[@"addend"] longLongValue];
             [mfix addObject:f];
             }
+        // .CRT$XCU (an xc module built without main): its constructors join
+        // the program's table (placeInit).
+        NSData* oinit = obj[@"init"];
+        if (oinit.length)
+            {
+            uint64_t ib = minit.length;
+            [minit appendData:oinit];
+            for (NSDictionary* r in obj[@"initrelocs"])
+                {
+                NSUInteger sn = [r[@"sym"] unsignedIntegerValue];
+                if ([r[@"type"] unsignedIntValue] != 0x01 /*IMAGE_REL_AMD64_ADDR64*/ || sn >= snames.count)
+                    {
+                    fprintf(stderr, "xcc-ln-win64: error: unhandled .CRT$XCU relocation in %s\n",
+                            whence.UTF8String);
+                    return NO;
+                    }
+                XAX86_64Fixup* f = [XAX86_64Fixup new];
+                f.offset = ib + [r[@"off"] unsignedLongLongValue];
+                f.kind = XAX86FixupAbs64;
+                f.symbol = tagged(sn);
+                f.addend = [r[@"addend"] longLongValue];
+                [minitFix addObject:f];
+                }
+            }
         }
+    return YES;
+    }
+
+static BOOL placeInit(NSMutableData* mdata, NSMutableDictionary<NSString*, NSNumber*>* msyms,
+                      NSMutableArray<XAX86_64Fixup*>* mfix, NSData* minit,
+                      NSArray<XAX86_64Fixup*>* minitFix)
+    {
+    if (!minit.length)
+        return YES;
+    NSNumber* so = msyms[@"__xt_ctors_start"];
+    NSNumber* eo = msyms[@"__xt_ctors_end"];
+    if (!so || !eo)
+        {
+        fprintf(stderr, "xcc-ln-win64: error: objects carry constructors (.CRT$XCU) and the "
+                        "program has no constructor table\n");
+        return NO;
+        }
+    uint64_t s0 = so.unsignedLongLongValue, s1 = eo.unsignedLongLongValue;
+    while (mdata.length & 7)
+        {
+        uint8_t z = 0;
+        [mdata appendBytes:&z length:1];
+        }
+    uint64_t nb = mdata.length;
+    // the program's own words, each with its fixup moved along
+    NSUInteger nfx = mfix.count;
+    for (uint64_t off = s0; off + 8 <= s1; off += 8)
+        {
+        uint64_t at = mdata.length;
+        uint8_t w[8];
+        memcpy(w, (const uint8_t*)mdata.bytes + off, 8);
+        [mdata appendBytes:w length:8];
+        for (NSUInteger i = 0; i < nfx; i++)
+            {
+            XAX86_64Fixup* f = mfix[i];
+            if (f.kind != XAX86FixupAbs64 || f.offset != off)
+                continue;
+            XAX86_64Fixup* g = [XAX86_64Fixup new];
+            g.offset = at;
+            g.kind = f.kind;
+            g.symbol = f.symbol;
+            g.addend = f.addend;
+            [mfix addObject:g];
+            }
+        }
+    uint64_t ob = mdata.length;
+    [mdata appendData:minit];
+    for (XAX86_64Fixup* f in minitFix)
+        {
+        XAX86_64Fixup* g = [XAX86_64Fixup new];
+        g.offset = ob + f.offset;
+        g.kind = f.kind;
+        g.symbol = f.symbol;
+        g.addend = f.addend;
+        [mfix addObject:g];
+        }
+    msyms[@"__xt_ctors_start"] = @(nb);
+    msyms[@"__xt_ctors_end"] = @(mdata.length);
     return YES;
     }

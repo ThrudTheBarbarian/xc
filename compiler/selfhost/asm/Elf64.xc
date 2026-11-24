@@ -1456,6 +1456,47 @@ class ElfSharedInfo
             data = new SectionBytes();
         if (commons == (Map*)0)
             commons = new Map();
+        // The module's load-time constructors (the back end's table between
+        // __xt_ctors_start and __xt_ctors_end): in an object without main they
+        // are its .init_array, which a link adds to the program's table after
+        // the program's own entries, in link order. The bounds are not
+        // written, so they cannot stand in for the program's. The entry
+        // module keeps its table in .data, where its start-up code finds it.
+        Data* ctors = new Data();
+        Array* ctorFix = new Array();
+        Object* cso = symbols.get((Hashable*)String.withCString("__xt_ctors_start"));
+        Object* ceo = symbols.get((Hashable*)String.withCString("__xt_ctors_end"));
+        if (cso != (Object*)0 && ceo != (Object*)0 && symbols.get((Hashable*)String.withCString("main")) == (Object*)0)
+            {
+            u32 c0 = ((Number*)cso).asU32();
+            u32 c1 = ((Number*)ceo).asU32();
+            for (u32 b = c0; b < c1; b = b + (u32)1)
+                ctors.appendByte(data.byteAt(b));
+            // The table ends the data (the back end emits it last): cut it off.
+            bool atEnd = c1 == data.length();
+            Map* syms2 = new Map();
+            Array* ks = symbols.allKeys();
+            for (u32 i = (u32)0; i < ks.count(); i = i + (u32)1)
+                {
+                String* k = (String*)ks.get(i);
+                if (!k.equals(String.withCString("__xt_ctors_start")) && !k.equals(String.withCString("__xt_ctors_end")))
+                    syms2.set((Hashable*)k, symbols.get((Hashable*)k));
+                }
+            symbols = syms2;
+            Array* fx2 = new Array();
+            for (u32 i = (u32)0; i < fixups.count(); i = i + (u32)1)
+                {
+                X86Fixup* f = (X86Fixup*)fixups.get(i);
+                bool inTable = f.kind() == (u32)X86FIX_ABS64 && f.offset() >= c0 && f.offset() < c1;
+                if (inTable)
+                    ctorFix.add((Object*)X86Fixup.make(f.offset() - c0, f.kind(), f.symbol(), f.addend()));
+                if (!inTable || !atEnd)
+                    fx2.add((Object*)f);
+                }
+            fixups = fx2;
+            if (atEnd)
+                data = data.subrange((u32)0, c0);
+            }
         // C++ handlers (X86Asm's LSDAs): as on arm64 ELF, each LSDA in .data
         // under a local symbol (xc.lsda.<n>), a data word per typeinfo the
         // type table names (xc.ti.<name>, its entries 4-byte pc-relative to
@@ -1799,6 +1840,21 @@ class ElfSharedInfo
             }
         bool hasEh = eh.length() > (u32)0;
 
+        // The constructors' pointers, each an R_X86_64_64 against its function.
+        Data* initRel = new Data();
+        for (u32 i = (u32)0; i < ctorFix.count(); i = i + (u32)1)
+            {
+            X86Fixup* f = (X86Fixup*)ctorFix.get(i);
+            Object* si = symIndex.get((Hashable*)f.symbol());
+            if (si == (Object*)0)
+                continue;
+            Elf64.put64In(initRel, f.offset());
+            Elf64.put32In(initRel, (u32)R_X86_64_64);
+            Elf64.put32In(initRel, ((Number*)si).asU32());
+            Elf64.putI64In(initRel, f.addend());
+            }
+        bool hasInit = ctors.length() > (u32)0;
+
         Array* secNames = new Array();
         secNames.add((Object*)String.withCString(""));
         secNames.add((Object*)String.withCString(".text"));
@@ -1821,6 +1877,12 @@ class ElfSharedInfo
         u32 secDep = secNames.count();
         if (hasDep)
             secNames.add((Object*)String.withCString(".deplibs"));
+        u32 secInit = secNames.count();
+        if (hasInit)
+            {
+            secNames.add((Object*)String.withCString(".init_array"));
+            secNames.add((Object*)String.withCString(".rela.init_array"));
+            }
         Data* shstr = new Data();
         shstr.appendByte((u8)0);
         Array* shName = new Array();
@@ -1861,6 +1923,14 @@ class ElfSharedInfo
             }
         u32 depOff = off;
         off = depOff + dep.length();
+        u32 initOff = off;
+        u32 irelOff = off;
+        if (hasInit)
+            {
+            initOff = Elf64.roundUpTo(off, (u32)8);
+            irelOff = Elf64.roundUpTo(initOff + ctors.length(), (u32)8);
+            off = irelOff + initRel.length();
+            }
         u32 shOff = Elf64.roundUpTo(off, (u32)8);
 
         _out = new Data();
@@ -1909,6 +1979,13 @@ class ElfSharedInfo
             Elf64.appendAll(_out, ehRel);
             }
         Elf64.appendAll(_out, dep);
+        if (hasInit)
+            {
+            padTo(initOff);
+            Elf64.appendAll(_out, ctors);
+            padTo(irelOff);
+            Elf64.appendAll(_out, initRel);
+            }
         padTo(shOff);
 
         objShdr(shName, (u32)0, (u32)0, (u32)0, (u32)0, (u32)0, (u32)0, (u32)0, (u32)0, (u32)0);
@@ -1932,6 +2009,12 @@ class ElfSharedInfo
             }
         if (hasDep)
             objShdr(shName, secDep, (u32)$6FFF4C04, (u32)$30, depOff, dep.length(), (u32)0, (u32)0, (u32)1, (u32)1);
+        // SHT_INIT_ARRAY, SHF_ALLOC|SHF_WRITE; its RELA table (SHF_INFO_LINK).
+        if (hasInit)
+            {
+            objShdr(shName, secInit, (u32)14, (u32)3, initOff, ctors.length(), (u32)0, (u32)0, (u32)8, (u32)8);
+            objShdr(shName, secInit + (u32)1, (u32)4, (u32)$40, irelOff, initRel.length(), (u32)5, secInit, (u32)8, (u32)RELA_SZ);
+            }
         _depLibs = (Array*)0;
         return _out;
         }
