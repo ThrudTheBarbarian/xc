@@ -1,0 +1,12 @@
+T1 3 4
+T2 inits 2 first 1 second 2
+T3 4 4 0
+T4 box 5 live 1
+T4 replaced live 1
+T5 copy 1 n 9 g.n 0 live 1
+T5 assign n 9 same 1 live 1 old taken apart 1
+T6 weak 1
+T6 deallocs 0 weak 1 1 sides 4
+T7 x 7 y 8 twice 14
+T8 4 2
+end deallocs 0

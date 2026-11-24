@@ -57,6 +57,7 @@
     final IRModule* run(Node* program, String* moduleName)
         {
         _pendingGlobalInits = new Array();
+        _valueGlobals = new Map();
         _m = new IRModule();
         _m.setName(moduleName);
 
@@ -308,7 +309,30 @@
             String* gty = self.isWeakSlot(d.op())
                               ? self.weakSlotAggOf(d.op())
                               : self.irType(d.op());
+            // `P g;` names an instance (#641), as a local of that shape does:
+            // the global is the instance's storage, and every target puts it
+            // in data behind an object header whose count is immortal, so `&g`
+            // can be held as a reference and the instance is never torn down.
+            ClassInfo* gci = d.kidCount() == (u32)0 ? self.valueClassOf(d.op()) : (ClassInfo*)0;
+            if (gci != 0)
+                gty = gci.agg();
+            // An array of them has no header for each element, so it is
+            // refused as a local one is.
+            if (isArrayLike(d.op()) && self.valueClassOf(elementOf(d.op())) != 0)
+                {
+                String* w = String.withCString("a global array of class instances (`");
+                w.append(d.op());
+                w.appendCString("`) is not supported; declare an array of references (`");
+                w.append(stripQual(elementOf(d.op())));
+                w.appendCString("* ");
+                w.append(d.name());
+                w.appendCString("[N]`) instead");
+                self.errorAtNode(w, d);
+                return (IRModule*)0;
+                }
             IRSymbol* g = IRSymbol.dataGlobal(d.name(), gty);
+            if (gci != 0)
+                g.setAttr(String.withCString("instance"), true);
             // §6: `extern` WITH an initialiser = an exported definition —
             // the original stamps `exported` on the global's symbol. The
             // parser already swapped NF_EXTERN for NF_EXPORTED on it.
@@ -336,6 +360,12 @@
                     _pendingGlobalInits.add((Object*)d);
                 }
             _m.addSym(g);
+            if (gci != 0)
+                {
+                _valueGlobals.set((Hashable*)d.name(), (Object*)gci);
+                if (!d.hasFlag((u32)NF_EXTERN))
+                    _pendingGlobalInits.add((Object*)d);
+                }
             }
         for (u32 i = (u32)0; i < program.kidCount(); i = i + (u32)1)
             {
@@ -353,6 +383,29 @@
                 self.lowerClass(d);
             if (_failed)
                 return (IRModule*)0;
+            }
+        // Global instances in a module with no main (a library, an object
+        // built with -c) are set up by a load-time constructor of the module's
+        // own, named after the first of them, which runs before the program's
+        // main.
+        for (u32 i = (u32)0; i < _pendingGlobalInits.count(); i = i + (u32)1)
+            {
+            Node* g = (Node*)_pendingGlobalInits.get(i);
+            if (_valueGlobals.get((Hashable*)g.name()) == 0)
+                continue;
+            _globalInitFn = String.withFormat("__xtc_ginit_%s", g.name().cString());
+            Node* ctor = Node.withName((u16)nkFunctionDecl, _globalInitFn);
+            ctor.setOp(String.withCString("void"));
+            ctor.setPos(g.fileId(), g.line(), g.col());
+            Node* body = Node.with((u16)nkBlock);
+            body.setPos(g.fileId(), g.line(), g.col());
+            ctor.add(body);
+            _m.addSym(IRSymbol.func(_globalInitFn, self.signatureOf(ctor), false, false));
+            _m.addModInit(String.withString(_globalInitFn));
+            self.lowerFunction(ctor);
+            if (_failed)
+                return (IRModule*)0;
+            break;
             }
         // A destructor is dispatched INDIRECTLY: its address is written into
         // every object header at `new` time, so there is no IR-level call edge

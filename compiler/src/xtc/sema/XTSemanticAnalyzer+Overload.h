@@ -88,6 +88,7 @@ NS_ASSUME_NONNULL_BEGIN
                              location:(XTSourceLocation*)loc;
 - (BOOL)isStackAddress:(nullable XTASTNode*)value inStrongSlot:(nullable XTType*)slotType;
 - (BOOL)isPromotableAddress:(nullable XTASTNode*)value;
+- (BOOL)isGlobalInstanceAddress:(nullable XTASTNode*)value;
 - (void)checkThrowsEffectForMethod:(nullable XTMethodDeclNode*)chosen
                                 at:(nullable XTSourceLocation*)loc;
 - (XTASTNode*)unboxCollectionElement:(XTASTNode*)e;

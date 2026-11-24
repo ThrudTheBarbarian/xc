@@ -1308,6 +1308,18 @@ class Xt6502
             u32 size = byteWidth(s.globalTy());
             if (size == (u32)0) size = (u32)2;
             if (!header) { _out.appendCString("; Module data\n"); header = true; }
+            // A global instance (#641): the 7-byte header a heap block has
+            // (block size, weak-list head, count) before the label, which names
+            // the fields as a heap reference does. Its count is $FFFF, which
+            // retain and release leave alone, so it is immortal at no cost.
+            if (s.attr(String.withCString("instance"))) {
+                u32 total = size + (u32)7;
+                _out.appendFormat("    .byte $%s,$%s,$00,$00,$00,$FF,$FF\n_%s: .space %lu\n",
+                                  IRSymbol.hex2(total & (u32)$FF).cString(),
+                                  IRSymbol.hex2((total >> (u32)8) & (u32)$7F).cString(),
+                                  s.name().cString(), size);
+                continue;
+            }
             Array* bytes = s.bytes();
             // A float initialiser arrives as raw IEEE DOUBLE bits — the
             // abstract value — so it is re-encoded at the target's own width

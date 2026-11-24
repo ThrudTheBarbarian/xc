@@ -4178,6 +4178,18 @@ static NSInteger sArm9ThreadSafeARCOverride = -1;
         uint32_t size = (uint32_t)[self fieldWidth:sym.globalType];
         if (size == 0)
             size = 4;
+        // A global instance (#641): the 24-byte header a heap block has
+        // (magic, stride, count, dealloc, weak-list head, count) before the
+        // label, which names the fields as a heap reference does. Its count
+        // is 0xFFFF, which retain and release leave alone (bug 261), so it is
+        // immortal at no cost.
+        if ([sym.attributes[@"instance"] boolValue])
+            {
+            dataHeader();
+            [out appendFormat:@"\t.p2align 3\n\t.word\t0x58544F42\n\t.word\t%u\n\t.word\t1\n\t.word\t0\n\t.word\t0\n\t.word\t0xFFFF0000\n", (unsigned)size];
+            [out appendFormat:@"\t.global\t%@\n%@:\n\t.space\t%u\n", sym.name, sym.name, (unsigned)size];
+            continue;
+            }
         if (sym.initialBytes.length > 0)
             {
             NSData* bytes = sym.initialBytes;

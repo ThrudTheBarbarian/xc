@@ -452,6 +452,12 @@
 // top of main instead of silently reading back zeros; a module with no main
 // gets the old warning, at end of lowering, for each leftover.
 @property(nonatomic) NSMutableArray<XTVariableDeclNode*>* pendingGlobalInits;
+// Global instances (#641), symbol name → class: `P g;` at file scope is the
+// instance itself, in data behind a header with an immortal count, and is set
+// up before main (by main's prologue, or in a module with no main by a
+// load-time constructor of its own, named here).
+@property(nonatomic) NSMutableDictionary<NSString*, XTIRClassInfo*>* valueClassGlobals;
+@property(nonatomic, copy, nullable) NSString* globalInitFunctionName;
 
 // Per-class static-data block: className → symbol-id of the
 // `__sdata_<Class>` DataGlobal (sized to the instance layout, zeroed).
@@ -4523,6 +4529,10 @@ static NSString* XTDescribeNodeKind(XTASTNodeKind k)
                                                    @"lowering: global '%@' lost its symbol", node.identName]];
             return nil;
             }
+        // A global instance (#641) is its address, as a stack instance is.
+        XTIRClassInfo* gci = self.valueClassGlobals[sym.name];
+        if (gci)
+            return [self globalInstanceAddr:gid.unsignedIntegerValue class:gci];
         if (sym.globalType.kind == XTIRTypeKindAgg && !self.weakGlobals[sym.name])
             {
             // Aggregate global (array or struct): emit the address
@@ -6414,6 +6424,19 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
                                                    @"lowering: global '%@' lost its symbol", lhs.identName]];
             return nil;
             }
+        // `g = c` of a global instance (#641) copies the bytes, as a stack
+        // instance's assignment does.
+        XTIRClassInfo* gci = self.valueClassGlobals[sym.name];
+        if (gci && node.rhs.nodeKind != XTASTNodeKindNewExpr && [self valueClassForASTType:node.rhs.resolvedType])
+            {
+            XTIRValue* srcAddr = [self lowerExpression:node.rhs];
+            if (srcAddr && srcAddr.type.kind == XTIRTypeKindPtr)
+                {
+                XTIRValue* dst = [self globalInstanceAddr:gid.unsignedIntegerValue class:gci];
+                [self valueCopyFrom:srcAddr into:dst pinned:nil class:gci assign:YES];
+                }
+            return nil;
+            }
         XTIRValue* rhsValG = [self lowerExpression:node.rhs];
         if (!rhsValG)
             return nil;
@@ -8269,32 +8292,62 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
             continue;
         NSUInteger slot = ci.ivarFieldIndex[name].unsignedIntegerValue;
         XTIRValue* ma = [self emitFieldAddr:addr fieldIndex:slot resultType:mc.selfPtrType];
+        [self setUpInstanceAt:ma class:mc zero:YES];
+        }
+    }
+
+// One instance held by value set up in place: ivars zeroed (unless its storage
+// starts zeroed, as a global's does), vtable seeded, its own members, then its
+// zero-argument init.
+- (void)setUpInstanceAt:(XTIRValue*)ma class:(XTIRClassInfo*)mc zero:(BOOL)zero
+    {
+    if (zero)
+        {
         [self emitZeroInitIvarsFor:ma class:mc];
         [self stackZeroStructsAt:ma class:mc];
-        [self emitVtableInitFor:ma class:mc];
-        [self setUpValueMembersAt:ma class:mc];
-        XTClassDeclNode* cls = self.classDeclsByName[mc.className];
-        XTMethodDeclNode* zeroArgInit = nil;
-        for (XTMethodDeclNode* m in cls.methods)
-            {
-            if ([m.methodName isEqualToString:@"init"] && m.parameters.count == 0)
-                {
-                zeroArgInit = m;
-                break;
-                }
-            }
-        if (!zeroArgInit)
-            continue;
-        NSString* mangled = zeroArgInit.mangledName ?: zeroArgInit.methodName;
-        XTIRSymbol* sym = [self.module symbolForName:[NSString stringWithFormat:@"%@$%@", mc.className, mangled]];
-        if (!sym)
-            continue;
-        XTIRSymbolId sid = [self.module.symbols indexOfObjectIdenticalTo:sym];
-        XTIRCallConv* conv = sym.attributes[@"cloaked"].boolValue  ? [XTIRCallConv cloaked]
-                             : sym.attributes[@"banked"].boolValue ? [XTIRCallConv banked]
-                                                                   : [XTIRCallConv standard];
-        (void)[self emitCall:sid callConv:conv argValues:@[ ma ] resultType:nil];
         }
+    [self emitVtableInitFor:ma class:mc];
+    [self setUpValueMembersAt:ma class:mc];
+    XTClassDeclNode* cls = self.classDeclsByName[mc.className];
+    XTMethodDeclNode* zeroArgInit = nil;
+    for (XTMethodDeclNode* m in cls.methods)
+        {
+        if ([m.methodName isEqualToString:@"init"] && m.parameters.count == 0)
+            {
+            zeroArgInit = m;
+            break;
+            }
+        }
+    if (!zeroArgInit)
+        return;
+    NSString* mangled = zeroArgInit.mangledName ?: zeroArgInit.methodName;
+    XTIRSymbol* sym = [self.module symbolForName:[NSString stringWithFormat:@"%@$%@", mc.className, mangled]];
+    if (!sym)
+        return;
+    XTIRSymbolId sid = [self.module.symbols indexOfObjectIdenticalTo:sym];
+    XTIRCallConv* conv = sym.attributes[@"cloaked"].boolValue  ? [XTIRCallConv cloaked]
+                         : sym.attributes[@"banked"].boolValue ? [XTIRCallConv banked]
+                                                               : [XTIRCallConv standard];
+    (void)[self emitCall:sid callConv:conv argValues:@[ ma ] resultType:nil];
+    }
+
+// The class of the global instance `name` names (#641), or nil: a local of
+// the same name hides it.
+- (nullable XTIRClassInfo*)globalInstanceClassNamed:(NSString*)name
+    {
+    if (!name || self.locals[name] || self.pinnedLocals[name])
+        return nil;
+    NSNumber* gid = self.globalsByName[name];
+    XTIRSymbol* sym = gid ? [self.module symbolForId:gid.unsignedIntegerValue] : nil;
+    return sym ? self.valueClassGlobals[sym.name] : nil;
+    }
+
+// The address of the global instance whose symbol is `sid`, as the class.
+- (XTIRValue*)globalInstanceAddr:(XTIRSymbolId)sid class:(XTIRClassInfo*)ci
+    {
+    return [self emitInsnOpcode:XTIROpAddrOf
+                         result:ci.selfPtrType
+                       operands:@[ [XTIROperand symWithSymbolId:sid] ]];
     }
 
 // `obj.m = v` / `m = v` of an instance held by value: a copy into the member's
@@ -9871,7 +9924,7 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
     if ([base isKindOfClass:[XTIdentifierNode class]])
         {
         NSString* name = ((XTIdentifierNode*)base).identName;
-        if (self.valueClassLocals[name] != nil)
+        if (self.valueClassLocals[name] != nil || [self globalInstanceClassNamed:name] != nil)
             return YES;
         // An ivar held by value, named bare in a method.
         return !self.locals[name] && !self.pinnedLocals[name] && self.currentSelf
@@ -19488,6 +19541,22 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
     XTIRType* irTy = [self irTypeForASTTypeQuiet:astTy];
     if (!irTy)
         return;
+    // `P g;` names an instance (#641), as a local of that shape does: the
+    // global is the instance's storage, and every target puts it in data
+    // behind an object header whose count is immortal, so `&g` can be held
+    // as a reference and the instance is never torn down.
+    XTIRClassInfo* gci = decl.initialiser ? nil : [self valueClassForASTType:astTy];
+    if (gci)
+        irTy = [XTIRType aggWithLayout:gci.instanceLayout];
+    // An array of them has no header for each element, so it is refused as a
+    // local one is.
+    if ([astTy isKindOfClass:[XTArrayType class]] && [self valueClassForASTType:((XTArrayType*)astTy).elementType])
+        {
+        XTType* et = ((XTArrayType*)astTy).elementType;
+        [self softFailLoweringAt:decl.location
+                     withMessage:[NSString stringWithFormat:@"a global array of class instances (`%@`) is not supported; declare an array of references (`%@* %@[N]`) instead",
+                                                            astTy.displayName, et.displayName, decl.varName]];
+        }
     // A WEAK global is a weak slot: it carries two hidden link words before its
     // payload, exactly as a weak ivar or local does, so the runtime finds the
     // chain links at a fixed negative offset. Without them it would write
@@ -19509,6 +19578,8 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
     // linear-memory address exports; ordinary external linkage elsewhere).
     if (decl.isExported)
         sym.attributes = @{@"cloaked" : @NO, @"banked" : @NO, @"exported" : @YES};
+    else if (gci)
+        sym.attributes = @{@"cloaked" : @NO, @"banked" : @NO, @"instance" : @YES};
     else
         sym.attributes = @{@"cloaked" : @NO, @"banked" : @NO};
     // `extern` — defined in another module. Emit a reference, reserve no storage.
@@ -19549,6 +19620,12 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
         }
     XTIRSymbolId sid = [self.module addSymbol:sym];
     self.globalsByName[decl.varName] = @(sid);
+    if (gci)
+        {
+        self.valueClassGlobals[decl.varName] = gci;
+        if (!decl.isExternalGlobal)
+            [self.pendingGlobalInits addObject:decl];
+        }
     }
 
 // Generic body-lowering helper: drives the per-function state machine
@@ -19715,7 +19792,12 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
     // user statement can read the global. A class-typed initialiser's +1 is
     // ADOPTED by the global (stored without an extra retain), which is the
     // ownership a global holds until process exit.
-    if ([fn.name isEqualToString:@"main"] && self.pendingGlobalInits.count)
+    // A global instance (#641) is set up here too, in declaration order with
+    // the initialisers: its storage starts zeroed, so its vtable is seeded, its
+    // members are set up and its init runs. In a module with no main, the
+    // load-time constructor made for it sets up the instances alone.
+    BOOL globalInitFn = self.globalInitFunctionName && [fn.name isEqualToString:self.globalInitFunctionName];
+    if (([fn.name isEqualToString:@"main"] || globalInitFn) && self.pendingGlobalInits.count)
         {
         NSArray<XTVariableDeclNode*>* pend = [self.pendingGlobalInits copy];
         [self.pendingGlobalInits removeAllObjects];
@@ -19724,6 +19806,17 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
             NSNumber* sid = self.globalsByName[g.varName];
             if (!sid)
                 continue;
+            XTIRClassInfo* gci = self.valueClassGlobals[g.varName];
+            if (gci)
+                {
+                [self setUpInstanceAt:[self globalInstanceAddr:sid.unsignedIntegerValue class:gci] class:gci zero:NO];
+                continue;
+                }
+            if (globalInitFn)
+                {
+                [self.pendingGlobalInits addObject:g];
+                continue;
+                }
             // An ARRAY initialiser `{ … }` whose elements aren't constant-
             // foldable (symbol addresses): store each element into the slot,
             // coercing per element. This WIDENS `callback tab[N] = {&a,&b}` to
@@ -21573,6 +21666,7 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
     L.weakGlobals = [NSMutableDictionary dictionary];
     L.stringLiterals = [NSMutableDictionary dictionary];
     L.pendingGlobalInits = [NSMutableArray array];
+    L.valueClassGlobals = [NSMutableDictionary dictionary];
     L.staticDataByClass = [NSMutableDictionary dictionary];
     L.staticInitFlagByClass = [NSMutableDictionary dictionary];
     // Race-free static-init once: forced by -f[no-]thread-safe-arc, else on
@@ -21730,6 +21824,26 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
             {
             [sym setValue:@(YES) forKey:@"escapes"];
             }
+        }
+
+    // Global instances in a module with no main (a library, an object built
+    // with -c) are set up by a load-time constructor of the module's own,
+    // named after the first of them, which runs before the program's main.
+    for (XTVariableDeclNode* g in L.pendingGlobalInits)
+        {
+        if (!L.valueClassGlobals[g.varName])
+            continue;
+        L.globalInitFunctionName = [@"__xtc_ginit_" stringByAppendingString:g.varName];
+        XTFunctionDeclNode* ctor = [[XTFunctionDeclNode alloc] initWithName:L.globalInitFunctionName
+                                                                returnTypes:@[ [XTType voidType] ]
+                                                                 parameters:@[]
+                                                                  isVarArgs:NO
+                                                                       body:[[XTBlockNode alloc] initWithStatements:@[] location:g.location]
+                                                                   location:g.location];
+        ctor.isModuleInit = YES;
+        [L preScanFunction:ctor];
+        [L lowerFunction:ctor];
+        break;
         }
 
     // Deferred global initialisers nobody ran: this module never lowered a

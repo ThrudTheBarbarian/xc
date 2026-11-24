@@ -10103,6 +10103,23 @@ class X86_64
         // on a 16 KB boundary within its section, padded to whole 16 KB
         // pages, as it registered it.
         bool page = sym.attr(String.withCString("gpupage"));
+        // A global instance (#641): a heap instance's header, magic and count,
+        // before the label, which names the fields as a reference does. The
+        // count is immortal: 0x40000000 is so far from 0 and from the teardown
+        // marker 0x80000000 that no run's retains and releases reach either,
+        // and retain and release stay as they are.
+        if (sym.attr(String.withCString("instance")))
+            {
+            u32 isz = gt != (String*)0 ? fieldWidth(gt) : (u32)8;
+            if (isz >= (u32)256)
+                data.appendCString("\t.p2align\t6\n\t.zero\t56\n");
+            else
+                data.appendCString("\t.p2align\t3\n");
+            data.appendCString("\t.long\t0x58544F4E\n\t.long\t0x40000000\n");
+            data.appendFormat("\t.globl\t%s\n%s:\n\t.zero\t%lu\n", safeSym(sym.name()).cString(),
+                              safeSym(sym.name()).cString(), isz);
+            return;
+            }
         if (bytes != (Array*)0 && bytes.count() > (u32)0)
             {
             if (isAggTy(gt))
