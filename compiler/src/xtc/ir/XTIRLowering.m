@@ -21587,9 +21587,8 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
     // registered the class's static block as a queue — on win64 the phantom
     // Operation init crashed outright, and on the 6502 the queue drain later
     // called through the static block's empty vtable. So no instantiated
-    // class gets the guard, on any target.
-    if (recvCi.usedByNew)
-        return;
+    // class gets the guard for an instance init, on any target (tested below,
+    // once the init is found).
     // Resolve `init` (own or inherited); nothing to do without one.
     XTIRSymbol* isym = nil;
     XTIRClassInfo* owner = nil;
@@ -21616,6 +21615,14 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
         if (t.kind != XTIRTypeKindMemory) // the trailing memory token
             initParams++;
     if (initParams != (isym.attributes[@"static"].boolValue ? 0u : 1u))
+        return;
+    // The instantiated-class rule is for an INSTANCE init. A `static void
+    // init` is never one: it runs whatever else the class is, so it is
+    // guarded even when sema saw a `new` of the class. That `new` may be the
+    // class-name table's, which names every class its module defines and is
+    // emitted in every object built with -c, in every library and in a
+    // program that asks for class names (#655).
+    if (recvCi.usedByNew && !isym.attributes[@"static"].boolValue)
         return;
     XTIRSymbolId iid = [self.module.symbols indexOfObjectIdenticalTo:isym];
 
