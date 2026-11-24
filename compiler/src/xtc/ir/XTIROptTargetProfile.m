@@ -211,6 +211,13 @@
     return YES;   // aggregates are ordinary addressable memory
     }
 
+// Every arm64 row fuses a recognised float matrix-multiply nest, as the SME
+// kernel does, kernel or not (#569). As the port's OptProfile.forTarget.
+- (BOOL)matMulContract
+    {
+    return YES;
+    }
+
 - (NSUInteger)unrollMaxTrip
     {
     return 32;

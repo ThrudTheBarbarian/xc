@@ -7990,6 +7990,8 @@ class ClassInfo
         // explains).
         if (_loopGoal == (u32)1)
             _fn.addSpeedHeader(hn);
+        else if (_loopGoal == (u32)2)
+            _fn.addAccuracyHeader(hn);
 
         IRBlock* preheader = _blk;
         Map* preSnap = snapshot();
@@ -8379,6 +8381,8 @@ class ClassInfo
         IRBlock* header = addBlock(hn);
         if (_loopGoal == (u32)1)
             _fn.addSpeedHeader(hn);
+        else if (_loopGoal == (u32)2)
+            _fn.addAccuracyHeader(hn);
         IRBlock* bodyB = addBlock(bn);
         IRBlock* exitB = addBlock(xn);
 

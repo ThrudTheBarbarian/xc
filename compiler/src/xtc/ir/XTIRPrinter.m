@@ -776,6 +776,15 @@ static NSString* dbgSuffix(XTIRInsn* insn)
         [out appendFormat:@"    speed: [%@]\n",
                           [names componentsJoinedByString:@", "]];
         }
+    // `accuracy: [bb_x, ...]` — the loop headers under an explicit
+    // `:goal(accuracy)` (#569); after `speed:`, only when non-empty, sorted.
+    if (fn.accuracyLoopHeaders.count > 0)
+        {
+        NSArray<NSString*>* names =
+            [fn.accuracyLoopHeaders.allObjects sortedArrayUsingSelector:@selector(compare:)];
+        [out appendFormat:@"    accuracy: [%@]\n",
+                          [names componentsJoinedByString:@", "]];
+        }
     // `par: kernel` / `par: outlined`, after `speed:`, only on a kernel.
     if (fn.parKernel == XTIRParKernelBlock)
         [out appendString:@"    par: kernel\n"];

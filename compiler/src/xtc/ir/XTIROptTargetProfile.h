@@ -304,6 +304,11 @@ NS_ASSUME_NONNULL_BEGIN
 // The target has integer kernels too (prefix + "u32"/"i32" + suffix): arm64,
 // whose SME kernel packs the values to bytes or halves when they fit.
 @property(nonatomic) BOOL matMulInts;
+// A recognised float matrix-multiply nest fuses as the SME kernel does,
+// kernel or not (no SME row, -fno-matmul): every arm64 row (#569), so an arm64
+// answer does not depend on the OS, the flag or a par block. Not under an
+// explicit `:goal(accuracy)`, which is strict ISO.
+@property(nonatomic) BOOL matMulContract;
 // -fbounds-check=light (the driver's --inline-checks): the subscript checks that
 // bounds-elide could not prove inline, in loops only. NO: they stay calls.
 @property(nonatomic) BOOL inlineChecks;

@@ -80,6 +80,7 @@
         _frameInfo = [[XTIRFrameInfo alloc] init];
         _forcedUnrollHeaders = [NSMutableSet set];
         _speedLoopHeaders = [NSMutableSet set];
+        _accuracyLoopHeaders = [NSMutableSet set];
         _values = [NSMutableDictionary dictionary];
         _nextValueId = 0;
         }

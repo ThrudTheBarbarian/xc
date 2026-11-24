@@ -2139,10 +2139,13 @@ typedef NS_ENUM(NSUInteger, XTIRTokKind) {
         // exchange IR TEXT.
         // speed: [bb_x, ...] — the loop headers under `:goal(speed)`, read
         // back the same way.
-        if ([kw isEqualToString:@"unroll"] || [kw isEqualToString:@"speed"])
+        // accuracy: [bb_x, ...] — those under an explicit `:goal(accuracy)`
+        // (#569), the same way.
+        if ([kw isEqualToString:@"unroll"] || [kw isEqualToString:@"speed"] || [kw isEqualToString:@"accuracy"])
             {
             NSMutableSet<NSString*>* into = [kw isEqualToString:@"unroll"] ? state.currentFunction.forcedUnrollHeaders
-                                                                          : state.currentFunction.speedLoopHeaders;
+                                          : [kw isEqualToString:@"speed"]  ? state.currentFunction.speedLoopHeaders
+                                                                           : state.currentFunction.accuracyLoopHeaders;
             NSUInteger pos = 1;
             if ([self tok:tokens at:pos].kind == XTIRTokColon)
                 pos++;

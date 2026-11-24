@@ -13,19 +13,40 @@
     class Opt (IdiomMatMul)
     {
 
+    // A matrix-multiply nest goes to the target's kernel. On every arm64
+    // row a float nest fuses as the SME kernel does (matMulContract, #569),
+    // whether or not the row has the kernel, so an arm64 answer does not
+    // depend on the OS, -fno-matmul or which rows ran as a par block. A nest
+    // under an explicit `:goal(accuracy)` is strict ISO: no SME kernel and
+    // nothing fused. As the reference.
     final void idiomMatMul(IRModule* m)
         {
-        if (_profile.matMulPrefix() == (String*)0)
+        bool kernel = _profile.matMulPrefix() != (String*)0;
+        if (!kernel && !_profile.matMulContract())
             return;
+        bool sme = kernel && _profile.matMulPrefix().hasPrefix(String.withCString("__xt_sme_"));
         for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
             {
             IRFunc* fn = (IRFunc*)m.funcs().get(f);
+            _mmLeft = new Map();
             for (u32 iter = (u32)0; iter < (u32)64; iter = iter + (u32)1)
                 {
                 if (!recogniseMatMul(fn))
                     break;
-                applyMatMul(m, fn);
+                bool accuracy = _mxHead != (IRBlock*)0 && _mxHead.name() != (String*)0
+                                && fn.isAccuracyHeader(_mxHead.name());
+                if (kernel && !(sme && accuracy))
+                    {
+                    applyMatMul(m, fn);
+                    continue;
+                    }
+                // Left as a loop: fused unless the goal is accuracy, and not
+                // recognised again.
+                if (!accuracy && _profile.matMulContract() && _mxAcc != (IRInsn*)0)
+                    _mxAcc.setPred(String.withCString("contract"));
+                _mmLeft.set((Hashable*)_mmLeftKey, (Object*)_mmLeftKey);
                 }
+            _mmLeft = (Map*)0;
             }
         }
 
@@ -345,6 +366,11 @@
             IRBlock* Hk = (IRBlock*)fn.blocks().get(hb);
             if (Hk.phis().count() != (u32)2)
                 continue;
+            // A nest idiomMatMul left as a loop (#569).
+            String* leftKey = Hk.name() != (String*)0 ? Hk.name() : String.withFormat("#%u", hb);
+            if (_mmLeft != (Map*)0 && _mmLeft.get((Hashable*)leftKey) != (Object*)0)
+                continue;
+            _mmLeftKey = leftKey;
             Array* hkPreds = self.predsOfBlock(fn, Hk);
             IRBlock* Bk = (IRBlock*)0;
             for (u32 i = (u32)0; i < hkPreds.count(); i = i + (u32)1)
