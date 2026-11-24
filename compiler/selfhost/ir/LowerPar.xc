@@ -2557,7 +2557,9 @@
                 _m = copy;
                 _mWordWhy = parWordStructs(f);
                 _m = m;
+                _mFieldWhere = b.where();
                 parFillBlock(f, f, copy);
+                _mFieldWhere = (String*)0;
                 if (_mWordWhy != (String*)0 && _mMslWhy != (String*)0)
                     _mMslWhy = _mWordWhy;
                 _mWordWhy = (String*)0;
@@ -2584,6 +2586,192 @@
     // addresses are used any other way (a whole element copied, a field's
     // address passed on) stays as it is, and the kernel declines it. Nothing
     // changes outside the copy.
+    // -Wpar-fields (#146, stage 1): what one use of an address into an
+    // array of structs does with the element: loads or stores the field at
+    // that offset, or (the element's own address, or a field's address passed
+    // on) uses the element whole.
+    final void parNoteFieldUse(IRInsn* ip, u32 k, bool root, String* key, u32 off, String* t,
+                               Map* rd, Map* wr, Map* whole)
+        {
+        bool load = ip.isOp(opLoad);
+        bool store = ip.isOp(opStore) && ip.ops().count() >= (u32)2;
+        if (root || k != (u32)0 || (!load && !store))
+            {
+            whole.set((Hashable*)key, (Object*)key);
+            return;
+            }
+        Map* m = load ? rd : wr;
+        Map* fm = (Map*)m.get((Hashable*)key);
+        if (fm == (Map*)0)
+            {
+            fm = new Map();
+            m.set((Hashable*)key, (Object*)fm);
+            }
+        Array* at = new Array();
+        at.add((Object*)Number.with(off));
+        at.add((Object*)t);
+        fm.set((Hashable*)String.withU32(off), (Object*)at);
+        }
+
+    // The name of the field at byte offset off of layout l (a nested one as
+    // `outer.inner`), from the struct's declaration when the layout is a
+    // named struct's; else `+<offset>`.
+    // The name of the struct whose layout is module layout n, or 0 (a C
+    // program's structs, read from clang's IR, have none here).
+    final String* parStructName(u32 n)
+        {
+        if (_layoutIds == (Map*)0)
+            return (String*)0;
+        Array* ks = _layoutIds.allKeys();
+        for (u32 i = (u32)0; i < ks.count(); i = i + (u32)1)
+            {
+            Number* ix = (Number*)_layoutIds.get((Hashable*)ks.get(i));
+            if (ix != (Number*)0 && ix.asU32() == n && structDeclFor((String*)ks.get(i)) != (Node*)0)
+                return (String*)ks.get(i);
+            }
+        return (String*)0;
+        }
+
+    final String* parFieldName(IRLayout* l, u32 n, u32 off, u32 depth)
+        {
+        String* sn = parStructName(n);
+        Node* decl = sn != (String*)0 ? structDeclFor(sn) : (Node*)0;
+        if (decl == (Node*)0 || decl.kidCount() != l.fieldCount() || depth > (u32)8)
+            return String.withFormat("+%u", off);
+        for (u32 i = (u32)0; i < l.fieldCount(); i = i + (u32)1)
+            {
+            u32 lo = l.offsetAt(i);
+            u32 hi = i + (u32)1 < l.fieldCount() ? l.offsetAt(i + (u32)1) : l.size();
+            if (off < lo || off >= hi)
+                continue;
+            String* nm = String.withString(decl.kid(i).name());
+            String* ft = l.typeAt(i);
+            IRLayout* inner = self.mslLayoutOf(ft);
+            if (inner != (IRLayout*)0 && !inner.isArray())
+                {
+                u32 m = (u32)0;
+                for (u32 q = (u32)4; q < ft.byteLength() && ft.byteAt(q) >= (u8)'0' && ft.byteAt(q) <= (u8)'9'; q = q + (u32)1)
+                    m = m * (u32)10 + (u32)(ft.byteAt(q) - (u8)'0');
+                nm.appendCString(".");
+                nm.append(parFieldName(inner, m, off - lo, depth + (u32)1));
+                }
+            else if (inner != (IRLayout*)0 || off != lo)
+                nm.append(String.withFormat("+%u", off - lo));
+            return nm;
+            }
+        return String.withFormat("+%u", off);
+        }
+
+    // A field list, `x, y`, and the bytes those fields cover.
+    final String* parFieldList(IRLayout* l, u32 n, Map* fm, u32* bytes)
+        {
+        String* out = new String();
+        if (fm == (Map*)0)
+            return out;
+        // In offset order.
+        Array* offs = new Array();
+        Array* ks = fm.allKeys();
+        for (u32 i = (u32)0; i < ks.count(); i = i + (u32)1)
+            {
+            Array* e = (Array*)fm.get((Hashable*)ks.get(i));
+            u32 v = ((Number*)e.get((u32)0)).asU32();
+            u32 at = offs.count();
+            for (u32 q = (u32)0; q < offs.count(); q = q + (u32)1)
+                if (((Number*)((Array*)offs.get(q)).get((u32)0)).asU32() > v && at == offs.count())
+                    at = q;
+            offs.insert(at, (Object*)e);
+            }
+        for (u32 i = (u32)0; i < offs.count(); i = i + (u32)1)
+            {
+            Array* e = (Array*)offs.get(i);
+            if (i > (u32)0)
+                out.appendCString(", ");
+            String* nm = parFieldName(l, n, ((Number*)e.get((u32)0)).asU32(), (u32)0);
+            out.append(nm);
+            // An unnamed one (a C struct's) says its type.
+            if (nm.byteLength() > (u32)0 && nm.byteAt((u32)0) == (u8)'+')
+                {
+                out.appendCString(" ");
+                out.append((String*)e.get((u32)1));
+                }
+            *bytes = *bytes + IRType.storageBytes((String*)e.get((u32)1), (u32)8);
+            }
+        return out;
+        }
+
+    // The report for one block, a line for each array of structs it uses:
+    // the fields it reads and writes, the bytes of each element those cover,
+    // and whether a copy holding only those fields (one array per field)
+    // would move less than the copy of whole elements. The sliced form is
+    // worth building when the fields used are at most half the element; an
+    // element used whole has only the in-place form.
+    final Array* parFieldReport(Array* keys, Map* sty, Map* rd, Map* wr, Map* whole)
+        {
+        Array* out = new Array();
+        for (u32 q = (u32)0; q < keys.count(); q = q + (u32)1)
+            {
+            String* key = (String*)keys.get(q);
+            String* st = (String*)sty.get((Hashable*)key);
+            IRLayout* l = self.mslLayoutOf(st);
+            if (l == (IRLayout*)0 || l.size() == (u32)0)
+                continue;
+            u32 n = (u32)0;
+            for (u32 i = (u32)4; i < st.byteLength() && st.byteAt(i) >= (u8)'0' && st.byteAt(i) <= (u8)'9'; i = i + (u32)1)
+                n = n * (u32)10 + (u32)(st.byteAt(i) - (u8)'0');
+            String* sn = parStructName(n);
+            String* arr = sn != (String*)0 ? String.withFormat("its array of %s (%u bytes an element)", sn.cString(), l.size())
+                                           : String.withFormat("its array of %u-byte structs", l.size());
+            String* line = new String();
+            if (whole.get((Hashable*)key) != (Object*)0)
+                {
+                line.appendCString("uses whole elements of ");
+                line.append(arr);
+                line.appendCString(", so only the in-place copy applies");
+                out.add((Object*)line);
+                continue;
+                }
+            Map* r = (Map*)rd.get((Hashable*)key);
+            Map* w = (Map*)wr.get((Hashable*)key);
+            // The bytes used: each field once, read or written.
+            Map* used = new Map();
+            for (u32 pass = (u32)0; pass < (u32)2; pass = pass + (u32)1)
+                {
+                Map* fm = pass == (u32)0 ? r : w;
+                if (fm == (Map*)0)
+                    continue;
+                Array* ks = fm.allKeys();
+                for (u32 i = (u32)0; i < ks.count(); i = i + (u32)1)
+                    used.set((Hashable*)ks.get(i), fm.get((Hashable*)ks.get(i)));
+                }
+            u32 rb = (u32)0;
+            u32 wb = (u32)0;
+            u32 ub = (u32)0;
+            String* rl = parFieldList(l, n, r, &rb);
+            String* wl = parFieldList(l, n, w, &wb);
+            parFieldList(l, n, used, &ub);
+            if (rl.byteLength() > (u32)0)
+                {
+                line.appendCString("reads ");
+                line.append(rl);
+                }
+            if (wl.byteLength() > (u32)0)
+                {
+                line.appendCString(rl.byteLength() > (u32)0 ? " and writes " : "writes ");
+                line.append(wl);
+                }
+            line.appendCString(" of ");
+            line.append(arr);
+            line.append(String.withFormat(": %u of %u bytes an element; ", ub, l.size()));
+            if (ub * (u32)2 <= l.size())
+                line.append(String.withFormat("a copy of those fields alone would move %u bytes an element to the GPU and %u back, where whole elements move %u and %u",
+                                              rb, wb, l.size(), wb > (u32)0 ? l.size() : (u32)0));
+            else
+                line.appendCString("it uses most of each element, so the in-place copy stays");
+            out.add((Object*)line);
+            }
+        return out.count() > (u32)0 ? out : (Array*)0;
+        }
+
     final String* parWordStructs(IRFunc* f)
         {
         if (f.params().count() == (u32)0)
@@ -2663,6 +2851,12 @@
         Map* cOff = new Map();      // value seq -> byte offset in the element
         Map* cTy = new Map();       // value seq -> the type there
         Map* cRoot = new Map();     // value seq -> the element's address
+        // -Wpar-fields (#146): the fields each array's element is read and
+        // written at (key -> byte offset -> type), and the arrays an element
+        // is used whole in. Only seen here; nothing below reads them.
+        Map* fuRead = new Map();
+        Map* fuWrite = new Map();
+        Map* fuWhole = new Map();
         for (u32 pass = (u32)0; pass < (u32)4; pass = pass + (u32)1)
             for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
                 {
@@ -2735,7 +2929,10 @@
                     if (bk != (String*)0)
                         {
                         if (!(k == 0 && resIn && ip.isOp(opElementAddr)))
+                            {
                             bad.set((Hashable*)bk, (Object*)bk);
+                            fuWhole.set((Hashable*)bk, (Object*)bk);
+                            }
                         continue;
                         }
                     if (ck == (String*)0)
@@ -2745,6 +2942,7 @@
                     String* t = (String*)cTy.get((Hashable*)vk);
                     String* wt = self.parWordOf((String*)sty.get((Hashable*)ck));
                     bool root = (IRValue*)cRoot.get((Hashable*)vk) == o.val();
+                    parNoteFieldUse(ip, k, root, ck, ((Number*)cOff.get((Hashable*)vk)).asU32(), t, fuRead, fuWrite, fuWhole);
                     if (!root && t.equals(wt) && ((Number*)cOff.get((Hashable*)vk)).asU32() % self.gpuBytes(wt) == (u32)0)
                         continue;
                     bool access = k == 0 && !root && (ip.isOp(opLoad)
@@ -2802,6 +3000,8 @@
                     }
                 }
             }
+        if (_parFieldsOn && _mFieldReport == (Array*)0)
+            _mFieldReport = parFieldReport(keys, sty, fuRead, fuWrite, fuWhole);
         bool any = false;
         for (u32 q = (u32)0; q < keys.count(); q = q + (u32)1)
             if (bad.get((Hashable*)keys.get(q)) == (Object*)0)
@@ -3424,6 +3624,29 @@
             if (!parIsScanBlock(cls.substringBytes((u32)8, cls.byteLength() - (u32)8)))
                 self.warnAtNode(String.withCString(lifted ? "par-auto" : "par-gpu"), w, (Node*)_classDecls.get((Hashable*)cls));
             }
+        // -Wpar-fields (#146): on a target with a GPU, the fields of each
+        // array of structs the block uses (parFieldReport).
+        if (_mFieldReport != (Array*)0 && (_parMetal || _parPTX || _parSPIRV || _parWGSL))
+            {
+            String* cls = f.name().substringBytes((u32)0, f.name().byteLength() - (u32)4);
+            String* bn = cls.substringBytes((u32)8, cls.byteLength() - (u32)8);
+            if (!parIsScanBlock(bn))
+                {
+                for (u32 q = (u32)0; q < _mFieldReport.count(); q = q + (u32)1)
+                    {
+                    String* w = String.withCString(parIsAutoBlock(bn) || _mFieldWhere != (String*)0
+                                                   ? "this loop (--par-style) " : "this 'par' block ");
+                    w.append((String*)_mFieldReport.get(q));
+                    // An outlined block (the optimiser's, after the front end
+                    // has printed its warnings) says it at its loop, now.
+                    if (_mFieldWhere != (String*)0)
+                        Stdio.error(String.withFormat("%s: warning: %s\n", _mFieldWhere.cString(), w.cString()));
+                    else
+                        self.warnAtNode(String.withCString("par-fields"), w, (Node*)_classDecls.get((Hashable*)cls));
+                    }
+                }
+            }
+        _mFieldReport = (Array*)0;
         // No form to run, but the run still checks the block's arrays against
         // each other (ParDevice.bufferOverlap) from the header line: a block
         // with no form gets that line alone, `// xcpar cpu`, with every

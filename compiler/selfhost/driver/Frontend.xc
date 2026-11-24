@@ -157,6 +157,8 @@ class FeOptions
         // par-auto is opt-in (-Wpar-auto): what --par-style=auto wrapped or demoted
         // is useful to see once, and noise in every build after.
         suppressWarning(String.withCString("par-auto"));
+        // par-fields too (-Wpar-fields, #146): a report, not a problem.
+        suppressWarning(String.withCString("par-fields"));
         }
 
     String* input(void)
@@ -1243,6 +1245,7 @@ class FeOptions
         // once ride the same switch and a program that asks for one gets both.
         lower.setThreadSafeStatics(o.threadSafeArc());
         lower.setBoundsCheck(o.boundsCheck());
+        lower.setParFields(!o.warningSuppressed(String.withCString("par-fields")));
         // -g, as the reference's driver sets it up: a fresh file table, and the
         // program's own source registered first, so it is file 0 and names the
         // compile unit (imports are lowered first and would otherwise take it).
