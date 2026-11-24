@@ -9,7 +9,10 @@
 # restricts it to another target. One that does not BUILD is counted apart and
 # not failed: the ST lacks threads, sockets, the par runtime and C's libc by
 # design, and those fixtures stop at compile time. A wrong answer, a crash and a
-# run past the time limit are failures.
+# run past the time limit are failures, and each says which: FAIL(timeout),
+# FAIL(crash: signal N), FAIL(exit N, wrong output) or FAIL(wrong output). The
+# heaviest fixtures (the SME matrix multiplies) take about 25 s at -O0 on a
+# loaded host, so the default limit leaves them little room.
 #
 #   bash tests/corpus/m68k-sweep.sh [filter]     (from compiler/)
 # Env: XCC (default bin/<plat>/xcc-xc), SIM (bin/<plat>/xcc-sim-68k),
@@ -50,8 +53,14 @@ one() {  # <fixture> -> one result line
         if ! limit 300 "$XCC" -q -O$O -A atarist -H . -o "$W/$b.$O.prg" "$f" > "$W/$b.$O.log" 2>&1; then
             r="$r O$O=BUILD"; continue
         fi
-        ( cd "$W" && limit "$TIMEOUT" "$SIM" -d "$W/$b.$O.prg" < /dev/null 2>/dev/null ) | tr -d '\r' > "$W/$b.$O.got"
-        if tr -d '\r' < "$exp" | cmp -s - "$W/$b.$O.got"; then r="$r O$O=PASS"; else r="$r O$O=FAIL"; fi
+        ( cd "$W" && limit "$TIMEOUT" "$SIM" -d "$W/$b.$O.prg" < /dev/null > "$W/$b.$O.raw" 2>/dev/null )
+        rc=$?
+        tr -d '\r' < "$W/$b.$O.raw" > "$W/$b.$O.got"
+        if tr -d '\r' < "$exp" | cmp -s - "$W/$b.$O.got"; then r="$r O$O=PASS"
+        elif [ $rc -eq 142 ]; then r="$r O$O=FAIL(timeout)"          # SIGALRM: past TIMEOUT
+        elif [ $rc -gt 128 ]; then r="$r O$O=FAIL(crash: signal $((rc - 128)))"
+        elif [ $rc -ne 0 ]; then r="$r O$O=FAIL(exit $rc, wrong output)"
+        else r="$r O$O=FAIL(wrong output)"; fi
     done
     echo "$r"
 }
