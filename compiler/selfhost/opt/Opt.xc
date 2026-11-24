@@ -49,6 +49,7 @@
 #import <OptLoopRotate>
 #import <OptLoopUnroll>
 #import <OptLoopClone>
+#import <OptOuterUnroll>
 #import <OptLoopUnrollVarTrip>
 #import <OptNarrow>
 #import <OptStrengthReduce>
@@ -818,6 +819,12 @@
         if (_level >= (u32)2)
             self.loopRotate(m);
         if (stopHere(String.withCString("loop-rotate")))
+            return;
+        // On the rotated shapes: a counted loop around a data-exit inner loop
+        // runs K copies per trip (#41).
+        if (_level >= (u32)2)
+            self.outerUnroll(m);
+        if (stopHere(String.withCString("outer-unroll")))
             return;
         if (_level >= (u32)2)
             self.narrowIV(m);

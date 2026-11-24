@@ -222,6 +222,10 @@ NS_ASSUME_NONNULL_BEGIN
 // against the few classes with a method in the slot, call that method
 // directly where one matches (XTIROptDevirtualise). The 64-bit targets.
 - (BOOL)devirtualises;
+// YES to run K copies of a counted loop's body per trip when it holds one
+// inner loop that exits on data it loads (XTIROptOuterUnroll, #41). The
+// 64-bit targets.
+- (BOOL)unrollsOuterLoops;
 
 // YES to turn a float Select whose arm computes, on one bit, back into a
 // branch (XTIROptSelectBranch, #22). arm64.

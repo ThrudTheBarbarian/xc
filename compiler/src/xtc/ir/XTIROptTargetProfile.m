@@ -139,6 +139,10 @@
     {
     return NO;
     }
+- (BOOL)unrollsOuterLoops
+    {
+    return NO;
+    }
 - (BOOL)selectsBranch
     {
     return NO;
@@ -393,6 +397,10 @@
     }
 
 - (BOOL)devirtualises
+    {
+    return YES;
+    }
+- (BOOL)unrollsOuterLoops
     {
     return YES;
     }
@@ -971,6 +979,10 @@
     return YES;
     }
 - (BOOL)devirtualises
+    {
+    return YES;
+    }
+- (BOOL)unrollsOuterLoops
     {
     return YES;
     }

@@ -35,6 +35,7 @@
 #import "XTIROptTrapCut.h"
 #import "XTIROptArcPair.h"
 #import "XTIROptLoopRotate.h"
+#import "XTIROptOuterUnroll.h"
 #import "XTIROptBlockMerge.h"
 #import "XTIROptReassociate.h"
 #import "XTIROptVectorize.h"
@@ -341,6 +342,11 @@
         XTIROptLoopRotate* rotate = [[XTIROptLoopRotate alloc] init];
         rotate.profile = profile;
         [p addPass:rotate];
+        // On the rotated shapes: a counted loop around a data-exit inner loop
+        // runs K copies per trip (#41).
+        XTIROptOuterUnroll* outer = [[XTIROptOuterUnroll alloc] init];
+        outer.profile = profile;
+        [p addPass:outer];
         // Narrow counted-loop induction variables to the smallest width holding
         // their range (profile-gated). Runs last, on the final loop shape, so a
         // 4-byte compare/increment becomes 1-byte on the 8-bit target; the DCE

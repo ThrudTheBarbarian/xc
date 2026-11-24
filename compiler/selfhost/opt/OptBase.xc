@@ -154,6 +154,7 @@ class OptProfile
     bool _pointerIV;       // loop array addressing becomes an advancing phi
     bool _unrollVarTrip;   // …and a variable-trip loop partially unrolls
     bool _unrollChains;    // …and so does a loop of independent vector chains (#8)
+    bool _outerUnroll;     // a counted loop around a data-exit inner loop runs K copies (#41)
     bool _devirtualise;    // a virtual call in a loop tests the receiver's class (OptDevirt)
     bool _selectBranch;    // a float Select whose arm computes, on one bit, is a branch (arm64)
     bool _licm;            // loop-invariant code moves to the preheader
@@ -447,6 +448,10 @@ class OptProfile
         // instructions a step instead of three (#8: 8 chains on a Pi 5,
         // 42.5 GFLOPS bound by the moves).
         p._unrollChains = arm64;
+        // A counted loop around one inner loop that exits on data it loads
+        // runs K copies of its body per trip, each copy its own inner loop and
+        // exit branch (#41, OptOuterUnroll.xc). The 64-bit hosts.
+        p._outerUnroll = wide;
         // Float Selects back to branches where an arm computes (#22: faster on
         // a Pi 5 and an M4 Max, OptSelectBranch.xc).
         p._selectBranch = arm64;
@@ -617,6 +622,10 @@ class OptProfile
     bool unrollChains(void)
         {
         return _unrollChains;
+        }
+    bool outerUnroll(void)
+        {
+        return _outerUnroll;
         }
 
     bool devirtualise(void)
