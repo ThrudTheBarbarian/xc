@@ -100,7 +100,9 @@ static XTTarget* row(NSString* name, NSString* cpu, NSInteger variant, NSString*
     BOOL reg = wide || [backend isEqualToString:@"arm9"] || [backend isEqualToString:@"wasm32"];
     BOOL m68k = [backend isEqualToString:@"atarist"];
     r.pointerWidth = wide ? 8 : (reg || m68k) ? 4 : 3;
-    r.countWidth = reg ? 4 : 2;
+    // The header's count: 8 on the 64-bit rows, so an array of more than 2^32
+    // elements has a `.length` (#321); 4 on arm9 and wasm32, 2 on m68k.
+    r.countWidth = wide ? 8 : reg ? 4 : 2;
     r.fieldAlign = reg ? 8 : m68k ? 2 : 1;
     r.tailAlign = m68k ? 2 : 8;
     r.itables = reg;

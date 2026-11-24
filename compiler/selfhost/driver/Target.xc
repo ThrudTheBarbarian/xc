@@ -150,7 +150,9 @@ class TargetRow
         bool reg = wide || b.equals(String.withCString("arm9")) || b.equals(String.withCString("wasm32"));
         bool m68k = b.equals(String.withCString("atarist"));
         _ptrWidth = wide ? (u32)8 : (reg || m68k) ? (u32)4 : (u32)3;
-        _countWidth = reg ? (u32)4 : (u32)2;
+        // The header's count: 8 on the 64-bit rows, so an array of more than
+        // 2^32 elements has a `.length` (#321); 4 on arm9 and wasm32, 2 on m68k.
+        _countWidth = wide ? (u32)8 : reg ? (u32)4 : (u32)2;
         _fieldAlign = reg ? (u32)8 : m68k ? (u32)2 : (u32)1;
         _tailAlign = m68k ? (u32)2 : (u32)8;
         _itables = reg;

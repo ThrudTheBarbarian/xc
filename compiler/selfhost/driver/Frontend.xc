@@ -2041,10 +2041,11 @@ bool hasPlatformPrelude(FeOptions* o)
 // the same call, silently shortened iteration (bug 234).
 u32 countWidthOf(FeOptions* o)
     {
-    // The row's: 4 on the 32/64-bit targets, capped there even where the
-    // header holds 8 (arm64), which keeps `.length` the same type everywhere
-    // and u64 out of the for-in and slice index arithmetic. 2 on m68k, whose
-    // header is [count:2][elemSize:2]; xt6502 writes no count at all and its
+    // The row's: 8 on the 64-bit targets, whose header holds 8, so `.length`
+    // is u64 there and for-in and slices count in u64 — an array of more than
+    // 2^32 elements reported a wrapped length and iterated only that many
+    // (owner, 2026-11-24, #321). 4 on arm9 and wasm32. 2 on m68k, whose header
+    // is [count:2][elemSize:2]; xt6502 writes no count at all and its
     // `.length` soft-fails at compile time.
     return layoutRow(o).countWidth();
     }

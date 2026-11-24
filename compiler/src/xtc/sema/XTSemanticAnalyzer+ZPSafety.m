@@ -711,6 +711,9 @@
         [self analyzeNode:node.initialiser];
         self.rangeInInitialiserPosition = prevRangeOK;
         self.expectedType = prev;
+        // `.length` by destination (#321).
+        if (node.declaredType && !node.declaredType.isAuto)
+            [self narrowLength:node.initialiser to:node.declaredType];
 
         // Stage-2 CFA: `<fnptr> fp = &funcName;` in a local decl.
         // Mirror of visitAssignExpr's record.
@@ -1333,6 +1336,9 @@
         {
         self.expectedType = (i < retTypes.count) ? retTypes[i] : nil;
         [self analyzeNode:node.values[i]];
+        // `.length` by destination (#321): the first value, as the port has it.
+        if (i == 0)
+            [self narrowLength:node.values[i] to:retTypes.firstObject];
         // `return nil` from a function that does not return a pointer.
         [self checkNilLiteral:node.values[i] against:self.expectedType];
         }
@@ -2895,6 +2901,9 @@
     if (node.lhs.resolvedType)
         self.expectedType = node.lhs.resolvedType;
     [self analyzeNode:node.rhs];
+    // `.length` by destination (#321).
+    if (node.assignOp == XTAssignOpAssign)
+        [self narrowLength:node.rhs to:node.lhs.resolvedType];
     self.expectedType = prev;
     // `n = nil` into anything but a pointer.
     [self checkNilLiteral:node.rhs against:node.lhs.resolvedType];

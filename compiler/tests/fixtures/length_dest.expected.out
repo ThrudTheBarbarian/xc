@@ -1,0 +1,7 @@
+pick(u32) 12
+pick(u32) 7000
+wide(u64) 7000
+narrow(u16) 12
+u32 7000, u64 7000, u16 12
+returned 7000 7000, cast 7000
+for-in 7000, arithmetic 6999
