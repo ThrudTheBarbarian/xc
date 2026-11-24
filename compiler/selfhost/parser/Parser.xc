@@ -1344,9 +1344,9 @@ class Parser
         if (foldIntConst(sz, &v) && v >= (i64)0 && v > (i64)$FFFFFFFF)
             {
             // Past 32 bits the count wrapped, and the array with it (#293).
-            String* m = String.withCString("Array size ");
+            String* m = String.withCString("an array of ");
             m.appendFormat("%lld", v);
-            m.appendCString(" does not fit in 32 bits");
+            m.appendCString(" elements is past 4 GB; allocate it with new T[n] (heap arrays take any size on the 64-bit targets)");
             _errorAt(m, sz);
             _fatal = true;
             }

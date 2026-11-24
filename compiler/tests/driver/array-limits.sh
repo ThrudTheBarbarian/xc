@@ -2,9 +2,9 @@
 # array-limits.sh — array sizes past 32 bits are errors (#293). A count of
 # 2^32 wrapped to 0, and an array of more than 4 GB was given storage of its
 # size mod 2^32 while .length kept the count, so writes ran off the end.
-# Both compilers refuse a count past 32 bits ("does not fit in 32 bits") and
-# a global, local or field array past 4 GB ("more than 4 GB"), and still
-# build a 4 GB - 1 byte array.
+# Both compilers refuse a count past 32 bits and a global, local or field
+# array past 4 GB, on every target, with a message that says to allocate it
+# with new T[n] (#321), and still build a 4 GB - 1 byte array.
 #
 #   bash tests/driver/array-limits.sh
 set -u
@@ -21,7 +21,7 @@ printf '#import "Stdio.xc"\nu8 a[4294967295];\ni32 main(void) { a[5] = (u8)1; re
 for c in "$REF" "$XC"; do
     [ -x "$c" ] || continue
     n=$(basename "$c")
-    for f in count:"does not fit in 32 bits" global:"more than 4 GB" local:"more than 4 GB" field:"more than 4 GB"; do
+    for f in count:"elements is past 4 GB; allocate it with new T\[n\]" global:"bytes, past 4 GB; allocate it with new T\[n\]" local:"bytes, past 4 GB; allocate it with new T\[n\]" field:"bytes, past 4 GB; allocate it with new T\[n\]"; do
         src=${f%%:*}; want=${f#*:}
         if "$c" -q -H . -S -o "$W/o.s" "$W/$src.xc" > "$W/e" 2>&1; then
             echo "FAIL $n: the $src case built"; fail=1

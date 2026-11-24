@@ -210,7 +210,7 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
     if ([self foldIntConstExpr:sizeExpr into:&v] && v > 0xFFFFFFFFLL)
         {
         // Past 32 bits the count wrapped, and the array with it (#293).
-        [_diagnostics emitError:[NSString stringWithFormat:@"Array size %lld does not fit in 32 bits", (long long)v]
+        [_diagnostics emitError:[NSString stringWithFormat:@"an array of %lld elements is past 4 GB; allocate it with new T[n] (heap arrays take any size on the 64-bit targets)", (long long)v]
                              at:sizeExpr.location ?: [self currentLocation]];
         return 0;
         }

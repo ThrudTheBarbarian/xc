@@ -146,6 +146,10 @@ and in a local one alike — so a rectangular table is flattened by hand and
 indexed `row * width + col`. (Heap arrays from `new T[N]` are one-dimensional
 for the same reason.)
 
+A global, local or field array is at most 4 GB, on every target; a larger one
+is a compile error that says so. Allocate it with `new T[n]` instead: on
+arm64, x86-64 and win64 a heap array takes any size.
+
 ### Range initialiser
 
 Fixed-size arrays with an integer element type also accept a range:
