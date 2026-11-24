@@ -25,11 +25,11 @@
 # stage therefore builds twice: an executable, to run the next stage with, and
 # the assembly, to compare.
 #
-# The BACK end is the Objective-C `xcc-cg-arm64` throughout: M7 is the front
-# end's bootstrap, and the back end has not been ported. Each stage is a real
-# toolchain directory — `xtc` resolves `xcc-fe` as a sibling of argv[0], so
-# dropping the self-hosted front end in beside it is all the substitution
-# takes.
+# The BACK end is the reference's code generator for the host (arm64 on a
+# Mac, x86-64 on Linux) throughout: this is the front end's bootstrap. Each
+# stage is a real toolchain directory — `xcc` resolves `xcc-fe` as a sibling
+# of argv[0], so dropping the self-hosted front end in beside it is all the
+# substitution takes.
 #
 #   bash selfhost/tools/bootstrap.sh
 
@@ -42,27 +42,34 @@ WORK=${TMPDIR:-/tmp}/bootstrap.$$
 mkdir -p "$WORK"
 trap 'rm -rf "$WORK"' EXIT
 
-INCS=(-I support/generic/lib -I support/arm64/lib -I support/xt6502/lib
+# The host's architecture: each stage's front end has to run here.
+case "$(uname -m)" in (arm64|aarch64) ARCH=arm64 ;; (*) ARCH=x86_64 ;; esac
+sha() { if command -v sha256sum >/dev/null; then sha256sum "$1"; else shasum -a 256 "$1"; fi; }
+
+INCS=(-I support/generic/lib -I support/$ARCH/lib -I support/xt6502/lib
       -I selfhost/lexer -I selfhost/codegen -I selfhost/asm -I selfhost/link -I selfhost/defs -I selfhost/preproc -I selfhost/parser
       -I selfhost/sema -I selfhost/defs -I selfhost/ir -I selfhost/opt)
-SRC=selfhost/tools/xtfe.xc -I selfhost/driver -I selfhost/defs
+SRC=(selfhost/tools/xtfe.xc -I selfhost/driver -I selfhost/defs)
 
 # Build the front end with the toolchain in $1: the executable as $2 and the
 # assembly it came from as $2.s.
 build_with() {
     local tools=$1 out=$2
-    "$tools/xtc" -O2 -A arm64 -H . -o "$out" "$SRC" "${INCS[@]}" 2>&1 \
+    "$tools/xcc" -O2 -A $ARCH -H . -o "$out" "${SRC[@]}" "${INCS[@]}" 2>&1 \
         | grep -E "error" && return 1
-    "$tools/xtc" -O2 -A arm64 -H . -o "$out.s" "$SRC" "${INCS[@]}" 2>&1 \
+    "$tools/xcc" -O2 -A $ARCH -H . -S -o "$out.s" "${SRC[@]}" "${INCS[@]}" 2>&1 \
         | grep -E "error" && return 1
     [ -x "$out" ] && [ -s "$out.s" ]
 }
 
-# A toolchain directory: the dispatcher, the back end, and a front end.
+# A toolchain directory: every tool beside the dispatcher (it finds the code
+# generator, the assembler and the linker as its siblings), then the stage's
+# own front end in place of xcc-fe.
 stage_dir() {
-    local dir=$1 fe=$2
+    local dir=$1 fe=$2 t
     mkdir -p "$dir"
-    cp "$BIN/xcc" "$BIN/xcc-cg-arm64" "$dir/"
+    for t in "$PWD/$BIN"/xcc*; do ln -sf "$t" "$dir/"; done
+    rm -f "$dir/xcc-fe"
     cp "$fe" "$dir/xcc-fe"
 }
 
@@ -79,7 +86,7 @@ build_with "$WORK/t2" "$WORK/xtfe3" || { echo "stage3 FAILED"; exit 1; }
 
 for s in 1 2 3; do
     printf 'stage%s  asm %s  %s lines\n' "$s" \
-        "$(shasum -a 256 "$WORK/xtfe$s.s" | cut -c1-16)" \
+        "$(sha "$WORK/xtfe$s.s" | cut -c1-16)" \
         "$(wc -l < "$WORK/xtfe$s.s" | tr -d ' ')"
 done
 
