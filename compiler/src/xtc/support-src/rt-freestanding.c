@@ -1080,9 +1080,9 @@ void _xtc_weak_zero_for(void*);
    reported length (bug 234). u32 is what the front end types `.length` as on
    this target — the header field here is 64-bit, but the generated stub in
    main.m describes a narrower one, so 4 is the width both can honour. */
-uint32_t _xtc_count(void* o)
+uint64_t _xtc_count(void* o)
     {
-    return (uint32_t)*(uint64_t*)((uint8_t*)o - XT_HDR + XT_COUNT_OFF);
+    return *(uint64_t*)((uint8_t*)o - XT_HDR + XT_COUNT_OFF);
     }
 
 #define XT_BTAB_CALLOC(n) _xt_calloc(n)

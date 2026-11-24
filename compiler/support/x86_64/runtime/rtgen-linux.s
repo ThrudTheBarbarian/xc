@@ -3185,7 +3185,7 @@ _xtc_new_string:                        # @_xtc_new_string
 	.type	_xtc_count,@function
 _xtc_count:                             # @_xtc_count
 # %bb.0:
-	mov	eax, dword ptr [rdi - 32]
+	mov	rax, qword ptr [rdi - 32]
 	ret
 .Lfunc_end49:
 	.size	_xtc_count, .Lfunc_end49-_xtc_count

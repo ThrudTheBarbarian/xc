@@ -2164,7 +2164,7 @@ _xtc_new_string:                        # @_xtc_new_string
 	.p2align	4, 0x90
 _xtc_count:                             # @_xtc_count
 # %bb.0:
-	mov	eax, dword ptr [rcx - 32]
+	mov	rax, qword ptr [rcx - 32]
 	ret
                                         # -- End function
 	.def	_xtc_block_note;
