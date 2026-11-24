@@ -22,8 +22,8 @@ request, and you sign by replying with one comment:
 
 > I have read the Contributor Licence Agreement and I sign it
 
-You keep the copyright in what you write. The agreement gives Cognostem Ltd,
-which runs the project, a licence to use your contribution, including the
+You keep the copyright in what you write. The agreement gives the repository owner,
+who runs the project, a licence to use your contribution, including the
 right to publish it under other terms. That covers two things:
 
 - **Changing a licence**, for example if the runtime exception or UXKit's
@@ -36,7 +36,7 @@ right to publish it under other terms. That covers two things:
 What the agreement promises in return: everything you contribute stays
 available to everyone under its open-source licence, permanently. A
 commercial licence is offered alongside the open-source one, never instead of
-it. Only Cognostem can grant other terms; anyone else gets your work under
+it. Only the repository owner can grant other terms; anyone else gets your work under
 the open-source licence.
 
 ## Licences

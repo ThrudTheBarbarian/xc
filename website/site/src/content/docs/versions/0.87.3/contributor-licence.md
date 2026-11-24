@@ -1,14 +1,14 @@
 ---
 title: Contributor licence agreement
-description: The individual contributor licence agreement every contributor to xc signs once - a licence grant to Cognostem Ltd, with a permanent open-source commitment.
+description: The individual contributor licence agreement every contributor to xc signs once - a licence grant to the owner of the xc repository, with a permanent open-source commitment.
 slug: versions/0.87.3/contributor-licence
 banner:
   content: 'This is the documentation for xc 0.87.3. <a href="/compiler/">The current documentation</a> describes the newest version.'
 pagefind: false
 ---
 
-This agreement is between you and Cognostem Ltd ("the Maintainer"), which
-runs the xc project ("the Project"). It covers every
+This agreement is between you and the owner of the xc repository at
+github.com/ThrudTheBarbarian/xc ("the Maintainer"), who runs the xc project ("the Project"). It covers every
 Contribution you submit to the Project, now or later. By signing it you accept
 its terms for all of them.
 
