@@ -268,6 +268,33 @@ static NSDictionary<NSString *, NSNumber *> *sKeywordMap = nil;
 }
 
 /****************************************************************************\
+|* The character tests, for ASCII only. The ctype functions are defined for
+|* 0 to 255; past that glibc reads outside its table, and a character such as
+|* ‖ after a name was taken as part of the name. Only ASCII letters and digits
+|* make names and numbers, as the port's lexer has them.
+\****************************************************************************/
+static inline BOOL xt_isalnum(unichar c) { return c < 0x80 && isalnum(c); }
+static inline BOOL xt_isalpha(unichar c) { return c < 0x80 && isalpha(c); }
+static inline BOOL xt_isdigit(unichar c) { return c < 0x80 && isdigit(c); }
+static inline BOOL xt_isxdigit(unichar c) { return c < 0x80 && isxdigit(c); }
+
+/****************************************************************************\
+|* 1 for a bracket an operator a class defines can use besides `|`: ‖, ⌈ ⌉,
+|* ⌊ ⌋, ⟨ ⟩. 2 for another bracket of the mathematical or angle kind, which
+|* it cannot (⟦ ⟧ ⟪ ⟫ ⦃ ⦄ 〈 〉 and the like): the set is fixed. 0 otherwise.
+|* Mirrored in the port (Lexer.xc).
+\****************************************************************************/
+static int XTLexerBracketChar(unichar ch)
+    {
+    if (ch == 0x2016 || (ch >= 0x2308 && ch <= 0x230B) || ch == 0x27E8 || ch == 0x27E9)
+        return 1;
+    if (ch == 0x2329 || ch == 0x232A || (ch >= 0x27E6 && ch <= 0x27EF) || (ch >= 0x2983 && ch <= 0x2998)
+        || (ch >= 0x3008 && ch <= 0x3011))
+        return 2;
+    return 0;
+    }
+
+/****************************************************************************\
 |* Scan a single token from the current position and append it to the
 |* token array. Dispatches to the appropriate literal/keyword/operator scanner.
 \****************************************************************************/
@@ -311,9 +338,10 @@ static NSDictionary<NSString *, NSNumber *> *sKeywordMap = nil;
         // Not a valid char literal — fall through to scanOperatorOrPunct.
     }
 
-    // A mathematical operator (U+2200 to U+22FF), before the ctype tests,
+    // A mathematical operator (U+2200 to U+22FF), or a bracket an operator
+    // can use or one it cannot (XTLexerBracketChar), before the ctype tests,
     // which are not defined for characters past 255.
-    if (ch >= 0x2200 && ch <= 0x22FF) {
+    if ((ch >= 0x2200 && ch <= 0x22FF) || XTLexerBracketChar(ch) != 0) {
         [self scanOperatorOrPunct:loc];
         return;
     }
@@ -327,7 +355,7 @@ static NSDictionary<NSString *, NSNumber *> *sKeywordMap = nil;
     // `0xFF` does not lex as the decimal 0 followed by an identifier. Nothing
     // else can start `0x`, so there is no ambiguity to resolve.
     if (ch == '0' && ([self peekChar:1] == 'x' || [self peekChar:1] == 'X')
-        && isxdigit([self peekChar:2])) {
+        && xt_isxdigit([self peekChar:2])) {
         [self scanHexLiteral:loc prefixLength:2 display:@"0x"];
         return;
     }
@@ -335,13 +363,13 @@ static NSDictionary<NSString *, NSNumber *> *sKeywordMap = nil;
         [self scanBinLiteral:loc];
         return;
     }
-    if (isdigit(ch)) {
+    if (xt_isdigit(ch)) {
         [self scanNumericLiteral:loc];
         return;
     }
 
     // Identifier or keyword
-    if (isalpha(ch) || ch == '_') {
+    if (xt_isalpha(ch) || ch == '_') {
         [self scanIdentifierOrKeyword:loc];
         return;
     }
@@ -541,7 +569,7 @@ static NSDictionary<NSString *, NSNumber *> *sKeywordMap = nil;
     while (_pos < _source.length) {
         unichar ch = [self currentChar];
         if (ch == '_') { [self advance]; continue; }
-        if (isxdigit(ch)) { [raw appendFormat:@"%C", ch]; [self advance]; }
+        if (xt_isxdigit(ch)) { [raw appendFormat:@"%C", ch]; [self advance]; }
         else break;
     }
     if (raw.length == 0) {
@@ -604,14 +632,14 @@ static NSDictionary<NSString *, NSNumber *> *sKeywordMap = nil;
     while (_pos < _source.length) {
         unichar ch = [self currentChar];
         if (ch == '_') { [self advance]; continue; }
-        if (isdigit(ch)) { [raw appendFormat:@"%C", ch]; [self advance]; }
-        else if (ch == '.' && !isFloat && isdigit([self peekChar:1])) {
+        if (xt_isdigit(ch)) { [raw appendFormat:@"%C", ch]; [self advance]; }
+        else if (ch == '.' && !isFloat && xt_isdigit([self peekChar:1])) {
             isFloat = YES;
             [raw appendFormat:@"%C", ch];
             [self advance];
         } else if ((ch == 'e' || ch == 'E') && !sawExponent
-                   && (isdigit([self peekChar:1])
-                       || (([self peekChar:1] == '+' || [self peekChar:1] == '-') && isdigit([self peekChar:2])))) {
+                   && (xt_isdigit([self peekChar:1])
+                       || (([self peekChar:1] == '+' || [self peekChar:1] == '-') && xt_isdigit([self peekChar:2])))) {
             // An exponent makes a float with or without a point (`1e30`), and
             // only when digits follow: `2e` is the number 2 and then `e`.
             isFloat = YES;
@@ -686,7 +714,7 @@ static NSDictionary<NSString *, NSNumber *> *sKeywordMap = nil;
     NSMutableString *buf = [NSMutableString string];
     while (_pos < _source.length) {
         unichar ch = [self currentChar];
-        if (isalnum(ch) || ch == '_') {
+        if (xt_isalnum(ch) || ch == '_') {
             [buf appendFormat:@"%C", ch];
             [self advance];
         } else {
@@ -838,6 +866,16 @@ static NSDictionary<NSString *, NSNumber *> *sKeywordMap = nil;
             // which the parser joins into an operator a class defines.
             if (ch >= 0x2200 && ch <= 0x22FF)
                 EMIT(XTTokenMathOp, ([NSString stringWithCharacters:&ch length:1]));
+            // A bracket an operator a class defines can use (`⌊self⌋`).
+            if (XTLexerBracketChar(ch) == 1)
+                EMIT(XTTokenMathBracket, ([NSString stringWithCharacters:&ch length:1]));
+            // A bracket it cannot: the set is fixed.
+            if (XTLexerBracketChar(ch) == 2) {
+                NSString *bad = [NSString stringWithFormat:@"'%C' cannot be an operator's bracket: write one of | ‖ ⌊ ⌋ ⌈ ⌉ ⟨ ⟩ instead", ch];
+                [_diagnostics emitError:bad at:loc];
+                [self advance];
+                break;
+            }
             NSString *msg = [NSString stringWithFormat:@"Unexpected character '%C'", ch];
             [_diagnostics emitError:msg at:loc];
             [self advance];

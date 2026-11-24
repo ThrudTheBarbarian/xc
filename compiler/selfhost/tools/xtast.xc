@@ -131,6 +131,13 @@ void main(void)
 
     Lexer* lex = Lexer.with(source, input);
     Array* tokens = lex.tokenise();
+    // A lexical error stops the reference's parse before its first
+    // declaration, so its tree is an empty Program; the same here.
+    if (lex.diagnostics().count() > (u32)0)
+        {
+        Stdio.printf("Program\n");
+        return;
+        }
     Parser* parser = Parser.with(tokens);
     parser.setGoalDefault(pp.goal());   // a #goal in the file, as the front end honours it
     parser.setLibraryFiles(pp.libraryFiles());

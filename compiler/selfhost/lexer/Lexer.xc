@@ -628,6 +628,30 @@ class Lexer
         _add(Token.withInt((u16)tokIntLiteral, disp, val, line, col));
         }
 
+    // The three UTF-8 bytes of a character: 1 for a bracket an operator a
+    // class defines can use besides `|` (U+2016, U+2308 to U+230B, U+27E8 and
+    // U+27E9); 2 for another bracket of the mathematical or angle kind, which
+    // it cannot (U+2329, U+232A, U+27E6 to U+27EF, U+2983 to U+2998, U+3008
+    // to U+3011); 0 otherwise.
+    static u32 bracketChar(u8 c1, u8 c2, u8 c3)
+        {
+        if (c1 == (u8)$E2 && c2 == (u8)$80 && c3 == (u8)$96)
+            return 1;
+        if (c1 == (u8)$E2 && c2 == (u8)$8C && c3 >= (u8)$88 && c3 <= (u8)$8B)
+            return 1;
+        if (c1 == (u8)$E2 && c2 == (u8)$9F && (c3 == (u8)$A8 || c3 == (u8)$A9))
+            return 1;
+        if (c1 == (u8)$E2 && c2 == (u8)$8C && (c3 == (u8)$A9 || c3 == (u8)$AA))
+            return 2;
+        if (c1 == (u8)$E2 && c2 == (u8)$9F && c3 >= (u8)$A6 && c3 <= (u8)$AF)
+            return 2;
+        if (c1 == (u8)$E2 && c2 == (u8)$A6 && c3 >= (u8)$83 && c3 <= (u8)$98)
+            return 2;
+        if (c1 == (u8)$E3 && c2 == (u8)$80 && c3 >= (u8)$88 && c3 <= (u8)$91)
+            return 2;
+        return 0;
+        }
+
     static u32 _hexValue(u8 c)
         {
         if (c >= (u8)'0' && c <= (u8)'9')
@@ -1305,6 +1329,31 @@ class Lexer
             for (u32 i = (u32)0; i < (u32)3; i = i + (u32)1) : serial
                 _advance();
             _add(Token.with((u16)tokMathOp, ch, line, col));
+            return;
+            }
+
+        // A bracket an operator a class defines can use besides `|` (1): ‖
+        // (E2 80 96), ⌈ ⌉ ⌊ ⌋ (E2 8C 88 to 8B), ⟨ ⟩ (E2 9F A8, A9). Or another
+        // bracket of the mathematical or angle kind (2), which it cannot: the
+        // set is fixed. As the reference's XTLexerBracketChar.
+        u32 bk = Lexer.bracketChar(c1, c2, c3);
+        if (bk != (u32)0)
+            {
+            String* ch = String.withCString("");
+            ch.appendByte(c1);
+            ch.appendByte(c2);
+            ch.appendByte(c3);
+            if (bk == (u32)2)
+                {
+                String* m = String.withCString("'");
+                m.append(ch);
+                m.appendCString("' cannot be an operator's bracket: write one of | \u2016 \u230A \u230B \u2308 \u2309 \u27E8 \u27E9 instead");
+                _err(m.cString());
+                }
+            for (u32 i = (u32)0; i < (u32)3; i = i + (u32)1) : serial
+                _advance();
+            if (bk == (u32)1)
+                _add(Token.with((u16)tokMathBracket, ch, line, col));
             return;
             }
 
