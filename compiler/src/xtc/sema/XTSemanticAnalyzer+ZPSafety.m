@@ -2142,6 +2142,15 @@
 \****************************************************************************/
 - (void)visitBinaryExpr:(XTBinaryExprNode*)node
     {
+    // Read two ways (an operator a class defines, `a**b`): choose by the
+    // operands' types, and analyse the reading kept.
+    if (node.alternative)
+        {
+        XTASTNode* alt = node.alternative;
+        node.alternative = nil;
+        [self chooseReadingOf:node alternative:alt];
+        return;
+        }
     // Propagate the outer expected type down to both operands —
     // this is what lets `2.0d * Math.PI()` resolve PI()'s zero-arg
     // overload as double when the binop itself is in a double
@@ -2720,6 +2729,13 @@
 
 - (void)visitUnaryExpr:(XTUnaryExprNode*)node
     {
+    if (node.alternative)
+        {
+        XTASTNode* alt = node.alternative;
+        node.alternative = nil;
+        [self chooseReadingOf:node alternative:alt];
+        return;
+        }
     // `&obj.method` — a bound method reference. Must be tried BEFORE the
     // operand is analysed: for a zero-arg method the property-getter rewrite
     // would read `obj.method` as a CALL, making `&obj.method` the address of

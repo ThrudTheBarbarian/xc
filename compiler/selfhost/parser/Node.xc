@@ -347,6 +347,11 @@ class Node
     u32 _vslots;         // the table's width (the program-wide total)
     String* _since;      // since("V") on a member: version that introduced it
     String* _opPat;      // `:operator(pattern)` on a method: "<shape> <names…>"
+    String* _opPrec;     // `:precedence(...)` on a method: "=op", ">op" or "<op",
+                         // ",right" after it; "? <what is wrong>"; 0 when absent
+    Node* _alt;          // on an nkBinary / nkUnary: the old reading of the
+                         // expression, beside the new one an operator a class
+                         // defines gave it (Parser.attachReading); 0 otherwise
     String* _category;   // category/extension marker (see setCategory)
     String* _catHost;    // §4.2: on a METHOD a category added to an
                          // EXTERNAL class — the extended class's name.
@@ -361,6 +366,8 @@ class Node
         _name = (String*)0;
         _since = (String*)0;
         _opPat = (String*)0;
+        _opPrec = (String*)0;
+        _alt = (Node*)0;
         _op = (String*)0;
         _extra = (String*)0;
         _num = (i64)0;
@@ -802,6 +809,26 @@ class Node
         {
         _opPat = p;
         }
+    // `:precedence(...)`: its spec, or "? <what is wrong>"; 0 when absent.
+    String* opPrec(void)
+        {
+        return _opPrec;
+        }
+    void setOpPrec(String* p)
+        {
+        _opPrec = p;
+        }
+    // The old reading of an expression read two ways, hung on the new one
+    // where the two differ: an operator a class defines whose characters also
+    // read the old way (`a**b`). Sema chooses, and clears it.
+    Node* alt(void)
+        {
+        return _alt;
+        }
+    void setAlt(Node* a)
+        {
+        _alt = a;
+        }
     // The shape alone: "_+_". 0 when not an operator, or for a pattern the
     // parser could not take (opFault).
     String* opShape(void)
@@ -831,6 +858,56 @@ class Node
             out.add(parts.get(i));
         return out;
         }
+
+    // Does `s` spell `lit` exactly?
+    static bool _shapeIs(String* s, string lit)
+        {
+        u8* b = (u8*)lit;
+        u32 i = 0;
+        while (b[i] != (u8)0)
+            {
+            if (i >= s.byteLength() || s.byteAt(i) != b[i])
+                return false;
+            i++;
+            }
+        return i == s.byteLength();
+        }
+
+    // ── Operator shapes (Parser.xc, "Operators a class defines") ──
+    // An infix shape (`_**_`), not a prefix one (`√_`).
+    static bool shapeIsInfix(String* shape)
+        {
+        u32 n = shape.byteLength();
+        return n >= 3 && shape.byteAt(0) == (u8)'_' && shape.byteAt(n - 1) == (u8)'_';
+        }
+
+    // The characters of a shape: `**` of `_**_`, `√` of `√_`.
+    static String* shapeCore(String* shape)
+        {
+        u32 n = shape.byteLength();
+        if (Node.shapeIsInfix(shape)) return shape.substringBytes(1, n - 2);
+        if (n >= 2 && shape.byteAt(n - 1) == (u8)'_') return shape.substringBytes(0, n - 1);
+        return shape;
+        }
+
+    // Is the shape one a class defines of its own, not a built-in operator,
+    // an index or a compound assignment?
+    static bool isUserShape(String* shape)
+        {
+        if (shape == 0 || shape.byteLength() == 0) return false;
+        if (shape.byteLength() > 1 && shape.byteAt(0) == (u8)'_' && shape.byteAt(1) == (u8)'[') return false;
+        String* c = Node.shapeCore(shape);
+        if (Node.shapeIsInfix(shape))
+            return !(Node._shapeIs(c, "+") || Node._shapeIs(c, "-") || Node._shapeIs(c, "*") || Node._shapeIs(c, "/")
+                     || Node._shapeIs(c, "%") || Node._shapeIs(c, "&") || Node._shapeIs(c, "|") || Node._shapeIs(c, "^")
+                     || Node._shapeIs(c, "<<") || Node._shapeIs(c, ">>") || Node._shapeIs(c, "<:") || Node._shapeIs(c, ":>")
+                     || Node._shapeIs(c, "<") || Node._shapeIs(c, "<=") || Node._shapeIs(c, ">") || Node._shapeIs(c, ">=")
+                     || Node._shapeIs(c, "+=") || Node._shapeIs(c, "-=") || Node._shapeIs(c, "*=") || Node._shapeIs(c, "/=")
+                     || Node._shapeIs(c, "%=") || Node._shapeIs(c, "&=") || Node._shapeIs(c, "|=") || Node._shapeIs(c, "^=")
+                     || Node._shapeIs(c, "<<=") || Node._shapeIs(c, ">>=") || Node._shapeIs(c, "<:=") || Node._shapeIs(c, ":>="));
+        return !(Node._shapeIs(c, "-") || Node._shapeIs(c, "+") || Node._shapeIs(c, "~") || Node._shapeIs(c, "!"));
+        }
+
     // The call an overloaded operator node became (NF_OPCALL), hung past its
     // operands: a binary's third kid, a prefix operator's second, a
     // subscript's or slice's last, an assignment's third. 0 for any other node.
@@ -1020,9 +1097,74 @@ class Node
         n._usedByNew = _usedByNew;
         n._heapRecv = _heapRecv;
         n._stackRecv = _stackRecv;
+        n._opPat = _opPat;
+        n._opPrec = _opPrec;
+        if (_alt != 0)
+            n._alt = _alt.deepCopy();
         for (u32 i = 0; i < _kids.count(); i++) : serial
             n._kids.add((Object*)((Node*)_kids.get(i)).deepCopy());
         return n;
+        }
+
+    // Become `o`: every field takes o's value, its kids array included (shared,
+    // not copied). Sema keeps the old reading of an expression this way, in
+    // the place the parse put the new one.
+    void adoptReading(Node* o)
+        {
+        _kind = o._kind;
+        _fileId = o._fileId;
+        _name = o._name;
+        _op = o._op;
+        _extra = o._extra;
+        _num = o._num;
+        _flags = o._flags;
+        _src = o._src;
+        _line = o._line;
+        _col = o._col;
+        _pkg = o._pkg;
+        _islots = o._islots;
+        _isyms = o._isyms;
+        _stmtFileId = o._stmtFileId;
+        _stmtLine = o._stmtLine;
+        _stmtCol = o._stmtCol;
+        _ty = o._ty;
+        _sym = o._sym;
+        _cls = o._cls;
+        _vslot = o._vslot;
+        _autoSuper = o._autoSuper;
+        _indirect = o._indirect;
+        _boundCall = o._boundCall;
+        _nilLit = o._nilLit;
+        _calleeTy = o._calleeTy;
+        _setter = o._setter;
+        _setterCls = o._setterCls;
+        _getter = o._getter;
+        _getterCls = o._getterCls;
+        _bound = o._bound;
+        _boundCls = o._boundCls;
+        _boundSlot = o._boundSlot;
+        _boundProto = o._boundProto;
+        _boundPIdx = o._boundPIdx;
+        _proto = o._proto;
+        _protoIdx = o._protoIdx;
+        _slots = o._slots;
+        _symSlots = o._symSlots;
+        _slotSyms = o._slotSyms;
+        _vslots = o._vslots;
+        _since = o._since;
+        _category = o._category;
+        _catHost = o._catHost;
+        _usedByNew = o._usedByNew;
+        _heapRecv = o._heapRecv;
+        _stackRecv = o._stackRecv;
+        _opPat = o._opPat;
+        _opPrec = o._opPrec;
+        _alt = o._alt;
+        _chainHost = o._chainHost;
+        _chainAnchor = o._chainAnchor;
+        _chainSlots = o._chainSlots;
+        _chainCount = o._chainCount;
+        _kids = o._kids;
         }
 
     // This node made into a bare name of `kind`, with no kids: what `self.f`

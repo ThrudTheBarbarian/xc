@@ -184,6 +184,18 @@ NSArray<NSString*>* XTWarningCategoryAllNames(void);
 - (void)emitFatalError:(NSString*)message at:(XTSourceLocation*)location;
 
 /****************************************************************************\
+|* Reading one stretch of the program two ways and keeping one (an operator a
+|* class defines whose characters also read the old way): the diagnostics so
+|* far, to come back to; the errors since such a mark; dropping everything
+|* since it; taking what came since it out, to be put back with -restore:.
+\****************************************************************************/
+- (NSUInteger)mark;
+- (NSUInteger)errorCountSince:(NSUInteger)mark;
+- (void)rollbackTo:(NSUInteger)mark;
+- (NSArray<XTDiagnostic*>*)takeSince:(NSUInteger)mark;
+- (void)restore:(NSArray<XTDiagnostic*>*)taken;
+
+/****************************************************************************\
 |* Suppress a warning category. Subsequent categorised warnings in
 |* that category are dropped before they're added to the diagnostic
 |* list (so they don't count against `warningCount`).

@@ -114,6 +114,12 @@ class Sema
     Node* _opPick;            // …while that call picks its method (methodOverload)
     bool _anyOps;             // some class defines an operator: until one does, none resolves
     bool _opAmbig;            // the last opPick reported a tie
+    // Choosing between the two readings of an expression (an operator a class
+    // defines whose characters also read the old way): for each choice being
+    // made, innermost last, what each such operator in it found, as
+    // [Number(1 when an operand's class defines it), its spelling, that
+    // class, the node].
+    Array* _readingCollect;
     Node* _opIndexTarget;     // the subscript on the left of the assignment being typed
     bool _tieToFloat;         // pickOverload may settle a return-type tie on
                               // the float form (explicit and free calls only)
@@ -194,6 +200,7 @@ class Sema
         _opForced = (Node*)0;
         _opPick = (Node*)0;
         _anyOps = false;
+        _readingCollect = (Array*)0;
         _opAmbig = false;
         _opIndexTarget = (Node*)0;
         _used = new Array();
@@ -3521,6 +3528,15 @@ class Sema
             typeStmt(n);
             return;
             }
+        // Read two ways (an operator a class defines, `a**b`): choose by the
+        // operands' types, and type the reading kept.
+        if ((k == (u16)nkBinary || k == (u16)nkUnary) && n.alt() != 0)
+            {
+            Node* alt = n.alt();
+            n.setAlt((Node*)0);
+            chooseReading(n, alt);
+            return;
+            }
 
         // An assignment's RHS is typed with the LHS as its expected type, so a
         // return-type-only overload can be chosen there too.
@@ -4291,15 +4307,52 @@ class Sema
     // Check every `:operator(pattern)` in the program against its method,
     // refuse it on a free function or a protocol method, and report a pattern
     // the parser could not take.
+    // A `:precedence` spec as written: "above *, right" for ">*,right".
+    static String* precedenceSpelling(String* spec)
+        {
+        bool right = spec.hasSuffix(String.withCString(",right"));
+        String* body = right ? spec.substringBytes(0, spec.byteLength() - 6) : spec;
+        String* op = body.substringFromByte(1);
+        u8 rel = body.byteAt(0);
+        String* out = String.withCString(rel == (u8)'>' ? "above " : (rel == (u8)'<' ? "below " : ""));
+        out.append(op);
+        if (right)
+            out.appendCString(", right");
+        return out;
+        }
+
+    // What is wrong with a method's `:precedence(...)`, or 0: a form the
+    // parser could not take, no `:operator` beside it, or an operator that is
+    // built in or prefix.
+    String* opPrecedenceFault(Node* m)
+        {
+        String* p = m.opPrec();
+        if (p == 0)
+            return (String*)0;
+        if (p.byteLength() >= 2 && p.byteAt(0) == (u8)'?')
+            return p.substringFromByte(2);
+        if (m.opShape() == 0)
+            return String.withFormat("':precedence' on '%s' needs ':operator' on the same method", m.name().cString());
+        if (!Node.isUserShape(m.opShape()))
+            return String.withFormat("'%s' keeps the precedence of the built-in operator: ':precedence' is for an operator of a class's own shape",
+                                     Node.shapeCore(m.opShape()).cString());
+        if (!Node.shapeIsInfix(m.opShape()))
+            return String.withFormat("':precedence' is for an operator between two operands: the prefix '%s' binds as the built-in prefix operators do",
+                                     Node.shapeCore(m.opShape()).cString());
+        return (String*)0;
+        }
+
     void checkOperatorMethods(Node* program)
         {
+        // Each shape's first `:precedence`, and where it was: [spec, class, method].
+        Map* precOf = new Map();
         for (u32 i = (u32)0; i < program.kidCount(); i = i + (u32)1)
             {
             Node* d = program.kid(i);
             u16 k = d.kind();
             if (k == (u16)nkFunctionDecl)
                 {
-                if (d.opPat() != 0)
+                if (d.opPat() != 0 || d.opPrec() != 0)
                     _errorAt(String.withFormat("'%s' is not a method: an operator is defined by a method of one of its operands' classes", d.name().cString()), d);
                 }
             else if (k == (u16)nkProtocolDecl)
@@ -4307,7 +4360,7 @@ class Sema
                 for (u32 j = (u32)0; j < d.kidCount(); j = j + (u32)1)
                     {
                     Node* m = d.kid(j);
-                    if (m.kind() == (u16)nkMethodDecl && m.opPat() != 0)
+                    if (m.kind() == (u16)nkMethodDecl && (m.opPat() != 0 || m.opPrec() != 0))
                         {
                         _errorAt(String.withFormat("protocol method '%s' cannot be an operator yet", m.name().cString()), m);
                         m.setOpPat((String*)0);
@@ -4319,11 +4372,16 @@ class Sema
                 for (u32 j = (u32)0; j < d.kidCount(); j = j + (u32)1)
                     {
                     Node* m = d.kid(j);
-                    if (m.kind() != (u16)nkMethodDecl || m.opPat() == 0)
+                    if (m.kind() != (u16)nkMethodDecl || (m.opPat() == 0 && m.opPrec() == 0))
                         continue;
                     if (m.opFault() != 0)
                         {
                         _errorAt(m.opFault(), m);
+                        continue;
+                        }
+                    if (m.opShape() == 0)
+                        {
+                        _errorAt(opPrecedenceFault(m), m);
                         continue;
                         }
                     String* fault = opPatternFault(m, d);
@@ -4331,9 +4389,47 @@ class Sema
                         {
                         _errorAt(fault, m);
                         m.setOpPat((String*)0);
+                        continue;
                         }
-                    else
-                        _anyOps = true;
+                    _anyOps = true;
+                    String* pf = opPrecedenceFault(m);
+                    if (pf != 0)
+                        {
+                        _errorAt(pf, m);
+                        continue;
+                        }
+                    if (m.opPrec() == 0)
+                        continue;
+                    // One operator, one precedence: the parse reads it before
+                    // any type is known.
+                    Array* first = (Array*)precOf.get((Hashable*)m.opShape());
+                    if (first == 0)
+                        {
+                        Array* rec = new Array();
+                        rec.add((Object*)m.opPrec());
+                        rec.add((Object*)d.name());
+                        rec.add((Object*)m.name());
+                        precOf.set((Hashable*)m.opShape(), (Object*)rec);
+                        }
+                    else if (!((String*)first.get(0)).equals(m.opPrec()))
+                        {
+                        String* msg = String.withCString("operator '");
+                        msg.append(Node.shapeCore(m.opShape()));
+                        msg.appendCString("' has the precedence '");
+                        msg.append(Sema.precedenceSpelling((String*)first.get(0)));
+                        msg.appendCString("' in '");
+                        msg.append((String*)first.get(1));
+                        msg.appendCString(".");
+                        msg.append((String*)first.get(2));
+                        msg.appendCString("' and '");
+                        msg.append(Sema.precedenceSpelling(m.opPrec()));
+                        msg.appendCString("' in '");
+                        msg.append(d.name());
+                        msg.appendCString(".");
+                        msg.append(m.name());
+                        msg.appendCString("': an operator has one precedence");
+                        _errorAt(msg, m);
+                        }
                     }
                 }
             }
@@ -4494,23 +4590,288 @@ class Sema
         return call;
         }
 
+    // ── OPERATORS OF A CLASS'S OWN SHAPE ─────────────────────────────
+
+    // A binary operator that is none of the built-in ones: one a class defines
+    // with a shape of its own (the parser spells it, `**`).
+    bool userBinaryOp(String* op)
+        {
+        return !(_isOp(op, "+") || _isOp(op, "-") || _isOp(op, "*") || _isOp(op, "/") || _isOp(op, "%")
+                 || _isOp(op, "&") || _isOp(op, "|") || _isOp(op, "^") || _isOp(op, "<<") || _isOp(op, ">>")
+                 || _isOp(op, "<:") || _isOp(op, ":>") || _isOp(op, "&&") || _isOp(op, "||") || _isOp(op, "==")
+                 || _isOp(op, "!=") || _isOp(op, "<") || _isOp(op, ">") || _isOp(op, "<=") || _isOp(op, ">="));
+        }
+
+    // …and a prefix one.
+    bool userUnaryOp(String* op)
+        {
+        return !(_isOp(op, "-") || _isOp(op, "+") || _isOp(op, "~") || _isOp(op, "!") || _isOp(op, "&")
+                 || _isOp(op, "*") || _isOp(op, "++") || _isOp(op, "--") || _isOp(op, "<") || _isOp(op, ">")
+                 || _isOp(op, ">>") || _isOp(op, ">>>"));
+        }
+
+    // The class of an operand (or an ancestor of it) that defines `shape`: the
+    // left operand's, else the right's. 0 when neither does.
+    Node* opOwnerOfShape(String* shape, Array* ops)
+        {
+        Node* lc = opClassOf(((Node*)ops.get(0)).ty());
+        if (lc != 0 && opClassDefines(lc, shape))
+            return lc;
+        Node* rc = ops.count() > 1 ? opClassOf(((Node*)ops.get(1)).ty()) : (Node*)0;
+        if (rc != 0 && opClassDefines(rc, shape))
+            return rc;
+        return (Node*)0;
+        }
+
+    // An operator of a class's own shape has no built-in meaning. When no
+    // operand's class defines it, that is an error, unless the operator is one
+    // of two readings being chosen between (it is then noted, not reported).
+    // true when the node is dealt with that way, typed u8.
+    bool userOperatorUndefined(Node* n, String* shape, String* op, Array* ops)
+        {
+        Node* owner = opOwnerOfShape(shape, ops);
+        bool noting = n.hasFlag((u32)NF_TWOREAD) && _readingCollect != 0 && _readingCollect.count() > 0;
+        if (noting)
+            {
+            Array* site = new Array();
+            site.add((Object*)Number.withU32(owner != 0 ? 1 : 0));
+            site.add((Object*)op);
+            site.add((Object*)(owner != 0 ? owner.name() : String.withCString("")));
+            site.add((Object*)n);
+            ((Array*)_readingCollect.last()).add((Object*)site);
+            }
+        if (owner != 0)
+            return false;
+        n.setTy(String.withCString("u8"));
+        if (!noting)
+            {
+            String* m = String.withCString(ops.count() == 1 ? "no class defines the prefix operator '" : "no class defines the operator '");
+            m.append(op);
+            m.appendCString("' for (");
+            m.append(opTypes(ops, 0));
+            m.appendCString(")");
+            _errorAt(m, n);
+            }
+        return true;
+        }
+
+    // The operator nodes of a reading, down through its operators: binary,
+    // prefix, postfix, conditional, assignment and cast nodes.
+    static void readingOperatorNodes(Node* n, Array* out)
+        {
+        if (n == 0)
+            return;
+        u16 k = n.kind();
+        u32 want = 0;
+        if (k == (u16)nkBinary || k == (u16)nkAssign)
+            want = 2;
+        else if (k == (u16)nkUnary || k == (u16)nkPostfix || k == (u16)nkCast)
+            want = 1;
+        else if (k == (u16)nkTernary)
+            want = 3;
+        else
+            return;
+        out.add((Object*)n);
+        for (u32 i = 0; i < want && i < n.kidCount(); i++) : serial
+            Sema.readingOperatorNodes(n.kid(i), out);
+        }
+
+    // Integers (bool and enums too), numbers, pointers, as the built-in
+    // operators take them.
+    static bool readingInt(String* t)
+        {
+        return Types.isInteger(t) || Types.isEnumName(t);
+        }
+    static bool readingNum(String* t)
+        {
+        return Sema.readingInt(t) || Types.isFloating(t);
+        }
+    static bool readingPtr(String* t)
+        {
+        return Types.isPointer(t) || (t != 0 && t.byteLength() > 0 && t.byteAt(t.byteLength() - 1) == (u8)']');
+        }
+
+    // Is a built-in operator of the old reading one the language defines for
+    // its operands' types: arithmetic on numbers, pointer arithmetic and
+    // comparison, bitwise operators on integers, a dereference of a pointer?
+    // Sema types some other uses without complaint (a class value
+    // multiplied), so the old reading is held to these. An operator that
+    // became a class's method call is defined.
+    bool readingOperatorDefined(Node* n)
+        {
+        u16 k = n.kind();
+        String* op = n.op();
+        if (k == (u16)nkBinary)
+            {
+            if (n.hasFlag((u32)NF_OPCALL))
+                return true;
+            String* l = n.kid(0).ty();
+            String* r = n.kid(1).ty();
+            if (_isOp(op, "+"))
+                return (Sema.readingNum(l) && Sema.readingNum(r)) || (Sema.readingPtr(l) && Sema.readingInt(r)) || (Sema.readingInt(l) && Sema.readingPtr(r));
+            if (_isOp(op, "-"))
+                return (Sema.readingNum(l) && Sema.readingNum(r)) || (Sema.readingPtr(l) && Sema.readingInt(r)) || (Sema.readingPtr(l) && Sema.readingPtr(r));
+            if (_isOp(op, "*") || _isOp(op, "/") || _isOp(op, "%"))
+                return Sema.readingNum(l) && Sema.readingNum(r);
+            if (_isOp(op, "&") || _isOp(op, "|") || _isOp(op, "^") || _isOp(op, "<<") || _isOp(op, ">>")
+                || _isOp(op, "<:") || _isOp(op, ":>"))
+                return Sema.readingInt(l) && Sema.readingInt(r);
+            if (_isOp(op, "<") || _isOp(op, ">") || _isOp(op, "<=") || _isOp(op, ">=") || _isOp(op, "==") || _isOp(op, "!="))
+                return (Sema.readingNum(l) && Sema.readingNum(r)) || (Sema.readingPtr(l) && Sema.readingPtr(r));
+            if (_isOp(op, "&&") || _isOp(op, "||"))
+                return (Sema.readingNum(l) || Sema.readingPtr(l)) && (Sema.readingNum(r) || Sema.readingPtr(r));
+            return false;
+            }
+        if (k == (u16)nkUnary)
+            {
+            if (n.hasFlag((u32)NF_OPCALL))
+                return true;
+            String* t = n.kid(0).ty();
+            if (_isOp(op, "-") || _isOp(op, "+"))
+                return Sema.readingNum(t);
+            if (_isOp(op, "!"))
+                return Sema.readingNum(t) || Sema.readingPtr(t);
+            if (_isOp(op, "*"))
+                return Sema.readingPtr(t);
+            if (_isOp(op, "&"))
+                return true;
+            if (_isOp(op, "~") || _isOp(op, "++") || _isOp(op, "--") || _isOp(op, "<") || _isOp(op, ">")
+                || _isOp(op, ">>") || _isOp(op, ">>>"))
+                return Sema.readingInt(t);
+            return false;
+            }
+        if (k == (u16)nkPostfix)
+            return Sema.readingInt(n.kid(0).ty());
+        return true;
+        }
+
+    // A spelling's width in columns: UTF-16 units.
+    static u32 readingUnits(String* v)
+        {
+        u32 n = 0;
+        for (u32 i = 0; i < v.byteLength(); i++) : serial
+            {
+            u8 b = v.byteAt(i);
+            if ((b & (u8)$C0) == (u8)$80)
+                continue;
+            n = n + (b >= (u8)$F0 ? 2 : 1);
+            }
+        return n;
+        }
+
+    // Do the old reading's operators where the operators of `sites` are
+    // written each have a meaning for their operands (readingOperatorDefined)?
+    bool oldReadingDefined(Node* alt, Array* sites)
+        {
+        Array* nodes = new Array();
+        Sema.readingOperatorNodes(alt, nodes);
+        for (u32 i = 0; i < nodes.count(); i++) : serial
+            {
+            Node* n = (Node*)nodes.get(i);
+            for (u32 j = 0; j < sites.count(); j++) : serial
+                {
+                Array* site = (Array*)sites.get(j);
+                Node* at = (Node*)site.get(3);
+                u32 len = Sema.readingUnits((String*)site.get(1));
+                if (n.fileId() == at.fileId() && n.line() == at.line() && n.col() >= at.col()
+                    && n.col() < at.col() + len && !readingOperatorDefined(n))
+                    return false;
+                }
+            }
+        return true;
+        }
+
+    // An expression read two ways (an operator a class defines whose
+    // characters also read the old way, `a**b`): `n` holds the new reading,
+    // `alt` the old one. The operator reading is kept when an operand's class
+    // defines each such operator in it, the old one when none does; both
+    // type-checking, or some defined and some not, is an error. `n` is typed
+    // as the one kept.
+    void chooseReading(Node* n, Node* alt)
+        {
+        u32 errMark = _errors.count();
+        u32 warnMark = _warnings.count();
+        if (_readingCollect == 0)
+            _readingCollect = new Array();
+        Array* sites = new Array();
+        _readingCollect.add((Object*)sites);
+        typeExpr(n);
+        _readingCollect.removeAt(_readingCollect.count() - 1);
+        u32 defined = 0;
+        Array* firstDefined = (Array*)0;
+        for (u32 i = 0; i < sites.count(); i++) : serial
+            {
+            Array* site = (Array*)sites.get(i);
+            if (((Number*)site.get(0)).asU32() != 0)
+                {
+                if (firstDefined == 0)
+                    firstDefined = site;
+                defined++;
+                }
+            }
+        if (defined == sites.count())
+            {
+            // The operator reading. The old one must not type-check as well.
+            if (firstDefined != 0)
+                {
+                u32 e2 = _errors.count();
+                u32 w2 = _warnings.count();
+                typeExpr(alt);
+                bool oldTypes = _errors.count() == e2 && oldReadingDefined(alt, sites);
+                while (_errors.count() > e2)
+                    _errors.removeAt(_errors.count() - 1);
+                while (_warnings.count() > w2)
+                    _warnings.removeAt(_warnings.count() - 1);
+                if (oldTypes)
+                    {
+                    String* m = String.withCString("'");
+                    m.append((String*)firstDefined.get(1));
+                    m.appendCString("' reads two ways here and both type-check: as the operator of '");
+                    m.append((String*)firstDefined.get(2));
+                    m.appendCString("' and as the built-in operators it is spelt with; write those operators apart, or call the method by name");
+                    _errorAt(m, (Node*)firstDefined.get(3));
+                    }
+                }
+            return;
+            }
+        while (_errors.count() > errMark)
+            _errors.removeAt(_errors.count() - 1);
+        while (_warnings.count() > warnMark)
+            _warnings.removeAt(_warnings.count() - 1);
+        if (defined == 0)
+            {
+            // The old reading, in the new one's place.
+            n.adoptReading(alt);
+            typeExpr(n);
+            return;
+            }
+        String* m = String.withCString("'");
+        m.append((String*)firstDefined.get(1));
+        m.appendCString("' is the operator of '");
+        m.append((String*)firstDefined.get(2));
+        m.appendCString("' in one place in this expression and has its built-in meaning in another; use parentheses");
+        _errorAt(m, n);
+        }
+
     // Resolve the operator node `n` (binary or prefix) over its typed operands.
     // false when no operand's class defines the operator: the built-in meaning
     // applies. true when the node now has its call, or an error was reported.
     bool resolveOperator(Node* n)
         {
-        if (!_anyOps)
-            return false;
         bool binary = n.kind() == (u16)nkBinary;
         String* op = n.op();
         if (op == 0)
             return false;
-        bool overloadable = binary
+        // An operator a class defines with a shape of its own (`**`, `√`).
+        bool user = binary ? userBinaryOp(op) : userUnaryOp(op);
+        if (!user && !_anyOps)
+            return false;
+        bool overloadable = user || (binary
             ? (_isOp(op, "+") || _isOp(op, "-") || _isOp(op, "*") || _isOp(op, "/") || _isOp(op, "%")
                || _isOp(op, "&") || _isOp(op, "|") || _isOp(op, "^") || _isOp(op, "<<") || _isOp(op, ">>")
                || _isOp(op, "<:") || _isOp(op, ":>") || _isOp(op, "<") || _isOp(op, ">")
                || _isOp(op, "<=") || _isOp(op, ">="))
-            : (_isOp(op, "-") || _isOp(op, "+") || _isOp(op, "~") || _isOp(op, "!"));
+            : (_isOp(op, "-") || _isOp(op, "+") || _isOp(op, "~") || _isOp(op, "!")));
         if (!overloadable)
             return false;
         String* shape = binary ? String.withCString("_") : String.withString(op);
@@ -4521,6 +4882,8 @@ class Sema
         ops.add((Object*)n.kid((u32)0));
         if (binary)
             ops.add((Object*)n.kid((u32)1));
+        if (user && userOperatorUndefined(n, shape, op, ops))
+            return true;
         Node* lc = opClassOf(n.kid((u32)0).ty());
         Node* rc = binary ? opClassOf(n.kid((u32)1).ty()) : (Node*)0;
         bool optL = lc != 0 && opClassDefines(lc, shape);

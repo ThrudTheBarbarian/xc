@@ -7,7 +7,9 @@
 
 #pragma mark - Expression Parsing (Shunting-Yard + Recursive Descent)
 
-// Precedence levels (higher = tighter binding)
+// Precedence levels (higher = tighter binding), four apart, so a level an
+// operator a class defines makes with `:precedence(above *)` or
+// `:precedence(below |)` sits between two built-in ones (XTParser+Shapes.m).
 typedef struct
     {
     int prec;
@@ -31,40 +33,40 @@ static XTOpInfo operatorInfo(XTTokenType type)
     case XTTokenShrAssign:
     case XTTokenRolAssign:
     case XTTokenRorAssign:
-        return (XTOpInfo){1, YES};
+        return (XTOpInfo){4, YES};
     case XTTokenQuestion:
-        return (XTOpInfo){2, YES};
+        return (XTOpInfo){8, YES};
     case XTTokenLogicalOr:
-        return (XTOpInfo){3, NO};
+        return (XTOpInfo){12, NO};
     case XTTokenLogicalAnd:
-        return (XTOpInfo){4, NO};
+        return (XTOpInfo){16, NO};
     case XTTokenPipe:
-        return (XTOpInfo){5, NO};
+        return (XTOpInfo){20, NO};
     case XTTokenCaret:
-        return (XTOpInfo){6, NO};
+        return (XTOpInfo){24, NO};
     case XTTokenAmpersand:
-        return (XTOpInfo){7, NO};
+        return (XTOpInfo){28, NO};
     case XTTokenEqual:
     case XTTokenNotEqual:
-        return (XTOpInfo){8, NO};
+        return (XTOpInfo){32, NO};
     case XTTokenLess:
     case XTTokenGreater:
     case XTTokenLessEq:
     case XTTokenGreaterEq:
-        return (XTOpInfo){9, NO};
+        return (XTOpInfo){36, NO};
     case XTTokenShiftLeft:
     case XTTokenShiftRight:
-        return (XTOpInfo){10, NO};
+        return (XTOpInfo){40, NO};
     case XTTokenRotateLeft:
     case XTTokenRotateRight:
-        return (XTOpInfo){11, NO};
+        return (XTOpInfo){44, NO};
     case XTTokenPlus:
     case XTTokenMinus:
-        return (XTOpInfo){12, NO};
+        return (XTOpInfo){48, NO};
     case XTTokenStar:
     case XTTokenSlash:
     case XTTokenPercent:
-        return (XTOpInfo){13, NO};
+        return (XTOpInfo){52, NO};
     default:
         return (XTOpInfo){-1, NO};
         }
@@ -76,6 +78,11 @@ static XTOpInfo operatorInfo(XTTokenType type)
 \****************************************************************************/
 - (nullable XTASTNode*)parseExpression
     {
+    // A unit whose classes define operators of their own shape reads each
+    // expression with them (and, where their characters also read the old
+    // way, a second time without).
+    if (self.opShapes.count)
+        return [self parseExpressionReadings];
     return [self parseExprWithMinPrec:0];
     }
 
@@ -94,6 +101,20 @@ static XTOpInfo operatorInfo(XTTokenType type)
     while (YES)
         {
         XTToken* op = [self currentToken];
+        // An operator a class defines with a shape of its own, joined from
+        // the tokens here (`**`, `⊗`).
+        if (self.opShapes.count)
+            {
+            BOOL stop = NO;
+            XTASTNode* sh = [self parseInfixShapeAfter:lhs minPrec:minPrec stop:&stop];
+            if (stop)
+                break;
+            if (sh)
+                {
+                lhs = sh;
+                continue;
+                }
+            }
         XTOpInfo info = operatorInfo(op.type);
 
         // Handle ternary
@@ -329,6 +350,14 @@ static XTOpInfo operatorInfo(XTTokenType type)
     {
     XTToken* cur = [self currentToken];
 
+    // A prefix operator a class defines with a shape of its own (`√x`, `~~x`).
+    if (self.opShapes.count)
+        {
+        XTASTNode* sh = [self parsePrefixShape];
+        if (sh)
+            return sh;
+        }
+
     // Prefix operators
     if (cur.type == XTTokenMinus)
         {
@@ -446,6 +475,10 @@ static BOOL parPlainDecimal(NSString* t)
     while (YES)
         {
         XTToken* cur = [self currentToken];
+        // `a-->b` where a class defines `-->`: the `--` starts that operator.
+        if ((cur.type == XTTokenPlusPlus || cur.type == XTTokenMinusMinus) && self.opShapes.count
+            && [self infixShapeAtCurrent])
+            break;
         if (cur.type == XTTokenPlusPlus)
             {
             [self advance];

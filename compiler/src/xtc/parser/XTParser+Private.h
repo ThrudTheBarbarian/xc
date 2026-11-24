@@ -122,7 +122,32 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, strong, nullable) NSArray<XTToken*>* pwPendBound;
 @property(nonatomic, strong, nullable) XTToken* pwPendCmp;
 @property(nonatomic, strong, nullable) XTSourceLocation* pwPendLoc;
+// Operators a class defines with a shape of its own (XTParser+Shapes.m): the
+// table, shape -> level * 2 + (1 when it groups from the right), level 0 for
+// a prefix shape; the shapes whose level a `:precedence` set; whether the
+// expression is being read with the shapes that also read the old way split;
+// and the operators joined so far in the expression being read that also
+// read the old way.
+@property(nonatomic, strong, nullable) NSMutableDictionary<NSString*, NSNumber*>* opShapes;
+@property(nonatomic, strong, nullable) NSMutableSet<NSString*>* opShapesSet;
+@property(nonatomic) BOOL splitShapes;
+@property(nonatomic, strong, nullable) NSMutableArray<XTASTNode*>* shapeSites;
 @end
+
+// Operators a class defines with a shape of its own (XTParser+Shapes.m).
+@interface XTParser (Shapes)
+- (void)prescanOperatorShapes;
+- (void)addShapesOfImports:(NSArray<XTASTNode*>*)decls;
+- (NSString*)parsePrecedenceSpec;
+- (nullable XTASTNode*)parseInfixShapeAfter:(XTASTNode*)lhs minPrec:(int)minPrec stop:(BOOL*)stop;
+- (nullable XTASTNode*)parsePrefixShape;
+- (BOOL)infixShapeAtCurrent;
+- (nullable XTASTNode*)parseExpressionReadings;
+@end
+BOOL XTShapeTokenType(XTTokenType t);
+NSString* _Nullable XTPatternUserShape(NSArray<XTToken*>* t, NSString* _Nullable* _Nonnull fault,
+                                       NSArray<NSString*>* _Nullable* _Nullable names);
+NSString* XTPrecedenceSpecOf(NSArray<XTToken*>* t);
 
 // The par frame walk (XTParser+ParFrame.m).
 @interface XTParser (ParFrame)

@@ -297,21 +297,59 @@ static BOOL XTOperatorSameParams(XTMethodDeclNode* a, XTMethodDeclNode* b)
     return nil;
     }
 
+// A `:precedence` spec as written: "above *, right" for ">*,right".
+static NSString* XTPrecedenceSpelling(NSString* spec)
+    {
+    BOOL right = [spec hasSuffix:@",right"];
+    NSString* body = right ? [spec substringToIndex:spec.length - 6] : spec;
+    NSString* op = [body substringFromIndex:1];
+    unichar rel = [body characterAtIndex:0];
+    NSString* s = rel == '>' ? [@"above " stringByAppendingString:op] : rel == '<' ? [@"below " stringByAppendingString:op] : op;
+    return right ? [s stringByAppendingString:@", right"] : s;
+    }
+
+/****************************************************************************\
+|* What is wrong with a method's `:precedence(...)`, or nil: a form the parser
+|* could not take, no `:operator` beside it, or an operator that is built in
+|* or prefix.
+\****************************************************************************/
+- (nullable NSString*)operatorPrecedenceFault:(XTMethodDeclNode*)m
+    {
+    NSString* p = m.operatorPrecedence;
+    if (!p)
+        return nil;
+    if ([p hasPrefix:@"? "])
+        return [p substringFromIndex:2];
+    if (!m.operatorShape)
+        return [NSString stringWithFormat:@"':precedence' on '%@' needs ':operator' on the same method", m.methodName];
+    if (!XTIsUserShape(m.operatorShape))
+        return [NSString stringWithFormat:@"'%@' keeps the precedence of the built-in operator: ':precedence' is for an "
+                                          @"operator of a class's own shape",
+                                          XTShapeCore(m.operatorShape)];
+    if (!XTShapeIsInfix(m.operatorShape))
+        return [NSString stringWithFormat:@"':precedence' is for an operator between two operands: the prefix '%@' binds "
+                                          @"as the built-in prefix operators do",
+                                          XTShapeCore(m.operatorShape)];
+    return nil;
+    }
+
 - (void)checkOperatorMethods:(XTProgramNode*)program
     {
+    // Each shape's first `:precedence`, and where it was: @[ spec, class, method ].
+    NSMutableDictionary<NSString*, NSArray<NSString*>*>* precOf = [NSMutableDictionary dictionary];
     for (XTASTNode* decl in program.declarations)
         {
         if ([decl isKindOfClass:[XTFunctionDeclNode class]])
             {
             XTFunctionDeclNode* fn = (XTFunctionDeclNode*)decl;
-            if (fn.operatorShape || fn.operatorFault)
+            if (fn.operatorShape || fn.operatorFault || fn.operatorPrecedence)
                 [self.diagnostics emitError:[NSString stringWithFormat:@"'%@' is not a method: an operator is defined by a method of one of its operands' classes", fn.funcName]
                                          at:fn.location];
             }
         else if ([decl isKindOfClass:[XTProtocolDeclNode class]])
             {
             for (XTMethodDeclNode* m in ((XTProtocolDeclNode*)decl).methods)
-                if (m.operatorShape || m.operatorFault)
+                if (m.operatorShape || m.operatorFault || m.operatorPrecedence)
                     {
                     [self.diagnostics emitError:[NSString stringWithFormat:@"protocol method '%@' cannot be an operator yet", m.methodName]
                                              at:m.location];
@@ -329,15 +367,42 @@ static BOOL XTOperatorSameParams(XTMethodDeclNode* a, XTMethodDeclNode* b)
                     continue;
                     }
                 if (!m.operatorShape)
+                    {
+                    if (m.operatorPrecedence)
+                        [self.diagnostics emitError:[self operatorPrecedenceFault:m] at:m.location];
                     continue;
+                    }
                 NSString* fault = [self operatorPatternFault:m inClass:cls];
                 if (fault)
                     {
                     [self.diagnostics emitError:fault at:m.location];
                     m.operatorShape = nil;
+                    continue;
                     }
-                else
-                    self.hasOperatorMethods = YES;
+                self.hasOperatorMethods = YES;
+                NSString* pf = [self operatorPrecedenceFault:m];
+                if (pf)
+                    {
+                    [self.diagnostics emitError:pf at:m.location];
+                    continue;
+                    }
+                if (!m.operatorPrecedence)
+                    continue;
+                // One operator, one precedence: the parse reads it before any
+                // type is known.
+                NSArray<NSString*>* first = precOf[m.operatorShape];
+                if (!first)
+                    precOf[m.operatorShape] = @[ m.operatorPrecedence, cls.className, m.methodName ];
+                else if (![first[0] isEqualToString:m.operatorPrecedence])
+                    [self.diagnostics emitError:[NSString stringWithFormat:@"operator '%@' has the precedence '%@' in "
+                                                                           @"'%@.%@' and '%@' in '%@.%@': an operator "
+                                                                           @"has one precedence",
+                                                                           XTShapeCore(m.operatorShape),
+                                                                           XTPrecedenceSpelling(first[0]), first[1],
+                                                                           first[2],
+                                                                           XTPrecedenceSpelling(m.operatorPrecedence),
+                                                                           cls.className, m.methodName]
+                                             at:m.location];
                 }
             }
         }
@@ -529,11 +594,244 @@ static BOOL XTOperatorSameParams(XTMethodDeclNode* a, XTMethodDeclNode* b)
     return nil;
     }
 
+#pragma mark - Operators of a class's own shape
+
+// The class of an operand (or an ancestor of it) that defines `shape`: the
+// left operand's, else the right's. nil when neither does.
+- (nullable XTClassDeclNode*)operatorOwnerOfShape:(NSString*)shape operands:(NSArray<XTASTNode*>*)ops
+    {
+    XTClassDeclNode* lc = [self operatorClassOfType:ops[0].resolvedType];
+    if (lc && [self operatorClass:lc defines:shape])
+        return lc;
+    XTClassDeclNode* rc = ops.count > 1 ? [self operatorClassOfType:ops[1].resolvedType] : nil;
+    if (rc && [self operatorClass:rc defines:shape])
+        return rc;
+    return nil;
+    }
+
+/****************************************************************************\
+|* An operator of a class's own shape has no built-in meaning. When no
+|* operand's class defines it, that is an error, unless the operator is one
+|* of two readings being chosen between (it is then noted, not reported).
+|* Returns YES when the node is dealt with that way, typed u8.
+\****************************************************************************/
+- (BOOL)userOperatorUndefined:(XTASTNode*)node
+                        shape:(NSString*)shape
+                     spelling:(NSString*)op
+                     operands:(NSArray<XTASTNode*>*)ops
+                  twoReadings:(BOOL)two
+    {
+    XTClassDeclNode* owner = [self operatorOwnerOfShape:shape operands:ops];
+    BOOL noting = two && self.readingCollect.count > 0;
+    if (noting)
+        [self.readingCollect.lastObject addObject:@[ @(owner != nil), op, owner.className ?: @"", node ]];
+    if (owner)
+        return NO;
+    node.resolvedType = [XTType u8Type];
+    if (!noting)
+        [self.diagnostics emitError:[NSString stringWithFormat:ops.count == 1
+                                                                   ? @"no class defines the prefix operator '%@' for (%@)"
+                                                                   : @"no class defines the operator '%@' for (%@)",
+                                                                   op, [self describeArgTypes:ops]]
+                                 at:node.location];
+    return YES;
+    }
+
+// The operator nodes of a reading, down through its operators: binary,
+// prefix, postfix, conditional, assignment and cast nodes.
+static void XTReadingOperatorNodes(XTASTNode* _Nullable n, NSMutableArray<XTASTNode*>* out)
+    {
+    NSArray<XTASTNode*>* kids = nil;
+    if ([n isKindOfClass:[XTBinaryExprNode class]])
+        kids = @[ ((XTBinaryExprNode*)n).left, ((XTBinaryExprNode*)n).right ];
+    else if ([n isKindOfClass:[XTUnaryExprNode class]])
+        kids = @[ ((XTUnaryExprNode*)n).operand ];
+    else if ([n isKindOfClass:[XTPostfixExprNode class]])
+        kids = @[ ((XTPostfixExprNode*)n).operand ];
+    else if ([n isKindOfClass:[XTTernaryExprNode class]])
+        kids = @[ ((XTTernaryExprNode*)n).condition, ((XTTernaryExprNode*)n).thenExpr, ((XTTernaryExprNode*)n).elseExpr ];
+    else if ([n isKindOfClass:[XTAssignExprNode class]])
+        kids = @[ ((XTAssignExprNode*)n).lhs, ((XTAssignExprNode*)n).rhs ];
+    else if ([n isKindOfClass:[XTCastExprNode class]])
+        kids = @[ ((XTCastExprNode*)n).operand ];
+    else
+        return;
+    [out addObject:n];
+    for (XTASTNode* k in kids)
+        XTReadingOperatorNodes(k, out);
+    }
+
+// Integers (bool and enums too), numbers, pointers, as the built-in operators
+// take them.
+static BOOL XTReadingInt(XTType* _Nullable t) { return t.isInteger; }
+static BOOL XTReadingNum(XTType* _Nullable t) { return t.isInteger || t.isFloating; }
+static BOOL XTReadingPtr(XTType* _Nullable t) { return t.isPointerLike; }
+
+/****************************************************************************\
+|* Is a built-in operator of the old reading one the language defines for its
+|* operands' types: arithmetic on numbers, pointer arithmetic and comparison,
+|* bitwise operators on integers, a dereference of a pointer? Sema types some
+|* other uses without complaint (a class value multiplied), so the old reading
+|* is held to these. An operator that became a class's method call is defined.
+\****************************************************************************/
+static BOOL XTReadingOperatorDefined(XTASTNode* n)
+    {
+    if ([n isKindOfClass:[XTBinaryExprNode class]])
+        {
+        XTBinaryExprNode* b = (XTBinaryExprNode*)n;
+        if (b.operatorCall)
+            return YES;
+        XTType* l = b.left.resolvedType;
+        XTType* r = b.right.resolvedType;
+        switch (b.op)
+            {
+        case XTBinaryOpAdd:
+            return (XTReadingNum(l) && XTReadingNum(r)) || (XTReadingPtr(l) && XTReadingInt(r)) || (XTReadingInt(l) && XTReadingPtr(r));
+        case XTBinaryOpSub:
+            return (XTReadingNum(l) && XTReadingNum(r)) || (XTReadingPtr(l) && XTReadingInt(r)) || (XTReadingPtr(l) && XTReadingPtr(r));
+        case XTBinaryOpMul:
+        case XTBinaryOpDiv:
+        case XTBinaryOpMod:
+            return XTReadingNum(l) && XTReadingNum(r);
+        case XTBinaryOpBitAnd:
+        case XTBinaryOpBitOr:
+        case XTBinaryOpBitXor:
+        case XTBinaryOpShl:
+        case XTBinaryOpShr:
+        case XTBinaryOpRol:
+        case XTBinaryOpRor:
+            return XTReadingInt(l) && XTReadingInt(r);
+        case XTBinaryOpLt:
+        case XTBinaryOpGt:
+        case XTBinaryOpLe:
+        case XTBinaryOpGe:
+        case XTBinaryOpEq:
+        case XTBinaryOpNeq:
+            return (XTReadingNum(l) && XTReadingNum(r)) || (XTReadingPtr(l) && XTReadingPtr(r));
+        case XTBinaryOpLogAnd:
+        case XTBinaryOpLogOr:
+            return (XTReadingNum(l) || XTReadingPtr(l)) && (XTReadingNum(r) || XTReadingPtr(r));
+        case XTBinaryOpUser:
+            return NO;
+            }
+        return NO;
+        }
+    if ([n isKindOfClass:[XTUnaryExprNode class]])
+        {
+        XTUnaryExprNode* u = (XTUnaryExprNode*)n;
+        if (u.operatorCall)
+            return YES;
+        XTType* t = u.operand.resolvedType;
+        switch (u.op)
+            {
+        case XTUnaryOpNeg:
+        case XTUnaryOpPlus:
+            return XTReadingNum(t);
+        case XTUnaryOpLogNot:
+            return XTReadingNum(t) || XTReadingPtr(t);
+        case XTUnaryOpDeref:
+            return XTReadingPtr(t);
+        case XTUnaryOpAddrOf:
+            return YES;
+        case XTUnaryOpBitNot:
+        case XTUnaryOpPreInc:
+        case XTUnaryOpPreDec:
+        case XTUnaryOpLoByte:
+        case XTUnaryOpHiByte:
+        case XTUnaryOpByte2:
+        case XTUnaryOpByte3:
+            return XTReadingInt(t);
+        case XTUnaryOpUser:
+            return NO;
+            }
+        return NO;
+        }
+    if ([n isKindOfClass:[XTPostfixExprNode class]])
+        return XTReadingInt(((XTPostfixExprNode*)n).operand.resolvedType);
+    return YES;
+    }
+
+/****************************************************************************\
+|* Do the old reading's operators where the operators of `sites` are written
+|* each have a meaning for their operands (XTReadingOperatorDefined)?
+\****************************************************************************/
+static BOOL XTOldReadingDefined(XTASTNode* alt, NSArray<NSArray*>* sites)
+    {
+    NSMutableArray<XTASTNode*>* nodes = [NSMutableArray array];
+    XTReadingOperatorNodes(alt, nodes);
+    for (XTASTNode* n in nodes)
+        for (NSArray* site in sites)
+            {
+            XTSourceLocation* at = ((XTASTNode*)site[3]).location;
+            NSUInteger len = ((NSString*)site[1]).length;
+            if ([n.location.filename isEqualToString:at.filename] && n.location.line == at.line
+                && n.location.column >= at.column && n.location.column < at.column + len
+                && !XTReadingOperatorDefined(n))
+                return NO;
+            }
+    return YES;
+    }
+
+- (void)chooseReadingOf:(XTASTNode*)node alternative:(XTASTNode*)alt
+    {
+    NSUInteger mark = [self.diagnostics mark];
+    if (!self.readingCollect)
+        self.readingCollect = [NSMutableArray array];
+    NSMutableArray<NSArray*>* sites = [NSMutableArray array];
+    [self.readingCollect addObject:sites];
+    [self analyzeNode:node];
+    [self.readingCollect removeLastObject];
+    NSUInteger defined = 0;
+    NSArray* firstDefined = nil;
+    for (NSArray* site in sites)
+        if ([site[0] boolValue])
+            {
+            if (!firstDefined)
+                firstDefined = site;
+            defined++;
+            }
+    if (defined == sites.count)
+        {
+        // The operator reading. The old one must not type-check as well.
+        if (firstDefined)
+            {
+            NSUInteger m2 = [self.diagnostics mark];
+            [self analyzeNode:alt];
+            BOOL oldTypes = [self.diagnostics errorCountSince:m2] == 0 && XTOldReadingDefined(alt, sites);
+            [self.diagnostics rollbackTo:m2];
+            if (oldTypes)
+                [self.diagnostics emitError:[NSString stringWithFormat:@"'%@' reads two ways here and both type-check: as "
+                                                                       @"the operator of '%@' and as the built-in operators "
+                                                                       @"it is spelt with; write those operators apart, or "
+                                                                       @"call the method by name",
+                                                                       firstDefined[1], firstDefined[2]]
+                                         at:((XTASTNode*)firstDefined[3]).location];
+            }
+        return;
+        }
+    [self.diagnostics rollbackTo:mark];
+    if (defined == 0)
+        {
+        // The old reading, in the new one's place.
+        [node adoptReading:alt];
+        [self analyzeNode:node];
+        return;
+        }
+    [self.diagnostics emitError:[NSString stringWithFormat:@"'%@' is the operator of '%@' in one place in this expression "
+                                                           @"and has its built-in meaning in another; use parentheses",
+                                                           firstDefined[1], firstDefined[2]]
+                             at:node.location];
+    }
+
 - (BOOL)resolveOperatorOfBinary:(XTBinaryExprNode*)node
     {
-    NSString* op = XTOperatorBinarySpelling(node.op);
+    BOOL user = node.op == XTBinaryOpUser;
+    NSString* op = user ? node.userOp : XTOperatorBinarySpelling(node.op);
     if (!op)
         return NO;
+    if (user && [self userOperatorUndefined:node shape:[NSString stringWithFormat:@"_%@_", op] spelling:op
+                                   operands:@[ node.left, node.right ] twoReadings:node.twoReadings])
+        return YES;
     BOOL handled = NO;
     XTASTNode* call = [self operatorCallForShape:[NSString stringWithFormat:@"_%@_", op]
                                         spelling:op
@@ -549,9 +847,13 @@ static BOOL XTOperatorSameParams(XTMethodDeclNode* a, XTMethodDeclNode* b)
 
 - (BOOL)resolveOperatorOfUnary:(XTUnaryExprNode*)node
     {
-    NSString* op = XTOperatorUnarySpelling(node.op);
+    BOOL user = node.op == XTUnaryOpUser;
+    NSString* op = user ? node.userOp : XTOperatorUnarySpelling(node.op);
     if (!op)
         return NO;
+    if (user && [self userOperatorUndefined:node shape:[NSString stringWithFormat:@"%@_", op] spelling:op
+                                   operands:@[ node.operand ] twoReadings:node.twoReadings])
+        return YES;
     BOOL handled = NO;
     XTASTNode* call = [self operatorCallForShape:[NSString stringWithFormat:@"%@_", op]
                                         spelling:op

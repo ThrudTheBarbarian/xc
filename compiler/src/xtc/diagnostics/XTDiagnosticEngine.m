@@ -345,6 +345,49 @@ NSArray<NSString*>* XTWarningCategoryAllNames(void)
     [self emitError:message at:location];
     }
 
+- (NSUInteger)mark
+    {
+    return _mutableDiagnostics.count;
+    }
+
+- (NSUInteger)errorCountSince:(NSUInteger)mark
+    {
+    NSUInteger count = 0;
+    for (NSUInteger i = mark; i < _mutableDiagnostics.count; i++)
+        if (_mutableDiagnostics[i].level == XTDiagnosticLevelError)
+            count++;
+    return count;
+    }
+
+- (void)rollbackTo:(NSUInteger)mark
+    {
+    (void)[self takeSince:mark];
+    }
+
+- (NSArray<XTDiagnostic*>*)takeSince:(NSUInteger)mark
+    {
+    if (mark >= _mutableDiagnostics.count)
+        return @[];
+    NSRange r = NSMakeRange(mark, _mutableDiagnostics.count - mark);
+    NSArray<XTDiagnostic*>* taken = [_mutableDiagnostics subarrayWithRange:r];
+    [_mutableDiagnostics removeObjectsInRange:r];
+    _fatalFlag = NO;
+    for (XTDiagnostic* d in _mutableDiagnostics)
+        if (d.level == XTDiagnosticLevelError)
+            _fatalFlag = YES;
+    return taken;
+    }
+
+- (void)restore:(NSArray<XTDiagnostic*>*)taken
+    {
+    for (XTDiagnostic* d in taken)
+        {
+        [_mutableDiagnostics addObject:d];
+        if (d.level == XTDiagnosticLevelError)
+            _fatalFlag = YES;
+        }
+    }
+
 /****************************************************************************\
 |* Print all diagnostics to stderr in clang style:
 |*   filename:line:col: error: message

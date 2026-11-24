@@ -46,6 +46,14 @@ NS_ASSUME_NONNULL_BEGIN
 |* applies. Operands are analysed.
 \****************************************************************************/
 - (BOOL)resolveOperatorOfAssign:(XTAssignExprNode*)node;
+/****************************************************************************\
+|* An expression read two ways (an operator a class defines whose characters
+|* also read the old way, `a**b`): `node` holds the new reading, `alt` the old
+|* one. The operator reading is kept when an operand's class defines each such
+|* operator in it, the old one when none does; both type-checking, or some
+|* defined and some not, is an error. `node` is analysed as the one kept.
+\****************************************************************************/
+- (void)chooseReadingOf:(XTASTNode*)node alternative:(XTASTNode*)alt;
 @end
 
 NS_ASSUME_NONNULL_END

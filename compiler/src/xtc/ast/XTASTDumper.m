@@ -52,6 +52,8 @@ static NSString* binOpName(XTBinaryOp op)
         return @"<=";
     case XTBinaryOpGe:
         return @">=";
+    case XTBinaryOpUser:
+        break;
         }
     return @"?";
     }
@@ -84,13 +86,15 @@ static void appendOperatorCall(NSMutableString* a, XTASTNode* oc)
         [a appendFormat:@" opvslot=%@", n.resolvedVirtualSlot];
     }
 
-// ` operator=_+_ operands=self,o` for an operator method, else nothing.
-static NSString* operatorField(NSString* shape, NSArray<NSString*>* names)
+// ` operator=_+_ operands=self,o` for an operator method, else nothing, and
+// ` precedence=>*,right` after it for a `:precedence(above *, right)`.
+static NSString* operatorField(NSString* shape, NSArray<NSString*>* names, NSString* prec)
     {
     if (!shape)
         return @"";
-    return [NSString stringWithFormat:@" operator=%@ operands=%@", shape,
-                                      [names componentsJoinedByString:@","]];
+    NSString* p = (prec.length && ![prec hasPrefix:@"?"]) ? [NSString stringWithFormat:@" precedence=%@", prec] : @"";
+    return [NSString stringWithFormat:@" operator=%@ operands=%@%@", shape,
+                                      [names componentsJoinedByString:@","], p];
     }
 
 static NSString* unOpName(XTUnaryOp op)
@@ -121,6 +125,8 @@ static NSString* unOpName(XTUnaryOp op)
         return @">>>";
     case XTUnaryOpPlus:
         return @"+";
+    case XTUnaryOpUser:
+        break;
         }
     return @"?";
     }
@@ -463,7 +469,7 @@ static NSString* semaAnnotation(XTASTNode* node)
         [self line:[NSString stringWithFormat:@"FunctionDecl name=%@ ret=%@ varargs=%d throws=%d%@",
                                               esc(n.funcName), rets.length ? rets : @"-", n.isVarArgs ? 1 : 0,
                                               n.throwsError ? 1 : 0,
-                                              operatorField(n.operatorShape, n.operatorOperands)]
+                                              operatorField(n.operatorShape, n.operatorOperands, n.operatorPrecedence)]
               into:out
             indent:ind];
         [self emitChildren:n.parameters into:out indent:ind + 1];
@@ -581,7 +587,7 @@ static NSString* semaAnnotation(XTASTNode* node)
                                  n.isFinal ? 1 : 0,
                                  [(n.sinceVersion.length
                                        ? [NSString stringWithFormat:@" since=%@", n.sinceVersion]
-                                       : @"") stringByAppendingString:operatorField(n.operatorShape, n.operatorOperands)]]
+                                       : @"") stringByAppendingString:operatorField(n.operatorShape, n.operatorOperands, n.operatorPrecedence)]]
               into:out
             indent:ind];
         [self emitChildren:n.parameters into:out indent:ind + 1];
@@ -743,20 +749,32 @@ static NSString* semaAnnotation(XTASTNode* node)
     case XTASTNodeKindBinaryExpr:
         {
         XTBinaryExprNode* n = (XTBinaryExprNode*)node;
-        [self line:[NSString stringWithFormat:@"Binary op=%@", binOpName(n.op)]
+        [self line:[NSString stringWithFormat:@"Binary op=%@", n.op == XTBinaryOpUser ? n.userOp : binOpName(n.op)]
               into:out
             indent:ind];
         [self emit:n.left into:out indent:ind + 1];
         [self emit:n.right into:out indent:ind + 1];
+        // The old reading of an operator a class defines, kept beside the new
+        // one until sema chooses.
+        if (n.alternative)
+            {
+            [self line:@"Otherwise" into:out indent:ind + 1];
+            [self emit:n.alternative into:out indent:ind + 2];
+            }
         break;
         }
     case XTASTNodeKindUnaryExpr:
         {
         XTUnaryExprNode* n = (XTUnaryExprNode*)node;
-        [self line:[NSString stringWithFormat:@"Unary op=%@", unOpName(n.op)]
+        [self line:[NSString stringWithFormat:@"Unary op=%@", n.op == XTUnaryOpUser ? n.userOp : unOpName(n.op)]
               into:out
             indent:ind];
         [self emit:n.operand into:out indent:ind + 1];
+        if (n.alternative)
+            {
+            [self line:@"Otherwise" into:out indent:ind + 1];
+            [self emit:n.alternative into:out indent:ind + 2];
+            }
         break;
         }
     case XTASTNodeKindPostfixExpr:

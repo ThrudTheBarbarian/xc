@@ -269,6 +269,23 @@ class AstDump
                 out.appendByte((u8)',');
             out.append((String*)names.get(i));
             }
+        // ` precedence=>*,right` for a `:precedence(above *, right)`.
+        String* pr = n.opPrec();
+        if (pr != 0 && pr.byteLength() > (u32)0 && pr.byteAt((u32)0) != (u8)'?')
+            {
+            out.appendCString(" precedence=");
+            out.append(pr);
+            }
+        }
+
+    // `Otherwise` and the old reading hung on an expression read two ways.
+    static void emitAlt(Node* n, String* out, u32 depth)
+        {
+        if (n.alt() == 0)
+            return;
+        AstDump.indent(out, depth);
+        out.appendCString("Otherwise\n");
+        AstDump.emit(n.alt(), out, depth + (u32)1);
         }
 
     // A subscript's or slice's kids, without the call an index operator hung
@@ -686,6 +703,9 @@ class AstDump
             // past them, and the original does not print it either.
             for (u32 i = (u32)0; i < n.kidCount() && i < (u32)2; i = i + (u32)1)
                 AstDump.emit(n.kid(i), out, depth + (u32)1);
+            // The old reading of an operator a class defines, kept beside the
+            // new one until sema chooses.
+            AstDump.emitAlt(n, out, depth + (u32)1);
             return;
             }
         if (k == (u16)nkUnary)
@@ -694,6 +714,7 @@ class AstDump
             out.appendFormat("Unary op=%s\n", n.op().cString());
             if (n.kidCount() > (u32)0)
                 AstDump.emit(n.kid((u32)0), out, depth + (u32)1);
+            AstDump.emitAlt(n, out, depth + (u32)1);
             return;
             }
         if (k == (u16)nkPostfix)

@@ -129,6 +129,11 @@
 // Some class in the program defines an operator (`:operator(pattern)`); until
 // one does, no operator expression needs resolving.
 @property(nonatomic) BOOL hasOperatorMethods;
+// Choosing between the two readings of an expression (an operator a class
+// defines whose characters also read the old way): for each choice being
+// made, innermost last, what each such operator in it found, as
+// @[ @(an operand's class defines it), its spelling, that class, the node ].
+@property(nonatomic, strong, nullable) NSMutableArray<NSMutableArray<NSArray*>*>* readingCollect;
 // The subscript (or slice) on the left of the assignment being analysed: on a
 // class with an index operator it is the target of the set form, not read.
 @property(nonatomic, weak, nullable) XTASTNode* operatorIndexTarget;
