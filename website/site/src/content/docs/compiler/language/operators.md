@@ -306,7 +306,7 @@ inherited. It has no built-in meaning: where no operand's class defines it, it
 is an error.
 
 ```
-error: no class defines the operator '⊗' for (i32, i32)
+error: no class defines the operator '⊗' for (i32, i32); one operand must be an instance of a class that defines it with :operator(...)
 ```
 
 A shape means one thing per class: a class with `self ** o` cannot use `**` for

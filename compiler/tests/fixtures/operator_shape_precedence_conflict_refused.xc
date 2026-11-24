@@ -1,7 +1,7 @@
 //xtc-flags: expect=sema-error
 // The parser reads an operator's precedence before any type is known, so two
 // classes cannot give one shape two precedences.
-// Refused: operator '**' has the precedence 'above *, right' in 'A.pow' and '*' in 'B.pow': an operator has one precedence
+// Refused: operator '**' has the precedence 'above *, right' in 'A.pow' and '*' in 'B.pow': an operator has one precedence; give both the same ':precedence', or leave it off one of them
 #import <Stdio.xc>
 
 class A

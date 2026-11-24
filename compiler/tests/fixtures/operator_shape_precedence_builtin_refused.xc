@@ -1,6 +1,6 @@
 //xtc-flags: expect=sema-error
 // Overloading a built-in operator never changes its precedence.
-// Refused: '+' keeps the precedence of the built-in operator: ':precedence' is for an operator of a class's own shape
+// Refused: '+' keeps the precedence of the built-in operator: ':precedence' is for an operator of a class's own shape; remove ':precedence'
 #import <Stdio.xc>
 
 class V

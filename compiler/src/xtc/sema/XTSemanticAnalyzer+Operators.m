@@ -324,11 +324,11 @@ static NSString* XTPrecedenceSpelling(NSString* spec)
         return [NSString stringWithFormat:@"':precedence' on '%@' needs ':operator' on the same method", m.methodName];
     if (!XTIsUserShape(m.operatorShape))
         return [NSString stringWithFormat:@"'%@' keeps the precedence of the built-in operator: ':precedence' is for an "
-                                          @"operator of a class's own shape",
+                                          @"operator of a class's own shape; remove ':precedence'",
                                           XTShapeCore(m.operatorShape)];
     if (!XTShapeIsInfix(m.operatorShape))
         return [NSString stringWithFormat:@"':precedence' is for an operator between two operands: the prefix '%@' binds "
-                                          @"as the built-in prefix operators do",
+                                          @"as the built-in prefix operators do; remove ':precedence'",
                                           XTShapeCore(m.operatorShape)];
     return nil;
     }
@@ -396,7 +396,7 @@ static NSString* XTPrecedenceSpelling(NSString* spec)
                 else if (![first[0] isEqualToString:m.operatorPrecedence])
                     [self.diagnostics emitError:[NSString stringWithFormat:@"operator '%@' has the precedence '%@' in "
                                                                            @"'%@.%@' and '%@' in '%@.%@': an operator "
-                                                                           @"has one precedence",
+                                                                           @"has one precedence; give both the same ':precedence', or leave it off one of them",
                                                                            XTShapeCore(m.operatorShape),
                                                                            XTPrecedenceSpelling(first[0]), first[1],
                                                                            first[2],
@@ -630,8 +630,8 @@ static NSString* XTPrecedenceSpelling(NSString* spec)
     node.resolvedType = [XTType u8Type];
     if (!noting)
         [self.diagnostics emitError:[NSString stringWithFormat:ops.count == 1
-                                                                   ? @"no class defines the prefix operator '%@' for (%@)"
-                                                                   : @"no class defines the operator '%@' for (%@)",
+                                                                   ? @"no class defines the prefix operator '%@' for (%@); the operand must be an instance of a class that defines it with :operator(...)"
+                                                                   : @"no class defines the operator '%@' for (%@); one operand must be an instance of a class that defines it with :operator(...)",
                                                                    op, [self describeArgTypes:ops]]
                                  at:node.location];
     return YES;

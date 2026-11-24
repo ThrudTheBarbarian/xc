@@ -2292,7 +2292,7 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
     else if ([refused isEqualToString:@"=="] || [refused isEqualToString:@"!="])
         msg = [NSString stringWithFormat:@"'%@' cannot be overloaded: it compares identity (equals compares values)", refused];
     else if (refused)
-        msg = [NSString stringWithFormat:@"'%@' cannot be overloaded", refused];
+        msg = [NSString stringWithFormat:@"'%@' cannot be overloaded; it keeps its built-in meaning, so choose another shape", refused];
     else
         msg = @"':operator' takes one operator applied to the method's own names, such as (self + o) or (-self)";
     return msg;

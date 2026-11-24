@@ -1,7 +1,7 @@
 //xtc-flags: expect=sema-error
 // No operator of a class's own may be spelt as a fixed built-in one: `->`
 // stays member access through a pointer.
-// Refused: '->' cannot be overloaded
+// Refused: '->' cannot be overloaded; it keeps its built-in meaning, so choose another shape
 #import <Stdio.xc>
 
 class V
