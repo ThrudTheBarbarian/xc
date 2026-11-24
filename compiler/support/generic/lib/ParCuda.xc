@@ -1261,7 +1261,7 @@ class ParCuda
         l.plan(lo, hi);
         // Kept on the GPU between runs (#15), an array has no copies for tiles
         // to overlap: the single-shot path, which keeps it.
-        if (tileable(l) && ParDevice.tilesWanted() && !ParDevice.residentOn() && runTiled(proto, fn, l, lo, hi, started))
+        if (tileable(l) && ParDevice.tilesWanted() && !ParDevice.residentFor(proto, hi - lo) && runTiled(proto, fn, l, lo, hi, started))
             return true;
         u8* obj = proto.objBytes();
 
@@ -1355,6 +1355,15 @@ class ParCuda
                     // this run's result is in the same slot (#15).
                     if (ParDevice.residentIn(owner(), at) == h)
                         {
+                        // Unless this block copies back (learned residency):
+                        // then it comes back now.
+                        if (!ParDevice.residentFor(proto, hi - lo))
+                            {
+                            ParDevice.fetchResident(h, false);
+                            at = at + (u32)1;
+                            continue;
+                            }
+                        ParDevice.residentNowOf(h, proto);
                         if (ParDevice.reporting())
                             Log.info("par: %ld bytes kept on the GPU", l.bufLen[i]);
                         at = at + (u32)1;
@@ -1363,13 +1372,13 @@ class ParCuda
                     bool pin = pinned(h, l.bufLen[i]);
                     // Resident instead (#15): the whole block, in its own slot,
                     // when auto is not measuring.
-                    if (pin && ParDevice.residentOn() && dev[at] == gParCuDev[at] && ParDevice.simdBase(h) == h
-                        && Par.spanOf(h, (i64)1, true) == l.bufLen[i] && !ParDevice.wouldMeasure(proto, hi - lo))
+                    if (pin && dev[at] == gParCuDev[at] && ParDevice.simdBase(h) == h
+                        && Par.spanOf(h, (i64)1, true) == l.bufLen[i] && ParDevice.residentFor(proto, hi - lo))
                         {
                         gParCuUpHost[at] = h;
                         gParCuUpLen[at] = l.bufLen[i];
                         gParCuUpGen[at] = ParDevice.generation(h);
-                        bool kept = ParDevice.keepResident(h, owner(), at, l.bufLen[i]);
+                        bool kept = ParDevice.keepResident(h, owner(), at, l.bufLen[i], proto);
                         if (kept)
                             {
                             if (ParDevice.reporting())
