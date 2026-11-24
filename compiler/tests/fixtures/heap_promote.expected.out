@@ -1,0 +1,13 @@
+T1 kept 3 live 1
+T1 dropped live 0
+T2 in scope 1
+T2 after scope 0 live 0
+T3 peek 4 deallocs 0
+T3 deallocs 1
+T4 a 6 live 1
+T4 released live 0
+T5 copy 30 4, z 3 3
+T5 assign 31 4 sum 35 via pointer 31
+T6 kept 2 live 2
+T6 dropped live 0
+T7 8 10 live 0

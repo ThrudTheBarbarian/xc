@@ -1,8 +1,7 @@
 // stack_addr_weak.xc — a weak pointer to a stack instance (#604).
 //
-// A stack instance has no header, so no reference count. A strong pointer to
-// one is refused (tests/fixtures/negative/stack_addr_strong_*); a weak one
-// does not retain, so it may hold the address.
+// `&y` moves y to the heap, so a weak pointer to it works as it does for any
+// heap object (heap_promote.xc has the clearing at scope exit).
 //
 //   T1  `weak:P* r = &y;` reads y's fields, and the instance declared before
 //       y keeps its last field (a retain used to add 1 to it: `2 2 2`)

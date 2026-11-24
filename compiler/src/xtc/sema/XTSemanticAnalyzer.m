@@ -561,6 +561,7 @@ static int xtVersionGT(NSString* a, NSString* b)
                                        at:p.location ?: node.location
                            allowBankedKey:YES];
         XTSymbol* sym = [[XTSymbol alloc] initWithName:p.paramName type:p.paramType];
+        sym.isParameter = YES;
         sym.storageClass = XTStorageClassStack;
         [self defineSymbol:sym];
         }
@@ -660,6 +661,7 @@ static int xtVersionGT(NSString* a, NSString* b)
                                        at:p.location ?: node.location
                            allowBankedKey:YES];
         XTSymbol* sym = [[XTSymbol alloc] initWithName:p.paramName type:p.paramType];
+        sym.isParameter = YES;
         sym.storageClass = XTStorageClassStack;
         [self defineSymbol:sym];
         }
@@ -926,8 +928,8 @@ static int xtVersionGT(NSString* a, NSString* b)
 |* tracked stack-allocated class local. Returns the origin variable name, or
 |* nil if the expression carries no tracked stack-class origin. A bare field
 |* read like `p.x` produces a scalar value, not an address, and is not an
-|* escape — only `&p`, `&p.field`, or a pointer local previously tagged as
-|* aliasing a stack instance count.
+|* escape — only `&p.field`, or a pointer local previously tagged as aliasing
+|* a stack instance, count (`&p` moves p to the heap).
 \****************************************************************************/
 - (nullable NSString*)escOriginOfExpr:(nullable XTASTNode*)expr
     {
@@ -936,7 +938,9 @@ static int xtVersionGT(NSString* a, NSString* b)
     if ([expr isKindOfClass:[XTUnaryExprNode class]])
         {
         XTUnaryExprNode* u = (XTUnaryExprNode*)expr;
-        if (u.op == XTUnaryOpAddrOf)
+        // `&p` of the whole instance moves p to the heap (#604), so only a
+        // pointer into it (`&p.x`) can outlive it.
+        if (u.op == XTUnaryOpAddrOf && ![u.operand isKindOfClass:[XTIdentifierNode class]])
             return [self escRootOfLvalue:u.operand];
         return nil;
         }
@@ -1087,8 +1091,8 @@ static int xtVersionGT(NSString* a, NSString* b)
             XTASTNode* v = r.values[i];
             [self escWalkExpr:v];
             NSString* origin = [self escOriginOfExpr:v];
-            // `return &y;` into a strong class pointer has its own message
-            // (checkStackAddressInStrongSlot); one error is enough.
+            // `return &y.inner;` into a strong class pointer has its own
+            // message (checkStackAddressInStrongSlot); one error is enough.
             if (origin && i < _currentReturnTypes.count &&
                 [self isStackAddress:v inStrongSlot:_currentReturnTypes[i]])
                 origin = nil;

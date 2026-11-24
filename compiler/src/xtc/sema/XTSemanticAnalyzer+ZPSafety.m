@@ -784,9 +784,6 @@
     if (node.initialiser)
         [self checkStackAddressInStrongSlot:node.declaredType
                                       value:node.initialiser
-                                       site:@"initialiser"
-                                     target:nil
-                                   declName:node.varName
                                    location:node.location];
 
     // Infer a sizeless array's length from its initialiser list:
@@ -1411,9 +1408,6 @@
         {
         [self checkStackAddressInStrongSlot:retTypes[i]
                                       value:node.values[i]
-                                       site:@"return"
-                                     target:nil
-                                   declName:nil
                                    location:node.location];
         [self checkClassPointerAssign:retTypes[i]
                               rhsType:node.values[i].resolvedType
@@ -2796,6 +2790,17 @@
                                                   [@"_fn_" stringByAppendingString:key]];
                 }
             }
+        // `&y` of a local stack instance moves y to the heap (#604), which a
+        // target built without one cannot do.
+        if ([self isPromotableAddress:node] && ![self.allocator isEqualToString:@"heap"])
+            {
+            NSString* y = ((XTIdentifierNode*)node.operand).identName;
+            [self.diagnostics emitError:[NSString stringWithFormat:@"'&%@' would need %@ on the heap, and this target is "
+                                                                    "built without one (-falloc=heap); use %@ directly, "
+                                                                    "or allocate it with new",
+                                                                   y, y, y]
+                                     at:node.location];
+            }
         break;
     case XTUnaryOpDeref:
         if ([ot isKindOfClass:[XTPointerType class]])
@@ -3095,9 +3100,6 @@
         {
         [self checkStackAddressInStrongSlot:node.lhs.resolvedType
                                       value:node.rhs
-                                       site:@"assignment"
-                                     target:node.lhs
-                                   declName:nil
                                    location:node.location];
         [self checkClassPointerAssign:node.lhs.resolvedType
                               rhsType:node.rhs.resolvedType

@@ -929,6 +929,10 @@ static BOOL XTIsErasedKeyType(XTType* t)
             XTType* ot = u.operand.resolvedType;
             if (!ot || ot.kind != XTTypeKindClass)
                 continue;
+            // A local moves to the heap (#604); the other forms are refused
+            // where they are stored (checkStackAddressInStrongSlot).
+            if ([self isPromotableAddress:u])
+                continue;
             if ([u.operand isKindOfClass:[XTIdentifierNode class]])
                 {
                 instName = ((XTIdentifierNode*)u.operand).identName;
@@ -977,119 +981,74 @@ static BOOL XTIsErasedKeyType(XTType* t)
     }
 
 /****************************************************************************\
-|* Where an instance held by value lives, for a diagnostic: "a stack
-|* instance" (a local or a parameter, or a member of one), "a global
-|* instance", or one held inside an object or an array.
-\****************************************************************************/
-- (NSString*)stackAddrWhereOf:(XTASTNode*)e
-    {
-    if ([e isKindOfClass:[XTIdentifierNode class]])
-        {
-        NSString* n = ((XTIdentifierNode*)e).identName;
-        XTSymbol* sym = [[self currentScope] lookupSymbol:n];
-        if (sym && sym.storageClass == XTStorageClassStack)
-            return @"a stack instance";
-        if (sym && sym == [self.globalScope lookupLocalSymbol:n])
-            return @"a global instance";
-        return @"an instance held inside an object";
-        }
-    if ([e isKindOfClass:[XTMemberAccessNode class]])
-        {
-        XTMemberAccessNode* m = (XTMemberAccessNode*)e;
-        XTType* bt = m.base.resolvedType;
-        if (!m.isArrow && bt && bt.kind == XTTypeKindClass && ![bt isKindOfClass:[XTPointerType class]])
-            return [self stackAddrWhereOf:m.base];
-        return @"an instance held inside an object";
-        }
-    if ([e isKindOfClass:[XTSubscriptExprNode class]])
-        {
-        XTSubscriptExprNode* s = (XTSubscriptExprNode*)e;
-        if ([s.base.resolvedType isKindOfClass:[XTArrayType class]])
-            return [self stackAddrWhereOf:s.base];
-        return @"an instance held inside an array";
-        }
-    return @"an instance held by value";
-    }
-
-/****************************************************************************\
-|* `&y` of an instance held by value (#604): such an instance has no header and
-|* so no reference count, and a strong class pointer that took its address
-|* retained through the word before it — usually the previous stack
-|* instance's last field — and could later free stack memory. Refused when the
-|* slot is a strong class pointer: an initialiser, an assignment or a return.
-|* A `weak:` slot does not retain, so it is the fix offered where it helps.
-|* The call argument form is checkStackInstanceStrongParamArgs.
+|* `&x` of an instance held by value, stored where a strong class pointer
+|* would retain it (#604). A local stack instance moves to the heap instead
+|* (isPromotableAddress); what is left has no header and so no reference
+|* count: a member or an element, which point inside an instance or an array,
+|* a by-value parameter, and a global instance. An initialiser, an assignment
+|* or a return; the argument form is checkStackInstanceStrongParamArgs.
 |* @param slotType  The type of the slot that takes the value.
 |* @param value     The value stored.
-|* @param site      @"initialiser", @"assignment" or @"return".
-|* @param lhs       The assignment's target, or nil.
-|* @param declName  The declared name for an initialiser, or nil.
 \****************************************************************************/
 - (void)checkStackAddressInStrongSlot:(nullable XTType*)slotType
                                 value:(nullable XTASTNode*)value
-                                 site:(NSString*)site
-                               target:(nullable XTASTNode*)lhs
-                             declName:(nullable NSString*)declName
                              location:(XTSourceLocation*)loc
     {
     if (![self isStackAddress:value inStrongSlot:slotType])
         return;
     XTASTNode* operand = ((XTUnaryExprNode*)value).operand;
-    NSString* cls = ((XTPointerType*)slotType).pointeeType.displayName;
     NSString* obj = [self stackAddrTextOf:operand];
-    NSString* where = [self stackAddrWhereOf:operand];
+    NSString* cls = operand.resolvedType.displayName ?: ((XTPointerType*)slotType).pointeeType.displayName;
     NSString* msg = nil;
-    if ([site isEqualToString:@"return"])
+    if ([operand isKindOfClass:[XTSubscriptExprNode class]])
         {
-        if ([where isEqualToString:@"a stack instance"])
-            msg = [NSString stringWithFormat:@"returning '&%@', the address of a stack instance that ends with this "
-                                              "function; return the instance by value ('%@') or allocate it with new",
-                                             obj, cls];
-        else
-            msg = [NSString stringWithFormat:@"'&%@' is the address of %@, which has no reference count, so a strong "
-                                              "'%@*' return cannot hold it; return the instance by value ('%@') or "
-                                              "allocate it with new",
-                                             obj, where, cls, cls];
+        msg = [NSString stringWithFormat:@"'&%@' points inside the array %@, and a pointer into an array cannot be "
+                                          "counted; copy the element out (%@ c = %@;), or allocate it with new",
+                                         obj, [self stackAddrTextOf:((XTSubscriptExprNode*)operand).base], cls, obj];
         }
-    else if ([site isEqualToString:@"initialiser"])
+    else if ([operand isKindOfClass:[XTMemberAccessNode class]])
         {
-        msg = [NSString stringWithFormat:@"'&%@' is the address of %@, which has no reference count, so a strong "
-                                          "'%@*' cannot hold it; declare it 'weak:%@* %@ = &%@;', which does not "
-                                          "retain it, or use %@ directly",
-                                         obj, where, cls, cls, declName ?: @"p", obj, obj];
+        msg = [NSString stringWithFormat:@"'&%@' points inside %@, and a pointer into an instance cannot be counted; "
+                                          "copy the member out (%@ c = %@;), or allocate it with new",
+                                         obj, [self stackAddrTextOf:((XTMemberAccessNode*)operand).base], cls, obj];
         }
     else
         {
-        NSString* noun = nil;
-        NSString* name = nil;
-        if ([lhs isKindOfClass:[XTIdentifierNode class]])
-            {
-            name = ((XTIdentifierNode*)lhs).identName;
-            XTSymbol* sym = [[self currentScope] lookupSymbol:name];
-            if (sym && sym.storageClass == XTStorageClassStack)
-                noun = @"local";
-            else if (sym && sym == [self.globalScope lookupLocalSymbol:name])
-                noun = @"global";
-            else
-                noun = @"field";
-            }
-        else if ([lhs isKindOfClass:[XTMemberAccessNode class]])
-            {
-            name = ((XTMemberAccessNode*)lhs).memberName;
-            noun = @"field";
-            }
-        if (noun)
-            msg = [NSString stringWithFormat:@"'&%@' is the address of %@, which has no reference count, so the "
-                                              "strong '%@*' %@ '%@' cannot hold it; declare '%@' as 'weak:%@* %@', "
-                                              "which does not retain it, or use %@ directly",
-                                             obj, where, cls, noun, name, name, cls, name, obj];
+        NSString* n = [operand isKindOfClass:[XTIdentifierNode class]] ? ((XTIdentifierNode*)operand).identName : obj;
+        XTSymbol* sym = [[self currentScope] lookupSymbol:n];
+        if (sym && sym.storageClass == XTStorageClassStack)
+            msg = [NSString stringWithFormat:@"'&%@' is the address of the parameter %@, which holds its instance by "
+                                              "value and cannot move to the heap; copy it into a local (%@ c = %@;) "
+                                              "and take the local's address",
+                                             obj, obj, cls, obj];
+        else if (sym && sym == [self.globalScope lookupLocalSymbol:n])
+            msg = [NSString stringWithFormat:@"'&%@' is the address of a global instance, which has no reference "
+                                              "count; declare the global as a reference (%@* %@ = new %@();)",
+                                             obj, cls, obj, cls];
         else
-            msg = [NSString stringWithFormat:@"'&%@' is the address of %@, which has no reference count, so a strong "
-                                              "'%@*' cannot hold it; store it in a 'weak:%@*', which does not retain "
-                                              "it, or use %@ directly",
-                                             obj, where, cls, cls, obj];
+            msg = [NSString stringWithFormat:@"'&%@' points inside self, and a pointer into an instance cannot be "
+                                              "counted; copy the member out (%@ c = %@;), or allocate it with new",
+                                             obj, cls, obj];
         }
     [self.diagnostics emitError:msg at:loc];
+    }
+
+/****************************************************************************\
+|* YES when `value` is `&y` of a LOCAL stack instance, which moves to the heap
+|* (#604): a parameter, a member, an element or a global does not.
+\****************************************************************************/
+- (BOOL)isPromotableAddress:(nullable XTASTNode*)value
+    {
+    if (![value isKindOfClass:[XTUnaryExprNode class]] || ((XTUnaryExprNode*)value).op != XTUnaryOpAddrOf)
+        return NO;
+    XTASTNode* operand = ((XTUnaryExprNode*)value).operand;
+    if (![operand isKindOfClass:[XTIdentifierNode class]])
+        return NO;
+    XTType* ot = operand.resolvedType;
+    if (!ot || ot.kind != XTTypeKindClass || [ot isKindOfClass:[XTPointerType class]])
+        return NO;
+    XTSymbol* sym = [[self currentScope] lookupSymbol:((XTIdentifierNode*)operand).identName];
+    return sym && sym.storageClass == XTStorageClassStack && !sym.isParameter;
     }
 
 /****************************************************************************\
@@ -1106,7 +1065,8 @@ static BOOL XTIsErasedKeyType(XTType* t)
     if (![value isKindOfClass:[XTUnaryExprNode class]] || ((XTUnaryExprNode*)value).op != XTUnaryOpAddrOf)
         return NO;
     XTType* ot = ((XTUnaryExprNode*)value).operand.resolvedType;
-    return ot && ot.kind == XTTypeKindClass && ![ot isKindOfClass:[XTPointerType class]];
+    return ot && ot.kind == XTTypeKindClass && ![ot isKindOfClass:[XTPointerType class]]
+           && ![self isPromotableAddress:value];
     }
 
 /****************************************************************************\

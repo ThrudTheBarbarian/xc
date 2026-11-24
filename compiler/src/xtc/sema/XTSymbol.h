@@ -44,6 +44,11 @@ typedef NS_ENUM(NSInteger, XTStorageClass) {
 @property(nonatomic) NSUInteger pageIndex;
 
 /****************************************************************************\
+|* YES for a function's or a method's parameter, NO for a local.
+\****************************************************************************/
+@property(nonatomic) BOOL isParameter;
+
+/****************************************************************************\
 |* Designated initialiser for a symbol. Storage class defaults to Unresolved,
 |* address to 0, mangledName to name, and pageIndex to 0.
 |* @param name  The symbol name as it appears in source.
