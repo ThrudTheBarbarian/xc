@@ -686,6 +686,42 @@ every run under the same names. A C program built with `--par-style=auto` asks w
 (`"cuda:…, cpu"`, or `""` before the block has run); declare it as
 `const char *xc_par_ran_on(const char *block);`.
 
+#### Arrays kept on the GPU between runs
+
+On a discrete CUDA card, a block's output can stay on the card after a run
+instead of being copied back, and go back into the next run without being
+sent again. For a block run many times over arrays the host doesn't look at
+in between (accumulators updated frame after frame, a simulation's state), it
+saves a copy of every output after every run. `XC_PAR_RESIDENT` decides:
+
+- `XC_PAR_RESIDENT=1` keeps every output that can be kept: a page-aligned
+  array of its own of 1 MB or more, written by a run on one CUDA device;
+- `XC_PAR_RESIDENT=auto` learns it per block: a block's outputs stay on the
+  card until the host touches one between runs, and from then on that block
+  copies back after every run, in this run of the program and the next (the
+  choice is kept with what `auto` learns, and `XC_PAR_FORGET=1` clears it);
+- unset or `0`, nothing is kept.
+
+The host can't tell an array that is on the card from one that isn't: the
+first time the program's code reads or writes it, the array is copied back
+and the access goes ahead. A system call given the array is the exception.
+`write()` or `send()` handed an array that is still on the card fails (with
+`EFAULT`) instead of bringing it back, and so does a C function that passes it
+to one. The standard library's writers (`Files`, `Socket`, `Http`) bring a
+buffer back before the call themselves. A program that hands an array straight
+to a C function calls `Par.sync(array)` first:
+
+```c
+par accumulate { … }          // the sums stay on the GPU
+Par.sync(sums);               // back on the host now
+write_c_report(sums, n);      // a C function that calls write()
+```
+
+`Par.sync` does nothing for an array that isn't on a device. Vulkan cards don't
+keep outputs yet; they keep inputs that haven't changed since the last run, as
+CUDA cards do, and integrated GPUs and Apple silicon share the program's
+memory, so nothing is copied there at all.
+
 ### Loops that become blocks: `--par-style`
 
 By default a `for (T i in a..b) { … }`

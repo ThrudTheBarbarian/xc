@@ -87,6 +87,15 @@ for C in xcc-xc xcc; do
             esac
         fi
     done
+    # A kept array handed to a system call (Socket.write's send()): the
+    # writer brings it back first instead of the call failing with EFAULT.
+    if [ "$cuda" -gt 0 ] && [ ! "$PLAT" = osx ]; then
+        "$XC" -q -O2 -H . -o "$W/s.$C" tests/fixtures/par_resident_send.xc > "$W/sb.$C" 2>&1 \
+            || { echo "FAIL resident ($C): par_resident_send does not build"; fail=1; }
+        got=$( (cd "$W" && XC_PAR=gpu XC_PAR_GPU=cuda XC_PAR_RESIDENT=1 ./s.$C) 2>/dev/null)
+        [ "$got" = "$(cat tests/fixtures/par_resident_send.expected.out)" ] \
+            || { echo "FAIL resident ($C): a kept array sent through a socket: '$got'"; fail=1; }
+    fi
     [ "$PLAT" = osx ] && [ -n "$HOST" ] && ssh "$HOST" "rm -rf $RD"
 done
 [ $fail = 0 ] && echo "resident: ok"

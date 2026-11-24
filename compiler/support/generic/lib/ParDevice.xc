@@ -29,6 +29,7 @@
 // then par), then the program's Par.device, then the block's :device, then
 // auto: the learned table, then measuring.
 #import "Settings.xc"
+#import "ParSync.xc"
 #import "Process.xc"
 // The compiler version, which keys the learned-choice cache below so a new
 // release re-learns (a changed code generator can move the CPU/GPU crossover).
@@ -2281,6 +2282,21 @@ class ParDevice
 #endif
         }
 
+    // Every resident block overlapping [p, p + n) comes back (ParSync: a
+    // buffer about to be handed to a system call, which would fail on a
+    // parked block instead of faulting).
+    static void fetchOverlapping(pointer p, u64 n)
+        {
+        u64 lo = (u64)p;
+        u64 hi = lo + n;
+        for (u32 i = (u32)0; i < (u32)PAR_RES; i = i + (u32)1)
+            {
+            pointer h = gParResHost[i];
+            if (h != (pointer)0 && (u64)h < hi && lo < (u64)h + (u64)gParResBytes[i])
+                fetchResident(h, false);
+            }
+        }
+
     // Every resident block a run over l uses comes back (the paths that keep
     // nothing resident: the tiled and multi-device ones).
     static void fetchUsed(u8* obj, ParLayout* l)
@@ -2299,6 +2315,8 @@ class ParDevice
             return;
         ParResidentFetch* f = new ParResidentFetch();
         gParResFetcher = (Object*)f;
+        // The standard library's writers ask before a system call (ParSync).
+        gParSyncer = (Object*)new ParResidentSyncer();
         callback cb i32(pointer base, i32 why) = &f.fetch;
         _xtc_simd_on_fetch((pointer)cb.code, (pointer)cb.recv);
 #endif
@@ -3563,5 +3581,14 @@ class ParResidentFetch
     i32 fetch(pointer base, i32 why)
         {
         return ParDevice.fetchResident(base, true) ? (i32)1 : (i32)0;
+        }
+    }
+
+// ParSync's syncer once a device keeps arrays (#15).
+class ParResidentSyncer : ParSyncer
+    {
+    void sync(pointer p, u64 n)
+        {
+        ParDevice.fetchOverlapping(p, n);
         }
     }
