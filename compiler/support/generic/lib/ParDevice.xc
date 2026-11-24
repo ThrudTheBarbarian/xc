@@ -417,7 +417,48 @@ pointer _xtc_simd_base(pointer p);
 i32 _xtc_simd_watch(pointer p);
 void _xtc_simd_unwatch(pointer p);
 i32 _xtc_simd_dirty(pointer p);
+// Resident blocks (#15, XC_PAR_RESIDENT=1): after a single-shot run on one
+// device, an output the run wrote whole may stay on the device instead of
+// being copied back. The device keeps the only current copy and the block is
+// parked (rt-freestanding.c, rt.c): its pages no-access, so any host access
+// faults into ParResidentFetch.fetch, which has the device copy it back,
+// unparks it and lets the access run again. A block passed to a system call
+// or a C library while parked makes the call fail (write() gets EFAULT)
+// instead of faulting here: Par.sync(p) first, or leave this off.
+i32 _xtc_simd_park(pointer p);
+void _xtc_simd_unpark(pointer p);
+void _xtc_simd_on_fetch(pointer code, pointer recv);
+i32 _xt_atomic_cas_i32(pointer slot, i32 expected, i32 desired);
+void _xt_atomic_store_i32(pointer slot, i32 v);
+u32 _xt_thread_self_id(void);
+void _xt_thread_yield(void);
+void abort(void);
 #endif
+// A device that can keep a block resident (ParCuda): it copies the block in
+// its slot back into host, whose pages are still no-access (a DMA into pinned
+// pages is not stopped by their protection, and no other thread sees the
+// block half-copied), and is told when the block is back.
+class ParResidentOwner
+    {
+    bool fetchBack(u32 slot, pointer host, i64 bytes)
+        {
+        return false;
+        }
+    void fetchedBack(u32 slot, pointer host)
+        {
+        }
+    }
+// The resident blocks, any device's: the host block, the device keeping it,
+// its slot there and its size.
+#define PAR_RES 64
+pointer gParResHost[PAR_RES];
+Object* gParResOwner[PAR_RES];
+u32 gParResSlot[PAR_RES];
+i64 gParResBytes[PAR_RES];
+i32 gParResLock;               // 1 while a fetch, or a run starting or ending, holds it
+u32 gParResRunTid;             // the thread inside a single-shot device run, plus one; 0 when none
+i32 gParResOn;                 // XC_PAR_RESIDENT: 0 not read yet, 1 on, 2 off
+Object* gParResFetcher;        // the fault hook's receiver, kept reachable
 // A block's generation (ParDevice.generation): the watch is one flag per block,
 // and a second device re-watching after its own upload would make the first
 // device's stale copy look current. So each copy records the generation it
@@ -1949,6 +1990,185 @@ class ParDevice
 #endif
         }
 
+    // ── resident blocks (#15) ──
+    // XC_PAR_RESIDENT=1, read once.
+    static bool residentOn(void)
+        {
+        if (gParResOn == (i32)0)
+            gParResOn = Platform.env(String.withCString("XC_PAR_RESIDENT")).equals(String.withCString("1")) ? (i32)1 : (i32)2;
+        return gParResOn == (i32)1;
+        }
+
+    static void resLock(void)
+        {
+#if ARCH_arm64 || ARCH_x86_64 || OS_windows
+        while (_xt_atomic_cas_i32((pointer)&gParResLock, (i32)0, (i32)1) != (i32)0)
+            _xt_thread_yield();
+#endif
+        }
+
+    static void resUnlock(void)
+        {
+#if ARCH_arm64 || ARCH_x86_64 || OS_windows
+        _xt_atomic_store_i32((pointer)&gParResLock, (i32)0);
+#endif
+        }
+
+    // A single-shot device run starts or ends on this thread: a fault there
+    // is the runtime touching a block it set aside, and a fault elsewhere
+    // waits for the run to end.
+    static void runStarts(void)
+        {
+#if ARCH_arm64 || ARCH_x86_64 || OS_windows
+        resLock();
+        gParResRunTid = _xt_thread_self_id() + (u32)1;
+        resUnlock();
+#endif
+        }
+
+    static void runEnds(void)
+        {
+        resLock();
+        gParResRunTid = (u32)0;
+        resUnlock();
+        }
+
+    // Whether host is a resident block (any device's).
+    static bool resident(pointer host)
+        {
+        if (host == (pointer)0)
+            return false;
+        for (u32 i = (u32)0; i < (u32)PAR_RES; i = i + (u32)1)
+            if (gParResHost[i] == host)
+                return true;
+        return false;
+        }
+
+    // The block owner keeps resident in its slot, or 0.
+    static pointer residentIn(Object* owner, u32 slot)
+        {
+        for (u32 i = (u32)0; i < (u32)PAR_RES; i = i + (u32)1)
+            if (gParResHost[i] != (pointer)0 && gParResOwner[i] == owner && gParResSlot[i] == slot)
+                return gParResHost[i];
+        return (pointer)0;
+        }
+
+    // Keep host (bytes long) resident in owner's slot: parked, so the next
+    // host access fetches it. False when it cannot be parked (or no entry is
+    // free): the caller then copies it back as usual.
+    static bool keepResident(pointer host, Object* owner, u32 slot, i64 bytes)
+        {
+#if !(ARCH_arm64 || ARCH_x86_64 || OS_windows)
+        return false;
+#else
+        hookFetch();
+        resLock();
+        u32 at = (u32)PAR_RES;
+        for (u32 i = (u32)0; i < (u32)PAR_RES && at == (u32)PAR_RES; i = i + (u32)1)
+            if (gParResHost[i] == (pointer)0)
+                at = i;
+        bool kept = at != (u32)PAR_RES && _xtc_simd_park(host) != (i32)0;
+        if (kept)
+            {
+            gParResHost[at] = host;
+            gParResOwner[at] = owner;
+            gParResSlot[at] = slot;
+            gParResBytes[at] = bytes;
+            }
+        resUnlock();
+        return kept;
+#endif
+        }
+
+    // Copy a resident block back to the host and unpark it: the fault hook
+    // (fromFault), Par.sync, or a run that needs it on the host. True when it
+    // was resident and is now back. A fault on the thread inside its own
+    // device run is the runtime touching a block it set aside, a bug: a fetch
+    // there would call into the driver from inside a call to it. A fault on
+    // another thread waits for that run to end; it cannot need these pages.
+    static bool fetchResident(pointer host, bool fromFault)
+        {
+#if !(ARCH_arm64 || ARCH_x86_64 || OS_windows)
+        return false;
+#else
+        if (!resident(host))
+            return false;
+        u32 me = _xt_thread_self_id() + (u32)1;
+        while (true)
+            {
+            resLock();
+            if (gParResRunTid == (u32)0 || gParResRunTid == me)
+                break;
+            resUnlock();
+            _xt_thread_yield();
+            }
+        if (fromFault && gParResRunTid == me)
+            {
+            resUnlock();
+            Log.error("par: an array kept on the GPU was read inside its own GPU run (#15)");
+            abort();
+            }
+        bool back = false;
+        for (u32 i = (u32)0; i < (u32)PAR_RES && !back; i = i + (u32)1)
+            if (gParResHost[i] == host)
+                {
+                ParResidentOwner* o = (ParResidentOwner*)gParResOwner[i];
+                bool ok = o.fetchBack(gParResSlot[i], host, gParResBytes[i]);
+                _xtc_simd_unpark(host);
+                gParResHost[i] = (pointer)0;
+                if (!ok)
+                    {
+                    resUnlock();
+                    Log.error("par: an array kept on the GPU could not be copied back (#15)");
+                    abort();
+                    }
+                o.fetchedBack(gParResSlot[i], host);
+                if (ParDevice.reporting())
+                    Log.info("par: %ld bytes fetched from the GPU", gParResBytes[i]);
+                back = true;
+                }
+        resUnlock();
+        return back;
+#endif
+        }
+
+    // The block at payload is going (its once hook): nothing to copy back,
+    // but its pages are made accessible again for the allocator.
+    static void dropResident(pointer payload)
+        {
+#if ARCH_arm64 || ARCH_x86_64 || OS_windows
+        for (u32 i = (u32)0; i < (u32)PAR_RES; i = i + (u32)1)
+            if (gParResHost[i] == payload)
+                {
+                gParResHost[i] = (pointer)0;
+                _xtc_simd_unpark(payload);
+                }
+#endif
+        }
+
+    // Every resident block a run over l uses comes back (the paths that keep
+    // nothing resident: the tiled and multi-device ones).
+    static void fetchUsed(u8* obj, ParLayout* l)
+        {
+        for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
+            fetchResident(*(pointer*)(obj + l.bufOff[i]), false);
+        for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
+            fetchResident(l.globPtr[i], false);
+        }
+
+    // The fault hook, set once.
+    static void hookFetch(void)
+        {
+#if ARCH_arm64 || ARCH_x86_64 || OS_windows
+        if (gParResFetcher != (Object*)0)
+            return;
+        ParResidentFetch* f = new ParResidentFetch();
+        gParResFetcher = (Object*)f;
+        callback cb i32(pointer base, i32 why) = &f.fetch;
+        _xtc_simd_on_fetch((pointer)cb.code, (pointer)cb.recv);
+#endif
+        }
+
     // The runtime writes the block at host (a copy back, a kernel on pinned
     // memory): its pages writable, and every copy of it out of date.
     // A pointer INTO a block (`stack + k*n`, a slice of a big array) writes
@@ -3197,5 +3417,16 @@ class ParDevice
         if (bpi <= (i64)0)
             return true;
         return l.ops >= bpi * (i64)4;
+        }
+    }
+
+// The receiver of the fault hook for resident blocks (#15): the runtime calls
+// fetch(base, 0) on a host access to a parked block, and the access runs
+// again when it answers 1.
+class ParResidentFetch
+    {
+    i32 fetch(pointer base, i32 why)
+        {
+        return ParDevice.fetchResident(base, true) ? (i32)1 : (i32)0;
         }
     }

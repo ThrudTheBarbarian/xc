@@ -525,9 +525,7 @@ class Par
     // array that is not kept on a device.
     static void sync(pointer p)
         {
-#if OS_windows || (ARCH_x86_64 && LIBC_glibc && !OS_android)
-        ParCuda.fetchResident(ParDevice.simdBase(p) != (pointer)0 ? ParDevice.simdBase(p) : p, false);
-#endif
+        ParDevice.fetchResident(ParDevice.simdBase(p) != (pointer)0 ? ParDevice.simdBase(p) : p, false);
         }
 
     // The byte length a block's generated gpuLength() reports for a captured
