@@ -735,7 +735,22 @@ class Par
 
     // Where the block runs and the run itself: auto's choice (or the forced
     // device), then that device, falling back to the CPU.
+    // A run of the block, with the runtime's own faults on resident arrays
+    // told apart from the host's (#15).
     static void dispatch(ParChunk* proto, i64 lo, i64 hi)
+        {
+        ParDevice.dispatchBegins(proto);
+        dispatchOne(proto, lo, hi);
+        ParDevice.dispatchEnds();
+        }
+
+    // The program is all xc (#15): the driver has main call this first.
+    static void markPure(void)
+        {
+        ParDevice.markPure();
+        }
+
+    static void dispatchOne(ParChunk* proto, i64 lo, i64 hi)
         {
         i32 choice = ParDevice.choose(proto, hi - lo);
 #if !ARCH_wasm32

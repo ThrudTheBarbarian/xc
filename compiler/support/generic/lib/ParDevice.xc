@@ -457,8 +457,18 @@ u32 gParResSlot[PAR_RES];
 i64 gParResBytes[PAR_RES];
 i32 gParResLock;               // 1 while a fetch, or a run starting or ending, holds it
 u32 gParResRunTid;             // the thread inside a single-shot device run, plus one; 0 when none
-i32 gParResOn;                 // XC_PAR_RESIDENT: 0 not read yet, 1 on, 2 off
+i32 gParResOn;                 // XC_PAR_RESIDENT: 0 not read yet, 1 on, 2 off, 3 learned per block
 Object* gParResFetcher;        // the fault hook's receiver, kept reachable
+u32 gParResBlock[PAR_RES];     // the block (ParDevice.slot) whose run left entry i resident
+// Residency learned per block (#15, mode 3): on by default in a program that
+// is all xc (the driver marks it, Par.markPure), off elsewhere. A block's
+// outputs are kept on the device until the host touches one between runs;
+// from then on that block copies back after every run, in this process and
+// (the settings store) the next.
+bool gParPure;
+u8 gParResLearn[64];           // per block: 0 not known yet, 1 kept, 2 copied back
+bool gParResTouched[64];       // the host touched the block's resident output since its last run
+i32 gParResActive;             // par dispatches running, any thread: their faults are the runtime's
 // A block's generation (ParDevice.generation): the watch is one flag per block,
 // and a second device re-watching after its own upload would make the first
 // device's stale copy look current. So each copy records the generation it
@@ -761,16 +771,18 @@ class ParDevice
         String* curL = keyHead("learned");
         String* curM = keyHead("measuring");
         String* curR = keyHead("runs");
+        String* curP = keyHead("resident");
         String* anyL = String.withCString("par.learned.");
         String* anyM = String.withCString("par.measuring.");
         String* anyR = String.withCString("par.runs.");
+        String* anyP = String.withCString("par.resident.");
         Array* ks = st.keys();
         bool changed = false;
         for (u32 j = (u32)0; j < ks.count(); j = j + (u32)1)
             {
             String* k = (String*)ks.get(j);
-            bool mine = k.hasPrefix(curL) || k.hasPrefix(curM) || k.hasPrefix(curR);
-            bool ours = k.hasPrefix(anyL) || k.hasPrefix(anyM) || k.hasPrefix(anyR);
+            bool mine = k.hasPrefix(curL) || k.hasPrefix(curM) || k.hasPrefix(curR) || k.hasPrefix(curP);
+            bool ours = k.hasPrefix(anyL) || k.hasPrefix(anyM) || k.hasPrefix(anyR) || k.hasPrefix(anyP);
             if (ours && (forget || !mine))
                 {
                 st.remove(k);
@@ -1991,12 +2003,119 @@ class ParDevice
         }
 
     // ── resident blocks (#15) ──
-    // XC_PAR_RESIDENT=1, read once.
-    static bool residentOn(void)
+    // The mode, read once: XC_PAR_RESIDENT=1 keeps every eligible output (1),
+    // =0 none (2), =auto learns per block (3); unset, a program the driver
+    // marked all xc learns per block and any other program keeps none.
+    static i32 residentMode(void)
         {
         if (gParResOn == (i32)0)
-            gParResOn = Platform.env(String.withCString("XC_PAR_RESIDENT")).equals(String.withCString("1")) ? (i32)1 : (i32)2;
-        return gParResOn == (i32)1;
+            {
+            String* v = Platform.env(String.withCString("XC_PAR_RESIDENT"));
+            if (v.equals(String.withCString("1")))
+                gParResOn = (i32)1;
+            else if (v.equals(String.withCString("auto")))
+                gParResOn = (i32)3;
+            else if (v.byteLength() > (u32)0 || !gParPure)
+                gParResOn = (i32)2;
+            else
+                gParResOn = (i32)3;
+            }
+        return gParResOn;
+        }
+
+    static bool residentOn(void)
+        {
+        i32 m = residentMode();
+        return m == (i32)1 || m == (i32)3;
+        }
+
+    // Whether a run of proto over n items may leave its outputs resident:
+    // forced, whenever auto is not measuring; learned, until the block's
+    // outputs were touched on the host between runs.
+    static bool residentFor(ParChunk* proto, i64 n)
+        {
+        i32 m = residentMode();
+        if (m == (i32)1)
+            return !wouldMeasure(proto, n);
+        if (m != (i32)3)
+            return false;
+        return resLearned(slot(proto.parName())) != (u8)2;
+        }
+
+    // The program is all xc (the driver says so at main's entry): residency
+    // is learned per block unless XC_PAR_RESIDENT says otherwise.
+    static void markPure(void)
+        {
+        gParPure = true;
+        }
+
+    static String* residentKey(u32 i)
+        {
+        String* key = keyHead("resident");
+        key.append(_hw != (String*)0 ? _hw : String.withCString("-"));
+        key.appendCString(".");
+        key.appendCString(gParBlock[i]);
+        return key;
+        }
+
+    // What block i has learned: 1 kept, 2 copied back (a host access between
+    // runs seen in this process or an earlier one).
+    static u8 resLearned(u32 i)
+        {
+        if (gParResLearn[i] == (u8)0)
+            {
+            String* v = store().get(residentKey(i));
+            gParResLearn[i] = v != (String*)0 && v.equals(String.withCString("copy")) ? (u8)2 : (u8)1;
+            }
+        return gParResLearn[i];
+        }
+
+    static void resCopyBack(u32 i)
+        {
+        if (gParResLearn[i] == (u8)2)
+            return;
+        gParResLearn[i] = (u8)2;
+        Settings* st = store();
+        st.set(residentKey(i), String.withCString("copy"));
+        st.save();
+        if (reporting())
+            Log.info("par: %s: the host reads its output between runs; copied back after every run from now on", gParBlock[i]);
+        }
+
+    // A par dispatch begins or ends (any thread): a fault meanwhile is a run
+    // of the block touching its own arrays, not the host. A block whose
+    // output the host touched since its last run learns to copy back.
+    static void dispatchBegins(ParChunk* proto)
+        {
+#if ARCH_arm64 || ARCH_x86_64 || OS_windows
+        if (gParResOn == (i32)3)
+            {
+            u32 b = slot(proto.parName());
+            if (gParResTouched[b])
+                {
+                gParResTouched[b] = false;
+                resCopyBack(b);
+                }
+            }
+        while (true)
+            {
+            i32 v = gParResActive;
+            if (_xt_atomic_cas_i32((pointer)&gParResActive, v, v + (i32)1) == v)
+                return;
+            }
+#endif
+        }
+
+    static void dispatchEnds(void)
+        {
+#if ARCH_arm64 || ARCH_x86_64 || OS_windows
+        while (true)
+            {
+            i32 v = gParResActive;
+            if (_xt_atomic_cas_i32((pointer)&gParResActive, v, v - (i32)1) == v)
+                return;
+            }
+#endif
         }
 
     static void resLock(void)
@@ -2056,7 +2175,7 @@ class ParDevice
     // Keep host (bytes long) resident in owner's slot: parked, so the next
     // host access fetches it. False when it cannot be parked (or no entry is
     // free): the caller then copies it back as usual.
-    static bool keepResident(pointer host, Object* owner, u32 slot, i64 bytes)
+    static bool keepResident(pointer host, Object* owner, u32 slot, i64 bytes, ParChunk* proto)
         {
 #if !(ARCH_arm64 || ARCH_x86_64 || OS_windows)
         return false;
@@ -2074,10 +2193,21 @@ class ParDevice
             gParResOwner[at] = owner;
             gParResSlot[at] = slot;
             gParResBytes[at] = bytes;
+            gParResBlock[at] = ParDevice.slot(proto.parName());
             }
         resUnlock();
         return kept;
 #endif
+        }
+
+    // A run of proto carries on a block already resident: it is that
+    // block's output now, for what the host's next access teaches.
+    static void residentNowOf(pointer host, ParChunk* proto)
+        {
+        u32 b = slot(proto.parName());
+        for (u32 i = (u32)0; i < (u32)PAR_RES; i = i + (u32)1)
+            if (gParResHost[i] == host)
+                gParResBlock[i] = b;
         }
 
     // Copy a resident block back to the host and unpark it: the fault hook
@@ -2123,6 +2253,11 @@ class ParDevice
                     abort();
                     }
                 o.fetchedBack(gParResSlot[i], host);
+                // The host touched it: if the block runs again, the access
+                // was between runs and the block copies back from then on
+                // (learned residency); a read after its last run is not.
+                if (fromFault && gParResActive == (i32)0 && gParResOn == (i32)3)
+                    gParResTouched[gParResBlock[i]] = true;
                 if (ParDevice.reporting())
                     Log.info("par: %ld bytes fetched from the GPU", gParResBytes[i]);
                 back = true;

@@ -8,7 +8,12 @@
 # once with no access between runs (the read before the final sum), ten times
 # with a host read between runs, and ten times with a host write between runs
 # (the write then reaching the next run is what the sum checks). Elsewhere
-# (no CUDA, Vulkan, Metal) nothing is kept. Both compilers' builds are run
+# (no CUDA, Vulkan, Metal) nothing is kept. Learned per block
+# (XC_PAR_RESIDENT=auto, the default of a program that is all xc), the array
+# stays on the device while the host leaves it alone between runs, and a
+# host access between runs makes the block copy back from then on, in the
+# next process too; the read after the last run teaches nothing. Both
+# compilers' builds are run
 # where they can target the host (here, or XC_LINUX_HOST for x86-64 Linux).
 #
 #   bash tests/par/resident.sh
@@ -53,6 +58,34 @@ for C in xcc-xc xcc; do
                 echo "FAIL resident ($C, args '$args', R=$R): kept $kept, fetched $fetched, wanted none"; fail=1
             fi
         done
+        # Learned per block (XC_PAR_RESIDENT=auto, the default of a program
+        # that is all xc): with no host access between runs the array stays
+        # on the GPU after every run, as forced; a host read or write between
+        # runs fetches it once and the block copies back from then on, in
+        # this process and (the settings store) the next.
+        out=$(run "XC_PAR=gpu XC_PAR_GPU=cuda XC_PAR_RESIDENT=auto XC_PAR_FORGET=1 XC_PAR_REPORT=1" "$args" 2>&1)
+        got=$(echo "$out" | grep -v '^par:')
+        [ "$got" = "$want" ] || { echo "FAIL resident ($C, args '$args', auto): '$got', wanted '$want'"; fail=1; }
+        if [ "$cuda" -gt 0 ]; then
+            kept=$(echo "$out" | grep -c 'kept on the GPU')
+            fetched=$(echo "$out" | grep -c 'fetched from the GPU')
+            learned=$(echo "$out" | grep -c 'copied back after every run from now on')
+            case "$args" in
+                "") [ "$kept" -ge 10 ] && [ "$fetched" = 1 ] && [ "$learned" = 0 ] \
+                        || { echo "FAIL resident ($C, auto, no access): kept $kept, fetched $fetched, learned $learned"; fail=1; } ;;
+                # Kept twice (the initialising loop, which --par-style lifts,
+                # and step's first run), fetched once, and step learns.
+                *)  [ "$kept" = 2 ] && [ "$fetched" = 1 ] && [ "$learned" = 1 ] \
+                        || { echo "FAIL resident ($C, auto, args '$args'): kept $kept, fetched $fetched, learned $learned, wanted 2 1 1"; fail=1; }
+                    # The next process: step copies back from its first run;
+                    # only the initialising loop's output is kept (once).
+                    again=$(run "XC_PAR=gpu XC_PAR_GPU=cuda XC_PAR_RESIDENT=auto XC_PAR_REPORT=1" "$args" 2>&1)
+                    k2=$(echo "$again" | grep -c 'kept on the GPU')
+                    l2=$(echo "$again" | grep -c 'copied back after every run from now on')
+                    [ "$k2" = 1 ] && [ "$l2" = 0 ] \
+                        || { echo "FAIL resident ($C, auto, args '$args'): the next process kept $k2, learned $l2, wanted 1 0"; fail=1; } ;;
+            esac
+        fi
     done
     [ "$PLAT" = osx ] && [ -n "$HOST" ] && ssh "$HOST" "rm -rf $RD"
 done
