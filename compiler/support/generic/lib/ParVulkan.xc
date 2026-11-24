@@ -215,6 +215,12 @@ bool gVkBudget;
 bool gVkHostImport;
 vkGetMemoryHostPointerPropertiesEXT_t* gVk_hostPtrProps;
 pointer gParVkHost[49];     // the `simd:` block binding slot i imports, or 0
+// The block single-shot slot i holds an unchanged copy of (#15), as CUDA's
+// slots: an input of 64 KB and more whose generation (ParDevice.generation)
+// is the one copied is not sent again.
+pointer gParVkUpHost[49];
+i64 gParVkUpLen[49];
+i64 gParVkUpGen[49];
 // An import must not outlive its block. RADV puts every memory object the
 // device holds in every submission, so an import whose pages have gone back
 // to the system fails the next submission of ANY kernel ("The CS has been
@@ -862,6 +868,8 @@ class ParVulkan
     static void drop(u32 i)
         {
         gParVkHost[i] = (pointer)0;
+        gParVkUpHost[i] = (pointer)0;
+        gParVkUpLen[i] = (i64)0;
         if (gParVkBuf[i] != (u64)0)
             _destroyBuffer(_dev, gParVkBuf[i], (pointer)0);
         if (gParVkMem[i] != (u64)0)
@@ -1442,22 +1450,60 @@ class ParVulkan
             devs[i] = gParVkDev[i];
             dmems[i] = gParVkDMem[i];
             }
+        // What goes up (#15): send[i] false for a buffer the device already
+        // holds (an input unchanged since this slot's copy of it) and, on a
+        // discrete card, for one the kernel overwrites whole; back[i] false
+        // for one the kernel only reads, on a discrete card.
+        bool send[49];
+        bool back[49];
+        for (u32 i = (u32)0; i < nb; i = i + (u32)1)
+            {
+            send[i] = true;
+            back[i] = true;
+            }
         if (ok)
             {
             memcpy((pointer)maps[0], (pointer)obj, (u64)l.size);
             b = (u32)1;
-            for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
+            for (u32 i = (u32)0; i < l.nbuf + l.nglob; i = i + (u32)1)
                 {
+                bool isBuf = i < l.nbuf;
+                u32 g = isBuf ? (u32)0 : i - l.nbuf;
+                pointer h = isBuf ? *(pointer*)(obj + l.bufOff[i]) : l.globPtr[g];
+                i64 len = isBuf ? l.bufLen[i] : l.globLen[g];
+                bool readOnly = isBuf ? l.bufIn[i] != (i64)0 : l.globIn[g] != (i64)0;
+                bool whole = isBuf ? l.bufOut[i] != (i64)0 : l.globOut[g] != (i64)0;
                 // An imported `simd:` block IS the mapping: nothing to copy;
                 // nor is an array the kernel overwrites whole (bufOut).
-                if (l.bufOut[i] == (i64)0 && (pointer)maps[b] != *(pointer*)(obj + l.bufOff[i]))
-                    memcpy((pointer)maps[b], *(pointer*)(obj + l.bufOff[i]), (u64)l.bufLen[i]);
-                b = b + (u32)1;
-                }
-            for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
-                {
-                if (l.globOut[i] == (i64)0 && (pointer)maps[b] != l.globPtr[i])
-                    memcpy((pointer)maps[b], l.globPtr[i], (u64)l.globLen[i]);
+                if ((pointer)maps[b] == h)
+                    {
+                    send[b] = false;
+                    back[b] = false;
+                    gParVkUpHost[b] = (pointer)0;
+                    }
+                else
+                    {
+                    i64 gen = readOnly && len >= (i64)65536 ? ParDevice.generation(h) : (i64)-1;
+                    if (readOnly && gen != (i64)-1 && gParVkUpHost[b] == h && gParVkUpLen[b] == len && gParVkUpGen[b] == gen)
+                        {
+                        send[b] = false;
+                        if (ParDevice.reporting())
+                            Log.info("par: %ld bytes already on the GPU, unchanged since", len);
+                        }
+                    else if (whole)
+                        send[b] = !_discrete;
+                    if (send[b] && !whole)
+                        memcpy((pointer)maps[b], h, (u64)len);
+                    if (readOnly)
+                        {
+                        back[b] = false;
+                        gParVkUpHost[b] = gen != (i64)-1 ? h : (pointer)0;
+                        gParVkUpLen[b] = len;
+                        gParVkUpGen[b] = gen;
+                        }
+                    else
+                        gParVkUpHost[b] = (pointer)0;
+                    }
                 b = b + (u32)1;
                 }
             }
@@ -1552,6 +1598,8 @@ class ParVulkan
                     {
                     for (u32 i = (u32)0; i < nb; i = i + (u32)1)
                         {
+                        if (!send[i])
+                            continue;
                         _vk64(&cr[0], (u32)0, (u64)0);
                         _vk64(&cr[0], (u32)8, (u64)0);
                         _vk64(&cr[0], (u32)16, (u64)sizes[i]);
@@ -1571,6 +1619,8 @@ class ParVulkan
                              (u32)0, (pointer)0, (u32)0, (pointer)0);
                     for (u32 i = (u32)0; i < nb; i = i + (u32)1)
                         {
+                        if (!back[i])
+                            continue;
                         _vk64(&cr[0], (u32)0, (u64)0);
                         _vk64(&cr[0], (u32)8, (u64)0);
                         _vk64(&cr[0], (u32)16, (u64)sizes[i]);
