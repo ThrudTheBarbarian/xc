@@ -750,5 +750,8 @@ typedef NS_ENUM(NSInteger, XTPlacement) {
 BOOL XTIsUserShape(NSString* _Nullable shape);
 NSString* XTShapeCore(NSString* shape);
 BOOL XTShapeIsInfix(NSString* shape);
+// A bracket shape (`|_|`, `⌊_⌋`), and a shape as a reader writes it (`|x|`).
+BOOL XTShapeIsBracket(NSString* shape);
+NSString* XTShapeSpelling(NSString* shape);
 
 NS_ASSUME_NONNULL_END

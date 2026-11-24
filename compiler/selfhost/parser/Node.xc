@@ -881,6 +881,25 @@ class Node
         return n >= 3 && shape.byteAt(0) == (u8)'_' && shape.byteAt(n - 1) == (u8)'_';
         }
 
+    // A bracket shape (`|_|`, `⌊_⌋`): the operand between two brackets.
+    static bool shapeIsBracket(String* shape)
+        {
+        u32 n = shape.byteLength();
+        return n >= 3 && shape.byteAt(0) != (u8)'_' && shape.byteAt(n - 1) != (u8)'_'
+            && shape.indexOfByte((u8)'_') != String.notFound();
+        }
+
+    // A shape as a reader writes it: `|x|` for `|_|`, `**` for `_**_`.
+    static String* shapeSpelling(String* shape)
+        {
+        if (!Node.shapeIsBracket(shape))
+            return Node.shapeCore(shape);
+        String* out = String.withCString("");
+        for (u32 i = 0; i < shape.byteLength(); i++) : serial
+            out.appendByte(shape.byteAt(i) == (u8)'_' ? (u8)'x' : shape.byteAt(i));
+        return out;
+        }
+
     // The characters of a shape: `**` of `_**_`, `√` of `√_`.
     static String* shapeCore(String* shape)
         {

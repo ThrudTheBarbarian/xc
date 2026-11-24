@@ -4336,6 +4336,9 @@ class Sema
         if (!Node.isUserShape(m.opShape()))
             return String.withFormat("'%s' keeps the precedence of the built-in operator: ':precedence' is for an operator of a class's own shape; remove ':precedence'",
                                      Node.shapeCore(m.opShape()).cString());
+        if (Node.shapeIsBracket(m.opShape()))
+            return String.withFormat("':precedence' is for an operator between two operands: the bracket operator %s binds as parentheses do; remove ':precedence'",
+                                     Node.shapeSpelling(m.opShape()).cString());
         if (!Node.shapeIsInfix(m.opShape()))
             return String.withFormat("':precedence' is for an operator between two operands: the prefix '%s' binds as the built-in prefix operators do; remove ':precedence'",
                                      Node.shapeCore(m.opShape()).cString());
@@ -4398,6 +4401,30 @@ class Sema
                         _errorAt(pf, m);
                         continue;
                         }
+                    // One meaning for a bracket in a class: `|M|` is the
+                    // determinant or the norm, not both.
+                    if (Node.shapeIsBracket(m.opShape()))
+                        for (u32 q = (u32)0; q < j; q = q + (u32)1)
+                            {
+                            Node* o = d.kid(q);
+                            if (o.kind() == (u16)nkMethodDecl && o.opShape() != 0 && o.opShape().equals(m.opShape())
+                                && o.hasFlag((u32)NF_STATIC) == m.hasFlag((u32)NF_STATIC) && Vtable.sameParams(o, m))
+                                {
+                                String* msg = String.withCString("'");
+                                msg.append(d.name());
+                                msg.appendCString(".");
+                                msg.append(m.name());
+                                msg.appendCString("' gives ");
+                                msg.append(Node.shapeSpelling(m.opShape()));
+                                msg.appendCString(" a second meaning: '");
+                                msg.append(d.name());
+                                msg.appendCString(".");
+                                msg.append(o.name());
+                                msg.appendCString("' defines it already; remove ':operator' from one of them and call it by name");
+                                _errorAt(msg, m);
+                                break;
+                                }
+                            }
                     if (m.opPrec() == 0)
                         continue;
                     // One operator, one precedence: the parse reads it before
@@ -4643,7 +4670,26 @@ class Sema
         if (owner != 0)
             return false;
         n.setTy(String.withCString("u8"));
-        if (!noting)
+        if (!noting && Node.shapeIsBracket(shape))
+            {
+            String* pat = String.withCString("");
+            for (u32 i = 0; i < shape.byteLength(); i++) : serial
+                {
+                if (shape.byteAt(i) == (u8)'_')
+                    pat.appendCString("self");
+                else
+                    pat.appendByte(shape.byteAt(i));
+                }
+            String* m = String.withCString("no class defines ");
+            m.append(op);
+            m.appendCString(" for '");
+            m.append(opTypes(ops, 0));
+            m.appendCString("'; the operand must be an instance of a class that defines it with :operator(");
+            m.append(pat);
+            m.appendCString(")");
+            _errorAt(m, n);
+            }
+        else if (!noting)
             {
             String* m = String.withCString(ops.count() == 1 ? "no class defines the prefix operator '" : "no class defines the operator '");
             m.append(op);
@@ -4874,10 +4920,16 @@ class Sema
             : (_isOp(op, "-") || _isOp(op, "+") || _isOp(op, "~") || _isOp(op, "!")));
         if (!overloadable)
             return false;
+        // A bracket shape is spelt in full (`|_|`), a prefix one by its
+        // characters.
+        bool bracket = !binary && Node.shapeIsBracket(op);
         String* shape = binary ? String.withCString("_") : String.withString(op);
         if (binary)
             shape.append(op);
-        shape.appendCString("_");
+        if (!bracket)
+            shape.appendCString("_");
+        if (bracket)
+            op = Node.shapeSpelling(shape);
         Array* ops = new Array();
         ops.add((Object*)n.kid((u32)0));
         if (binary)
@@ -4897,7 +4949,9 @@ class Sema
             if (!_opAmbig)
                 {
                 String* msg = (String*)0;
-                if (!binary)
+                if (bracket)
+                    msg = String.withFormat("'%s' has no %s taking '%s': pass one of the types its %s methods take", lc.name().cString(), op.cString(), opTypes(ops, 0).cString(), op.cString());
+                else if (!binary)
                     msg = String.withFormat("'%s' has no prefix '%s' taking '%s'", lc.name().cString(), op.cString(), opTypes(ops, 0).cString());
                 else if (optL)
                     msg = String.withFormat("'%s' has no '%s' taking '%s'", lc.name().cString(), op.cString(), opTypes(ops, 1).cString());
