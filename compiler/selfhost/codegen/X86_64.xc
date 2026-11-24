@@ -10115,7 +10115,10 @@ class X86_64
                 data.appendCString("\t.p2align\t6\n\t.zero\t56\n");
             else
                 data.appendCString("\t.p2align\t3\n");
-            data.appendCString("\t.long\t0x58544F4E\n\t.long\t0x40000000\n");
+            // The header has a local label of its own, so the symbol before
+            // it ends there and the global's ELF size (taken to the next
+            // symbol) is the instance's alone.
+            data.appendFormat("__xtc_gihdr_%s:\n\t.long\t0x58544F4E\n\t.long\t0x40000000\n", sym.name().cString());
             data.appendFormat("\t.globl\t%s\n%s:\n\t.zero\t%lu\n", safeSym(sym.name()).cString(),
                               safeSym(sym.name()).cString(), isz);
             return;
