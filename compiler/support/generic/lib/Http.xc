@@ -203,8 +203,15 @@ class _HttpSocket
         {
         if (_tls != (HttpSecureConnection*)0)
             return _tls.write(p, n);
-        // An array a GPU run kept on its device comes back first (#15).
-        parSync((pointer)p, (u64)n);
+        // An array a GPU run kept on its device comes back first (#15;
+        // Socket.xc declares memchr).
+#if ARCH_arm64 || ARCH_x86_64 || OS_windows
+        if (n > (u32)0)
+            {
+            memchr((pointer)p, (i32)0, (u64)1);
+            memchr((pointer)(p + (n - (u32)1)), (i32)0, (u64)1);
+            }
+#endif
         u32 done = (u32)0;
         while (done < n)
             {

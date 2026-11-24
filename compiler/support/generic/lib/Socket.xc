@@ -56,7 +56,14 @@
 
 #import "Foundation.xc"
 #import "Error.xc"
-#import "ParSync.xc"
+// A system call given an array a GPU run kept on its device (#15, its pages
+// no-access until the host touches them) fails with EFAULT instead of
+// faulting into the par runtime, which would bring it back. So a buffer is
+// read once at each end, through the C library, before it is handed to one:
+// a read faults like any other host access and brings the array back first.
+#if ARCH_arm64 || ARCH_x86_64 || OS_windows
+pointer memchr(pointer s, i32 c, u64 n);
+#endif
 
 #if ARCH_wasm32 || ARCH_armv7 || ARCH_m68k
 #define _SOCKET_NO_TCP 1
@@ -515,9 +522,14 @@ class Socket
 #if _SOCKET_NO_TCP
         return false;
 #else
-        // An array a GPU run kept on its device comes back first: send()
-        // fails on it instead of faulting (#15).
-        parSync((pointer)p, (u64)n);
+        // An array a GPU run kept on its device comes back first (#15).
+#if ARCH_arm64 || ARCH_x86_64 || OS_windows
+        if (n > (u32)0)
+            {
+            memchr((pointer)p, (i32)0, (u64)1);
+            memchr((pointer)(p + (n - (u32)1)), (i32)0, (u64)1);
+            }
+#endif
         if (!_open)
             return false;
         u32 done = (u32)0;
