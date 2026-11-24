@@ -314,6 +314,11 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
     return NO;
     }
 
+- (void)addImportedOperatorShapes:(NSArray<XTASTNode*>*)decls
+    {
+    [self addShapesOfImports:decls];
+    }
+
 #pragma mark - Top-Level Parse
 
 - (nullable XTProgramNode*)parse
@@ -333,6 +338,9 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
     // body has been parsed.
     [self rewriteProtocolStaticReceivers];
     [self prescanForwardTypeDeclarations];
+    // The operators of their own shape the unit's classes define, before any
+    // expression is read (XTParser+Shapes.m).
+    [self prescanOperatorShapes];
 
     while (![self check:XTTokenEOF] && !_diagnostics.hasFatalError)
         {
@@ -1260,6 +1268,7 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
                 method.operatorShape = fn.operatorShape;
                 method.operatorOperands = fn.operatorOperands;
                 method.operatorFault = fn.operatorFault;
+                method.operatorPrecedence = fn.operatorPrecedence;
                 [methods addObject:method];
                 }
             }
@@ -1464,6 +1473,7 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
             m.operatorShape = fn.operatorShape;
             m.operatorOperands = fn.operatorOperands;
             m.operatorFault = fn.operatorFault;
+            m.operatorPrecedence = fn.operatorPrecedence;
             [methods addObject:m];
             }
         }
@@ -1890,6 +1900,7 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
     NSString* operatorShape = nil;
     NSArray<NSString*>* operatorOperands = nil;
     NSString* operatorFault = nil;
+    NSString* operatorPrecedence = nil;
     if ([self match:XTTokenColon])
         {
         while ([self check:XTTokenIdentifier])
@@ -1942,6 +1953,10 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
                 {
                 operatorFault = [self parseOperatorPatternShape:&operatorShape operands:&operatorOperands];
                 }
+            else if ([annotName isEqualToString:@"precedence"])
+                {
+                operatorPrecedence = [self parsePrecedenceSpec];
+                }
             else if ([annotName isEqualToString:@"cloaked"])
                 {
                 placement = XTPlacementCloaked;
@@ -1975,9 +1990,16 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
                                  category:XTWarnUnknownAnnotation
                                        at:tok.location];
                 }
-            // Consume comma separator if present
-            if (![self match:XTTokenComma])
-                break;
+            // Consume comma separator if present; `:` before the next word
+            // starts another annotation too (`:operator(...) :precedence(...)`).
+            if ([self match:XTTokenComma])
+                continue;
+            if ([self check:XTTokenColon] && [self peekToken:1].type == XTTokenIdentifier)
+                {
+                [self advance];
+                continue;
+                }
+            break;
             }
         }
         // Mutually-exclusive epilogues — let the parser flag the conflict
@@ -2047,6 +2069,7 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
     fn.operatorShape = operatorShape;
     fn.operatorOperands = operatorOperands;
     fn.operatorFault = operatorFault;
+    fn.operatorPrecedence = operatorPrecedence;
     return fn;
     }
 
@@ -2238,6 +2261,22 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
         refused = @"()";
     else if (n == 5 && t[1].type == XTTokenQuestion && t[3].type == XTTokenColon)
         refused = @"?:";
+
+    // An operator of the class's own shape: `self ** o`, `self ⊗ o`, `√self`
+    // (XTParser+Shapes.m).
+    if (!shape && !refused && !noIndex && !noValue)
+        {
+        NSString* fault = nil;
+        NSArray<NSString*>* userNames = nil;
+        NSString* user = XTPatternUserShape(t, &fault, &userNames);
+        if (user)
+            {
+            shape = user;
+            names = userNames;
+            }
+        else if (fault)
+            return fault;
+        }
 
     if (shape)
         {

@@ -25,6 +25,8 @@ typedef NS_ENUM(NSInteger, XTBinaryOp) {
     XTBinaryOpGt,     // >
     XTBinaryOpLe,     // <=
     XTBinaryOpGe,     // >=
+    XTBinaryOpUser,   // an operator a class defines with a shape of its own
+                      // (`:operator(self ** o)`): spelt in `userOp`
 };
 
 typedef NS_ENUM(NSInteger, XTUnaryOp) {
@@ -40,6 +42,8 @@ typedef NS_ENUM(NSInteger, XTUnaryOp) {
     XTUnaryOpByte2,  // >>
     XTUnaryOpByte3,  // >>>
     XTUnaryOpPlus,   // +  (prefix; only a class operator gives it a meaning)
+    XTUnaryOpUser,   // a prefix operator a class defines with a shape of its
+                     // own (`:operator(√self)`): spelt in `userOp`
 };
 
 typedef NS_ENUM(NSInteger, XTPostfixOp) {
@@ -86,6 +90,17 @@ typedef NS_ENUM(NSInteger, XTAssignOp) {
 // Its operands are analysed already (the get call and value of `m[i] += v`).
 @property(nonatomic) BOOL operandsAnalysed;
 /****************************************************************************\
+|* Operators a class defines with a shape of its own. `userOp` spells the
+|* operator of an XTBinaryOpUser node (`**`, `⊗`). `twoReadings` marks one
+|* the parser joined from characters that also read the old way (`a**b` is
+|* `a * *b`), and `alternative` holds, on the smallest expression where the
+|* two readings differ, the old reading of it: sema reads the operands' types,
+|* keeps one reading and drops the other. See XTParser+Shapes.m.
+\****************************************************************************/
+@property(nonatomic, copy, nullable) NSString* userOp;
+@property(nonatomic) BOOL twoReadings;
+@property(nonatomic, nullable) XTASTNode* alternative;
+/****************************************************************************\
 |* Create a binary expression node (e.g. a + b, x == y).
 |* @param op        The binary operator.
 |* @param left      The left-hand operand expression.
@@ -107,6 +122,10 @@ typedef NS_ENUM(NSInteger, XTAssignOp) {
 |* operator with its built-in meaning. Not printed by the parse dump.
 \****************************************************************************/
 @property(nonatomic, nullable) XTASTNode* operatorCall;
+// As on XTBinaryExprNode, for a prefix operator of a class's own shape.
+@property(nonatomic, copy, nullable) NSString* userOp;
+@property(nonatomic) BOOL twoReadings;
+@property(nonatomic, nullable) XTASTNode* alternative;
 /****************************************************************************\
 |* Create a unary (prefix) expression node (e.g. -x, !flag, &var).
 |* @param op        The unary operator.

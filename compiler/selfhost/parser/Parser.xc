@@ -38,6 +38,7 @@
 #import "NodeDefs.xc"
 #import <Lexer>
 #import <FloatEncoding>
+#import <AstDump>
 
 class Parser
 {
@@ -111,6 +112,16 @@ class Parser
     // the declarator parser reads it off here (the original's _lastTypeIsOutlet).
     bool    _lastTypeIsOutlet;
     Set*    _blkWbImpls;    // impl classes carrying write-back captures
+    // Operators a class defines with a shape of its own ("Operators a class
+    // defines" below): the table, shape -> level * 2 + (1 when it groups from
+    // the right), level 0 for a prefix shape; the shapes whose level a
+    // `:precedence` set; whether the expression is being read with the shapes
+    // that also read the old way split; and the operators joined so far in
+    // the expression being read that also read the old way.
+    Map*    _opShapes;
+    Set*    _opShapesSet;
+    bool    _splitShapes;
+    Array*  _shapeSites;
 
     void init(void)
     {
@@ -145,6 +156,10 @@ class Parser
         _lastBlkWb = false;
         _lastTypeIsOutlet = false;
         _blkWbImpls = new Set();
+        _opShapes = (Map*)0;
+        _opShapesSet = (Set*)0;
+        _splitShapes = false;
+        _shapeSites = (Array*)0;
     }
 
     // v2 (task #29): `block:T` — the write-back qualifier. Consumed, never
@@ -1471,6 +1486,9 @@ class Parser
     Node* parse(void)
     {
         rewriteProtocolStaticReceivers();
+        // The operators of their own shape the unit's classes define, before
+        // any expression is read ("Operators a class defines").
+        prescanOperatorShapes();
         Node* program = mk((u16)nkProgram);
         while (!check((u16)tokEOF) && !_fatal) {
             u32 before = _pos;
@@ -2637,7 +2655,14 @@ class Parser
             if (owner != 0 && Parser._same(w.lowercased(), "operator")) {
                 advance();
                 parseOperatorPattern(owner);
-                match((u16)tokColon);
+                if (!match((u16)tokColon)) match((u16)tokComma);
+                continue;
+            }
+            // `:precedence(...)` on an operator of the class's own shape.
+            if (owner != 0 && Parser._same(w.lowercased(), "precedence")) {
+                advance();
+                owner.setOpPrec(parsePrecedenceSpec());
+                if (!match((u16)tokColon)) match((u16)tokComma);
                 continue;
             }
             if (owner != 0) {
@@ -2667,7 +2692,7 @@ class Parser
                 while (!check((u16)tokRParen) && !check((u16)tokEOF)) advance();
                 expect((u16)tokRParen);
             }
-            match((u16)tokColon);
+            if (!match((u16)tokColon)) match((u16)tokComma);
         }
     }
 
@@ -2818,6 +2843,24 @@ class Parser
             refused = String.withCString("?:");
         }
 
+        // An operator of the class's own shape: `self ** o`, `self ⊗ o`,
+        // `√self` ("Operators a class defines").
+        if (pat == 0 && refused == 0 && !noIndex && !noValue) {
+            Array* userNames = new Array();
+            String* user = Parser.patternUserShape(t, userNames);
+            if (user != 0 && user.byteAt((u32)0) == (u8)'?') {
+                owner.setOpPat(user);
+                return;
+            }
+            if (user != 0) {
+                pat = String.withString(user);
+                for (u32 q = (u32)0; q < userNames.count(); q = q + (u32)1) {
+                    pat.appendByte((u8)' ');
+                    pat.append((String*)userNames.get(q));
+                }
+            }
+        }
+
         if (pat != 0) {
             owner.setOpPat(pat);
             return;
@@ -2840,6 +2883,645 @@ class Parser
         String* fault = String.withCString("? ");
         fault.append(msg);
         owner.setOpPat(fault);
+    }
+
+    // ── Operators a class defines ────────────────────────────────
+    // Operators a class defines with a shape of its own: `:operator(self ** o)`,
+    // `:operator(self ⊗ o)`, `:operator(√self)`:
+    //
+    //   * Before any expression is read, the whole token stream is scanned for
+    //     `:operator(...)` patterns and `:precedence(...)` annotations, and the
+    //     shapes go into a table with their precedence and associativity
+    //     (prescanOperatorShapes). An imported interface adds its classes'
+    //     shapes (addImportedOperatorShapes).
+    //   * A shape is made of symbol characters: + - * / % < > = ! & | ^ ~ ? :
+    //     @ and the Unicode Mathematical Operators block (U+2200 to U+22FF),
+    //     which the lexer gives one token a character. The parser joins
+    //     adjacent operator tokens into a shape when the table has it.
+    //   * A shape takes the precedence and associativity of its first
+    //     character; those of the Unicode block share the level of `*`.
+    //     `:precedence(op)`, `(above op)`, `(below op)`, with `, right`, set
+    //     them instead. Levels are the built-in ones times four.
+    //   * Where the characters of a shape also read the old way (`a**b` is
+    //     `a * *b`), the expression is read a second time with those shapes
+    //     split, and the old reading hangs on the smallest expression where
+    //     the two differ (Node.alt). Sema chooses by the operands' types.
+
+    // A token an operator a class defines can be made of: one whose
+    // characters are all symbol characters, or a mathematical operator.
+    static bool shapeTok(u16 t)
+    {
+        return t == tokPlus || t == tokMinus || t == tokStar || t == tokSlash || t == tokPercent
+            || t == tokAmpersand || t == tokPipe || t == tokCaret || t == tokTilde || t == tokBang
+            || t == tokLess || t == tokGreater || t == tokLessEq || t == tokGreaterEq
+            || t == tokEqual || t == tokNotEqual || t == tokLogicalAnd || t == tokLogicalOr
+            || t == tokAssign || t == tokPlusAssign || t == tokMinusAssign || t == tokStarAssign
+            || t == tokSlashAssign || t == tokPercentAssign || t == tokAmpAssign || t == tokPipeAssign
+            || t == tokCaretAssign || t == tokShlAssign || t == tokShrAssign || t == tokRolAssign
+            || t == tokRorAssign || t == tokShiftLeft || t == tokShiftRight || t == tokRotateLeft
+            || t == tokRotateRight || t == tokPlusPlus || t == tokMinusMinus || t == tokArrow
+            || t == tokByte3 || t == tokQuestion || t == tokColon || t == tokAt || t == tokMathOp;
+    }
+
+    // A built-in binary operator (not an assignment, not `?`).
+    static bool shapeBinaryTok(u16 t)
+    {
+        return t == tokPlus || t == tokMinus || t == tokStar || t == tokSlash || t == tokPercent
+            || t == tokAmpersand || t == tokPipe || t == tokCaret || t == tokShiftLeft
+            || t == tokShiftRight || t == tokRotateLeft || t == tokRotateRight || t == tokLess
+            || t == tokGreater || t == tokLessEq || t == tokGreaterEq || t == tokEqual
+            || t == tokNotEqual || t == tokLogicalAnd || t == tokLogicalOr;
+    }
+
+    // A token that reads as a built-in prefix operator where an operand starts.
+    static bool shapePrefixTok(u16 t)
+    {
+        return t == tokMinus || t == tokPlus || t == tokTilde || t == tokBang || t == tokAmpersand
+            || t == tokStar || t == tokAt || t == tokPlusPlus || t == tokMinusMinus || t == tokLess
+            || t == tokByte3;
+    }
+
+    static bool shapeAssignTok(u16 t)
+    {
+        return t == tokAssign || t == tokPlusAssign || t == tokMinusAssign || t == tokStarAssign
+            || t == tokSlashAssign || t == tokPercentAssign || t == tokAmpAssign || t == tokPipeAssign
+            || t == tokCaretAssign || t == tokShlAssign || t == tokShrAssign || t == tokRolAssign
+            || t == tokRorAssign;
+    }
+
+    // A token's length in columns: UTF-16 units, as Lexer._advance counts.
+    static u32 tokUnits(Token* t)
+    {
+        String* v = t.value();
+        u32 n = 0;
+        for (u32 i = 0; i < v.byteLength(); i++) : serial {
+            u8 b = v.byteAt(i);
+            if ((b & (u8)$C0) == (u8)$80) continue;
+            n = n + (b >= (u8)$F0 ? 2 : 1);
+        }
+        return n;
+    }
+
+    // `b` starts where `a` ends: same file and line, the next column.
+    static bool tokAdjacent(Token* a, Token* b)
+    {
+        return a.fileId() == b.fileId() && a.line() == b.line() && b.col() == a.col() + Parser.tokUnits(a);
+    }
+
+    // A binary literal (`%101`) whose `%` can end a shape.
+    static bool shapeBinlit(Token* t)
+    {
+        return t.type() == tokIntLiteral && t.value().byteLength() > 0 && t.value().byteAt(0) == (u8)'%';
+    }
+
+    // Do the first `n` tokens of `run` also read the old way between two
+    // operands: postfix `++`/`--`, a built-in binary operator, then prefix
+    // operators?
+    static bool shapeOldInfix(Array* run, u32 n)
+    {
+        for (u32 s = 0; s < n; s++) : serial {
+            bool ok = Parser.shapeBinaryTok(((Token*)run.get(s)).type());
+            for (u32 q = 0; ok && q < s; q++) : serial {
+                u16 qt = ((Token*)run.get(q)).type();
+                ok = qt == tokPlusPlus || qt == tokMinusMinus;
+            }
+            for (u32 q = s + 1; ok && q < n; q++) : serial
+                ok = Parser.shapePrefixTok(((Token*)run.get(q)).type());
+            if (ok) return true;
+        }
+        return false;
+    }
+
+    // …or, where an operand starts, as built-in prefix operators?
+    static bool shapeOldPrefix(Array* run, u32 n)
+    {
+        for (u32 q = 0; q < n; q++) : serial
+            if (!Parser.shapePrefixTok(((Token*)run.get(q)).type())) return false;
+        return true;
+    }
+
+    // The precedence of a built-in binary operator, spelt, times four; -1 for
+    // anything else.
+    static i32 shapeBuiltinLevel(String* op)
+    {
+        if (Parser._same(op, "||")) return 12;
+        if (Parser._same(op, "&&")) return 16;
+        if (Parser._same(op, "|")) return 20;
+        if (Parser._same(op, "^")) return 24;
+        if (Parser._same(op, "&")) return 28;
+        if (Parser._same(op, "==") || Parser._same(op, "!=")) return 32;
+        if (Parser._same(op, "<") || Parser._same(op, ">") || Parser._same(op, "<=") || Parser._same(op, ">=")) return 36;
+        if (Parser._same(op, "<<") || Parser._same(op, ">>")) return 40;
+        if (Parser._same(op, "<:") || Parser._same(op, ":>")) return 44;
+        if (Parser._same(op, "+") || Parser._same(op, "-")) return 48;
+        if (Parser._same(op, "*") || Parser._same(op, "/") || Parser._same(op, "%")) return 52;
+        return -1;
+    }
+
+    // The level of an infix shape with no `:precedence`: that of its first
+    // character, times four. A mathematical operator, `~`, `?` and `@` share
+    // the level of `*`; `=` and `!` that of `==`; `:` that of `:>`.
+    static i32 shapeFirstCharLevel(String* core)
+    {
+        u8 c = core.byteLength() > 0 ? core.byteAt(0) : (u8)'*';
+        if (c == (u8)'|') return 20;
+        if (c == (u8)'^') return 24;
+        if (c == (u8)'&') return 28;
+        if (c == (u8)'=' || c == (u8)'!') return 32;
+        if (c == (u8)'<' || c == (u8)'>') return 36;
+        if (c == (u8)':') return 44;
+        if (c == (u8)'+' || c == (u8)'-') return 48;
+        return 52;
+    }
+
+    // A `:precedence` spec's level and associativity, packed as the table
+    // keeps them: level * 2, plus 1 for right.
+    static i32 shapeSpecEntry(String* spec)
+    {
+        bool right = spec.hasSuffix(String.withCString(",right"));
+        String* body = right ? spec.substringBytes(0, spec.byteLength() - 6) : spec;
+        u8 rel = body.byteAt(0);
+        i32 level = Parser.shapeBuiltinLevel(body.substringFromByte(1));
+        if (rel == (u8)'>') level = level + 1;
+        else if (rel == (u8)'<') level = level - 1;
+        return level * 2 + (right ? 1 : 0);
+    }
+
+    static String* shapeDisallowed(String* what)
+    {
+        String* m = String.withCString("? '");
+        m.append(what);
+        m.appendCString("' cannot be part of an operator, which is made of the characters + - * / % < > = ! & | ^ ~ ? : @ and the mathematical operators U+2200 to U+22FF");
+        return m;
+    }
+
+    // The shape of a class's own that tokens [from, to) of a pattern spell,
+    // as an infix operator (`_**_`) or a prefix one (`√_`): the key; "? <what
+    // is wrong>" when the tokens are an operator that cannot be one; 0 when
+    // they are not an attempt at one (the caller's message then applies).
+    static String* userShapeOf(Array* t, u32 from, u32 to, bool infix)
+    {
+        u32 k = to - from;
+        for (u32 q = from; q < to; q++) : serial {
+            Token* x = (Token*)t.get(q);
+            u16 xt = x.type();
+            if (Parser.shapeTok(xt)) continue;
+            bool word = xt == tokIdentifier || xt == tokIntLiteral || xt == tokFloatLiteral
+                        || xt == tokCharLiteral || xt == tokStringLiteral;
+            u8 c0 = x.value().byteLength() > 0 ? x.value().byteAt(0) : (u8)0;
+            bool nameLike = xt == tokIdentifier
+                && (c0 == (u8)'_' || (c0 >= (u8)'a' && c0 <= (u8)'z') || (c0 >= (u8)'A' && c0 <= (u8)'Z'));
+            if (word && (k == 1 || !nameLike)) return Parser.shapeDisallowed(x.value());
+            return (String*)0;
+        }
+        Token* t0 = (Token*)t.get(from);
+        if (k == 1 && t0.type() != tokAt && t0.type() != tokMathOp) {
+            String* m = String.withCString("? '");
+            m.append(t0.value());
+            m.appendCString("' cannot be overloaded");
+            return m;
+        }
+        for (u32 q = from + 1; q < to; q++) : serial
+            if (!Parser.tokAdjacent((Token*)t.get(q - 1), (Token*)t.get(q)))
+                return String.withCString("? the characters of an operator are written together, as in (self ** o)");
+        String* text = String.withCString("");
+        for (u32 q = from; q < to; q++) : serial
+            text.append(((Token*)t.get(q)).value());
+        if (infix && k >= 2 && (Parser.shapeAssignTok(t0.type()) || t0.type() == tokQuestion || t0.type() == tokColon)) {
+            bool rest = true;
+            for (u32 q = from + 1; q < to; q++) : serial
+                rest = rest && Parser.shapePrefixTok(((Token*)t.get(q)).type());
+            if (rest) {
+                String* m = String.withCString("? '");
+                m.append(text);
+                m.appendCString("' cannot be an operator: between two operands it already reads as '");
+                m.append(t0.value());
+                m.appendCString("' followed by a prefix operator");
+                return m;
+            }
+        }
+        String* key = String.withCString(infix ? "_" : "");
+        key.append(text);
+        key.appendCString("_");
+        return key;
+    }
+
+    // A pattern's shape of the class's own (or "? <what is wrong>", or 0) and
+    // its operand names, added to `names`: two names round the operator
+    // (`self ** o`), or the operator before one (`√self`).
+    static String* patternUserShape(Array* t, Array* names)
+    {
+        u32 n = t.count();
+        if (n >= 3 && ((Token*)t.get(0)).type() == tokIdentifier && ((Token*)t.get(n - 1)).type() == tokIdentifier) {
+            String* key = Parser.userShapeOf(t, 1, n - 1, true);
+            if (key != 0 && key.byteAt(0) != (u8)'?' && names != 0) {
+                names.add((Object*)((Token*)t.get(0)).value());
+                names.add((Object*)((Token*)t.get(n - 1)).value());
+            }
+            return key;
+        }
+        if (n >= 2 && ((Token*)t.get(n - 1)).type() == tokIdentifier
+            && (n == 2 || ((Token*)t.get(0)).type() != tokIdentifier)) {
+            String* key = Parser.userShapeOf(t, 0, n - 1, false);
+            if (key != 0 && key.byteAt(0) != (u8)'?' && names != 0)
+                names.add((Object*)((Token*)t.get(n - 1)).value());
+            return key;
+        }
+        return (String*)0;
+    }
+
+    // `:precedence(...)`'s tokens as a spec: "=op", ">op" (above op) or "<op"
+    // (below op), with ",right" for `, right`; "? <what is wrong>" otherwise.
+    static String* precedenceSpecOf(Array* t)
+    {
+        u32 n = t.count();
+        u32 i = 0;
+        String* rel = String.withCString("=");
+        String* bad = String.withCString("? ':precedence' takes an operator, or 'above' or 'below' and an operator, then ', right' to group from the right, such as (above *, right)");
+        if (n > 0 && ((Token*)t.get(0)).type() == tokIdentifier
+            && (Parser._same(((Token*)t.get(0)).value(), "above") || Parser._same(((Token*)t.get(0)).value(), "below"))) {
+            rel = String.withCString(Parser._same(((Token*)t.get(0)).value(), "above") ? ">" : "<");
+            i = 1;
+        }
+        if (i >= n || !Parser.shapeBinaryTok(((Token*)t.get(i)).type())) return bad;
+        String* spec = String.withString(rel);
+        spec.append(((Token*)t.get(i)).value());
+        i++;
+        if (i < n) {
+            if (i + 2 == n && ((Token*)t.get(i)).type() == tokComma && ((Token*)t.get(i + 1)).type() == tokIdentifier
+                && Parser._same(((Token*)t.get(i + 1)).value(), "right"))
+                spec.appendCString(",right");
+            else
+                return bad;
+        }
+        return spec;
+    }
+
+    // Add a shape to the table: an infix one with its level and
+    // associativity (from `spec`, else by its first character), a prefix one
+    // alone. The first `:precedence` for a shape is the one the parse uses;
+    // sema reports two that disagree.
+    void addOperatorShape(String* key, String* spec)
+    {
+        if (_opShapes == 0) {
+            _opShapes = new Map();
+            _opShapesSet = new Set();
+        }
+        if (!Node.shapeIsInfix(key)) {
+            if (_opShapes.get((Hashable*)key) == 0) _opShapes.set((Hashable*)key, (Object*)Number.withU32(0));
+            return;
+        }
+        bool explicit = spec != 0 && spec.byteLength() > 0 && spec.byteAt(0) != (u8)'?';
+        if (_opShapes.get((Hashable*)key) != 0 && (!explicit || _opShapesSet.contains((Hashable*)key))) return;
+        i32 entry = explicit ? Parser.shapeSpecEntry(spec) : Parser.shapeFirstCharLevel(Node.shapeCore(key)) * 2;
+        _opShapes.set((Hashable*)key, (Object*)Number.withU32((u32)entry));
+        if (explicit) _opShapesSet.add((Hashable*)key);
+    }
+
+    // Every `:operator(pattern)` in the token stream with a shape of a
+    // class's own, and the `:precedence(...)` beside it. An annotation run is
+    // `:` and a word, with a parenthesised argument or not, then more joined
+    // by `:` or `,`.
+    void prescanOperatorShapes(void)
+    {
+        u32 n = _tokens.count();
+        for (u32 i = 0; i + 1 < n; i++) : serial {
+            if (((Token*)_tokens.get(i)).type() != tokColon || ((Token*)_tokens.get(i + 1)).type() != tokIdentifier)
+                continue;
+            Array* opArgs = (Array*)0;
+            Array* precArgs = (Array*)0;
+            u32 j = i;
+            while (j + 1 < n) {
+                u16 jt = ((Token*)_tokens.get(j)).type();
+                if (!(jt == tokColon || (j > i && jt == tokComma)) || ((Token*)_tokens.get(j + 1)).type() != tokIdentifier)
+                    break;
+                String* w = ((Token*)_tokens.get(j + 1)).value().lowercased();
+                u32 k = j + 2;
+                Array* args = (Array*)0;
+                if (k < n && ((Token*)_tokens.get(k)).type() == tokLParen) {
+                    u32 depth = 0;
+                    u32 q = k + 1;
+                    while (q < n) {
+                        u16 ty = ((Token*)_tokens.get(q)).type();
+                        if (ty == tokEOF || (ty == tokRParen && depth == 0)) break;
+                        if (ty == tokLParen || ty == tokLBracket) depth++;
+                        else if ((ty == tokRParen || ty == tokRBracket) && depth > 0) depth--;
+                        q++;
+                    }
+                    args = new Array();
+                    for (u32 a = k + 1; a < q; a++) : serial args.add(_tokens.get(a));
+                    k = q < n ? q + 1 : q;
+                }
+                if (args != 0 && Parser._same(w, "operator")) opArgs = args;
+                if (args != 0 && Parser._same(w, "precedence")) precArgs = args;
+                j = k;
+            }
+            if (opArgs != 0) {
+                String* key = Parser.patternUserShape(opArgs, (Array*)0);
+                if (key != 0 && key.byteAt(0) != (u8)'?')
+                    addOperatorShape(key, precArgs != 0 ? Parser.precedenceSpecOf(precArgs) : (String*)0);
+            }
+            i = j - 1;
+        }
+    }
+
+    // The operators of their own shape that an imported class defines, for
+    // the parse to read. The driver calls it before parse() for each class
+    // it reconstructed from an interface.
+    void addImportedOperatorShapes(Node* cls)
+    {
+        if (cls == 0 || cls.kind() != (u16)nkClassDecl) return;
+        for (u32 i = 0; i < cls.kidCount(); i++) : serial {
+            Node* m = cls.kid(i);
+            if (m.kind() == (u16)nkMethodDecl && Node.isUserShape(m.opShape()))
+                addOperatorShape(m.opShape(), m.opPrec());
+        }
+    }
+
+    // `:precedence(...)` after the word: its spec, or what is wrong with it.
+    String* parsePrecedenceSpec(void)
+    {
+        Array* t = new Array();
+        if (!check((u16)tokLParen)) return Parser.precedenceSpecOf(t);
+        advance();
+        u32 depth = 0;
+        while (!check((u16)tokEOF)) {
+            u16 ty = curType();
+            if (ty == tokRParen && depth == 0) break;
+            if (ty == tokLParen || ty == tokLBracket) depth++;
+            else if ((ty == tokRParen || ty == tokRBracket) && depth > 0) depth--;
+            t.add((Object*)advance());
+        }
+        expect((u16)tokRParen);
+        return Parser.precedenceSpecOf(t);
+    }
+
+    // Set by shapeAtCurrent: how many tokens the shape takes, whether it ends
+    // with the `%` of the binary literal after them, and whether its
+    // characters also read the old way.
+    u32  _shLen;
+    bool _shBinlit;
+    bool _shAmb;
+
+    // The longest shape in the table that the tokens from the current one
+    // spell, infix or prefix: its key, or 0 (_shLen, _shBinlit and _shAmb
+    // say the rest). While the expression is read the old way (_splitShapes),
+    // a shape that also reads the old way is passed over.
+    String* shapeAtCurrent(bool infix)
+    {
+        if (_opShapes == 0 || _opShapes.count() == 0) return (String*)0;
+        u32 p = _pos;
+        Array* run = new Array();
+        while (run.count() < 8 && p + run.count() < _tokens.count()) {
+            Token* t = (Token*)_tokens.get(p + run.count());
+            if (!Parser.shapeTok(t.type())) break;
+            if (run.count() > 0 && !Parser.tokAdjacent((Token*)run.last(), t)) break;
+            run.add((Object*)t);
+        }
+        if (run.count() == 0) return (String*)0;
+        u32 after = p + run.count();
+        bool tail = after < _tokens.count() && Parser.shapeBinlit((Token*)_tokens.get(after))
+            && Parser.tokAdjacent((Token*)run.last(), (Token*)_tokens.get(after));
+        i32 j = (i32)run.count() + (tail ? 1 : 0);
+        while (j >= 1) {
+            bool withTail = tail && j == (i32)run.count() + 1;
+            u32 nt = withTail ? run.count() : (u32)j;
+            String* key = String.withCString(infix ? "_" : "");
+            for (u32 q = 0; q < nt; q++) : serial key.append(((Token*)run.get(q)).value());
+            if (withTail) key.appendCString("%");
+            key.appendCString("_");
+            j = j - 1;
+            if (_opShapes.get((Hashable*)key) == 0) continue;
+            bool old = infix ? Parser.shapeOldInfix(run, nt) : Parser.shapeOldPrefix(run, nt);
+            if (old && _splitShapes) continue;
+            _shLen = nt;
+            _shBinlit = withTail;
+            _shAmb = old;
+            return key;
+        }
+        return (String*)0;
+    }
+
+    // With the current token a binary literal whose `%` ended a shape: the
+    // token in its place that its digits make, a decimal literal one column on.
+    static Token* shapeDecimalFrom(Token* bt)
+    {
+        String* digits = bt.value().substringFromByte(1);
+        u64 v = 0;
+        for (u32 q = 0; q < digits.byteLength(); q++) : serial
+            v = v * 10 + (u64)(digits.byteAt(q) - (u8)'0');
+        Token* t = Token.withInt(tokIntLiteral, digits, (i64)v, bt.line(), bt.col() + 1);
+        t.setFileId(bt.fileId());
+        return t;
+    }
+
+    // The right operand of an infix shape, at `prec`; the operand of a prefix
+    // one (prec < 0). After a shape that took a binary literal's `%`, its
+    // digits are read as the decimal literal they spell.
+    Node* parseShapeOperand(i16 prec, bool binlit)
+    {
+        if (!binlit) return prec < 0 ? parseUnary() : parseExprMinPrec(prec);
+        u32 at = _pos;
+        Token* bt = (Token*)_tokens.get(at);
+        _tokens.set(at, (Object*)Parser.shapeDecimalFrom(bt));
+        Node* r = prec < 0 ? parseUnary() : parseExprMinPrec(prec);
+        _tokens.set(at, (Object*)bt);
+        return r;
+    }
+
+    // An infix shape at the current token, with lhs read: 0 when there is
+    // none or it binds less tightly than minPrec (*stop then says to stop).
+    // Otherwise the operator node, its right operand read.
+    Node* parseInfixShapeAfter(Node* lhs, i16 minPrec, bool* stop)
+    {
+        *stop = false;
+        String* key = shapeAtCurrent(true);
+        if (key == 0) return (Node*)0;
+        u32 len = _shLen;
+        bool tail = _shBinlit;
+        bool amb = _shAmb;
+        u32 entry = ((Number*)_opShapes.get((Hashable*)key)).asU32();
+        i16 prec = (i16)(entry >> 1);
+        bool right = (entry & 1) != 0;
+        if (prec < minPrec) {
+            *stop = true;
+            return (Node*)0;
+        }
+        Token* first = cur();
+        for (u32 q = 0; q < len; q++) : serial advance();
+        Node* rhs = parseShapeOperand(right ? prec : prec + (i16)1, tail);
+        Node* b = mk((u16)nkBinary);
+        b.setPos(first.fileId(), first.line(), first.col());
+        b.setOp(Node.shapeCore(key));
+        b.add(lhs);
+        b.add(rhs);
+        if (amb && _shapeSites != 0) {
+            b.addFlag((u32)NF_TWOREAD);
+            _shapeSites.add((Object*)b);
+        }
+        return b;
+    }
+
+    // A prefix shape at the current token, and its operand; 0 when none.
+    Node* parsePrefixShape(void)
+    {
+        String* key = shapeAtCurrent(false);
+        if (key == 0) return (Node*)0;
+        u32 len = _shLen;
+        bool tail = _shBinlit;
+        bool amb = _shAmb;
+        Token* first = cur();
+        for (u32 q = 0; q < len; q++) : serial advance();
+        Node* n = mk((u16)nkUnary);
+        n.setPos(first.fileId(), first.line(), first.col());
+        n.setOp(Node.shapeCore(key));
+        Node* opnd = parseShapeOperand((i16)-1, tail);
+        n.add(opnd);
+        if (amb && _shapeSites != 0) {
+            n.addFlag((u32)NF_TWOREAD);
+            _shapeSites.add((Object*)n);
+        }
+        return n;
+    }
+
+    // `a--` before `>`: is the `--` the start of an infix shape here (`-->`)?
+    bool infixShapeAtCurrent(void)
+    {
+        return shapeAtCurrent(true) != 0;
+    }
+
+    // The sub-expressions two readings are compared through: a binary's two
+    // operands, a prefix operator's one, a ternary's three, an assignment's
+    // two, a cast's operand. 0 for any other node.
+    static Array* readingKids(Node* n)
+    {
+        u16 k = n.kind();
+        u32 want = 0;
+        if (k == (u16)nkBinary || k == (u16)nkAssign) want = 2;
+        else if (k == (u16)nkUnary || k == (u16)nkCast) want = 1;
+        else if (k == (u16)nkTernary) want = 3;
+        else return (Array*)0;
+        Array* out = new Array();
+        u32 from = k == (u16)nkCast ? n.kidCount() - 1 : 0;
+        for (u32 i = 0; i < want && from + i < n.kidCount(); i++) : serial
+            out.add((Object*)n.kid(from + i));
+        return out;
+    }
+
+    // A tree's parse dump, to compare two readings by.
+    static String* readingDump(Node* n)
+    {
+        String* d = String.withCString("");
+        AstDump.emit(n, d, 0);
+        return d;
+    }
+
+    static String* readingHead(Node* n)
+    {
+        String* d = Parser.readingDump(n);
+        u32 nl = d.indexOfByte((u8)10);
+        return nl == String.notFound() ? d : d.substringBytes(0, nl);
+    }
+
+    // Hang `o`, the old reading of the expression `u` was read as, on the
+    // smallest expression of `u` where the two differ. false when that is
+    // not an operator in both (the readings are then not kept).
+    bool attachReading(Node* o, Node* u)
+    {
+        Node* us = u;
+        Node* os = o;
+        while (true) {
+            Array* uk = Parser.readingKids(us);
+            Array* ok = Parser.readingKids(os);
+            if (uk == 0 || ok == 0 || uk.count() != ok.count() || us.kind() != os.kind()
+                || !Parser.readingHead(us).equals(Parser.readingHead(os)))
+                break;
+            u32 differ = 0;
+            u32 at = 0;
+            for (u32 i = 0; i < uk.count(); i++) : serial
+                if (!Parser.readingDump((Node*)uk.get(i)).equals(Parser.readingDump((Node*)ok.get(i)))) {
+                    differ++;
+                    at = i;
+                }
+            if (differ != 1) break;
+            us = (Node*)uk.get(at);
+            os = (Node*)ok.get(at);
+        }
+        if ((us.kind() == (u16)nkBinary || us.kind() == (u16)nkUnary) && us.kind() == os.kind()) {
+            us.setAlt(os);
+            return true;
+        }
+        return false;
+    }
+
+    // What the parse of an expression may leave behind besides its tree:
+    // block literals and par blocks made, :scan blocks rewritten, loops
+    // lifted. An expression that made any is not read a second time.
+    String* shapeSideEffects(void)
+    {
+        return String.withFormat("%lu/%lu/%lu/%lu", _blkCounter, _parCounter, _parAutoCounter, _scanSeq);
+    }
+
+    // A full expression in a unit with shapes. Read with the shapes joined;
+    // when one joined there also reads the old way, read again with those
+    // split. Both readings parse: the old one hangs on the new
+    // (attachReading). Only the old one parses: it is the expression. Only
+    // the new one: it is, and its shapes read one way.
+    Node* parseExpressionReadings(void)
+    {
+        Array* outerSites = _shapeSites;
+        bool outerSplit = _splitShapes;
+        Array* sites = new Array();
+        _shapeSites = sites;
+        _splitShapes = false;
+        u32 start = _pos;
+        u32 errMark = _errors.count();
+        u32 warnMark = _warnings.count();
+        bool fatalBefore = _fatal;
+        String* effects = shapeSideEffects();
+        Node* u = parseExprMinPrec((i16)0);
+        if (sites.count() > 0) {
+            u32 endU = _pos;
+            bool uFailed = u == 0 || _errors.count() > errMark;
+            bool attached = false;
+            if (shapeSideEffects().equals(effects)) {
+                u32 errMark2 = _errors.count();
+                u32 warnMark2 = _warnings.count();
+                bool fatal2 = _fatal;
+                _pos = start;
+                _splitShapes = true;
+                _shapeSites = (Array*)0;
+                Node* o = parseExprMinPrec((i16)0);
+                bool oFailed = o == 0 || _errors.count() > errMark2;
+                u32 endO = _pos;
+                Array* oWarn = new Array();
+                for (u32 w = warnMark2; w < _warnings.count(); w++) : serial oWarn.add(_warnings.get(w));
+                while (_warnings.count() > warnMark2) _warnings.removeAt(_warnings.count() - 1);
+                while (_errors.count() > errMark2) _errors.removeAt(_errors.count() - 1);
+                _fatal = fatal2;
+                _splitShapes = false;
+                _pos = endU;
+                if (!oFailed && endO == endU) {
+                    if (uFailed) {
+                        while (_errors.count() > errMark) _errors.removeAt(_errors.count() - 1);
+                        while (_warnings.count() > warnMark) _warnings.removeAt(_warnings.count() - 1);
+                        _fatal = fatalBefore;
+                        for (u32 w = 0; w < oWarn.count(); w++) : serial _warnings.add(oWarn.get(w));
+                        u = o;
+                    } else {
+                        attached = attachReading(o, u);
+                    }
+                }
+            }
+            if (!attached)
+                for (u32 i = 0; i < sites.count(); i++) : serial {
+                    Node* sn = (Node*)sites.get(i);
+                    sn.setFlags(sn.flags() & ~(u32)NF_TWOREAD);
+                }
+        }
+        _shapeSites = outerSites;
+        _splitShapes = outerSplit;
+        return u;
     }
 
     // A top-level function or variable declaration. Both start with a type.
@@ -4007,6 +4689,7 @@ class Parser
             goalFlags(n, g);
         }
         for (u32 i = 0; i < n.kidCount(); i++) parAutoGoals(n.kid(i), g);
+        if (n.alt() != 0) parAutoGoals(n.alt(), g);
     }
 
     u16 parTokType(u32 i)
@@ -7226,6 +7909,8 @@ class Parser
         if (n == (Node*)0) return;
         if (n.kind() == nkIdent && n.name() != (String*)0 && n.name().equals(from)) n.setName(to);
         for (u32 i = 0; i < n.kidCount(); i++) Parser.scRename(n.kid(i), from, to);
+        // The old reading beside an operator a class defines is renamed too.
+        Parser.scRename(n.alt(), from, to);
     }
 
     Node* parsePar(void)
@@ -9909,9 +10594,11 @@ class Parser
     }
 
     // ── Expressions ──────────────────────────────────────────────
-    // Precedence-climbing, with the ObjC parser's table copied verbatim:
+    // Precedence-climbing, the levels as both front ends number them:
     // assignment 1 (right), ternary 2 (right), || 3, && 4, | 5, ^ 6, & 7,
-    // ==/!= 8, relational 9, shifts 10, rotates 11, +/- 12, */ /% 13.
+    // ==/!= 8, relational 9, shifts 10, rotates 11, +/- 12, */ /% 13; each
+    // times four, so a level an operator a class defines makes with
+    // `:precedence(above *)` or `:precedence(below |)` sits between two.
     i16 precOf(u16 t)
     {
         if (t == (u16)tokAssign || t == (u16)tokPlusAssign || t == (u16)tokMinusAssign
@@ -9919,24 +10606,24 @@ class Parser
             || t == (u16)tokPercentAssign || t == (u16)tokAmpAssign
             || t == (u16)tokPipeAssign || t == (u16)tokCaretAssign
             || t == (u16)tokShlAssign || t == (u16)tokShrAssign
-            || t == (u16)tokRolAssign || t == (u16)tokRorAssign) return (i16)1;
-        if (t == (u16)tokQuestion)    return (i16)2;
-        if (t == (u16)tokLogicalOr)   return (i16)3;
-        if (t == (u16)tokLogicalAnd)  return (i16)4;
-        if (t == (u16)tokPipe)        return (i16)5;
-        if (t == (u16)tokCaret)       return (i16)6;
-        if (t == (u16)tokAmpersand)   return (i16)7;
-        if (t == (u16)tokEqual || t == (u16)tokNotEqual) return (i16)8;
+            || t == (u16)tokRolAssign || t == (u16)tokRorAssign) return (i16)4;
+        if (t == (u16)tokQuestion)    return (i16)8;
+        if (t == (u16)tokLogicalOr)   return (i16)12;
+        if (t == (u16)tokLogicalAnd)  return (i16)16;
+        if (t == (u16)tokPipe)        return (i16)20;
+        if (t == (u16)tokCaret)       return (i16)24;
+        if (t == (u16)tokAmpersand)   return (i16)28;
+        if (t == (u16)tokEqual || t == (u16)tokNotEqual) return (i16)32;
         if (t == (u16)tokLess || t == (u16)tokGreater
-            || t == (u16)tokLessEq || t == (u16)tokGreaterEq) return (i16)9;
-        if (t == (u16)tokShiftLeft || t == (u16)tokShiftRight) return (i16)10;
-        if (t == (u16)tokRotateLeft || t == (u16)tokRotateRight) return (i16)11;
-        if (t == (u16)tokPlus || t == (u16)tokMinus) return (i16)12;
-        if (t == (u16)tokStar || t == (u16)tokSlash || t == (u16)tokPercent) return (i16)13;
+            || t == (u16)tokLessEq || t == (u16)tokGreaterEq) return (i16)36;
+        if (t == (u16)tokShiftLeft || t == (u16)tokShiftRight) return (i16)40;
+        if (t == (u16)tokRotateLeft || t == (u16)tokRotateRight) return (i16)44;
+        if (t == (u16)tokPlus || t == (u16)tokMinus) return (i16)48;
+        if (t == (u16)tokStar || t == (u16)tokSlash || t == (u16)tokPercent) return (i16)52;
         return (i16)-1;
     }
 
-    bool isAssignTok(u16 t) { return precOf(t) == (i16)1; }
+    bool isAssignTok(u16 t) { return precOf(t) == (i16)4; }
 
     // Every expression carries the position of its FIRST token. Stamped here,
     // at the one entry point, rather than at the ~90 places a node is built:
@@ -9945,7 +10632,11 @@ class Parser
     Node* parseExpression(void)
     {
         Token* t0 = cur();
-        Node* n = parseExprMinPrec((i16)0);
+        // A unit whose classes define operators of their own shape reads each
+        // expression with them (and, where their characters also read the old
+        // way, a second time without).
+        Node* n = (_opShapes != 0 && _opShapes.count() > (u32)0)
+            ? parseExpressionReadings() : parseExprMinPrec((i16)0);
         if (n != 0 && n.line() == (u32)0) n.setPos(t0.fileId(), t0.line(), t0.col());
         return n;
     }
@@ -9956,6 +10647,17 @@ class Parser
         if (lhs == 0) return (Node*)0;
 
         while (true) {
+            // An operator a class defines with a shape of its own, joined
+            // from the tokens here (`**`, `⊗`).
+            if (_opShapes != 0 && _opShapes.count() > (u32)0) {
+                bool stop = false;
+                Node* sh = parseInfixShapeAfter(lhs, minPrec, &stop);
+                if (stop) break;
+                if (sh != 0) {
+                    lhs = sh;
+                    continue;
+                }
+            }
             u16 opType = curType();
             i16 prec = precOf(opType);
 
@@ -10057,6 +10759,12 @@ class Parser
 
     Node* parseUnary(void)
     {
+        // A prefix operator a class defines with a shape of its own (`√x`,
+        // `~~x`).
+        if (_opShapes != 0 && _opShapes.count() > (u32)0) {
+            Node* sh = parsePrefixShape();
+            if (sh != 0) return sh;
+        }
         u16 t = curType();
         if (t == (u16)tokMinus || t == (u16)tokTilde || t == (u16)tokBang
             || t == (u16)tokAmpersand || isPointerSigil(t)
@@ -10101,6 +10809,10 @@ class Parser
         Node* node = base;
         while (true) {
             u16 t = curType();
+            // `a-->b` where a class defines `-->`: the `--` starts that operator.
+            if ((t == (u16)tokPlusPlus || t == (u16)tokMinusMinus) && _opShapes != 0
+                && _opShapes.count() > (u32)0 && infixShapeAtCurrent())
+                break;
             if (t == (u16)tokPlusPlus || t == (u16)tokMinusMinus) {
                 Token* op = advance();
                 Node* n = mk((u16)nkPostfix);

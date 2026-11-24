@@ -157,6 +157,11 @@ typedef NS_ENUM(NSInteger, XTStackConvention) {
 // A pattern the parser could not take: what is wrong with it. Sema reports
 // it with the method's other faults, so a bad pattern stops at one message.
 @property(nonatomic, copy, nullable) NSString* operatorFault;
+// `:precedence(...)` on an operator of the class's own shape: "=op" (the
+// level of op), ">op" or "<op" (a level directly above or below it), then
+// ",right" when it groups from the right. "? <what is wrong>" for a form the
+// parser could not take. nil when absent.
+@property(nonatomic, copy, nullable) NSString* operatorPrecedence;
 /****************************************************************************\
 |* A load-time constructor: its name is recorded in the module's
 |* moduleInitFunctionNames so each backend emits a pointer to it in the
@@ -467,6 +472,11 @@ typedef NS_ENUM(NSInteger, XTPlacement) {
 // A pattern the parser could not take: what is wrong with it. Sema reports
 // it with the method's other faults, so a bad pattern stops at one message.
 @property(nonatomic, copy, nullable) NSString* operatorFault;
+// `:precedence(...)` on an operator of the class's own shape: "=op" (the
+// level of op), ">op" or "<op" (a level directly above or below it), then
+// ",right" when it groups from the right. "? <what is wrong>" for a form the
+// parser could not take. nil when absent.
+@property(nonatomic, copy, nullable) NSString* operatorPrecedence;
 /****************************************************************************\
 |* Separate-compilation §4.2: the class this method was added to by a
 |* `class C (Cat) { … }` whose C came from ANOTHER module. nil for every
@@ -731,5 +741,14 @@ typedef NS_ENUM(NSInteger, XTPlacement) {
                      methods:(NSArray<XTMethodDeclNode*>*)methods
                     location:(XTSourceLocation*)location;
 @end
+
+/****************************************************************************\
+|* Operator shapes (XTParser+Shapes.m): is a method's shape one a class
+|* defines of its own (`_**_`, `√_`), not a built-in operator, index or
+|* compound assignment; its characters (`**`); and is it infix.
+\****************************************************************************/
+BOOL XTIsUserShape(NSString* _Nullable shape);
+NSString* XTShapeCore(NSString* shape);
+BOOL XTShapeIsInfix(NSString* shape);
 
 NS_ASSUME_NONNULL_END

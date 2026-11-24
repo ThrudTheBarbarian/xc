@@ -79,6 +79,13 @@ NS_ASSUME_NONNULL_BEGIN
 \****************************************************************************/
 - (void)prescanForwardTypeDeclarations;
 
+/****************************************************************************\
+|* The operators of their own shape that the classes of imported interfaces
+|* define (`:operator(self ** o)`), for the parse to read. The driver calls it
+|* before -parse with the declarations it reconstructed.
+\****************************************************************************/
+- (void)addImportedOperatorShapes:(NSArray<XTASTNode*>*)decls;
+
 @end
 
 NS_ASSUME_NONNULL_END

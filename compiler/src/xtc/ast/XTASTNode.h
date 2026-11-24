@@ -114,6 +114,14 @@ typedef NS_OPTIONS(NSUInteger, XTSrcFact) {
 \****************************************************************************/
 - (void)acceptVisitor:(id<XTASTVisitor>)visitor;
 
+/****************************************************************************\
+|* Become `other`, a node of the same class: every instance variable takes
+|* other's value. Sema keeps the old reading of an operator a class defines
+|* this way (XTBinaryExprNode.alternative), in the place the parse put the
+|* new one.
+\****************************************************************************/
+- (void)adoptReading:(XTASTNode*)other;
+
 @end
 
 /****************************************************************************\

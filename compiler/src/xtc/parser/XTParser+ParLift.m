@@ -161,6 +161,7 @@ static NSString* plBinarySpelling(XTBinaryOp op, XTTokenType* t)
     case XTBinaryOpGt: *t = XTTokenGreater; return @">";
     case XTBinaryOpLe: *t = XTTokenLessEq; return @"<=";
     case XTBinaryOpGe: *t = XTTokenGreaterEq; return @">=";
+    case XTBinaryOpUser: break;
         }
     *t = XTTokenPlus;
     return @"+";
@@ -427,6 +428,13 @@ static NSString* plAddrRoot(XTASTNode* _Nullable e)
         XTBinaryExprNode* b = (XTBinaryExprNode*)e;
         XTTokenType t;
         NSString* s = plBinarySpelling(b.op, &t);
+        // An operator a class defines with a shape of its own: a name to the
+        // recogniser, as the port's plOpTok makes it.
+        if (b.op == XTBinaryOpUser)
+            {
+            t = XTTokenIdentifier;
+            s = b.userOp;
+            }
         [self plExpr:b.left];
         [self plTok:t value:s];
         [self plExpr:b.right];
@@ -452,6 +460,7 @@ static NSString* plAddrRoot(XTASTNode* _Nullable e)
         case XTUnaryOpByte2: [self plTok:XTTokenShiftRight value:@">>"]; break;
         case XTUnaryOpByte3: [self plTok:XTTokenByte3 value:@">>>"]; break;
         case XTUnaryOpPlus: [self plTok:XTTokenPlus value:@"+"]; break;
+        case XTUnaryOpUser: [self plTok:XTTokenIdentifier value:u.userOp]; break;
             }
         [self plExpr:u.operand];
         return;

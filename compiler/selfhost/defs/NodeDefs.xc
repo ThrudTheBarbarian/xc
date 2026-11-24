@@ -36,6 +36,11 @@
 // defines `+` and no `+=` that takes b. Shares NF_STATIC's bit, which only a
 // declaration carries.
 #define NF_OPFALLBACK $0001
+// On an nkBinary / nkUnary only: an operator a class defines with a shape of
+// its own that the parser joined from characters that also read the old way
+// (`a**b`, also `a * *b`). Shares NF_VARARGS's bit, which only a declaration
+// carries.
+#define NF_TWOREAD $0002
 #define NF_SYNTH $100000
 #define NF_EXTERNAL $2000000
 #define NF_CHAINM $4000000
