@@ -1628,6 +1628,7 @@ class OptProfile
     {
     String* _cls;       // ParImpl$o<n>: the class name the printers give the block
     Array* _fieldTypes; // the record's types from field 3 on: the captures, then the accumulators
+    String* _where;     // the loop's file:line:col, or 0: where -Wpar-fields reports it (#146)
 
     static ParOutBlock* with(String* cls, Array* types)
         {
@@ -1638,6 +1639,8 @@ class OptProfile
         }
     String* cls(void)        { return _cls; }
     Array* fieldTypes(void)  { return _fieldTypes; }
+    String* where(void)      { return _where; }
+    void setWhere(String* w) { _where = w; }
     }
 
     class ParKernelHook

@@ -2596,7 +2596,11 @@
         // gpuSource stays the base's empty one, so it runs on the CPU.
         // A running total has none either: its passes are the CPU's (#272).
         if (nHist == (u32)0 && _ppScanSt == (Array*)0)
-            _ppMade.add((Object*)ParOutBlock.with(pcls, ftys));
+            {
+            ParOutBlock* made = ParOutBlock.with(pcls, ftys);
+            made.setWhere(_ppWarnAt);
+            _ppMade.add((Object*)made);
+            }
         // ── the class: ParFnChunk's vtable with the three replaced (they are
         // dispatched: Par.xc's ParFnChunkBase overrides them too) ──
         Array* slots = new Array();

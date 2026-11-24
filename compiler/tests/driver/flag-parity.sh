@@ -706,7 +706,8 @@ same "-Wpar-auto --par-style=auto (-A arm64)"   -q -A arm64 -O2 --par-style=auto
 same "--par-style=threads (-A arm64 -O2)"    -q -A arm64 -O2 --par-style=threads -o @OUT@ $ROOT/tests/fixtures/outer_vectorize_matmul.xc
 same "--par-style=gpu (-A arm64 -O2)"        -q -A arm64 -O2 --par-style=gpu -o @OUT@ $ROOT/tests/fixtures/outer_vectorize_matmul.xc
 same "--par-style=cpu (-A arm64 -O2)"        -q -A arm64 -O2 --par-style=cpu -o @OUT@ $ROOT/tests/fixtures/outer_vectorize_matmul.xc
-cover -fpar-kernels= --par-style= --par-style=auto -fgoal= -Wpar-auto
+xcconly "-Wpar-fields (-A arm64 -O2)" 0 "its array of Mixed" -q -A arm64 -O2 -Wpar-fields -o @OUT@ $ROOT/tests/fixtures/par_struct_words.xc
+cover -fpar-kernels= --par-style= --par-style=auto -fgoal= -Wpar-auto -Wpar-fields
 same "an undefined C symbol is a link error (580)" $A -o @OUT@ nothere.xc
 xcconly "  ...naming it (580)" 1 "undefined symbol 'nothere'" $A -o @OUT@ nothere.xc
 xcconly "--link-libs (-A arm64, refused)" 1 "applies to -A wasm32" -q -A arm64 --link-libs -o @OUT@ ret.xc

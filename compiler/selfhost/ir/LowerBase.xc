@@ -671,6 +671,9 @@ class ClassInfo
     String* _parExtraMeta;
     String* _mMslWhy;   // the Metal form's reason it was not made, for the outliner's trace
     String* _mWordWhy;  // why parWordStructs left an array of structs as it was, or 0
+    bool _parFieldsOn;       // -Wpar-fields (#146): report the fields each block's struct arrays use
+    Array* _mFieldReport;    // that report's lines for the block being filled, or 0
+    String* _mFieldWhere;    // an outlined block's loop (file:line:col), where it is printed
 
     // ── the `par` kernel as Metal source (par-blocks.md §6) ─────────────────
     // The port of XTIRParMSL: the same kernel, byte for byte. Each GPU thread
@@ -965,6 +968,10 @@ class ClassInfo
     void setBoundsCheck(bool b)
         {
         _boundsCheck = b;
+        }
+    void setParFields(bool b)
+        {
+        _parFieldsOn = b;
         }
     void setDebugInfo(bool b)
         {
