@@ -4,10 +4,12 @@
 #   bash tests/crossmod/operators.sh
 #
 # opobj.xc defines classes with `:operator(pattern)` methods (arithmetic,
-# compound and index operators) and is compiled with -c; opmain.xc imports its
+# compound and index operators, and operators of a class's own shape with a
+# `:precedence`) and is compiled with -c; opmain.xc imports its
 # interface and uses the operators. The pattern travels in the interface, so
 # the program resolves `a + b`, `a += b` and `l[r, c] = x` to the methods as
-# the defining module would. Each half is built by both compilers, every
+# the defining module would, and parses `2 * a ** b ** c` and `a ⊗ b` with the
+# shapes and precedence the interface gives. Each half is built by both compilers, every
 # pairing is linked and run, and the two compilers' objects, interfaces and
 # programs are compared byte for byte. arm64 (this host) only.
 XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
@@ -21,7 +23,7 @@ if [ "$(uname -s)" != Darwin ] || [ "$(uname -m)" != arm64 ]; then
     echo "SKIP  operators.sh runs on an arm64 macOS host"
     exit 0
 fi
-WANT=$'sum 175\nneg -150\nscaled 75\ncompound 175\nindex 5 10 15'
+WANT=$'sum 175\nneg -150\nscaled 75\ncompound 175\nindex 5 10 15\nshapes 1024 203 25'
 fail=0
 bad() { echo "FAIL  $*"; fail=$((fail+1)); }
 for O in xcc xcc-xc; do
@@ -31,6 +33,7 @@ done
 cmp -s "$TMP/obj-xcc/opobj.o" "$TMP/obj-xcc-xc/opobj.o" && cmp -s "$TMP/obj-xcc/opobj.xtc.iface" "$TMP/obj-xcc-xc/opobj.xtc.iface" \
     || bad "the two compilers' opobj.o or its interface differ"
 grep -q '"operator"' "$TMP/obj-xcc/opobj.xtc.iface" || bad "the interface carries no operator pattern"
+grep -q '"precedence"' "$TMP/obj-xcc/opobj.xtc.iface" || bad "the interface carries no operator precedence"
 for O in xcc xcc-xc; do
     for M in xcc xcc-xc; do
         d="$TMP/run-$O-$M"; mkdir -p "$d"; cp "$TMP/obj-$O"/* "$d/"

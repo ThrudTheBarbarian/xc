@@ -359,6 +359,12 @@ class IfaceWrite
         // when set.
         if (m.opShape() != (String*)0)
             IfaceWrite.kv(out, "operator", m.opPat(), true);
+        // `:precedence(...)` on an operator of the class's own shape, as its
+        // spec (">*,right"), so a client parses the operator as the library
+        // does.
+        if (m.opShape() != (String*)0 && m.opPrec() != (String*)0 && m.opPrec().byteLength() > (u32)0
+            && m.opPrec().byteAt((u32)0) != (u8)'?')
+            IfaceWrite.kv(out, "precedence", m.opPrec(), true);
         IfaceWrite.params(out, m);
         IfaceWrite.returnsList(out, m);
     }

@@ -18,3 +18,21 @@ class Ledger
     void put(i32 r, i32 c, i32 x) :operator(self[r, c] = x) { cells[r * 3 + c] = x; }
     i32 ends(i32 lo, i32 hi) :operator(self[lo..hi]) { return cells[lo] + cells[hi - 1]; }
     }
+
+// Operators of the class's own shape: `**` grouping from the right above `*`,
+// and `⊗` from the Unicode block. Their shapes and the precedence travel in
+// the interface, so the program parses them as this module does.
+class Pow
+    {
+    i32 v;
+    static Pow* of(i32 x) { Pow* p = new Pow(); p.v = x; return p; }
+    Pow* raise(Pow* e) :operator(self ** e) :precedence(above *, right)
+        {
+        i32 r = 1;
+        for (i32 i = 0; i < e.v; i++) : serial
+            r = r * v;
+        return Pow.of(r);
+        }
+    static Pow* scaled(i32 k, Pow* p) :operator(k * p) { return Pow.of(k * p.v); }
+    Pow* kron(Pow* o) :operator(self ⊗ o) { return Pow.of(v * 100 + o.v); }
+    }
