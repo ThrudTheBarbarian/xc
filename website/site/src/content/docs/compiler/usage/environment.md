@@ -150,7 +150,7 @@ too. [How auto learns](/compiler/language/par/#how-auto-learns-across-runs-of-di
 explains the two numbers.
 
 To make a program measure everything again, run it once with
-`XC_PAR_FORGET=1`, which removes its `par.learned` and `par.measuring`
+`XC_PAR_FORGET=1`, which removes its `par.learned`, `par.measuring` and `par.resident`
 records (your own `par` keys and the probe records stay). Or delete the
 keys by hand, with the commands above.
 
@@ -187,7 +187,8 @@ empty value is the same as an unset one.
 | `XC_PAR` | `cpu`, `gpu`, `gpus`, `all`, `auto` | unset: your settings, then the program's choices, then `auto` | every `par` block runs there. `cpu` also stops looking for remote daemons |
 | `XC_PAR_THREADS` | a number above 0 | the machine's CPU count | how many threads a block on the CPU uses |
 | `XC_PAR_REPORT` | `1`, or `2` | off | prints where each block ran, how long it took, why it stayed on the CPU, and what `auto` measured and learned. `2` adds each tile's worker and time |
-| `XC_PAR_FORGET` | `1` | off | removes the program's `par.learned` and `par.measuring` records when it starts, so `auto` measures again |
+| `XC_PAR_FORGET` | `1` | off | removes the program's `par.learned`, `par.measuring` and `par.resident` records when it starts, so `auto` measures again |
+| `XC_PAR_RESIDENT` | `1`, `auto`, `0` | off | a CUDA card keeps a block's outputs between runs instead of copying them back: `1` every output it can, `auto` per block until the host touches one between runs (see [Arrays kept on the GPU](/compiler/language/par/#arrays-kept-on-the-gpu-between-runs)) |
 | `XC_PAR_GPU` | `cuda`, `vulkan` | CUDA where there is a CUDA card, else Vulkan | which GPU interface is used where both exist (Windows, Linux on x86-64) |
 | `XC_PAR_VULKAN_DEVICE` | a number, `0` up | a discrete GPU, else an integrated one, else the first | which Vulkan device, by its index in the driver's list |
 | `XC_PAR_CUDA_DEVICES` | numbers, e.g. `0,1` | every CUDA card | which CUDA cards take tiles, by ordinal |
