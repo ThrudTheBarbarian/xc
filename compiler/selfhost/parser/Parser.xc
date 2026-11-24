@@ -122,6 +122,14 @@ class Parser
     Set*    _opShapesSet;
     bool    _splitShapes;
     Array*  _shapeSites;
+    // Bracket shapes (`|x|`, `⌊x⌋`): the bracket that closes the one whose
+    // operand is being read, when no parenthesis or argument list lies
+    // between; the closing bracket of a bracket whose operand the next
+    // parseExpression reads; and whether the current token is a `||` whose
+    // first bar is taken.
+    String* _bracketClose;
+    String* _bracketBody;
+    bool    _halfBar;
 
     void init(void)
     {
@@ -160,6 +168,9 @@ class Parser
         _opShapesSet = (Set*)0;
         _splitShapes = false;
         _shapeSites = (Array*)0;
+        _bracketClose = (String*)0;
+        _bracketBody = (String*)0;
+        _halfBar = false;
     }
 
     // v2 (task #29): `block:T` — the write-back qualifier. Consumed, never
@@ -3109,9 +3120,64 @@ class Parser
     // A pattern's shape of the class's own (or "? <what is wrong>", or 0) and
     // its operand names, added to `names`: two names round the operator
     // (`self ** o`), or the operator before one (`√self`).
+    // The bracket that closes `open` in a bracket shape, or 0 when `open`
+    // does not start one: `|` and `‖` close themselves, `⌊` `⌈` `⟨` are
+    // closed by `⌋` `⌉` `⟩`.
+    static String* shapeCloserOf(String* open)
+    {
+        if (Parser._same(open, "|")) return String.withCString("|");
+        if (Parser._same(open, "\u2016")) return String.withCString("\u2016");
+        if (Parser._same(open, "\u230A")) return String.withCString("\u230B");
+        if (Parser._same(open, "\u2308")) return String.withCString("\u2309");
+        if (Parser._same(open, "\u27E8")) return String.withCString("\u27E9");
+        return (String*)0;
+    }
+
     static String* patternUserShape(Array* t, Array* names)
     {
         u32 n = t.count();
+        // A bracket shape: an opening bracket, one operand name, its closing
+        // one (`|self|`, `⌊x⌋`).
+        if (n >= 2) {
+            Token* b0 = (Token*)t.get(0);
+            Token* bn = (Token*)t.get(n - 1);
+            bool tok0 = b0.type() == tokPipe || b0.type() == tokMathBracket;
+            bool tokN = bn.type() == tokPipe || bn.type() == tokMathBracket;
+            String* closer = tok0 ? Parser.shapeCloserOf(b0.value()) : (String*)0;
+            if (closer != 0 && tokN) {
+                if (!bn.value().equals(closer)) {
+                    String* m = String.withCString("? '");
+                    m.append(b0.value());
+                    m.appendCString("' is closed by '");
+                    m.append(closer);
+                    m.appendCString("', not '");
+                    m.append(bn.value());
+                    m.appendCString("': write (");
+                    m.append(b0.value());
+                    m.appendCString("self");
+                    m.append(closer);
+                    m.appendCString(")");
+                    return m;
+                }
+                if (n != 3 || ((Token*)t.get(1)).type() != tokIdentifier) {
+                    String* m = String.withCString("? a bracket operator takes one operand: write (");
+                    m.append(b0.value());
+                    m.appendCString("self");
+                    m.append(closer);
+                    m.appendCString("), or (");
+                    m.append(b0.value());
+                    m.appendCString("x");
+                    m.append(closer);
+                    m.appendCString(") on a static method with one parameter");
+                    return m;
+                }
+                if (names != 0) names.add((Object*)((Token*)t.get(1)).value());
+                String* key = String.withString(b0.value());
+                key.appendCString("_");
+                key.append(closer);
+                return key;
+            }
+        }
         if (n >= 3 && ((Token*)t.get(0)).type() == tokIdentifier && ((Token*)t.get(n - 1)).type() == tokIdentifier) {
             String* key = Parser.userShapeOf(t, 1, n - 1, true);
             if (key != 0 && key.byteAt(0) != (u8)'?' && names != 0) {
@@ -3390,6 +3456,110 @@ class Parser
         return shapeAtCurrent(true) != 0;
     }
 
+    // The bracket the current token opens where an operand starts, or 0: `|`
+    // for a `|` or a `||` when the table has `|_|` (a `||` is two bars, the
+    // second taken when _halfBar says the first is), and ‖ ⌊ ⌈ ⟨ always,
+    // since they mean nothing else.
+    String* bracketOpenAtCurrent(void)
+    {
+        Token* t = cur();
+        if (t.type() == tokPipe || t.type() == tokLogicalOr) {
+            if (_opShapes != 0 && _opShapes.get((Hashable*)String.withCString("|_|")) != 0)
+                return String.withCString("|");
+            return (String*)0;
+        }
+        if (t.type() == tokMathBracket && Parser.shapeCloserOf(t.value()) != 0)
+            return t.value();
+        return (String*)0;
+    }
+
+    bool atBracketOpen(void)
+    {
+        return bracketOpenAtCurrent() != 0;
+    }
+
+    // After an operand: does the current token end the operand of the
+    // bracket being read? Inside |...| the first `|` after an operand closes,
+    // so a `|` or `||` there is no operator; nor is a `||` whose first bar
+    // closed a bracket. The other brackets are no operator anywhere, so they
+    // stop an expression anyway.
+    bool atBracketStop(void)
+    {
+        if (_halfBar) return true;
+        u16 ty = curType();
+        return _bracketClose != 0 && Parser._same(_bracketClose, "|") && (ty == tokPipe || ty == tokLogicalOr);
+    }
+
+    // Take one bar of the current `|` or `||`.
+    void takeBar(void)
+    {
+        if (curType() == tokLogicalOr && !_halfBar) {
+            _halfBar = true;
+            return;
+        }
+        _halfBar = false;
+        advance();
+    }
+
+    // A bracket shape at the current token (atBracketOpen): the bracket, its
+    // operand read as a full expression, and its closing bracket. A prefix
+    // node spelt with the shape (`|_|`), which sema resolves like a prefix
+    // operator. A `||` after the operand closes this bar and the one around
+    // it.
+    Node* parseBracket(void)
+    {
+        Token* t = cur();
+        String* open = bracketOpenAtCurrent();
+        String* close = Parser.shapeCloserOf(open);
+        u32 line = t.line();
+        u32 col = _halfBar ? t.col() + 1 : t.col();
+        if (Parser._same(open, "|")) takeBar();
+        else advance();
+        _bracketBody = close;
+        Node* body = parseExpression();
+        if (body == 0) return (Node*)0;
+        Token* c = cur();
+        if (Parser._same(close, "|") && (c.type() == tokPipe || c.type() == tokLogicalOr)) {
+            if (c.type() == tokLogicalOr && !_halfBar && !(_bracketClose != 0 && Parser._same(_bracketClose, "|"))) {
+                _errorAtTok(String.withCString("'||' after an operand inside |...| closes two bars, and one is open here: write '| |' to close it and start an or"), c);
+                advance();
+            } else {
+                takeBar();
+            }
+        } else if (c.type() == tokMathBracket && c.value().equals(close)) {
+            advance();
+        } else if (c.type() == tokMathBracket) {
+            String* m = String.withCString("'");
+            m.append(c.value());
+            m.appendCString("' does not close '");
+            m.append(open);
+            m.appendCString("': write '");
+            m.append(close);
+            m.appendCString("' to close it");
+            _errorAtTok(m, c);
+            advance();
+        } else {
+            String* m = String.withCString("'");
+            m.append(open);
+            m.appendCString("' at line ");
+            m.append(String.withU32(line));
+            m.appendCString(", column ");
+            m.append(String.withU32(col));
+            m.appendCString(" is not closed: add '");
+            m.append(close);
+            m.appendCString("' after its operand, here");
+            _errorAtTok(m, c);
+        }
+        Node* n = mk((u16)nkUnary);
+        n.setPos(t.fileId(), line, col);
+        String* key = String.withString(open);
+        key.appendCString("_");
+        key.append(close);
+        n.setOp(key);
+        n.add(body);
+        return n;
+    }
+
     // The sub-expressions two readings are compared through: a binary's two
     // operands, a prefix operator's one, a ternary's three, an assignment's
     // two, a cast's operand. 0 for any other node.
@@ -3475,6 +3645,7 @@ class Parser
         _shapeSites = sites;
         _splitShapes = false;
         u32 start = _pos;
+        bool startHalf = _halfBar;
         u32 errMark = _errors.count();
         u32 warnMark = _warnings.count();
         bool fatalBefore = _fatal;
@@ -3482,6 +3653,7 @@ class Parser
         Node* u = parseExprMinPrec((i16)0);
         if (sites.count() > 0) {
             u32 endU = _pos;
+            bool endHalf = _halfBar;
             bool uFailed = u == 0 || _errors.count() > errMark;
             bool attached = false;
             if (shapeSideEffects().equals(effects)) {
@@ -3489,11 +3661,13 @@ class Parser
                 u32 warnMark2 = _warnings.count();
                 bool fatal2 = _fatal;
                 _pos = start;
+                _halfBar = startHalf;
                 _splitShapes = true;
                 _shapeSites = (Array*)0;
                 Node* o = parseExprMinPrec((i16)0);
                 bool oFailed = o == 0 || _errors.count() > errMark2;
                 u32 endO = _pos;
+                bool sameEnd = endO == endU && _halfBar == endHalf;
                 Array* oWarn = new Array();
                 for (u32 w = warnMark2; w < _warnings.count(); w++) : serial oWarn.add(_warnings.get(w));
                 while (_warnings.count() > warnMark2) _warnings.removeAt(_warnings.count() - 1);
@@ -3501,7 +3675,8 @@ class Parser
                 _fatal = fatal2;
                 _splitShapes = false;
                 _pos = endU;
-                if (!oFailed && endO == endU) {
+                _halfBar = endHalf;
+                if (!oFailed && sameEnd) {
                     if (uFailed) {
                         while (_errors.count() > errMark) _errors.removeAt(_errors.count() - 1);
                         while (_warnings.count() > warnMark) _warnings.removeAt(_warnings.count() - 1);
@@ -10632,11 +10807,18 @@ class Parser
     Node* parseExpression(void)
     {
         Token* t0 = cur();
+        // Inside parentheses, an argument list or an index, a `|` is an
+        // operator again; the operand of a bracket shape is read with its
+        // closing bracket ("Operators a class defines").
+        String* outerClose = _bracketClose;
+        _bracketClose = _bracketBody;
+        _bracketBody = (String*)0;
         // A unit whose classes define operators of their own shape reads each
         // expression with them (and, where their characters also read the old
         // way, a second time without).
         Node* n = (_opShapes != 0 && _opShapes.count() > (u32)0)
             ? parseExpressionReadings() : parseExprMinPrec((i16)0);
+        _bracketClose = outerClose;
         if (n != 0 && n.line() == (u32)0) n.setPos(t0.fileId(), t0.line(), t0.col());
         return n;
     }
@@ -10647,6 +10829,8 @@ class Parser
         if (lhs == 0) return (Node*)0;
 
         while (true) {
+            // The bracket around this operand closes here (`|a|`).
+            if (atBracketStop()) break;
             // An operator a class defines with a shape of its own, joined
             // from the tokens here (`**`, `⊗`).
             if (_opShapes != 0 && _opShapes.count() > (u32)0) {
@@ -10759,6 +10943,9 @@ class Parser
 
     Node* parseUnary(void)
     {
+        // A bracket shape (`|x|`, `⌊x⌋`) is an operand: where one opens,
+        // nothing else starts.
+        if (atBracketOpen()) return parsePostfixFrom(parsePrimary());
         // A prefix operator a class defines with a shape of its own (`√x`,
         // `~~x`).
         if (_opShapes != 0 && _opShapes.count() > (u32)0) {
@@ -10979,6 +11166,8 @@ class Parser
 
     Node* parsePrimary(void)
     {
+        // A bracket shape: `|x|`, `‖x‖`, `⌊x⌋` ("Operators a class defines").
+        if (atBracketOpen()) return parseBracket();
         u16 t = curType();
 
         if (t == (u16)tokIntLiteral) {

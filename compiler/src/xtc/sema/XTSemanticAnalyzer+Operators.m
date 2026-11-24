@@ -326,6 +326,10 @@ static NSString* XTPrecedenceSpelling(NSString* spec)
         return [NSString stringWithFormat:@"'%@' keeps the precedence of the built-in operator: ':precedence' is for an "
                                           @"operator of a class's own shape; remove ':precedence'",
                                           XTShapeCore(m.operatorShape)];
+    if (XTShapeIsBracket(m.operatorShape))
+        return [NSString stringWithFormat:@"':precedence' is for an operator between two operands: the bracket operator "
+                                          @"%@ binds as parentheses do; remove ':precedence'",
+                                          XTShapeSpelling(m.operatorShape)];
     if (!XTShapeIsInfix(m.operatorShape))
         return [NSString stringWithFormat:@"':precedence' is for an operator between two operands: the prefix '%@' binds "
                                           @"as the built-in prefix operators do; remove ':precedence'",
@@ -386,6 +390,27 @@ static NSString* XTPrecedenceSpelling(NSString* spec)
                     [self.diagnostics emitError:pf at:m.location];
                     continue;
                     }
+                // One meaning for a bracket in a class: `|M|` is the
+                // determinant or the norm, not both.
+                if (XTShapeIsBracket(m.operatorShape))
+                    for (XTMethodDeclNode* o in cls.methods)
+                        {
+                        if (o == m)
+                            break;
+                        if ([o.operatorShape isEqualToString:m.operatorShape] && o.isStatic == m.isStatic
+                            && XTOperatorSameParams(o, m))
+                            {
+                            [self.diagnostics emitError:[NSString stringWithFormat:@"'%@.%@' gives %@ a second meaning: "
+                                                                                   @"'%@.%@' defines it already; remove "
+                                                                                   @"':operator' from one of them and call "
+                                                                                   @"it by name",
+                                                                                   cls.className, m.methodName,
+                                                                                   XTShapeSpelling(m.operatorShape),
+                                                                                   cls.className, o.methodName]
+                                                     at:m.location];
+                            break;
+                            }
+                        }
                 if (!m.operatorPrecedence)
                     continue;
                 // One operator, one precedence: the parse reads it before any
@@ -581,7 +606,10 @@ static NSString* XTPrecedenceSpelling(NSString* spec)
     if (call || ambiguous)
         return call;
     NSString* msg;
-    if (ops.count == 1)
+    if (ops.count == 1 && XTShapeIsBracket(shape))
+        msg = [NSString stringWithFormat:@"'%@' has no %@ taking '%@': pass one of the types its %@ methods take", lc.className,
+                                         op, [self describeArgTypes:ops], op];
+    else if (ops.count == 1)
         msg = [NSString stringWithFormat:@"'%@' has no prefix '%@' taking '%@'", lc.className, op,
                                          [self describeArgTypes:ops]];
     else if (optL)
@@ -628,7 +656,15 @@ static NSString* XTPrecedenceSpelling(NSString* spec)
     if (owner)
         return NO;
     node.resolvedType = [XTType u8Type];
-    if (!noting)
+    if (!noting && XTShapeIsBracket(shape))
+        [self.diagnostics emitError:[NSString stringWithFormat:@"no class defines %@ for '%@'; the operand must be an "
+                                                               @"instance of a class that defines it with "
+                                                               @":operator(%@)",
+                                                               op, [self describeArgTypes:ops],
+                                                               [shape stringByReplacingOccurrencesOfString:@"_"
+                                                                                                withString:@"self"]]
+                                 at:node.location];
+    else if (!noting)
         [self.diagnostics emitError:[NSString stringWithFormat:ops.count == 1
                                                                    ? @"no class defines the prefix operator '%@' for (%@); the operand must be an instance of a class that defines it with :operator(...)"
                                                                    : @"no class defines the operator '%@' for (%@); one operand must be an instance of a class that defines it with :operator(...)",
@@ -851,11 +887,14 @@ static BOOL XTOldReadingDefined(XTASTNode* alt, NSArray<NSArray*>* sites)
     NSString* op = user ? node.userOp : XTOperatorUnarySpelling(node.op);
     if (!op)
         return NO;
-    if (user && [self userOperatorUndefined:node shape:[NSString stringWithFormat:@"%@_", op] spelling:op
+    // A bracket shape is spelt in full (`|_|`), a prefix one by its characters.
+    NSString* shape = XTShapeIsBracket(op) ? op : [NSString stringWithFormat:@"%@_", op];
+    op = XTShapeSpelling(shape);
+    if (user && [self userOperatorUndefined:node shape:shape spelling:op
                                    operands:@[ node.operand ] twoReadings:node.twoReadings])
         return YES;
     BOOL handled = NO;
-    XTASTNode* call = [self operatorCallForShape:[NSString stringWithFormat:@"%@_", op]
+    XTASTNode* call = [self operatorCallForShape:shape
                                         spelling:op
                                         operands:@[ node.operand ]
                                               at:node.location

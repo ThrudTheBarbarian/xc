@@ -132,6 +132,13 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, strong, nullable) NSMutableSet<NSString*>* opShapesSet;
 @property(nonatomic) BOOL splitShapes;
 @property(nonatomic, strong, nullable) NSMutableArray<XTASTNode*>* shapeSites;
+// Bracket shapes (`|x|`, `⌊x⌋`): the bracket that closes the one whose
+// operand is being read, when no parenthesis or argument list lies between;
+// the closing bracket of a bracket whose operand the next parseExpression
+// reads; and whether the current token is a `||` whose first bar is taken.
+@property(nonatomic, copy, nullable) NSString* bracketClose;
+@property(nonatomic, copy, nullable) NSString* bracketBody;
+@property(nonatomic) BOOL halfBar;
 @end
 
 // Operators a class defines with a shape of its own (XTParser+Shapes.m).
@@ -143,6 +150,9 @@ NS_ASSUME_NONNULL_BEGIN
 - (nullable XTASTNode*)parsePrefixShape;
 - (BOOL)infixShapeAtCurrent;
 - (nullable XTASTNode*)parseExpressionReadings;
+- (BOOL)atBracketOpen;
+- (BOOL)atBracketStop;
+- (nullable XTASTNode*)parseBracket;
 @end
 BOOL XTShapeTokenType(XTTokenType t);
 NSString* _Nullable XTPatternUserShape(NSArray<XTToken*>* t, NSString* _Nullable* _Nonnull fault,

@@ -78,12 +78,18 @@ static XTOpInfo operatorInfo(XTTokenType type)
 \****************************************************************************/
 - (nullable XTASTNode*)parseExpression
     {
+    // Inside parentheses, an argument list or an index, a `|` is an operator
+    // again; the operand of a bracket shape is read with its closing bracket
+    // (XTParser+Shapes.m).
+    NSString* outerClose = self.bracketClose;
+    self.bracketClose = self.bracketBody;
+    self.bracketBody = nil;
     // A unit whose classes define operators of their own shape reads each
     // expression with them (and, where their characters also read the old
     // way, a second time without).
-    if (self.opShapes.count)
-        return [self parseExpressionReadings];
-    return [self parseExprWithMinPrec:0];
+    XTASTNode* e = self.opShapes.count ? [self parseExpressionReadings] : [self parseExprWithMinPrec:0];
+    self.bracketClose = outerClose;
+    return e;
     }
 
 /****************************************************************************\
@@ -101,6 +107,9 @@ static XTOpInfo operatorInfo(XTTokenType type)
     while (YES)
         {
         XTToken* op = [self currentToken];
+        // The bracket around this operand closes here (`|a|`).
+        if ([self atBracketStop])
+            break;
         // An operator a class defines with a shape of its own, joined from
         // the tokens here (`**`, `⊗`).
         if (self.opShapes.count)
@@ -349,6 +358,11 @@ static XTOpInfo operatorInfo(XTTokenType type)
 - (nullable XTASTNode*)parseUnary
     {
     XTToken* cur = [self currentToken];
+
+    // A bracket shape (`|x|`, `⌊x⌋`) is an operand: where one opens, nothing
+    // else starts.
+    if ([self atBracketOpen])
+        return [self parsePostfix];
 
     // A prefix operator a class defines with a shape of its own (`√x`, `~~x`).
     if (self.opShapes.count)
@@ -657,6 +671,10 @@ static BOOL parPlainDecimal(NSString* t)
     {
     XTToken* cur = [self currentToken];
     XTSourceLocation* loc = cur.location;
+
+    // A bracket shape: `|x|`, `‖x‖`, `⌊x⌋` (XTParser+Shapes.m).
+    if ([self atBracketOpen])
+        return [self parseBracket];
 
     // inline: funcName(args) or inline:receiver.method(args) — force
     // inline at call site. The trailing call may be either a free

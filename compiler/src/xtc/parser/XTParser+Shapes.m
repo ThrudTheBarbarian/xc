@@ -224,6 +224,33 @@ BOOL XTShapeIsInfix(NSString* shape)
     return shape.length >= 3 && [shape hasPrefix:@"_"] && [shape hasSuffix:@"_"];
     }
 
+// A bracket shape (`|_|`, `⌊_⌋`): the operand between two brackets.
+BOOL XTShapeIsBracket(NSString* shape)
+    {
+    NSUInteger n = shape.length;
+    return n >= 3 && ![shape hasPrefix:@"_"] && ![shape hasSuffix:@"_"] && [shape containsString:@"_"];
+    }
+
+// A shape as a reader writes it: `|x|` for `|_|`, `**` for `_**_`.
+NSString* XTShapeSpelling(NSString* shape)
+    {
+    if (XTShapeIsBracket(shape))
+        return [shape stringByReplacingOccurrencesOfString:@"_" withString:@"x"];
+    return XTShapeCore(shape);
+    }
+
+// The bracket that closes `open` in a bracket shape, or nil when `open`
+// does not start one: `|` and `‖` close themselves, `⌊` `⌈` `⟨` are closed by
+// `⌋` `⌉` `⟩`.
+static NSString* _Nullable XTShapeCloserOf(NSString* open)
+    {
+    static NSDictionary<NSString*, NSString*>* pairs;
+    if (!pairs)
+        pairs = @{ @"|" : @"|", @"\u2016" : @"\u2016", @"\u230A" : @"\u230B", @"\u2308" : @"\u2309",
+                   @"\u27E8" : @"\u27E9" };
+    return pairs[open];
+    }
+
 // Is the shape one a class defines of its own, not a built-in operator, an
 // index or a compound assignment?
 BOOL XTIsUserShape(NSString* _Nullable shape)
@@ -361,6 +388,30 @@ NSString* _Nullable XTPatternUserShape(NSArray<XTToken*>* t, NSString* _Nullable
     {
     NSUInteger n = t.count;
     *fault = nil;
+    // A bracket shape: an opening bracket, one operand name, its closing one
+    // (`|self|`, `⌊x⌋`).
+    BOOL bracketTok0 = n >= 2 && (t[0].type == XTTokenPipe || t[0].type == XTTokenMathBracket);
+    BOOL bracketTokN = n >= 2 && (t[n - 1].type == XTTokenPipe || t[n - 1].type == XTTokenMathBracket);
+    NSString* closer = bracketTok0 ? XTShapeCloserOf(t[0].value) : nil;
+    if (closer && bracketTokN)
+        {
+        if (![t[n - 1].value isEqualToString:closer])
+            {
+            *fault = [NSString stringWithFormat:@"'%@' is closed by '%@', not '%@': write (%@self%@)", t[0].value, closer,
+                                                t[n - 1].value, t[0].value, closer];
+            return nil;
+            }
+        if (n != 3 || t[1].type != XTTokenIdentifier)
+            {
+            *fault = [NSString stringWithFormat:@"a bracket operator takes one operand: write (%@self%@), or (%@x%@) on a "
+                                                @"static method with one parameter",
+                                                t[0].value, closer, t[0].value, closer];
+            return nil;
+            }
+        if (names)
+            *names = @[ t[1].value ];
+        return [NSString stringWithFormat:@"%@_%@", t[0].value, closer];
+        }
     if (n >= 3 && t[0].type == XTTokenIdentifier && t[n - 1].type == XTTokenIdentifier)
         {
         NSString* key = XTUserShapeOf(t, 1, n - 1, YES, fault);
@@ -693,6 +744,111 @@ NSString* XTPrecedenceSpecOf(NSArray<XTToken*>* t)
     return [self shapeAtCurrentInfix:YES len:&len binlit:&tail ambiguous:&amb] != nil;
     }
 
+#pragma mark - Bracket shapes
+
+/****************************************************************************\
+|* The bracket the current token opens where an operand starts, or nil: `|`
+|* for a `|` or a `||` when the table has `|_|` (a `||` is two bars, the
+|* second taken when halfBar says the first is), and ‖ ⌊ ⌈ ⟨ always, since they
+|* mean nothing else.
+\****************************************************************************/
+- (nullable NSString*)bracketOpenAtCurrent
+    {
+    XTToken* t = [self currentToken];
+    if (t.type == XTTokenPipe || t.type == XTTokenLogicalOr)
+        return self.opShapes[@"|_|"] ? @"|" : nil;
+    if (t.type == XTTokenMathBracket && XTShapeCloserOf(t.value))
+        return t.value;
+    return nil;
+    }
+
+- (BOOL)atBracketOpen
+    {
+    return [self bracketOpenAtCurrent] != nil;
+    }
+
+/****************************************************************************\
+|* After an operand: does the current token end the operand of the bracket
+|* being read? Inside |...| the first `|` after an operand closes, so a `|` or
+|* `||` there is no operator; nor is a `||` whose first bar closed a bracket.
+|* The other brackets are no operator anywhere, so they stop an expression
+|* anyway.
+\****************************************************************************/
+- (BOOL)atBracketStop
+    {
+    if (self.halfBar)
+        return YES;
+    XTTokenType ty = [self currentToken].type;
+    return [self.bracketClose isEqualToString:@"|"] && (ty == XTTokenPipe || ty == XTTokenLogicalOr);
+    }
+
+// Take one bar of the current `|` or `||`.
+- (void)takeBar
+    {
+    if ([self currentToken].type == XTTokenLogicalOr && !self.halfBar)
+        {
+        self.halfBar = YES;
+        return;
+        }
+    self.halfBar = NO;
+    [self advance];
+    }
+
+/****************************************************************************\
+|* A bracket shape at the current token (atBracketOpen): the bracket, its
+|* operand read as a full expression, and its closing bracket. A prefix node
+|* spelt with the shape (`|_|`), which sema resolves like a prefix operator.
+|* A `||` after the operand closes this bar and the one around it.
+\****************************************************************************/
+- (nullable XTASTNode*)parseBracket
+    {
+    XTToken* t = [self currentToken];
+    NSString* open = [self bracketOpenAtCurrent];
+    NSString* close = XTShapeCloserOf(open);
+    XTSourceLocation* loc = t.location;
+    if (self.halfBar)
+        loc = [XTSourceLocation locationWithFilename:loc.filename line:loc.line column:loc.column + 1];
+    if ([open isEqualToString:@"|"])
+        [self takeBar];
+    else
+        [self advance];
+    self.bracketBody = close;
+    XTASTNode* body = [self parseExpression];
+    if (!body)
+        return nil;
+    XTToken* c = [self currentToken];
+    if ([close isEqualToString:@"|"] && (c.type == XTTokenPipe || c.type == XTTokenLogicalOr))
+        {
+        if (c.type == XTTokenLogicalOr && !self.halfBar && ![self.bracketClose isEqualToString:@"|"])
+            {
+            [self.diagnostics emitError:@"'||' after an operand inside |...| closes two bars, and one is open here: "
+                                        @"write '| |' to close it and start an or"
+                                     at:c.location];
+            [self advance];
+            }
+        else
+            [self takeBar];
+        }
+    else if (c.type == XTTokenMathBracket && [c.value isEqualToString:close])
+        [self advance];
+    else if (c.type == XTTokenMathBracket)
+        {
+        [self.diagnostics emitError:[NSString stringWithFormat:@"'%@' does not close '%@': write '%@' to close it", c.value,
+                                                               open, close]
+                                 at:c.location];
+        [self advance];
+        }
+    else
+        [self.diagnostics emitError:[NSString stringWithFormat:@"'%@' at line %lu, column %lu is not closed: add '%@' after "
+                                                               @"its operand, here",
+                                                               open, (unsigned long)loc.line,
+                                                               (unsigned long)loc.column, close]
+                                 at:c.location];
+    XTUnaryExprNode* u = [[XTUnaryExprNode alloc] initWithOp:XTUnaryOpUser operand:body location:loc];
+    u.userOp = [NSString stringWithFormat:@"%@_%@", open, close];
+    return u;
+    }
+
 #pragma mark - Two readings
 
 // The sub-expressions the two readings are compared through, and what else
@@ -785,27 +941,32 @@ static NSString* XTReadingHead(XTASTNode* n)
     self.shapeSites = sites;
     self.splitShapes = NO;
     NSUInteger start = self.pos;
+    BOOL startHalf = self.halfBar;
     NSUInteger mark = [self.diagnostics mark];
     NSString* effects = [self shapeSideEffects];
     XTASTNode* u = [self parseExprWithMinPrec:0];
     if (sites.count)
         {
         NSUInteger endU = self.pos;
+        BOOL endHalf = self.halfBar;
         BOOL uFailed = !u || [self.diagnostics errorCountSince:mark] > 0;
         BOOL attached = NO;
         if ([[self shapeSideEffects] isEqualToString:effects])
             {
             NSUInteger mark2 = [self.diagnostics mark];
             self.pos = start;
+            self.halfBar = startHalf;
             self.splitShapes = YES;
             self.shapeSites = nil;
             XTASTNode* o = [self parseExprWithMinPrec:0];
             BOOL oFailed = !o || [self.diagnostics errorCountSince:mark2] > 0;
             NSUInteger endO = self.pos;
+            BOOL sameEnd = endO == endU && self.halfBar == endHalf;
             NSArray<XTDiagnostic*>* oDiags = [self.diagnostics takeSince:mark2];
             self.splitShapes = NO;
             self.pos = endU;
-            if (!oFailed && endO == endU)
+            self.halfBar = endHalf;
+            if (!oFailed && sameEnd)
                 {
                 if (uFailed)
                     {
