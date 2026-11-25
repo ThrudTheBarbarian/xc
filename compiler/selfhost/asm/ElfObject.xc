@@ -51,10 +51,20 @@ class ElfSymDef
     u32 _off;   // offset within that blob
     u32 _size;  // COMMON byte size (where==5); 0 otherwise
     u32 _align; // COMMON alignment (where==5)
+    bool _tentative; // COFF: defined in an uninitialised (.bss) section
     void init(void)
         {
         _size = (u32)0;
         _align = (u32)1;
+        _tentative = false;
+        }
+    bool tentative(void)
+        {
+        return _tentative;
+        }
+    void setTentative(bool t)
+        {
+        _tentative = t;
         }
     String* name(void)
         {

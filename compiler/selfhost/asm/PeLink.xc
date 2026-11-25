@@ -23,6 +23,7 @@ class PeLink
     SectionBytes* _tls;   // the objects' .tls$ sections: the thread-local template
     Array* _tlsFix;       // X86Fixup@ against it
     Map* _tlsSyms;        // name -> Number(offset in _tls), defined when placed
+    Map* _tentative;      // name -> 1: defined so far only by a .bss (tentative) definition
     SectionBytes* _ctors; // the objects' .ctors: constructors, run by __main
     Array* _ctorsFix;     // X86Fixup@ against it
     bool _dll;            // the image is a DLL (setDll), not an executable
@@ -36,6 +37,7 @@ class PeLink
         _tls = new SectionBytes();
         _tlsFix = new Array();
         _tlsSyms = new Map();
+        _tentative = new Map();
         _ctors = new SectionBytes();
         _ctorsFix = new Array();
         }
@@ -98,6 +100,16 @@ class PeLink
     static void appendData(SectionBytes* a, Data* d)
         {
         a.appendData(d);
+        }
+
+    static void dropName(Array* a, String* n)
+        {
+        for (u32 i = (u32)0; i < a.count(); i = i + (u32)1)
+            if (((String*)a.get(i)).equals(n))
+                {
+                a.removeAt(i);
+                return;
+                }
         }
 
     // One object into the image. Text 16-aligned, data 8-aligned; first
@@ -165,14 +177,25 @@ class PeLink
                     fail(String.withCString("class in two modules"));
                     return false;
                     }
-                continue;
+                // A tentative definition (`i32 g;`, in .bss) yields to an
+                // initialised one whatever the order, as a C linker merges a
+                // common (#686); otherwise the FIRST definition stands (#663).
+                if (_tentative.get((Hashable*)nm) == (Object*)0 || sd.tentative())
+                    continue;
+                _tentative.remove((Hashable*)nm);
+                if (sd.where() == (u32)1)
+                    PeLink.dropName(mdataSyms, nm);
                 }
             if (sd.where() == (u32)1)
                 msyms.set((Hashable*)nm, (Object*)Number.withU32(tbase + sd.off()));
             else
                 {
+                bool listed = msyms.get((Hashable*)nm) != (Object*)0;
                 msyms.set((Hashable*)nm, (Object*)Number.withU32(dbase + sd.off()));
-                mdataSyms.add((Object*)nm);
+                if (!listed)
+                    mdataSyms.add((Object*)nm);
+                if (sd.tentative())
+                    _tentative.set((Hashable*)nm, (Object*)Number.withU32((u32)1));
                 }
             }
         Array* rl = obj.relocs();

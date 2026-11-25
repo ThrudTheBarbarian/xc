@@ -18,8 +18,9 @@
 //     name. Every relocation against either is tagged the same way.
 //   * Archive members join only when something still undefined needs them,
 //     to a fixpoint; a .o named on the command line joins regardless.
-//   * STRONG beats WEAK whatever the order; two strong definitions are an
-//     error, not a silent override.
+//   * STRONG beats WEAK whatever the order; between strong definitions the
+//     FIRST stands (#663): the program's own image, then the objects, then
+//     archive members. A category-chain table defined twice is an error.
 //   * A GOT reference to a symbol the image defines is relaxed to adrp/add
 //     after the pull settles, as MachOLink does: the writer makes GOT slots
 //     for imports alone.
@@ -273,7 +274,6 @@ class ElfLinkArm64
                     continue;
                 ElfObject* obj = (ElfObject*)allObjs.get(oi);
                 bool defines = forced.get((Hashable*)key) != (Object*)0;
-                bool named = defines;   // on the command line, not an archive member
                 if (!defines)
                     defines = ElfLinkArm64.definesAny(obj, needed, msyms);
                 if (!defines)
@@ -326,19 +326,23 @@ class ElfLinkArm64
                         {
                         if (sd.weak())
                             continue;                                   // a definition stands already
-                        // xcc's own objects (a split build's modules) each
-                        // carry a copy of the standard library: the first
-                        // definition stands, as in the x86-64 and Mach-O
-                        // links. A class's category table twice is still the
-                        // class compiled into two modules.
-                        if (named && strongDefs.get((Hashable*)nm) != (Object*)0 && !nm.contains(String.withCString("$cat$")))
-                            continue;
-                        if (strongDefs.get((Hashable*)nm) != (Object*)0)
+                        // The FIRST definition stands (#663), as in every
+                        // in-house linker: the program's own image, then the
+                        // objects, then archive members. xcc's own objects (a
+                        // split build's modules) each carry a copy of the
+                        // standard library. A class's category table twice is
+                        // still the class compiled into two modules.
+                        if (strongDefs.get((Hashable*)nm) != (Object*)0 && nm.contains(String.withCString("$cat$")))
                             {
                             fail(String.withCString("'").appending(nm).appending(String.withCString("' is defined twice, the second time in ")).appending(label));
                             return;
                             }
-                        // strong over weak: fall through and replace
+                        // Only a WEAK definition gives way to a strong one; the
+                        // program's own (which no object may replace) and every
+                        // earlier strong one stand.
+                        if (weakDefs.get((Hashable*)nm) == (Object*)0)
+                            continue;
+                        weakDefs.remove((Hashable*)nm);
                         }
                     if (sd.where() == (u32)3)
                         {

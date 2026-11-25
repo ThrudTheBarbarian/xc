@@ -27,6 +27,10 @@
 // construction: a duplicate is the same body twice, which is COMDAT semantics
 // rather than an error. `<Class>$cat` is the exception, where two definitions
 // mean two different category tables (separate-compilation §4.2).
+// The size of each name a COMMON defines, for the common-vs-strong rule
+// (#686). One link per process, so one table.
+static NSMutableDictionary<NSString*, NSNumber*>* gCommonSize;
+
 static BOOL mergeElfObject(NSDictionary* obj, NSString* label, NSUInteger tag,
                            NSMutableData* mtext, NSMutableData* mdata,
                            NSMutableDictionary<NSString*, NSNumber*>* msyms,
@@ -43,6 +47,8 @@ static BOOL mergeElfObject(NSDictionary* obj, NSString* label, NSUInteger tag,
                            uint64_t* mbssAlign,
                            XTElfGC* gc)
     {
+    if (!gCommonSize)
+        gCommonSize = [NSMutableDictionary dictionary];
     while (mtext.length & 15)
         {
         uint8_t z = 0;
@@ -162,10 +168,38 @@ static BOOL mergeElfObject(NSDictionary* obj, NSString* label, NSUInteger tag,
                         [nm substringToIndex:nm.length - 4].UTF8String, nm.UTF8String);
                 return NO;
                 }
+            // A COMMON (a tentative `i32 g;`) yields as a C linker has it
+            // (#686): a strong definition beats it whatever the order, and
+            // among commons the LARGEST wins. Anything else: the FIRST
+            // definition stands (#663).
+            NSNumber* haveC = gCommonSize[nm];
+            if (haveC)
+                {
+                if (where == 5)
+                    {
+                    uint64_t csz = [sdefs[si][@"size"] unsignedLongLongValue];
+                    if (!csz)
+                        csz = 8;
+                    if (csz <= haveC.unsignedLongLongValue)
+                        continue;
+                    [mbssSyms removeObject:nm];        // re-registered below, larger
+                    [mdataSyms removeObject:nm];
+                    [mweakdef removeObject:nm];
+                    }
+                else if (!weakDef)
+                    {
+                    [mbssSyms removeObject:nm];        // the strong definition takes it
+                    [mdataSyms removeObject:nm];
+                    [mweakdef removeObject:nm];
+                    [gCommonSize removeObjectForKey:nm];
+                    }
+                else
+                    continue;
+                }
             // Strong beats weak, whatever the merge order (ELF rule). A weak
             // definition that arrived first steps aside for this strong one;
             // a weak arriving second is simply not registered.
-            if (!weakDef && [mweakdef containsObject:nm])
+            else if (!weakDef && [mweakdef containsObject:nm])
                 {
                 [mweakdef removeObject:nm];
                 [mdataSyms removeObject:nm];
@@ -193,6 +227,7 @@ static BOOL mergeElfObject(NSDictionary* obj, NSString* label, NSUInteger tag,
             if (!csize)
                 csize = 8;
             [mbss appendData:[NSMutableData dataWithLength:(NSUInteger)csize]];
+            gCommonSize[nm] = @(csize);
             if (cal > *mbssAlign)
                 *mbssAlign = cal;
             if ([sdefs[si][@"ext"] boolValue])

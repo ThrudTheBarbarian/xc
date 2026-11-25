@@ -22,6 +22,10 @@
 #import "XTPEWriter.h"
 
 // Merge one COFF object into the growing image (defined below main).
+// Names defined so far only by a .bss (tentative) definition (#686). One link
+// per process, so one set.
+static NSMutableSet<NSString*>* gTentative;
+
 static BOOL mergeCoffObject(NSDictionary* obj, NSString* whence, NSUInteger oi,
                             NSMutableData* mtext, NSMutableData* mdata,
                             NSMutableDictionary<NSString*, NSNumber*>* msyms,
@@ -426,6 +430,8 @@ static BOOL mergeCoffObject(NSDictionary* obj, NSString* whence, NSUInteger oi,
                             NSMutableSet<NSString*>* mdataSyms,
                             NSMutableArray<XAX86_64Fixup*>* mfix)
     {
+    if (!gTentative)
+        gTentative = [NSMutableSet set];
         {
         while (mtext.length & 15)
             {
@@ -491,7 +497,14 @@ static BOOL mergeCoffObject(NSDictionary* obj, NSString* whence, NSUInteger oi,
                             [nm substringToIndex:nm.length - 4].UTF8String, nm.UTF8String);
                     return NO;
                     }
-                continue;
+                // A tentative definition (`i32 g;`, in .bss) yields to an
+                // initialised one whatever the order, as a C linker merges a
+                // common (#686); otherwise the FIRST definition stands (#663).
+                if (![gTentative containsObject:nm] || [sdefs[si][@"tentative"] boolValue])
+                    continue;
+                [gTentative removeObject:nm];
+                if (where == 1)
+                    [mdataSyms removeObject:nm];
                 }
             if (where == 1)
                 msyms[nm] = @(tbase + off);
@@ -499,6 +512,8 @@ static BOOL mergeCoffObject(NSDictionary* obj, NSString* whence, NSUInteger oi,
                 {
                 msyms[nm] = @(dbase + off);
                 [mdataSyms addObject:nm];
+                if ([sdefs[si][@"tentative"] boolValue])
+                    [gTentative addObject:nm];
                 }
             }
         for (NSDictionary* r in obj[@"relocs"])

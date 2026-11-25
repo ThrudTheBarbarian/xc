@@ -116,6 +116,7 @@ bool gCoffKeepUnwind;
     bool _ok;
     Map* _textOffOf; // section index -> offset+1 in the text blob
     Map* _dataOffOf;
+    Map* _bssSect;   // section index -> 1: an uninitialised (.bss) section
     u32 _dataAlign;  // the strictest alignment a data section asks for
     Data* _tlsData;      // the .tls$ sections: the thread-local template
     Map* _tlsOffOf;      // section index -> offset+1 in it
@@ -137,6 +138,7 @@ bool gCoffKeepUnwind;
         _data = new Data();
         _textOffOf = new Map();
         _dataOffOf = new Map();
+        _bssSect = new Map();
         _dataAlign = (u32)8;
         _tlsData = new Data();
         _tlsOffOf = new Map();
@@ -362,7 +364,10 @@ bool gCoffKeepUnwind;
             _dataOffOf.set((Hashable*)Number.withU32(i),
                            (Object*)Number.withU32(_data.length() + (u32)1));
             if ((ch & (u32)COFF_SCN_UNINIT_DATA) != (u32)0)
+                {
                 _zeros(_data, s.size());
+                _bssSect.set((Hashable*)Number.withU32(i), (Object*)Number.withU32((u32)1));
+                }
             else
                 _copyInto(_data, s.raw(), s.size());
             }
@@ -412,6 +417,10 @@ bool gCoffKeepUnwind;
                 }
             ElfSymDef* sd = new ElfSymDef();
             sd.set(nm, ext, false, where, off);
+            // A definition in .bss is a TENTATIVE one (win64 emits `i32 g;`
+            // there): an initialised definition of the name beats it (#686).
+            if (where == (u32)2 && sect > (i32)0 && _bssSect.get((Hashable*)Number.withU32((u32)sect)) != (Object*)0)
+                sd.setTentative(true);
             // A weak external (class 105): its first aux record names the
             // default definition, which it stands for (libc++'s operator new).
             if (gCoffKeepUnwind && cls == (u32)105 && naux > (u32)0)

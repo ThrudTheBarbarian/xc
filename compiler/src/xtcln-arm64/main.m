@@ -493,8 +493,15 @@ static int mergeMachOInputs(NSArray<NSString *> *objectFiles,
                         return 1;
                     }
                     uint64_t off = [sd[@"off"] unsignedLongLongValue];
-                    if (where==1) msyms[nm] = @(base + off);
-                    else {
+                    // FIRST definition wins (#663), as in every in-house
+                    // linker: the program's own image, then the objects in
+                    // command-line order, then archive members. A common
+                    // still yields to a strong definition (bug 177).
+                    BOOL taken = msyms[nm] != nil && commonSizes[nm] == nil;
+                    if (where==1) { if (!taken) msyms[nm] = @(base + off); }
+                    else if (taken) {
+                        // a strong definition (text, data or the program's) stands
+                    } else {
                         // Common (tentative) vs strong resolution (bug 177). A
                         // STRONG data def beats any common; among commons the
                         // LARGEST size wins whatever the link ORDER (a C linker

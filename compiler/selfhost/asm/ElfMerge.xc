@@ -161,6 +161,7 @@ class MergedImage
     Map* _tlsSyms;     // name -> Number(offset in the thread block)
     SectionBytes* _bss; // zero-init (COMMON) storage — NOBITS, a size only
     Array* _bssSyms;   // String@ — names whose offset is a BSS offset
+    Map* _commonSize;  // name -> Number: what a COMMON defined it with (#686)
     u32 _bssAlign;
     Map* _funcSizes;      // name -> byte extent (st_size) of a TEXT function (bug 196 GC)
     Array* _objText;      // Number@ pairs: [start, end) of each merged object's text (bug 196 GC)
@@ -198,6 +199,7 @@ class MergedImage
         _ehFix = new Array();
         _bss = new SectionBytes();
         _bssSyms = new Array();
+        _commonSize = new Map();
         _bssAlign = (u32)1;
         _funcSizes = new Map();
         _objText = new Array();
@@ -1686,6 +1688,29 @@ class MergedImage
         _dataSyms = keepD;
         }
 
+    Object* commonSize(String* n)
+        {
+        return _commonSize.get((Hashable*)n);
+        }
+
+    void setCommonSize(String* n, u32 size)
+        {
+        _commonSize.set((Hashable*)n, (Object*)Number.withU32(size));
+        }
+
+    // A COMMON gives up its name: to a strong definition, or to a larger
+    // common that takes a fresh slot (the old one stays as dead BSS).
+    void dropCommon(String* n)
+        {
+        _commonSize.remove((Hashable*)n);
+        Array* keepB = new Array();
+        for (u32 i = (u32)0; i < _bssSyms.count(); i = i + (u32)1)
+            if (!((String*)_bssSyms.get(i)).equals(n))
+                keepB.add(_bssSyms.get(i));
+        _bssSyms = keepB;
+        dropWeakDef(n);
+        }
+
     void noteWeakDef(String* n)
         {
         _weakDef.add((Object*)n);
@@ -1898,9 +1923,28 @@ class MergedImage
                                 .appending(nm));
                     return;
                     }
+                // A COMMON (a tentative `i32 g;`) yields as a C linker has it
+                // (#686): a strong definition beats it whatever the order, and
+                // among commons the LARGEST wins. Anything else: the FIRST
+                // definition stands (#663).
+                Object* haveC = im.commonSize(nm);
+                if (haveC != (Object*)0)
+                    {
+                    if (s.where() == (u32)5)
+                        {
+                        u32 csz = s.size() != (u32)0 ? s.size() : (u32)8;
+                        if (csz <= ((Number*)haveC).asU32())
+                            continue;
+                        im.dropCommon(nm);              // re-registered below, larger
+                        }
+                    else if (!s.weak())
+                        im.dropCommon(nm);              // the strong definition takes it
+                    else
+                        continue;
+                    }
                 // Strong beats weak whatever the order; a weak arriving second
                 // is simply not registered.
-                if (!s.weak() && im.isWeakDef(nm))
+                else if (!s.weak() && im.isWeakDef(nm))
                     im.dropWeakDef(nm);
                 else
                     continue;
@@ -1917,6 +1961,7 @@ class MergedImage
                 im.dataSyms().add((Object*)nm); // resolves as a data address
 
                 im.bss().appendZeros(s.size() != (u32)0 ? s.size() : (u32)8);
+                im.setCommonSize(nm, s.size() != (u32)0 ? s.size() : (u32)8);
                 if (cal > im.bssAlign())
                     im.setBssAlign(cal);
                 if (s.ext())

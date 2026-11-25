@@ -349,8 +349,21 @@ class MachOLink
                         _rc = (u32)1;
                         return;
                         }
+                    // FIRST definition wins (#663), as in every in-house
+                    // linker: the program's own image, then the objects in
+                    // command-line order, then archive members. A common
+                    // still yields to a strong definition (bug 177).
+                    bool taken = msyms.get((Hashable*)nm) != (Object*)0
+                              && commonSizes.get((Hashable*)nm) == (Object*)0;
                     if (sd.where() == (u32)1)
-                        msyms.set((Hashable*)nm, (Object*)Number.withU32(base + sd.off()));
+                        {
+                        if (!taken)
+                            msyms.set((Hashable*)nm, (Object*)Number.withU32(base + sd.off()));
+                        }
+                    else if (taken)
+                        {
+                        // a strong definition (text, data or the program's) stands
+                        }
                     else
                         {
                         // Common vs strong resolution (bug 177): a strong def

@@ -441,6 +441,7 @@ static uint64_t rawSizeOf(NSData* d)
     NSMutableData* data = [NSMutableData data];
     NSMutableDictionary<NSNumber*, NSNumber*>* blobOff = [NSMutableDictionary dictionary];
     uint32_t dataAlign = 8; // the strictest alignment a data section asks for
+    NSMutableSet<NSNumber*>* bssSects = [NSMutableSet set];   // uninitialised (.bss) sections
     for (NSUInteger i = 1; i < secs.count; i++)
         {
         if (textOff[@(i)])
@@ -469,7 +470,10 @@ static uint64_t rawSizeOf(NSData* d)
         blobOff[@(i)] = @(data.length);
         uint32_t sz = [secs[i][@"size"] unsignedIntValue];
         if (ch & PE_SCN_UNINIT_DATA)
+            {
             [data appendData:[NSMutableData dataWithLength:sz]];
+            [bssSects addObject:@(i)];
+            }
         else
             [data appendBytes:b + [secs[i][@"raw"] unsignedLongLongValue] length:sz];
         }
@@ -506,8 +510,12 @@ static uint64_t rawSizeOf(NSData* d)
             where = 2;
             off = blobOff[@(sect)].unsignedLongLongValue + val;
             }
+        // A definition in .bss is a TENTATIVE one (win64 emits `i32 g;`
+        // there): an initialised definition of the name beats it (#686).
+        BOOL tentative = where == 2 && [bssSects containsObject:@(sect)];
         [symnames addObject:n];
-        [symdefs addObject:@{@"ext" : @(ext), @"where" : @(where), @"off" : @(off)}];
+        [symdefs addObject:@{@"ext" : @(ext), @"where" : @(where), @"off" : @(off),
+                             @"tentative" : @(tentative)}];
         if (n.length && ext && where == 1)
             syms[n] = @(off);
         else if (n.length && ext && where == 2)
