@@ -49,6 +49,9 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, readonly, nullable) NSArray<NSString *> *ownDefines;
 // Building libRuntime: the runtime files the unit took in (its `provides`).
 @property (nonatomic, readonly, nullable) NSArray<NSString *> *providedFiles;
+// The program or library is of xc alone, its imports included (#15): a
+// library's interface then says `pure`.
+@property (nonatomic, readonly) BOOL pureResolved;
 /****************************************************************************\
 |* The vtable slot indices this build committed to — serialised into the
 |* library's interface under --emit-lib so a client adopts them rather than

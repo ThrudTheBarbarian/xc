@@ -921,6 +921,19 @@ class JsonVal
         return out;
         }
 
+    // Whether a library says it was built of xc alone (`pure`, #15).
+    static bool pureOf(String* path)
+        {
+        if (path.hasPrefix(String.withCString("framework:")))
+            return false;
+        String* text = IfaceImport.ifaceText(path);
+        if (text == 0)
+            return false;
+        JsonVal* root = JsonParser.parse(text);
+        JsonVal* v = root == (JsonVal*)0 ? (JsonVal*)0 : root.member("pure");
+        return v != (JsonVal*)0 && v.asBool();
+        }
+
     // A library's `stdState`: the hash of the standard-library sources it was
     // built with (Frontend.xc's stdStateHashOf). Null when it has none.
     static String* stdStateOf(String* path)

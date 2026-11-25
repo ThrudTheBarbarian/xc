@@ -706,6 +706,9 @@ int main(int argc, const char* argv[])
                         [pv addObject:root];
                     json = [XTInterfaceSerializer json:json withProvides:pv];
                     }
+                // A library of xc alone says so (#15): its clients stay all xc.
+                if (json.length && opts.emitLib && driver.pureResolved)
+                    json = [XTInterfaceSerializer jsonWithPure:json];
                 if (json.length)
                     {
                     [json writeToFile:ifacePath

@@ -2241,13 +2241,23 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     // program declares the thread-spawn primitive (threading.md §9.5).
     [XTIRLowering setThreadSafeStatics:(int)_options.threadSafeARC];
     [XTIRLowering setCPackCarrier:dispatchRow.cPackCarrier];
-    // An executable of xc alone (the dispatcher's word) that imports no
-    // library but xcc's runtime (#15), as the port's onlyRuntimeLibs.
+    // An executable or library of xc alone (the dispatcher's word) that
+    // imports no library but xcc's runtime and libraries of xc alone (their
+    // interface says `pure`) (#15), as the port's onlyRuntimeLibs.
     {
     BOOL pure = _options.pureProgram;
     for (NSString* p in _neededLibraryPaths)
-        if (![p.lastPathComponent hasPrefix:@"libRuntime."])
+        {
+        if ([p.lastPathComponent hasPrefix:@"libRuntime."])
+            continue;
+        NSString* json = [p hasPrefix:@"framework:"] ? nil : [XTInterfaceImporter interfaceJSONFromLibrary:p];
+        NSDictionary* root = json.length ? [NSJSONSerialization JSONObjectWithData:[json dataUsingEncoding:NSUTF8StringEncoding]
+                                                                            options:0 error:NULL] : nil;
+        id v = [root isKindOfClass:[NSDictionary class]] ? root[@"pure"] : nil;
+        if (!([v isKindOfClass:[NSNumber class]] && [v boolValue]))
             pure = NO;
+        }
+    _pureResolved = pure;
     [XTIRLowering setPureProgram:pure];
     }
     // --migrate=<base>:<to> — sema hides members newer than <base>.

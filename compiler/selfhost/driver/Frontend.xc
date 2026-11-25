@@ -561,16 +561,17 @@ class FeOptions
         }
 
     // Whether every library the program imported is xcc's runtime itself
-    // (libRuntime): an imported library may be C (#import <tls>, GTK) that
-    // hands the program's buffers to the system, so it makes the program
-    // not all xc (#15).
+    // (libRuntime) or an xc library built of xc alone (its interface says
+    // `pure`): any other may be C (#import <tls>, GTK, a framework) that hands
+    // the program's buffers to the system, so it makes the program not all
+    // xc (#15).
     static bool onlyRuntimeLibs(FeOptions* o)
         {
         Array* nl = o.neededLibs();
         for (u32 i = (u32)0; nl != (Array*)0 && i < nl.count(); i = i + (u32)1)
             {
-            String* b = ((String*)nl.get(i)).lastPathComponent();
-            if (!b.hasPrefix(String.withCString("libRuntime.")))
+            String* p = (String*)nl.get(i);
+            if (!p.lastPathComponent().hasPrefix(String.withCString("libRuntime.")) && !IfaceImport.pureOf(p))
                 return false;
             }
         return true;
@@ -1306,6 +1307,9 @@ class FeOptions
                     }
                 j = IfaceWrite.withProvides(j, pv);
                 }
+            // A library of xc alone says so (#15): its clients stay all xc.
+            if (o.emitLib() && o.pureProgram() && Frontend.onlyRuntimeLibs(o))
+                j = IfaceWrite.withPure(j);
             o.setIfaceJson(j);
             }
         // Where each definition came from, for the link's clash check (#663).

@@ -5001,14 +5001,14 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
     // the back end turns them into line tables, so both processes are told.
     if (opts.debugInfo) [feArgs addObject:@"-g"];
     if (opts.emitLib) [feArgs addObject:@"--emit-lib"];  // L2: write the .xtc.iface sidecar
-    // An executable of xc alone, built and linked here (#15): one xc source,
-    // no -c, no library or runtime build, nothing named for the link (-l,
+    // An executable or a library of xc alone, built and linked here (#15): one
+    // xc source, no -c, not the runtime, nothing named for the link (-l,
     // -framework, -Xlinker, -Wl, $XTC_LDFLAGS). As the port's programIsPureXc;
     // the front end adds the libraries the program imports.
     {
     NSString* in = opts.inputFiles.count == 1 ? opts.inputFiles.firstObject : nil;
     const char* envLd = getenv("XTC_LDFLAGS");
-    BOOL pure = in && ([in hasSuffix:@".xc"] || [in hasSuffix:@".xt"]) && !opts.compileOnly && !opts.emitLib
+    BOOL pure = in && ([in hasSuffix:@".xc"] || [in hasSuffix:@".xt"]) && !opts.compileOnly
                 && !opts.emitRuntime && opts.linkerArgs.count == 0 && !(envLd && envLd[0]);
     if (pure) [feArgs addObject:@"--pure-program"];
     }

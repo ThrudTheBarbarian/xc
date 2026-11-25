@@ -686,6 +686,17 @@ class IfaceWrite
         return JsonVal.canonical(out);
     }
 
+    // A library built of xc alone (#15): `"pure": true`, added to an
+    // interface already written; absent, a library is taken to hold C.
+    static String* withPure(String* json)
+    {
+        if (!json.hasPrefix(String.withCString("{")))
+            return json;
+        String* out = String.withCString("{\"pure\": true,");
+        out.append(json.substringFromByte((u32)1));
+        return JsonVal.canonical(out);
+    }
+
     static String* json(Node* program, Vtable* vt, Set* prelude, Array* cImports)
     {
         return IfaceWrite.jsonWithTable(program, vt, prelude, cImports, (String*)0);

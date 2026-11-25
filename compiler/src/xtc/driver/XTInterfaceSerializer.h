@@ -88,6 +88,9 @@ NS_ASSUME_NONNULL_BEGIN
 // of, sorted) added to an interface already written, canonical again. As the
 // port's IfaceWrite.withProvides.
 + (NSString*)json:(NSString*)json withProvides:(NSArray<NSString*>*)names;
+// A library built of xc alone (#15): `"pure": true` added to an interface
+// already written. As the port's IfaceWrite.withPure.
++ (NSString*)jsonWithPure:(NSString*)json;
 // …and a library's standard-library state hash, written as `stdState`.
 + (nullable NSString*)jsonForProgram:(XTProgramNode*)program
                        protocolSlots:(nullable NSDictionary*)protocolSlots
