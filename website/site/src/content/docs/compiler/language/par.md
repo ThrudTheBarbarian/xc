@@ -797,10 +797,12 @@ saves a copy of every output after every run. `XC_PAR_RESIDENT` decides:
   choice is kept with what `auto` learns, and `XC_PAR_FORGET=1` clears it);
 - `XC_PAR_RESIDENT=0`, nothing is kept;
 - unset, a program built and linked by xcc from xc alone learns per block, as
-  with `auto`. A program with C or C++ in it, an object, archive or library
-  named for the link (`-l`, `-Wl`, `-Xlinker`, a framework), or a C library it
-  imports, keeps nothing unless the variable says otherwise, because its C
-  code may hand an array to a system call.
+  with `auto`. Importing an xc library that was itself built from xc alone
+  keeps a program that way. A program with C or C++ in it, an object, archive
+  or library named for the link (`-l`, `-Wl`, `-Xlinker`, a framework), or a C
+  library it imports (or an xc library holding C), keeps nothing unless the
+  variable says otherwise, because its C code may hand an array to a system
+  call.
 
 The host can't tell an array that is on the card from one that isn't: the
 first time the program's code reads or writes it, the array is copied back
