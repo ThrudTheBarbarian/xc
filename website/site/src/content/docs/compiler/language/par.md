@@ -218,6 +218,39 @@ The calling thread keeps the CPU it runs on when its first block starts, and
 the other threads take the CPUs after it, so programs running blocks at the
 same time spread over the machine. `XC_PAR_PIN=0` leaves the threads unpinned.
 
+## Blocks next to each other run as one
+
+Two blocks with nothing between them run as one block when the second needs only what the first wrote at the same index:
+
+```c
+par scale
+{
+    for (u32 i in 0..n)
+        y[i] = x[i] * 2.0 + 1.0;
+}
+par square :reduce(+ total)
+{
+    for (u32 i in 0..n)
+    {
+        z[i] = y[i] * y[i];
+        total = total + z[i];
+    }
+}
+```
+
+These two run as one loop, `scale+square`, in which each item computes `y[i]` and then `z[i]`. Each item's `y[i]` is still in a register or in cache when it is read, and the block starts once instead of twice. The answer is the same as running the blocks one after the other. Reductions in either block are kept.
+
+`xcc` decides this when it builds the program, before any device is chosen. Two blocks run as one only when all of these hold:
+
+- Both bodies are one counted loop over the same range, with loop variables of the same type. Each bound is made of numbers and of variables neither body writes.
+- They have the same `:goal`, and neither has `:grid`, `:scan`, `:device` or `:constant`.
+- Every array one block writes is touched by the other only at index `i`, in both blocks. A read of `y[i - 1]` keeps the blocks apart.
+- Two arrays of different names are known to be different memory. Each is a fixed-size array, or a local set once with `new` and never set again in the function. A pointer argument may point anywhere, so a block that writes through one stays apart from a block that touches another array.
+- Neither uses the other's reduction variable, and they reduce different variables.
+- The bodies call only maths functions (`sqrt`, `sin`, `Math.sqrt`, …) and contain no `return`, `goto` or `break` out of the loop.
+
+More than two blocks in a row can run as one this way. A fused block is measured, placed and reported under its own name (`scale+square`), so nothing `auto` learned about the separate blocks applies to it. `-Wpar-auto` says which blocks ran as one and, for neighbours that stayed apart, why. `-fno-par-fuse` keeps every block separate, for comparison.
+
 ## Running on the GPU
 
 **macOS on Apple silicon, and Windows with an NVIDIA GPU. Also Linux, Windows with any GPU, Android, and the browser.** A block that can

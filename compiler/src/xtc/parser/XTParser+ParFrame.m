@@ -24,6 +24,7 @@
 \****************************************************************************/
 #import <objc/runtime.h>
 #import "XTParser+Private.h"
+#import "XTArrayType.h"
 
 // Store an object into an ivar, retaining it as a strong reference. Apple's
 // runtime needs the StrongDefault form for ivars without ownership metadata;
@@ -136,6 +137,293 @@ static void pfwRename(id obj, NSString* from, NSString* to)
 void XTASTRename(XTASTNode* n, NSString* from, NSString* to)
     {
     pfwRename(n, [from copy], [to copy]);
+    }
+
+/****************************************************************************\
+|* Adjacent par blocks fused (#147): what one body touches, read from its
+|* tree, as the port's parFuseScan. "acc" name -> bits (1 read, 2 written, 4
+|* at another index or through a pointer), "names" every name it reads or
+|* writes, "decls" its own names and "dtypes" their types, "scalars" the
+|* names it assigns, "bad" set when it holds what fusing cannot carry.
+\****************************************************************************/
+static NSString* _Nullable pfuRoot(XTASTNode* n)
+    {
+    while (n)
+        {
+        if ([n isKindOfClass:[XTIdentifierNode class]])
+            return ((XTIdentifierNode*)n).identName;
+        if ([n isKindOfClass:[XTSubscriptExprNode class]])
+            n = ((XTSubscriptExprNode*)n).base;
+        else if ([n isKindOfClass:[XTMemberAccessNode class]] && !((XTMemberAccessNode*)n).isArrow)
+            n = ((XTMemberAccessNode*)n).base;
+        else
+            return nil;
+        }
+    return nil;
+    }
+
+static void pfuNote(NSMutableDictionary* st, NSString* n, NSUInteger bits)
+    {
+    NSMutableDictionary* acc = st[@"acc"];
+    acc[n] = @([acc[n] unsignedIntegerValue] | bits);
+    }
+
+static void pfuWalk(id _Nullable n, NSMutableDictionary* st, NSString* iv, NSUInteger loops);
+
+static void pfuAccess(NSMutableDictionary* st, XTSubscriptExprNode* sub, NSString* iv, NSUInteger bits, NSUInteger loops)
+    {
+    XTASTNode* base = sub.base;
+    XTASTNode* idx = sub.index;
+    if ([base isKindOfClass:[XTIdentifierNode class]])
+        {
+        NSString* name = ((XTIdentifierNode*)base).identName;
+        BOOL atIv = [idx isKindOfClass:[XTIdentifierNode class]] && [((XTIdentifierNode*)idx).identName isEqualToString:iv];
+        pfuNote(st, name, atIv ? bits : bits | 4);
+        [st[@"names"] addObject:name];
+        }
+    else
+        {
+        NSString* root = pfuRoot(base);
+        if (!root)
+            {
+            st[@"bad"] = @YES;
+            return;
+            }
+        pfuNote(st, root, bits | 4);
+        [st[@"names"] addObject:root];
+        pfuWalk(base, st, iv, loops);
+        }
+    if (idx)
+        pfuWalk(idx, st, iv, loops);
+    }
+
+static void pfuTarget(NSMutableDictionary* st, XTASTNode* t, NSString* iv, NSUInteger bits, NSUInteger loops)
+    {
+    if ([t isKindOfClass:[XTSubscriptExprNode class]])
+        {
+        pfuAccess(st, (XTSubscriptExprNode*)t, iv, bits, loops);
+        return;
+        }
+    if ([t isKindOfClass:[XTIdentifierNode class]])
+        {
+        [st[@"names"] addObject:((XTIdentifierNode*)t).identName];
+        [st[@"scalars"] addObject:((XTIdentifierNode*)t).identName];
+        return;
+        }
+    st[@"bad"] = @YES;
+    }
+
+static void pfuWalk(id _Nullable n, NSMutableDictionary* st, NSString* iv, NSUInteger loops)
+    {
+    if (!n)
+        return;
+    if ([n isKindOfClass:[XTReturnNode class]] || [n isKindOfClass:[XTGotoNode class]] || [n isKindOfClass:[XTThrowNode class]] ||
+        [n isKindOfClass:[XTTryNode class]] || [n isKindOfClass:[XTDeferNode class]] || [n isKindOfClass:[XTAsmBlockNode class]] ||
+        [n isKindOfClass:[XTDeleteNode class]] || [n isKindOfClass:[XTLabelNode class]] || [n isKindOfClass:[XTTupleAssignNode class]])
+        {
+        st[@"bad"] = @YES;
+        return;
+        }
+    if (([n isKindOfClass:[XTBreakNode class]] || [n isKindOfClass:[XTContinueNode class]]) && loops == 0)
+        {
+        st[@"bad"] = @YES;
+        return;
+        }
+    if ([n isKindOfClass:[XTForCStyleNode class]] || [n isKindOfClass:[XTForInNode class]] || [n isKindOfClass:[XTWhileNode class]] ||
+        [n isKindOfClass:[XTSwitchNode class]])
+        {
+        pfwEachIvar(n, ^(Ivar ivar, id val) {
+          (void)ivar;
+          if (pfwTreeObject(val))
+              pfuWalk(val, st, iv, loops + 1);
+          else
+              for (id e in (NSArray*)val)
+                  pfuWalk(e, st, iv, loops + 1);
+        });
+        return;
+        }
+    if ([n isKindOfClass:[XTCallExprNode class]])
+        {
+        XTCallExprNode* c = n;
+        if (c.isIndirectCall || !XTParFuseMath(c.calleeName))
+            {
+            st[@"bad"] = @YES;
+            return;
+            }
+        for (XTASTNode* a in c.arguments)
+            pfuWalk(a, st, iv, loops);
+        return;
+        }
+    if ([n isKindOfClass:[XTMethodCallExprNode class]])
+        {
+        XTMethodCallExprNode* c = n;
+        if (![c.receiver isKindOfClass:[XTIdentifierNode class]] || ![((XTIdentifierNode*)c.receiver).identName isEqualToString:@"Math"] ||
+            !XTParFuseMath(c.methodName))
+            {
+            st[@"bad"] = @YES;
+            return;
+            }
+        for (XTASTNode* a in c.arguments)
+            pfuWalk(a, st, iv, loops);
+        return;
+        }
+    if ([n isKindOfClass:[XTVariableDeclNode class]])
+        {
+        XTVariableDeclNode* d = n;
+        [st[@"decls"] addObject:d.varName];
+        if ([d.declaredType isKindOfClass:[XTArrayType class]])
+            [st[@"arrays"] addObject:d.varName];
+        pfuWalk(d.initialiser, st, iv, loops);
+        for (XTASTNode* a in d.constructorArgs)
+            pfuWalk(a, st, iv, loops);
+        return;
+        }
+    if ([n isKindOfClass:[XTAssignExprNode class]])
+        {
+        XTAssignExprNode* a = n;
+        pfuTarget(st, a.lhs, iv, a.assignOp == XTAssignOpAssign ? 2 : 3, loops);
+        pfuWalk(a.rhs, st, iv, loops);
+        return;
+        }
+    if ([n isKindOfClass:[XTPostfixExprNode class]])
+        {
+        pfuTarget(st, ((XTPostfixExprNode*)n).operand, iv, 3, loops);
+        return;
+        }
+    if ([n isKindOfClass:[XTUnaryExprNode class]])
+        {
+        XTUnaryExprNode* u = n;
+        if (u.op == XTUnaryOpPreInc || u.op == XTUnaryOpPreDec)
+            {
+            pfuTarget(st, u.operand, iv, 3, loops);
+            return;
+            }
+        if (u.op == XTUnaryOpAddrOf || u.op == XTUnaryOpDeref)
+            {
+            // An address taken, or a pointer read: what it reaches is not
+            // known, so its array is touched everywhere.
+            NSString* root = pfuRoot(u.operand);
+            if (!root)
+                {
+                st[@"bad"] = @YES;
+                return;
+                }
+            pfuNote(st, root, 7);
+            [st[@"names"] addObject:root];
+            pfuWalk(u.operand, st, iv, loops);
+            return;
+            }
+        }
+    if ([n isKindOfClass:[XTSubscriptExprNode class]])
+        {
+        pfuAccess(st, n, iv, 1, loops);
+        return;
+        }
+    if ([n isKindOfClass:[XTIdentifierNode class]])
+        {
+        [st[@"names"] addObject:((XTIdentifierNode*)n).identName];
+        [st[@"bare"] addObject:((XTIdentifierNode*)n).identName];
+        return;
+        }
+    if ([n isKindOfClass:[XTMemberAccessNode class]] && ((XTMemberAccessNode*)n).isArrow)
+        {
+        st[@"bad"] = @YES;
+        return;
+        }
+    pfwEachIvar(n, ^(Ivar ivar, id val) {
+      (void)ivar;
+      if (pfwTreeObject(val))
+          pfuWalk(val, st, iv, loops);
+      else
+          for (id e in (NSArray*)val)
+              pfuWalk(e, st, iv, loops);
+    });
+    }
+
+NSMutableDictionary* XTParFuseScan(XTASTNode* body, NSString* iv)
+    {
+    NSMutableDictionary* st = [@{
+        @"acc" : [NSMutableDictionary dictionary],
+        @"names" : [NSMutableSet set],
+        @"bare" : [NSMutableSet set],
+        @"scalars" : [NSMutableSet set],
+        @"decls" : [NSMutableSet set],
+        @"arrays" : [NSMutableSet set],
+    } mutableCopy];
+    pfuWalk(body, st, iv, 0);
+    // A name read whole (passed on, copied into a pointer) is touched at
+    // every index.
+    NSMutableDictionary* acc = st[@"acc"];
+    for (NSString* b in st[@"bare"])
+        if (acc[b])
+            pfuNote(st, b, 4);
+    // An element access through a name the body declares that is not an
+    // array of its own: what it reaches is not known.
+    for (NSString* a in acc)
+        if ([st[@"decls"] containsObject:a] && ![st[@"arrays"] containsObject:a])
+            st[@"bad"] = @YES;
+    return st;
+    }
+
+// The same bound: numbers, names and arithmetic on them, alike.
+BOOL XTParFuseSame(XTASTNode* _Nullable a, XTASTNode* _Nullable b)
+    {
+    if (!a || !b)
+        return a == b;
+    if ([a class] != [b class])
+        return NO;
+    if ([a isKindOfClass:[XTLiteralIntNode class]])
+        return ((XTLiteralIntNode*)a).intValue == ((XTLiteralIntNode*)b).intValue;
+    if ([a isKindOfClass:[XTIdentifierNode class]])
+        return [((XTIdentifierNode*)a).identName isEqualToString:((XTIdentifierNode*)b).identName];
+    if ([a isKindOfClass:[XTBinaryExprNode class]])
+        return ((XTBinaryExprNode*)a).op == ((XTBinaryExprNode*)b).op &&
+               XTParFuseSame(((XTBinaryExprNode*)a).left, ((XTBinaryExprNode*)b).left) &&
+               XTParFuseSame(((XTBinaryExprNode*)a).right, ((XTBinaryExprNode*)b).right);
+    if ([a isKindOfClass:[XTCastExprNode class]])
+        return [((XTCastExprNode*)a).castType.description isEqualToString:((XTCastExprNode*)b).castType.description] &&
+               XTParFuseSame(((XTCastExprNode*)a).operand, ((XTCastExprNode*)b).operand);
+    if ([a isKindOfClass:[XTUnaryExprNode class]])
+        return ((XTUnaryExprNode*)a).op == ((XTUnaryExprNode*)b).op &&
+               XTParFuseSame(((XTUnaryExprNode*)a).operand, ((XTUnaryExprNode*)b).operand);
+    return NO;
+    }
+
+// A bound both loops may share: numbers, names neither body writes, and
+// arithmetic on them.
+BOOL XTParFuseBound(XTASTNode* _Nullable e, NSSet* written)
+    {
+    if ([e isKindOfClass:[XTLiteralIntNode class]])
+        return YES;
+    if ([e isKindOfClass:[XTIdentifierNode class]])
+        return ![written containsObject:((XTIdentifierNode*)e).identName];
+    if ([e isKindOfClass:[XTBinaryExprNode class]])
+        return XTParFuseBound(((XTBinaryExprNode*)e).left, written) && XTParFuseBound(((XTBinaryExprNode*)e).right, written);
+    if ([e isKindOfClass:[XTCastExprNode class]])
+        return XTParFuseBound(((XTCastExprNode*)e).operand, written);
+    if ([e isKindOfClass:[XTUnaryExprNode class]] && ((XTUnaryExprNode*)e).op == XTUnaryOpNeg)
+        return XTParFuseBound(((XTUnaryExprNode*)e).operand, written);
+    return NO;
+    }
+
+// A maths function a block may call on any device.
+BOOL XTParFuseMath(NSString* _Nullable n)
+    {
+    static NSSet* ok;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+      ok = [NSSet setWithArray:[@"sqrt sqrtf sin sinf cos cosf tan tanf exp expf exp2 exp2f log logf log2 log2f log10 log10f "
+                                @"pow powf fabs fabsf floor floorf ceil ceilf round roundf trunc truncf fmin fminf fmax fmaxf "
+                                @"fmod fmodf atan atanf atan2 atan2f asin asinf acos acosf tanh tanhf sinh sinhf cosh coshf "
+                                @"abs min max rsqrt rsqrtf fma fmaf" componentsSeparatedByString:@" "]];
+    });
+    return n && [ok containsObject:n];
+    }
+
+// The loop's body replaced (the fused body).
+void XTParFuseSetBody(XTForCStyleNode* loop, XTASTNode* body)
+    {
+    pfwSetIvar(loop, class_getInstanceVariable([XTForCStyleNode class], "_body"), body);
     }
 
 // `old` replaced by `rep` where the tree under `obj` holds it. Whether it was.

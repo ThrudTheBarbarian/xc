@@ -46,6 +46,8 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic) NSUInteger goalDefault;
 /// The goal of the loop or block being parsed: 0 none yet, 1 speed, 2 accuracy.
 @property(nonatomic) NSUInteger goalNow;
+// -fno-par-fuse: adjacent par blocks stay apart (#147).
+@property(nonatomic) BOOL parNoFuse;
 // --par-style's device for a par block with no :device (1 cpu, 2 gpu), or 0.
 @property(nonatomic) NSInteger parDeviceDefault;
 // The files --par-style=auto leaves alone: the standard library's and the

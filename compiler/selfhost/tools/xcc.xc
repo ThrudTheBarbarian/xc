@@ -7483,6 +7483,7 @@ void capabilityUsage(void)
     Stdio.printf("  -fthread-safe-arc          Atomic ARC refcounts. Default: on when the\n");
     Stdio.printf("                             program spawns a thread\n");
     Stdio.printf("  -fno-thread-safe-arc       Plain, non-atomic refcounts\n");
+    Stdio.printf("  -fno-par-fuse              Run adjacent par blocks as separate blocks\n");
     Stdio.printf("  -fpar-kernels=all          Every par block carries every GPU kernel form,\n");
     Stdio.printf("                             for workers on other machines (xcd); on by\n");
     Stdio.printf("                             itself where XC_PAR_REMOTE is set\n");
@@ -8236,6 +8237,7 @@ enum DriverOptionId = {
     doptStd,
     doptFpContract,
     doptNoBoundsCheck,
+    doptNoParFuse,
     doptMigrate,
     doptQuiet,
     doptLoopUnroll,
@@ -8365,6 +8367,7 @@ Array* driverOptions(void)
     driverOption((u32)doptStd, (u32)doptkPrefixLonger, "-std=", (u32)5);
     driverOption((u32)doptFpContract, (u32)doptkPrefix, "-ffp-contract=", (u32)0);
     driverOption((u32)doptNoBoundsCheck, (u32)doptkExact, "-fno-bounds-check", (u32)0);
+    driverOption((u32)doptNoParFuse, (u32)doptkExact, "-fno-par-fuse", (u32)0);
     driverOption((u32)doptMigrate, (u32)doptkPrefix, "--migrate=", (u32)0);
     driverOption((u32)doptQuiet, (u32)doptkExact, "-q --quiet", (u32)0);
     driverOption((u32)doptLoopUnroll, (u32)doptkExactValue, "-Flu --fn-loop-unroll", (u32)0);
@@ -8613,6 +8616,10 @@ u32 applyOption(DriverOptions* d, u32 id, String* a, u32 i, u32 argc)
     // -fno-bounds-check: no checks, the default (benchmarks say it anyway).
     if (id == (u32)doptNoBoundsCheck) {
         o.setBoundsCheck(false); o.setBoundsReport(false); return (u32)1;
+    }
+    // -fno-par-fuse: adjacent par blocks stay apart (#147), for comparison.
+    if (id == (u32)doptNoParFuse) {
+        o.setNoParFuse(true); return (u32)1;
     }
     if (id == (u32)doptMigrate) {
         o.setMigrate(a.substringFromByte((u32)10));

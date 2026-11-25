@@ -69,6 +69,8 @@ class Parser
     u32     _parCounter;    // ParImpl$N numbering (par blocks)
     bool    _parAuto;       // --par-style=auto: a plain loop becomes a par block where its shape allows
     u32     _parAutoCounter; // lifted loops so far
+    bool    _parNoFuse;      // -fno-par-fuse: adjacent par blocks stay apart (#147)
+    u32     _fnTok;          // where the function or method being parsed opens its body (#147)
     Map*    _parAutoLabels;  // a lifted loop's file:line -> how many had it
     bool    _parAutoWantsRuntime; // --par-style=auto found a loop to wrap, but Par.xc was not imported
     u32     _loopDepth;     // loops open in the code being parsed (an auto par wraps an outermost one)
@@ -1268,6 +1270,7 @@ class Parser
     String* _webBad;
     void setGoalDefault(u32 g) { _goalDefault = g; }
     void setParDeviceDefault(u32 d) { _parDeviceDefault = d; }
+    void setParNoFuse(bool b) { _parNoFuse = b; }
     void setLibraryFiles(Set* files) { _libFiles = files; }
 
     void _error(String* msg)
@@ -2635,7 +2638,10 @@ class Parser
                     Node* pk = m.kid(bi);
                     if (pk.kind() == (u16)nkParam) blkBind(pk.name(), pk.op(), (Array*)0);
                 }
+                u32 outerTok = _fnTok;
+                _fnTok = _pos;
                 m.add(parseBlock());
+                _fnTok = outerTok;
                 blkPopScope();
             }
             else                  match((u16)tokSemicolon);
@@ -3921,9 +3927,12 @@ class Parser
                     if (pk.kind() == (u16)nkParam) blkBind(pk.name(), pk.op(), (Array*)0);
                 }
                 String* outerFn = _parFn;
+                u32 outerTok = _fnTok;
                 _parFn = name;
+                _fnTok = _pos;
                 f.add(parseBlock());
                 _parFn = outerFn;
+                _fnTok = outerTok;
                 blkPopScope();
             }
             else {
@@ -8201,12 +8210,21 @@ class Parser
         Parser.scRename(n.alt(), from, to);
     }
 
-    Node* parsePar(void)
+    // A par block read, not yet built (parBuild): its header node (name,
+    // reductions), body, frame and the rest, so a block after it can be read
+    // and the two fused first (#147). A :scan block comes back built, under
+    // "scanned".
+    Map* parParts(void)
     {
         // :scan (#144): made into plain blocks (parScanWritten).
         bool scanned = false;
         Node* sc = parScanWritten(&scanned);
-        if (scanned) return sc;
+        if (scanned) {
+            Map* done = new Map();
+            done.set((Hashable*)String.withCString("scanned"), (Object*)Number.with((u32)1));
+            if (sc != (Node*)0) done.set((Hashable*)String.withCString("node"), (Object*)sc);
+            return done;
+        }
         _parTok = cur();
         Token* parAt = _parTok; // a nested `par` in the body moves _parTok
         advance(); // 'par'
@@ -8234,7 +8252,7 @@ class Parser
             advance();
             if (!check((u16)tokIdentifier)) {
                 _error(String.withCString("expected a decorator name after ':'"));
-                return (Node*)0;
+                return (Map*)0;
             }
             String* dec = cur().value();
             Token* decTok = cur();
@@ -8242,16 +8260,16 @@ class Parser
             if (dec.equals(String.withCString("grid"))) {
                 if (grid != (Array*)0) {
                     _errorAt(String.withCString("'par' takes one ':grid'"), parTokNode(decTok));
-                    return (Node*)0;
+                    return (Map*)0;
                 }
-                if (expect((u16)tokLParen) == (Token*)0) return (Node*)0;
+                if (expect((u16)tokLParen) == (Token*)0) return (Map*)0;
                 grid = new Array();
                 grid.add((Object*)parseExpression());
                 while (match((u16)tokComma)) grid.add((Object*)parseExpression());
-                if (expect((u16)tokRParen) == (Token*)0) return (Node*)0;
+                if (expect((u16)tokRParen) == (Token*)0) return (Map*)0;
                 if (grid.count() < (u32)2 || grid.count() > (u32)3) {
                     _errorAt(String.withCString("':grid' takes a width and a height, and optionally a depth: :grid(w, h) or :grid(w, h, d)"), parTokNode(decTok));
-                    return (Node*)0;
+                    return (Map*)0;
                 }
                 if (head != (Array*)0) {
                     Array* d = Array.with((Object*)dec);
@@ -8265,12 +8283,12 @@ class Parser
             if (dec.equals(String.withCString("device"))) {
                 if (device >= (i32)0) {
                     _errorAt(String.withCString("'par' takes one ':device'"), parTokNode(decTok));
-                    return (Node*)0;
+                    return (Map*)0;
                 }
-                if (expect((u16)tokLParen) == (Token*)0) return (Node*)0;
+                if (expect((u16)tokLParen) == (Token*)0) return (Map*)0;
                 if (!check((u16)tokIdentifier)) {
                     _error(String.withCString("':device' takes cpu, gpu, gpus, all or auto"));
-                    return (Node*)0;
+                    return (Map*)0;
                 }
                 String* dv = cur().value();
                 i32 code = (i32)-1;
@@ -8284,11 +8302,11 @@ class Parser
                     m.append(dv);
                     m.appendCString("'");
                     _error(m);
-                    return (Node*)0;
+                    return (Map*)0;
                 }
                 advance();
                 device = code;
-                if (expect((u16)tokRParen) == (Token*)0) return (Node*)0;
+                if (expect((u16)tokRParen) == (Token*)0) return (Map*)0;
                 if (head != (Array*)0) head.add((Object*)Array.with((Object*)dec, (Object*)dv));
                 continue;
             }
@@ -8298,7 +8316,7 @@ class Parser
                 expect((u16)tokLParen);
                 if (!check((u16)tokIdentifier)) {
                     _error(String.withCString("':goal' takes speed or accuracy"));
-                    return (Node*)0;
+                    return (Map*)0;
                 }
                 String* g = cur().value();
                 if (!g.equals(String.withCString("speed")) && !g.equals(String.withCString("accuracy"))) {
@@ -8306,7 +8324,7 @@ class Parser
                     m.append(g);
                     m.appendCString("'");
                     _error(m);
-                    return (Node*)0;
+                    return (Map*)0;
                 }
                 advance();
                 if (g.equals(String.withCString("accuracy"))) flags = flags | (u32)1;
@@ -8323,7 +8341,7 @@ class Parser
                 for (;;) {
                     if (!check((u16)tokIdentifier)) {
                         _error(String.withCString("Expected identifier"));
-                        return (Node*)0;
+                        return (Map*)0;
                     }
                     constants.add((Object*)cur().value());
                     advance();
@@ -8364,7 +8382,7 @@ class Parser
                 m.append(dec);
                 m.appendCString("' (it takes :reduce(op var), :scan(op var), :grid(w, h[, d]), :goal(speed|accuracy), :constant(a, b) and :device(cpu|gpu|gpus|all|auto))");
                 _error(m);
-                return (Node*)0;
+                return (Map*)0;
             }
             expect((u16)tokLParen);
             String* op = (String*)0;
@@ -8379,12 +8397,12 @@ class Parser
                 op = cur().value();
             if (op == (String*)0) {
                 _error(String.withCString("':reduce' wants an operator (+ * & | ^ min max) and a variable: :reduce(+ sum)"));
-                return (Node*)0;
+                return (Map*)0;
             }
             advance();
             if (!check((u16)tokIdentifier)) {
                 _error(String.withCString("':reduce' wants an operator (+ * & | ^ min max) and a variable: :reduce(+ sum)"));
-                return (Node*)0;
+                return (Map*)0;
             }
             Node* r = mk((u16)nkParReduce);
             r.setOp(op);
@@ -8393,7 +8411,7 @@ class Parser
             // `:reduce(+ h[])`: an array reduction, each chunk updating a
             // private copy of the array h. As the reference.
             if (match((u16)tokLBracket)) {
-                if (expect((u16)tokRBracket) == (Token*)0) return (Node*)0;
+                if (expect((u16)tokRBracket) == (Token*)0) return (Map*)0;
                 r.setNum((i64)1);
             }
             expect((u16)tokRParen);
@@ -8403,7 +8421,7 @@ class Parser
         p.setFlags(flags);
         if (!check((u16)tokLBrace)) {
             _error(String.withCString("'par' wants a block: par { ... }"));
-            return (Node*)0;
+            return (Map*)0;
         }
         // The body is parsed inside a capture frame, as a block literal's is,
         // and its frame computed from its tree (parFrameFill). As the reference.
@@ -8444,7 +8462,7 @@ class Parser
         _goalNow = savedGoal;
         blkPopScope();
         _blkFrames.removeAt(_blkFrames.count() - (u32)1);
-        if (body == 0) return (Node*)0;
+        if (body == 0) return (Map*)0;
         // The block's frame, from the body's tree. A running total's body
         // put in by the scan expansion (scSplice) was parsed outside the
         // frame: the walk says what it cannot capture and reads `self.f` as
@@ -8458,6 +8476,40 @@ class Parser
         }
         parFrameFill(frame, body);
         _pfwAuto = pfwAuto;
+        Map* r = new Map();
+        r.set((Hashable*)String.withCString("p"), (Object*)p);
+        r.set((Hashable*)String.withCString("body"), (Object*)body);
+        r.set((Hashable*)String.withCString("frame"), (Object*)frame);
+        r.set((Hashable*)String.withCString("parAt"), (Object*)parAt);
+        r.set((Hashable*)String.withCString("flags"), (Object*)Number.with(flags));
+        if (head != (Array*)0) r.set((Hashable*)String.withCString("head"), (Object*)head);
+        // What keeps a block from fusing with its neighbour (#147).
+        if (grid != (Array*)0 || device >= (i32)0 || constants.count() > (u32)0 || scanPass || _scanSpliced != spliced)
+            r.set((Hashable*)String.withCString("nofuse"), (Object*)Number.with((u32)1));
+        return r;
+    }
+
+    Node* parsePar(void)
+    {
+        Map* a = parParts();
+        if (a == (Map*)0) return (Node*)0;
+        if (a.get((Hashable*)String.withCString("scanned")) != (Object*)0)
+            return (Node*)a.get((Hashable*)String.withCString("node"));
+        // The blocks after it, while each fuses with what is built so far.
+        if (!_parNoFuse)
+            while (parFuseNext(a)) { }
+        return parBuild(a);
+    }
+
+    // Builds the block parParts read (or a fused run of them).
+    Node* parBuild(Map* a)
+    {
+        Node* p = (Node*)a.get((Hashable*)String.withCString("p"));
+        Node* body = (Node*)a.get((Hashable*)String.withCString("body"));
+        Map* frame = (Map*)a.get((Hashable*)String.withCString("frame"));
+        Token* parAt = (Token*)a.get((Hashable*)String.withCString("parAt"));
+        Array* head = (Array*)a.get((Hashable*)String.withCString("head"));
+        _parTok = parAt;
         Array* reds = new Array();
         for (u32 i = (u32)0; i < p.kidCount(); i = i + (u32)1) reds.add((Object*)p.kid(i));
         // Everything the desugaring builds is at the `par`, as the
@@ -8472,6 +8524,503 @@ class Parser
         _pfwNoted = savedNoted;
         _mkAt = savedMkAt;
         return out;
+    }
+
+    // ── adjacent blocks fused (#147) ──
+    // Two par blocks with nothing between them, over the same range, where
+    // each array one writes is touched by the other only at the loop's own
+    // index, become one block: one loop, the second body after the first in
+    // each iteration, each in its own scope. Decided here, from the trees,
+    // before any device is chosen. As the reference.
+
+    // Reads the next statement as a par block and fuses it into a (parParts'
+    // map) when it may; else puts the parse back. True when it fused.
+    bool parFuseNext(Map* a)
+    {
+        if (a.get((Hashable*)String.withCString("nofuse")) != (Object*)0)
+            return false;
+        if (!(check((u16)tokIdentifier) && cur().value().equals(String.withCString("par"))
+              && (checkAt((u32)1, (u16)tokLBrace) || checkAt((u32)1, (u16)tokColon)
+                  || (checkAt((u32)1, (u16)tokIdentifier)
+                      && (checkAt((u32)2, (u16)tokLBrace) || checkAt((u32)2, (u16)tokColon))))))
+            return false;
+        Map* mark = parAutoMark();
+        Token* parTok = _parTok;
+        Node* p1 = (Node*)a.get((Hashable*)String.withCString("p"));
+        Token* at1 = (Token*)a.get((Hashable*)String.withCString("parAt"));
+        String* first = parFuseLabel(p1, at1);
+        Map* b = parParts();
+        String* why = (String*)0;
+        String* second = (String*)0;
+        if (b == (Map*)0 || b.get((Hashable*)String.withCString("scanned")) != (Object*)0)
+            why = String.withCString("");
+        else {
+            second = parFuseLabel((Node*)b.get((Hashable*)String.withCString("p")), (Token*)b.get((Hashable*)String.withCString("parAt")));
+            if (b.get((Hashable*)String.withCString("nofuse")) != (Object*)0)
+                why = String.withCString("one has :grid, :device, :constant or :scan");
+            else
+                why = parFuse(a, b);
+        }
+        // -Wpar-auto says which blocks became one, and why a pair did not.
+        if (why == (String*)0) {
+            String* w = String.withCString("the 'par' blocks '");
+            w.append(first);
+            w.appendCString("' and '");
+            w.append(second);
+            w.appendCString("' run as one block");
+            warnAt(String.withCString("par-auto"), w, at1);
+            return true;
+        }
+        parAutoRollback(mark);
+        _parTok = parTok;
+        if (second != (String*)0 && why.byteLength() > (u32)0) {
+            String* w = String.withCString("the 'par' blocks '");
+            w.append(first);
+            w.appendCString("' and '");
+            w.append(second);
+            w.appendCString("' run apart: ");
+            w.append(why);
+            warnAt(String.withCString("par-auto"), w, at1);
+        }
+        return false;
+    }
+
+    // The counted loop a block's body is: exactly `for (T i = lo; i < hi; step)`
+    // with a step of one; else 0.
+    static Node* parFuseLoop(Node* body)
+    {
+        if (body == (Node*)0 || body.kidCount() != (u32)1) return (Node*)0;
+        Node* loop = body.kid((u32)0);
+        if (loop.kind() != (u16)nkForCStyle || loop.kidCount() != (u32)4) return (Node*)0;
+        if (loop.kid((u32)0).kidCount() != (u32)1 || loop.kid((u32)1).kidCount() != (u32)1 || loop.kid((u32)2).kidCount() != (u32)1)
+            return (Node*)0;
+        Node* iv = loop.kid((u32)0).kid((u32)0);
+        Node* cond = loop.kid((u32)1).kid((u32)0);
+        Node* step = loop.kid((u32)2).kid((u32)0);
+        if (iv.kind() != (u16)nkVariableDecl || iv.name() == (String*)0 || iv.op() == (String*)0 || iv.kidCount() != (u32)1)
+            return (Node*)0;
+        if (cond.kind() != (u16)nkBinary || !Parser._same(cond.op(), "<") || cond.kidCount() != (u32)2
+            || cond.kid((u32)0).kind() != (u16)nkIdent || !cond.kid((u32)0).name().equals(iv.name()))
+            return (Node*)0;
+        bool stepOk = false;
+        if (step.kind() == (u16)nkAssign && Parser._same(step.op(), "+=") && step.kidCount() == (u32)2
+            && step.kid((u32)0).kind() == (u16)nkIdent && step.kid((u32)0).name().equals(iv.name())
+            && step.kid((u32)1).kind() == (u16)nkInt && step.kid((u32)1).num() == (i64)1)
+            stepOk = true;
+        else if ((step.kind() == (u16)nkPostfix || step.kind() == (u16)nkUnary) && Parser._same(step.op(), "++")
+                 && step.kidCount() > (u32)0 && step.kid((u32)0).kind() == (u16)nkIdent && step.kid((u32)0).name().equals(iv.name()))
+            stepOk = true;
+        else if (step.kind() == (u16)nkAssign && Parser._same(step.op(), "=") && step.kidCount() == (u32)2
+                 && step.kid((u32)0).kind() == (u16)nkIdent && step.kid((u32)0).name().equals(iv.name())
+                 && step.kid((u32)1).kind() == (u16)nkBinary && Parser._same(step.kid((u32)1).op(), "+")
+                 && step.kid((u32)1).kid((u32)0).kind() == (u16)nkIdent && step.kid((u32)1).kid((u32)0).name().equals(iv.name())
+                 && step.kid((u32)1).kid((u32)1).kind() == (u16)nkInt && step.kid((u32)1).kid((u32)1).num() == (i64)1)
+            stepOk = true;
+        return stepOk ? loop : (Node*)0;
+    }
+
+    // The same tree: kinds, names, operators, numbers and children.
+    static bool parFuseSame(Node* a, Node* b)
+    {
+        if (a == (Node*)0 || b == (Node*)0) return a == b;
+        if (a.kind() != b.kind() || a.kidCount() != b.kidCount() || a.num() != b.num()) return false;
+        if ((a.name() == (String*)0) != (b.name() == (String*)0)) return false;
+        if (a.name() != (String*)0 && !a.name().equals(b.name())) return false;
+        if ((a.op() == (String*)0) != (b.op() == (String*)0)) return false;
+        if (a.op() != (String*)0 && !a.op().equals(b.op())) return false;
+        for (u32 i = (u32)0; i < a.kidCount(); i = i + (u32)1)
+            if (!Parser.parFuseSame(a.kid(i), b.kid(i))) return false;
+        return true;
+    }
+
+    // A bound both loops may share: numbers, names and arithmetic on them.
+    static bool parFuseBound(Node* e, Set* written)
+    {
+        if (e == (Node*)0) return false;
+        u16 k = e.kind();
+        if (k == (u16)nkInt) return true;
+        if (k == (u16)nkIdent) return !written.contains((Hashable*)e.name());
+        if (k != (u16)nkBinary && k != (u16)nkCast && !(k == (u16)nkUnary && Parser._same(e.op(), "-")))
+            return false;
+        for (u32 i = (u32)0; i < e.kidCount(); i = i + (u32)1)
+            if (!Parser.parFuseBound(e.kid(i), written)) return false;
+        return true;
+    }
+
+    // A maths function a block may call on any device.
+    static bool parFuseMath(String* n)
+    {
+        if (n == (String*)0) return false;
+        String* key = String.withCString(" ");
+        key.append(n);
+        key.appendCString(" ");
+        return String.withCString(" sqrt sqrtf sin sinf cos cosf tan tanf exp expf exp2 exp2f log logf log2 log2f log10 log10f"
+                                  " pow powf fabs fabsf floor floorf ceil ceilf round roundf trunc truncf fmin fminf fmax fmaxf"
+                                  " fmod fmodf atan atanf atan2 atan2f asin asinf acos acosf tanh tanhf sinh sinhf cosh coshf"
+                                  " abs min max rsqrt rsqrtf fma fmaf ").contains(key);
+    }
+
+    // One body's accesses: "acc" name -> bits (1 read, 2 written, 4 at
+    // another index or through a pointer), "names" every name it reads or
+    // writes, "decls" its own names (and their types, "dtypes"), "bad" set
+    // when it holds what fusing cannot carry (a call, a return, a jump out).
+    void parFuseNote(Map* st, String* n, u32 bits)
+    {
+        Map* acc = (Map*)st.get((Hashable*)String.withCString("acc"));
+        Number* was = (Number*)acc.get((Hashable*)n);
+        acc.set((Hashable*)n, (Object*)Number.with((was != (Number*)0 ? was.asU32() : (u32)0) | bits));
+    }
+
+    void parFuseBad(Map* st)
+    {
+        st.set((Hashable*)String.withCString("bad"), (Object*)Number.with((u32)1));
+    }
+
+    // An element access: `a[iv]` (bits as they are), anything else at
+    // another index (bit 4 too).
+    void parFuseAccess(Map* st, Node* sub, String* iv, u32 bits, u32 loops)
+    {
+        Node* base = sub.kid((u32)0);
+        Node* idx = sub.kidCount() > (u32)1 ? sub.kid((u32)1) : (Node*)0;
+        if (base.kind() == (u16)nkIdent) {
+            bool atIv = idx != (Node*)0 && idx.kind() == (u16)nkIdent && idx.name().equals(iv);
+            parFuseNote(st, base.name(), atIv ? bits : bits | (u32)4);
+            ((Set*)st.get((Hashable*)String.withCString("names"))).add((Hashable*)base.name());
+        }
+        else {
+            String* root = Parser.parRootName(base);
+            if (root == (String*)0) { parFuseBad(st); return; }
+            parFuseNote(st, root, bits | (u32)4);
+            ((Set*)st.get((Hashable*)String.withCString("names"))).add((Hashable*)root);
+            parFuseWalk(base, st, iv, loops);
+        }
+        if (idx != (Node*)0) parFuseWalk(idx, st, iv, loops);
+    }
+
+    // What a write lands on: an element (parFuseAccess), a name, or
+    // anything else (bad: a write through a pointer or to a field).
+    void parFuseTarget(Map* st, Node* t, String* iv, u32 bits, u32 loops)
+    {
+        if (t.kind() == (u16)nkSubscript && t.kidCount() > (u32)0) { parFuseAccess(st, t, iv, bits, loops); return; }
+        if (t.kind() == (u16)nkIdent) {
+            ((Set*)st.get((Hashable*)String.withCString("names"))).add((Hashable*)t.name());
+            ((Set*)st.get((Hashable*)String.withCString("scalars"))).add((Hashable*)t.name());
+            return;
+        }
+        parFuseBad(st);
+    }
+
+    void parFuseWalk(Node* n, Map* st, String* iv, u32 loops)
+    {
+        if (n == (Node*)0) return;
+        u16 k = n.kind();
+        if (k == (u16)nkReturn || k == (u16)nkGoto || k == (u16)nkThrow || k == (u16)nkTry || k == (u16)nkDefer
+            || k == (u16)nkAsmBlock || k == (u16)nkDelete || k == (u16)nkGotoLabel || k == (u16)nkLabel || k == (u16)nkTupleAssign) {
+            parFuseBad(st); return;
+        }
+        if ((k == (u16)nkBreak || k == (u16)nkContinue) && loops == (u32)0) { parFuseBad(st); return; }
+        if (k == (u16)nkForCStyle || k == (u16)nkForIn || k == (u16)nkWhile || k == (u16)nkSwitch) {
+            for (u32 i = (u32)0; i < n.kidCount(); i = i + (u32)1) parFuseWalk(n.kid(i), st, iv, loops + (u32)1);
+            return;
+        }
+        if (k == (u16)nkCall) {
+            if (Parser._same(n.name(), "<indirect>") || !Parser.parFuseMath(n.name())) { parFuseBad(st); return; }
+            for (u32 i = (u32)0; i < n.kidCount(); i = i + (u32)1) parFuseWalk(n.kid(i), st, iv, loops);
+            return;
+        }
+        if (k == (u16)nkMethodCall) {
+            if (n.kidCount() == (u32)0 || n.kid((u32)0).kind() != (u16)nkIdent || !Parser._same(n.kid((u32)0).name(), "Math")
+                || !Parser.parFuseMath(n.name())) { parFuseBad(st); return; }
+            for (u32 i = (u32)1; i < n.kidCount(); i = i + (u32)1) parFuseWalk(n.kid(i), st, iv, loops);
+            return;
+        }
+        if (k == (u16)nkVariableDecl) {
+            if (n.name() != (String*)0) {
+                ((Set*)st.get((Hashable*)String.withCString("decls"))).add((Hashable*)n.name());
+                if (n.op() != (String*)0)
+                    ((Map*)st.get((Hashable*)String.withCString("dtypes"))).set((Hashable*)n.name(), (Object*)n.op());
+            }
+            for (u32 i = (u32)0; i < n.kidCount(); i = i + (u32)1) parFuseWalk(n.kid(i), st, iv, loops);
+            return;
+        }
+        if (k == (u16)nkAssign && n.kidCount() == (u32)2) {
+            u32 bits = Parser._same(n.op(), "=") ? (u32)2 : (u32)3;
+            parFuseTarget(st, n.kid((u32)0), iv, bits, loops);
+            parFuseWalk(n.kid((u32)1), st, iv, loops);
+            return;
+        }
+        if ((k == (u16)nkPostfix || k == (u16)nkUnary) && n.kidCount() > (u32)0
+            && (Parser._same(n.op(), "++") || Parser._same(n.op(), "--"))) {
+            parFuseTarget(st, n.kid((u32)0), iv, (u32)3, loops);
+            return;
+        }
+        if (k == (u16)nkUnary && n.kidCount() > (u32)0 && (Parser._same(n.op(), "&") || Parser._same(n.op(), "*"))) {
+            // An address taken, or a pointer read: what it reaches is not
+            // known, so its array is touched everywhere.
+            String* root = Parser.parRootName(n.kid((u32)0));
+            if (root == (String*)0) { parFuseBad(st); return; }
+            parFuseNote(st, root, (u32)7);
+            ((Set*)st.get((Hashable*)String.withCString("names"))).add((Hashable*)root);
+            parFuseWalk(n.kid((u32)0), st, iv, loops);
+            return;
+        }
+        if (k == (u16)nkSubscript && n.kidCount() > (u32)0) { parFuseAccess(st, n, iv, (u32)1, loops); return; }
+        if (k == (u16)nkIdent) {
+            ((Set*)st.get((Hashable*)String.withCString("names"))).add((Hashable*)n.name());
+            ((Set*)st.get((Hashable*)String.withCString("bare"))).add((Hashable*)n.name());
+            return;
+        }
+        if (k == (u16)nkMember && n.hasFlag((u32)NF_ARROW)) { parFuseBad(st); return; }
+        for (u32 i = (u32)0; i < n.kidCount(); i = i + (u32)1) parFuseWalk(n.kid(i), st, iv, loops);
+    }
+
+    Map* parFuseScan(Node* body, String* iv)
+    {
+        Map* st = new Map();
+        st.set((Hashable*)String.withCString("acc"), (Object*)new Map());
+        st.set((Hashable*)String.withCString("names"), (Object*)new Set());
+        st.set((Hashable*)String.withCString("bare"), (Object*)new Set());
+        st.set((Hashable*)String.withCString("scalars"), (Object*)new Set());
+        st.set((Hashable*)String.withCString("decls"), (Object*)new Set());
+        st.set((Hashable*)String.withCString("dtypes"), (Object*)new Map());
+        parFuseWalk(body, st, iv, (u32)0);
+        // A name read whole (passed on, copied into a pointer) is touched at
+        // every index.
+        Map* acc = (Map*)st.get((Hashable*)String.withCString("acc"));
+        Array* bare = ((Set*)st.get((Hashable*)String.withCString("bare"))).allObjects();
+        for (u32 i = (u32)0; i < bare.count(); i = i + (u32)1)
+            if (acc.get((Hashable*)bare.get(i)) != (Object*)0) parFuseNote(st, (String*)bare.get(i), (u32)4);
+        // An element access through a pointer the body declares: what it
+        // reaches is not known.
+        Map* dt = (Map*)st.get((Hashable*)String.withCString("dtypes"));
+        Set* decls = (Set*)st.get((Hashable*)String.withCString("decls"));
+        Array* names = acc.allKeys();
+        for (u32 i = (u32)0; i < names.count(); i = i + (u32)1) {
+            if (!decls.contains((Hashable*)names.get(i))) continue;
+            String* t = (String*)dt.get((Hashable*)names.get(i));
+            if (t == (String*)0 || t.indexOfByte((u8)'[') == (u32)$FFFFFFFF) parFuseBad(st);
+        }
+        return st;
+    }
+
+    // The tokens of the function being parsed: [_fnTok, its closing brace).
+    u32 parFuseFnEnd(void)
+    {
+        i32 depth = (i32)0;
+        for (u32 i = _fnTok; i < _tokens.count(); i = i + (u32)1) {
+            u16 t = ((Token*)_tokens.get(i)).type();
+            if (t == (u16)tokLBrace) depth = depth + (i32)1;
+            else if (t == (u16)tokRBrace) {
+                depth = depth - (i32)1;
+                if (depth == (i32)0) return i;
+            }
+        }
+        return _tokens.count();
+    }
+
+    // n is a local the function sets once, `T* n = new …`, and never again
+    // (no other assignment, increment or address taken): its block is its own.
+    bool parFuseFresh(String* n, u32 end)
+    {
+        u32 made = (u32)0;
+        for (u32 i = _fnTok; i < end; i = i + (u32)1) {
+            Token* t = (Token*)_tokens.get(i);
+            if (t.type() != (u16)tokIdentifier || !t.value().equals(n)) continue;
+            u16 before = i > (u32)0 ? ((Token*)_tokens.get(i - (u32)1)).type() : (u16)0;
+            u16 after = i + (u32)1 < _tokens.count() ? ((Token*)_tokens.get(i + (u32)1)).type() : (u16)0;
+            if (before == (u16)tokAmpersand || before == (u16)tokPlusPlus || before == (u16)tokMinusMinus
+                || before == (u16)tokDot || before == (u16)tokArrow)
+                return false;
+            if (after == (u16)tokPlusPlus || after == (u16)tokMinusMinus) return false;
+            if (after >= (u16)tokAssign && after <= (u16)tokRorAssign) {
+                u16 next = i + (u32)2 < _tokens.count() ? ((Token*)_tokens.get(i + (u32)2)).type() : (u16)0;
+                if (after != (u16)tokAssign || next != (u16)tokNew
+                    || !(before == (u16)tokStar || before == (u16)tokIdentifier)) return false;
+                made = made + (u32)1;
+            }
+        }
+        return made == (u32)1;
+    }
+
+    // Two names of arrays that cannot be the same memory: each a fixed-size
+    // array, or a local block of its own (parFuseFresh).
+    bool parFuseApart(String* x, String* y, Map* types, u32 end)
+    {
+        // A captured name's type, else a global's.
+        String* tx = (String*)types.get((Hashable*)x);
+        String* ty = (String*)types.get((Hashable*)y);
+        if (tx == (String*)0 && _parTopVars != (Map*)0) tx = (String*)_parTopVars.get((Hashable*)x);
+        if (ty == (String*)0 && _parTopVars != (Map*)0) ty = (String*)_parTopVars.get((Hashable*)y);
+        bool fx = (tx != (String*)0 && tx.indexOfByte((u8)'[') != (u32)$FFFFFFFF) || parFuseFresh(x, end);
+        bool fy = (ty != (String*)0 && ty.indexOfByte((u8)'[') != (u32)$FFFFFFFF) || parFuseFresh(y, end);
+        return fx && fy;
+    }
+
+    // Each array one body writes that the other touches: touched only at
+    // the index, by both, and every other array either touches apart from it.
+    String* parFuseArrays(Map* wr, Map* other, Set* skip, Map* types, u32 end)
+    {
+        Map* aw = (Map*)wr.get((Hashable*)String.withCString("acc"));
+        Map* ao = (Map*)other.get((Hashable*)String.withCString("acc"));
+        Array* names = aw.allKeys();
+        Array* onames = ao.allKeys();
+        for (u32 i = (u32)0; i < names.count(); i = i + (u32)1) {
+            String* x = (String*)names.get(i);
+            if (skip.contains((Hashable*)x)) continue;
+            u32 bw = ((Number*)aw.get((Hashable*)x)).asU32();
+            if ((bw & (u32)2) == (u32)0) continue;
+            Number* o = (Number*)ao.get((Hashable*)x);
+            if (o != (Number*)0 && ((bw | o.asU32()) & (u32)4) != (u32)0) {
+                String* w = String.withCString("'");
+                w.append(x);
+                w.appendCString("' is written by one and used at another index by the other");
+                return w;
+            }
+            for (u32 j = (u32)0; j < onames.count(); j = j + (u32)1) {
+                String* y = (String*)onames.get(j);
+                if (y.equals(x) || skip.contains((Hashable*)y)) continue;
+                if (!parFuseApart(x, y, types, end)) {
+                    String* w = String.withCString("'");
+                    w.append(x);
+                    w.appendCString("' and '");
+                    w.append(y);
+                    w.appendCString("' may be the same memory");
+                    return w;
+                }
+            }
+        }
+        return (String*)0;
+    }
+
+    // The name a block is known by at run time: its own, or file:line.
+    String* parFuseLabel(Node* p, Token* at)
+    {
+        if (p.name() != (String*)0) return String.withString(p.name());
+        String* file = (at != (Token*)0 && at.file() != (String*)0) ? at.file() : String.withCString("?");
+        u32 cut = (u32)0;
+        for (u32 q = (u32)0; q < file.byteLength(); q = q + (u32)1)
+            if (file.byteAt(q) == (u8)'/') cut = q + (u32)1;
+        String* nm = file.substringBytes(cut, file.byteLength() - cut);
+        nm.appendByte((u8)':');
+        nm.append(String.withU32(at != (Token*)0 ? at.line() : (u32)0));
+        return nm;
+    }
+
+    // Fuses b into a when the rules allow; true when it did.
+    String* parFuse(Map* a, Map* b)
+    {
+        Node* p1 = (Node*)a.get((Hashable*)String.withCString("p"));
+        Node* p2 = (Node*)b.get((Hashable*)String.withCString("p"));
+        if (((Number*)a.get((Hashable*)String.withCString("flags"))).asU32() != ((Number*)b.get((Hashable*)String.withCString("flags"))).asU32())
+            return String.withCString("their goals differ");
+        Node* body1 = (Node*)a.get((Hashable*)String.withCString("body"));
+        Node* body2 = (Node*)b.get((Hashable*)String.withCString("body"));
+        Node* l1 = Parser.parFuseLoop(body1);
+        Node* l2 = Parser.parFuseLoop(body2);
+        if (l1 == (Node*)0 || l2 == (Node*)0) return String.withCString("a body is not one counted loop");
+        Node* iv1 = l1.kid((u32)0).kid((u32)0);
+        Node* iv2 = l2.kid((u32)0).kid((u32)0);
+        if (!iv1.op().equals(iv2.op())) return String.withCString("their loop variables have different types");
+        Map* s1 = parFuseScan(l1.kid((u32)3), iv1.name());
+        Map* s2 = parFuseScan(l2.kid((u32)3), iv2.name());
+        if (s1.get((Hashable*)String.withCString("bad")) != (Object*)0 || s2.get((Hashable*)String.withCString("bad")) != (Object*)0)
+            return String.withCString("a body calls a function other than a maths one, or leaves its loop");
+        // The same range, of names neither body writes.
+        Set* written = new Set();
+        Array* sc = ((Set*)s1.get((Hashable*)String.withCString("scalars"))).allObjects();
+        for (u32 i = (u32)0; i < sc.count(); i = i + (u32)1) written.add((Hashable*)sc.get(i));
+        sc = ((Set*)s2.get((Hashable*)String.withCString("scalars"))).allObjects();
+        for (u32 i = (u32)0; i < sc.count(); i = i + (u32)1) written.add((Hashable*)sc.get(i));
+        // Bounds of numbers and names neither body writes, then the same ones.
+        Node* lo1 = iv1.kid((u32)0);
+        Node* hi1 = l1.kid((u32)1).kid((u32)0).kid((u32)1);
+        Node* lo2 = iv2.kid((u32)0);
+        Node* hi2 = l2.kid((u32)1).kid((u32)0).kid((u32)1);
+        if (!Parser.parFuseBound(lo1, written) || !Parser.parFuseBound(hi1, written)
+            || !Parser.parFuseBound(lo2, written) || !Parser.parFuseBound(hi2, written))
+            return String.withCString("a range bound is not numbers and names neither body writes");
+        if (!Parser.parFuseSame(lo1, lo2) || !Parser.parFuseSame(hi1, hi2))
+            return String.withCString("their ranges differ");
+        // Reductions: different variables, and neither body uses the other's.
+        Set* n1 = (Set*)s1.get((Hashable*)String.withCString("names"));
+        Set* n2 = (Set*)s2.get((Hashable*)String.withCString("names"));
+        for (u32 i = (u32)0; i < p1.kidCount(); i = i + (u32)1)
+            if (n2.contains((Hashable*)p1.kid(i).name())) return String.withCString("the second uses what the first reduces");
+        for (u32 i = (u32)0; i < p2.kidCount(); i = i + (u32)1) {
+            if (n1.contains((Hashable*)p2.kid(i).name())) return String.withCString("the first uses what the second reduces");
+            for (u32 j = (u32)0; j < p1.kidCount(); j = j + (u32)1)
+                if (p1.kid(j).name().equals(p2.kid(i).name())) return String.withCString("both reduce the same variable");
+        }
+        // The second loop's variable takes the first's name: the second body
+        // must not already use that name, nor declare its own again.
+        if (!iv1.name().equals(iv2.name())
+            && (n2.contains((Hashable*)iv1.name()) || ((Set*)s2.get((Hashable*)String.withCString("decls"))).contains((Hashable*)iv1.name())
+                || ((Set*)s2.get((Hashable*)String.withCString("decls"))).contains((Hashable*)iv2.name())))
+            return String.withCString("the second body already uses the first loop's variable name");
+        // The arrays: each body's own names (its locals, one per iteration)
+        // aside.
+        Set* skip1 = (Set*)s1.get((Hashable*)String.withCString("decls"));
+        Set* skip2 = (Set*)s2.get((Hashable*)String.withCString("decls"));
+        // A name one body declares and the other uses could be either: apart.
+        Array* d1 = skip1.allObjects();
+        for (u32 i = (u32)0; i < d1.count(); i = i + (u32)1)
+            if (n2.contains((Hashable*)d1.get(i))) return String.withCString("a name is declared in one body and used in the other");
+        Array* d2 = skip2.allObjects();
+        for (u32 i = (u32)0; i < d2.count(); i = i + (u32)1)
+            if (n1.contains((Hashable*)d2.get(i))) return String.withCString("a name is declared in one body and used in the other");
+        Set* skip = new Set();
+        Array* d = skip1.allObjects();
+        for (u32 i = (u32)0; i < d.count(); i = i + (u32)1) skip.add((Hashable*)d.get(i));
+        d = skip2.allObjects();
+        for (u32 i = (u32)0; i < d.count(); i = i + (u32)1) skip.add((Hashable*)d.get(i));
+        Map* f1 = (Map*)a.get((Hashable*)String.withCString("frame"));
+        Map* f2 = (Map*)b.get((Hashable*)String.withCString("frame"));
+        Map* types = new Map();
+        Map* t1 = (Map*)f1.get((Hashable*)String.withCString("types"));
+        Map* t2 = (Map*)f2.get((Hashable*)String.withCString("types"));
+        Array* tk = t1.allKeys();
+        for (u32 i = (u32)0; i < tk.count(); i = i + (u32)1) types.set((Hashable*)tk.get(i), t1.get((Hashable*)tk.get(i)));
+        tk = t2.allKeys();
+        for (u32 i = (u32)0; i < tk.count(); i = i + (u32)1) types.set((Hashable*)tk.get(i), t2.get((Hashable*)tk.get(i)));
+        u32 end = parFuseFnEnd();
+        String* why = parFuseArrays(s1, s2, skip, types, end);
+        if (why == (String*)0) why = parFuseArrays(s2, s1, skip, types, end);
+        if (why != (String*)0) return why;
+        // Fused: one loop, each body in its own scope, the second's variable
+        // renamed; the reductions of both; the name of both.
+        Node* second = l2.kid((u32)3);
+        if (!iv1.name().equals(iv2.name())) Parser.scRename(second, iv2.name(), iv1.name());
+        Node* both = mk((u16)nkBlock);
+        both.add(l1.kid((u32)3));
+        both.add(second);
+        l1.setKid((u32)3, both);
+        String* nm = parFuseLabel(p1, (Token*)a.get((Hashable*)String.withCString("parAt")));
+        nm.appendByte((u8)'+');
+        nm.append(parFuseLabel(p2, (Token*)b.get((Hashable*)String.withCString("parAt"))));
+        p1.setName(nm);
+        for (u32 i = (u32)0; i < p2.kidCount(); i = i + (u32)1) p1.add(p2.kid(i));
+        // The fused block's frame, from its tree, as the first block's was made.
+        Map* frame = parFuseFrame(f1);
+        parFrameFill(frame, body1);
+        a.set((Hashable*)String.withCString("frame"), (Object*)frame);
+        return (String*)0;
+    }
+
+    // A frame as parParts starts one, with what the first block's carried.
+    Map* parFuseFrame(Map* was)
+    {
+        Map* frame = new Map();
+        frame.set((Hashable*)String.withCString("depth"), was.get((Hashable*)String.withCString("depth")));
+        frame.set((Hashable*)String.withCString("names"), (Object*)new Array());
+        frame.set((Hashable*)String.withCString("types"), (Object*)new Map());
+        frame.set((Hashable*)String.withCString("wbnames"), (Object*)new Array());
+        frame.set((Hashable*)String.withCString("par"), (Object*)Number.with((u32)1));
+        frame.set((Hashable*)String.withCString("written"), (Object*)new Set());
+        if (was.get((Hashable*)String.withCString("once")) != (Object*)0)
+            frame.set((Hashable*)String.withCString("once"), (Object*)Number.with((u32)1));
+        if (was.get((Hashable*)String.withCString("fast")) != (Object*)0)
+            frame.set((Hashable*)String.withCString("fast"), (Object*)Number.with((u32)1));
+        return frame;
     }
 
     // The name an element access is rooted at: `a` for a[i], a[i][j], a[i].f.

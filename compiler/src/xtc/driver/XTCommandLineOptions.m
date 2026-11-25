@@ -72,6 +72,7 @@
 @property(nonatomic, readwrite) BOOL dceTrace;
 @property(nonatomic, readwrite) NSInteger threadSafeARC;
 @property(nonatomic, readwrite) BOOL parKernelsAll;
+@property(nonatomic, readwrite) BOOL noParFuse;
 @property(nonatomic, readwrite) BOOL parAuto;
 @property(nonatomic, readwrite) NSInteger parDeviceDefault;
 @property(nonatomic, readwrite) NSUInteger goalDefault;
@@ -1197,6 +1198,10 @@ static NSString* sExecutablePath = nil;
             {
             opts.parKernelsAll = YES;
             }
+        else if ([arg isEqualToString:@"-fno-par-fuse"])
+            {
+            opts.noParFuse = YES;
+            }
         else if ([arg hasPrefix:@"--par-style="])
             {
             // auto: loops become par blocks, each choosing its devices at run
@@ -1735,6 +1740,7 @@ static NSString* sExecutablePath = nil;
             "                             share an object. Default: on exactly when\n"
             "                             the program spawns a thread.\n"
             "  -fno-thread-safe-arc       Force plain, non-atomic ARC refcounts.\n"
+            "  -fno-par-fuse              Run adjacent par blocks as separate blocks\n"
             "  -fpar-kernels=all          Every par block carries every GPU kernel\n"
             "                             form, for workers on other machines (xcd);\n"
             "                             on by itself where XC_PAR_REMOTE is set.\n"

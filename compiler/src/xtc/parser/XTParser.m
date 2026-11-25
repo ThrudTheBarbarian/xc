@@ -1,3 +1,4 @@
+#import "XTArrayType.h"
 #import "XTParser+Private.h"
 #import "XTLexer.h"
 
@@ -2154,9 +2155,12 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
         for (XTParamNode* p in params)
             [self blkBind:p.paramName type:p.paramType];
         id outerFn = self.blkState[@"fn"];
+        NSUInteger outerTok = self.fnTok;
         self.blkState[@"fn"] = name ?: (id)[NSNull null];
+        self.fnTok = _pos;
         body = [self parseBlock];
         self.blkState[@"fn"] = outerFn ?: (id)[NSNull null];
+        self.fnTok = outerTok;
         [self blkPopScope];
         }
     else
@@ -6508,13 +6512,21 @@ static NSString* scCombine(NSString* op, NSString* r, NSString* v)
     return to;
     }
 
-- (nullable XTASTNode*)parsePar
+// A par block read, not yet built (parBuild:): its name, reductions, body,
+// frame and the rest, so a block after it can be read and the two fused
+// first (#147). A :scan block comes back built, under "scanned". As the port.
+- (nullable NSMutableDictionary*)parParts
     {
     // :scan (#144): made into plain blocks (parScanWritten).
     BOOL scanned = NO;
     XTASTNode* sc = [self parScanWritten:&scanned];
     if (scanned)
-        return sc;
+        {
+        NSMutableDictionary* done = [NSMutableDictionary dictionaryWithObject:@YES forKey:@"scanned"];
+        if (sc)
+            done[@"node"] = sc;
+        return done;
+        }
     XTSourceLocation* loc = [self currentLocation];
     [self advance]; // consume 'par'
     NSString* name = nil;
@@ -6782,6 +6794,45 @@ static NSString* scCombine(NSString* op, NSString* r, NSString* v)
         frame[@"device"] = @(device);
     if (scanPass)
         frame[@"scanpass"] = @YES;
+    NSMutableDictionary* r = [NSMutableDictionary dictionary];
+    if (name)
+        r[@"name"] = name;
+    r[@"reductions"] = reductions;
+    r[@"body"] = body;
+    r[@"frame"] = frame;
+    r[@"loc"] = loc;
+    r[@"accuracy"] = @(accuracy);
+    if (head)
+        r[@"head"] = head;
+    // What keeps a block from fusing with its neighbour (#147).
+    if (grid || device >= 0 || constants.count > 0 || scanPass || self.scanSpliced != spliced)
+        r[@"nofuse"] = @YES;
+    return r;
+    }
+
+- (nullable XTASTNode*)parsePar
+    {
+    NSMutableDictionary* a = [self parParts];
+    if (!a)
+        return nil;
+    if (a[@"scanned"])
+        return a[@"node"];
+    // The blocks after it, while each fuses with what is built so far.
+    if (!self.parNoFuse)
+        while ([self parFuseNext:a])
+            ;
+    return [self parBuild:a];
+    }
+
+// Builds the block parParts read (or a fused run of them).
+- (nullable XTASTNode*)parBuild:(NSMutableDictionary*)a
+    {
+    NSString* name = a[@"name"];
+    NSArray* reductions = a[@"reductions"];
+    XTBlockNode* body = a[@"body"];
+    NSMutableDictionary* frame = a[@"frame"];
+    XTSourceLocation* loc = a[@"loc"];
+    NSArray* head = a[@"head"];
     NSMutableArray* savedNoted = self.pfwNoted;
     self.pfwNoted = [NSMutableArray array];
     XTASTNode* out = [self parDesugarBody:body frame:frame name:name reductions:reductions at:loc];
@@ -6790,6 +6841,290 @@ static NSString* scCombine(NSString* op, NSString* r, NSString* v)
         [self plRegister:out entry:@{ @"kind" : @1, @"body" : body, @"head" : head }];
     self.pfwNoted = savedNoted;
     return out;
+    }
+
+// ── adjacent blocks fused (#147) ──
+// Two par blocks with nothing between them, over the same range, where each
+// array one writes is touched by the other only at the loop's own index,
+// become one block: one loop, the second body after the first in each
+// iteration, each in its own scope. Decided here, from the trees, before any
+// device is chosen. As the port.
+
+// The name a block is known by at run time: its own, or file:line.
+- (NSString*)parFuseLabel:(NSDictionary*)a
+    {
+    if (a[@"name"])
+        return a[@"name"];
+    XTSourceLocation* loc = a[@"loc"];
+    return [NSString stringWithFormat:@"%@:%lu", loc.filename.lastPathComponent ?: @"?", (unsigned long)loc.line];
+    }
+
+// Reads the next statement as a par block and fuses it into a when it may;
+// else puts the parse back. Whether it fused.
+- (BOOL)parFuseNext:(NSMutableDictionary*)a
+    {
+    if (a[@"nofuse"])
+        return NO;
+    XTToken* t1 = [self peekToken:1];
+    XTToken* t2 = [self peekToken:2];
+    if (!([self check:XTTokenIdentifier] && [[self currentToken].value isEqualToString:@"par"] &&
+          (t1.type == XTTokenLBrace || t1.type == XTTokenColon ||
+           (t1.type == XTTokenIdentifier && (t2.type == XTTokenLBrace || t2.type == XTTokenColon)))))
+        return NO;
+    NSDictionary* mark = [self parAutoMark];
+    NSString* first = [self parFuseLabel:a];
+    XTSourceLocation* at1 = a[@"loc"];
+    NSMutableDictionary* b = [self parParts];
+    NSString* why = nil;
+    NSString* second = nil;
+    if (!b || b[@"scanned"])
+        why = @"";
+    else
+        {
+        second = [self parFuseLabel:b];
+        why = b[@"nofuse"] ? @"one has :grid, :device, :constant or :scan" : [self parFuse:a with:b];
+        }
+    // -Wpar-auto says which blocks became one, and why a pair did not.
+    if (!why)
+        {
+        [_diagnostics emitWarning:[NSString stringWithFormat:@"the 'par' blocks '%@' and '%@' run as one block", first, second]
+                         category:XTWarnParAuto
+                               at:at1];
+        return YES;
+        }
+    [self parAutoRollback:mark];
+    if (second && why.length > 0)
+        [_diagnostics emitWarning:[NSString stringWithFormat:@"the 'par' blocks '%@' and '%@' run apart: %@", first, second, why]
+                         category:XTWarnParAuto
+                               at:at1];
+    return NO;
+    }
+
+// The counted loop a block's body is: exactly `for (T i = lo; i < hi; step)`
+// with a step of one; else nil.
+static XTForCStyleNode* _Nullable parFuseLoop(XTBlockNode* body)
+    {
+    if (body.statements.count != 1 || ![body.statements[0] isKindOfClass:[XTForCStyleNode class]])
+        return nil;
+    XTForCStyleNode* loop = (XTForCStyleNode*)body.statements[0];
+    if (![loop.loopInit isKindOfClass:[XTVariableDeclNode class]] || ![loop.condition isKindOfClass:[XTBinaryExprNode class]])
+        return nil;
+    XTVariableDeclNode* iv = (XTVariableDeclNode*)loop.loopInit;
+    XTBinaryExprNode* cond = (XTBinaryExprNode*)loop.condition;
+    if (!iv.varName || !iv.declaredType || !iv.initialiser)
+        return nil;
+    BOOL (^isIv)(XTASTNode*) = ^BOOL(XTASTNode* e) {
+      return [e isKindOfClass:[XTIdentifierNode class]] && [((XTIdentifierNode*)e).identName isEqualToString:iv.varName];
+    };
+    if (cond.op != XTBinaryOpLt || !isIv(cond.left))
+        return nil;
+    XTASTNode* inc = loop.increment;
+    BOOL stepOk = NO;
+    if ([inc isKindOfClass:[XTAssignExprNode class]])
+        {
+        XTAssignExprNode* s = (XTAssignExprNode*)inc;
+        BOOL one = [s.rhs isKindOfClass:[XTLiteralIntNode class]] && ((XTLiteralIntNode*)s.rhs).intValue == 1;
+        if (s.assignOp == XTAssignOpAdd && one && isIv(s.lhs))
+            stepOk = YES;
+        else if (s.assignOp == XTAssignOpAssign && isIv(s.lhs) && [s.rhs isKindOfClass:[XTBinaryExprNode class]])
+            {
+            XTBinaryExprNode* b = (XTBinaryExprNode*)s.rhs;
+            stepOk = b.op == XTBinaryOpAdd && isIv(b.left) && [b.right isKindOfClass:[XTLiteralIntNode class]] &&
+                     ((XTLiteralIntNode*)b.right).intValue == 1;
+            }
+        }
+    else if ([inc isKindOfClass:[XTPostfixExprNode class]])
+        stepOk = ((XTPostfixExprNode*)inc).postfixOp == XTPostfixOpInc && isIv(((XTPostfixExprNode*)inc).operand);
+    else if ([inc isKindOfClass:[XTUnaryExprNode class]])
+        stepOk = ((XTUnaryExprNode*)inc).op == XTUnaryOpPreInc && isIv(((XTUnaryExprNode*)inc).operand);
+    return stepOk ? loop : nil;
+    }
+
+// The token after the function being parsed closes its body.
+- (NSUInteger)parFuseFnEnd
+    {
+    NSInteger depth = 0;
+    for (NSUInteger i = self.fnTok; i < _tokens.count; i++)
+        {
+        XTTokenType t = _tokens[i].type;
+        if (t == XTTokenLBrace)
+            depth++;
+        else if (t == XTTokenRBrace && --depth == 0)
+            return i;
+        }
+    return _tokens.count;
+    }
+
+// n is a local the function sets once, `T* n = new …`, and never again (no
+// other assignment, increment or address taken): its block is its own.
+- (BOOL)parFuseFresh:(NSString*)n end:(NSUInteger)end
+    {
+    NSUInteger made = 0;
+    for (NSUInteger i = self.fnTok; i < end; i++)
+        {
+        XTToken* t = _tokens[i];
+        if (t.type != XTTokenIdentifier || ![t.value isEqualToString:n])
+            continue;
+        XTTokenType before = i > 0 ? _tokens[i - 1].type : (XTTokenType)0;
+        XTTokenType after = i + 1 < _tokens.count ? _tokens[i + 1].type : (XTTokenType)0;
+        if (before == XTTokenAmpersand || before == XTTokenPlusPlus || before == XTTokenMinusMinus || before == XTTokenDot ||
+            before == XTTokenArrow)
+            return NO;
+        if (after == XTTokenPlusPlus || after == XTTokenMinusMinus)
+            return NO;
+        if (after >= XTTokenAssign && after <= XTTokenRorAssign)
+            {
+            XTTokenType next = i + 2 < _tokens.count ? _tokens[i + 2].type : (XTTokenType)0;
+            if (after != XTTokenAssign || next != XTTokenNew || !(before == XTTokenStar || before == XTTokenIdentifier))
+                return NO;
+            made++;
+            }
+        }
+    return made == 1;
+    }
+
+// Two names of arrays that cannot be the same memory: each a fixed-size
+// array, or a local block of its own.
+- (BOOL)parFuseApart:(NSString*)x from:(NSString*)y types:(NSDictionary*)types end:(NSUInteger)end
+    {
+    // A captured name's type, else a global's.
+    id tx = types[x] ?: self.blkState[@"topVars"][x];
+    id ty = types[y] ?: self.blkState[@"topVars"][y];
+    BOOL fx = [tx isKindOfClass:[XTArrayType class]] || [self parFuseFresh:x end:end];
+    BOOL fy = [ty isKindOfClass:[XTArrayType class]] || [self parFuseFresh:y end:end];
+    return fx && fy;
+    }
+
+// Each array one body writes that the other touches: touched only at the
+// index, by both, and every other array either touches apart from it. Why
+// not, or nil.
+- (nullable NSString*)parFuseArrays:(NSDictionary*)wr other:(NSDictionary*)other skip:(NSSet*)skip
+                              types:(NSDictionary*)types end:(NSUInteger)end
+    {
+    NSDictionary* aw = wr[@"acc"];
+    NSDictionary* ao = other[@"acc"];
+    for (NSString* x in [aw.allKeys sortedArrayUsingSelector:@selector(compare:)])
+        {
+        if ([skip containsObject:x])
+            continue;
+        NSUInteger bw = [aw[x] unsignedIntegerValue];
+        if (!(bw & 2))
+            continue;
+        NSNumber* o = ao[x];
+        if (o && ((bw | o.unsignedIntegerValue) & 4))
+            return [NSString stringWithFormat:@"'%@' is written by one and used at another index by the other", x];
+        for (NSString* y in [ao.allKeys sortedArrayUsingSelector:@selector(compare:)])
+            {
+            if ([y isEqualToString:x] || [skip containsObject:y])
+                continue;
+            if (![self parFuseApart:x from:y types:types end:end])
+                return [NSString stringWithFormat:@"'%@' and '%@' may be the same memory", x, y];
+            }
+        }
+    return nil;
+    }
+
+// A frame as parParts starts one, with what the first block's carried.
+- (NSMutableDictionary*)parFuseFrame:(NSDictionary*)was
+    {
+    NSMutableDictionary* frame = [NSMutableDictionary dictionary];
+    frame[@"depth"] = was[@"depth"];
+    frame[@"names"] = [NSMutableArray array];
+    frame[@"types"] = [NSMutableDictionary dictionary];
+    frame[@"bases"] = [NSMutableDictionary dictionary];
+    frame[@"wb"] = [NSMutableSet set];
+    frame[@"selfName"] = [NSNull null];
+    frame[@"par"] = @YES;
+    frame[@"written"] = [NSMutableSet set];
+    if (was[@"once"])
+        frame[@"once"] = @YES;
+    return frame;
+    }
+
+// Fuses b into a when the rules allow: nil when it did, else why not.
+- (nullable NSString*)parFuse:(NSMutableDictionary*)a with:(NSDictionary*)b
+    {
+    if ([a[@"accuracy"] boolValue] != [b[@"accuracy"] boolValue])
+        return @"their goals differ";
+    XTBlockNode* body1 = a[@"body"];
+    XTBlockNode* body2 = b[@"body"];
+    XTForCStyleNode* l1 = parFuseLoop(body1);
+    XTForCStyleNode* l2 = parFuseLoop(body2);
+    if (!l1 || !l2)
+        return @"a body is not one counted loop";
+    XTVariableDeclNode* iv1 = (XTVariableDeclNode*)l1.loopInit;
+    XTVariableDeclNode* iv2 = (XTVariableDeclNode*)l2.loopInit;
+    if (![iv1.declaredType.description isEqualToString:iv2.declaredType.description])
+        return @"their loop variables have different types";
+    NSMutableDictionary* s1 = XTParFuseScan(l1.body, iv1.varName);
+    NSMutableDictionary* s2 = XTParFuseScan(l2.body, iv2.varName);
+    if (s1[@"bad"] || s2[@"bad"])
+        return @"a body calls a function other than a maths one, or leaves its loop";
+    // Bounds of numbers and names neither body writes, then the same ones.
+    NSMutableSet* written = [NSMutableSet setWithSet:s1[@"scalars"]];
+    [written unionSet:s2[@"scalars"]];
+    XTASTNode* lo1 = iv1.initialiser;
+    XTASTNode* hi1 = ((XTBinaryExprNode*)l1.condition).right;
+    XTASTNode* lo2 = iv2.initialiser;
+    XTASTNode* hi2 = ((XTBinaryExprNode*)l2.condition).right;
+    if (!XTParFuseBound(lo1, written) || !XTParFuseBound(hi1, written) || !XTParFuseBound(lo2, written) || !XTParFuseBound(hi2, written))
+        return @"a range bound is not numbers and names neither body writes";
+    if (!XTParFuseSame(lo1, lo2) || !XTParFuseSame(hi1, hi2))
+        return @"their ranges differ";
+    // Reductions: different variables, and neither body uses the other's.
+    NSSet* n1 = s1[@"names"];
+    NSSet* n2 = s2[@"names"];
+    NSArray<NSArray*>* r1 = a[@"reductions"];
+    NSArray<NSArray*>* r2 = b[@"reductions"];
+    for (NSArray* r in r1)
+        if ([n2 containsObject:r[1]])
+            return @"the second uses what the first reduces";
+    for (NSArray* r in r2)
+        {
+        if ([n1 containsObject:r[1]])
+            return @"the first uses what the second reduces";
+        for (NSArray* q in r1)
+            if ([q[1] isEqualToString:r[1]])
+                return @"both reduce the same variable";
+        }
+    // The second loop's variable takes the first's name: the second body must
+    // not already use that name, nor declare its own again.
+    if (![iv1.varName isEqualToString:iv2.varName] &&
+        ([n2 containsObject:iv1.varName] || [s2[@"decls"] containsObject:iv1.varName] || [s2[@"decls"] containsObject:iv2.varName]))
+        return @"the second body already uses the first loop's variable name";
+    // A name one body declares and the other uses could be either: apart.
+    for (NSString* d in s1[@"decls"])
+        if ([n2 containsObject:d])
+            return @"a name is declared in one body and used in the other";
+    for (NSString* d in s2[@"decls"])
+        if ([n1 containsObject:d])
+            return @"a name is declared in one body and used in the other";
+    // The arrays: each body's own names (its locals, one per iteration) aside.
+    NSMutableSet* skip = [NSMutableSet setWithSet:s1[@"decls"]];
+    [skip unionSet:s2[@"decls"]];
+    NSMutableDictionary* types = [NSMutableDictionary dictionaryWithDictionary:a[@"frame"][@"types"]];
+    [types addEntriesFromDictionary:b[@"frame"][@"types"]];
+    NSUInteger end = [self parFuseFnEnd];
+    NSString* why = [self parFuseArrays:s1 other:s2 skip:skip types:types end:end];
+    if (!why)
+        why = [self parFuseArrays:s2 other:s1 skip:skip types:types end:end];
+    if (why)
+        return why;
+    // Fused: one loop, each body in its own scope, the second's variable
+    // renamed; the reductions of both; the name of both.
+    XTASTNode* second = l2.body;
+    if (![iv1.varName isEqualToString:iv2.varName])
+        XTASTRename(second, iv2.varName, iv1.varName);
+    XTParFuseSetBody(l1, [[XTBlockNode alloc] initWithStatements:@[ l1.body, second ] location:l1.body.location]);
+    a[@"name"] = [NSString stringWithFormat:@"%@+%@", [self parFuseLabel:a], [self parFuseLabel:b]];
+    a[@"reductions"] = [a[@"reductions"] arrayByAddingObjectsFromArray:r2];
+    // The fused block's frame, from its tree, as the first block's was made.
+    NSMutableDictionary* frame = [self parFuseFrame:a[@"frame"]];
+    [self parFrameFill:frame body:body1];
+    if (![a[@"accuracy"] boolValue])
+        frame[@"fast"] = @YES;
+    a[@"frame"] = frame;
+    return nil;
     }
 
 - (nullable XTASTNode*)parseDefer

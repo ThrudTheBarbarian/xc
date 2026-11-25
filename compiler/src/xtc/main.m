@@ -5025,6 +5025,7 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
     if (opts.threadSafeARC == 1)      [feArgs addObject:@"-fthread-safe-arc"];
     else if (opts.threadSafeARC == 0) [feArgs addObject:@"-fno-thread-safe-arc"];
     if (opts.parKernelsAll)           [feArgs addObject:@"-fpar-kernels=all"];
+    if (opts.noParFuse)               [feArgs addObject:@"-fno-par-fuse"];
     // The style, spelled out: the front end's own default is auto.
     if (!opts.parAuto)                [feArgs addObject:@"--par-style=cpu"];
     else if (opts.parDeviceDefault == 1) [feArgs addObject:@"--par-style=threads"];

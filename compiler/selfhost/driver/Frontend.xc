@@ -65,6 +65,7 @@ class FeOptions
     Array* _libs; // -L dirs: `.xtc.iface` side files resolve here
     bool _verbose;
     bool _boundsCheck; // subscripts checked: -fbounds-check or -fbounds-check=light
+    bool _noParFuse;   // -fno-par-fuse: adjacent par blocks are never fused (#147)
     bool _boundsReport; // -fbounds-check: the debug build (frames kept, a symbolised backtrace)
     bool _debugInfo;   // -g: source locations on the IR, for the line tables
     i32 _threadSafeArc; // -f[no-]thread-safe-arc: 1 on, 0 off, -1 decide per module
@@ -428,6 +429,14 @@ class FeOptions
         {
         _migrate = m;
         }
+    bool noParFuse(void)
+        {
+        return _noParFuse;
+        }
+    void setNoParFuse(bool b)
+        {
+        _noParFuse = b;
+        }
     void setBoundsCheck(bool b)
         {
         _boundsCheck = b;
@@ -638,6 +647,7 @@ class FeOptions
         // arm9 run a block serially). As the reference.
         parser.setParAuto(o.parAuto() && layoutRow(o).threads());
         parser.setParDeviceDefault(o.parDeviceDefault());
+        parser.setParNoFuse(o.noParFuse());
         // XC_PAR_AUTO_TRACE=1: a line on stderr for each loop --par-style=auto
         // looks at, what it decided and why. As the reference.
         String* trace = Platform.env(String.withCString("XC_PAR_AUTO_TRACE"));
