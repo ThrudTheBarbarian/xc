@@ -41,3 +41,17 @@
 // A byte-list zero tail of at least this many fixed-width scalar elements is
 // one MemSet of its bytes, not a store apiece (#617). Both compilers.
 #define ZERO_RUN_MEMSET 16
+
+// An atomic's memory order (LLVM's, weakest first): monotonic (C's relaxed),
+// acquire, release, acq_rel, seq_cst. The kinds of AtomicRMW.
+#define ATOMIC_RELAXED 0
+#define ATOMIC_ACQUIRE 1
+#define ATOMIC_RELEASE 2
+#define ATOMIC_ACQREL 3
+#define ATOMIC_SEQCST 4
+#define ATOMIC_RMW_XCHG 0
+#define ATOMIC_RMW_ADD 1
+#define ATOMIC_RMW_SUB 2
+#define ATOMIC_RMW_AND 3
+#define ATOMIC_RMW_OR 4
+#define ATOMIC_RMW_XOR 5

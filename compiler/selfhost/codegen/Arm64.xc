@@ -1379,6 +1379,20 @@ class Arm64
         if (op == opPtrToInt)    { emitPtrToInt(n); return true; }
         if (op == opAggBuild)   { emitAggBuild(n); return true; }
         if (op == opAggExtract) { emitAggExtract(n); return true; }
+        if (op == opAtomicRMW || op == opCmpXchg || op == opAtomicLoad
+         || op == opAtomicStore || op == opFence) {
+            // Bracketed as an asm body is, out of the text peepholes'
+            // sight: they read operand 0 as the one written, and an LSE
+            // ldadd writes its second (and cas reads its first).
+            _out.appendCString("    // inline asm\n");
+            if (op == opAtomicRMW) emitAtomicRmw(n);
+            else if (op == opCmpXchg) emitCmpXchg(n);
+            else if (op == opAtomicLoad) emitAtomicLoad(n);
+            else if (op == opAtomicStore) emitAtomicStore(n);
+            else emitFence(n);
+            _out.appendCString("    // end inline asm\n");
+            return true;
+        }
         if (op == opMemCopy) { emitMemHelper(n, String.withCString("_memcpy"), true); return true; }
         if (op == opMemSet)  { emitMemHelper(n, String.withCString("_memset"), false); return true; }
         return false;
@@ -7595,6 +7609,157 @@ class Arm64
         dest = resultReg(n.res(), dest);
         _out.appendFormat("    %s %s, %s\n", mnem.cString(), dest.cString(), addr.cString());
         storeReg(dest, n.res());
+    }
+
+    // ── Atomics (C and C++) ─────────────────────────────────────────────
+    //
+    // The address in x16, an operand in w17/x17, the old value in w15/x15.
+    // With LSE (Apple silicon) each read-modify-write is one instruction;
+    // without (the armv8-a baseline of arm64 Linux) it is an exclusive
+    // load/store loop, its new value in w8/x8 and the store's status in w9
+    // (x8 is stowed at entry when it carries a result pointer, and x9 only
+    // stages far frame slots, which nothing in the loop touches). An
+    // ordering stronger than relaxed takes the acquire and release forms.
+
+    // An atomic's width in bytes: a pointer's is 8.
+    u32 atomicWidth(String* t)
+    {
+        return isPtrTy(t) ? (u32)8 : width(t);
+    }
+
+    static u8* atomicSize(u32 w)
+    {
+        return w == (u32)1 ? "b" : (w == (u32)2 ? "h" : "");
+    }
+
+    static String* atomicReg(u32 n, u32 w)
+    {
+        return String.withFormat(w == (u32)8 ? "x%lu" : "w%lu", n);
+    }
+
+    static i64 immOf(IRInsn* n, u32 k)
+    {
+        return ((IROperand*)n.ops().get(k)).imm();
+    }
+
+    // The old value in w15/x15 to the result: a signed byte or halfword is
+    // kept sign-extended, as a load of one leaves it.
+    void atomicResult(IRInsn* n, u32 w)
+    {
+        if (n.res() == (IRValue*)0) return;
+        if (w < (u32)4 && isSignedTy(n.res().ty()))
+            _out.appendFormat("    sxt%s w15, w15\n", atomicSize(w));
+        storeReg(atomicReg((u32)15, w), n.res());
+    }
+
+    // (addr, value, kind, order) -> the old value.
+    void emitAtomicRmw(IRInsn* n)
+    {
+        if (n.ops().count() < (u32)5 || n.res() == (IRValue*)0) { unsupported(n.op()); return; }
+        u32 w = atomicWidth(n.res().ty());
+        i64 kind = immOf(n, (u32)2);
+        i64 ord = immOf(n, (u32)3);
+        String* v = atomicReg((u32)17, w);
+        String* old = atomicReg((u32)15, w);
+        u8* sz = atomicSize(w);
+        emitDerefAddr((IROperand*)n.ops().get((u32)0));
+        materialise((IROperand*)n.ops().get((u32)1), v);
+        if (_lseAtomics) {
+            u8* mn = "swp";
+            if (kind == (i64)ATOMIC_RMW_ADD) mn = "ldadd";
+            else if (kind == (i64)ATOMIC_RMW_SUB) { mn = "ldadd"; _out.appendFormat("    neg %s, %s\n", v.cString(), v.cString()); }
+            else if (kind == (i64)ATOMIC_RMW_AND) { mn = "ldclr"; _out.appendFormat("    mvn %s, %s\n", v.cString(), v.cString()); }
+            else if (kind == (i64)ATOMIC_RMW_OR) mn = "ldset";
+            else if (kind == (i64)ATOMIC_RMW_XOR) mn = "ldeor";
+            u8* o = ord == (i64)ATOMIC_RELAXED ? "" : (ord == (i64)ATOMIC_ACQUIRE ? "a" : (ord == (i64)ATOMIC_RELEASE ? "l" : "al"));
+            _out.appendFormat("    %s%s%s %s, %s, [x16]\n", mn, o, sz, v.cString(), old.cString());
+        } else {
+            String* nv = atomicReg((u32)8, w);
+            String* again = localLabel(String.withCString("rmw"));
+            _out.appendFormat("%s:\n", again.cString());
+            _out.appendFormat("    %s%s %s, [x16]\n", ord == (i64)ATOMIC_RELAXED || ord == (i64)ATOMIC_RELEASE ? "ldxr" : "ldaxr", sz, old.cString());
+            if (kind == (i64)ATOMIC_RMW_XCHG) nv = v;
+            else {
+                u8* op = kind == (i64)ATOMIC_RMW_ADD ? "add" : (kind == (i64)ATOMIC_RMW_SUB ? "sub"
+                       : (kind == (i64)ATOMIC_RMW_AND ? "and" : (kind == (i64)ATOMIC_RMW_OR ? "orr" : "eor")));
+                _out.appendFormat("    %s %s, %s, %s\n", op, nv.cString(), old.cString(), v.cString());
+            }
+            _out.appendFormat("    %s%s w9, %s, [x16]\n", ord == (i64)ATOMIC_RELAXED || ord == (i64)ATOMIC_ACQUIRE ? "stxr" : "stlxr", sz, nv.cString());
+            _out.appendFormat("    cbnz w9, %s\n", again.cString());
+        }
+        atomicResult(n, w);
+    }
+
+    // (addr, expected, new, order) -> the old value.
+    void emitCmpXchg(IRInsn* n)
+    {
+        if (n.ops().count() < (u32)5 || n.res() == (IRValue*)0) { unsupported(n.op()); return; }
+        u32 w = atomicWidth(n.res().ty());
+        i64 ord = immOf(n, (u32)3);
+        String* nv = atomicReg((u32)17, w);
+        String* e = atomicReg((u32)8, w);
+        String* old = atomicReg((u32)15, w);
+        u8* sz = atomicSize(w);
+        emitDerefAddr((IROperand*)n.ops().get((u32)0));
+        materialise((IROperand*)n.ops().get((u32)2), nv);
+        materialise((IROperand*)n.ops().get((u32)1), e);
+        if (_lseAtomics) {
+            u8* o = ord == (i64)ATOMIC_RELAXED ? "" : (ord == (i64)ATOMIC_ACQUIRE ? "a" : (ord == (i64)ATOMIC_RELEASE ? "l" : "al"));
+            _out.appendFormat("    mov %s, %s\n", old.cString(), e.cString());
+            _out.appendFormat("    cas%s%s %s, %s, [x16]\n", o, sz, old.cString(), nv.cString());
+        } else {
+            String* again = localLabel(String.withCString("cas"));
+            String* done = localLabel(String.withCString("cas_done"));
+            // The exclusive load zero-extends a byte or halfword: so must
+            // the value it is compared with.
+            if (w < (u32)4)
+                _out.appendFormat("    uxt%s w8, w8\n", sz);
+            _out.appendFormat("%s:\n", again.cString());
+            _out.appendFormat("    %s%s %s, [x16]\n", ord == (i64)ATOMIC_RELAXED || ord == (i64)ATOMIC_RELEASE ? "ldxr" : "ldaxr", sz, old.cString());
+            _out.appendFormat("    cmp %s, %s\n", old.cString(), e.cString());
+            _out.appendFormat("    b.ne %s\n", done.cString());
+            _out.appendFormat("    %s%s w9, %s, [x16]\n", ord == (i64)ATOMIC_RELAXED || ord == (i64)ATOMIC_ACQUIRE ? "stxr" : "stlxr", sz, nv.cString());
+            _out.appendFormat("    cbnz w9, %s\n", again.cString());
+            _out.appendFormat("%s:\n", done.cString());
+        }
+        atomicResult(n, w);
+    }
+
+    // (addr, order): relaxed is a plain load, anything stronger ldar.
+    void emitAtomicLoad(IRInsn* n)
+    {
+        if (n.ops().count() < (u32)3 || n.res() == (IRValue*)0) { unsupported(n.op()); return; }
+        u32 w = atomicWidth(n.res().ty());
+        emitDerefAddr((IROperand*)n.ops().get((u32)0));
+        bool plain = immOf(n, (u32)1) == (i64)ATOMIC_RELAXED;
+        _out.appendFormat("    %s%s %s, [x16]\n", plain ? "ldr" : "ldar", atomicSize(w), atomicReg((u32)15, w).cString());
+        atomicResult(n, w);
+    }
+
+    // (addr, value, order): relaxed is a plain store, anything stronger stlr.
+    void emitAtomicStore(IRInsn* n)
+    {
+        if (n.ops().count() < (u32)4) { unsupported(n.op()); return; }
+        IROperand* vop = (IROperand*)n.ops().get((u32)1);
+        String* vty = vop.kind() == (u8)OPK_USE && vop.val() != (IRValue*)0 ? vop.val().ty() : String.withCString("I64");
+        u32 w = atomicWidth(vty);
+        emitDerefAddr((IROperand*)n.ops().get((u32)0));
+        String* v = atomicReg((u32)17, w);
+        materialise(vop, v);
+        bool plain = immOf(n, (u32)2) == (i64)ATOMIC_RELAXED;
+        _out.appendFormat("    %s%s %s, [x16]\n", plain ? "str" : "stlr", atomicSize(w), v.cString());
+    }
+
+    // (order, single-thread): a signal fence orders only what the compiler
+    // emits, which the memory token already does; an acquire fence orders
+    // loads, any stronger one everything.
+    void emitFence(IRInsn* n)
+    {
+        if (n.ops().count() < (u32)2) { unsupported(n.op()); return; }
+        if (immOf(n, (u32)1) != (i64)0) return;
+        i64 ord = immOf(n, (u32)0);
+        if (ord == (i64)ATOMIC_RELAXED) return;
+        _out.appendCString(ord == (i64)ATOMIC_ACQUIRE ? "    dmb ishld\n" : "    dmb ish\n");
     }
 
     static bool isSignedTy(String* t)

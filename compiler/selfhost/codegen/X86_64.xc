@@ -517,9 +517,10 @@ class X86_64
             // peepholeLea again after the tail copies: a copied block that starts
             // with `mov r, r` can land after a 32-bit write of r, which the first
             // pass never saw side by side.
-            // An inline-asm body is the user's: out of the peepholes' sight.
+            // An inline-asm body is the user's, and an atomic's is bracketed the
+            // same way: out of the peepholes' sight.
             String* emitted = _out;
-            bool hasAsm = _hasAsm && emitted.contains(String.withCString("\t# inline asm\n"));
+            bool hasAsm = emitted.contains(String.withCString("\t# inline asm\n"));
             Array* asmBodies = new Array();
             Array* fl = emitted.splitOnByte((u8)'\n');
             if (hasAsm)
@@ -7209,6 +7210,88 @@ class X86_64
         _out.appendFormat("\tmov\t[rax], %s\n", reg((u8)'c', w).cString());
         }
 
+    // ── Atomics (C and C++) ──────────────────────────────────────────────
+    //
+    // x86-64's ordering is strong enough that every load is an acquire and
+    // every store a release: only a seq_cst store (xchg) and a seq_cst fence
+    // (mfence) need more than the plain instruction, and a locked
+    // instruction is a full barrier. The address in rax (rdx where
+    // cmpxchg wants rax), the operand in rcx.
+    void emitAtomic(IRInsn* n, u16 op)
+        {
+        if (op == opFence)
+            {
+            if (n.ops().count() >= (u32)2 && ((IROperand*)n.ops().get((u32)0)).imm() == (i64)ATOMIC_SEQCST
+                && ((IROperand*)n.ops().get((u32)1)).imm() == (i64)0)
+                _out.appendCString("\tmfence\n");
+            return;
+            }
+        IROperand* p = (IROperand*)n.ops().get((u32)0);
+        if (op == opAtomicStore)
+            {
+            IROperand* v = (IROperand*)n.ops().get((u32)1);
+            u32 w = v.kind() == (u8)OPK_USE && v.val() != (IRValue*)0 ? widthOfValue(v.val()) : (u32)8;
+            loadZX(p, (u8)'a');
+            load(v, (u8)'c');
+            bool sc = ((IROperand*)n.ops().get((u32)2)).imm() == (i64)ATOMIC_SEQCST;
+            _out.appendFormat(sc ? "\txchg\t[rax], %s\n" : "\tmov\t[rax], %s\n", reg((u8)'c', w).cString());
+            return;
+            }
+        if (n.res() == (IRValue*)0)
+            return;
+        u32 w = widthOfValue(n.res());
+        String* C = reg((u8)'c', w);
+        String* A = reg((u8)'a', w);
+        if (op == opAtomicLoad)
+            {
+            loadZX(p, (u8)'a');
+            _out.appendFormat("\tmov\t%s, [rax]\n", C.cString());
+            store((u8)'c', n.res());
+            return;
+            }
+        if (op == opCmpXchg)
+            {
+            loadZX(p, (u8)'a');
+            _out.appendCString("\tmov\trdx, rax\n");
+            load((IROperand*)n.ops().get((u32)2), (u8)'c');
+            load((IROperand*)n.ops().get((u32)1), (u8)'a');
+            _out.appendFormat("\tlock cmpxchg\t[rdx], %s\n", C.cString());
+            store((u8)'a', n.res());
+            return;
+            }
+        // AtomicRMW
+        IROperand* v = (IROperand*)n.ops().get((u32)1);
+        i64 kind = ((IROperand*)n.ops().get((u32)2)).imm();
+        loadZX(p, (u8)'a');
+        if (kind == (i64)ATOMIC_RMW_XCHG || kind == (i64)ATOMIC_RMW_ADD || kind == (i64)ATOMIC_RMW_SUB)
+            {
+            load(v, (u8)'c');
+            if (kind == (i64)ATOMIC_RMW_XCHG)
+                _out.appendFormat("\txchg\t[rax], %s\n", C.cString());
+            else
+                {
+                if (kind == (i64)ATOMIC_RMW_SUB)
+                    _out.appendFormat("\tneg\t%s\n", C.cString());
+                _out.appendFormat("\tlock xadd\t[rax], %s\n", C.cString());
+                }
+            store((u8)'c', n.res());
+            return;
+            }
+        // and/or/xor: the old value in rax, the new one made in rcx, until
+        // the exchange finds memory unchanged.
+        u32 lbl = _arcLabel;
+        _arcLabel = _arcLabel + (u32)1;
+        u8* mn = kind == (i64)ATOMIC_RMW_AND ? "and" : (kind == (i64)ATOMIC_RMW_OR ? "or" : "xor");
+        _out.appendCString("\tmov\trdx, rax\n");
+        _out.appendFormat("\tmov\t%s, [rdx]\n", A.cString());
+        _out.appendFormat(".L_atom_%lu:\n", lbl);
+        load(v, (u8)'c');
+        _out.appendFormat("\t%s\t%s, %s\n", mn, C.cString(), A.cString());
+        _out.appendFormat("\tlock cmpxchg\t[rdx], %s\n", C.cString());
+        _out.appendFormat("\tjne\t.L_atom_%lu\n", lbl);
+        store((u8)'a', n.res());
+        }
+
     // Block-copy between a pointer and a frame slot whose byte 0 is at
     // [rbp-slotOff], in 8/4/2/1-byte chunks through rcx.
     void copyAgg(u32 size, String* ptrReg, u32 slotOff, bool toSlot)
@@ -8485,6 +8568,16 @@ class X86_64
         if (op == opCallIndirect || op == opCallBankedIndirect)
             {
             emitCall(fn, n, true);
+            return true;
+            }
+        if (op == opAtomicRMW || op == opCmpXchg || op == opAtomicLoad || op == opAtomicStore || op == opFence)
+            {
+            // Bracketed as an asm body is, out of the text peepholes' sight:
+            // cmpxchg reads and writes rax unnamed, and xadd and xchg write
+            // their register operand.
+            _out.appendCString("\t# inline asm\n");
+            emitAtomic(n, op);
+            _out.appendCString("\t# end inline asm\n");
             return true;
             }
         if (op == opMemCopy)

@@ -601,6 +601,17 @@ enum IROpcode = {
     opVFCmp,
     opVSIToFp,
     opVFpToSI,
+    // Atomics (C and C++ through the LLVM reader): each takes and returns
+    // the memory token, and an ordering as an immediate (ATOMIC_* in
+    // IrDefs.xc). AtomicRMW: (addr, value, ATOMIC_RMW_*, order) -> the old
+    // value. CmpXchg: (addr, expected, new, order) -> the old value.
+    // AtomicLoad: (addr, order). AtomicStore: (addr, value, order). Fence:
+    // (order, single-thread 0/1).
+    opAtomicRMW,
+    opCmpXchg,
+    opAtomicLoad,
+    opAtomicStore,
+    opFence,
     opCount
 };
 
@@ -753,6 +764,11 @@ class IROp
         IROp.def(opVFCmp, "VFCmp", 0);
         IROp.def(opVSIToFp, "VSIToFp", 0);
         IROp.def(opVFpToSI, "VFpToSI", 0);
+        IROp.def(opAtomicRMW, "AtomicRMW", OPF_MEM | OPF_WRITES);
+        IROp.def(opCmpXchg, "CmpXchg", OPF_MEM | OPF_WRITES);
+        IROp.def(opAtomicLoad, "AtomicLoad", OPF_MEM | OPF_WRITES);
+        IROp.def(opAtomicStore, "AtomicStore", OPF_MEM | OPF_WRITES);
+        IROp.def(opFence, "Fence", OPF_MEM | OPF_WRITES);
         for (u32 i = 0; i < n; i = i + 1)
             {
             if (_names.get(i) == (Object*)0)

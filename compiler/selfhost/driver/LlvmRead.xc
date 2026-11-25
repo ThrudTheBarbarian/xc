@@ -1788,6 +1788,195 @@ class LlvmReader
         return operand(t);
         }
 
+    // ── atomics ─────────────────────────────────────────────────────────
+    //
+    // An atomic of an integer of 8 to 64 bits or a pointer: an AtomicRMW,
+    // CmpXchg, AtomicLoad, AtomicStore or Fence on the memory token, the
+    // ordering an immediate (ATOMIC_*). Others (floating-point RMWs, i128,
+    // nand/min/max) are clang's.
+
+    // `syncscope("singlethread")` (a signal fence's): true. Any other scope
+    // is the whole system's, as no syncscope is.
+    bool atomicScope(void)
+        {
+        ws();
+        if (!_s.substringFromByte(_p).hasPrefix(String.withCString("syncscope(")))
+            return false;
+        bool single = _s.substringFromByte(_p).hasPrefix(String.withCString("syncscope(\"singlethread\")"));
+        while (_p < _s.byteLength() && _s.byteAt(_p) != (u8)')')
+            _p = _p + (u32)1;
+        _p = _p + (u32)1;
+        return single;
+        }
+
+    // The ordering at the cursor (after any syncscope), or $FF with the
+    // function failed.
+    u32 atomicOrder(void)
+        {
+        atomicScope();
+        if (eat("monotonic")) return (u32)ATOMIC_RELAXED;
+        if (eat("acquire")) return (u32)ATOMIC_ACQUIRE;
+        if (eat("release")) return (u32)ATOMIC_RELEASE;
+        if (eat("acq_rel")) return (u32)ATOMIC_ACQREL;
+        if (eat("seq_cst")) return (u32)ATOMIC_SEQCST;
+        fail("an atomic ordering not read");
+        return (u32)$FF;
+        }
+
+    // Whether an atomic can be of IR type t: an integer of 8 to 64 bits or a
+    // pointer.
+    bool atomicType(String* t)
+        {
+        if (t == (String*)0)
+            return false;
+        if (t.hasPrefix(String.withCString("Ptr(")))
+            return true;
+        return t.equals(String.withCString("I8")) || t.equals(String.withCString("I16"))
+            || t.equals(String.withCString("I32")) || t.equals(String.withCString("I64"));
+        }
+
+    // n on the memory token, its result r (0 for none).
+    void atomicInsn(IRInsn* n, IRValue* r)
+        {
+        IRValue* mo = new IRValue(String.withCString("Mem"));
+        if (r != (IRValue*)0)
+            n.setRes(r);
+        n.setMemRes(mo);
+        n.add(IROperand.useVal(_mem));
+        _blk.add(n);
+        _mem = mo;
+        }
+
+    // `load atomic [volatile] T, ptr P [syncscope] ORDER, align N`.
+    void readAtomicLoad(String* res)
+        {
+        eat("volatile");
+        String* t = irOf(llType());
+        eat(",");
+        IRValue* addr = typedOperand();
+        if (!atomicType(t) || addr == (IRValue*)0)
+            {
+            fail("an atomic load of this type");
+            return;
+            }
+        u32 o = atomicOrder();
+        if (o == (u32)$FF)
+            return;
+        IRInsn* n = IRInsn.with(String.withCString("AtomicLoad"));
+        n.add(IROperand.useVal(asPtrTo(addr, t)));
+        n.add(IROperand.immI((i64)o, String.withCString("I32")));
+        IRValue* r = valNamed(res, t);
+        r.setTy(t);
+        atomicInsn(n, r);
+        }
+
+    // `store atomic [volatile] T V, ptr P [syncscope] ORDER, align N`.
+    void readAtomicStore(void)
+        {
+        eat("volatile");
+        IRValue* v = typedOperand();
+        eat(",");
+        IRValue* addr = typedOperand();
+        if (v == (IRValue*)0 || addr == (IRValue*)0 || !atomicType(v.ty()))
+            {
+            fail("an atomic store of this type");
+            return;
+            }
+        u32 o = atomicOrder();
+        if (o == (u32)$FF)
+            return;
+        IRInsn* n = IRInsn.with(String.withCString("AtomicStore"));
+        n.add(IROperand.useVal(asPtrTo(addr, v.ty())));
+        n.add(IROperand.useVal(v));
+        n.add(IROperand.immI((i64)o, String.withCString("I32")));
+        atomicInsn(n, (IRValue*)0);
+        }
+
+    // `atomicrmw [volatile] OP ptr P, T V [syncscope] ORDER, align N`.
+    void readAtomicRmw(String* res)
+        {
+        eat("volatile");
+        i64 k = (i64)-1;
+        if (eat("xchg")) k = (i64)ATOMIC_RMW_XCHG;
+        else if (eat("add")) k = (i64)ATOMIC_RMW_ADD;
+        else if (eat("sub")) k = (i64)ATOMIC_RMW_SUB;
+        else if (eat("and")) k = (i64)ATOMIC_RMW_AND;
+        else if (eat("or")) k = (i64)ATOMIC_RMW_OR;
+        else if (eat("xor")) k = (i64)ATOMIC_RMW_XOR;
+        if (k < (i64)0)
+            {
+            fail("an atomicrmw of this operation");
+            return;
+            }
+        IRValue* addr = typedOperand();
+        eat(",");
+        IRValue* v = typedOperand();
+        if (addr == (IRValue*)0 || v == (IRValue*)0 || !atomicType(v.ty())
+            || (k != (i64)ATOMIC_RMW_XCHG && v.ty().hasPrefix(String.withCString("Ptr("))))
+            {
+            fail("an atomicrmw of this type");
+            return;
+            }
+        u32 o = atomicOrder();
+        if (o == (u32)$FF)
+            return;
+        IRInsn* n = IRInsn.with(String.withCString("AtomicRMW"));
+        n.add(IROperand.useVal(asPtrTo(addr, v.ty())));
+        n.add(IROperand.useVal(v));
+        n.add(IROperand.immI(k, String.withCString("I32")));
+        n.add(IROperand.immI((i64)o, String.withCString("I32")));
+        IRValue* r = valNamed(res, v.ty());
+        r.setTy(v.ty());
+        atomicInsn(n, r);
+        }
+
+    // `cmpxchg [weak] [volatile] ptr P, T E, T N [syncscope] SUCC FAIL, align N`:
+    // { the old value, whether it was E }. The pair is two values, which
+    // extractvalue reads as a parameter's words are; success is old == E,
+    // which a strong exchange guarantees (a weak one may also fail
+    // spuriously, so reading it as strong is one of its outcomes).
+    void readCmpXchg(String* res)
+        {
+        eat("weak");
+        eat("volatile");
+        IRValue* addr = typedOperand();
+        eat(",");
+        IRValue* e = typedOperand();
+        eat(",");
+        IRValue* nv = typedOperand();
+        if (addr == (IRValue*)0 || e == (IRValue*)0 || nv == (IRValue*)0 || !atomicType(e.ty()))
+            {
+            fail("a cmpxchg of this type");
+            return;
+            }
+        u32 o = atomicOrder();
+        if (o == (u32)$FF)
+            return;
+        u32 of = atomicOrder();
+        if (of == (u32)$FF)
+            return;
+        if (of > o)
+            o = of;
+        IRInsn* n = IRInsn.with(String.withCString("CmpXchg"));
+        n.add(IROperand.useVal(asPtrTo(addr, e.ty())));
+        n.add(IROperand.useVal(e));
+        n.add(IROperand.useVal(nv));
+        n.add(IROperand.immI((i64)o, String.withCString("I32")));
+        IRValue* old = new IRValue(e.ty());
+        atomicInsn(n, old);
+        IRInsn* cmp = IRInsn.with(String.withCString("ICmp"));
+        IRValue* ok = new IRValue(String.withCString("Bool"));
+        cmp.setRes(ok);
+        cmp.setPred(String.withCString("EQ"));
+        cmp.add(IROperand.useVal(old));
+        cmp.add(IROperand.useVal(e));
+        _blk.add(cmp);
+        Array* pair = new Array();
+        pair.add((Object*)old);
+        pair.add((Object*)ok);
+        _aggParams.set((Hashable*)res, (Object*)pair);
+        }
+
     // v as a pointer to `elemT` (LLVM's are untyped).
     IRValue* asPtrTo(IRValue* v, String* elemT)
         {
@@ -1878,7 +2067,7 @@ class LlvmReader
             // volatile read it stands for. Any other atomic is clang's.
             if (eat("atomic") && !(_msvc && eat("volatile")))
                 {
-                fail("an atomic load");
+                readAtomicLoad(res);
                 return;
                 }
             eat("volatile");
@@ -1910,7 +2099,7 @@ class LlvmReader
             // plain store does not have, and any other atomic is clang's.
             if (eat("atomic") && (!_msvc || _s.contains(String.withCString(" seq_cst")) || !eat("volatile")))
                 {
-                fail("an atomic store");
+                readAtomicStore();
                 return;
                 }
             eat("volatile");
@@ -1931,6 +2120,28 @@ class LlvmReader
             st.setMemRes(mo);
             _blk.add(st);
             _mem = mo;
+            return;
+            }
+        if (op.equals(String.withCString("atomicrmw")))
+            {
+            readAtomicRmw(res);
+            return;
+            }
+        if (op.equals(String.withCString("cmpxchg")))
+            {
+            readCmpXchg(res);
+            return;
+            }
+        if (op.equals(String.withCString("fence")))
+            {
+            bool single = atomicScope();
+            u32 o = atomicOrder();
+            if (o == (u32)$FF)
+                return;
+            IRInsn* f = IRInsn.with(String.withCString("Fence"));
+            f.add(IROperand.immI((i64)o, String.withCString("I32")));
+            f.add(IROperand.immI(single ? (i64)1 : (i64)0, String.withCString("I32")));
+            atomicInsn(f, (IRValue*)0);
             return;
             }
         if (op.equals(String.withCString("getelementptr")))
@@ -2110,9 +2321,17 @@ class LlvmReader
                 _p = _p + (u32)1;
             Array* vs = (Array*)_aggParams.get((Hashable*)an);
             u32 k = _p > k0 ? (u32)LlvmReader.decimal(_s.substringBytes(k0, _p - k0)) : (u32)$FFFFFFFF;
-            if (vs == (Array*)0 || k >= vs.count() || _vals.get((Hashable*)res) != (Object*)0)
+            if (vs == (Array*)0 || k >= vs.count() || vs.get(k) == (Object*)0)
                 {
                 fail("an extractvalue not read");
+                return;
+                }
+            // A name used before this line (a loop's phi of it) already has
+            // its value: that value is made a copy of the part.
+            if (_vals.get((Hashable*)res) != (Object*)0)
+                {
+                IRValue* part = (IRValue*)vs.get(k);
+                define(res, String.withCString("Bitcast"), part.ty(), IROperand.useVal(part), (IROperand*)0, (IROperand*)0, (String*)0);
                 return;
                 }
             _vals.set((Hashable*)res, vs.get(k));
