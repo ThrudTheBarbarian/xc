@@ -124,10 +124,30 @@ The arithmetic is done in software on every target. A `par` block that
 computes in `f16` or `bf16` runs on the CPU; the compiler says so when the
 block could otherwise use the GPU.
 
-Between xc functions an `f16` or `bf16` travels as its 16-bit pattern, in an
-integer register or stack slot. C passes `_Float16` and `__bf16` in
-floating-point registers, so a C library function, or a variadic one declared
-without a body, cannot take or return either type; give it a `float`.
+#### Calling C
+
+`f16` and `bf16` are C's `_Float16` and `__bf16`. Between xc functions either
+travels as its 16-bit pattern, in an integer register or stack slot. A function
+that C calls or defines takes and returns them as C does:
+
+- a C library function, imported with `#import <Lib>` (whose debug
+  information declares a `_Float16` parameter as `f16` and a `__bf16` one as
+  `bf16`);
+- a function declared without a body and ending in `...`;
+- a function declared `extern`, with a body or without. Declare a C function
+  you write the prototype for `extern`, and give an xc function that C calls,
+  by name or through a pointer, `extern` too.
+
+| Target | Where C passes `_Float16` and `__bf16` |
+|--------|----------------------------------------|
+| `arm64` | the low 16 bits of `v0`–`v7` (`h0`–`h7`); on the stack, 2 bytes packed on macOS and iOS, an 8-byte slot on Linux and Android |
+| `x86_64` | the low 16 bits of `xmm0`–`xmm7`; on the stack, an 8-byte slot |
+| `win64` | the low 16 bits of `xmm0`–`xmm3`, by position; on the stack, an 8-byte slot |
+| `arm9` | the low 16 bits of a core register or 4-byte stack slot (the soft-float convention) |
+
+`wasm32`, `m68k` and `xt6502` have no C with these types, so a C library
+function or bodyless variadic that takes or returns one is an error there; give
+it a `float`. An `extern` function keeps xc's convention on those targets.
 
 ### `i64` / `u64` on every target
 

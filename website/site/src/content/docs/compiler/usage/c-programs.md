@@ -118,6 +118,20 @@ at load; the baseline copy rounds each operation on its own.
 any target, whatever `-ffp-contract` says: each operation is rounded on its
 own, as ISO C describes.
 
+## 16-bit floats
+
+`_Float16` and `__bf16` are xc's [`f16` and `bf16`](/compiler/language/types/#f16-and-bf16),
+and `xcc` compiles the functions that use them. Each operation is worked in
+`float` and rounded to the type once, the result ISO C gives for `_Float16` under
+`FLT_EVAL_METHOD` 0. Where `clang` itself evaluates a `_Float16` expression in
+`float` and rounds once at the end (on x86-64, where it keeps that excess
+precision), its IR says so and `xcc` follows it, so the program prints what the
+`clang`-built one does. A multiply-add `clang` marks for fusing rounds once, as a
+fused instruction does. A function taking or returning either type passes it as
+C does, so it calls and is called by the functions `clang` compiles. A loop over
+`_Float16` arrays becomes a `par` block that runs on the CPU's threads. A vector
+of either type leaves its function to `clang`.
+
 ## C++
 
 C++ takes the same path: see [C++ programs](/compiler/usage/cpp-programs/).
