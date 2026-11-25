@@ -456,6 +456,11 @@ Object* gParResOwner[PAR_RES];
 u32 gParResSlot[PAR_RES];
 i64 gParResBytes[PAR_RES];
 i32 gParResLock;               // 1 while a fetch, or a run starting or ending, holds it
+// XC_PAR_RESIDENT_SLOW_MS (tests): each fetch waits this long inside the lock
+// first, so CPU lanes reading a kept block all fault while it is fetched.
+// -1 until read (where a block is kept: a fault handler reads no settings).
+i32 gParResSlowMs = (i32)-1;
+void _xt_thread_sleep_ms(u32 ms);
 u32 gParResRunTid;             // the thread inside a single-shot device run, plus one; 0 when none
 i32 gParResOn;                 // XC_PAR_RESIDENT: 0 not read yet, 1 on, 2 off, 3 learned per block
 Object* gParResFetcher;        // the fault hook's receiver, kept reachable
@@ -2100,7 +2105,7 @@ class ParDevice
         while (true)
             {
             i32 v = gParResActive;
-            if (_xt_atomic_cas_i32((pointer)&gParResActive, v, v + (i32)1) == v)
+            if (_xt_atomic_cas_i32((pointer)&gParResActive, v, v + (i32)1) != (i32)0)
                 return;
             }
 #endif
@@ -2112,7 +2117,7 @@ class ParDevice
         while (true)
             {
             i32 v = gParResActive;
-            if (_xt_atomic_cas_i32((pointer)&gParResActive, v, v - (i32)1) == v)
+            if (_xt_atomic_cas_i32((pointer)&gParResActive, v, v - (i32)1) != (i32)0)
                 return;
             }
 #endif
@@ -2121,7 +2126,8 @@ class ParDevice
     static void resLock(void)
         {
 #if ARCH_arm64 || ARCH_x86_64 || OS_windows
-        while (_xt_atomic_cas_i32((pointer)&gParResLock, (i32)0, (i32)1) != (i32)0)
+        // The call answers 1 when it stored: spin while it does not.
+        while (_xt_atomic_cas_i32((pointer)&gParResLock, (i32)0, (i32)1) == (i32)0)
             _xt_thread_yield();
 #endif
         }
@@ -2181,6 +2187,14 @@ class ParDevice
         return false;
 #else
         hookFetch();
+        if (gParResSlowMs < (i32)0)
+            {
+            String* slow = Platform.env(String.withCString("XC_PAR_RESIDENT_SLOW_MS"));
+            i32 ms = (i32)0;
+            for (u32 i = (u32)0; i < slow.byteLength() && slow.byteAt(i) >= (u8)'0' && slow.byteAt(i) <= (u8)'9' && ms < (i32)10000; i = i + (u32)1)
+                ms = ms * (i32)10 + (i32)(slow.byteAt(i) - (u8)'0');
+            gParResSlowMs = ms;
+            }
         resLock();
         u32 at = (u32)PAR_RES;
         for (u32 i = (u32)0; i < (u32)PAR_RES && at == (u32)PAR_RES; i = i + (u32)1)
@@ -2221,8 +2235,13 @@ class ParDevice
 #if !(ARCH_arm64 || ARCH_x86_64 || OS_windows)
         return false;
 #else
+        // A fault on a block no longer kept: the fault handler saw it parked,
+        // and another thread (CPU lanes reading it together) has fetched it
+        // since; the access is retried. A false answer there would hand the
+        // signal to the action installed before, for good, and the next
+        // parked block's fault would kill the process.
         if (!resident(host))
-            return false;
+            return fromFault;
         u32 me = _xt_thread_self_id() + (u32)1;
         while (true)
             {
@@ -2243,6 +2262,8 @@ class ParDevice
             if (gParResHost[i] == host)
                 {
                 ParResidentOwner* o = (ParResidentOwner*)gParResOwner[i];
+                if (gParResSlowMs > (i32)0)
+                    _xt_thread_sleep_ms((u32)gParResSlowMs);
                 bool ok = o.fetchBack(gParResSlot[i], host, gParResBytes[i]);
                 _xtc_simd_unpark(host);
                 gParResHost[i] = (pointer)0;
@@ -2263,7 +2284,7 @@ class ParDevice
                 back = true;
                 }
         resUnlock();
-        return back;
+        return back || fromFault;
 #endif
         }
 
