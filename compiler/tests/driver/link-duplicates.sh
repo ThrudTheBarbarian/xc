@@ -7,9 +7,11 @@
 #
 #   * A tentative definition (`i32 g;`) yields to an initialised one in either
 #     link order: the program reads 5, never 0 (#686).
-#   * The same function defined in two objects (the shape every `-c` object
-#     and split build has, with the standard library compiled into each)
-#     links in either order and the program runs.
+#   * One source compiled into two objects (the shape every `-c` object and
+#     split build has, with the standard library compiled into each) links in
+#     either order and the program runs.
+#   * Two modules that each define the same name are refused, in either
+#     order, with a message naming the symbol and both objects (#663).
 #
 # Both drivers, each linking its own objects.
 #
@@ -33,14 +35,21 @@ cat > "$W/init.xc" <<'EOF'
 i32 g = 5;
 i32 readG(void) { return g; }
 EOF
+cat > "$W/shared.xc" <<'EOF'
+i32 twice(i32 x) { return x * 2; }
+EOF
 cat > "$W/dupA.xc" <<'EOF'
 #import "Stdio.xc"
-i32 twice(i32 x) { return x * 2; }
+#import "shared.xc"
 i32 viaB(i32 x);
 i32 main(void) { Stdio.printf("%d %d\n", twice(4), viaB(5)); return 0; }
 EOF
 cat > "$W/dupB.xc" <<'EOF'
-i32 twice(i32 x) { return x * 2; }
+#import "shared.xc"
+i32 viaB(i32 x) { return twice(x) + 1; }
+EOF
+cat > "$W/dupC.xc" <<'EOF'
+i32 twice(i32 x) { return x * 3; }
 i32 viaB(i32 x) { return twice(x) + 1; }
 EOF
 
@@ -69,8 +78,8 @@ for a in $targets; do
     for c in "$REF" "$XC"; do
         [ -x "$c" ] || continue
         n=$(basename "$c"); d="$W/$a-$n"; mkdir -p "$d"
-        for s in tent init dupA dupB; do
-            "$c" -q -A "$a" -H . $L -c "$W/$s.xc" -o "$d/$s.o" > "$d/err" 2>&1 \
+        for s in tent init dupA dupB dupC; do
+            "$c" -q -A "$a" -H . $L -I "$W" -c "$W/$s.xc" -o "$d/$s.o" > "$d/err" 2>&1 \
                 || { bad "$a $n: -c $s.xc: $(head -c 200 "$d/err")"; continue 2; }
         done
         for order in "tent init" "init tent"; do
@@ -108,12 +117,32 @@ PY
             set -- $order
             if "$c" -q -A "$a" -H . $L "$d/$1.o" "$d/$2.o" -o "$d/u$ext" > "$d/err" 2>&1; then
                 out=$(runit "$a" "$d/u$ext")
-                [ "$out" = "8 11" ] && ok || bad "$a $n [$order]: identical duplicates (got '$out', want '8 11')"
+                [ "$out" = "8 11" ] && ok || bad "$a $n [$order]: one source in two objects (got '$out', want '8 11')"
             else
-                bad "$a $n [$order]: identical duplicates did not link: $(head -c 200 "$d/err")"
+                bad "$a $n [$order]: one source in two objects did not link: $(head -c 200 "$d/err")"
+            fi
+        done
+        for order in "dupA dupC" "dupC dupA"; do
+            set -- $order
+            if "$c" -q -A "$a" -H . $L "$d/$1.o" "$d/$2.o" -o "$d/v$ext" > "$d/err" 2>&1; then
+                bad "$a $n [$order]: two modules' 'twice' linked"
+            elif grep -q "'twice' is defined in both" "$d/err" && grep -q "$1.o" "$d/err" && grep -q "$2.o" "$d/err"; then
+                ok
+            else
+                bad "$a $n [$order]: refused, but not naming the symbol and both objects: $(head -c 300 "$d/err")"
             fi
         done
     done
+done
+# Both drivers write the same origins table for the same source (#663).
+for a in $targets; do
+    r="$W/$a-$(basename "$REF")"; x="$W/$a-$(basename "$XC")"
+    [ -f "$r/dupA.xtc.origins" ] && [ -f "$x/dupA.xtc.origins" ] || continue
+    for s in dupA dupB dupC init; do
+        cmp -s "$r/$s.xtc.origins" "$x/$s.xtc.origins" && ok \
+            || bad "$a: the two drivers' $s.xtc.origins differ: $(diff "$r/$s.xtc.origins" "$x/$s.xtc.origins" | head -4 | tr '\n' ' ')"
+    done
+    grep -q "^twice	shared.xc:1$" "$x/dupA.xtc.origins" && ok || bad "$a: dupA.xtc.origins does not place twice at shared.xc:1"
 done
 [ -z "$targets" ] && echo "link-duplicates: no target this host runs"
 [ $fail = 0 ] && echo "link-duplicates: ok ($pass checks on: $targets)"

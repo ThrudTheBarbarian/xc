@@ -16,6 +16,7 @@
 #import "XTPointerType.h"
 #import "XTStructType.h"
 #import "XTType.h"
+#import "XTDeclNodes.h"
 
 // xtc-fe — IR-emitting frontend for the new-IR pipeline.
 //
@@ -46,6 +47,56 @@
 |* first, then the three whitespace characters that would otherwise break the
 |* one-token-one-line invariant.
 \****************************************************************************/
+// Where each definition in a -c object came from (#663): one line per name,
+// `<symbol>\t<file basename>:<line>`, sorted — free functions and methods with
+// a body, and initialised globals (a tentative `i32 g;` is a common, merged by
+// design). The link refuses a name two objects define from different origins.
+// The port's Origins.table, byte for byte.
+static NSString* XTOriginTable(XTProgramNode* program)
+    {
+    NSMutableDictionary<NSString*, NSString*>* m = [NSMutableDictionary dictionary];
+    void (^note)(NSString*, XTASTNode*) = ^(NSString* sym, XTASTNode* at) {
+      if (!sym.length || !at.location.filename.length || m[sym])
+          return;
+      // Only what a user wrote: not a definition the compiler synthesised (a
+      // `<class-names>` or `<conformance-helper>` source, a line of 0).
+      if ([at.location.filename hasPrefix:@"<"] || at.location.line == 0)
+          return;
+      m[sym] = [NSString stringWithFormat:@"%@:%lu", at.location.filename.lastPathComponent,
+                                          (unsigned long)at.location.line];
+    };
+    for (XTASTNode* d in program.declarations)
+        {
+        if (d.nodeKind == XTASTNodeKindFunctionDecl)
+            {
+            XTFunctionDeclNode* f = (XTFunctionDeclNode*)d;
+            if (f.body)
+                note(f.mangledName ?: f.funcName, f);
+            }
+        else if (d.nodeKind == XTASTNodeKindClassDecl)
+            {
+            XTClassDeclNode* c = (XTClassDeclNode*)d;
+            // A class whose name has a `$` is the compiler's (a block's
+            // `Blk$…`, a par block's): it has no source of its own.
+            if ([c.className rangeOfString:@"$"].location != NSNotFound)
+                continue;
+            for (XTMethodDeclNode* mt in c.methods)
+                if (mt.body)
+                    note([NSString stringWithFormat:@"%@$%@", c.className, mt.mangledName ?: mt.methodName], mt);
+            }
+        else if (d.nodeKind == XTASTNodeKindVariableDecl)
+            {
+            XTVariableDeclNode* v = (XTVariableDeclNode*)d;
+            if ((v.initialiser || v.constructorArgs.count) && !v.isExternalGlobal)
+                note(v.varName, v);
+            }
+        }
+    NSMutableString* out = [NSMutableString string];
+    for (NSString* n in [m.allKeys sortedArrayUsingSelector:@selector(compare:)])
+        [out appendFormat:@"%@\t%@\n", n, m[n]];
+    return out;
+    }
+
 static NSString* XTEscapeTokenText(NSString* s)
     {
     // Escape per UTF-8 BYTE, not per unichar: the xtc lexer sees bytes, and a
@@ -658,6 +709,14 @@ int main(int argc, const char* argv[])
                 {
                 [[NSFileManager defaultManager] removeItemAtPath:ifacePath error:NULL];
                 }
+            // …and where each definition came from, for the link's clash check
+            // (#663): `<output>.origins`, written beside the object by -c.
+            NSString* originsPath = [outPath stringByAppendingPathExtension:@"origins"];
+            if ((opts.emitLib || opts.compileOnly || opts.emitIface) && driver.analyzedProgram)
+                [XTOriginTable(driver.analyzedProgram) writeToFile:originsPath atomically:YES
+                                                         encoding:NSUTF8StringEncoding error:NULL];
+            else
+                [[NSFileManager defaultManager] removeItemAtPath:originsPath error:NULL];
             }
         else
             {

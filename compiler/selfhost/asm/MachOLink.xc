@@ -12,6 +12,7 @@
 #import <SectionBytes>
 #import "Arm64AsmDefs.xc"
 #import <MachOObject>
+#import <DupCheck>
 #import "MachOObjectDefs.xc"
 
 class MachOLink
@@ -215,6 +216,8 @@ class MachOLink
         for (u32 q = (u32)0; q < mdataSyms.count(); q = q + (u32)1)
             mdataSet.set((Hashable*)mdataSyms.get(q), mdataSyms.get(q));
         Array* allObjs = new Array();
+        Array* labels = new Array();    // each input's name, for a clash message (#663)
+        Map* firstOrigin = new Map();   // name -> [object, origin]: a named object's first definition
         Map* forced = new Map();
         for (u32 i = (u32)0; i < objectFiles.count(); i = i + (u32)1)
             {
@@ -230,6 +233,7 @@ class MachOLink
                 o.redirectUndefined(_redirect);
             forced.set((Hashable*)Number.withU32(allObjs.count()), (Object*)Number.withU32((u32)1));
             allObjs.add((Object*)o);
+            labels.add((Object*)op);
             }
         for (u32 i = (u32)0; i < archives.count(); i = i + (u32)1)
             {
@@ -241,7 +245,10 @@ class MachOLink
                 continue;
                 }
             for (u32 k = (u32)0; k < os.count(); k = k + (u32)1)
+                {
                 allObjs.add(os.get(k));
+                labels.add((Object*)ap);
+                }
             }
         Map* pulled = new Map();
         // Common-symbol resolution across objects (bug 177): size of the common
@@ -276,6 +283,11 @@ class MachOLink
                     defines = obj.definesAny(needed);
                 if (!defines)
                     continue;
+                bool named = forced.get((Hashable*)key) != (Object*)0;
+                String* label = (String*)labels.get(oi);
+                // Where this named object's definitions came from (#663);
+                // archive members are a pool, where the first stands.
+                Map* org = named ? DupCheck.originsFor(label) : (Map*)0;
                 forced.remove((Hashable*)key);
                 pulled.set((Hashable*)key, (Object*)Number.withU32((u32)1));
                 // Append __text (4-aligned) and the data blob (16-aligned: a
@@ -355,6 +367,31 @@ class MachOLink
                     // still yields to a strong definition (bug 177).
                     bool taken = msyms.get((Hashable*)nm) != (Object*)0
                               && commonSizes.get((Hashable*)nm) == (Object*)0;
+                    if (sd.ext() && obj.commons().get((Hashable*)sd.name()) == (Object*)0)
+                        {
+                        String* o2 = DupCheck.originOf(org, nm, true);
+                        Array* fo = (Array*)firstOrigin.get((Hashable*)nm);
+                        // The first stands — when both come from the same
+                        // source. Two modules each defining the name is a
+                        // clash, refused naming both objects and origins (#663).
+                        if (taken && fo != (Array*)0 && o2 != (String*)0 && !o2.equals((String*)fo.get((u32)1)))
+                            {
+                            Stdio.error(String.withCString("xcc-ln-arm64: error: ")
+                                            .appending(DupCheck.message(nm.hasPrefix(String.withCString("_")) ? nm.substringFromByte((u32)1) : nm,
+                                                                           (String*)fo.get((u32)0), (String*)fo.get((u32)1), label, o2))
+                                            .appending(String.withCString("\n")));
+                            _why = String.withCString("a name defined from different sources in two objects");
+                            _rc = (u32)1;
+                            return;
+                            }
+                        if (!taken && o2 != (String*)0)
+                            {
+                            Array* fa = new Array();
+                            fa.add((Object*)label);
+                            fa.add((Object*)o2);
+                            firstOrigin.set((Hashable*)nm, (Object*)fa);
+                            }
+                        }
                     if (sd.where() == (u32)1)
                         {
                         if (!taken)

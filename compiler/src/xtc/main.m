@@ -5091,6 +5091,13 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
         NSString *side = [[opts.outputPath stringByDeletingPathExtension]
                              stringByAppendingPathExtension:@"xtc.iface"];
         if (!writeSidecar(side, ifaceJson)) return 1;
+        // Where each definition came from (#663): the link refuses a name two
+        // objects define from different origins. The front end wrote it beside
+        // its IR.
+        NSString *origins = [NSString stringWithContentsOfFile:[irPath stringByAppendingPathExtension:@"origins"]
+                                                      encoding:NSUTF8StringEncoding error:NULL];
+        if (!writeSidecar([[opts.outputPath stringByDeletingPathExtension]
+                              stringByAppendingPathExtension:@"xtc.origins"], origins)) return 1;
         if (ifaceJson.length && !opts.quiet)
             fprintf(stderr, "xcc: interface -> '%s'\n", side.UTF8String);
     }

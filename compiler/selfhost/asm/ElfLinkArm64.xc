@@ -35,6 +35,7 @@
 #import <SectionBytes>
 #import "Arm64AsmDefs.xc"
 #import <ElfObject>
+#import <DupCheck>
 #import <ArArchive>
 #import <ElfArm64>
 #import "ElfArm64Defs.xc"
@@ -245,6 +246,7 @@ class ElfLinkArm64
         Map* pulled = new Map();
         Map* strongDefs = new Map();
         Map* weakDefs = new Map();
+        Map* firstOrigin = new Map();   // name -> [object, origin]: a named object's first definition (#663)
         bool progress = true;
         while (progress)
             {
@@ -278,9 +280,12 @@ class ElfLinkArm64
                     defines = ElfLinkArm64.definesAny(obj, needed, msyms);
                 if (!defines)
                     continue;
+                bool named = forced.get((Hashable*)key) != (Object*)0;   // on the command line, not an archive member
                 forced.remove((Hashable*)key);
                 pulled.set((Hashable*)key, (Object*)Number.withU32((u32)1));
                 String* label = (String*)labels.get(oi);
+                // Where this named object's definitions came from (#663).
+                Map* org = named ? DupCheck.originsFor(label) : (Map*)0;
                 // Its thread-local template after the others', on its alignment.
                 u32 lbase = (u32)0;
                 if (obj.tls().length() > (u32)0)
@@ -341,7 +346,19 @@ class ElfLinkArm64
                         // program's own (which no object may replace) and every
                         // earlier strong one stand.
                         if (weakDefs.get((Hashable*)nm) == (Object*)0)
+                            {
+                            // The first stands — when both come from the same
+                            // source. Two modules each defining the name is a
+                            // clash, refused naming both objects and origins.
+                            Array* fo = sd.weak() ? (Array*)0 : (Array*)firstOrigin.get((Hashable*)nm);
+                            String* o2 = DupCheck.originOf(org, nm, false);
+                            if (fo != (Array*)0 && o2 != (String*)0 && !o2.equals((String*)fo.get((u32)1)))
+                                {
+                                fail(DupCheck.message(nm, (String*)fo.get((u32)0), (String*)fo.get((u32)1), label, o2));
+                                return;
+                                }
                             continue;
+                            }
                         weakDefs.remove((Hashable*)nm);
                         }
                     if (sd.where() == (u32)3)
@@ -370,6 +387,17 @@ class ElfLinkArm64
                         }
                     bool inData = sd.where() == (u32)2;
                     msyms.set((Hashable*)nm, (Object*)Number.withU32((inData ? dbase : base) + sd.off()));
+                    if (sd.ext() && !sd.weak())
+                        {
+                        String* o1 = DupCheck.originOf(org, nm, false);
+                        if (o1 != (String*)0)
+                            {
+                            Array* fa = new Array();
+                            fa.add((Object*)label);
+                            fa.add((Object*)o1);
+                            firstOrigin.set((Hashable*)nm, (Object*)fa);
+                            }
+                        }
                     if (inData && mdataSet.get((Hashable*)nm) == (Object*)0)
                         {
                         mdataSyms.add((Object*)nm);

@@ -10,6 +10,7 @@
 #import <SectionBytes>
 #import "X86AsmDefs.xc"
 #import <CoffObject>
+#import <DupCheck>
 #import "CoffObjectDefs.xc"
 #import <ArArchive>
 #import <ElfObject>
@@ -24,6 +25,7 @@ class PeLink
     Array* _tlsFix;       // X86Fixup@ against it
     Map* _tlsSyms;        // name -> Number(offset in _tls), defined when placed
     Map* _tentative;      // name -> 1: defined so far only by a .bss (tentative) definition
+    Map* _firstOrigin;    // name -> [object, origin]: a named object's first definition (#663)
     SectionBytes* _ctors; // the objects' .ctors: constructors, run by __main
     Array* _ctorsFix;     // X86Fixup@ against it
     bool _dll;            // the image is a DLL (setDll), not an executable
@@ -38,6 +40,7 @@ class PeLink
         _tlsFix = new Array();
         _tlsSyms = new Map();
         _tentative = new Map();
+        _firstOrigin = new Map();
         _ctors = new SectionBytes();
         _ctorsFix = new Array();
         }
@@ -160,6 +163,9 @@ class PeLink
             PeLink.appendData(_tls, obj.tls());
             }
         Array* sdefs = obj.symdefs();
+        // Where this named object's definitions came from (#663); archive
+        // members (oi 1000 and up) are a pool, where the first stands.
+        Map* org = oi < (u32)1000 ? DupCheck.originsFor(whence) : (Map*)0;
         for (u32 si = (u32)0; si < sdefs.count(); si = si + (u32)1)
             {
             ElfSymDef* sd = (ElfSymDef*)sdefs.get(si);
@@ -206,10 +212,36 @@ class PeLink
                 // common (#686); otherwise the FIRST definition stands (#663).
                 if (_tentative.get((Hashable*)nm) == (Object*)0 || sd.tentative()
                     || PeLink.zeroFilled(obj, sdefs, si))
+                    {
+                    // The first stands — when both come from the same source.
+                    // Two modules each defining the name is a clash, refused
+                    // naming both objects and origins (#663).
+                    Array* fo = (Array*)_firstOrigin.get((Hashable*)nm);
+                    String* o2 = sd.ext() ? DupCheck.originOf(org, nm, false) : (String*)0;
+                    if (fo != (Array*)0 && o2 != (String*)0 && !o2.equals((String*)fo.get((u32)1)))
+                        {
+                        Stdio.error(String.withCString("xcc-ln-win64: error: ")
+                                        .appending(DupCheck.message(nm, (String*)fo.get((u32)0), (String*)fo.get((u32)1), whence, o2))
+                                        .appending(String.withCString("\n")));
+                        fail(String.withCString("a name defined from different sources in two objects"));
+                        return false;
+                        }
                     continue;
+                    }
                 _tentative.remove((Hashable*)nm);
                 if (sd.where() == (u32)1)
                     PeLink.dropName(mdataSyms, nm);
+                }
+            if (sd.ext())
+                {
+                String* o1 = DupCheck.originOf(org, nm, false);
+                if (o1 != (String*)0)
+                    {
+                    Array* fa = new Array();
+                    fa.add((Object*)whence);
+                    fa.add((Object*)o1);
+                    _firstOrigin.set((Hashable*)nm, (Object*)fa);
+                    }
                 }
             if (sd.where() == (u32)1)
                 msyms.set((Hashable*)nm, (Object*)Number.withU32(tbase + sd.off()));
