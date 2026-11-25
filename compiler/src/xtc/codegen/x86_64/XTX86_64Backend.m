@@ -6894,6 +6894,23 @@ static BOOL xtConstThrough(XTIRValueId v, XTIRInsn* (^defOf)(XTIRValueId), int d
                 [out appendFormat:@"\t%@\t%@, %@ ptr %@\n", bc, d, (lane && lane.byteWidth == 8) ? @"qword" : @"dword", memop];
                 return;
                 }
+            // A scalar that lives in a stack slot is broadcast straight from
+            // it: one `vpbroadcastd zmm, dword ptr [rbp-N]` where a load into
+            // a GPR, a zeroing, a movd and a register broadcast were four,
+            // and a dependency chain, in the hot loop (md5_mask's per-prefix
+            // words, #30). Only a lane no wider than the value: its low bytes
+            // are the lane's value. The port's emitVSplat.
+            XTIRValue* sv = ops[0].kind == XTIROperandKindUse ? fn.values[@(ops[0].valueId)] : nil;
+            NSNumber* ss = ops[0].kind == XTIROperandKindUse ? slot[@(ops[0].valueId)] : nil;
+            NSUInteger sbw = lane ? lane.byteWidth : 4;
+            if (sv && ss && !sHome[@(ops[0].valueId)] && (sbw == 4 || sbw == 8) && [self widthOf:sv] >= sbw)
+                {
+                NSString* bc = (lane && lane.kind == XTIRTypeKindF64) ? @"vbroadcastsd"
+                             : (lane && lane.kind == XTIRTypeKindF32) ? @"vbroadcastss"
+                             : sbw == 8 ? @"vpbroadcastq" : @"vpbroadcastd";
+                [out appendFormat:@"\t%@\t%@, %@ ptr [rbp-%@]\n", bc, d, sbw == 8 ? @"qword" : @"dword", ss];
+                return;
+                }
             if (lane && lane.kind == XTIRTypeKindF64)
                 {
                 [self loadF:ops[0] into:x fn:fn slot:slot out:out];
