@@ -196,6 +196,7 @@ Full discussion on [Optimisation](/compiler/usage/optimization/).
 | `-fthread-safe-arc` | Force atomic ARC refcounts, so two threads can share an object. |
 | `-fgoal=speed\|accuracy` | The default goal of every loop and `par` block in the build. A `#goal speed` or `#goal accuracy` line in a file overrides it for that file, and a `:goal(…)` on a loop or block, or on the loop or block around it, overrides both. Without any, loops are exact and `par` blocks favour speed, both those written in the source and those `--par-style` makes from loops. See [Which goal applies](/compiler/language/par/#which-goal-applies). |
 | `-fno-thread-safe-arc` | Force plain, non-atomic refcounts. |
+| `-fno-par-fuse` | Run adjacent `par` blocks separately instead of as one block (see [Blocks next to each other run as one](/compiler/language/par/#blocks-next-to-each-other-run-as-one)), for comparison. |
 | `-fpar-kernels=all` | Every `par` block carries every GPU kernel form (Metal, PTX, SPIR-V, WGSL), for workers on other machines (see [Across machines](/compiler/language/par/#across-machines-xcd)). A build made where `XC_PAR_REMOTE` is set does this by itself. |
 
 Atomic refcounts are decided **per module** and switch on when the module spawns a

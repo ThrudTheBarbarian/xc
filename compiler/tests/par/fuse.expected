@@ -1,0 +1,11 @@
+the 'par' blocks 'ptrWrite' and 'ptrRead' run apart: 'p' and 'q' may be the same memory
+the 'par' blocks 'scale' and 'square' run as one block
+the 'par' blocks 'c1' and 'c2' run as one block
+the 'par' blocks 'c1+c2' and 'c3' run as one block
+the 'par' blocks 'shiftA' and 'shiftB' run apart: 'y' is written by one and used at another index by the other
+the 'par' blocks 'redA' and 'redB' run apart: the second uses what the first reduces
+the 'par' blocks 'goalA' and 'goalB' run apart: their goals differ
+the 'par' blocks 'callA' and 'callB' run apart: a body calls a function other than a maths one, or leaves its loop
+the 'par' blocks 'rangeA' and 'rangeB' run apart: their ranges differ
+the 'par' blocks 'nameA' and 'nameB' run apart: the second body already uses the first loop's variable name
+the 'par' blocks 'glob1' and 'glob2' run as one block

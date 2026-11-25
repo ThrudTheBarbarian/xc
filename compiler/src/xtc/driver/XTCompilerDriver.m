@@ -898,6 +898,7 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
         parser.parAuto = NO;
 #endif
     parser.parDeviceDefault = _options.parDeviceDefault;
+    parser.parNoFuse = _options.noParFuse;
     parser.webModules = _options.useWasm32Backend;
     parser.goalDefault = _goalDirective ? _goalDirective : _options.goalDefault;
     parser.libraryFiles = _libraryFiles;
@@ -1097,6 +1098,7 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
         parser.parAuto = NO;
 #endif
     parser.parDeviceDefault = _options.parDeviceDefault;
+    parser.parNoFuse = _options.noParFuse;
     parser.webModules = _options.useWasm32Backend;
     parser.goalDefault = _goalDirective ? _goalDirective : _options.goalDefault;
     parser.libraryFiles = _libraryFiles;
@@ -1817,6 +1819,7 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
         parser.parAuto = NO;
 #endif
     parser.parDeviceDefault = _options.parDeviceDefault;
+    parser.parNoFuse = _options.noParFuse;
     // XC_PAR_AUTO_TRACE=1: a line on stderr for each loop --par-style=auto
     // looks at, what it decided and why. Mirrored in the port.
     const char* trace = getenv("XC_PAR_AUTO_TRACE");

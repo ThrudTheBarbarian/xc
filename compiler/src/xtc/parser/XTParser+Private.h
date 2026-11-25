@@ -66,6 +66,7 @@ NS_ASSUME_NONNULL_BEGIN
 // parAutoFor (as the port): decisions made on the loop depth so far, the
 // parAutoFor calls open, and the names parAutoLabels counted, in order.
 @property(nonatomic) NSUInteger parAutoDepthReads;
+@property(nonatomic) NSUInteger fnTok;   // where the function being parsed opens its body (#147)
 @property(nonatomic) NSUInteger parAutoNest;
 @property(nonatomic, strong, nullable) NSMutableArray<NSString*>* parAutoLabelLog;
 // The par frame walk (XTParser+ParFrame.m): the frame it fills, whether it is
@@ -175,6 +176,12 @@ NSString* XTPrecedenceSpecOf(NSArray<XTToken*>* t);
 // a parse in the block's frame gives its loops.
 XTASTNode* XTASTDeepCopy(XTASTNode* n);
 void XTASTRename(XTASTNode* n, NSString* from, NSString* to);
+// Adjacent par blocks fused (#147; XTParser+ParFrame.m).
+NSMutableDictionary* XTParFuseScan(XTASTNode* body, NSString* iv);
+BOOL XTParFuseSame(XTASTNode* _Nullable a, XTASTNode* _Nullable b);
+BOOL XTParFuseBound(XTASTNode* _Nullable e, NSSet* written);
+BOOL XTParFuseMath(NSString* _Nullable n);
+void XTParFuseSetBody(XTForCStyleNode* loop, XTASTNode* body);
 void parAutoGoals(XTASTNode* n, NSInteger g);
 
 // The --par-style=auto recogniser (XTParser+ParLift.m).

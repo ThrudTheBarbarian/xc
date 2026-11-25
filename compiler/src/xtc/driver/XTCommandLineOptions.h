@@ -234,6 +234,11 @@ NS_ASSUME_NONNULL_BEGIN
 // PTX, SPIR-V, WGSL), not only its target's, so a worker on another machine
 // (xcd) finds the one its GPU takes.
 @property(nonatomic, readonly) BOOL parKernelsAll;
+/****************************************************************************\
+|* `-fno-par-fuse`: adjacent par blocks are never fused into one (#147), for
+|* comparison.
+\****************************************************************************/
+@property(nonatomic, readonly) BOOL noParFuse;
 // --par-style=auto — an outermost `for (T i in a..b)` loop in plain code becomes a
 // `par` block when its shape allows; one par-check cannot prove independent,
 // or a GPU cannot run, is demoted to a serial run (warning par-auto).
