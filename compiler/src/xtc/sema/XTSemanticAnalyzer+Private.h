@@ -286,6 +286,7 @@
 @property(nonatomic) NSMutableArray<NSString*>* usedClassNames;
 @property(nonatomic, readwrite) BOOL usesClassNames;
 @property(nonatomic, readwrite) BOOL usesAtFormat;
+@property(nonatomic, readwrite) NSUInteger packRoutines;
 // Function names whose only free declaration is an AUTO-IMPORTED C proto
 // (XTFunctionDeclNode.isCImport — the DWARF libc import). Bare-call
 // resolution demotes these below a matching `use`-promoted static: libc's

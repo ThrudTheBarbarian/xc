@@ -196,6 +196,7 @@
 // hidden `$err` out-parameter, so `throw` has somewhere to store.
 @property(nonatomic) BOOL currentFnThrows;
 @property(nonatomic) BOOL currentFnMultiReturn; // the function being lowered returns several values
+@property(nonatomic, nullable) XTType* currentFnReturnAST; // its (first) declared return type
 // Bitcast result valueId -> the value it was cast FROM. `return (Base@)local;`
 // returns the CAST, whose valueId differs from the local's, so the return-path
 // ARC exemption could not match it and released the local while the caller still
@@ -565,7 +566,9 @@ static BOOL XTFnIsCABI(XTFunctionDeclNode* fn)
     return fn.isCImport || (fn.isVarArgs && fn.body == nil);
     }
 
-// 16-bit floats across the C ABI. C passes a _Float16 or __bf16 where it
+// f16 and bf16 across the C ABI (the two packs C has; every other pack, f8
+// among them, crosses as its bit pattern, the integer it is in xc). C passes
+// a _Float16 or __bf16 where it
 // passes a float, its bits in the low half of the register (an FP register on
 // arm64, x86-64 and win64, a core register under arm9's soft-float
 // convention). A function C calls or is called by (a C import, a bodyless
@@ -768,8 +771,9 @@ static uint32_t xtProtocolId(NSString* name)
         return [XTIRType f32Type]; // single-precision (backend owns width)
     case XTTypeKindDouble:
         return [XTIRType f64Type]; // double-precision
-    case XTTypeKindF16:
-        return [XTIRType u16Type]; // f16/bf16: the 16-bit pattern (FloatPack.xc)
+    case XTTypeKindPack:
+        // A small float: its bit pattern (FloatPack.xc), a U16 or a U8.
+        return ty.byteWidth == 1 ? [XTIRType u8Type] : [XTIRType u16Type];
     case XTTypeKindPointer:
         {
         // Class-pointer → Ptr(Agg(instanceLayout), unbanked).
@@ -828,8 +832,8 @@ static uint32_t xtProtocolId(NSString* name)
             case XTTypeKindDouble:
                 inner = [XTIRType f64Type];
                 break;
-            case XTTypeKindF16:
-                inner = [XTIRType u16Type];
+            case XTTypeKindPack:
+                inner = pointee.byteWidth == 1 ? [XTIRType u8Type] : [XTIRType u16Type];
                 break;
             case XTTypeKindBool:
                 inner = [XTIRType boolType];
@@ -1739,6 +1743,9 @@ static NSString* XTDescribeNodeKind(XTASTNodeKind k)
         XTIRValue* w = [self widenFunctionPointer:av signature:wsig toAggType:dstIR];
         return w ?: av;
         }
+    // A small float converts as a value does (coerceScalarValue).
+    if (srcAST.isFloatPack && av.type.kind == [self packIRType:srcAST].kind)
+        return [self coerceScalarValue:av fromASTType:srcAST toIRType:dstIR] ?: av;
     BOOL srcFlt = av.type && XTIRTypeKindIsFloating(av.type.kind);
     BOOL dstFlt = XTIRTypeKindIsFloating(dstIR.kind);
     XTIROpcode op;
@@ -1795,17 +1802,24 @@ static NSString* XTDescribeNodeKind(XTASTNodeKind k)
     return result;
     }
 
-#pragma mark - 16-bit floats (f16, bf16)
+#pragma mark - Small floats (f16, bf16, f8 and their packs)
 
-// A 16-bit float is its bit pattern, a U16, in the IR. Every conversion and
-// operation is a call of FloatPack.xc, which the preprocessor imports into a
-// unit that names one of the types; each call takes the pack's exponent and
-// mantissa widths as two u32 arguments.
-- (XTIRValue*)packConst:(uint16_t)bits
+// A small float is its bit pattern in the IR, a U16 (f16 and its packs) or a
+// U8 (f8 and its). Every conversion and operation is a call of FloatPack.xc,
+// which the driver imports into a unit that uses one of the types; each call
+// takes the pack's exponent and mantissa widths as two u32 arguments, and a
+// pack that is not ieee, or is unsigned, calls FloatPackKinds.xc's routine of
+// the same name with a `k` added, which takes its kind word as a third. The
+// routines carry every pattern as a u16.
+- (XTIRType*)packIRType:(XTType*)pack
     {
-    return [self emitInsnOpcode:XTIROpConst
-                         result:[XTIRType u16Type]
-                       operands:@[ [XTIROperand immIWithType:[XTIRType u16Type] value:bits] ]];
+    return pack.byteWidth == 1 ? [XTIRType u8Type] : [XTIRType u16Type];
+    }
+
+- (XTIRValue*)packConst:(uint32_t)bits pack:(XTType*)pack
+    {
+    XTIRType* t = [self packIRType:pack];
+    return [self emitInsnOpcode:XTIROpConst result:t operands:@[ [XTIROperand immIWithType:t value:bits] ]];
     }
 
 - (XTIRValue*)packU32Const:(int64_t)v
@@ -1823,22 +1837,38 @@ static NSString* XTDescribeNodeKind(XTASTNodeKind k)
     NSMutableArray<XTIRValue*>* all = [args mutableCopy];
     [all addObject:[self packU32Const:(int64_t)pack.packExpBits]];
     [all addObject:[self packU32Const:(int64_t)pack.packMantBits]];
+    if (pack.packFlags)
+        {
+        name = [name stringByAppendingString:@"k"];
+        [all addObject:[self packU32Const:(int64_t)pack.packFlags]];
+        }
     return [self emitCall:[self runtimeHelperSymbolNamed:name]
                  callConv:[XTIRCallConv standard]
                 argValues:all
                resultType:rt];
     }
 
+// A routine that rounds to a pack: its u16 result, narrowed for an f8.
+- (XTIRValue*)packResultCall:(NSString*)name args:(NSArray<XTIRValue*>*)args pack:(XTType*)pack
+    {
+    XTIRValue* r = [self packCall:name args:args pack:pack result:[XTIRType u16Type]];
+    if (pack.byteWidth == 1)
+        r = [self emitInsnOpcode:XTIROpTrunc result:[XTIRType u8Type] operands:@[ [XTIROperand useWithValueId:r.valueId] ]];
+    return r;
+    }
+
 // A pack's value as an f32, which holds it exactly.
 - (XTIRValue*)packToF32:(XTIRValue*)v pack:(XTType*)pack
     {
+    if (pack.byteWidth == 1)
+        v = [self emitInsnOpcode:XTIROpZExt result:[XTIRType u16Type] operands:@[ [XTIROperand useWithValueId:v.valueId] ]];
     return [self packCall:@"_xt_fpk_unpack" args:@[ v ] pack:pack result:[XTIRType f32Type]];
     }
 
 // An f32 rounded to a pack.
 - (XTIRValue*)packFromF32:(XTIRValue*)v pack:(XTType*)pack
     {
-    return [self packCall:@"_xt_fpk_pack_f32" args:@[ v ] pack:pack result:[XTIRType u16Type]];
+    return [self packResultCall:@"_xt_fpk_pack_f32" args:@[ v ] pack:pack];
     }
 
 - (XTIRValue*)packExtend:(XTIRValue*)v to:(XTIRType*)t signed:(BOOL)sgn
@@ -1849,7 +1879,7 @@ static NSString* XTDescribeNodeKind(XTASTNodeKind k)
     return [self emitInsnOpcode:op result:t operands:@[ [XTIROperand useWithValueId:v.valueId] ]];
     }
 
-// Conversions with a 16-bit float on either side: C23's rules for _Float16,
+// Conversions with a small float on either side: C23's rules for _Float16,
 // with an out-of-range float-to-integer conversion saturating and NaN giving
 // 0. nil when neither side is one.
 - (nullable XTIRValue*)coercePack:(XTIRValue*)src
@@ -1868,16 +1898,21 @@ static NSString* XTDescribeNodeKind(XTASTNodeKind k)
         {
         if (to.kind == XTTypeKindBool)
             {
-            // Nonzero, NaN included: everything but the two zeros.
+            // Nonzero, NaN included: everything but the two zeros. An
+            // unsigned scale has no zero, so every value is true.
+            if (from.packUnsigned)
+                return [self emitInsnOpcode:XTIROpConst
+                                     result:[XTIRType boolType]
+                                   operands:@[ [XTIROperand immIWithType:[XTIRType boolType] value:1] ]];
             XTIRValue* mag = [self emitInsnOpcode:XTIROpAnd
-                                           result:[XTIRType u16Type]
+                                           result:[self packIRType:from]
                                          operands:@[ [XTIROperand useWithValueId:src.valueId],
-                                                     [XTIROperand useWithValueId:[self packConst:0x7FFF].valueId] ]];
+                                                     [XTIROperand useWithValueId:[self packConst:from.packSignBit - 1 pack:from].valueId] ]];
             XTIRValue* r = [self allocateValueOfType:[XTIRType boolType] atSite:self.currentBlock];
             [self.currentBlock appendInstruction:[[XTIRInsn alloc] initWithOpcode:XTIROpICmp
                                                                            result:r
                                                                          operands:@[ [XTIROperand useWithValueId:mag.valueId],
-                                                                                     [XTIROperand useWithValueId:[self packConst:0].valueId] ]
+                                                                                     [XTIROperand useWithValueId:[self packConst:0 pack:from].valueId] ]
                                                                         predicate:XTIRICmpNE
                                                                            dbgLoc:nil]];
             return r;
@@ -1890,7 +1925,7 @@ static NSString* XTDescribeNodeKind(XTASTNodeKind k)
         if (to.kind == XTTypeKindDouble)
             return [self emitInsnOpcode:XTIROpFpExt result:[XTIRType f64Type] operands:@[ [XTIROperand useWithValueId:f.valueId] ]];
         if (!to.isInteger)
-            return [self coerceValueImpl:src fromType:[XTType u16Type] toType:to location:loc];
+            return [self coerceValueImpl:src fromType:(from.byteWidth == 1 ? [XTType u8Type] : [XTType u16Type]) toType:to location:loc];
         XTIRType* dst = [self irTypeForASTType:to at:loc];
         NSUInteger w = to.byteWidth;
         XTIRValue* r;
@@ -1935,24 +1970,22 @@ static NSString* XTDescribeNodeKind(XTASTNodeKind k)
     if (from.kind == XTTypeKindFloat)
         return [self packFromF32:src pack:to];
     if (from.kind == XTTypeKindDouble)
-        return [self packCall:@"_xt_fpk_pack_f64" args:@[ src ] pack:to result:[XTIRType u16Type]];
+        return [self packResultCall:@"_xt_fpk_pack_f64" args:@[ src ] pack:to];
     if (src.type.kind == XTIRTypeKindBool || from.kind == XTTypeKindBool)
-        return [self packCall:@"_xt_fpk_pack_u32"
-                         args:@[ [self packExtend:src to:[XTIRType u32Type] signed:NO] ]
-                         pack:to
-                       result:[XTIRType u16Type]];
+        return [self packResultCall:@"_xt_fpk_pack_u32"
+                               args:@[ [self packExtend:src to:[XTIRType u32Type] signed:NO] ]
+                               pack:to];
     if (from.isInteger)
         {
         BOOL sgn = from.isSigned;
         if (from.byteWidth >= 8)
-            return [self packCall:sgn ? @"_xt_fpk_pack_i64" : @"_xt_fpk_pack_u64" args:@[ src ] pack:to result:[XTIRType u16Type]];
+            return [self packResultCall:sgn ? @"_xt_fpk_pack_i64" : @"_xt_fpk_pack_u64" args:@[ src ] pack:to];
         XTIRType* wide = sgn ? [XTIRType i32Type] : [XTIRType u32Type];
-        return [self packCall:sgn ? @"_xt_fpk_pack_i32" : @"_xt_fpk_pack_u32"
-                         args:@[ [self packExtend:src to:wide signed:sgn] ]
-                         pack:to
-                       result:[XTIRType u16Type]];
+        return [self packResultCall:sgn ? @"_xt_fpk_pack_i32" : @"_xt_fpk_pack_u32"
+                               args:@[ [self packExtend:src to:wide signed:sgn] ]
+                               pack:to];
         }
-    return [self coerceValueImpl:src fromType:from toType:[XTType u16Type] location:loc];
+    return [self coerceValueImpl:src fromType:from toType:(to.byteWidth == 1 ? [XTType u8Type] : [XTType u16Type]) location:loc];
     }
 
 // An AST type for a scalar IR type, for the argument coercion that knows only
@@ -4277,7 +4310,7 @@ static NSString* XTDescribeNodeKind(XTASTNodeKind k)
 - (nullable XTIRValue*)lowerLiteralInt:(XTLiteralIntNode*)node
     {
     if (node.resolvedType.isFloatPack)
-        return [self packConst:[node.resolvedType packBitsForDouble:(double)node.intValue]];
+        return [self packConst:[node.resolvedType packBitsForDouble:(double)node.intValue] pack:node.resolvedType];
     XTIRType* ty = [self irTypeForASTType:node.resolvedType at:node.location];
     if (!ty)
         return nil;
@@ -4297,7 +4330,7 @@ static NSString* XTDescribeNodeKind(XTASTNodeKind k)
         {
         double v = node.sourceText.length ? strtod(node.sourceText.UTF8String, NULL)
                                           : [XTFloatEncoding doubleFromIEEEData:node.floatData];
-        return [self packConst:[node.resolvedType packBitsForDouble:v]];
+        return [self packConst:[node.resolvedType packBitsForDouble:v] pack:node.resolvedType];
         }
     XTIRType* ty = [self irTypeForASTType:node.resolvedType at:node.location];
     BOOL isDouble = (node.floatData.length == 8);
@@ -5609,21 +5642,23 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
         {
         XTASTNode* lit = node.operand;
         if (lit.nodeKind == XTASTNodeKindLiteralInt)
-            return [self packConst:[node.resolvedType packBitsForDouble:(double)(-((XTLiteralIntNode*)lit).intValue)]];
+            return [self packConst:[node.resolvedType packBitsForDouble:(double)(-((XTLiteralIntNode*)lit).intValue)]
+                              pack:node.resolvedType];
         if (lit.nodeKind == XTASTNodeKindLiteralFloat)
             {
             XTLiteralFloatNode* f = (XTLiteralFloatNode*)lit;
             double v = f.sourceText.length ? strtod(f.sourceText.UTF8String, NULL) : [XTFloatEncoding doubleFromIEEEData:f.floatData];
-            return [self packConst:[node.resolvedType packBitsForDouble:-v]];
+            return [self packConst:[node.resolvedType packBitsForDouble:-v] pack:node.resolvedType];
             }
         XTIRValue* pv = [self lowerExpression:node.operand];
         if (!pv)
             return nil;
         pv = [self coerceValue:pv fromType:node.operand.resolvedType toType:node.resolvedType location:node.location];
         return [self emitInsnOpcode:XTIROpXor
-                             result:[XTIRType u16Type]
+                             result:[self packIRType:node.resolvedType]
                            operands:@[ [XTIROperand useWithValueId:pv.valueId],
-                                       [XTIROperand useWithValueId:[self packConst:0x8000].valueId] ]];
+                                       [XTIROperand useWithValueId:[self packConst:node.resolvedType.packSignBit
+                                                                                pack:node.resolvedType].valueId] ]];
         }
 
     // A negated integer LITERAL is typed by the value it negates to, which can
@@ -8458,10 +8493,10 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
         return av;
     // A 16-bit float argument: to a U16 parameter it is that pack (sema
     // refuses anything else without a cast); to any other, converted.
-    if (srcAST.isFloatPack && av.type.kind == XTIRTypeKindU16)
+    if (srcAST.isFloatPack && av.type.kind == [self packIRType:srcAST].kind)
         {
         XTType* dstAST = [self astTypeForScalarIR:dstIR];
-        if (dstIR.kind == XTIRTypeKindU16 || !dstAST)
+        if (dstIR.kind == av.type.kind || !dstAST)
             return av;
         return [self coercePack:av fromType:srcAST toType:dstAST location:nil] ?: av;
         }
@@ -9872,8 +9907,8 @@ static NSString* _Nullable primElemNameForType(XTType* t)
         case XTTypeKindBool: return @"bool";
         case XTTypeKindFloat: return @"float";
         case XTTypeKindDouble: return @"double";
-        // A 16-bit float array is stored as its bit patterns.
-        case XTTypeKindF16: return @"u16";
+        // A small float array is stored as its bit patterns.
+        case XTTypeKindPack: return t.byteWidth == 1 ? @"u8" : @"u16";
         case XTTypeKindPointer: return @"pointer";
         case XTTypeKindEnum:
             {
@@ -9894,12 +9929,17 @@ static NSString* _Nullable primElemNameForType(XTType* t)
 - (NSString*)newElemNameFor:(XTNewExprNode*)node
     {
     NSString* written = node.className;
-    if ([written isEqualToString:@"f16"] || [written isEqualToString:@"bf16"])
-        return @"u16";
-    if (XTIRIsPrimitiveElemName(written))
-        return written;
     XTType* rt = node.resolvedType;
     XTType* elem = [rt isKindOfClass:[XTPointerType class]] ? ((XTPointerType*)rt).pointeeType : nil;
+    // A small float array is stored as its bit patterns: u16's helper, or
+    // u8's for an f8 (written so, or through a typedef).
+    XTType* pack = [XTType packTypeNamed:written];
+    if (!pack && elem.kind == XTTypeKindPack)
+        pack = elem;
+    if (pack)
+        return pack.byteWidth == 1 ? @"u8" : @"u16";
+    if (XTIRIsPrimitiveElemName(written))
+        return written;
     NSString* prim = elem ? primElemNameForType(elem) : nil;
     return prim ?: written;
     }
@@ -10632,7 +10672,7 @@ static const NSUInteger kVarargSlotBytes = 8;
     for (NSUInteger i = fixed; i < args.count && i < asts.count; i++)
         {
         XTType* t = asts[i].resolvedType;
-        if (t.isFloatPack && args[i].type.kind == XTIRTypeKindU16)
+        if (t.isFloatPack && args[i].type.kind == [self packIRType:t].kind)
             args[i] = [self coercePack:args[i] fromType:t toType:[XTType doubleType] location:asts[i].location];
         }
     }
@@ -11523,6 +11563,18 @@ static const NSUInteger kVarargSlotBytes = 8;
                     return nil;
                 }
             XTType* srcAST = a.resolvedType;
+            // A small float to a parameter of another type converts as a value
+            // does (coerceScalarValue): its bits are not an integer.
+            if (srcAST.isFloatPack && !widened && av.type.kind == [self packIRType:srcAST].kind &&
+                dstIR.kind != av.type.kind)
+                {
+                XTIRValue* pv = [self coerceScalarValue:av fromASTType:srcAST toIRType:dstIR];
+                if (pv)
+                    {
+                    av = pv;
+                    srcAST = [self astTypeForScalarIR:dstIR] ?: srcAST;
+                    }
+                }
             // Only integer/sign width-adjust scalar args. A pointer arg
             // (e.g. a function pointer passed to a `FuncType@` parameter,
             // or any `T@`) must pass through untouched — applying the
@@ -16802,6 +16854,24 @@ typedef NS_ENUM(NSInteger, XTStructARCMode) {
         // differs.
         XTType* srcAST = returnAstType;
         XTIRType* dstIR = self.currentFunction.returnType;
+        // A small float returned as another type converts as a value does:
+        // to the declared pack, or to the float or integer the return type
+        // is (the port's coerceArg). The integer cascade below would read
+        // its bits as a number.
+        XTType* retAST = self.currentFnReturnAST;
+        if (srcAST.isFloatPack && !self.currentFnMultiReturn && v.type.kind == [self packIRType:srcAST].kind)
+            {
+            XTType* to = retAST.isFloatPack ? retAST : (dstIR.kind == v.type.kind ? nil : [self astTypeForScalarIR:dstIR]);
+            if (to && to != srcAST)
+                {
+                XTIRValue* pv = [self coercePack:v fromType:srcAST toType:to location:node.location];
+                if (pv)
+                    {
+                    v = pv;
+                    srcAST = to;
+                    }
+                }
+            }
         // A class's bytes are already the return type: nothing to coerce. A
         // pack leaving as C's carrier is that pack already, carried below.
         if (srcAST && dstIR && dstIR.kind != XTIRTypeKindVoid && !classByValue && !self.currentFnCPackRet)
@@ -17541,7 +17611,7 @@ static NSString* XTIRTypeKindName(XTIRTypeKind k)
         return [self emitTruthTest:v];
     XTType* t = e.resolvedType;
     // A 16-bit float likewise: -0.0 is false, so not its bits as they stand.
-    if (t.isFloatPack && v.type.kind == XTIRTypeKindU16)
+    if (t.isFloatPack && v.type.kind == [self packIRType:t].kind)
         return [self coercePack:v fromType:t toType:[XTType boolType] location:e.location];
     // The AST type is not enough on its own. sema types a comparison as the
     // WIDENING OF ITS OPERANDS, not as bool — so `f == (Sink^)0` is itself
@@ -19440,12 +19510,12 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
 
     // A pack to or from a C-ABI function travels as C's carrier.
     BOOL cpk = XTFnPassesCPack(fnDecl);
-    if (cpk && astRetType.isFloatPack)
+    if (cpk && astRetType.isCPack)
         irRetType = XTCPackCarrierType();
     NSMutableArray<XTIRType*>* paramTypes = [NSMutableArray array];
     for (XTParamNode* p in fnDecl.parameters)
         {
-        XTIRType* t = (cpk && p.paramType.isFloatPack) ? XTCPackCarrierType() : [self irTypeForASTTypeQuiet:p.paramType];
+        XTIRType* t = (cpk && p.paramType.isCPack) ? XTCPackCarrierType() : [self irTypeForASTTypeQuiet:p.paramType];
         if (!t)
             return YES;
         [paramTypes addObject:t];
@@ -19486,9 +19556,9 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
     if (cpk)
         {
         for (NSUInteger i = 0; i < fnDecl.parameters.count; i++)
-            if (fnDecl.parameters[i].paramType.isFloatPack)
+            if (fnDecl.parameters[i].paramType.isCPack)
                 attrs[[NSString stringWithFormat:@"half_%lu", (unsigned long)i]] = @YES;
-        if (astRetType.isFloatPack)
+        if (astRetType.isCPack)
             attrs[@"half_ret"] = @YES;
         }
     // Call sites read this to decide whether to emit an error check after the
@@ -19980,7 +20050,7 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
         uint16_t bits = 0;
         if (![self tryFoldPack:expr pack:astTy bits:&bits])
             return nil;
-        return [self packLE:bits width:2];
+        return [self packLE:bits width:astTy.byteWidth];
         }
     if (astTy.kind == XTTypeKindFloat || astTy.kind == XTTypeKindDouble)
         {
@@ -20688,6 +20758,7 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
     self.currentParamASTTypes = paramAST;
     self.currentFnThrows = fnDecl.throwsError;
     self.currentFnMultiReturn = fnDecl.returnTypes.count > 1;
+    self.currentFnReturnAST = fnDecl.returnTypes.firstObject;
     [self _lowerCallable:fn
               paramNames:paramNames
                     body:fnDecl.body
@@ -21880,6 +21951,7 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
             self.pendingRetainSelf = m.hasHeapReceiver && !m.hasNonHeapReceiver && !m.isStatic;
             self.currentFnThrows = m.throwsError;
             self.currentFnMultiReturn = m.returnTypes.count > 1;
+            self.currentFnReturnAST = m.returnTypes.firstObject;
             [self _lowerCallable:fn
                       paramNames:paramNames
                             body:m.body
@@ -21917,6 +21989,7 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
         self.pendingRetainSelf = m.hasHeapReceiver && !m.hasNonHeapReceiver && !m.isStatic;
         self.currentFnThrows = m.throwsError;
             self.currentFnMultiReturn = m.returnTypes.count > 1;
+            self.currentFnReturnAST = m.returnTypes.firstObject;
         [self _lowerCallable:fn
                   paramNames:paramNames
                         body:m.body

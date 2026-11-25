@@ -35,6 +35,7 @@
 #import <Dwarf> // …and a C library's own DWARF, when it has no iface
 #import "DwarfDefs.xc"
 #import <Analyze>
+#import <Types>
 #import <Sema>
 #import <Vtable>
 #import <Ir>
@@ -78,6 +79,9 @@ class FeOptions
     bool _classNames;
     // Sema found a printf-family format holding `%@`: HAS_ATFMT is 1 (lower).
     bool _atFormat;
+    // Sema found a small float: its routine files (1 FloatPack.xc, 2
+    // FloatPackKinds.xc), imported at the end of the entry file (lower).
+    u32 _packRoutines;
     u32 _goalDefault;    // -fgoal=: the unit's default goal (0 built-in, 1 speed, 2 accuracy); a #goal overrides it
     bool _emitIface;   // compute the module interface (--emit-lib, -c, --emit-iface)
     // …and, SEPARATELY, whether this is a LIBRARY build. The two used to be one
@@ -154,6 +158,7 @@ class FeOptions
         _parAutoImport = false;
         _classNames = false;
         _atFormat = false;
+        _packRoutines = (u32)0;
         _goalDefault = (u32)0;
         // par-auto is opt-in (-Wpar-auto): what --par-style=auto wrapped or demoted
         // is useful to see once, and noise in every build after.
@@ -509,6 +514,14 @@ class FeOptions
         {
         _classNames = b;
         }
+    u32 packRoutines(void)
+        {
+        return _packRoutines;
+        }
+    void setPackRoutines(u32 r)
+        {
+        _packRoutines = r;
+        }
     u32 goalDefault(void)
         {
         return _goalDefault;
@@ -541,6 +554,7 @@ class FeOptions
         {
         o.setClassNames(false);
         o.setAtFormat(false);
+        o.setPackRoutines((u32)0);
         return Frontend.lowerUnit(o);
         }
 
@@ -1048,12 +1062,18 @@ class FeOptions
         // diagnostics are dropped with it.
         bool wantNames = namesSwitch && sema.usesClassNames() && !o.classNames();
         bool wantAt = sema.usesAtFormat() && !o.atFormat();
-        if (wantNames || wantAt)
+        // A small float's operations call FloatPack's routines (and
+        // FloatPackKinds' for a pack that is not ieee): imported at the end of
+        // the entry file when sema finds one, so a program with none is
+        // unchanged.
+        u32 wantPack = sema.packRoutines() & ~o.packRoutines();
+        if (wantNames || wantAt || wantPack != (u32)0)
             {
             if (wantNames)
                 o.setClassNames(true);
             if (wantAt)
                 o.setAtFormat(true);
+            o.setPackRoutines(o.packRoutines() | wantPack);
             return Frontend.lowerUnit(o);
             }
         Frontend.flushEarly(early);
@@ -1399,7 +1419,7 @@ class FeOptions
             if (held.byteAt((u32)0) == (u8)'D')
                 Frontend.printDiagnostic(msg);
             else
-                Stdio.error(msg);
+                Stdio.error(Types.packSpelling(msg));
             }
         early.removeAll();
         }
@@ -1414,6 +1434,8 @@ class FeOptions
 
     static void printDiagnostic(String* msg)
         {
+        // A small float's canonical type name as the source writes it.
+        msg = Types.packSpelling(msg);
         String* bold = String.withCString("\x1b[1m");
         String* red = String.withCString("\x1b[1;31m");
         String* green = String.withCString("\x1b[1;32m");
@@ -2607,6 +2629,8 @@ Preprocessor* buildPP(FeOptions* o)
     predefine(pp, o);
     if (o.parAutoImport())
         pp.setAutoImport(String.withCString("Par.xc"));
+    if (o.packRoutines() != (u32)0)
+        pp.setTailImport(Preprocessor.packTailImport(o.packRoutines()));
     // Checked subscripts take their checks from Checked.xc: everywhere under
     // -fbounds-check=light, and under -fbounds-check wherever the row has no
     // checked runtime (macOS and iOS link rt-checked's backtracing reporter).

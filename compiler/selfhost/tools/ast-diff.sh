@@ -39,7 +39,7 @@ if [ ! -x "$XTC" ] || [ ! -x "$FE" ]; then
 fi
 
 echo "building xtast (xtc → native arm64)…"
-if ! "${XC_TOOL_XCC:-$XTC}" --par-style=cpu -H . -q -A $XC_HOST_ARCH -I selfhost/lexer -I selfhost/opt -I selfhost/codegen -I selfhost/asm -I selfhost/link -I selfhost/driver -I selfhost/defs -I selfhost/preproc -I selfhost/parser \
+if ! "${XC_TOOL_XCC:-$XTC}" --par-style=cpu -H . -q -A $XC_HOST_ARCH -I selfhost/lexer -I selfhost/opt -I selfhost/codegen -I selfhost/asm -I selfhost/link -I selfhost/driver -I selfhost/defs -I selfhost/preproc -I selfhost/parser -I selfhost/sema \
         selfhost/tools/xtast.xc -o "$TMP/xtast" 2>"$TMP/build.err"; then
     echo "ast-diff: xtast failed to build" >&2
     cat "$TMP/build.err" >&2

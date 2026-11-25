@@ -425,10 +425,16 @@ static int XTDumpSema(int argc, const char* argv[])
     [XTType setFloatIsIEEE:YES];
     [XTStructType setFieldAlignmentCap:8]; // match the arm64-shaped widths above
 
+    // A program with a small float is read again with its routines imported
+    // at the end, as a compile reads it (sema's packRoutines).
+    NSUInteger packRoutines = 0;
+again:;
     XTDiagnosticEngine* diag = [[XTDiagnosticEngine alloc] init];
     XTPreprocessor* pp = [[XTPreprocessor alloc] initWithDiagnostics:diag];
     pp.includePaths = includes;
     XTDumpApplyPrelude(pp, includes);
+    if (packRoutines)
+        pp.tailImport = [XTPreprocessor packTailImport:packRoutines];
     for (NSString* d in defines)
         {
         NSRange eq = [d rangeOfString:@"="];
@@ -471,6 +477,11 @@ static int XTDumpSema(int argc, const char* argv[])
     sema.itableProtocols = NO;
     sema.vtableConforms = YES;
     [sema analyzeProgram:program];
+    if (sema.packRoutines & ~packRoutines)
+        {
+        packRoutines = packRoutines | sema.packRoutines;
+        goto again;
+        }
     // A parse or sema ERROR is reported but still dumps. The distinction that
     // matters for a differential oracle: a PREPROCESSOR failure means neither
     // side ever saw the source, so there is nothing to compare and the run

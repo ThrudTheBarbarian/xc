@@ -278,6 +278,13 @@ NS_ASSUME_NONNULL_BEGIN
 \****************************************************************************/
 @property(nonatomic, readonly) BOOL usesAtFormat;
 
+/****************************************************************************|* The small floats' routine files the program needs, once an expression has
+|* a small float type: 1 FloatPack.xc (every pack), 2 FloatPackKinds.xc (a
+|* pack that is not ieee, or is unsigned). The driver imports them at the end
+|* of the entry file (-[XTPreprocessor tailImport]) and starts again.
+\****************************************************************************/
+@property(nonatomic, readonly) NSUInteger packRoutines;
+
 @end
 
 NS_ASSUME_NONNULL_END

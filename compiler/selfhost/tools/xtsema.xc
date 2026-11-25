@@ -42,6 +42,7 @@ void main(void)
     String* input = (String*)0;
     bool raw = false;
     bool dumpVslots = false;
+    Array* defs = new Array();
 
     u32 argc = Process.argumentCount();
     u32 i = (u32)1;
@@ -75,12 +76,14 @@ void main(void)
         if (a.equals(String.withCString("-D")) && i + (u32)1 < argc)
             {
             defineArg(pp, Process.argument(i + (u32)1));
+            defs.add((Object*)Process.argument(i + (u32)1));
             i = i + (u32)2;
             continue;
             }
         if (a.hasPrefix(String.withCString("-D")) && a.byteLength() > (u32)2)
             {
             defineArg(pp, a.substringFromByte((u32)2));
+            defs.add((Object*)a.substringFromByte((u32)2));
             i = i + (u32)1;
             continue;
             }
@@ -96,55 +99,77 @@ void main(void)
         return;
         }
 
-    // The implicit platform prelude, gated exactly as the oracle gates it —
-    // a Platform.xc anywhere on the -I list (task #36). The compile path has
-    // it, so the dump oracles have it; an oracle parsing a DIFFERENT unit
-    // than a real compile reads ambient-surface files as error files.
-    if (!raw)
+    // A program with a small float is read again with its routines imported
+    // at the end (Sema.packRoutines), as the oracle reads it.
+    Array* incs0 = pp.includePaths();
+    u32 packR = (u32)0;
+    Sema* sema = (Sema*)0;
+    Node* program = (Node*)0;
+    for (u32 pass = (u32)0; pass < (u32)2; pass = pass + (u32)1)
         {
-        Array* incs = pp.includePaths();
-        for (u32 ppi = (u32)0; ppi < incs.count(); ppi = ppi + (u32)1)
+        if (pass > (u32)0)
             {
-            String* ppp = String.withCString(((String*)incs.get(ppi)).cString());
-            ppp.appendCString("/Platform.xc");
-            if (Files.exists(ppp))
+            Preprocessor* pp2 = new Preprocessor();
+            for (u32 pi = (u32)0; pi < incs0.count(); pi = pi + (u32)1)
+                pp2.addIncludePath((String*)incs0.get(pi));
+            for (u32 di = (u32)0; di < defs.count(); di = di + (u32)1)
+                defineArg(pp2, (String*)defs.get(di));
+            pp2.setTailImport(Preprocessor.packTailImport(packR));
+            pp = pp2;
+            }
+        // The implicit platform prelude, gated exactly as the oracle gates it —
+        // a Platform.xc anywhere on the -I list (task #36). The compile path has
+        // it, so the dump oracles have it; an oracle parsing a DIFFERENT unit
+        // than a real compile reads ambient-surface files as error files.
+        if (!raw)
+            {
+            Array* incs = pp.includePaths();
+            for (u32 ppi = (u32)0; ppi < incs.count(); ppi = ppi + (u32)1)
                 {
-                pp.setPrelude(String.withCString("Platform.xc"));
-                ppi = incs.count();
+                String* ppp = String.withCString(((String*)incs.get(ppi)).cString());
+                ppp.appendCString("/Platform.xc");
+                if (Files.exists(ppp))
+                    {
+                    pp.setPrelude(String.withCString("Platform.xc"));
+                    ppi = incs.count();
+                    }
                 }
             }
-        }
 
-    String* source = raw ? Files.readText(input) : pp.preprocessFile(input);
-    if (source == 0)
-        {
-        Stdio.printf("xtsema: cannot read '%s'\n", input.cString());
-        Process.exit((i32)1);
-        return;
-        }
+        String* source = raw ? Files.readText(input) : pp.preprocessFile(input);
+        if (source == 0)
+            {
+            Stdio.printf("xtsema: cannot read '%s'\n", input.cString());
+            Process.exit((i32)1);
+            return;
+            }
 
-    Lexer* lex = Lexer.with(source, input);
-    Array* tokens = lex.tokenise();
-    // A lexical error stops the reference's parse before its first
-    // declaration, so its tree is an empty Program; the same here.
-    if (lex.diagnostics().count() > (u32)0)
-        {
-        Stdio.printf("Program\n");
-        return;
-        }
-    Parser* parser = Parser.with(tokens);
-    parser.setGoalDefault(pp.goal());   // a #goal in the file, as the front end honours it
-    parser.setLibraryFiles(pp.libraryFiles());
-    Node* program = parser.parse();
+        Lexer* lex = Lexer.with(source, input);
+        Array* tokens = lex.tokenise();
+        // A lexical error stops the reference's parse before its first
+        // declaration, so its tree is an empty Program; the same here.
+        if (lex.diagnostics().count() > (u32)0)
+            {
+            Stdio.printf("Program\n");
+            return;
+            }
+        Parser* parser = Parser.with(tokens);
+        parser.setGoalDefault(pp.goal());   // a #goal in the file, as the front end honours it
+        parser.setLibraryFiles(pp.libraryFiles());
+        program = parser.parse();
 
-    Sema* sema = Sema.make();
-    // This tool dumps the tree for COMPARISON against xcc-fe --dump-sema, and
-    // that mode lays everything out with an 8-byte pointer regardless of
-    // target (XTDumpSema parses only -I/-D and the filename). Say so, rather
-    // than leaning on the default: the two sides must agree on the ptrdiff
-    // type or every `p - q` in the corpus reads as a divergence.
-    sema.setPointerWidth((u32)8);
-    sema.analyse(program);
+        sema = Sema.make();
+        // This tool dumps the tree for COMPARISON against xcc-fe --dump-sema, and
+        // that mode lays everything out with an 8-byte pointer regardless of
+        // target (XTDumpSema parses only -I/-D and the filename). Say so, rather
+        // than leaning on the default: the two sides must agree on the ptrdiff
+        // type or every `p - q` in the corpus reads as a divergence.
+        sema.setPointerWidth((u32)8);
+        sema.analyse(program);
+        if (raw || (sema.packRoutines() & ~packR) == (u32)0)
+            break;
+        packR = packR | sema.packRoutines();
+        }
 
     // --dump-vslots mirrors XTC_DUMP_VSLOTS on xtc-fe, so the two slot
     // assignments can be diffed line for line rather than inferred from what

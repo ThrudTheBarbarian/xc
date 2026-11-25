@@ -106,6 +106,7 @@ class IfFrame
     String* _appleSdk;       // the SDK root, or 0 (then the frameworks on this machine)
     String* _prelude;        // the target's implicit platform header, if any
     String* _autoImport;     // a file imported ahead of the entry file's own text (--par-style=auto: Par.xc), or 0
+    String* _tailImport;     // files imported at the end of the entry file, `;`-separated (the small floats' routines), or 0
     Array* _errors;
     // `#package <ns>` — the host import namespace in force for subsequent
     // BODYLESS declarations (wasm-target.md §6). A STATE directive: it holds
@@ -168,6 +169,7 @@ class IfFrame
         _preludeFiles = new Set();
         _inPrelude = false;
         _autoImport = (String*)0;
+        _tailImport = (String*)0;
         _sourceDepth = (u32)0;
         _ifStack = new Array();
         _includePaths = new Array();
@@ -673,6 +675,29 @@ class IfFrame
         {
         _autoImport = p;
         }
+    // Standard-library files the entry file imports at its end: the small
+    // floats' routines (FloatPack.xc, FloatPackKinds.xc), which the front end
+    // asks for when sema finds the program uses a small float. As the
+    // reference's tailImport.
+    void setTailImport(String* p)
+        {
+        _tailImport = p;
+        }
+    // The tail import for sema's packRoutines bits (1 FloatPack.xc, 2
+    // FloatPackKinds.xc).
+    static String* packTailImport(u32 routines)
+        {
+        String* r = String.withCString("");
+        if ((routines & (u32)1) != 0)
+            r.appendCString("FloatPack.xc");
+        if ((routines & (u32)2) != 0)
+            {
+            if (r.byteLength() > (u32)0)
+                r.appendCString(";");
+            r.appendCString("FloatPackKinds.xc");
+            }
+        return r;
+        }
     void addAutoImport(String* p)
         {
         if (_autoImport == (String*)0)
@@ -1153,38 +1178,25 @@ class IfFrame
 
         if (_ifStack.count() > entryIfDepth)
             _error(String.withCString("unterminated #if / #ifdef block"));
-        // A unit that names a 16-bit float (f16, bf16) gets the conversions
-        // its operations call, at the end of the entry file: FloatPack.xc.
-        if (_sourceDepth == 1 && Preprocessor.textNamesFloatPack(output))
-            handleInclude(String.withCString("import \"FloatPack.xc\""), filename, lines.count(), output, true);
+        // The small floats' routines, when the front end asks for them (sema
+        // found the program uses a small float): at the end of the entry file.
+        if (_sourceDepth == 1 && _tailImport != (String*)0 && _tailImport.byteLength() > (u32)0)
+            {
+            Array* tails = _tailImport.splitOnByte((u8)';');
+            _tailImport = (String*)0;
+            for (u32 ti = (u32)0; ti < tails.count(); ti = ti + (u32)1)
+                {
+                String* tn = (String*)tails.get(ti);
+                if (tn.byteLength() == (u32)0)
+                    continue;
+                String* d = String.withCString("import \"");
+                d.append(tn);
+                d.appendCString("\"");
+                handleInclude(d, filename, lines.count(), output, true);
+                }
+            }
         _sourceDepth = _sourceDepth - (u32)1;
         return output;
-        }
-
-    // Does the text hold the word `f16` or `bf16`?
-    static bool textNamesFloatPack(String* text)
-        {
-        u8* s = text.cString();
-        u32 n = text.byteLength();
-        for (u32 i = 0; i + 3 <= n; i++)
-            {
-            if (s[i] != (u8)'f' || s[i + 1] != (u8)'1' || s[i + 2] != (u8)'6')
-                continue;
-            u32 at = i;
-            if (at > 0 && s[at - 1] == (u8)'b')
-                at--;
-            bool identBefore = at > 0 && Preprocessor.isIdentByte(s[at - 1]);
-            bool identAfter = i + 3 < n && Preprocessor.isIdentByte(s[i + 3]);
-            if (!identBefore && !identAfter)
-                return true;
-            }
-        return false;
-        }
-
-    static bool isIdentByte(u8 c)
-        {
-        return (c >= (u8)'A' && c <= (u8)'Z') || (c >= (u8)'a' && c <= (u8)'z') || (c >= (u8)'0' && c <= (u8)'9')
-            || c == (u8)'_';
         }
 
     // ── Conditional state ────────────────────────────────────────

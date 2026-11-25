@@ -133,11 +133,15 @@ class Overload
         String* parc = Overload._unqualify(par);
         if (arg.equals(parc))
             return (u32)0;
-        // A 16-bit float widens to float or double; anything else reaches a
+        // A small float widens to a pack that holds it, float or double;
+        // anything else reaches a
         // pack parameter only as a literal that took its type, or through a
         // cast. (Boxing is the caller's last resort, as for any number.)
         if (Types.isPack(arg) || Types.isPack(parc))
             {
+            // To a wider pack that holds it (e4m3 to f16): nearer than f32.
+            if (Types.isPack(arg) && Types.isPack(parc) && Types.packHolds(arg, parc))
+                return 2;
             if (Types.isPack(arg) && Overload._is(parc, "float"))
                 return 3;
             if (Types.isPack(arg) && Overload._is(parc, "double"))

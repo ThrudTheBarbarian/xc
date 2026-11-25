@@ -579,9 +579,9 @@ static int xtVersionGT(NSString* a, NSString* b)
         // has no C convention to pass one by.
         BOOL packed = NO;
         for (XTType* rt in node.returnTypes)
-            packed = packed || rt.isFloatPack;
+            packed = packed || rt.isCPack;
         for (XTParamNode* pp in node.parameters)
-            packed = packed || pp.paramType.isFloatPack;
+            packed = packed || pp.paramType.isCPack;
         if (packed && self.cPackCarrier.length == 0)
             [self.diagnostics emitError:[NSString stringWithFormat:@"a C-ABI function cannot take or return f16 or bf16 on this target "
                                                                    @"('%@'): its C has no _Float16 or __bf16; "

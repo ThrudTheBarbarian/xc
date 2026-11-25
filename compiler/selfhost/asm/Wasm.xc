@@ -422,6 +422,12 @@ class WasmBuf
             }
         else if (i < n && t.byteAt(i) == (u8)'+')
             i = i + (u32)1;
+        // `inf` and `nan`, as the reference's strtod reads them: an infinity,
+        // and a quiet NaN (any payload written after it is not read).
+        if (i + (u32)3 <= n && t.byteAt(i) == (u8)'i' && t.byteAt(i + (u32)1) == (u8)'n' && t.byteAt(i + (u32)2) == (u8)'f')
+            return sign | (u64)$7FF0000000000000;
+        if (i + (u32)3 <= n && t.byteAt(i) == (u8)'n' && t.byteAt(i + (u32)1) == (u8)'a' && t.byteAt(i + (u32)2) == (u8)'n')
+            return sign | (u64)$7FF8000000000000;
         if (i + (u32)1 < n && t.byteAt(i) == (u8)'0' && (t.byteAt(i + (u32)1) == (u8)'x' || t.byteAt(i + (u32)1) == (u8)'X'))
             i = i + (u32)2;
         u64 mant = (u64)0;

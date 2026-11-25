@@ -83,6 +83,7 @@ class Sema
     bool _cloakedWarn;         // -Wno-cloaked-transitive: a warning, not an error
     bool _usesClassNames;      // a call resolved to Object.className() or Object.newInstanceOfClass()
     bool _usesAtFormat;        // a printf-family format literal holds `%@`
+    u32 _packRoutines;         // an expression has a small float type: 1 FloatPack.xc, 2 FloatPackKinds.xc too
     // The escape walk (escWalkStmt), per body: stack class locals by the
     // block depth that declared them, and pointer locals by the stack local
     // whose address they hold.
@@ -188,6 +189,7 @@ class Sema
         _cloakedWarn = false;
         _usesClassNames = false;
         _usesAtFormat = false;
+        _packRoutines = (u32)0;
         _scopes = new Array();
         _globals = new Map();
         _structs = new Map();
@@ -258,6 +260,15 @@ class Sema
     bool usesAtFormat(void)
         {
         return _usesAtFormat;
+        }
+    // The small floats' routine files the program needs, once an expression
+    // has a small float type: 1 FloatPack.xc (every pack), 2
+    // FloatPackKinds.xc (a pack that is not ieee, or is unsigned). The front
+    // end imports them at the end of the entry file and starts again. As the
+    // reference's packRoutines.
+    u32 packRoutines(void)
+        {
+        return _packRoutines;
         }
     // A method call has resolved to `m`, declared by the class `owner`.
     void noteClassNameUse(String* owner, Node* m)
@@ -497,16 +508,22 @@ class Sema
         lit.setTy(pack);
         if (neg != 0)
             neg.setTy(pack);
-        u32 e8 = Types.packExp(pack);
-        u32 m = Types.packMant(pack);
-        u32 bits = Types.packBits(Types.literalBits(lit.kind() == (u16)nkFloat, lit.name(), lit.num(), false), e8, m);
-        u32 one = 1;
-        u32 inf = ((one << e8) - one) << m;
-        if ((bits & (u32)0x7FFF) == inf)
+        // The value as written, its sign included: an unsigned scale has no
+        // negative values.
+        u64 x = Types.literalBits(lit.kind() == (u16)nkFloat, lit.name(), lit.num(), neg != 0);
+        if (Types.packUnsigned(pack) && Types.literalNotPositive(x))
             {
             String* msg = String.withCString("a literal out of range for '");
             msg.append(pack);
-            msg.appendCString(e8 == 8 ? "': its largest finite value is 3.39e38" : "': its largest finite value is 65504");
+            msg.appendCString("': it holds only powers of two from 2^-127 to 2^127, no zero or negative value");
+            _errorAt(msg, e);
+            }
+        else if (Types.packLiteralOutOfRange(x, pack))
+            {
+            String* msg = String.withCString("a literal out of range for '");
+            msg.append(pack);
+            msg.appendCString("': its largest finite value is ");
+            msg.append(Types.packMaxText(pack));
             _errorAt(msg, e);
             }
         return true;
@@ -578,7 +595,26 @@ class Sema
             return;
         if (Types.isPack(rt) && !Types.isPack(lt) && packAdoptLiteral(l, rt))
             return;
-        if (Types.isPack(lt) && Types.isPack(rt) && !lt.equals(rt))
+        if (lt.equals(rt))
+            return;
+        // An unsigned scale (ue8m0) mixes with nothing: its values are powers
+        // of two to multiply by, not numbers to add to others.
+        if (Types.packUnsigned(lt) || Types.packUnsigned(rt))
+            {
+            String* sc = Types.packUnsigned(lt) ? lt : rt;
+            String* other = Types.packUnsigned(lt) ? rt : lt;
+            if (Types.isPack(other) || Types.isFloating(other) || Types.isInteger(other))
+                {
+                String* msg = String.withCString("'");
+                msg.append(sc);
+                msg.appendCString("' is a scale and does not mix with '");
+                msg.append(other);
+                msg.appendCString("' without a cast; convert it first, e.g. '(f32)s * x'");
+                _errorAt(msg, at);
+                }
+            return;
+            }
+        if (Types.isPack(lt) && Types.isPack(rt) && !Types.packHolds(lt, rt) && !Types.packHolds(rt, lt))
             {
             String* msg = String.withCString("'");
             msg.append(lt);
@@ -1916,11 +1952,11 @@ class Sema
                 while (rest != 0)
                     {
                     String* one = firstReturn(rest);
-                    packed = packed || Types.isPack(one.trimmed());
+                    packed = packed || Types.isCPack(one.trimmed());
                     rest = one.byteLength() < rest.byteLength() ? rest.substringFromByte(one.byteLength() + 1) : (String*)0;
                     }
                 for (u32 pi = 0; pi < decl.kidCount(); pi++)
-                    if (decl.kid(pi).kind() == (u16)nkParam && Types.isPack(decl.kid(pi).op()))
+                    if (decl.kid(pi).kind() == (u16)nkParam && Types.isCPack(decl.kid(pi).op()))
                         packed = true;
                 if (packed && _cPackCarrier.byteLength() == 0)
                     {
@@ -3731,7 +3767,21 @@ class Sema
         }
 
     // Bottom-up: children first, then the node's own rule.
+    // An expression typed, and noted when its type is a small float: its
+    // operations call FloatPack's routines (packRoutines). As the reference's
+    // analyzeNode.
     void typeExpr(Node* n)
+        {
+        typeExprOf(n);
+        if (n != 0 && n.kind() >= (u16)nkBinary && n.ty() != 0)
+            {
+            u32 pd = Types.packFlags(n.ty());
+            if (Types.isPack(n.ty()))
+                _packRoutines = _packRoutines | (pd != (u32)0 ? (u32)3 : (u32)1);
+            }
+        }
+
+    void typeExprOf(Node* n)
         {
         if (n == 0)
             return;
@@ -6264,6 +6314,14 @@ class Sema
             n.setTy(Types.signedOfWidth(Types.byteWidth(t)));
             return;
             }
+        // An unsigned scale (ue8m0) has no negative values.
+        if (_isOp(op, "-") && t != 0 && Types.packUnsigned(t))
+            {
+            String* um = String.withCString("'");
+            um.append(t);
+            um.appendCString("' has no sign: it cannot be negated");
+            _errorAt(um, n);
+            }
         n.setTy(t);
         }
 
@@ -7864,6 +7922,18 @@ class Sema
                 return;
             Node* a = call.kid(ai);
             checkPtrArgWidth(a, p.op(), decl.name(), pi);
+            // A small float given to a parameter of a pack that holds it (f8
+            // to f16): converted, as an assignment would, by a cast the
+            // lowering sees. As the reference's applyAutoboxToArguments.
+            if (a.ty() != 0 && p.op() != 0 && Types.isPack(a.ty()) && Types.isPack(p.op()) && !a.ty().equals(p.op())
+                && Types.packHolds(a.ty(), p.op()))
+                {
+                Node* cv = Node.withName((u16)nkCast, p.op());
+                cv.add(a);
+                typeExpr(cv);
+                call.setKid(ai, cv);
+                continue;
+                }
             String* box = autoboxClassFor(a.ty(), p.op());
             if (box != 0)
                 {

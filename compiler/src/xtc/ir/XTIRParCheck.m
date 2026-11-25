@@ -1644,7 +1644,7 @@ static BOOL gEmitsWGSL = NO;
             // A 16-bit float's operations are calls the kernels do not have:
             // the block runs on the CPU, in the type's own precision.
             if (XTParUsesFloatPack(module, f, [NSMutableSet set]))
-                why = @"it computes in f16 or bf16, which GPU kernels do not take yet";
+                why = @"it computes in f16, bf16 or f8, which GPU kernels do not take yet";
             // A loop the compiler lifted by itself says so only under
             // -Wpar-auto: a plain program is not told about a block it never
             // wrote. Mirrored in the port.

@@ -382,30 +382,30 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
 |* Mirrored in the port's parser, text for text.
 \****************************************************************************/
 /****************************************************************************\
-|* A float type's pack, `T:pack(eXmY)`, chooses its bit layout (one sign bit,
-|* X exponent bits, Y mantissa bits). The pack is part of the type, so the six
-|* tokens become the one type name they denote, and every place that reads a
-|* type reads it unchanged: `f16:pack(e8m7)` is `bf16`, and a type's own
-|* default pack is the type (`f16:pack(e5m10)` is `f16`). f16 takes those two
-|* packs, f32 and f64 only their own; anything else is refused, naming what to
-|* write. Only after a float type name or a type keyword, so `c ? x : pack(y)`
-|* keeps its meaning. Mirrored in the port's parser.
+|* A float type's pack, `T:pack(eXmY)` or `T:pack(eXmY, kind)`, chooses its
+|* bit layout (one sign bit, X exponent bits, Y mantissa bits; `ue8m0` the
+|* unsigned scale) and its special values (ieee, finite or none). The pack is
+|* part of the type, so the tokens become the one type name they denote
+|* (XTType packNameForBase:), and every place that reads a type reads it
+|* unchanged: `f16:pack(e8m7)` is `bf16`, a type's own default pack is the
+|* type (`f8:pack(e4m3)` is `f8`), and any other is its canonical name
+|* (`f8:pack(e5m2)`). A refused pack is an error saying what to write. Only
+|* after a float type name or a type keyword, so `c ? x : pack(y)` keeps its
+|* meaning. Mirrored in the port's parser.
 \****************************************************************************/
 - (void)fusePackSuffixes
     {
     NSUInteger n = _tokens.count;
     NSMutableArray<XTToken*>* t = nil;
-    // `f8 x` / `f4 x`: the widths the language will have, written as a type
-    // before they are one. Refused by name; f16 stands in so parsing goes on.
+    // `f4 x`: the width the language will have, written as a type before it
+    // is one. Refused by name; f16 stands in so parsing goes on.
     for (NSUInteger i = 0; i + 1 < n; i++)
         {
         XTToken* tk = (t ?: _tokens)[i];
-        if (tk.type != XTTokenIdentifier || !([tk.value isEqualToString:@"f8"] || [tk.value isEqualToString:@"f4"]) ||
+        if (tk.type != XTTokenIdentifier || ![tk.value isEqualToString:@"f4"] ||
             (t ?: _tokens)[i + 1].type != XTTokenIdentifier)
             continue;
-        [_diagnostics emitError:[NSString stringWithFormat:@"'%@' is not a type yet: the float types are f16, bf16, f32 and f64",
-                                                           tk.value]
-                             at:tk.location];
+        [_diagnostics emitError:@"'f4' is not a type yet: the float types are f8, f16, bf16, f32 and f64" at:tk.location];
         if (!t)
             t = [_tokens mutableCopy];
         t[i] = [[XTToken alloc] initWithType:XTTokenIdentifier value:@"f16" location:tk.location];
@@ -427,57 +427,36 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
                          [base isEqualToString:@"f8"] || [base isEqualToString:@"f4"];
         if (!(tk.isTypeKeyword || (tk.type == XTTokenIdentifier && floatName)))
             continue;
-        if (src[i + 4].type != XTTokenIdentifier || src[i + 5].type != XTTokenRParen)
+        // `( eXmY )` or `( eXmY , kind )`.
+        NSUInteger len = 0;
+        if (src[i + 4].type == XTTokenIdentifier && src[i + 5].type == XTTokenRParen)
+            len = 6;
+        else if (i + 7 < n && src[i + 4].type == XTTokenIdentifier && src[i + 5].type == XTTokenComma &&
+                 src[i + 6].type == XTTokenIdentifier && src[i + 7].type == XTTokenRParen)
+            len = 8;
+        if (len == 0)
             {
-            [_diagnostics emitError:[NSString stringWithFormat:@"a pack is written 'pack(eXmY)', with X exponent bits and "
-                                                               @"Y mantissa bits, as in 'f16:pack(e8m7)'"]
+            [_diagnostics emitError:@"a pack is written 'pack(eXmY)' or 'pack(eXmY, kind)', with X exponent bits, Y "
+                                    @"mantissa bits and the kind ieee, finite or none, as in 'f8:pack(e5m2)'"
                                  at:src[i + 2].location];
             continue;
             }
-        NSString* pk = src[i + 4].value;
-        NSString* name = nil;
         NSString* err = nil;
-        if ([base isEqualToString:@"f16"])
-            {
-            if ([pk isEqualToString:@"e5m10"])
-                name = @"f16";
-            else if ([pk isEqualToString:@"e8m7"])
-                name = @"bf16";
-            else
-                err = [NSString stringWithFormat:@"f16 has no pack '%@': it takes e5m10 (the default, IEEE binary16) or "
-                                                 @"e8m7 (bfloat16); write 'f16' or 'bf16'",
-                                                 pk];
-            }
-        else if ([base isEqualToString:@"f32"] || [base isEqualToString:@"f64"])
-            {
-            NSString* own = [base isEqualToString:@"f32"] ? @"e8m23" : @"e11m52";
-            if ([pk isEqualToString:own])
-                name = base;
-            else
-                err = [NSString stringWithFormat:@"%@ has no pack '%@': it takes only its own, %@; write '%@'",
-                                                 base, pk, own, base];
-            }
-        else if ([base isEqualToString:@"bf16"])
-            err = [NSString stringWithFormat:@"bf16 is already f16:pack(e8m7) and takes no pack; write 'bf16', or "
-                                             @"'f16:pack(%@)' for another layout of f16",
-                                             pk];
-        else if ([base isEqualToString:@"f8"] || [base isEqualToString:@"f4"])
-            err = [NSString stringWithFormat:@"'%@' is not a type yet: the float types are f16, bf16, f32 and f64",
-                                             base];
-        else
-            err = [NSString stringWithFormat:@"'%@' has no pack: a pack is written on a float type, f16, f32 or f64",
-                                             tk.value];
+        NSString* name = [XTType packNameForBase:base
+                                            pack:src[i + 4].value
+                                            kind:(len == 8 ? src[i + 6].value : nil)
+                                           error:&err];
         if (err)
             {
             [_diagnostics emitError:err at:src[i + 2].location];
             // The base type stands for the whole, so parsing goes on.
-            name = [base isEqualToString:@"f8"] || [base isEqualToString:@"f4"] ? @"f16" : nil;
+            name = [base isEqualToString:@"f4"] ? @"f16" : nil;
             }
         if (!t)
             t = [_tokens mutableCopy];
         XTToken* fused = name ? [[XTToken alloc] initWithType:XTTokenIdentifier value:name location:tk.location]
                               : tk;
-        [t replaceObjectsInRange:NSMakeRange(i, 6) withObjectsFromArray:@[ fused ]];
+        [t replaceObjectsInRange:NSMakeRange(i, len) withObjectsFromArray:@[ fused ]];
         n = t.count;
         }
     if (t)

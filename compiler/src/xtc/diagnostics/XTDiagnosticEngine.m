@@ -144,6 +144,86 @@ NSArray<NSString*>* XTWarningCategoryAllNames(void)
 @implementation XTDiagnostic
 
 /****************************************************************************\
+|* A small float's canonical type name as the source writes it: `f8$e5m2` is
+|* `f8:pack(e5m2)`, `f8$e4m3$ieee` is `f8:pack(e4m3, ieee)` (XTType
+|* packTypeNamed:). Every diagnostic's text passes through here. Mirrored in
+|* the port (Types.packSpelling).
+\****************************************************************************/
+static BOOL XTPackIdentChar(unichar c)
+    {
+    return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_';
+    }
+
+static NSString* XTPackSpelling(NSString* text)
+    {
+    if ([text rangeOfString:@"$"].location == NSNotFound)
+        return text;
+    NSUInteger n = text.length;
+    NSMutableString* out = [NSMutableString string];
+    NSUInteger i = 0;
+    while (i < n)
+        {
+        NSUInteger head = 0;
+        if (i + 3 <= n && [[text substringWithRange:NSMakeRange(i, 3)] isEqualToString:@"f8$"])
+            head = 3;
+        else if (i + 4 <= n && [[text substringWithRange:NSMakeRange(i, 4)] isEqualToString:@"f16$"])
+            head = 4;
+        if (head && (i == 0 || !XTPackIdentChar([text characterAtIndex:i - 1])))
+            {
+            // [u]e<digits>m<digits>, then $<kind>.
+            NSUInteger j = i + head;
+            NSUInteger split = j;
+            if (j < n && [text characterAtIndex:j] == 'u')
+                j++;
+            BOOL ok = j < n && [text characterAtIndex:j] == 'e';
+            if (ok)
+                {
+                j++;
+                NSUInteger d = j;
+                while (j < n && [text characterAtIndex:j] >= '0' && [text characterAtIndex:j] <= '9')
+                    j++;
+                ok = j > d && j < n && [text characterAtIndex:j] == 'm';
+                }
+            if (ok)
+                {
+                j++;
+                NSUInteger d = j;
+                while (j < n && [text characterAtIndex:j] >= '0' && [text characterAtIndex:j] <= '9')
+                    j++;
+                ok = j > d;
+                }
+            if (ok)
+                {
+                NSString* sp = [text substringWithRange:NSMakeRange(split, j - split)];
+                NSString* kind = nil;
+                if (j < n && [text characterAtIndex:j] == '$')
+                    {
+                    NSUInteger k = j + 1;
+                    while (k < n && [text characterAtIndex:k] >= 'a' && [text characterAtIndex:k] <= 'z')
+                        k++;
+                    if (k > j + 1)
+                        {
+                        kind = [text substringWithRange:NSMakeRange(j + 1, k - j - 1)];
+                        j = k;
+                        }
+                    }
+                [out appendString:[text substringWithRange:NSMakeRange(i, head - 1)]];
+                [out appendString:@":pack("];
+                [out appendString:sp];
+                if (kind)
+                    [out appendFormat:@", %@", kind];
+                [out appendString:@")"];
+                i = j;
+                continue;
+                }
+            }
+        [out appendFormat:@"%C", [text characterAtIndex:i]];
+        i++;
+        }
+    return out;
+    }
+
+/****************************************************************************\
 |* Initialise a diagnostic record with level, message, and source location.
 |* @param level     The severity (note, warning, or error).
 |* @param message   The human-readable diagnostic text.
@@ -158,7 +238,7 @@ NSArray<NSString*>* XTWarningCategoryAllNames(void)
     if (self)
         {
         _level = level;
-        _message = [message copy];
+        _message = [XTPackSpelling(message) copy];
         _location = location;
         }
     return self;

@@ -93,6 +93,9 @@ static NSHashTable* gDualLength;
         {
         if (argType == paramType)
             return 0;
+        // To a wider pack that holds it (e4m3 to f16): nearer than f32.
+        if (argType.isFloatPack && paramType.isFloatPack && [XTType packHolds:argType in:paramType])
+            return 2;
         if (argType.isFloatPack && paramType.kind == XTTypeKindFloat)
             return 3;
         if (argType.isFloatPack && paramType.kind == XTTypeKindDouble)
@@ -421,7 +424,7 @@ static NSHashTable* gDualLength;
     case XTTypeKindFloat:
     case XTTypeKindDouble:
     // A 16-bit float is boxed as the float that holds it exactly.
-    case XTTypeKindF16:
+    case XTTypeKindPack:
         boxedClass = @"Number";
         break;
     case XTTypeKindPointer:
@@ -505,6 +508,18 @@ static NSHashTable* gDualLength;
         XTASTNode* arg = args[i];
         XTType* pt = paramTypes[i];
         XTType* at = arg.resolvedType;
+        // A small float given to a parameter of a pack that holds it (f8 to
+        // f16): converted, as an assignment would, by a cast the lowering
+        // sees, since a call's parameters reach it as IR types only.
+        if (at.isFloatPack && pt.isFloatPack && at != pt && [XTType packHolds:at in:pt])
+            {
+            XTCastExprNode* cv = [[XTCastExprNode alloc] initWithType:pt operand:arg location:arg.location];
+            [self analyzeNode:cv];
+            if (!out)
+                out = [args mutableCopy];
+            out[i] = cv;
+            continue;
+            }
         NSString* boxed = [self autoboxClassNameForArgType:at toParamType:pt];
         if (!boxed)
             continue;
@@ -581,7 +596,7 @@ static NSHashTable* gDualLength;
         return @"asFloat";
     case XTTypeKindDouble:
         return @"asDouble";
-    case XTTypeKindF16:
+    case XTTypeKindPack:
         return @"asFloat";
     default:
         return nil;
@@ -4676,9 +4691,10 @@ static NSInteger XTFmtWrapperIndex(BOOL isVarArgs, NSArray<XTParamNode*>* params
     }
 
 /****************************************************************************\
-|* A literal takes the 16-bit float type its context needs and is rounded to
+|* A literal takes the small float type its context needs and is rounded to
 |* it (`f16 h = 0.1;`): a float or integer literal, or one negated. One
-|* beyond the type's range is an error. NO when the expression is no literal.
+|* beyond the type's range (for an unsigned scale, one not above zero) is an
+|* error. NO when the expression is no literal.
 \****************************************************************************/
 - (BOOL)packAdoptLiteral:(XTASTNode*)expr to:(XTType*)pack
     {
@@ -4702,13 +4718,18 @@ static NSInteger XTFmtWrapperIndex(BOOL isVarArgs, NSArray<XTParamNode*>* params
     lit.resolvedType = pack;
     if (neg)
         neg.resolvedType = pack;
-    uint16_t bits = [pack packBitsForDouble:v];
-    uint16_t inf = (uint16_t)(((1u << pack.packExpBits) - 1) << pack.packMantBits);
-    if ((bits & 0x7FFF) == inf)
+    // The value as written, its sign included: an unsigned scale has no
+    // negative values.
+    double sv = neg ? -v : v;
+    if (pack.packUnsigned && !(sv > 0))
+        [self.diagnostics emitError:[NSString stringWithFormat:@"a literal out of range for '%@': it holds only powers of "
+                                                               @"two from 2^-127 to 2^127, no zero or negative value",
+                                                               pack.displayName]
+                                 at:expr.location];
+    else if ([pack packLiteralOutOfRange:sv])
         [self.diagnostics emitError:[NSString stringWithFormat:@"a literal out of range for '%@': its largest finite value "
                                                                @"is %@",
-                                                               pack.displayName,
-                                                               pack.packExpBits == 8 ? @"3.39e38" : @"65504"]
+                                                               pack.displayName, pack.packMaxFiniteText]
                                  at:expr.location];
     return YES;
     }
@@ -4791,7 +4812,22 @@ static NSInteger XTFmtWrapperIndex(BOOL isVarArgs, NSArray<XTParamNode*>* params
         return;
     if (rt.isFloatPack && !lt.isFloatPack && [self packAdoptLiteral:left to:rt])
         return;
-    if (lt.isFloatPack && rt.isFloatPack && lt != rt)
+    if (lt == rt)
+        return;
+    // An unsigned scale (ue8m0) mixes with nothing: its values are powers of
+    // two to multiply by, not numbers to add to others.
+    if (lt.packUnsigned || rt.packUnsigned)
+        {
+        XTType* sc = lt.packUnsigned ? lt : rt;
+        XTType* other = lt.packUnsigned ? rt : lt;
+        if (other.isFloatPack || other.isFloating || other.isInteger)
+            [self.diagnostics emitError:[NSString stringWithFormat:@"'%@' is a scale and does not mix with '%@' without a "
+                                                                   @"cast; convert it first, e.g. '(f32)s * x'",
+                                                               sc.displayName, other.displayName]
+                                     at:loc];
+        return;
+        }
+    if (lt.isFloatPack && rt.isFloatPack && ![XTType packHolds:lt in:rt] && ![XTType packHolds:rt in:lt])
         [self.diagnostics emitError:[NSString stringWithFormat:@"'%@' and '%@' have no common type: neither holds every "
                                                                @"value of the other; convert both, e.g. '(f32)a + (f32)b'",
                                                                lt.displayName, rt.displayName]

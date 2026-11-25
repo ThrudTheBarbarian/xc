@@ -25,11 +25,13 @@ typedef NS_ENUM(NSInteger, XTTypeKind) {
     // DWARF struct import.
     XTTypeKindI64,
     XTTypeKindU64,
-    // A 16-bit float: f16 (IEEE binary16, pack e5m10) or bf16 (pack e8m7). The
-    // two are distinct type objects of this kind; packExpBits/packMantBits
-    // say which. The value is its 16-bit pattern: the IR holds it as a U16
-    // and every operation converts through f32 (FloatPack.xc).
-    XTTypeKindF16,
+    // A small float, one width (f16 or f8) in one pack: f16 (IEEE binary16,
+    // pack e5m10), bf16 (pack e8m7), f8 (OCP E4M3), f8:pack(e5m2) and the
+    // rest. Every pack is a distinct type object of this kind, one per name
+    // (packTypeNamed:); packExpBits/packMantBits/packKind say which. The value
+    // is its bit pattern: the IR holds it as a U16 or a U8, and every
+    // operation converts through f32 (FloatPack.xc, FloatPackKinds.xc).
+    XTTypeKindPack,
 };
 
 @interface XTType : NSObject <NSCopying>
@@ -179,21 +181,59 @@ typedef NS_ENUM(NSInteger, XTTypeKind) {
 + (instancetype)f16Type;
 /// bf16, bfloat16 (pack e8m7), spelled `f16:pack(e8m7)` too.
 + (instancetype)bf16Type;
-/// YES for a 16-bit float (f16, bf16). Neither isInteger nor isFloating: its
-/// value is a bit pattern, converted through f32 for every operation.
+/// f8, OCP FP8 E4M3 (pack e4m3, finite).
++ (instancetype)f8Type;
+/// The pack type a canonical name denotes (`f16`, `bf16`, `f8`, `f8$e5m2`,
+/// `f8$ue8m0`, `f8$e4m3$ieee`, `f16$e6m9`), one object per name; nil for any
+/// other name. A diagnostic writes `f8$e5m2` as `f8:pack(e5m2)`.
++ (nullable XTType*)packTypeNamed:(NSString*)name;
+/// The canonical name of `base:pack(pk)` or `base:pack(pk, kind)` (kind nil
+/// when not written), as the parser fuses it: nil with *err set when the
+/// pack is refused, the message saying what to write.
++ (nullable NSString*)packNameForBase:(NSString*)base
+                                 pack:(NSString*)pk
+                                 kind:(nullable NSString*)kind
+                                error:(NSString* _Nullable* _Nonnull)err;
+/// YES for a small float (f16, bf16, f8 and their packs). Neither isInteger
+/// nor isFloating: its value is a bit pattern, converted through f32 for
+/// every operation.
 @property(nonatomic, readonly) BOOL isFloatPack;
-/// The pack's exponent and mantissa widths (f16 5/10, bf16 8/7); 0 otherwise.
+/// The pack's exponent and mantissa widths (f16 5/10, bf16 8/7, f8 4/3,
+/// ue8m0 8/0); 0 otherwise.
 @property(nonatomic, readonly) NSUInteger packExpBits;
 @property(nonatomic, readonly) NSUInteger packMantBits;
-/// The pack's largest finite value (f16 65504).
+/// The pack's special values: 0 ieee (infinities and NaNs), 1 finite (no
+/// infinity, the all-ones pattern is NaN), 2 none (neither).
+@property(nonatomic, readonly) NSUInteger packKind;
+/// YES for an unsigned scale pack (ue8m0): no sign bit, the value 2^(E-127),
+/// 0xFF NaN, no zero.
+@property(nonatomic, readonly) BOOL packUnsigned;
+/// The routines' pack word beyond (e, m): the kind, with 4 for unsigned.
+/// 0 for an ieee signed pack, which FloatPack.xc's routines take as (e, m).
+@property(nonatomic, readonly) uint32_t packFlags;
+/// YES for the two packs C has (_Float16 and __bf16): f16 and bf16.
+@property(nonatomic, readonly) BOOL isCPack;
+/// The pack's sign bit (0x8000 for f16, 0x80 for f8), 0 when unsigned.
+@property(nonatomic, readonly) uint32_t packSignBit;
+/// The pack's largest finite value (f16 65504, f8 448).
 @property(nonatomic, readonly) double packMaxFinite;
-/// A double rounded to the pack (nearest, ties to even, subnormals kept, a
-/// value too large an infinity), as its 16-bit pattern.
+/// It as a diagnostic writes it: `65504`, `448`, `3.39e38`.
+@property(nonatomic, readonly) NSString* packMaxFiniteText;
+/// A double rounded to the pack (nearest, ties to even, subnormals kept; too
+/// large: an infinity where the pack has one, else its largest finite
+/// value), as its bit pattern. The routines' _xt_fpk_pack_f64(k).
 - (uint16_t)packBitsForDouble:(double)v;
+/// Is a literal of this value beyond the pack: rounds past its largest
+/// finite value, or (unsigned) is zero or negative?
+- (BOOL)packLiteralOutOfRange:(double)v;
+/// Does every value of `from` (a pack, f32 or f64) convert exactly to `to`
+/// (the same), its infinities and NaNs included?
++ (BOOL)packHolds:(XTType*)from in:(XTType*)to;
 /// Can a value of `from` reach a slot of `to` with no cast? Only when every
-/// value converts exactly: a pack to itself, f32 or f64. An integer reaches a
-/// pack through a cast (a literal takes the pack's type at the site). Asked
-/// only when one side is a pack.
+/// value converts exactly (packHolds:in:): a pack to itself, to a pack that
+/// holds it, to f32 or f64. An integer reaches a pack through a cast (a
+/// literal takes the pack's type at the site). Asked only when one side is a
+/// pack.
 + (BOOL)packConvertsImplicitly:(XTType*)from to:(XTType*)to;
 
 /****************************************************************************\

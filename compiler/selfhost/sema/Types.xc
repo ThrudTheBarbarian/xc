@@ -60,22 +60,542 @@ class Types
         return Types._is(t, "float") || Types._is(t, "double");
         }
 
-    // A 16-bit float: f16 (IEEE binary16, pack e5m10) or bf16 (pack e8m7).
-    // Neither an integer nor floating: its value is a bit pattern, converted
-    // through f32 for every operation (FloatPack.xc). XTType.isFloatPack.
-    static bool isPack(String* t)
+    // A small float, one width in one pack: f16 (IEEE binary16, pack e5m10),
+    // bf16 (pack e8m7), f8 (OCP E4M3), and every other pack by its canonical
+    // name: `fW$eXmY`, with `$kind` when the kind is not the split's default
+    // (finite for f8's e4m3, ieee for every other), and `f8$ue8m0`, the
+    // unsigned scale. No source can spell such a name, it holds no `:` (which
+    // begins a qualifier in a spelling, stripQual), and a diagnostic writes it
+    // as the source does (packSpelling). Neither an integer nor floating:
+    // its value is a bit pattern, converted through f32 for every operation
+    // (FloatPack.xc). XTType.isFloatPack, and the pack model below is
+    // XTType.m's, step for step.
+    //
+    // packDesc: 0 for no pack, else 0x80000000 | unsigned << 28 | kind << 24
+    // | width << 16 | exponent bits << 8 | mantissa bits.
+    static u32 packDesc(String* t)
         {
-        return Types._is(t, "f16") || Types._is(t, "bf16");
+        if (t == 0 || t.byteLength() < (u32)2)
+            return 0;
+        u8 c0 = t.byteAt(0);
+        if (c0 != (u8)'f' && c0 != (u8)'b')
+            return 0;
+        if (Types._is(t, "f16"))
+            return Types.packDescOf(16, 5, 10, 0, false);
+        if (Types._is(t, "bf16"))
+            return Types.packDescOf(16, 8, 7, 0, false);
+        if (Types._is(t, "f8"))
+            return Types.packDescOf(8, 4, 3, 1, false);
+        u32 w = 0;
+        u32 at = 0;
+        if (t.hasPrefix(String.withCString("f8$")))
+            {
+            w = 8;
+            at = 3;
+            }
+        else if (t.hasPrefix(String.withCString("f16$")))
+            {
+            w = 16;
+            at = 4;
+            }
+        else
+            return 0;
+        String* rest = t.substringFromByte(at);
+        String* split = rest;
+        String* kw = (String*)0;
+        u32 dollar = rest.byteIndexOf(String.withCString("$"));
+        if (dollar != String.notFound())
+            {
+            split = rest.substringBytes(0, dollar);
+            kw = rest.substringFromByte(dollar + 1);
+            }
+        u32 sd = Types.packSplit(split);
+        if (sd == 0)
+            return 0;
+        u32 e = (sd >> 8) & (u32)0xFF;
+        u32 m = sd & (u32)0xFF;
+        bool uns = (sd & (u32)0x10000000) != 0;
+        if (uns)
+            {
+            if (kw != (String*)0 || w != 8 || e != 8 || m != 0)
+                return 0;
+            return Types.packDescOf(8, 8, 0, 1, true);
+            }
+        if (e + m + 1 != w)
+            return 0;
+        u32 kind = Types.packDefaultKind(w, e, m);
+        if (kw != (String*)0)
+            {
+            if (Types._is(kw, "ieee"))
+                kind = 0;
+            else if (Types._is(kw, "finite"))
+                kind = 1;
+            else if (Types._is(kw, "none"))
+                kind = 2;
+            else
+                return 0;
+            }
+        if (!Types.packCanonical(w, e, m, kind, false).equals(t))
+            return 0;
+        return Types.packDescOf(w, e, m, kind, false);
         }
 
-    // The pack's exponent and mantissa widths.
+    static u32 packDescOf(u32 w, u32 e, u32 m, u32 kind, bool uns)
+        {
+        u32 d = (u32)0x80000000 | (kind << 24) | (w << 16) | (e << 8) | m;
+        if (uns)
+            d = d | (u32)0x10000000;
+        return d;
+        }
+
+    // "eXmY" (or "ueXmY") as 0x80000000 | unsigned << 28 | X << 8 | Y; 0 for
+    // any other spelling.
+    static u32 packSplit(String* pk)
+        {
+        u32 n = pk.byteLength();
+        u32 i = 0;
+        bool uns = false;
+        if (i < n && pk.byteAt(i) == (u8)'u')
+            {
+            uns = true;
+            i++;
+            }
+        if (i + 1 >= n || pk.byteAt(i) != (u8)'e' || !Types.isDigit(pk.byteAt(i + 1)))
+            return 0;
+        i++;
+        u32 a = 0;
+        while (i < n && Types.isDigit(pk.byteAt(i)) && a < 1000)
+            {
+            a = a * 10 + (u32)(pk.byteAt(i) - (u8)'0');
+            i++;
+            }
+        if (i + 1 >= n || pk.byteAt(i) != (u8)'m' || !Types.isDigit(pk.byteAt(i + 1)))
+            return 0;
+        i++;
+        u32 b = 0;
+        while (i < n && Types.isDigit(pk.byteAt(i)) && b < 1000)
+            {
+            b = b * 10 + (u32)(pk.byteAt(i) - (u8)'0');
+            i++;
+            }
+        if (i != n || a > 255 || b > 255)
+            return 0;
+        u32 d = (u32)0x80000000 | (a << 8) | b;
+        if (uns)
+            d = d | (u32)0x10000000;
+        return d;
+        }
+
+    static bool isDigit(u8 c)
+        {
+        return c >= (u8)'0' && c <= (u8)'9';
+        }
+
+    static u32 packDefaultKind(u32 w, u32 e, u32 m)
+        {
+        if (w == 8 && e == 4 && m == 3)
+            return 1;
+        return 0;
+        }
+
+    static String* packKindWord(u32 k)
+        {
+        if (k == 1)
+            return String.withCString("finite");
+        if (k == 2)
+            return String.withCString("none");
+        return String.withCString("ieee");
+        }
+
+    static String* packCanonical(u32 w, u32 e, u32 m, u32 kind, bool uns)
+        {
+        if (uns)
+            return String.withCString("f8$ue8m0");
+        if (w == 16 && e == 5 && m == 10 && kind == 0)
+            return String.withCString("f16");
+        if (w == 16 && e == 8 && m == 7 && kind == 0)
+            return String.withCString("bf16");
+        if (w == 8 && e == 4 && m == 3 && kind == 1)
+            return String.withCString("f8");
+        String* r = String.withCString("f");
+        r.append(String.withU32(w));
+        r.appendCString("$e");
+        r.append(String.withU32(e));
+        r.appendCString("m");
+        r.append(String.withU32(m));
+        if (kind != Types.packDefaultKind(w, e, m))
+            {
+            r.appendCString("$");
+            r.append(Types.packKindWord(kind));
+            }
+        return r;
+        }
+
+    // A small float's canonical type name as the source writes it: `f8$e5m2`
+    // is `f8:pack(e5m2)`, `f8$e4m3$ieee` is `f8:pack(e4m3, ieee)`. Every
+    // diagnostic's text passes through here (Frontend.printDiagnostic). As
+    // the reference's XTPackSpelling.
+    static String* packSpelling(String* text)
+        {
+        if (text == 0 || text.byteIndexOf(String.withCString("$")) == String.notFound())
+            return text;
+        u32 n = text.byteLength();
+        String* out = String.withCString("");
+        u32 i = 0;
+        while (i < n)
+            {
+            u32 head = 0;
+            if (i + 3 <= n && text.byteAt(i) == (u8)'f' && text.byteAt(i + 1) == (u8)'8' && text.byteAt(i + 2) == (u8)'$')
+                head = 3;
+            else if (i + 4 <= n && text.byteAt(i) == (u8)'f' && text.byteAt(i + 1) == (u8)'1' && text.byteAt(i + 2) == (u8)'6'
+                     && text.byteAt(i + 3) == (u8)'$')
+                head = 4;
+            if (head != 0 && (i == 0 || !Types.isIdentByte(text.byteAt(i - 1))))
+                {
+                u32 j = i + head;
+                u32 split = j;
+                if (j < n && text.byteAt(j) == (u8)'u')
+                    j++;
+                bool ok = j < n && text.byteAt(j) == (u8)'e';
+                if (ok)
+                    {
+                    j++;
+                    u32 d = j;
+                    while (j < n && Types.isDigit(text.byteAt(j)))
+                        j++;
+                    ok = j > d && j < n && text.byteAt(j) == (u8)'m';
+                    }
+                if (ok)
+                    {
+                    j++;
+                    u32 d2 = j;
+                    while (j < n && Types.isDigit(text.byteAt(j)))
+                        j++;
+                    ok = j > d2;
+                    }
+                if (ok)
+                    {
+                    String* sp = text.substringBytes(split, j - split);
+                    String* kind = (String*)0;
+                    if (j < n && text.byteAt(j) == (u8)'$')
+                        {
+                        u32 k = j + 1;
+                        while (k < n && text.byteAt(k) >= (u8)'a' && text.byteAt(k) <= (u8)'z')
+                            k++;
+                        if (k > j + 1)
+                            {
+                            kind = text.substringBytes(j + 1, k - j - 1);
+                            j = k;
+                            }
+                        }
+                    out.append(text.substringBytes(i, head - 1));
+                    out.appendCString(":pack(");
+                    out.append(sp);
+                    if (kind != (String*)0)
+                        {
+                        out.appendCString(", ");
+                        out.append(kind);
+                        }
+                    out.appendCString(")");
+                    i = j;
+                    continue;
+                    }
+                }
+            out.appendByte(text.byteAt(i));
+            i++;
+            }
+        return out;
+        }
+
+    static bool isIdentByte(u8 c)
+        {
+        return (c >= (u8)'A' && c <= (u8)'Z') || (c >= (u8)'a' && c <= (u8)'z') || (c >= (u8)'0' && c <= (u8)'9')
+            || c == (u8)'_';
+        }
+
+    // The message packNameFor gives when it refuses a pack.
+    static String* _packErr;
+    static String* packError(void)
+        {
+        return _packErr;
+        }
+
+    // The canonical name of `base:pack(pk)` or `base:pack(pk, kind)` (kind 0
+    // when not written), as the parser fuses it; 0 when refused, with the
+    // message in packError(). XTType packNameForBase:pack:kind:error:.
+    static String* packNameFor(String* base, String* pk, String* kind)
+        {
+        _packErr = (String*)0;
+        u32 sd = Types.packSplit(pk);
+        u32 e = (sd >> 8) & (u32)0xFF;
+        u32 m = sd & (u32)0xFF;
+        bool uns = (sd & (u32)0x10000000) != 0;
+        if (Types._is(base, "f32") || Types._is(base, "f64"))
+            {
+            String* own = Types._is(base, "f32") ? String.withCString("e8m23") : String.withCString("e11m52");
+            if (!pk.equals(own))
+                {
+                String* er = String.withString(base);
+                er.appendCString(" has no pack '");
+                er.append(pk);
+                er.appendCString("': it takes only its own, ");
+                er.append(own);
+                er.appendCString("; write '");
+                er.append(base);
+                er.appendCString("'");
+                _packErr = er;
+                return (String*)0;
+                }
+            if (kind != (String*)0)
+                {
+                String* er = String.withString(base);
+                er.appendCString(" takes no special-value kind: its pack is IEEE's; write '");
+                er.append(base);
+                er.appendCString("'");
+                _packErr = er;
+                return (String*)0;
+                }
+            return base;
+            }
+        if (Types._is(base, "bf16"))
+            {
+            String* er = String.withCString("bf16 is already f16:pack(e8m7) and takes no pack; write 'bf16', or 'f16:pack(");
+            er.append(pk);
+            er.appendCString(")' for another layout of f16");
+            _packErr = er;
+            return (String*)0;
+            }
+        if (Types._is(base, "f4"))
+            {
+            _packErr = String.withCString("'f4' is not a type yet: the float types are f8, f16, bf16, f32 and f64");
+            return (String*)0;
+            }
+        if (!Types._is(base, "f16") && !Types._is(base, "f8"))
+            {
+            String* er = String.withCString("'");
+            er.append(base);
+            er.appendCString("' has no pack: a pack is written on a float type, f8, f16, f32 or f64");
+            _packErr = er;
+            return (String*)0;
+            }
+        u32 w = Types._is(base, "f8") ? 8 : 16;
+        if (w == 16 && (sd == 0 || uns || e + m + 1 != 16 || e < 5 || e > 8))
+            {
+            String* er = String.withCString("f16 has no pack '");
+            er.append(pk);
+            er.appendCString("': its packs are e5m10 (the default, IEEE binary16), e6m9, e7m8 and e8m7 (bfloat16)");
+            _packErr = er;
+            return (String*)0;
+            }
+        if (w == 8 && uns && !(sd != 0 && e == 8 && m == 0))
+            {
+            String* er = String.withCString("f8 has no pack '");
+            er.append(pk);
+            er.appendCString("': its one unsigned pack is ue8m0");
+            _packErr = er;
+            return (String*)0;
+            }
+        if (w == 8 && !uns && (sd == 0 || e + m + 1 != 8 || e < 2 || m < 1))
+            {
+            String* er = String.withCString("f8 has no pack '");
+            er.append(pk);
+            er.appendCString("': a signed pack has 1 + X + Y = 8 bits, e2m5 to e6m1 (e4m3 the default, e5m2), and the unsigned scale is ue8m0");
+            _packErr = er;
+            return (String*)0;
+            }
+        if (uns)
+            {
+            if (kind != (String*)0)
+                {
+                _packErr = String.withCString("ue8m0 takes no special-value kind: 0xFF is its NaN and it has no infinity; write 'f8:pack(ue8m0)'");
+                return (String*)0;
+                }
+            return Types.packCanonical(8, 8, 0, 1, true);
+            }
+        u32 k = Types.packDefaultKind(w, e, m);
+        if (kind != (String*)0)
+            {
+            if (Types._is(kind, "ieee"))
+                k = 0;
+            else if (Types._is(kind, "finite"))
+                k = 1;
+            else if (Types._is(kind, "none"))
+                k = 2;
+            else
+                {
+                String* er = String.withCString("'");
+                er.append(kind);
+                er.appendCString("' is not a special-value kind: write ieee, finite or none");
+                _packErr = er;
+                return (String*)0;
+                }
+            }
+        if (k != 0 && e > 7)
+            {
+            String* er = String.withCString("a ");
+            er.append(Types.packKindWord(k));
+            er.appendCString(" pack has at most 7 exponent bits, so that its largest values fit f32; write 'f");
+            er.append(String.withU32(w));
+            er.appendCString(":pack(");
+            er.append(pk);
+            er.appendCString(")'");
+            _packErr = er;
+            return (String*)0;
+            }
+        return Types.packCanonical(w, e, m, k, false);
+        }
+
+    static bool isPack(String* t)
+        {
+        return Types.packDesc(t) != 0;
+        }
+
+    // The pack's exponent and mantissa widths, kind, signedness and width.
     static u32 packExp(String* t)
         {
-        return Types._is(t, "bf16") ? 8 : 5;
+        return (Types.packDesc(t) >> 8) & (u32)0xFF;
         }
     static u32 packMant(String* t)
         {
-        return Types._is(t, "bf16") ? 7 : 10;
+        return Types.packDesc(t) & (u32)0xFF;
+        }
+    static u32 packKind(String* t)
+        {
+        return (Types.packDesc(t) >> 24) & (u32)3;
+        }
+    static bool packUnsigned(String* t)
+        {
+        return (Types.packDesc(t) & (u32)0x10000000) != 0;
+        }
+    static u32 packWidth(String* t)
+        {
+        return (Types.packDesc(t) >> 16) & (u32)0xFF;
+        }
+    // The routines' pack word beyond (e, m): the kind, 4 for unsigned; 0 for
+    // an ieee signed pack, which FloatPack.xc's routines take as (e, m).
+    static u32 packFlags(String* t)
+        {
+        u32 d = Types.packDesc(t);
+        if (d == 0)
+            return 0;
+        u32 f = (d >> 24) & (u32)3;
+        if ((d & (u32)0x10000000) != 0)
+            f = f | (u32)4;
+        return f;
+        }
+    // The two packs C has: f16 and bf16.
+    static bool isCPack(String* t)
+        {
+        return Types._is(t, "f16") || Types._is(t, "bf16");
+        }
+    static u32 packSignBit(String* t)
+        {
+        u32 d = Types.packDesc(t);
+        if (d == 0 || (d & (u32)0x10000000) != 0)
+            return 0;
+        u32 one = 1;
+        return one << (((d >> 8) & (u32)0xFF) + (d & (u32)0xFF));
+        }
+
+    // 2^n, exactly.
+    static f64 pow2(i32 n)
+        {
+        f64 r = 1.0;
+        while (n > 0)
+            {
+            r = r * 2.0;
+            n = n - 1;
+            }
+        while (n < 0)
+            {
+            r = r * 0.5;
+            n = n + 1;
+            }
+        return r;
+        }
+
+    static u32 packMaxBits(u32 e, u32 m, u32 kind, bool uns)
+        {
+        u32 one = 1;
+        if (uns)
+            return (u32)0xFE;
+        u32 all = (one << (e + m)) - one;
+        if (kind == 0)
+            return (((one << e) - one) << m) - one;
+        if (kind == 1)
+            return all - one;
+        return all;
+        }
+
+    // The value of a finite pattern (magnitude bits) of a pack.
+    static f64 packValue(u32 bits, u32 e, u32 m, bool uns)
+        {
+        u32 one = 1;
+        if (uns)
+            return Types.pow2((i32)bits - 127);
+        u32 ex = bits >> m;
+        u32 mant = bits & ((one << m) - one);
+        i32 bias = (i32)((one << (e - one)) - one);
+        if (ex == 0)
+            return (f64)mant * Types.pow2(1 - bias - (i32)m);
+        return (f64)((one << m) | mant) * Types.pow2((i32)ex - bias - (i32)m);
+        }
+
+    static f64 packMaxFinite(String* t)
+        {
+        u32 d = Types.packDesc(t);
+        if (d == 0)
+            return 0.0;
+        u32 e = (d >> 8) & (u32)0xFF;
+        u32 m = d & (u32)0xFF;
+        bool uns = (d & (u32)0x10000000) != 0;
+        return Types.packValue(Types.packMaxBits(e, m, (d >> 24) & (u32)3, uns), e, m, uns);
+        }
+
+    // It as a diagnostic writes it: an integer below 1e10 in full, any other
+    // value below that exactly, a larger one to three figures (3.39e38).
+    // XTType.packMaxFiniteText.
+    static String* packMaxText(String* t)
+        {
+        f64 v = Types.packMaxFinite(t);
+        if (v < 1e10)
+            {
+            i64 ip = (i64)v;
+            f64 frac = v - (f64)ip;
+            String* s = String.withI64(ip);
+            if (frac > 0.0)
+                {
+                s.appendCString(".");
+                while (frac > 0.0)
+                    {
+                    frac = frac * 10.0;
+                    i64 dg = (i64)frac;
+                    s.append(String.withI64(dg));
+                    frac = frac - (f64)dg;
+                    }
+                }
+            return s;
+            }
+        f64 dd = v;
+        i64 n = 0;
+        while (dd >= 10.0)
+            {
+            dd = dd / 10.0;
+            n = n + 1;
+            }
+        i64 r = (i64)(dd * 100.0 + 0.5);
+        if (r >= 1000)
+            {
+            r = r / 10;
+            n = n + 1;
+            }
+        String* s = String.withI64(r / 100);
+        s.appendCString(".");
+        s.append(String.withI64(r / 10 % 10));
+        s.append(String.withI64(r % 10));
+        s.appendCString("e");
+        s.append(String.withI64(n));
+        return s;
         }
 
     // The bits of a literal's double: a float literal's digits, or an integer
@@ -102,32 +622,37 @@ class Types
         return bits;
         }
 
-    // A double, given as its bits, rounded to a pack: FloatPack.xc's
-    // _xt_fpk_pack_f64, the same steps. XTType.packBitsForDouble:.
-    static u32 packBits(u64 x, u32 e, u32 m)
+    // A value as its sign, the unbiased exponent of bit 31 of sig, and sig,
+    // rounded to a pack: FloatPackKinds.xc's _xt_fpk_roundk (FloatPack.xc's
+    // _xt_fpk_round for k 0), the same steps. Bit 31 of the result says the
+    // rounded magnitude was beyond the largest finite value.
+    static u32 packRound(u32 sign, i32 unb, u32 sig, u32 e, u32 m, u32 k)
         {
         u32 one = 1;
-        u32 hi = (u32)(x >> 32);
-        u32 lo = (u32)x;
-        u32 sign = hi >> 31;
-        u32 ex = (hi >> 20) & (u32)0x7FF;
-        u32 mhi = hi & (u32)0xFFFFF;
-        u32 sig = (mhi << 11) | (lo >> 21);
-        if ((lo & (u32)0x1FFFFF) != 0)
-            sig = sig | one;
-        u32 inf = ((one << e) - one) << m;
-        if (ex == (u32)0x7FF)
+        u32 kind = k & (u32)3;
+        if ((k & (u32)4) != 0)
             {
-            if (mhi == 0 && lo == 0)
-                return (sign << (e + m)) | inf;
-            u32 top = (sig << 1) | one;
-            return (sign << (e + m)) | inf | (one << (m - one)) | (top >> (32 - m));
+            if (sign != 0)
+                return (u32)0xFF;
+            while ((sig & (u32)0x80000000) == 0)
+                {
+                sig = sig << 1;
+                unb = unb - 1;
+                }
+            i32 ue = unb + 127;
+            u32 urem = sig & (u32)0x7FFFFFFF;
+            if (urem > (u32)0x40000000 || (urem == (u32)0x40000000 && (ue & 1) != 0))
+                ue = ue + 1;
+            if (ue < 0)
+                return 0;
+            if (ue > 254)
+                {
+                if ((k & (u32)8) != 0)
+                    return (u32)0x800000FF;
+                return (u32)0x800000FE;
+                }
+            return (u32)ue;
             }
-        if (ex == 0 && mhi == 0 && lo == 0)
-            return sign << (e + m);
-        i32 unb = ex == 0 ? -1022 : (i32)ex - 1023;
-        if (ex != 0)
-            sig = sig | (u32)0x80000000;
         i32 bias = (i32)((one << (e - one)) - one);
         i32 te = unb + bias;
         i32 sh = 31 - (i32)m;
@@ -152,22 +677,200 @@ class Types
                 q = q + one;
             }
         u32 bits = ((u32)(te - 1) << m) + q;
-        if (bits > inf)
+        u32 all = (one << (e + m)) - one;
+        u32 inf = ((one << e) - one) << m;
+        u32 over = 0;
+        if (kind == 0 && bits >= inf)
+            {
+            over = (u32)0x80000000;
             bits = inf;
-        return (sign << (e + m)) | bits;
+            if ((k & (u32)16) != 0)
+                bits = inf - one;
+            }
+        else if (kind == 1 && bits >= all)
+            {
+            over = (u32)0x80000000;
+            bits = all - one;
+            if ((k & (u32)8) != 0)
+                bits = all;
+            }
+        else if (kind == 2 && bits > all)
+            {
+            over = (u32)0x80000000;
+            bits = all;
+            }
+        return over | (sign << (e + m)) | bits;
+        }
+
+    // A double, given as its bits, rounded to a pack: FloatPack.xc's
+    // _xt_fpk_pack_f64 and FloatPackKinds.xc's _xt_fpk_pack_f64k, the same
+    // steps; bit 31 as packRound. XTPackRoundDouble.
+    static u32 packRoundDouble(u64 x, u32 e, u32 m, u32 k)
+        {
+        u32 one = 1;
+        u32 kind = k & (u32)3;
+        bool uns = (k & (u32)4) != 0;
+        u32 hi = (u32)(x >> 32);
+        u32 lo = (u32)x;
+        u32 sign = hi >> 31;
+        u32 ex = (hi >> 20) & (u32)0x7FF;
+        u32 mhi = hi & (u32)0xFFFFF;
+        u32 sig = (mhi << 11) | (lo >> 21);
+        if ((lo & (u32)0x1FFFFF) != 0)
+            sig = sig | one;
+        u32 all = (one << (e + m)) - one;
+        u32 sbit = sign << (e + m);
+        if (uns)
+            {
+            all = (u32)0xFF;
+            sbit = 0;
+            }
+        if (ex == (u32)0x7FF)
+            {
+            if (mhi == 0 && lo == 0)
+                {
+                if (uns)
+                    {
+                    if (sign != 0 || (k & (u32)8) != 0)
+                        return (u32)0xFF;
+                    return (u32)0xFE;
+                    }
+                if (kind == 0)
+                    {
+                    if ((k & (u32)16) != 0)
+                        return sbit | Types.packMaxBits(e, m, 0, false);
+                    return sbit | (((one << e) - one) << m);
+                    }
+                if (kind == 1 && (k & (u32)8) != 0)
+                    return sbit | all;
+                return sbit | Types.packMaxBits(e, m, kind, false);
+                }
+            if (uns)
+                return (u32)0xFF;
+            if (kind == 1)
+                return sbit | all;
+            if (kind == 2)
+                return 0;
+            u32 top = (sig << 1) | one;
+            return sbit | (((one << e) - one) << m) | (one << (m - one)) | (top >> (32 - m));
+            }
+        if (ex == 0 && mhi == 0 && lo == 0)
+            {
+            if (uns)
+                return 0;
+            return sbit;
+            }
+        i32 unb = ex == 0 ? -1022 : (i32)ex - 1023;
+        if (ex != 0)
+            sig = sig | (u32)0x80000000;
+        return Types.packRound(sign, unb, sig, e, m, k);
+        }
+
+    // A double, given as its bits, rounded to the pack `t`, as its pattern.
+    // XTType.packBitsForDouble:.
+    static u32 packBits(u64 x, String* t)
+        {
+        return Types.packRoundDouble(x, Types.packExp(t), Types.packMant(t), Types.packFlags(t)) & (u32)0xFFFF;
+        }
+
+    // Is a literal (its double's bits) beyond the pack: rounds past its
+    // largest finite value, or (unsigned) is zero or negative?
+    // XTType.packLiteralOutOfRange:.
+    static bool packLiteralOutOfRange(u64 x, String* t)
+        {
+        if (Types.packUnsigned(t) && Types.literalNotPositive(x))
+            return true;
+        return (Types.packRoundDouble(x, Types.packExp(t), Types.packMant(t), Types.packFlags(t)) & (u32)0x80000000) != 0;
+        }
+
+    // A double's bits: zero, negative or NaN.
+    static bool literalNotPositive(u64 x)
+        {
+        u64 mag = x & (u64)0x7FFFFFFFFFFFFFFF;
+        if (mag == 0 || mag > (u64)0x7FF0000000000000)
+            return true;
+        return (x >> 63) != 0;
+        }
+
+    // The numbers packHolds compares, for a pack, f32 or f64 (XTPackShape).
+    static bool packShapeKnown(String* t)
+        {
+        return Types.isPack(t) || Types.isFloating(t);
+        }
+    static u32 packShapeMant(String* t)
+        {
+        if (Types._is(t, "double"))
+            return 52;
+        if (Types._is(t, "float"))
+            return 23;
+        return Types.packMant(t);
+        }
+    static i32 packShapeQmin(String* t)
+        {
+        u32 one = 1;
+        if (Types._is(t, "double"))
+            return -1074;
+        if (Types._is(t, "float"))
+            return -149;
+        if (Types.packUnsigned(t))
+            return -127;
+        i32 bias = (i32)((one << (Types.packExp(t) - one)) - one);
+        return 1 - bias - (i32)Types.packMant(t);
+        }
+    static f64 packShapeMax(String* t)
+        {
+        if (Types._is(t, "double"))
+            return (2.0 - Types.pow2(-52)) * Types.pow2(1023);
+        if (Types._is(t, "float"))
+            return (2.0 - Types.pow2(-23)) * Types.pow2(127);
+        return Types.packMaxFinite(t);
+        }
+    static bool packShapeInf(String* t)
+        {
+        if (Types.isFloating(t))
+            return true;
+        return Types.packKind(t) == 0 && !Types.packUnsigned(t);
+        }
+    static bool packShapeNan(String* t)
+        {
+        if (Types.isFloating(t))
+            return true;
+        return Types.packKind(t) != 2;
+        }
+
+    // Does every value of `from` (a pack, f32 or f64) convert exactly to `to`
+    // (the same), its infinities and NaNs included? XTType packHolds:in:.
+    static bool packHolds(String* from, String* to)
+        {
+        if (from == 0 || to == 0)
+            return false;
+        if (from.equals(to))
+            return true;
+        if (!Types.packShapeKnown(from) || !Types.packShapeKnown(to))
+            return false;
+        bool ua = Types.packUnsigned(from);
+        bool ub = Types.packUnsigned(to);
+        if (ub && !ua)
+            return false;
+        if (Types.packShapeInf(from) && !Types.packShapeInf(to))
+            return false;
+        if (Types.packShapeNan(from) && !Types.packShapeNan(to))
+            return false;
+        return Types.packShapeMant(to) >= Types.packShapeMant(from) && Types.packShapeQmin(from) >= Types.packShapeQmin(to)
+            && Types.packShapeMax(from) <= Types.packShapeMax(to);
         }
 
     // Can a value of `from` reach a slot of `to` with no cast? Only when every
-    // value converts exactly: a pack to itself, f32 or f64. An integer reaches
-    // a pack through a cast. XTType.packConvertsImplicitly:to:.
+    // value converts exactly (packHolds). An integer, f32 or f64 reaches a
+    // pack through a cast. XTType.packConvertsImplicitly:to:.
     static bool packConvertsImplicitly(String* from, String* to)
         {
         if (from == 0 || to == 0)
             return true;
         if (Types.isPack(to))
-            return from.equals(to);
+            return Types.isPack(from) && Types.packHolds(from, to);
         if (Types.isPack(from))
-            return Types.isFloating(to);
+            return Types.isFloating(to) && Types.packHolds(from, to);
         return true;
         }
 
@@ -199,7 +902,7 @@ class Types
         if (Types._is(t, "float"))
             return (u32)4;
         if (Types.isPack(t))
-            return 2;
+            return Types.packWidth(t) / 8;
         if (Types._is(t, "bool"))
             return (u32)1;
         if (Types._is(t, "i8"))
@@ -272,19 +975,33 @@ class Types
             return b;
         if (b == 0)
             return a;
-        // A 16-bit float widens to the type that holds both operands; two
-        // different packs have no common type (sema refuses them).
+        // A small float widens to the type that holds both operands: the pack
+        // that holds the other, itself for an integer it holds every value of
+        // (f16 and bf16 an 8-bit one), f32 for a wider one up to 16 bits, f64
+        // beyond; two packs neither of which holds the other have no common
+        // type (sema refuses them). XTType.widenType:with:.
         if (Types.isPack(a) || Types.isPack(b))
             {
             String* p = Types.isPack(a) ? a : b;
             String* o = Types.isPack(a) ? b : a;
             if (Types._is(o, "double"))
                 return String.withCString("double");
-            if (Types._is(o, "float") || (Types.isPack(o) && !o.equals(p)))
+            if (Types._is(o, "float"))
                 return String.withCString("float");
-            if (Types.isPack(o) || Types._is(o, "u8") || Types._is(o, "i8") || Types._is(o, "bool")
-                || Types.isEnumName(o))
-                return p;
+            if (Types.isPack(o))
+                {
+                if (o.equals(p) || Types.packHolds(o, p))
+                    return p;
+                if (Types.packHolds(p, o))
+                    return o;
+                return String.withCString("float");
+                }
+            if (Types._is(o, "u8") || Types._is(o, "i8") || Types._is(o, "bool") || Types.isEnumName(o))
+                {
+                if (!Types.packUnsigned(p) && Types.packMant(p) >= 7 && Types.packMaxFinite(p) >= 256.0)
+                    return p;
+                return String.withCString("float");
+                }
             if (Types.isInteger(o) && Types.byteWidth(o) <= 2)
                 return String.withCString("float");
             if (Types.isInteger(o))

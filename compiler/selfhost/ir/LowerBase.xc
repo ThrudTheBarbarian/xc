@@ -1277,9 +1277,10 @@ class ClassInfo
             return String.withCString("F32");
         if (isName(s, "double"))
             return String.withCString("F64");
-        // f16/bf16: the 16-bit pattern (FloatPack.xc converts it).
+        // A small float: its bit pattern (FloatPack.xc converts it), a U16 or
+        // a U8.
         if (Types.isPack(s))
-            return String.withCString("U16");
+            return String.withCString(Types.packWidth(s) == (u32)8 ? "U8" : "U16");
         if (isName(s, "bool"))
             return String.withCString("Bool");
         if (isName(s, "void"))
@@ -1628,7 +1629,7 @@ class ClassInfo
         if (t == 0 || t.byteLength() == 0)
             return (String*)0;
         if (Types.isPack(t))
-            return String.withCString("u16");
+            return String.withCString(Types.packWidth(t) <= (u32)8 ? "u8" : "u16");
         if (Types.isPointer(t))
             return String.withCString("pointer");
         if (isPrimElemName(t))
@@ -2395,14 +2396,29 @@ class ClassInfo
 
     // `-x` is a Neg, `~x` a Not, and `!x` a comparison against false —
     // there is no boolean-negate instruction, and there does not need to be.
-    // ── 16-bit floats (f16, bf16) ────────────────────────────────────────
-    // A 16-bit float is its bit pattern, a U16, in the IR. Every conversion
-    // and operation is a call of FloatPack.xc, which the preprocessor imports
-    // into a unit that names one of the types; each call takes the pack's
-    // exponent and mantissa widths as two u32 arguments. As the reference.
-    IRValue* packConst(u32 bits)
+    // ── Small floats (f16, bf16, f8 and their packs) ────────────────────
+    // A small float is its bit pattern in the IR, a U16 (f16 and its packs)
+    // or a U8 (f8 and its). Every conversion and operation is a call of
+    // FloatPack.xc, which the front end imports into a unit that uses one of
+    // the types; each call takes the pack's exponent and mantissa widths as
+    // two u32 arguments, and a pack that is not ieee, or is unsigned, calls
+    // FloatPackKinds.xc's routine of the same name with a `k` added, which
+    // takes its kind word as a third. The routines carry every pattern as a
+    // u16. As the reference.
+    static String* packIr(String* pack)
         {
-        return constOf((i64)bits, String.withCString("u16"));
+        return String.withCString(Types.packWidth(pack) == (u32)8 ? "U8" : "U16");
+        }
+
+    // Is v a pack's pattern (its IR type)?
+    static bool isPackValue(IRValue* v, String* pack)
+        {
+        return v.ty().equals(Lower.packIr(pack));
+        }
+
+    IRValue* packConst(u32 bits, String* pack)
+        {
+        return constOf((i64)bits, String.withCString(Types.packWidth(pack) == (u32)8 ? "u8" : "u16"));
         }
 
     IRValue* packCall(string name, Array* args, String* irRet)
@@ -2436,16 +2452,40 @@ class ClassInfo
         return r;
         }
 
-    // The call with the pack's widths appended.
+    // The call with the pack's widths appended, and its kind word for a pack
+    // FloatPackKinds.xc's routines take.
     IRValue* packCallOf(string name, Array* args, String* pack, String* irRet)
         {
         args.add((Object*)constOf((i64)Types.packExp(pack), String.withCString("u32")));
         args.add((Object*)constOf((i64)Types.packMant(pack), String.withCString("u32")));
+        u32 flags = Types.packFlags(pack);
+        if (flags != (u32)0)
+            {
+            args.add((Object*)constOf((i64)flags, String.withCString("u32")));
+            String* kname = String.withCString(name);
+            kname.appendCString("k");
+            return packCall(kname.cString(), args, irRet);
+            }
         return packCall(name, args, irRet);
         }
 
-    // ── 16-bit floats across the C ABI ──────────────────────────────────
-    // C passes a _Float16 or __bf16 where it passes a float, its bits in the
+    // A routine that rounds to a pack: its u16 result, narrowed for an f8.
+    IRValue* packResultCallOf(string name, Array* args, String* pack)
+        {
+        IRValue* r = packCallOf(name, args, pack, String.withCString("U16"));
+        if (Types.packWidth(pack) == (u32)8)
+            {
+            Array* to = new Array();
+            to.add((Object*)IROperand.useVal(r));
+            r = emit(String.withCString("Trunc"), String.withCString("U8"), to);
+            }
+        return r;
+        }
+
+    // ── f16 and bf16 across the C ABI ───────────────────────────────────
+    // The two packs C has; every other pack, f8 among them, crosses as its
+    // bit pattern, the integer it is in xc. C passes a _Float16 or __bf16
+    // where it passes a float, its bits in the
     // low half of the register (an FP register on arm64, x86-64 and win64, a
     // core register under arm9's soft-float convention). A function C calls
     // or is called by (a C import, a bodyless variadic, an `extern` function)
@@ -2466,7 +2506,7 @@ class ClassInfo
     // The IR type a value of AST type t travels as to or from such a function.
     String* cPackIrType(String* t)
         {
-        if (Types.isPack(stripQual(t)))
+        if (Types.isCPack(stripQual(t)))
             return _cPackCarrier;
         return irType(t);
         }
@@ -2508,17 +2548,23 @@ class ClassInfo
             Node* p = d.kid(i);
             if (p.kind() != (u16)nkParam)
                 continue;
-            if (Types.isPack(stripQual(p.op())))
+            if (Types.isCPack(stripQual(p.op())))
                 fsym.setAttr(String.withFormat("half_%u", pi), true);
             pi++;
             }
-        if (Types.isPack(stripQual(firstReturn(d.op()))))
+        if (Types.isCPack(stripQual(firstReturn(d.op()))))
             fsym.setAttr(String.withCString("half_ret"), true);
         }
 
     // A pack's value as an f32, which holds it exactly.
     IRValue* packToF32(IRValue* v, String* pack)
         {
+        if (Types.packWidth(pack) == (u32)8)
+            {
+            Array* zo = new Array();
+            zo.add((Object*)IROperand.useVal(v));
+            v = emit(String.withCString("ZExt"), String.withCString("U16"), zo);
+            }
         Array* a = new Array();
         a.add((Object*)v);
         return packCallOf("_xt_fpk_unpack", a, pack, String.withCString("F32"));
@@ -2529,7 +2575,7 @@ class ClassInfo
         {
         Array* a = new Array();
         a.add((Object*)v);
-        return packCallOf("_xt_fpk_pack_f32", a, pack, String.withCString("U16"));
+        return packResultCallOf("_xt_fpk_pack_f32", a, pack);
         }
 
     IRValue* packExtend(IRValue* v, String* irTo, bool sgn)
@@ -2561,7 +2607,7 @@ class ClassInfo
         return (String*)0;
         }
 
-    // Conversions with a 16-bit float on either side: C23's rules for
+    // Conversions with a small float on either side: C23's rules for
     // _Float16, with an out-of-range float-to-integer conversion saturating
     // and NaN giving 0. 0 when neither side is one. As the reference's
     // coercePack:fromType:toType:location:.
@@ -2578,12 +2624,15 @@ class ClassInfo
             {
             if (isName(to, "bool"))
                 {
-                // Nonzero, NaN included: everything but the two zeros.
+                // Nonzero, NaN included: everything but the two zeros. An
+                // unsigned scale has no zero, so every value is true.
+                if (Types.packUnsigned(from))
+                    return constOf((i64)1, String.withCString("bool"));
                 Array* ao = new Array();
                 ao.add((Object*)IROperand.useVal(v));
-                ao.add((Object*)IROperand.useVal(packConst((u32)$7FFF)));
-                IRValue* mag = emit(String.withCString("And"), String.withCString("U16"), ao);
-                IRValue* zero = packConst(0);
+                ao.add((Object*)IROperand.useVal(packConst(Types.packSignBit(from) - (u32)1, from)));
+                IRValue* mag = emit(String.withCString("And"), Lower.packIr(from), ao);
+                IRValue* zero = packConst(0, from);
                 IRInsn* c = IRInsn.with(String.withCString("ICmp"));
                 c.setRes(new IRValue(String.withCString("Bool")));
                 c.setPred(String.withCString("NE"));
@@ -2604,7 +2653,7 @@ class ClassInfo
                 return emit(String.withCString("FpExt"), String.withCString("F64"), xo);
                 }
             if (!(Types.isInteger(to) || Types.isEnumName(to)))
-                return coerceImpl(v, String.withCString("u16"), to);
+                return coerceImpl(v, String.withCString(Types.packWidth(from) == (u32)8 ? "u8" : "u16"), to);
             u32 w = astWidth(to);
             bool sgn = Types.isSigned(to);
             Array* args = new Array();
@@ -2655,12 +2704,12 @@ class ClassInfo
         if (isName(from, "double"))
             {
             a.add((Object*)v);
-            return packCallOf("_xt_fpk_pack_f64", a, to, String.withCString("U16"));
+            return packResultCallOf("_xt_fpk_pack_f64", a, to);
             }
         if (IRType.is(v.ty(), tyBool) || isName(from, "bool"))
             {
             a.add((Object*)packExtend(v, String.withCString("U32"), false));
-            return packCallOf("_xt_fpk_pack_u32", a, to, String.withCString("U16"));
+            return packResultCallOf("_xt_fpk_pack_u32", a, to);
             }
         if (Types.isInteger(from) || Types.isEnumName(from))
             {
@@ -2668,12 +2717,12 @@ class ClassInfo
             if (astWidth(from) >= 8)
                 {
                 a.add((Object*)v);
-                return packCallOf(sg ? "_xt_fpk_pack_i64" : "_xt_fpk_pack_u64", a, to, String.withCString("U16"));
+                return packResultCallOf(sg ? "_xt_fpk_pack_i64" : "_xt_fpk_pack_u64", a, to);
                 }
             a.add((Object*)packExtend(v, String.withCString(sg ? "I32" : "U32"), sg));
-            return packCallOf(sg ? "_xt_fpk_pack_i32" : "_xt_fpk_pack_u32", a, to, String.withCString("U16"));
+            return packResultCallOf(sg ? "_xt_fpk_pack_i32" : "_xt_fpk_pack_u32", a, to);
             }
-        return coerceImpl(v, from, String.withCString("u16"));
+        return coerceImpl(v, from, String.withCString(Types.packWidth(to) == (u32)8 ? "u8" : "u16"));
         }
 
     // `x + 1` / `x - 1` for ++/--: a const 1 of the value's type and an Add
@@ -2710,7 +2759,7 @@ class ClassInfo
             {
             String* t = call.kid(kidBase + i).ty();
             IRValue* av = (IRValue*)args.get(i);
-            if (t != 0 && Types.isPack(stripQual(t)) && IRType.is(av.ty(), tyU16))
+            if (t != 0 && Types.isPack(stripQual(t)) && Lower.isPackValue(av, stripQual(t)))
                 args.replaceAt(i, (Object*)coercePack(av, stripQual(t), String.withCString("double")));
             }
         }
@@ -2725,16 +2774,15 @@ class ClassInfo
             String* pk = stripQual(n.ty());
             Node* lit = n.kid(0);
             if (lit.kind() == (u16)nkInt || lit.kind() == (u16)nkFloat)
-                return packConst(Types.packBits(Types.literalBits(lit.kind() == (u16)nkFloat, lit.name(), lit.num(), true),
-                                                Types.packExp(pk), Types.packMant(pk)));
+                return packConst(Types.packBits(Types.literalBits(lit.kind() == (u16)nkFloat, lit.name(), lit.num(), true), pk), pk);
             IRValue* pv = lowerExpr(lit);
             if (_failed)
                 return (IRValue*)0;
             pv = coerce(pv, lit.ty(), pk);
             Array* xo = new Array();
             xo.add((Object*)IROperand.useVal(pv));
-            xo.add((Object*)IROperand.useVal(packConst((u32)$8000)));
-            return emit(String.withCString("Xor"), String.withCString("U16"), xo);
+            xo.add((Object*)IROperand.useVal(packConst(Types.packSignBit(pk), pk)));
+            return emit(String.withCString("Xor"), Lower.packIr(pk), xo);
             }
         // A negated integer LITERAL is typed by the value it negates to, which
         // can need more bytes than the literal: `-3000000000` negates a u32
@@ -4820,8 +4868,8 @@ class ClassInfo
 
         // A literal sema gave a 16-bit float type: its digits' double, rounded.
         if ((k == (u16)nkFloat || k == (u16)nkInt) && n.ty() != 0 && Types.isPack(stripQual(n.ty())))
-            return packConst(Types.packBits(Types.literalBits(k == (u16)nkFloat, n.name(), n.num(), false),
-                                            Types.packExp(stripQual(n.ty())), Types.packMant(stripQual(n.ty()))));
+            return packConst(Types.packBits(Types.literalBits(k == (u16)nkFloat, n.name(), n.num(), false), stripQual(n.ty())),
+                             stripQual(n.ty()));
         if (k == (u16)nkFloat)
             {
             // The literal reaches the IR as the 64 bits of its DOUBLE value,
@@ -6701,7 +6749,7 @@ class ClassInfo
         for (u32 i = (u32)0; i < cargs.count(); i = i + (u32)1)
             {
             IRValue* ca = (IRValue*)cargs.get(i);
-            if (cpk && i < fixedParamCount(decl) && Types.isPack(stripQual(paramTypeAt(decl, i))))
+            if (cpk && i < fixedParamCount(decl) && Types.isCPack(stripQual(paramTypeAt(decl, i))))
                 ca = packToCarrier(ca);
             call.add(IROperand.useVal(ca));
             }
@@ -6710,7 +6758,7 @@ class ClassInfo
         call.setMemRes(nextMem);
         String* ret = firstReturn(decl.op());
         IRValue* res = (IRValue*)0;
-        bool cpkRet = cpk && Types.isPack(stripQual(ret));
+        bool cpkRet = cpk && Types.isCPack(stripQual(ret));
         if (!isName(stripQual(ret), "void"))
             {
             res = new IRValue(cpkRet ? _cPackCarrier
@@ -6978,12 +7026,13 @@ class ClassInfo
         String* dstIr = irType(dstAst);
         if (IRType.is(dstIr, tyVoid) || isPtrIr(dstIr))
             return v;
-        // A 16-bit float argument: to a U16 parameter it is that pack (sema
-        // refuses anything else without a cast); to any other, converted.
-        if (Types.isPack(stripQual(srcAst)) && IRType.is(v.ty(), tyU16))
+        // A small float argument: to a parameter of its IR type it is that
+        // pack (sema refuses anything else without a cast); to any other,
+        // converted.
+        if (Types.isPack(stripQual(srcAst)) && Lower.isPackValue(v, stripQual(srcAst)))
             {
             String* da = Lower.astOfScalarIr(dstIr);
-            if (IRType.is(dstIr, tyU16) || da == 0)
+            if (dstIr.equals(v.ty()) || da == 0)
                 return v;
             IRValue* pv = coercePack(v, stripQual(srcAst), da);
             return pv != 0 ? pv : v;
@@ -7457,15 +7506,14 @@ class ClassInfo
             }
         if (lit.kind() != (u16)nkFloat && lit.kind() != (u16)nkInt)
             return (Array*)0;
-        u32 bits = Types.packBits(Types.literalBits(lit.kind() == (u16)nkFloat, lit.name(), lit.num(), neg),
-                                  Types.packExp(pack), Types.packMant(pack));
+        u32 bits = Types.packBits(Types.literalBits(lit.kind() == (u16)nkFloat, lit.name(), lit.num(), neg), pack);
         return leBytes((i64)bits, width);
         }
 
     Array* foldInitialiser(Node* ini, String* ty)
         {
         if (Types.isPack(stripQual(ty)) && ini.kind() != (u16)nkBlock)
-            return packLeafBytes(ini, stripQual(ty), 2);
+            return packLeafBytes(ini, stripQual(ty), Types.packWidth(stripQual(ty)) / (u32)8);
         // A FLOAT global's payload is the literal as an IEEE DOUBLE, eight
         // bytes, whether the slot is declared `float` or `double` — the
         // backend narrows it if it has to.
@@ -8281,7 +8329,7 @@ class ClassInfo
         if (isFloatIr(v.ty()))
             return truthTest(v);
         // A 16-bit float likewise: -0.0 is false, so not its bits as they stand.
-        if (e.ty() != 0 && Types.isPack(stripQual(e.ty())) && IRType.is(v.ty(), tyU16))
+        if (e.ty() != 0 && Types.isPack(stripQual(e.ty())) && Lower.isPackValue(v, stripQual(e.ty())))
             return coercePack(v, stripQual(e.ty()), String.withCString("bool"));
         if (e.ty() == 0 || !isBoundSig(stripQual(e.ty())))
             return v;
@@ -10076,8 +10124,23 @@ class ClassInfo
                 // — and not the way an assignment coerces one. Same
                 // distinction, same reason: a comparison's declared type is
                 // its operand type, so returning `n == 0` as a bool truncates.
+                // A small float returned as another pack converts to it as a
+                // value does (as the reference): coerceArg alone would take
+                // the pack's IR type for an integer.
+                String* rsrc = n.kid((u32)0).ty();
+                if (!forwards && rsrc != 0 && _fnReturn != 0 && Types.isPack(stripQual(rsrc))
+                    && Types.isPack(stripQual(_fnReturn)) && !stripQual(rsrc).equals(stripQual(_fnReturn))
+                    && Lower.isPackValue(v, stripQual(rsrc)))
+                    {
+                    IRValue* pv = coercePack(v, stripQual(rsrc), stripQual(_fnReturn));
+                    if (pv != 0)
+                        {
+                        v = pv;
+                        rsrc = _fnReturn;
+                        }
+                    }
                 if (!forwards)
-                    v = coerceArg(v, n.kid((u32)0).ty(), _fnReturn);
+                    v = coerceArg(v, rsrc, _fnReturn);
                 if (_fnCPackRet)
                     v = packToCarrier(v);
                 r.add(IROperand.useVal(v));
@@ -12430,9 +12493,11 @@ class ClassInfo
         // The element type the name RESOLVES to, as sema typed the `new`:
         // `f32` is float, and a typedef is its target.
         String* el = stripQual(pointeeOf(n.ty()));
-        // A 16-bit float array is stored as its bit patterns: u16's helper.
-        if (Types.isPack(nm))
-            nm = String.withCString("u16");
+        // A small float array is stored as its bit patterns: u16's helper, or
+        // u8's for an f8 (written so, or through a typedef).
+        String* pk = Types.isPack(nm) ? nm : (Types.isPack(el) ? el : (String*)0);
+        if (pk != (String*)0)
+            nm = String.withCString(Types.packWidth(pk) == (u32)8 ? "u8" : "u16");
         else if (!isPrimElemName(nm))
             {
             // The helper's shape and element width come from its NAME alone,
@@ -17170,7 +17235,7 @@ class ClassInfo
         // showed up as a byte-identity failure.
         String* ret = irReturnOf(d);
         bool cp = cPackFn(d);
-        if (cp && Types.isPack(stripQual(returnOf(d))))
+        if (cp && Types.isCPack(stripQual(returnOf(d))))
             ret = _cPackCarrier;
         String* s = String.withCString("(");
         u32 n = (u32)0;
@@ -17691,7 +17756,7 @@ class ClassInfo
         // An `extern` function C may call takes and returns its packs as C's
         // carrier (cPackFn).
         bool cpk = cPackFn(d);
-        if (cpk && Types.isPack(stripQual(returnOf(d))))
+        if (cpk && Types.isCPack(stripQual(returnOf(d))))
             {
             _fnCPackRet = true;
             _fn.setRet(_cPackCarrier);
@@ -17710,7 +17775,7 @@ class ClassInfo
             for (u32 i = 0; i < d.kidCount(); i++)
                 {
                 Node* p = d.kid(i);
-                if (p.kind() != (u16)nkParam || !Types.isPack(stripQual(p.op())))
+                if (p.kind() != (u16)nkParam || !Types.isCPack(stripQual(p.op())))
                     continue;
                 IRValue* cv = (IRValue*)_locals.get((Hashable*)p.name());
                 cv.setTy(_cPackCarrier);

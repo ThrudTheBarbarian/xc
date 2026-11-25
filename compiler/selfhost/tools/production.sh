@@ -61,7 +61,7 @@ tool_incs() {
       # script is not the same as knowing what a tool needs.
       xtfe)      echo "-I selfhost/lexer -I selfhost/codegen -I selfhost/preproc -I selfhost/parser -I selfhost/sema -I selfhost/ir -I selfhost/opt -I selfhost/driver -I selfhost/defs";;
       xtapk)     echo "-I selfhost/link -I selfhost/defs -I selfhost/asm";;
-      xtast)     echo "-I selfhost/lexer -I selfhost/codegen -I selfhost/defs -I selfhost/preproc -I selfhost/parser";;
+      xtast)     echo "-I selfhost/lexer -I selfhost/codegen -I selfhost/defs -I selfhost/preproc -I selfhost/parser -I selfhost/sema";;
       xtir)      echo "-I selfhost/lexer -I selfhost/codegen -I selfhost/preproc -I selfhost/parser -I selfhost/sema -I selfhost/ir -I selfhost/opt -I selfhost/driver -I selfhost/defs";;
       xtirp)     echo "-I selfhost/ir -I selfhost/defs -I selfhost/opt";;
       xtlex)     echo "-I selfhost/lexer -I selfhost/codegen -I selfhost/asm -I selfhost/link -I selfhost/defs";;

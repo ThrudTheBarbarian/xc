@@ -362,6 +362,11 @@ static NSUInteger sUnderPointer = 0;
     {
     if (s.length == 0)
         return [XTType voidType];
+    // A small float's pack by its canonical name (`f8:pack(e5m2)`), which
+    // would otherwise read as a function type.
+    XTType* pack = [XTType packTypeNamed:s];
+    if (pack)
+        return pack;
     if ([s hasPrefix:@"$bound_"] || [s hasPrefix:@"$wbound_"])
         {
         XTType* bm = [self boundTypeFromString:s tt:tt protos:protos];

@@ -2834,6 +2834,10 @@
                 node.resolvedType = ot;
             break;
             }
+        // An unsigned scale (ue8m0) has no negative values.
+        if (ot.packUnsigned)
+            [self.diagnostics emitError:[NSString stringWithFormat:@"'%@' has no sign: it cannot be negated", ot.displayName]
+                                     at:node.location];
         node.resolvedType = ot ?: [XTType i8Type];
         break;
         }

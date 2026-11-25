@@ -39,6 +39,7 @@
 #import <Lexer>
 #import <FloatEncoding>
 #import <AstDump>
+#import <Types>
 
 class Parser
 {
@@ -1132,10 +1133,12 @@ class Parser
         // names, not keywords, a variable or parameter may still be `f32`.
         addTypedef(String.withCString("f32"), String.withCString("float"));
         addTypedef(String.withCString("f64"), String.withCString("double"));
-        // The 16-bit floats: `f16` (pack e5m10) and `bf16`, the name of
-        // `f16:pack(e8m7)`, which fusePackSuffixes spells this way.
+        // The small floats: `f16` (pack e5m10), `bf16`, the name of
+        // `f16:pack(e8m7)`, which fusePackSuffixes spells this way, and `f8`
+        // (OCP E4M3). Every other pack is added by name as it is fused.
         _typeNames.add((Hashable*)String.withCString("f16"));
         _typeNames.add((Hashable*)String.withCString("bf16"));
+        _typeNames.add((Hashable*)String.withCString("f8"));
 
         u32 i = (u32)0;
         while (i + (u32)1 < _tokens.count()) {
@@ -1528,25 +1531,23 @@ class Parser
         return program;
     }
 
-    // A float type's pack, `T:pack(eXmY)`, chooses its bit layout. The pack is
-    // part of the type, so the six tokens become the one type name they
-    // denote: `f16:pack(e8m7)` is `bf16`, and a type's own default pack is the
-    // type. f16 takes those two packs, f32 and f64 only their own; anything
-    // else is refused, naming what to write. Only after a float type name or a
-    // type keyword, so `c ? x : pack(y)` keeps its meaning. `f8 x` and `f4 x`
-    // are refused by name, f16 standing in. As the reference's
+    // A float type's pack, `T:pack(eXmY)` or `T:pack(eXmY, kind)`, chooses its
+    // bit layout and its special values. The pack is part of the type, so the
+    // tokens become the one type name they denote (Types.packNameFor):
+    // `f16:pack(e8m7)` is `bf16`, a type's own default pack is the type, and
+    // any other is its canonical name (`f8:pack(e5m2)`), added to the type
+    // names. A refused pack is an error saying what to write. Only after a
+    // float type name or a type keyword, so `c ? x : pack(y)` keeps its
+    // meaning. `f4 x` is refused by name, f16 standing in. As the reference's
     // fusePackSuffixes.
     void fusePackSuffixes(void)
     {
         u32 n = _tokens.count();
         for (u32 i = 0; i + 1 < n; i++) {
             Token* t = (Token*)_tokens.get(i);
-            if (t.type() != (u16)tokIdentifier || !(Parser._same(t.value(), "f8") || Parser._same(t.value(), "f4"))
+            if (t.type() != (u16)tokIdentifier || !Parser._same(t.value(), "f4")
                 || ((Token*)_tokens.get(i + 1)).type() != (u16)tokIdentifier) continue;
-            String* m = String.withCString("'");
-            m.append(t.value());
-            m.appendCString("' is not a type yet: the float types are f16, bf16, f32 and f64");
-            _errorAtTok(m, t);
+            _errorAtTok(String.withCString("'f4' is not a type yet: the float types are f8, f16, bf16, f32 and f64"), t);
             Token* r = Token.with((u16)tokIdentifier, String.withCString("f16"), t.line(), t.col());
             r.setFileId(t.fileId());
             _tokens.replaceAt(i, (Object*)r);
@@ -1563,66 +1564,40 @@ class Parser
             String* base = t.value();
             if (Parser._same(base, "float")) base = String.withCString("f32");
             else if (Parser._same(base, "double")) base = String.withCString("f64");
-            bool small = Parser._same(base, "f8") || Parser._same(base, "f4");
             bool floatName = Parser._same(base, "f16") || Parser._same(base, "f32") || Parser._same(base, "f64")
-                          || Parser._same(base, "bf16") || small;
+                          || Parser._same(base, "bf16") || Parser._same(base, "f8") || Parser._same(base, "f4");
             if (!(isTypeKeywordToken(t.type()) || (t.type() == (u16)tokIdentifier && floatName))) {
                 i++;
                 continue;
             }
+            // `( eXmY )` or `( eXmY , kind )`.
+            u32 len = 0;
             Token* w = (Token*)_tokens.get(i + 4);
-            if (w.type() != (u16)tokIdentifier || ((Token*)_tokens.get(i + 5)).type() != (u16)tokRParen) {
-                _errorAtTok(String.withCString("a pack is written 'pack(eXmY)', with X exponent bits and Y mantissa bits, as in 'f16:pack(e8m7)'"), pk);
+            if (w.type() == (u16)tokIdentifier && ((Token*)_tokens.get(i + 5)).type() == (u16)tokRParen)
+                len = 6;
+            else if (i + 7 < n && w.type() == (u16)tokIdentifier && ((Token*)_tokens.get(i + 5)).type() == (u16)tokComma
+                     && ((Token*)_tokens.get(i + 6)).type() == (u16)tokIdentifier
+                     && ((Token*)_tokens.get(i + 7)).type() == (u16)tokRParen)
+                len = 8;
+            if (len == 0) {
+                _errorAtTok(String.withCString("a pack is written 'pack(eXmY)' or 'pack(eXmY, kind)', with X exponent bits, Y mantissa bits and the kind ieee, finite or none, as in 'f8:pack(e5m2)'"), pk);
                 i++;
                 continue;
             }
-            String* v = w.value();
-            String* name = (String*)0;
-            String* err = (String*)0;
-            if (Parser._same(base, "f16")) {
-                if (Parser._same(v, "e5m10")) name = String.withCString("f16");
-                else if (Parser._same(v, "e8m7")) name = String.withCString("bf16");
-                else {
-                    err = String.withCString("f16 has no pack '");
-                    err.append(v);
-                    err.appendCString("': it takes e5m10 (the default, IEEE binary16) or e8m7 (bfloat16); write 'f16' or 'bf16'");
-                }
-            } else if (Parser._same(base, "f32") || Parser._same(base, "f64")) {
-                String* own = Parser._same(base, "f32") ? String.withCString("e8m23") : String.withCString("e11m52");
-                if (v.equals(own)) name = base;
-                else {
-                    err = String.withString(base);
-                    err.appendCString(" has no pack '");
-                    err.append(v);
-                    err.appendCString("': it takes only its own, ");
-                    err.append(own);
-                    err.appendCString("; write '");
-                    err.append(base);
-                    err.appendCString("'");
-                }
-            } else if (Parser._same(base, "bf16")) {
-                err = String.withCString("bf16 is already f16:pack(e8m7) and takes no pack; write 'bf16', or 'f16:pack(");
-                err.append(v);
-                err.appendCString(")' for another layout of f16");
-            } else if (small) {
-                err = String.withCString("'");
-                err.append(base);
-                err.appendCString("' is not a type yet: the float types are f16, bf16, f32 and f64");
-            } else {
-                err = String.withCString("'");
-                err.append(t.value());
-                err.appendCString("' has no pack: a pack is written on a float type, f16, f32 or f64");
-            }
-            if (err != (String*)0) {
-                _errorAtTok(err, pk);
-                name = small ? String.withCString("f16") : (String*)0;
+            String* kw = (String*)0;
+            if (len == 8) kw = ((Token*)_tokens.get(i + 6)).value();
+            String* name = Types.packNameFor(base, w.value(), kw);
+            if (name == (String*)0) {
+                _errorAtTok(Types.packError(), pk);
+                if (Parser._same(base, "f4")) name = String.withCString("f16");
             }
             Token* fused = t;
             if (name != (String*)0) {
                 fused = Token.with((u16)tokIdentifier, name, t.line(), t.col());
                 fused.setFileId(t.fileId());
+                _typeNames.add((Hashable*)String.withString(name));
             }
-            for (u32 k = 0; k < 5; k++) _tokens.removeAt(i + 1);
+            for (u32 k = 0; k < len - 1; k++) _tokens.removeAt(i + 1);
             _tokens.replaceAt(i, (Object*)fused);
             n = _tokens.count();
             i++;

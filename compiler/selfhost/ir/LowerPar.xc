@@ -3653,7 +3653,7 @@
             // the block runs on the CPU, in the type's own precision.
             String* why = _mWhy;
             if (parUsesFloatPack(f, new Map()))
-                why = String.withCString("it computes in f16 or bf16, which GPU kernels do not take yet");
+                why = String.withCString("it computes in f16, bf16 or f8, which GPU kernels do not take yet");
             w.append(why != (String*)0 ? why : String.withCString("its GPU version cannot express something it uses yet"));
             // A :scan's passes are the compiler's, not written blocks: they
             // say nothing (#144).

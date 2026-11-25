@@ -87,6 +87,15 @@ NS_ASSUME_NONNULL_BEGIN
 \****************************************************************************/
 @property(nonatomic, nullable) NSString* autoImport;
 
+/****************************************************************************|* Standard-library files the entry file imports at its end, `;`-separated:
+|* the small floats' routines (FloatPack.xc, FloatPackKinds.xc), which the
+|* driver asks for when sema finds the program uses a small float. nil = none.
+\****************************************************************************/
+@property(nonatomic, nullable) NSString* tailImport;
+/// The tailImport for sema's packRoutines bits (1 FloatPack.xc, 2
+/// FloatPackKinds.xc).
++ (NSString*)packTailImport:(NSUInteger)routines;
+
 // Every file the implicit platform prelude pulled in (standardized absolute
 // paths). The interface serializer excludes declarations that originate here:
 // the ambient surface is EVERY unit's, so a module's .xtc.iface must not

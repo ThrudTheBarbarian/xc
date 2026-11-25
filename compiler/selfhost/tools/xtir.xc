@@ -119,11 +119,14 @@ void main(void)
     // (Sema.usesAtFormat): the first pass is built with HAS_ATFMT 0, and a
     // program that uses `%@` is built again with 1, as the driver does.
     // Without it the port compiles a different program than the driver does.
+    // A small float's routines likewise (Sema.packRoutines): imported at the
+    // end of the entry file in a pass after the first, as the driver does.
     bool hasAt = false;
+    u32 packR = (u32)0;
     String* source = (String*)0;
     Node* program = (Node*)0;
     Sema* sema = (Sema*)0;
-    for (u32 pass = (u32)0; pass < (u32)2; pass = pass + (u32)1)
+    for (u32 pass = (u32)0; pass < (u32)3; pass = pass + (u32)1)
         {
         if (pass > (u32)0)
             {
@@ -137,6 +140,8 @@ void main(void)
         if (!raw)
             pp.define(String.withCString("HAS_ATFMT"),
                       String.withCString(hasAt ? "1" : "0"));
+        if (!raw && packR != (u32)0)
+            pp.setTailImport(Preprocessor.packTailImport(packR));
 
         // The implicit platform prelude, gated exactly as the oracle's driver
         // gates it — a Platform.xc anywhere on the search path (task #36).
@@ -188,9 +193,14 @@ void main(void)
         // disagree the cast is selected from one width and applied to the other.
         sema.setPointerWidth((u32)3);
         sema.analyse(program);
-        if (raw || hasAt || !sema.usesAtFormat())
+        if (raw)
             break;
-        hasAt = true;
+        bool wantAt = !hasAt && sema.usesAtFormat();
+        u32 wantPack = sema.packRoutines() & ~packR;
+        if (!wantAt && wantPack == (u32)0)
+            break;
+        hasAt = hasAt || wantAt;
+        packR = packR | wantPack;
         }
 
     // --dump-vslots mirrors XTC_DUMP_VSLOTS on xtc-fe, so the two slot

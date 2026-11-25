@@ -49,6 +49,7 @@
     NSMutableSet<NSString*>* _noDebugInfoWarned;   // libraries already warned about, once across a --par-style=auto restart
     BOOL _classNamesUsed;              // sema found a call to Object.className()/newInstanceOfClass(): the class-name table is on
     BOOL _atFmtUsed;                   // sema found a printf-family format holding `%@`: HAS_ATFMT is 1
+    NSUInteger _packRoutines;          // sema found a small float: its routine files (1 FloatPack, 2 FloatPackKinds)
     BOOL _arm9LibcWarned;              // the arm9 missing-libc warning, once across a restart
     }
 
@@ -1323,6 +1324,7 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     {
     _classNamesUsed = NO;
     _atFmtUsed = NO;
+    _packRoutines = 0;
     return [self frontendPassForFile:inputFile];
     }
 
@@ -1437,6 +1439,8 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
         pp.platformPrelude = @"Platform.xc";
     if (_parAutoImport)
         pp.autoImport = @"Par.xc";
+    if (_packRoutines)
+        pp.tailImport = [XTPreprocessor packTailImport:_packRoutines];
     // Checked subscripts take their checks from Checked.xc: everywhere under
     // -fbounds-check=light, and under -fbounds-check wherever the row has no
     // checked runtime (macOS and iOS link rt-checked's backtracing reporter).
@@ -2250,10 +2254,15 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     // with them.
     BOOL wantNames = namesSwitch && sema.usesClassNames && !_classNamesUsed;
     BOOL wantAt = sema.usesAtFormat && !_atFmtUsed;
-    if (wantNames || wantAt)
+    // A small float's operations call FloatPack's routines (and
+    // FloatPackKinds' for a pack that is not ieee): imported at the end of the
+    // entry file when sema finds one, so a program with none is unchanged.
+    NSUInteger wantPack = sema.packRoutines & ~_packRoutines;
+    if (wantNames || wantAt || wantPack)
         {
         _classNamesUsed = _classNamesUsed || wantNames;
         _atFmtUsed = _atFmtUsed || wantAt;
+        _packRoutines = _packRoutines | wantPack;
         [_diagnostics truncateToCount:diagMark];
         return [self frontendPassForFile:inputFile];
         }

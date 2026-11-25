@@ -2982,6 +2982,12 @@
     if (!node)
         return;
     [node acceptVisitor:self];
+    // A small float in an expression: its operations call FloatPack's
+    // routines. Declarations do not count (one never used needs none).
+    XTType* rt = node.resolvedType;
+    if (rt.isFloatPack && ![node isKindOfClass:[XTVariableDeclNode class]] && ![node isKindOfClass:[XTParamNode class]] &&
+        ![node isKindOfClass:[XTFunctionDeclNode class]] && ![node isKindOfClass:[XTMethodDeclNode class]])
+        self.packRoutines |= rt.packFlags ? 3 : 1;
     }
 
 #pragma mark - Cloak-safety inference
