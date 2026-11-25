@@ -1424,6 +1424,43 @@
     }
 
 /****************************************************************************\
+|* A string literal stored in a number, or any pointer stored in a float or
+|* double, is refused with what was probably meant. YES when it was.
+\****************************************************************************/
+- (BOOL)checkPointerToNumber:(XTType*)lhsType
+                     rhsType:(XTType*)rhsType
+                     rhsNode:(XTASTNode*)rhsNode
+                        site:(NSString*)site
+                    location:(XTSourceLocation*)loc
+    {
+    if (rhsType.kind != XTTypeKindPointer || lhsType.kind == XTTypeKindPointer)
+        return NO;
+    if (!lhsType.isInteger && !lhsType.isFloating)
+        return NO;
+    if (rhsNode.nodeKind == XTASTNodeKindLiteralString)
+        {
+        [self.diagnostics emitError:[NSString stringWithFormat:
+                                                  @"%@: a string literal is a pointer, not a '%@' — for one "
+                                                  @"character write 'x' (or s[0]); for a number in text, parse it "
+                                                  @"(NumberFormatter's parse); cast explicitly if the address is "
+                                                  @"really meant",
+                                                  site, lhsType.displayName]
+                                 at:loc];
+        return YES;
+        }
+    if (lhsType.isFloating)
+        {
+        [self.diagnostics emitError:[NSString stringWithFormat:
+                                                  @"%@: a pointer '%@' has no '%@' value — dereference it (*p) "
+                                                  @"for the value it points at",
+                                                  site, rhsType.displayName, lhsType.displayName]
+                                 at:loc];
+        return YES;
+        }
+    return NO;
+    }
+
+/****************************************************************************\
 |* PR4 class-pointer compat — reject assignment / return of an
 |* unrelated class pointer into a class-pointer slot. Exact-class
 |* match is always allowed; upcast (RHS = descendant of LHS) is
@@ -1438,6 +1475,12 @@
                        location:(XTSourceLocation*)loc
     {
     if (!lhsType || !rhsType)
+        return;
+
+    // A string literal is a pointer, not a number, and no pointer has a
+    // floating value: both compiled silently and stored the address (#669).
+    // A cast still says the address is really meant.
+    if ([self checkPointerToNumber:lhsType rhsType:rhsType rhsNode:rhsNode site:site location:loc])
         return;
 
     // A `simd:` pointer may hold only what `new[]` returned or what another

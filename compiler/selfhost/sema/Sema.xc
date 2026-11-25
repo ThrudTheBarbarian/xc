@@ -804,6 +804,12 @@ class Sema
         if (lhs == 0 || rhs == 0)
             return;
 
+        // A string literal is a pointer, not a number, and no pointer has a
+        // floating value: both compiled silently and stored the address
+        // (#669). A cast still says the address is really meant.
+        if (checkPointerToNumber(lhs, rhs, rhsNode, site, at))
+            return;
+
         // A `simd:` pointer may hold only what `new[]` returned or what
         // another `simd:` pointer holds: the qualifier promises a page-aligned
         // block the runtime can find (the reference explains). nil and 0 are
@@ -947,6 +953,40 @@ class Sema
         e.append(lp);
         e.appendByte((u8)0x27);
         _errorAt(e, at);
+        }
+
+    // A string literal stored in a number, or any pointer stored in a float
+    // or double, is refused with what was probably meant. True when it was.
+    bool checkPointerToNumber(String* lhs, String* rhs, Node* rhsNode, string site, Node* at)
+        {
+        if (!Types.isPointer(rhs) || Types.isPointer(lhs))
+            return false;
+        bool num = Types.isInteger(lhs) || Types.isFloating(lhs) || Types.isEnumName(lhs);
+        if (!num)
+            return false;
+        if (rhsNode != 0 && rhsNode.kind() == (u16)nkStr)
+            {
+            String* e = String.withCString(site);
+            e.appendCString(": a string literal is a pointer, not a '");
+            e.append(lhs);
+            e.appendCString("' — for one character write 'x' (or s[0]); for a number in text, ");
+            e.appendCString("parse it (NumberFormatter's parse); cast explicitly if the address ");
+            e.appendCString("is really meant");
+            _errorAt(e, at);
+            return true;
+            }
+        if (Types.isFloating(lhs))
+            {
+            String* e = String.withCString(site);
+            e.appendCString(": a pointer '");
+            e.append(rhs);
+            e.appendCString("' has no '");
+            e.append(lhs);
+            e.appendCString("' value — dereference it (*p) for the value it points at");
+            _errorAt(e, at);
+            return true;
+            }
+        return false;
         }
 
     // A stack instance copied BY VALUE into a slot of one of its ancestors —
