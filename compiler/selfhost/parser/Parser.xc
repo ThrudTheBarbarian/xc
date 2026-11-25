@@ -2388,7 +2388,9 @@ class Parser
                                             "web modules passes numbers, or a pointer to numbers "
                                             "followed by their count; '%s' is neither",
                                             P.cString(), m.name().cString(), _webBad.cString());
-            _errorAt(msg, m);
+            // At the declaration's first token after `static` (its type), as
+            // the reference places it, not at the name.
+            _errorAtTok(msg, (Token*)_tokens.get(from));
         }
         String* args = new String();
         for (u32 k = (u32)0; k < m.kidCount(); k = k + (u32)1) {
