@@ -949,6 +949,7 @@ class FeOptions
         // arm64 and arm9 pass variadic arguments by the C ABI; every other
         // target shares one pack buffer, which sema guards (bug 273).
         sema.setNativeVarargs(layoutRow(o).nativeVarargs());
+        sema.setCPackCarrier(layoutRow(o).cPackCarrier());
         sema.setCloakedTransitiveWarns(o.warningSuppressed(String.withCString("cloaked-transitive")));
         // Adopt each imported module's vtable numbering — its vtables are emitted,
         // so its slots are authoritative and local numbering continues above them.
@@ -1255,6 +1256,7 @@ class FeOptions
         // goes through the itable (bugs 201, 266).
         lower.setItableDispatch(itableProtos);
         lower.setNativeVarargs(layoutRow(o).nativeVarargs());                         // bug 179
+        lower.setCPackCarrier(layoutRow(o).cPackCarrier());
         // The race-free static-init once (threading.md §9.5). -1 = decide per
         // module; -f[no-]thread-safe-arc forces it, because atomic ARC and this
         // once ride the same switch and a program that asks for one gets both.

@@ -143,6 +143,10 @@ void cPathSetDropBase(bool b) { gCPathDropBase = b; }
 // so the C file's own calls are renamed in its IR.
 Map* gCPathAllocRedirect;
 void cPathSetAllocRedirect(Map* m) { gCPathAllocRedirect = m; }
+// The front end's options, for a C file whose IR has a half or bfloat when the
+// driver gave lowerWith none: FloatPack is lowered from them (the stub).
+FeOptions* gCPathFe;
+void cPathSetFe(FeOptions* fe) { gCPathFe = fe; }
 // The source's row of the language table (Language.xc): the command that
 // writes its LLVM IR, and which functions xcc takes. 0: C's.
 LanguageRow* gCPathLang;
@@ -184,6 +188,32 @@ class CPath
     // In any order of a function's blocks a cycle has an edge back to a block
     // at or before its own, so a loop is exactly a branch to a label already
     // seen in that function. (A function's entry block cannot be a target.)
+    // Whether clang's IR names the type `half` or `bfloat` (C's _Float16,
+    // __bf16): the word alone, not part of a name (`%half`, `@bfloat_sum`).
+    static bool irHasHalf(String* ll)
+    {
+        u32 n = ll.byteLength();
+        for (u32 i = (u32)0; i + (u32)4 <= n; i = i + (u32)1)
+        {
+            u8 c = ll.byteAt(i);
+            u32 w = (u32)0;
+            if (c == (u8)'h' && ll.byteAt(i + (u32)1) == (u8)'a' && ll.byteAt(i + (u32)2) == (u8)'l'
+                && ll.byteAt(i + (u32)3) == (u8)'f')
+                w = (u32)4;
+            else if (c == (u8)'b' && i + (u32)6 <= n && ll.byteAt(i + (u32)1) == (u8)'f' && ll.byteAt(i + (u32)2) == (u8)'l'
+                     && ll.byteAt(i + (u32)3) == (u8)'o' && ll.byteAt(i + (u32)4) == (u8)'a' && ll.byteAt(i + (u32)5) == (u8)'t')
+                w = (u32)6;
+            if (w == (u32)0) continue;
+            u8 before = i > (u32)0 ? ll.byteAt(i - (u32)1) : (u8)' ';
+            u8 after = i + w < n ? ll.byteAt(i + w) : (u8)' ';
+            bool openB = before == (u8)' ' || before == (u8)'(' || before == (u8)'<' || before == (u8)'{' || before == (u8)9;
+            bool closeA = after == (u8)' ' || after == (u8)',' || after == (u8)')' || after == (u8)']' || after == (u8)'>'
+                       || after == (u8)'}' || after == (u8)'*' || after == (u8)10;
+            if (openB && closeA) return true;
+        }
+        return false;
+    }
+
     static bool irHasLoop(String* ll)
     {
         Array* lines = ll.splitOnByte((u8)10);
@@ -659,13 +689,21 @@ class CPath
         // optimiser would drop the stub anyway (gCPathDropBase).
         if (fe != (FeOptions*)0 && gCPathDropBase && !CPath.irHasLoop(readText))
             fe = (FeOptions*)0;
+        // A half or bfloat is worked by FloatPack's routines, which the stub
+        // brings (with the par runtime, or alone where there is none).
+        bool halves = CPath.irHasHalf(readText);
+        bool parStub = fe != (FeOptions*)0;
+        if (fe == (FeOptions*)0 && halves)
+            fe = gCPathFe;
         if (fe != (FeOptions*)0)
             {
             String* stub = String.withString(scratch);
             stub.appendCString(".xc");
-            String* stubText = String.withCString("#import \"Par.xc\"\n");
-            if (gCPathHeap)
+            String* stubText = String.withCString(parStub ? "#import \"Par.xc\"\n" : "");
+            if (parStub && gCPathHeap)
                 stubText.appendCString("#import \"CAlloc.xc\"\n");
+            if (halves)
+                stubText.appendCString("#import \"FloatPack.xc\"\n");
             if (!Files.writeText(stub, stubText))
                 {
                 Stdio.error(String.withFormat("xcc: error: cannot write '%s'\n", stub.cString()));

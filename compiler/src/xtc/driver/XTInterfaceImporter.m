@@ -718,6 +718,7 @@ static NSMutableSet<NSString*>* sUnresolved = nil;
                                                 body:nil
                                             location:loc];
         proto.mangledName = f[@"symbol"] ?: nm;
+        proto.isExtern = [f[@"extern"] boolValue];
         [decls addObject:proto];
         }
     // GLOBALS ARE DELIBERATELY NOT IMPORTED. XTVariableDeclNode has no "external"

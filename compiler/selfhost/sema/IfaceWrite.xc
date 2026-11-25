@@ -284,6 +284,20 @@ class IfaceWrite
         if (comma) out.appendCString(", ");
     }
 
+    // Whether a function takes or returns f16 or bf16.
+    static bool takesPack(Node* d)
+    {
+        String* r = d.op() != (String*)0 ? d.op().trimmed() : (String*)0;
+        bool any = r != (String*)0 && (r.equals(String.withCString("f16")) || r.equals(String.withCString("bf16")));
+        for (u32 i = 0; i < d.kidCount(); i++) {
+            Node* p = d.kid(i);
+            if (p.kind() != (u16)nkParam || p.op() == (String*)0) continue;
+            String* t = p.op().trimmed();
+            any = any || t.equals(String.withCString("f16")) || t.equals(String.withCString("bf16"));
+        }
+        return any;
+    }
+
     static void kb(String* out, string k, bool v, bool comma)
     {
         out.appendFormat("\"%s\": %s", k, v ? "true" : "false");
@@ -797,6 +811,10 @@ class IfaceWrite
             // rule, which is how a contract in two places drifts.
             IfaceWrite.kv(out, "symbol",
                           IfaceWrite.nm(d.sym() != (String*)0 ? d.sym() : d.name()), true);
+            // An `extern` function passes a 16-bit float by C's convention,
+            // so a client calls it that way (only said where it matters).
+            if (d.hasFlag((u32)NF_EXTERN) && IfaceWrite.takesPack(d))
+                IfaceWrite.kb(out, "extern", true, true);
             IfaceWrite.kb(out, "varargs", d.hasFlag((u32)NF_VARARGS), true);
             IfaceWrite.params(out, d);
             IfaceWrite.returnsList(out, d);

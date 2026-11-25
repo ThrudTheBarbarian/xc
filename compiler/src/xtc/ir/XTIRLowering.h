@@ -70,6 +70,10 @@ NS_ASSUME_NONNULL_BEGIN
 + (void)setThreadSafeStatics:(int)mode;
 + (int)threadSafeStatics;
 
+// How C passes a _Float16 or __bf16 on the target (XTTarget.cPackCarrier):
+// "F32", "U32", or "" where its C has neither type.
++ (void)setCPackCarrier:(NSString*)carrier;
+
 + (void)setVtableConforms:(BOOL)on;
 + (BOOL)vtableConforms;
 

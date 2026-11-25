@@ -1204,6 +1204,8 @@ class JsonVal
             fd.setOp(String.withString(rt));
             if (f.memberBool((u8*)"varargs"))
                 fd.addFlag((u32)NF_VARARGS);
+            if (f.memberBool((u8*)"extern"))
+                fd.addFlag((u32)NF_EXTERN);
             fd.addFlag((u32)NF_EXTERNAL);
             JsonVal* ps = f.member((u8*)"params");
             if (ps != 0)

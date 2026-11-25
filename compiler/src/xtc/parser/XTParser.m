@@ -841,6 +841,7 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
         else if ([d isKindOfClass:[XTFunctionDeclNode class]])
             {
             XTFunctionDeclNode* f = (XTFunctionDeclNode*)d;
+            f.isExtern = YES;
             if (f.body)
                 f.isExported = YES; // exported definition
             // bodyless: an import — bind it to the `#package` in force.

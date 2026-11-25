@@ -61,6 +61,7 @@ class Sema
     // that buffer mid-read. The call graph is recorded as bodies are walked,
     // by the same `_fn_<sym>` / `_cls_<Class>_<sym>` labels the original uses.
     bool _nativeVarargs;      // arm64 / arm9: arguments ride the C ABI, no buffer
+    String* _cPackCarrier;    // how C passes a _Float16 (TargetRow.cPackCarrier); "" when it has none
     String* _curLabel;        // the label of the body being walked, or 0
     Map* _callEdges;          // label -> Array of callee labels, first-seen order
     Map* _labelDisplay;       // label -> the name a message shows for it
@@ -170,6 +171,7 @@ class Sema
         _fnPackingCallee = (String*)0;
         _fnForwardsVarargs = false;
         _nativeVarargs = false;
+        _cPackCarrier = String.withCString("F32");
         _curLabel = (String*)0;
         _callEdges = new Map();
         _labelDisplay = new Map();
@@ -282,6 +284,10 @@ class Sema
     void setNativeVarargs(bool v)
         {
         _nativeVarargs = v;
+        }
+    void setCPackCarrier(String* v)
+        {
+        _cPackCarrier = v;
         }
 
     void setCloakedTransitiveWarns(bool v)
@@ -1882,8 +1888,8 @@ class Sema
                     cbHasBody = true;
             if (decl.hasFlag((u32)NF_CABI) || (decl.hasFlag((u32)NF_VARARGS) && !cbHasBody))
                 {
-                // C passes _Float16 and __bf16 in floating-point registers; xc
-                // passes a 16-bit float as its bit pattern in an integer one.
+                // A target whose C has no _Float16 or __bf16 (wasm32, m68k,
+                // xt6502) has no C convention to pass one by.
                 bool packed = false;
                 String* rest = decl.op();
                 while (rest != 0)
@@ -1895,11 +1901,11 @@ class Sema
                 for (u32 pi = 0; pi < decl.kidCount(); pi++)
                     if (decl.kid(pi).kind() == (u16)nkParam && Types.isPack(decl.kid(pi).op()))
                         packed = true;
-                if (packed)
+                if (packed && _cPackCarrier.byteLength() == 0)
                     {
-                    String* pm = String.withCString("a C-ABI function cannot take or return f16 or bf16 yet ('");
+                    String* pm = String.withCString("a C-ABI function cannot take or return f16 or bf16 on this target ('");
                     pm.append(decl.name());
-                    pm.appendCString("'): C passes them in floating-point registers; declare the C side with float");
+                    pm.appendCString("'): its C has no _Float16 or __bf16; declare the C side with float");
                     _errorAt(pm, decl);
                     }
                 for (u32 pi = (u32)0; pi < decl.kidCount(); pi = pi + (u32)1)

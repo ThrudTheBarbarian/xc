@@ -66,6 +66,9 @@ NS_ASSUME_NONNULL_BEGIN
 // through the shared pack buffer every other target uses. Decides whether the
 // `...` forwarding form can work at all. private:docs/bugs/047.
 @property(nonatomic) BOOL nativeVarargs;
+// How C passes a _Float16 or __bf16 on the target (XTTarget.cPackCarrier):
+// "F32", "U32", or "" where its C has neither type.
+@property(nonatomic, copy) NSString* cPackCarrier;
 
 /****************************************************************************\
 |* Automatic Reference Counting gate, mirroring the `-farc` driver flag.

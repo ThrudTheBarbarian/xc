@@ -83,6 +83,9 @@ typedef NS_ENUM(NSInteger, XTStackConvention) {
 |* function stays the (already-implicit) import spelling.
 \****************************************************************************/
 @property(nonatomic) BOOL isExported;
+// Written `extern`, with a body or without: C may call it or define it, so a
+// 16-bit float it takes or returns travels by C's convention.
+@property(nonatomic) BOOL isExtern;
 /****************************************************************************\
 |* The host package a bodyless (imported) function binds to, set by the
 |* `#package <name>` directive in force at the declaration site. nil = the

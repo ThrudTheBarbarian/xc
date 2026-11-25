@@ -2201,6 +2201,7 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     // one ABI, so a bodyless `...` prototype reaches EITHER — fixing the
     // cross-unit variadic call that arrived empty (c2xc 33).
     sema.nativeVarargs = dispatchRow.nativeVarargs;
+    sema.cPackCarrier = dispatchRow.cPackCarrier ?: @"";
     [XTIRLowering setItableProtocols:itableDispatch];
     // The race-free static-init once rides the SAME switch as atomic ARC: both
     // answer "can two threads touch this at once?", so -f[no-]thread-safe-arc
@@ -2208,6 +2209,7 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     // default (-1) leaves lowering to decide per module — on exactly when the
     // program declares the thread-spawn primitive (threading.md §9.5).
     [XTIRLowering setThreadSafeStatics:(int)_options.threadSafeARC];
+    [XTIRLowering setCPackCarrier:dispatchRow.cPackCarrier];
     // --migrate=<base>:<to> — sema hides members newer than <base>.
     if (_options.migrateVersions.length)
         {

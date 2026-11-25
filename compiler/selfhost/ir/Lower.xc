@@ -218,6 +218,8 @@
                                            self.signatureOf(d),
                                            d.hasFlag((u32)NF_VARARGS),
                                            d.hasFlag((u32)NF_CABI));
+            if (self.cPackFn(d))
+                self.markCPacks(fsym, d);
             if (d.hasFlag((u32)NF_THROWS))
                 fsym.setThrows();
             if (d.hasFlag((u32)NF_IRQ))

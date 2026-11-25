@@ -1149,8 +1149,9 @@ class Arm64
         if (fn.sretParam() && user > (u32)0)
             first = (u32)1;
         Array* types = new Array();
+        IRSymbol* hs = (_aapcs64Abi || first != (u32)0) ? (IRSymbol*)0 : symbolNamed(fn.name());
         for (u32 i = first; i < user; i = i + (u32)1)
-            types.add((Object*)((IRValue*)fn.params().get(i)).ty());
+            types.add(halfAt(hs, i) ? (Object*)String.withCString("H16") : (Object*)((IRValue*)fn.params().get(i)).ty());
         // A parameter that arrived on the stack lives in the CALLER's outgoing
         // area, which sits just above this frame — hence the frameSize bias.
         Array* offs = offsetsForTypes(types, (u32)0);
@@ -1163,8 +1164,10 @@ class Arm64
             if (CgCommon.isFloatTy(t)) {
                 if (so >= (i32)0) {
                     String* sc = fregName((u32)16, t);
-                    _out.appendFormat("    ldr %s, %s\n", sc.cString(),
-                                      spMemForOff(_frame + (u32)so, sc).cString());
+                    // A packed half (halfAt) loads its two bytes, zero-extended.
+                    String* ld = halfAt(hs, i) ? String.withCString("h16") : sc;
+                    _out.appendFormat("    ldr %s, %s\n", ld.cString(),
+                                      spMemForOff(_frame + (u32)so, ld).cString());
                     storeReg(sc, p);
                     continue;
                 }
@@ -1830,7 +1833,9 @@ class Arm64
         if (n.res() == (IRValue*)0) return;
         if (n.ops().count() < (u32)1) { unsupported(n.op()); return; }
         String* ty = n.res().ty();
-        if (CgCommon.isFloatTy(ty) || isAggTy(ty) || isVecTy(ty)) { unsupported(n.op()); return; }
+        // A Bitcast to a float (a 16-bit float's carrier, its pattern in an
+        // F32's bits) is the same move, into the float's home: as the reference.
+        if ((CgCommon.isFloatTy(ty) && !n.isOp(opBitcast)) || isAggTy(ty) || isVecTy(ty)) { unsupported(n.op()); return; }
         // …and the same for an i64/u64 result. Scratching a 64-bit widening
         // through `w16` emitted `mov w16, w<src>`, which neither sign-extends
         // nor carries a high half — so the value was SPILLED as four bytes and
@@ -2296,6 +2301,7 @@ class Arm64
     {
         Array* offs = argStackOffsets(n, first, argc, startGP);
         if (offs == (Array*)0) return false;
+        IRSymbol* hs = halfCallee(n, first);
         if (isSretCall(n) && argc > (u32)0) {
             materialise((IROperand*)n.ops().get(first), String.withCString("x8"));
             first = first + (u32)1;
@@ -2328,7 +2334,7 @@ class Arm64
                 else {
                     String* sc = fregName((u32)16, aty);
                     loadValue(a.val(), sc);
-                    _out.appendFormat("    str %s, [sp, #%ld]\n", sc.cString(), so);
+                    _out.appendFormat("    str %s, [sp, #%ld]\n", halfAt(hs, i) ? "h16" : sc.cString(), so);
                 }
                 continue;
             }
@@ -5860,6 +5866,26 @@ class Arm64
         return n.cc() != (String*)0 && n.cc().equals(String.withCString("CallConv::Sret"));
     }
 
+    // A 16-bit float the C ABI passes travels as an F32 holding its bits
+    // (the lowering's carrier), and its symbol marks it `half_<i>`. In a
+    // register that is all there is to it; on the stack Darwin packs one in
+    // two bytes, as clang does, where a float takes four. Plain AAPCS64 gives
+    // every stack argument eight bytes, so only Darwin reads the marks, and
+    // the classifier sees such an argument as `H16`. As the reference.
+    bool halfAt(IRSymbol* s, u32 i)
+    {
+        return s != (IRSymbol*)0 && s.attr(String.withFormat("half_%u", i));
+    }
+
+    // The symbol whose marks a call's arguments take: a direct call's, under
+    // Darwin's packing, without a hidden result pointer. 0 otherwise.
+    IRSymbol* halfCallee(IRInsn* n, u32 first)
+    {
+        if (_aapcs64Abi || first != (u32)1 || !isDirectCallOp(n.opc()) || isSretCall(n)) return (IRSymbol*)0;
+        IROperand* c = (IROperand*)n.ops().get((u32)0);
+        return c.kind() == (u8)OPK_SYM ? symbolNamed(c.name()) : (IRSymbol*)0;
+    }
+
     Array* argStackOffsets(IRInsn* n, u32 first, u32 argc, u32 startGP)
     {
         if (isSretCall(n) && argc > (u32)0) {
@@ -5867,8 +5893,10 @@ class Arm64
             argc = argc - (u32)1;
         }
         Array* types = new Array();
+        IRSymbol* hs = halfCallee(n, first);
         for (u32 i = (u32)0; i < argc; i = i + (u32)1) {
             String* t = argType((IROperand*)n.ops().get(first + i));
+            if (halfAt(hs, i)) t = String.withCString("H16");
             types.add(t == (String*)0 ? (Object*)String.withCString("") : (Object*)t);
         }
         // A direct call to a variadic C-ABI symbol puts its ENTIRE tail on
@@ -5981,9 +6009,10 @@ class Arm64
                 stk = stk + asz;
                 continue;
             }
-            if (CgCommon.isFloatTy(t)) {
+            bool half = t != (String*)0 && t.equals(String.withCString("H16"));
+            if (half || CgCommon.isFloatTy(t)) {
                 if (fp < (u32)8) { fp = fp + (u32)1; offs.add((Object*)Number.with(-1)); continue; }
-                u32 sz = IRType.is(t, tyF64) ? 8 : 4;
+                u32 sz = half ? 2 : IRType.is(t, tyF64) ? 8 : 4;
                 if (_aapcs64Abi) sz = (u32)8;
                 stk = (stk + sz - (u32)1) & ~(sz - (u32)1);
                 offs.add((Object*)Number.with((i32)stk));

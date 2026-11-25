@@ -39,6 +39,7 @@
 @property(nonatomic, readwrite) BOOL itableAlways;
 @property(nonatomic, readwrite) BOOL nativeVarargs;
 @property(nonatomic, readwrite) BOOL threads;
+@property(nonatomic, readwrite, copy) NSString* cPackCarrier;
 @end
 
 @implementation XTTarget
@@ -109,6 +110,7 @@ static XTTarget* row(NSString* name, NSString* cpu, NSInteger variant, NSString*
     r.itableAlways = [backend isEqualToString:@"arm9"];
     r.nativeVarargs = [backend isEqualToString:@"arm9"] || [backend isEqualToString:@"arm64"];
     r.threads = wide || [backend isEqualToString:@"wasm32"];
+    r.cPackCarrier = wide ? @"F32" : [backend isEqualToString:@"arm9"] ? @"U32" : @"";
     return r;
     }
 

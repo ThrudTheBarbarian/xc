@@ -1632,7 +1632,12 @@ static NSString* normDwarfSectionName(const char* sect)
         t = XTType.boolType;
         break;
     case DW_ATE_float:
-        t = (sz >= 8) ? XTType.doubleType : XTType.floatType;
+        // A 2-byte float is C's _Float16 (f16) or __bf16 (bf16), told apart by
+        // name, as the port.
+        if (sz == 2)
+            t = [die->name containsString:@"bf16"] ? XTType.bf16Type : XTType.f16Type;
+        else
+            t = (sz >= 8) ? XTType.doubleType : XTType.floatType;
         break;
     // An 8-byte integer is 64 bits: a C `long` on LP64 Linux, `long long`,
     // int64_t. Mapping it to 32 truncated every such return value and field
