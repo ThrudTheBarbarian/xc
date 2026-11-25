@@ -563,13 +563,6 @@ static uint32_t sPlatformSdk = 11 << 16;
 // than wrong ones — see sTbdTargets' use in inspectTbd (private:docs/bugs/028).
 static NSArray<NSString*>* sTbdTargets = nil;
 
-static NSArray<NSString*>* sDylibRpaths = nil;
-
-+ (void)setDylibRpaths:(nullable NSArray<NSString*>*)rpaths
-    {
-    sDylibRpaths = [rpaths copy];
-    }
-
 + (void)setApplePlatform:(nullable NSString*)platform
     {
     if (platform == nil || [platform isEqualToString:@"macos"])
@@ -2907,12 +2900,8 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
     for (NSDictionary* dl in dylibs)
         szDeps += (uint32_t)roundUp(24 + strlen([dl[@"install"] UTF8String]) + 1, 8);
     uint32_t szRpath = dylibs.count ? (uint32_t)roundUp(12 + strlen(loaderPath) + 1, 8) : 0;
-    // …then sDylibRpaths, as an executable's extra run paths (#620).
-    NSArray<NSString*>* extraRp = dylibs.count && sDylibRpaths ? sDylibRpaths : @[];
-    for (NSString* rp in extraRp)
-        szRpath += (uint32_t)roundUp(12 + strlen(rp.UTF8String) + 1, 8);
     BOOL hasDyldInfo = hasImp || hasRebase || hasExport;
-    uint32_t ncmds = 1 + (hasDataSeg ? 1 : 0) + (hasIface ? 1 : 0) + 1 + (hasDyldInfo ? 1 : 0) + 1 /*dyld*/ + 1 /*id*/ + 1 /*libSystem*/ + (uint32_t)dylibs.count + (dylibs.count ? 1 : 0) /*rpath*/ + (uint32_t)extraRp.count + 1 /*sym*/ + 1 /*dysym*/ + 1 /*build*/ + 1 /*uuid*/ + 1 /*codesig*/;
+    uint32_t ncmds = 1 + (hasDataSeg ? 1 : 0) + (hasIface ? 1 : 0) + 1 + (hasDyldInfo ? 1 : 0) + 1 /*dyld*/ + 1 /*id*/ + 1 /*libSystem*/ + (uint32_t)dylibs.count + (dylibs.count ? 1 : 0) /*rpath*/ + 1 /*sym*/ + 1 /*dysym*/ + 1 /*build*/ + 1 /*uuid*/ + 1 /*codesig*/;
     uint32_t sizeofcmds = szTextSeg + (hasDataSeg ? szDataSeg : 0) + (hasIface ? szXtcSeg : 0) + szLink + (hasDyldInfo ? szDyldInfo : 0) + szDyld + szId + szDylib + szDeps + szRpath + szSym + szDysym + szBuild + szUUID + szCodeSig;
 
     // ── 6. emit ──
@@ -3170,19 +3159,10 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
         }
     if (dylibs.count)
         {
-        uint32_t lsz = (uint32_t)roundUp(12 + strlen(loaderPath) + 1, 8);
         put32(out, XLC_RPATH);
-        put32(out, lsz);
+        put32(out, szRpath);
         put32(out, 12);
-        putFixed(out, loaderPath, (int)(lsz - 12));
-        for (NSString* rp in extraRp)
-            {
-            uint32_t rsz = (uint32_t)roundUp(12 + strlen(rp.UTF8String) + 1, 8);
-            put32(out, XLC_RPATH);
-            put32(out, rsz);
-            put32(out, 12);
-            putFixed(out, rp.UTF8String, (int)(rsz - 12));
-            }
+        putFixed(out, loaderPath, (int)(szRpath - 12));
         }
     // LC_SYMTAB
     put32(out, XLC_SYMTAB);

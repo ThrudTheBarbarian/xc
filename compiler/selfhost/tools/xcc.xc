@@ -3177,9 +3177,7 @@ void linkX86_64Glibc(DriverOptions* d, String* prog)
     }
     // Libraries the program #imported (xc-built .so files).
     // Found beside the program ($ORIGIN) or where each was linked from, in
-    // that order: DT_RUNPATH as the reference writes it (bug 626). A library
-    // writes the same (#620): libRuntime's directory among them, so it loads
-    // into a program linked from objects, which keeps the runtime its own.
+    // that order: DT_RUNPATH as the reference writes it (bug 626).
     Array* nl = d.fe().neededLibs();
     bool haveDeps = false;
     String* runpath = String.withCString("$ORIGIN");
@@ -3213,7 +3211,7 @@ void linkX86_64Glibc(DriverOptions* d, String* prog)
         addMissing(exports, rtExports);
         Elf64.sortStrings(exports);
         img = ln.linkGlibcShared(srcs, objs, ars, sos, mapText, baseNameOf(d.fe().output()),
-                                 exports, runpath, iface);
+                                 exports, String.withCString("$ORIGIN"), iface);
     } else {
         img = ln.linkGlibc(srcs, objs, ars, String.withCString("_start"), sos, mapText,
                            haveDeps ? runpath : (String*)0);
@@ -5436,37 +5434,9 @@ void linkObjects(DriverOptions* d)
     // An object link is the dynamic glibc one, as a build from source is
     // (-c compiled the objects for glibc); -static gives the static musl one.
     if (isX86_64(d) && !d.caps().staticLink()) {
-        // The libraries the objects imported (their .xtc.needs sidecars) are
-        // needed as an #import <X> in one source would make them (#620), as
-        // the arm64 Linux object link has it.
-        Array* needs = objectNeeds(d.objectInputs());
-        for (u32 i = (u32)0; i < needs.count(); i = i + (u32)1) {
-            bool have = false;
-            for (u32 k = (u32)0; k < d.fe().neededLibs().count(); k = k + (u32)1)
-                if (((String*)d.fe().neededLibs().get(k)).equals((String*)needs.get(i))) have = true;
-            if (!have) d.fe().neededLibs().add(needs.get(i));
-        }
         linkX86_64Glibc(d, String.withCString("")); return;
     }
-    if (isX86_64(d)) {
-        // -static: a static ELF has no DT_NEEDED to record an imported
-        // library in, so the link is refused by name, not left to fail on its
-        // undefined symbols. As the reference.
-        Array* needs = objectNeeds(d.objectInputs());
-        if (needs.count() > (u32)0) {
-            String* names = new String();
-            for (u32 i = (u32)0; i < needs.count(); i = i + (u32)1) {
-                if (i > (u32)0) names.appendCString(", ");
-                names.append((String*)needs.get(i));
-            }
-            Stdio.printf("xcc: error: these objects import xtc librar%s (%s), but an x86-64 object "
-                         "link cannot record a shared-library dependency yet.\n  Link from source, "
-                         "or compile the modules together.\n",
-                         needs.count() == (u32)1 ? "y" : "ies", names.cString());
-            driverExit((i32)1); return;
-        }
-        linkX86_64(d, String.withCString("")); return;
-    }
+    if (isX86_64(d)) { linkX86_64(d, String.withCString("")); return; }
     if (isArm9(d)) { linkObjectsArm9(d); return; }
     if (isWin64(d)) {
         // A win64 object link is a STATIC PE and cannot record a DLL
@@ -6647,10 +6617,6 @@ void emitModule(DriverOptions* d, IRModule* mod)
             // which the shim the library now carries calls into (bug 634) —
             // the same list, in the same order, as an executable's.
             m.setDeps(arm64LinkDeps(d, d.fe().neededLibs(), new Array()));
-            // Its run paths as an executable's, libRuntime's directory among
-            // them: a program linked from objects keeps the runtime its own
-            // and names no such path, and the library still loads (#620).
-            m.setRpaths(arm64Rpaths(d, d.fe().neededLibs()));
             m.dylib(as.textBytes(), instName, exports, iface,
                     as.symbols(), dataBytes, as.dataSyms(), fixups, miLen, objcSects, bssLen);
             checkPageImports(m);

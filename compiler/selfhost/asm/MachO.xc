@@ -2425,13 +2425,7 @@ class MachOSha256
         for (u32 i = (u32)0; i < nDeps; i = i + (u32)1)
             szDeps = szDeps + roundUp((u32)24 + ((MachODep*)_deps.get(i)).path().byteLength() + (u32)1, (u32)8);
         u32 szRpath = nDeps > (u32)0 ? roundUp((u32)12 + name((u32)11).byteLength() + (u32)1, (u32)8) : (u32)0;
-        // …then the setRpaths list, as an executable's (#620): a library that
-        // takes libRuntime names its directory, so the library loads into a
-        // program that keeps the runtime its own (an object link) too.
-        u32 nRp = nDeps > (u32)0 ? _rpaths.count() : (u32)0;
-        for (u32 i = (u32)0; i < nRp; i = i + (u32)1)
-            szRpath = szRpath + roundUp((u32)12 + ((String*)_rpaths.get(i)).byteLength() + (u32)1, (u32)8);
-        u32 ncmds = (u32)1 + (hasDataSeg ? (u32)1 : (u32)0) + (hasIface ? (u32)1 : (u32)0) + (u32)1 + (hasDyldInfo ? (u32)1 : (u32)0) + (u32)1 + (u32)1 + (u32)1 + nDeps + (nDeps > (u32)0 ? (u32)1 : (u32)0) + nRp + (u32)1 + (u32)1 + (u32)1 + (u32)1 + (u32)1;
+        u32 ncmds = (u32)1 + (hasDataSeg ? (u32)1 : (u32)0) + (hasIface ? (u32)1 : (u32)0) + (u32)1 + (hasDyldInfo ? (u32)1 : (u32)0) + (u32)1 + (u32)1 + (u32)1 + nDeps + (nDeps > (u32)0 ? (u32)1 : (u32)0) + (u32)1 + (u32)1 + (u32)1 + (u32)1 + (u32)1;
         u32 sizeofcmds = szTextSeg + (hasDataSeg ? szDataSeg : (u32)0) + (hasIface ? szXtcSeg : (u32)0) + szLink + (hasDyldInfo ? szDyldInfo : (u32)0) + szDyld + szId + szDylib + szDeps + szRpath + szSym + szDysym + szBuild + szUUID + szCodeSig;
 
         // 6. Header and commands. A segment_command_64 is cmd, cmdsize,
@@ -2657,20 +2651,10 @@ class MachOSha256
             }
         if (nDeps > (u32)0)
             {
-            u32 lsz = roundUp((u32)12 + name((u32)11).byteLength() + (u32)1, (u32)8);
             put32((u32)$1C | (u32)$80000000);
-            put32(lsz); // LC_RPATH @loader_path
+            put32(szRpath); // LC_RPATH @loader_path
             put32((u32)12);
-            putName((u32)11, lsz - (u32)12);
-            for (u32 i = (u32)0; i < nRp; i = i + (u32)1)
-                {
-                String* rp = (String*)_rpaths.get(i);
-                u32 rsz = roundUp((u32)12 + rp.byteLength() + (u32)1, (u32)8);
-                put32((u32)$1C | (u32)$80000000);
-                put32(rsz);
-                put32((u32)12);
-                putFixed(rp, rsz - (u32)12);
-                }
+            putName((u32)11, szRpath - (u32)12);
             }
         put32((u32)2);
         put32(szSym); // LC_SYMTAB

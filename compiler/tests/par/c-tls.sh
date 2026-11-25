@@ -4,10 +4,8 @@
 # (and, in C++, one with a constructor and destructor); the main thread's
 # copies stay as they were. Each program is built by xcc as a whole, and the
 # C one also with -c and a separate link; each must print what clang's build
-# prints. Natively on arm64 macOS and Linux; with Wine and the mingw root,
-# also for win64: the C program with Windows threads (threads-win.c) against
-# clang's build of threads.c. (The C++ one's thread_local with a destructor
-# is not yet linked for win64: #611.) Skipped without clang.
+# prints. arm64 macOS for now: the ELF and PE linkers' thread-local support
+# is still to come (#611). Skipped without clang.
 #
 #   bash tests/par/c-tls.sh
 set -u
@@ -33,16 +31,5 @@ if "$XC" -q -O2 -H . -c -o "$W/t.o" "$C" > "$W/b" 2>&1 && "$XC" -q -o "$W/x.o" "
 else echo "FAIL c-tls: threads.c with -c does not build"; grep -v warning "$W/b" | head -3; fail=1; fi
 if "$XC" -q -O2 -H . -o "$W/x.cpp" "$CXX" > "$W/b" 2>&1; then check threads.cpp "$W/x.cpp" "$W/ref.cpp"
 else echo "FAIL c-tls: threads.cpp does not build"; grep -v warning "$W/b" | head -3; fail=1; fi
-# win64 under Wine.
-ROOT=/opt/clang/win64/x86_64-w64-mingw32
-if command -v wine >/dev/null 2>&1 && [ -f "$ROOT/lib/libc++.a" ]; then
-    export WINEPREFIX=${WINEPREFIX:-$HOME/.wine-gates} WINEDLLOVERRIDES="winedbg.exe=d" WINEDEBUG=-all
-    wrun() { timeout 120 wine "$1" 2>/dev/null | tr -d '\r'; }
-    want=$("$W/ref.c" 2>&1)
-    if "$XC" -q -O2 -H . -A win64 -o "$W/xw.exe" tests/par/c-tls/threads-win.c > "$W/b" 2>&1; then
-        got=$(wrun "$W/xw.exe")
-        [ "$got" = "$want" ] || { echo "FAIL c-tls: threads-win.c (win64) gives '$got', clang's threads.c '$want'"; fail=1; }
-    else echo "FAIL c-tls: threads-win.c does not build for win64"; grep -v warning "$W/b" | head -3; fail=1; fi
-fi
 [ $fail = 0 ] && echo "--- c-tls: pass ---" || echo "--- c-tls: FAIL ---"
 exit $fail

@@ -3072,16 +3072,6 @@ static int linkX86_64GlibcShared(const char *argv0, XTCommandLineOptions *opts, 
     }
     [args addObjectsFromArray:@[@"-soname", outPath.lastPathComponent, @"-iface", ifacePath,
                                 @"-exports", exportsPath, @"-rpath", @"$ORIGIN", @"-o", outPath]];
-    // …then where each library it imports was linked from, libRuntime's
-    // directory among them, as a program's: the library then loads into a
-    // program linked from objects, which keeps the runtime its own (#620).
-    NSMutableArray<NSString *> *soDirs = [NSMutableArray array];
-    for (NSString *lib in neededLibs) {
-        if (![lib hasSuffix:@".so"]) continue;
-        NSString *dir = [lib stringByDeletingLastPathComponent];
-        if (dir.length && ![soDirs containsObject:dir]) [soDirs addObject:dir];
-    }
-    for (NSString *dir in soDirs) { [args addObject:@"-rpath"]; [args addObject:dir]; }
     int rc = runChild(ln, args);
     if (!opts.verbose) {
         [fm removeItemAtPath:stubPath error:NULL];
@@ -4718,12 +4708,11 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
                 return rc2;
             }
             // A `#import <Lib>` recorded by one of these objects cannot be
-            // honoured by -static: a STATIC ELF has no DT_NEEDED to record it
-            // in. Say so, rather than letting the link fail lower down with
-            // "undefined symbol ... is the runtime missing?" — the symbols
-            // really are absent, but the reason is the library. The dynamic
-            // glibc link records them (#620).
-            if (objNeeds.count && opts.staticLink) {
+            // honoured here: this link is a STATIC ELF, which has no DT_NEEDED
+            // to record it in. Say so, rather than letting the link fail lower
+            // down with "undefined symbol ... is the runtime missing?" — the
+            // symbols really are absent, but the reason is the library.
+            if (objNeeds.count) {
                 fprintf(stderr, "xcc: error: these objects import xtc librar%s (%s), "
                         "but an x86-64 object link cannot record a shared-library "
                         "dependency yet.\n  Link from source, or compile "
@@ -4738,7 +4727,7 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
             if (!opts.staticLink) {
                 NSString *none = [xtcTempDir() stringByAppendingPathComponent:@"xtc-x86_64-objlink.s"];
                 [@"" writeToFile:none atomically:YES encoding:NSUTF8StringEncoding error:NULL];
-                return linkX86_64Glibc(argv0, opts, none, opts.inputFiles, opts.outputPath, objNeeds);
+                return linkX86_64Glibc(argv0, opts, none, opts.inputFiles, opts.outputPath, @[]);
             }
             [args addObjectsFromArray:opts.inputFiles];
             // The libc pool, exactly as the ordinary static-exec link appends

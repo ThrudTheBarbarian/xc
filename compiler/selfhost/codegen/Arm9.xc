@@ -1262,7 +1262,8 @@ class Arm9
                 // A forwarding call also writes the relayed tail into the
                 // outgoing area, past whatever the explicit args used — reserve
                 // for it, or the relay lands on this function's own locals.
-                if (isVaForward() && insn.isOp(opCall))
+                // A dispatch from a forwarder relays too (#661).
+                if (isVaForward() && (insn.isOp(opCall) || insn.isOp(opVTblDispatch) || insn.isOp(opProtoDispatch)))
                     {
                     u32 k = cSret ? (u32)1 : (u32)0;
                     for (u32 z = (u32)0; z < clocs.count(); z = z + (u32)1)
@@ -2259,6 +2260,21 @@ class Arm9
             }
         bool sret = res != 0 && !Arm9.isMemTy(res.ty()) && returnsViaSret(res.ty());
         marshalArgs(args, argTypes, sret, res);
+        // A forwarder's call through a method table relays its tail as a
+        // direct call to a variadic does (#661). The target is not known here,
+        // but a vaforward function reads no varargs of its own, so the relay
+        // is the tail for a variadic target and only fills slots past the
+        // arguments of any other.
+        if (isVaForward())
+            {
+            Array* alocs = classifyArgsAt(argTypes, sret, (u32)$FFFFFFFF);
+            u32 k = sret ? (u32)1 : (u32)0;
+            for (u32 i = (u32)0; i < alocs.count(); i = i + (u32)1)
+                k = k + ((Number*)((Array*)alocs.get(i)).get((u32)1)).asU32();
+            if ((k & (u32)1) != (u32)0)
+                k = k + (u32)1; // tail base is 8-aligned
+            emitVaForwardRelay(k);
+            }
         // The receiver landed in r0 — or r1, when the sret pointer took r0.
         String* recvReg = String.withCString(sret ? "r1" : "r0");
         if (viaItable)

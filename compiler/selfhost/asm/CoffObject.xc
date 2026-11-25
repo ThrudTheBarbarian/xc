@@ -117,7 +117,7 @@ bool gCoffKeepUnwind;
     Map* _textOffOf; // section index -> offset+1 in the text blob
     Map* _dataOffOf;
     u32 _dataAlign;  // the strictest alignment a data section asks for
-    Data* _tlsData;      // the .tls$ sections: the thread-local template
+    Data* _tlsData;      // the .tls$ sections: the thread-local template (setKeepUnwind)
     Map* _tlsOffOf;      // section index -> offset+1 in it
     Array* _tlsDataRelocs; // ElfReloc@ against it
     Data* _ctors;        // the .ctors sections: constructor pointers (setKeepUnwind)
@@ -202,9 +202,9 @@ bool gCoffKeepUnwind;
         {
         return _data;
         }
-    // The thread-local template (.tls$ sections), for C and C++ alike (C's
-    // _Thread_local, C++'s thread_local and libc++abi's exception globals).
-    // Its symbols are where 3.
+    // The thread-local template (.tls$ sections) when setKeepUnwind is on
+    // (C++: libc++abi's exception globals are thread_local); otherwise empty
+    // and the sections ride in data as before. Its symbols are where 3.
     Data* tls(void)
         {
         return _tlsData;
@@ -323,7 +323,7 @@ bool gCoffKeepUnwind;
             if (s.isCode() || s.skippable())
                 continue;
             u32 ch = s.chars();
-            if (s.name().hasPrefix(String.withCString(".tls")))
+            if (gCoffKeepUnwind && s.name().hasPrefix(String.withCString(".tls")))
                 {
                 _padTo(_tlsData, (u32)16);
                 _tlsOffOf.set((Hashable*)Number.withU32(i), (Object*)Number.withU32(_tlsData.length() + (u32)1));
