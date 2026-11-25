@@ -1,0 +1,6 @@
+eq u32
+eq u32
+pair u16 u32
+pair u32 u32
+lit u16
+sgn i32

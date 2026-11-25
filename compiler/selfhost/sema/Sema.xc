@@ -5903,7 +5903,101 @@ class Sema
     // match on the argument type spellings — and declines to guess when they
     // leave more than one standing. Declining shows up as a missing annotation
     // in the harness, which is the honest failure.
+    // #643: the call goes to today's choice; where today's rule leaves a tie
+    // it cannot break (an ambiguous call), the candidate that converts each
+    // argument no worse than every other tied candidate, and one argument
+    // better (the smaller widening: `(u32, u32)` over `(u64, u64)` for a
+    // `(u32, u16)` call), wins. So no call that resolves today changes; only
+    // calls that were ambiguous resolve.
     Node* pickOverload(Array* group, Node* call, u32 argBase)
+        {
+        Node* today = pickOverloadToday(group, call, argBase);
+        if (today != (Node*)0)
+            return today;
+        return dominator(bestTied(group, call, argBase), call, argBase);
+        }
+
+    // The candidates of the right arity whose every argument converts.
+    Array* viable(Array* group, Node* call, u32 argBase)
+        {
+        u32 argc = (call.kidCount() > argBase) ? call.kidCount() - argBase : (u32)0;
+        Array* out = new Array();
+        for (u32 i = (u32)0; i < group.count(); i = i + (u32)1)
+            {
+            Node* d = (Node*)group.get(i);
+            u32 pc = paramCount(d);
+            if (!(d.hasFlag((u32)NF_VARARGS) ? (argc >= pc) : (argc == pc)))
+                continue;
+            if (scoreCandidate(d, call, argBase) != Overload.noMatch())
+                out.add((Object*)d);
+            }
+        return out;
+        }
+
+    // Of those, the ones at the best (lowest) score: today's tie.
+    Array* bestTied(Array* group, Node* call, u32 argBase)
+        {
+        Array* v = viable(group, call, argBase);
+        u32 best = Overload.noMatch();
+        for (u32 i = (u32)0; i < v.count(); i = i + (u32)1)
+            {
+            u32 sc = scoreCandidate((Node*)v.get(i), call, argBase);
+            if (sc < best)
+                best = sc;
+            }
+        Array* out = new Array();
+        for (u32 i = (u32)0; i < v.count(); i = i + (u32)1)
+            if (scoreCandidate((Node*)v.get(i), call, argBase) == best)
+                out.add(v.get(i));
+        return out;
+        }
+
+    // The candidate whose every argument's (rank, widening distance) is no
+    // worse than each other candidate's and better on at least one, as C++
+    // ranks conversions; 0 when no candidate is (or there is none).
+    Node* dominator(Array* cands, Node* call, u32 argBase)
+        {
+        if (cands.count() == (u32)0)
+            return (Node*)0;
+        if (cands.count() == (u32)1)
+            return (Node*)cands.get((u32)0);
+        Array* keys = new Array();
+        for (u32 i = (u32)0; i < cands.count(); i = i + (u32)1)
+            keys.add((Object*)paramKeys((Node*)cands.get(i), call, argBase));
+        for (u32 c = (u32)0; c < cands.count(); c = c + (u32)1)
+            {
+            Array* kc = (Array*)keys.get(c);
+            bool beatsAll = kc != (Array*)0;
+            for (u32 o = (u32)0; o < cands.count() && beatsAll; o = o + (u32)1)
+                {
+                if (o == c)
+                    continue;
+                Array* ko = (Array*)keys.get(o);
+                if (ko == (Array*)0 || ko.count() != kc.count())
+                    {
+                    beatsAll = false;
+                    continue;
+                    }
+                bool better = false;
+                for (u32 i = (u32)0; i < kc.count(); i = i + (u32)1)
+                    {
+                    u32 a = ((Number*)kc.get(i)).asU32();
+                    u32 b = ((Number*)ko.get(i)).asU32();
+                    if (a > b)
+                        beatsAll = false;
+                    if (a < b)
+                        better = true;
+                    }
+                if (!better)
+                    beatsAll = false;
+                }
+            if (beatsAll)
+                return (Node*)cands.get(c);
+            }
+        return (Node*)0;
+        }
+
+    Node* pickOverloadToday(Array* group, Node* call, u32 argBase)
         {
         u32 argc = (call.kidCount() > argBase) ? call.kidCount() - argBase : (u32)0;
         Array* arity = new Array();
@@ -6002,7 +6096,23 @@ class Sema
     // The worst rank across the candidate's parameters.
     u32 scoreCandidate(Node* decl, Node* call, u32 argBase)
         {
+        Array* keys = paramKeys(decl, call, argBase);
+        if (keys == (Array*)0)
+            return Overload.noMatch();
         u32 worst = (u32)0;
+        for (u32 i = (u32)0; i < keys.count(); i = i + (u32)1)
+            worst = Overload.worstOf(worst, ((Number*)keys.get(i)).asU32() >> (u32)4);
+        return worst;
+        }
+
+    // Each declared parameter's conversion as a key, rank * 16 plus the
+    // widening distance in bytes for an integer widening (#643; 0 for any
+    // other conversion), so a smaller key converts better; null when an
+    // argument cannot convert at all. scoreCandidate's score is the worst
+    // rank among them.
+    Array* paramKeys(Node* decl, Node* call, u32 argBase)
+        {
+        Array* keys = new Array();
         u32 pi = (u32)0;
         // Only the DECLARED parameters are scored; a vararg has no parameter
         // to be converted to.
@@ -6013,7 +6123,7 @@ class Sema
                 continue;
             u32 ai = argBase + pi;
             if (ai >= call.kidCount())
-                return Overload.noMatch();
+                return (Array*)0;
             Node* a = call.kid(ai);
             bool isLit = a.kind() == (u16)nkInt;
             // nil is the null pointer of any pointer type and nothing else:
@@ -6023,7 +6133,8 @@ class Sema
             if (isLit && a.nilLit())
                 {
                 if (!Types.isPointer(Overload._unqualify(p.op())))
-                    return Overload.noMatch();
+                    return (Array*)0;
+                keys.add((Object*)Number.with((u32)0));
                 pi = pi + (u32)1;
                 continue;
                 }
@@ -6036,12 +6147,19 @@ class Sema
                 r = (u32)8;
             if (r == Overload.noMatch() && canUnboxType(a.ty(), p.op()))
                 r = (u32)9;
-            worst = Overload.worstOf(worst, r);
-            if (worst == Overload.noMatch())
-                return worst;
+            if (r == Overload.noMatch())
+                return (Array*)0;
+            // An integer widening's distance (u16 into u32: 2 bytes, into
+            // u64: 6): the smaller widening converts better (#643).
+            u32 dist = (u32)0;
+            String* at = Overload._decay(Overload._unqualify(a.ty()));
+            String* pt = Overload._unqualify(p.op());
+            if (!isLit && Types.isInteger(at) && Types.isInteger(pt) && Types.byteWidth(pt) > Types.byteWidth(at))
+                dist = Types.byteWidth(pt) - Types.byteWidth(at);
+            keys.add((Object*)Number.with(r * (u32)16 + dist));
             pi = pi + (u32)1;
             }
-        return worst;
+        return keys;
         }
 
     u32 paramCount(Node* decl)

@@ -243,10 +243,17 @@ static NSHashTable* gDualLength;
         }
 
     // Integer widening (both signed or both unsigned).
-    BOOL aSigned = (argType.kind == XTTypeKindI8 || argType.kind == XTTypeKindI16 || argType.kind == XTTypeKindI32);
-    BOOL aUnsigned = (argType.kind == XTTypeKindU8 || argType.kind == XTTypeKindU16 || argType.kind == XTTypeKindU32);
-    BOOL pSigned = (paramType.kind == XTTypeKindI8 || paramType.kind == XTTypeKindI16 || paramType.kind == XTTypeKindI32);
-    BOOL pUnsigned = (paramType.kind == XTTypeKindU8 || paramType.kind == XTTypeKindU16 || paramType.kind == XTTypeKindU32);
+    // The 64-bit integers widen and narrow as the others do (#643): without
+    // them a u16 argument did not reach a u64 parameter at all, where the
+    // port's Overload.rank widens it, so the two front ends disagreed.
+    BOOL aSigned = (argType.kind == XTTypeKindI8 || argType.kind == XTTypeKindI16 || argType.kind == XTTypeKindI32
+                    || argType.kind == XTTypeKindI64);
+    BOOL aUnsigned = (argType.kind == XTTypeKindU8 || argType.kind == XTTypeKindU16 || argType.kind == XTTypeKindU32
+                      || argType.kind == XTTypeKindU64);
+    BOOL pSigned = (paramType.kind == XTTypeKindI8 || paramType.kind == XTTypeKindI16 || paramType.kind == XTTypeKindI32
+                    || paramType.kind == XTTypeKindI64);
+    BOOL pUnsigned = (paramType.kind == XTTypeKindU8 || paramType.kind == XTTypeKindU16 || paramType.kind == XTTypeKindU32
+                      || paramType.kind == XTTypeKindU64);
     NSInteger aWidth = 0, pWidth = 0;
     switch (argType.kind)
         {
@@ -261,6 +268,10 @@ static NSHashTable* gDualLength;
     case XTTypeKindI32:
     case XTTypeKindU32:
         aWidth = 4;
+        break;
+    case XTTypeKindI64:
+    case XTTypeKindU64:
+        aWidth = 8;
         break;
     default:
         break;
@@ -278,6 +289,10 @@ static NSHashTable* gDualLength;
     case XTTypeKindI32:
     case XTTypeKindU32:
         pWidth = 4;
+        break;
+    case XTTypeKindI64:
+    case XTTypeKindU64:
+        pWidth = 8;
         break;
     default:
         break;
@@ -1319,6 +1334,89 @@ static NSHashTable* gDualLength;
 |* each to its first return type. Returns the chosen candidate, or
 |* nil if no unique winner exists.
 \****************************************************************************/
+// An integer type's width in bytes, or 0 (#643's widening distance).
+static NSInteger xtIntWidth(XTType* t)
+    {
+    switch (t.kind)
+        {
+    case XTTypeKindI8: case XTTypeKindU8: return 1;
+    case XTTypeKindI16: case XTTypeKindU16: return 2;
+    case XTTypeKindI32: case XTTypeKindU32: return 4;
+    case XTTypeKindI64: case XTTypeKindU64: return 8;
+    default: return 0;
+        }
+    }
+
+/****************************************************************************\
+|* #643: among candidates tied at the best score that the tie-breaks above
+|* could not separate, the one whose every argument's key (rank * 16 plus the
+|* widening distance in bytes for an integer widening) is no worse than each
+|* other candidate's and better on at least one, as C++ ranks conversions; nil
+|* when no candidate is. So only a call that would be ambiguous resolves. As
+|* the port's dominator / paramKeys.
+\****************************************************************************/
+- (nullable id)dominatorAmong:(NSArray*)tied
+                 paramTypesOf:(NSArray<XTType*>* (^)(id))paramTypesOf
+                    arguments:(NSArray<XTASTNode*>*)args
+    {
+    if (tied.count == 0)
+        return nil;
+    if (tied.count == 1)
+        return tied.firstObject;
+    NSMutableArray<NSArray<NSNumber*>*>* keys = [NSMutableArray array];
+    for (id c in tied)
+        {
+        NSArray<XTType*>* pt = paramTypesOf(c);
+        NSMutableArray<NSNumber*>* k = [NSMutableArray array];
+        for (NSUInteger i = 0; i < pt.count && i < args.count; i++)
+            {
+            XTASTNode* arg = args[i];
+            BOOL isLit = [arg isKindOfClass:[XTLiteralIntNode class]];
+            if (isLit && ((XTLiteralIntNode*)arg).isNil)
+                {
+                [k addObject:@0];
+                continue;
+                }
+            int64_t lv = isLit ? ((XTLiteralIntNode*)arg).intValue : 0;
+            NSInteger r = [self conversionRankFrom:arg.resolvedType to:pt[i] isIntLit:isLit litValue:lv];
+            NSInteger aw = xtIntWidth(arg.resolvedType), pw = xtIntWidth(pt[i]);
+            NSInteger dist = (!isLit && aw && pw && pw > aw) ? pw - aw : 0;
+            [k addObject:@(r * 16 + dist)];
+            }
+        [keys addObject:k];
+        }
+    for (NSUInteger c = 0; c < tied.count; c++)
+        {
+        NSArray<NSNumber*>* kc = keys[c];
+        BOOL beatsAll = YES;
+        for (NSUInteger o = 0; o < tied.count && beatsAll; o++)
+            {
+            if (o == c)
+                continue;
+            NSArray<NSNumber*>* ko = keys[o];
+            if (ko.count != kc.count)
+                {
+                beatsAll = NO;
+                continue;
+                }
+            BOOL better = NO;
+            for (NSUInteger i = 0; i < kc.count; i++)
+                {
+                NSInteger a = kc[i].integerValue, b = ko[i].integerValue;
+                if (a > b)
+                    beatsAll = NO;
+                if (a < b)
+                    better = YES;
+                }
+            if (!better)
+                beatsAll = NO;
+            }
+        if (beatsAll)
+            return tied[c];
+        }
+    return nil;
+    }
+
 - (id)tiebreakOverloadCandidates:(NSArray*)candidates
                returnTypeOfBlock:(XTType* (^)(id))returnTypeOf
     {
@@ -2223,6 +2321,12 @@ static NSHashTable* gDualLength;
                                               returnTypeOfBlock:^XTType*(id c) {
                                                 return ((XTFunctionType*)((XTSymbol*)c).symbolType).returnTypes.firstObject;
                                               }];
+            if (!picked)
+                picked = [self dominatorAmong:tied
+                                 paramTypesOf:^NSArray<XTType*>*(id c) {
+                                   return ((XTFunctionType*)((XTSymbol*)c).symbolType).paramTypes;
+                                 }
+                                    arguments:node.arguments];
             if (picked)
                 {
                 best = picked;
@@ -3849,6 +3953,15 @@ static NSInteger XTFmtWrapperIndex(BOOL isVarArgs, NSArray<XTParamNode*>* params
                                                           returnTypeOfBlock:^XTType*(id c) {
                                                             return ((XTMethodDeclNode*)c).returnTypes.firstObject;
                                                           }];
+                if (!picked)
+                    picked = [self dominatorAmong:tied
+                                     paramTypesOf:^NSArray<XTType*>*(id c) {
+                                       NSMutableArray<XTType*>* pt = [NSMutableArray array];
+                                       for (XTParamNode* p in ((XTMethodDeclNode*)c).parameters)
+                                           [pt addObject:p.paramType];
+                                       return pt;
+                                     }
+                                        arguments:node.arguments];
                 if (picked)
                     {
                     bestM = picked;
