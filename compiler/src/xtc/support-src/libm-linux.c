@@ -68,13 +68,20 @@ static uint64_t asBits(double d)
     return u.i;
     }
 
+// The instruction itself: __builtin_sqrt compiles to a call to sqrt where
+// errno is kept for maths functions, and here that call is this function, so
+// it never returned (#672).
 double sqrt(double x)
     {
-    return __builtin_sqrt(x);
+    double r;
+    __asm__("sqrtsd %1, %0" : "=x"(r) : "x"(x));
+    return r;
     }
 float sqrtf(float x)
     {
-    return __builtin_sqrtf(x);
+    float r;
+    __asm__("sqrtss %1, %0" : "=x"(r) : "x"(x));
+    return r;
     }
 
 // floor, without libm: for anything past 2^52 every double is already integral.

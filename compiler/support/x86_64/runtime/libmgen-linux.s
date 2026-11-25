@@ -28,7 +28,8 @@
 	.type	sqrt,@function
 sqrt:                                   # @sqrt
 # %bb.0:
-	jmp	sqrt                            # TAILCALL
+	.byte	0xf2, 0x0f, 0x51, 0xc0          # sqrtsd %xmm0, %xmm0: a call to sqrt here was itself (#672)
+	ret
 .Lfunc_end0:
 	.size	sqrt, .Lfunc_end0-sqrt
                                         # -- End function
@@ -37,7 +38,8 @@ sqrt:                                   # @sqrt
 	.type	sqrtf,@function
 sqrtf:                                  # @sqrtf
 # %bb.0:
-	jmp	sqrtf                           # TAILCALL
+	.byte	0xf3, 0x0f, 0x51, 0xc0          # sqrtss %xmm0, %xmm0: a call to sqrtf here was itself (#672)
+	ret
 .Lfunc_end1:
 	.size	sqrtf, .Lfunc_end1-sqrtf
                                         # -- End function

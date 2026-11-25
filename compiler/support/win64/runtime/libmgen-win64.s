@@ -37,7 +37,8 @@
 	.p2align	4, 0x90
 sqrt:                                   # @sqrt
 # %bb.0:
-	jmp	sqrt                            # TAILCALL
+	.byte	0xf2, 0x0f, 0x51, 0xc0          # sqrtsd %xmm0, %xmm0: a call to sqrt here was itself (#672)
+	ret
                                         # -- End function
 	.def	sqrtf;
 	.scl	2;
@@ -47,7 +48,8 @@ sqrt:                                   # @sqrt
 	.p2align	4, 0x90
 sqrtf:                                  # @sqrtf
 # %bb.0:
-	jmp	sqrtf                           # TAILCALL
+	.byte	0xf3, 0x0f, 0x51, 0xc0          # sqrtss %xmm0, %xmm0: a call to sqrtf here was itself (#672)
+	ret
                                         # -- End function
 	.def	sin;
 	.scl	2;
