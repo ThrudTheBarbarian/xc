@@ -13,14 +13,16 @@ L=$(mktemp -d "${TMPDIR:-/tmp}/negative.XXXX")
 pass=0; fail=0
 # `// xtc: error "…"`: the build must fail and say so. `// xtc: warn "…"` (one
 # or more): the build must succeed and each warning must appear; `// xtc:
-# nowarn "…"`: and this text must not.
+# nowarn "…"`: and this text must not. `// xtc: target <t>`: built for that
+# target instead of $A.
 for f in tests/fixtures/negative/*.xc; do
     b=$(basename "$f" .xc)
     want=$(grep -m1 -oE 'xtc: error "[^"]*"' "$f" | sed -E 's/^xtc: error "//; s/"$//')
     warns=$(grep -oE 'xtc: warn "[^"]*"' "$f" | sed -E 's/^xtc: warn "//; s/"$//')
     nowarns=$(grep -oE 'xtc: nowarn "[^"]*"' "$f" | sed -E 's/^xtc: nowarn "//; s/"$//')
     if [ -z "$want" ] && [ -z "$warns" ]; then echo "FAIL $b: no // xtc: error or warn line"; fail=$((fail + 1)); continue; fi
-    "$XC" -q -O2 -A "$A" -H . -o "$L/$b" "$f" > "$L/$b.out" 2>&1
+    tgt=$(grep -m1 -oE 'xtc: target [a-z0-9_-]+' "$f" | sed -E 's/^xtc: target //')
+    "$XC" -q -O2 -A "${tgt:-$A}" -H . -o "$L/$b" "$f" > "$L/$b.out" 2>&1
     rc=$?
     if [ $rc -ge 128 ]; then
         echo "FAIL $b: the compiler died (status $rc)"; fail=$((fail + 1)); continue
