@@ -13,6 +13,8 @@ description: The fixed-width scalars, structs, enums, pointers, arrays, type inf
 | `u64`, `i64` | 8 bytes | 64-bit unsigned / signed integer |
 | `f32` | 4 bytes | IEEE-754 binary32; `float` is an alias |
 | `f64` | 8 bytes | IEEE-754 binary64; `double` is an alias |
+| `f16` | 2 bytes | IEEE-754 binary16 (pack `e5m10`) |
+| `bf16` | 2 bytes | bfloat16, `f16:pack(e8m7)` |
 | `bool` | 1 byte | alias of `u8`; values are `true` and `false` |
 | `void` | — | absence of value (function returns, parameter list `(void)`) |
 | `string` | pointer | alias of `u8*` (pointer to null-terminated bytes) |
@@ -45,6 +47,87 @@ interfaces and the debugger show these types as `float` and `double`.
 
 `f32` and `f64` are built-in type names, not keywords, so a variable, parameter
 or field may still be called `f32` or `f64`.
+
+### `f16` and `bf16`
+
+`f16` is the IEEE-754 binary16 type: one sign bit, 5 exponent bits and 10
+mantissa bits, with a largest finite value of 65504. `bf16` is bfloat16: 8
+exponent bits and 7 mantissa bits, the range of `f32` with less precision
+(largest finite value about 3.39e38). Both are 2 bytes, aligned as `u16` is on
+the target, and both work on every target, in locals, globals, arrays, struct
+fields, ivars, parameters, returns and `Array<f16>`. They have infinities, NaN
+and subnormals as IEEE-754 defines them.
+
+`f16` and `bf16` are built-in type names, so no import is needed.
+
+#### Packs
+
+A float type's bit layout is its pack, written `:pack(eXmY)` after the type: one
+sign bit, X exponent bits and Y mantissa bits. The pack is part of the type, so
+it can appear anywhere a type can: in declarations, fields, parameters, returns,
+casts, `Array<…>`, typedefs, `sizeof` and `new`.
+
+| Spelling | Type |
+|----------|------|
+| `f16:pack(e5m10)` | `f16` (its default pack) |
+| `f16:pack(e8m7)` | `bf16` |
+| `f32:pack(e8m23)` | `f32` (its only pack) |
+| `f64:pack(e11m52)` | `f64` (its only pack) |
+
+Every pack is a distinct type. Any other pack is an error that names what to
+write.
+
+#### Conversions and type rules
+
+A value converts implicitly only when the conversion is exact:
+
+- `f16` and `bf16` convert implicitly to `f32` and `f64`.
+- Everything else needs a cast: `f32` or `f64` to `f16`, `f16` to `bf16` and
+  back, an integer to either, and either to an integer.
+- A literal takes the type its context needs and is rounded to it, so
+  `f16 h = 0.1;`, `h + 1` and `h * 0.5` need no cast. A literal beyond the
+  type's range is an error: `f16 h = 70000.0;` is refused.
+
+Mixed arithmetic widens to the type that holds both operands: `f16 + f32` is
+`f32`, and `f16 + u8` is `f16`. `f16 + bf16` is an error, since neither holds
+every value of the other; convert both, as in `(f32)a + (f32)b`.
+
+Conversions round to nearest, ties to even, and keep subnormals. A value too
+large for the type becomes an infinity of its sign. A NaN stays a NaN, with its
+sign. A conversion to an integer takes the integral part, truncated toward zero;
+a value beyond the integer type's range saturates to its end, and a NaN gives
+0. A conversion to `bool` is `false` for both zeros and `true` for anything
+else, NaN included.
+
+`printf` and other variadic functions receive an `f16` or `bf16` as a `double`,
+as they do a `float`, so `%f` prints it.
+
+#### Arithmetic
+
+`+`, `-`, `*`, `/`, unary minus, the comparisons, compound assignment, `++` and
+`--` work on both types. Each operation converts its operands to `f32`, works
+in `f32`, and rounds the result to the operands' type. Because `f32` has more
+than twice the precision of either type plus two bits, the result is the
+correctly rounded result of the operation, and a chain of operations rounds
+after every step, as ISO C's `_Float16` does. Negation flips the sign bit. The
+square root is `(f16)Math.sqrt((f32)h)`, which rounds once and is exact in the
+same way.
+
+```c
+f16 a = 1.0;
+f16 b = 0.0004887;
+f16 s = a + b;                   // 1.0009765625, the f16 nearest the sum
+f32 t = (f32)a + (f32)b;         // 1.0004887
+```
+
+The arithmetic is done in software on every target. A `par` block that
+computes in `f16` or `bf16` runs on the CPU; the compiler says so when the
+block could otherwise use the GPU.
+
+Between xc functions an `f16` or `bf16` travels as its 16-bit pattern, in an
+integer register or stack slot. C passes `_Float16` and `__bf16` in
+floating-point registers, so a C library function, or a variadic one declared
+without a body, cannot take or return either type; give it a `float`.
 
 ### `i64` / `u64` on every target
 
