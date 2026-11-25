@@ -4407,6 +4407,11 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
                                       [NSCharacterSet whitespaceCharacterSet]];
                     if (!t.length || [seenNeed containsObject:t]) continue;
                     [seenNeed addObject:t];
+                    // A framework is linked as -framework, not as a library.
+                    if ([t hasPrefix:@"framework:"]) {
+                        [opts addImportedFramework:[t substringFromIndex:10]];
+                        continue;
+                    }
                     [objNeeds addObject:t];
                 }
             }
@@ -5024,6 +5029,11 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
     // so the front end hands them across via `<irPath>.needs`.
     NSString *needsPath = [irPath stringByAppendingPathExtension:@"needs"];
     NSArray<NSString *> *neededLibs = @[];
+    // Every line in the front end's order, frameworks included, for an
+    // object's .xtc.needs: a -c object whose loop became a par block calls the
+    // par runtime's CoreFoundation and Metal, and an object link learns that
+    // only from the sidecar.
+    NSMutableArray<NSString *> *needsLines = [NSMutableArray array];
     {
         NSString *needsBody = [NSString stringWithContentsOfFile:needsPath
                                                         encoding:NSUTF8StringEncoding error:NULL];
@@ -5032,6 +5042,7 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
             for (NSString *ln in [needsBody componentsSeparatedByString:@"\n"]) {
                 NSString *t = [ln stringByTrimmingCharactersInSet:
                                   [NSCharacterSet whitespaceCharacterSet]];
+                if (t.length) [needsLines addObject:t];
                 // An `#import`ed system framework is linked as -framework.
                 if ([t hasPrefix:@"framework:"]) {
                     [opts addImportedFramework:[t substringFromIndex:10]];
@@ -5105,11 +5116,14 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
         // linked in, not loaded. Recording those made every win64 and arm9
         // object link refuse itself. DT_NEEDED / LC_LOAD_DYLIB name a shared
         // object, so that is exactly the test.
+        // A framework the module needs goes with the object too
+        // (`framework:CoreFoundation`): the link that takes it adds it.
         NSMutableArray<NSString *> *shared = [NSMutableArray array];
-        for (NSString *l in neededLibs) {
+        for (NSString *l in needsLines) {
             NSString *base = l.lastPathComponent;
             if ([base hasSuffix:@".dylib"] || [base hasSuffix:@".so"]
-                || [base rangeOfString:@".so."].location != NSNotFound)
+                || [base rangeOfString:@".so."].location != NSNotFound
+                || [l hasPrefix:@"framework:"])
                 [shared addObject:l];
         }
         NSString *needSide = [[opts.outputPath stringByDeletingPathExtension]
