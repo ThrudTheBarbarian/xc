@@ -354,6 +354,43 @@ else
     bad "build objects that import a library"; head -3 "$W/nb.err"
 fi
 
+# A loop lifted into a par block calls the par runtime, which needs
+# CoreFoundation and Metal on macOS. Those ride in .xtc.needs as framework:
+# lines; the reference wrote only shared libraries there, so the object link
+# failed on the CF and Metal symbols. Both drivers, and their sidecars agree.
+cat > "$W/pLib.xc" <<'EOF2'
+i32 powi(i32 b, i32 e)
+    {
+    i32 r = 1;
+    for (i32 i = 0; i < e; i++)
+        r = r * b;
+    return r;
+    }
+EOF2
+cat > "$W/pMain.xc" <<'EOF2'
+#import "Stdio.xc"
+i32 powi(i32 b, i32 e);
+i32 main(void) { Stdio.printf("%d\n", powi(3, 4)); return 0; }
+EOF2
+for c in xcc xcc-xc; do
+    [ -x "bin/$XC_PLAT/$c" ] || continue
+    pd="$W/par-$c"; mkdir -p "$pd"
+    if "bin/$XC_PLAT/$c" -q -A arm64 -c "$W/pLib.xc" -o "$pd/pLib.o" 2>"$pd/err" \
+       && "bin/$XC_PLAT/$c" -q -A arm64 -c "$W/pMain.xc" -o "$pd/pMain.o" 2>>"$pd/err" \
+       && "bin/$XC_PLAT/$c" -q -A arm64 "$pd/pMain.o" "$pd/pLib.o" -o "$pd/pprog" 2>>"$pd/err"; then
+        out="$("$pd/pprog" 2>&1 | head -1)"
+        [ "$out" = "81" ] && ok "$c: an object with a par-lifted loop links (got 81)" \
+            || bad "$c: par-lifted object program (got '$out', want 81)"
+    else
+        bad "$c: link an object with a par-lifted loop"; head -3 "$pd/err"
+    fi
+done
+[ -f "$W/par-xcc/pLib.xtc.needs" ] && [ -f "$W/par-xcc-xc/pLib.xtc.needs" ] && {
+    cmp -s "$W/par-xcc/pLib.xtc.needs" "$W/par-xcc-xc/pLib.xtc.needs" \
+        && ok "the two compilers record the same needs for a par-lifted object" \
+        || bad "par-lifted object needs differ: '$(cat "$W/par-xcc/pLib.xtc.needs")' vs '$(cat "$W/par-xcc-xc/pLib.xtc.needs")'"
+}
+
 # ── §4.2: a category method that is OVERRIDDEN here ──────────────────────
 # The case above works because nothing overrides `report`, so it keeps a direct
 # call. Add a subclass that overrides it and the method needs runtime dispatch —
