@@ -24,6 +24,11 @@
 |*   * The chosen method is called as an ordinary method call, so dispatch is
 |*     virtual where the call would be, and ARC treats its result as any
 |*     call's result.
+|*   * A protocol method may be an operator too. A value typed as the
+|*     protocol takes the protocol's operators as a class instance takes its
+|*     class's (and gives up the built-in meaning of each), the call
+|*     dispatching through the protocol; a class that conforms must define
+|*     the same operator (checkOperatorRequirement:).
 \****************************************************************************/
 #import "XTSemanticAnalyzer+Private.h"
 
@@ -189,32 +194,73 @@ static XTBinaryOp XTAssignBinaryOp(XTAssignOp op)
     return nil;
     }
 
-// Does the class or an ancestor define an operator of this shape?
-- (BOOL)operatorClass:(XTClassDeclNode*)cls defines:(NSString*)shape
+/****************************************************************************\
+|* Where an operand's operators are found: its class (operatorClassOfType:),
+|* or for a pointer typed as a protocol, the protocol, whose requirements may
+|* be operators. nil for anything else.
+\****************************************************************************/
+- (nullable XTASTNode*)operatorOwnerOfType:(nullable XTType*)t
     {
-    for (XTClassDeclNode* c = cls; c != nil; c = c.parentClass)
-        for (XTMethodDeclNode* m in c.methods)
+    XTClassDeclNode* cls = [self operatorClassOfType:t];
+    if (cls)
+        return cls;
+    if (![t isKindOfClass:[XTPointerType class]])
+        return nil;
+    XTType* pe = ((XTPointerType*)t).pointeeType;
+    if (pe && pe.kind == XTTypeKindClass && ![pe isKindOfClass:[XTPointerType class]])
+        return self.protocolsByName[pe.displayName];
+    return nil;
+    }
+
+// An owner's name, its methods, and the owner its methods are inherited from:
+// a class's parent, nothing for a protocol.
+static NSString* XTOwnerName(XTASTNode* o)
+    {
+    if ([o isKindOfClass:[XTProtocolDeclNode class]])
+        return ((XTProtocolDeclNode*)o).protocolName;
+    return ((XTClassDeclNode*)o).className;
+    }
+
+static NSArray<XTMethodDeclNode*>* XTOwnerMethods(XTASTNode* o)
+    {
+    if ([o isKindOfClass:[XTProtocolDeclNode class]])
+        return ((XTProtocolDeclNode*)o).methods;
+    return ((XTClassDeclNode*)o).methods;
+    }
+
+static XTASTNode* _Nullable XTOwnerParent(XTASTNode* o)
+    {
+    if ([o isKindOfClass:[XTProtocolDeclNode class]])
+        return nil;
+    return ((XTClassDeclNode*)o).parentClass;
+    }
+
+// Does the owner or an ancestor define an operator of this shape?
+- (BOOL)operatorClass:(XTASTNode*)cls defines:(NSString*)shape
+    {
+    for (XTASTNode* c = cls; c != nil; c = XTOwnerParent(c))
+        for (XTMethodDeclNode* m in XTOwnerMethods(c))
             if ([m.operatorShape isEqualToString:shape])
                 return YES;
     return NO;
     }
 
-// Does the class or an ancestor define an index operator of any shape? One
+// Does the owner or an ancestor define an index operator of any shape? One
 // that does gives up the built-in index for its pointers.
-- (BOOL)operatorClassDefinesIndex:(XTClassDeclNode*)cls
+- (BOOL)operatorClassDefinesIndex:(XTASTNode*)cls
     {
-    for (XTClassDeclNode* c = cls; c != nil; c = c.parentClass)
-        for (XTMethodDeclNode* m in c.methods)
+    for (XTASTNode* c = cls; c != nil; c = XTOwnerParent(c))
+        for (XTMethodDeclNode* m in XTOwnerMethods(c))
             if (m.operatorShape && XTOperatorIsIndex(m.operatorShape))
                 return YES;
     return NO;
     }
 
-// Does the class or an ancestor define any operator?
-- (BOOL)operatorClassHasOperators:(XTClassDeclNode*)cls
+// Does the owner or an ancestor define any operator?
+- (BOOL)operatorClassHasOperators:(XTASTNode*)cls
     {
-    for (XTClassDeclNode* c = cls; c != nil; c = c.parentClass)
-        for (XTMethodDeclNode* m in c.methods)
+    for (XTASTNode* c = cls; c != nil; c = XTOwnerParent(c))
+        for (XTMethodDeclNode* m in XTOwnerMethods(c))
             if (m.operatorShape)
                 return YES;
     return NO;
@@ -240,7 +286,7 @@ static BOOL XTOperatorSameParams(XTMethodDeclNode* a, XTMethodDeclNode* b)
 /****************************************************************************\
 |* The first thing wrong with one operator method's pattern, or nil.
 \****************************************************************************/
-- (nullable NSString*)operatorPatternFault:(XTMethodDeclNode*)m inClass:(XTClassDeclNode*)cls
+- (nullable NSString*)operatorPatternFault:(XTMethodDeclNode*)m inClass:(XTASTNode*)cls
     {
     NSString* name = m.methodName;
     if (m.isVarArgs)
@@ -284,11 +330,11 @@ static BOOL XTOperatorSameParams(XTMethodDeclNode* a, XTMethodDeclNode* b)
         for (XTParamNode* p in m.parameters)
             {
             XTClassDeclNode* pc = [self operatorClassOfType:p.paramType];
-            if (pc && [self class:pc inheritsFromOrEquals:cls])
+            if (pc && [cls isKindOfClass:[XTClassDeclNode class]] && [self class:pc inheritsFromOrEquals:(XTClassDeclNode*)cls])
                 own = YES;
             }
         if (!own)
-            return [NSString stringWithFormat:@"static operator '%@' needs an operand of its own class '%@'", name, cls.className];
+            return [NSString stringWithFormat:@"static operator '%@' needs an operand of its own class '%@'", name, XTOwnerName(cls)];
         }
     // An index or a compound assignment applies to the receiver.
     if ((XTOperatorIsIndex(m.operatorShape) || XTOperatorIsCompound(m.operatorShape))
@@ -352,85 +398,200 @@ static NSString* XTPrecedenceSpelling(NSString* spec)
             }
         else if ([decl isKindOfClass:[XTProtocolDeclNode class]])
             {
-            for (XTMethodDeclNode* m in ((XTProtocolDeclNode*)decl).methods)
-                if (m.operatorShape || m.operatorFault || m.operatorPrecedence)
-                    {
-                    [self.diagnostics emitError:[NSString stringWithFormat:@"protocol method '%@' cannot be an operator yet", m.methodName]
-                                             at:m.location];
-                    m.operatorShape = nil;
-                    }
+            XTProtocolDeclNode* proto = (XTProtocolDeclNode*)decl;
+            for (XTMethodDeclNode* m in proto.methods)
+                [self checkOperatorMethod:m of:proto precedences:precOf];
             }
         else if ([decl isKindOfClass:[XTClassDeclNode class]])
             {
             XTClassDeclNode* cls = (XTClassDeclNode*)decl;
             for (XTMethodDeclNode* m in cls.methods)
-                {
-                if (m.operatorFault)
-                    {
-                    [self.diagnostics emitError:m.operatorFault at:m.location];
-                    continue;
-                    }
-                if (!m.operatorShape)
-                    {
-                    if (m.operatorPrecedence)
-                        [self.diagnostics emitError:[self operatorPrecedenceFault:m] at:m.location];
-                    continue;
-                    }
-                NSString* fault = [self operatorPatternFault:m inClass:cls];
-                if (fault)
-                    {
-                    [self.diagnostics emitError:fault at:m.location];
-                    m.operatorShape = nil;
-                    continue;
-                    }
-                self.hasOperatorMethods = YES;
-                NSString* pf = [self operatorPrecedenceFault:m];
-                if (pf)
-                    {
-                    [self.diagnostics emitError:pf at:m.location];
-                    continue;
-                    }
-                // One meaning for a bracket in a class: `|M|` is the
-                // determinant or the norm, not both.
-                if (XTShapeIsBracket(m.operatorShape))
-                    for (XTMethodDeclNode* o in cls.methods)
-                        {
-                        if (o == m)
-                            break;
-                        if ([o.operatorShape isEqualToString:m.operatorShape] && o.isStatic == m.isStatic
-                            && XTOperatorSameParams(o, m))
-                            {
-                            [self.diagnostics emitError:[NSString stringWithFormat:@"'%@.%@' gives %@ a second meaning: "
-                                                                                   @"'%@.%@' defines it already; remove "
-                                                                                   @"':operator' from one of them and call "
-                                                                                   @"it by name",
-                                                                                   cls.className, m.methodName,
-                                                                                   XTShapeSpelling(m.operatorShape),
-                                                                                   cls.className, o.methodName]
-                                                     at:m.location];
-                            break;
-                            }
-                        }
-                if (!m.operatorPrecedence)
-                    continue;
-                // One operator, one precedence: the parse reads it before any
-                // type is known.
-                NSArray<NSString*>* first = precOf[m.operatorShape];
-                if (!first)
-                    precOf[m.operatorShape] = @[ m.operatorPrecedence, cls.className, m.methodName ];
-                else if (![first[0] isEqualToString:m.operatorPrecedence])
-                    [self.diagnostics emitError:[NSString stringWithFormat:@"operator '%@' has the precedence '%@' in "
-                                                                           @"'%@.%@' and '%@' in '%@.%@': an operator "
-                                                                           @"has one precedence; give both the same ':precedence', or leave it off one of them",
-                                                                           XTShapeCore(m.operatorShape),
-                                                                           XTPrecedenceSpelling(first[0]), first[1],
-                                                                           first[2],
-                                                                           XTPrecedenceSpelling(m.operatorPrecedence),
-                                                                           cls.className, m.methodName]
-                                             at:m.location];
-                }
+                [self checkOperatorMethod:m of:cls precedences:precOf];
             }
         }
+    }
+
+/****************************************************************************\
+|* One method of a class or protocol: its pattern, its `:precedence`, one
+|* meaning per bracket, and one precedence per shape across the program
+|* (`precOf`: each shape's first `:precedence`, @[ spec, owner, method ]). A
+|* protocol's operator requirement cannot be `optional`.
+\****************************************************************************/
+- (void)checkOperatorMethod:(XTMethodDeclNode*)m
+                         of:(XTASTNode*)owner
+                precedences:(NSMutableDictionary<NSString*, NSArray<NSString*>*>*)precOf
+    {
+    if (m.operatorFault)
+        {
+        [self.diagnostics emitError:m.operatorFault at:m.location];
+        return;
+        }
+    if (!m.operatorShape)
+        {
+        if (m.operatorPrecedence)
+            [self.diagnostics emitError:[self operatorPrecedenceFault:m] at:m.location];
+        return;
+        }
+    if (m.isOptional && [owner isKindOfClass:[XTProtocolDeclNode class]])
+        {
+        [self.diagnostics emitError:[NSString stringWithFormat:@"an operator requirement cannot be optional; make '%@' "
+                                                               @"a required method or drop ':operator(...)'",
+                                                               m.methodName]
+                                 at:m.location];
+        m.operatorShape = nil;
+        return;
+        }
+    NSString* fault = [self operatorPatternFault:m inClass:owner];
+    if (fault)
+        {
+        [self.diagnostics emitError:fault at:m.location];
+        m.operatorShape = nil;
+        return;
+        }
+    self.hasOperatorMethods = YES;
+    NSString* pf = [self operatorPrecedenceFault:m];
+    if (pf)
+        {
+        [self.diagnostics emitError:pf at:m.location];
+        return;
+        }
+    NSString* ownerName = XTOwnerName(owner);
+    // One meaning for a bracket in a class: `|M|` is the determinant or the
+    // norm, not both.
+    if (XTShapeIsBracket(m.operatorShape))
+        for (XTMethodDeclNode* o in XTOwnerMethods(owner))
+            {
+            if (o == m)
+                break;
+            if ([o.operatorShape isEqualToString:m.operatorShape] && o.isStatic == m.isStatic
+                && XTOperatorSameParams(o, m))
+                {
+                [self.diagnostics emitError:[NSString stringWithFormat:@"'%@.%@' gives %@ a second meaning: "
+                                                                       @"'%@.%@' defines it already; remove "
+                                                                       @"':operator' from one of them and call "
+                                                                       @"it by name",
+                                                                       ownerName, m.methodName,
+                                                                       XTShapeSpelling(m.operatorShape),
+                                                                       ownerName, o.methodName]
+                                         at:m.location];
+                break;
+                }
+            }
+    if (!m.operatorPrecedence)
+        return;
+    // One operator, one precedence: the parse reads it before any type is
+    // known.
+    NSArray<NSString*>* first = precOf[m.operatorShape];
+    if (!first)
+        precOf[m.operatorShape] = @[ m.operatorPrecedence, ownerName, m.methodName ];
+    else if (![first[0] isEqualToString:m.operatorPrecedence])
+        [self.diagnostics emitError:[NSString stringWithFormat:@"operator '%@' has the precedence '%@' in "
+                                                               @"'%@.%@' and '%@' in '%@.%@': an operator "
+                                                               @"has one precedence; give both the same ':precedence', or leave it off one of them",
+                                                               XTShapeCore(m.operatorShape),
+                                                               XTPrecedenceSpelling(first[0]), first[1],
+                                                               first[2],
+                                                               XTPrecedenceSpelling(m.operatorPrecedence),
+                                                               ownerName, m.methodName]
+                                 at:m.location];
+    }
+
+#pragma mark - Operator requirements
+
+/****************************************************************************\
+|* A pattern as it is written, from its shape and operand names: `self + o`,
+|* `-self`, `|self|`, `self[r, c] = x`, `self += o`.
+\****************************************************************************/
+static NSString* XTPatternText(NSString* shape, NSArray<NSString*>* names)
+    {
+    NSString* (^name)(NSUInteger) = ^NSString*(NSUInteger i) { return i < names.count ? names[i] : @"_"; };
+    if (!XTOperatorIsIndex(shape) && XTShapeIsInfix(shape))
+        return [NSString stringWithFormat:@"%@ %@ %@", name(0), XTShapeCore(shape), name(1)];
+    NSMutableString* out = [NSMutableString string];
+    NSUInteger next = 0;
+    for (NSUInteger i = 0; i < shape.length; i++)
+        {
+        unichar c = [shape characterAtIndex:i];
+        if (c == '_')
+            [out appendString:name(next++)];
+        else if (c == ',')
+            [out appendString:@", "];
+        else if (c == '=' && i > 0 && [shape characterAtIndex:i - 1] == ']')
+            [out appendString:@" = "];
+        else
+            [out appendFormat:@"%C", c];
+        }
+    return out;
+    }
+
+// Each operand of a pattern by its role: `self`, or the parameter's position.
+static NSArray<NSString*>* XTPatternRoles(XTMethodDeclNode* m)
+    {
+    NSMutableArray<NSString*>* roles = [NSMutableArray array];
+    for (NSString* op in m.operatorOperands)
+        {
+        NSString* role = op;
+        for (NSUInteger i = 0; i < m.parameters.count; i++)
+            if ([m.parameters[i].paramName isEqualToString:op])
+                role = [NSString stringWithFormat:@"#%lu", (unsigned long)i];
+        [roles addObject:role];
+        }
+    return roles;
+    }
+
+// The pattern of `req` written with the parameter names of `m`.
+static NSString* XTPatternTextFor(XTMethodDeclNode* req, XTMethodDeclNode* m)
+    {
+    NSMutableArray<NSString*>* names = [NSMutableArray array];
+    for (NSString* role in XTPatternRoles(req))
+        {
+        NSString* name = role;
+        if ([role hasPrefix:@"#"])
+            {
+            NSUInteger at = (NSUInteger)[role substringFromIndex:1].integerValue;
+            name = at < m.parameters.count ? m.parameters[at].paramName : role;
+            }
+        [names addObject:name];
+        }
+    return XTPatternText(req.operatorShape, names);
+    }
+
+- (void)checkOperatorRequirement:(XTMethodDeclNode*)req
+                        protocol:(NSString*)pname
+                            impl:(XTMethodDeclNode*)impl
+                              in:(XTClassDeclNode*)implCls
+                           class:(XTClassDeclNode*)cls
+    {
+    if (!req.operatorShape)
+        return;
+    // An override is the operator its ancestor's method is, with its pattern
+    // or without.
+    XTMethodDeclNode* eff = impl;
+    XTClassDeclNode* effCls = implCls;
+    for (XTClassDeclNode* c = implCls.parentClass; c != nil && !eff.operatorShape; c = c.parentClass)
+        {
+        XTMethodDeclNode* o = [self methodIn:c matching:req];
+        if (o.operatorShape)
+            {
+            eff = o;
+            effCls = c;
+            }
+        }
+    if ([eff.operatorShape isEqualToString:req.operatorShape] && [XTPatternRoles(eff) isEqualToArray:XTPatternRoles(req)])
+        return;
+    NSString* want = XTPatternText(req.operatorShape, req.operatorOperands);
+    NSString* msg;
+    if (!eff.operatorShape)
+        msg = [NSString stringWithFormat:@"class '%@' conforms to '%@', which requires '%@' to be the operator '%@'; "
+                                         @"add ':operator(%@)' to %@'s %@",
+                                         cls.className, pname, req.methodName, want, XTPatternTextFor(req, impl),
+                                         implCls.className, impl.methodName];
+    else
+        msg = [NSString stringWithFormat:@"class '%@' conforms to '%@', which requires '%@' to be the operator '%@'; "
+                                         @"%@'s %@ is the operator '%@': change it to ':operator(%@)'",
+                                         cls.className, pname, req.methodName, want, effCls.className, eff.methodName,
+                                         XTPatternText(eff.operatorShape, eff.operatorOperands), XTPatternTextFor(req, eff)];
+    [self.diagnostics emitError:msg at:cls.location];
     }
 
 #pragma mark - Resolving an operator expression
@@ -441,26 +602,26 @@ static NSString* XTPrecedenceSpelling(NSString* spec)
 |* with the same parameter types, and a method already present is not added
 |* twice (the two operands may share a class).
 \****************************************************************************/
-- (void)addOperatorCandidatesOf:(XTClassDeclNode*)cls
+- (void)addOperatorCandidatesOf:(XTASTNode*)cls
                           shape:(NSString*)shape
                        isStatic:(BOOL)wantStatic
                           cands:(NSMutableArray<XTMethodDeclNode*>*)cands
-                         owners:(NSMutableArray<XTClassDeclNode*>*)owners
+                         owners:(NSMutableArray<XTASTNode*>*)owners
     {
     NSUInteger first = cands.count;
-    for (XTClassDeclNode* c = cls; c != nil; c = c.parentClass)
+    for (XTASTNode* c = cls; c != nil; c = XTOwnerParent(c))
         {
         NSUInteger nearer = cands.count;
-        for (XTMethodDeclNode* m in c.methods)
+        for (XTMethodDeclNode* m in XTOwnerMethods(c))
             {
             if (![m.operatorShape isEqualToString:shape] || m.isStatic != wantStatic)
                 continue;
             // An override in a nearer class is the operator too, written with
             // its pattern or not: the call names it, as `a.plus(b)` would.
             XTMethodDeclNode* use = m;
-            XTClassDeclNode* useOwner = c;
-            for (XTClassDeclNode* n = cls; !wantStatic && n != nil && n != c && use == m; n = n.parentClass)
-                for (XTMethodDeclNode* o in n.methods)
+            XTASTNode* useOwner = c;
+            for (XTASTNode* n = cls; !wantStatic && n != nil && n != c && use == m; n = XTOwnerParent(n))
+                for (XTMethodDeclNode* o in XTOwnerMethods(n))
                     if (!o.isStatic && [o.methodName isEqualToString:m.methodName] && XTOperatorSameParams(o, m))
                         {
                         use = o;
@@ -487,7 +648,7 @@ static NSString* XTPrecedenceSpelling(NSString* spec)
 |* with the operands as arguments, in the order its parameters name them.
 \****************************************************************************/
 - (XTMethodCallExprNode*)operatorCallOf:(XTMethodDeclNode*)m
-                                  owner:(XTClassDeclNode*)owner
+                                  owner:(XTASTNode*)owner
                                operands:(NSArray<XTASTNode*>*)ops
                                      at:(XTSourceLocation*)loc
     {
@@ -502,7 +663,7 @@ static NSString* XTPrecedenceSpelling(NSString* spec)
         NSUInteger at = [m.operatorOperands indexOfObject:p.paramName];
         [args addObject:ops[at < ops.count ? at : 0]];
         }
-    XTIdentifierNode* recv = [[XTIdentifierNode alloc] initWithName:owner.className location:loc];
+    XTIdentifierNode* recv = [[XTIdentifierNode alloc] initWithName:XTOwnerName(owner) location:loc];
     return [[XTMethodCallExprNode alloc] initWithReceiver:recv
                                                methodName:m.methodName
                                                 arguments:args
@@ -520,13 +681,13 @@ static NSString* XTPrecedenceSpelling(NSString* spec)
                                               spelling:(NSString*)op
                                               operands:(NSArray<XTASTNode*>*)ops
                                                     at:(XTSourceLocation*)loc
-                                                  left:(nullable XTClassDeclNode*)lc
-                                                 right:(nullable XTClassDeclNode*)rc
+                                                  left:(nullable XTASTNode*)lc
+                                                 right:(nullable XTASTNode*)rc
                                              ambiguous:(BOOL*)ambiguous
     {
     *ambiguous = NO;
     NSMutableArray<XTMethodDeclNode*>* cands = [NSMutableArray array];
-    NSMutableArray<XTClassDeclNode*>* owners = [NSMutableArray array];
+    NSMutableArray<XTASTNode*>* owners = [NSMutableArray array];
     if (lc)
         {
         [self addOperatorCandidatesOf:lc shape:shape isStatic:NO cands:cands owners:owners];
@@ -563,8 +724,8 @@ static NSString* XTPrecedenceSpelling(NSString* spec)
         NSUInteger a = tied[0].unsignedIntegerValue;
         NSUInteger b = tied[1].unsignedIntegerValue;
         [self.diagnostics emitError:[NSString stringWithFormat:@"operator '%@' on (%@) is ambiguous: '%@.%@' and '%@.%@' both match",
-                                                               op, [self describeArgTypes:ops], owners[a].className, cands[a].methodName,
-                                                               owners[b].className, cands[b].methodName]
+                                                               op, [self describeArgTypes:ops], XTOwnerName(owners[a]), cands[a].methodName,
+                                                               XTOwnerName(owners[b]), cands[b].methodName]
                                  at:loc];
         *ambiguous = YES;
         return nil;
@@ -592,8 +753,8 @@ static NSString* XTPrecedenceSpelling(NSString* spec)
     *handled = NO;
     if (!self.hasOperatorMethods)
         return nil;
-    XTClassDeclNode* lc = [self operatorClassOfType:ops[0].resolvedType];
-    XTClassDeclNode* rc = ops.count > 1 ? [self operatorClassOfType:ops[1].resolvedType] : nil;
+    XTASTNode* lc = [self operatorOwnerOfType:ops[0].resolvedType];
+    XTASTNode* rc = ops.count > 1 ? [self operatorOwnerOfType:ops[1].resolvedType] : nil;
     BOOL optL = lc && [self operatorClass:lc defines:shape];
     BOOL optR = rc && [self operatorClass:rc defines:shape];
     if (!optL && !optR)
@@ -607,16 +768,16 @@ static NSString* XTPrecedenceSpelling(NSString* spec)
         return call;
     NSString* msg;
     if (ops.count == 1 && XTShapeIsBracket(shape))
-        msg = [NSString stringWithFormat:@"'%@' has no %@ taking '%@': pass one of the types its %@ methods take", lc.className,
+        msg = [NSString stringWithFormat:@"'%@' has no %@ taking '%@': pass one of the types its %@ methods take", XTOwnerName(lc),
                                          op, [self describeArgTypes:ops], op];
     else if (ops.count == 1)
-        msg = [NSString stringWithFormat:@"'%@' has no prefix '%@' taking '%@'", lc.className, op,
+        msg = [NSString stringWithFormat:@"'%@' has no prefix '%@' taking '%@'", XTOwnerName(lc), op,
                                          [self describeArgTypes:ops]];
     else if (optL)
-        msg = [NSString stringWithFormat:@"'%@' has no '%@' taking '%@'", lc.className, op,
+        msg = [NSString stringWithFormat:@"'%@' has no '%@' taking '%@'", XTOwnerName(lc), op,
                                          [self describeArgTypes:@[ ops[1] ]]];
     else
-        msg = [NSString stringWithFormat:@"'%@' has no '%@' taking '%@' on the left", rc.className, op,
+        msg = [NSString stringWithFormat:@"'%@' has no '%@' taking '%@' on the left", XTOwnerName(rc), op,
                                          [self describeArgTypes:@[ ops[0] ]]];
     [self.diagnostics emitError:msg at:loc];
     return nil;
@@ -626,12 +787,12 @@ static NSString* XTPrecedenceSpelling(NSString* spec)
 
 // The class of an operand (or an ancestor of it) that defines `shape`: the
 // left operand's, else the right's. nil when neither does.
-- (nullable XTClassDeclNode*)operatorOwnerOfShape:(NSString*)shape operands:(NSArray<XTASTNode*>*)ops
+- (nullable XTASTNode*)operatorOwnerOfShape:(NSString*)shape operands:(NSArray<XTASTNode*>*)ops
     {
-    XTClassDeclNode* lc = [self operatorClassOfType:ops[0].resolvedType];
+    XTASTNode* lc = [self operatorOwnerOfType:ops[0].resolvedType];
     if (lc && [self operatorClass:lc defines:shape])
         return lc;
-    XTClassDeclNode* rc = ops.count > 1 ? [self operatorClassOfType:ops[1].resolvedType] : nil;
+    XTASTNode* rc = ops.count > 1 ? [self operatorOwnerOfType:ops[1].resolvedType] : nil;
     if (rc && [self operatorClass:rc defines:shape])
         return rc;
     return nil;
@@ -649,10 +810,10 @@ static NSString* XTPrecedenceSpelling(NSString* spec)
                      operands:(NSArray<XTASTNode*>*)ops
                   twoReadings:(BOOL)two
     {
-    XTClassDeclNode* owner = [self operatorOwnerOfShape:shape operands:ops];
+    XTASTNode* owner = [self operatorOwnerOfShape:shape operands:ops];
     BOOL noting = two && self.readingCollect.count > 0;
     if (noting)
-        [self.readingCollect.lastObject addObject:@[ @(owner != nil), op, owner.className ?: @"", node ]];
+        [self.readingCollect.lastObject addObject:@[ @(owner != nil), op, owner ? XTOwnerName(owner) : @"", node ]];
     if (owner)
         return NO;
     node.resolvedType = [XTType u8Type];
@@ -932,8 +1093,9 @@ static void XTIndexParts(XTASTNode* node, XTASTNode* _Nullable* _Nonnull base,
     *range = s.inclusive ? @"..." : @"..";
     }
 
-// The class with an index operator that an index node's base belongs to, or nil.
-- (nullable XTClassDeclNode*)indexOperatorClassOf:(XTASTNode*)node
+// The class (or protocol) with an index operator that an index node's base
+// belongs to, or nil.
+- (nullable XTASTNode*)indexOperatorClassOf:(XTASTNode*)node
     {
     if (!self.hasOperatorMethods)
         return nil;
@@ -942,7 +1104,7 @@ static void XTIndexParts(XTASTNode* node, XTASTNode* _Nullable* _Nonnull base,
     XTASTNode* base = nil;
     NSString* range = nil;
     XTIndexParts(node, &base, [NSMutableArray array], &range);
-    XTClassDeclNode* cls = [self operatorClassOfType:base.resolvedType];
+    XTASTNode* cls = [self operatorOwnerOfType:base.resolvedType];
     return cls && [self operatorClassDefinesIndex:cls] ? cls : nil;
     }
 
@@ -950,7 +1112,7 @@ static void XTIndexParts(XTASTNode* node, XTASTNode* _Nullable* _Nonnull base,
 |* The get call of an index node on a class with an index operator, or nil
 |* after reporting why there is none.
 \****************************************************************************/
-- (nullable XTMethodCallExprNode*)indexGetCallOf:(XTASTNode*)node cls:(XTClassDeclNode*)cls
+- (nullable XTMethodCallExprNode*)indexGetCallOf:(XTASTNode*)node cls:(XTASTNode*)cls
     {
     XTASTNode* base = nil;
     NSString* range = nil;
@@ -958,7 +1120,7 @@ static void XTIndexParts(XTASTNode* node, XTASTNode* _Nullable* _Nonnull base,
     XTIndexParts(node, &base, idx, &range);
     if (range && idx.count != 2)
         {
-        [self.diagnostics emitError:[NSString stringWithFormat:@"a range index on '%@' needs both bounds", cls.className]
+        [self.diagnostics emitError:[NSString stringWithFormat:@"a range index on '%@' needs both bounds", XTOwnerName(cls)]
                                  at:node.location];
         return nil;
         }
@@ -967,7 +1129,7 @@ static void XTIndexParts(XTASTNode* node, XTASTNode* _Nullable* _Nonnull base,
     if (![self operatorClass:cls defines:shape] && [self operatorClass:cls defines:XTIndexShape(idx.count, range, YES)])
         {
         [self.diagnostics emitError:[NSString stringWithFormat:@"'%@' has '%@=' but no '%@' to read an element with",
-                                                               cls.className, op, op]
+                                                               XTOwnerName(cls), op, op]
                                  at:node.location];
         return nil;
         }
@@ -977,7 +1139,7 @@ static void XTIndexParts(XTASTNode* node, XTASTNode* _Nullable* _Nonnull base,
     XTMethodCallExprNode* call = [self operatorPickForShape:shape spelling:op operands:ops at:node.location
                                                        left:cls right:nil ambiguous:&ambiguous];
     if (!call && !ambiguous)
-        [self.diagnostics emitError:[NSString stringWithFormat:@"'%@' has no '%@' taking '%@'", cls.className, op,
+        [self.diagnostics emitError:[NSString stringWithFormat:@"'%@' has no '%@' taking '%@'", XTOwnerName(cls), op,
                                                                [self describeArgTypes:idx]]
                                  at:node.location];
     return call;
@@ -985,7 +1147,7 @@ static void XTIndexParts(XTASTNode* node, XTASTNode* _Nullable* _Nonnull base,
 
 - (BOOL)resolveIndexOperatorOf:(XTASTNode*)node target:(BOOL)target
     {
-    XTClassDeclNode* cls = [self indexOperatorClassOf:node];
+    XTASTNode* cls = [self indexOperatorClassOf:node];
     if (!cls)
         return NO;
     // The target of an assignment is not read: the assignment resolves it.
@@ -1126,7 +1288,8 @@ static void XTSharedLvalue(XTASTNode* lv, NSMutableArray<XTASTNode*>* out)
     XTASTNode* oc = XTOperatorCallOf(recv);
     if ([oc isKindOfClass:[XTMethodCallExprNode class]])
         {
-        owner = [self operatorClassOfType:((XTMethodCallExprNode*)oc).receiver.resolvedType].className;
+        XTASTNode* oo = [self operatorOwnerOfType:((XTMethodCallExprNode*)oc).receiver.resolvedType];
+        owner = oo ? XTOwnerName(oo) : nil;
         if ([recv isKindOfClass:[XTSubscriptExprNode class]])
             src = @"[]";
         else if ([recv isKindOfClass:[XTSliceExprNode class]])
@@ -1138,7 +1301,8 @@ static void XTSharedLvalue(XTASTNode* lv, NSMutableArray<XTASTNode*>* out)
         }
     else if ([recv isKindOfClass:[XTMethodCallExprNode class]])
         {
-        owner = [self operatorClassOfType:((XTMethodCallExprNode*)recv).receiver.resolvedType].className;
+        XTASTNode* ro = [self operatorOwnerOfType:((XTMethodCallExprNode*)recv).receiver.resolvedType];
+        owner = ro ? XTOwnerName(ro) : nil;
         src = ((XTMethodCallExprNode*)recv).methodName;
         }
     else if ([recv isKindOfClass:[XTCallExprNode class]])
@@ -1167,7 +1331,7 @@ static void XTSharedLvalue(XTASTNode* lv, NSMutableArray<XTASTNode*>* out)
     NSString* bop = XTAssignBinarySpelling(node.assignOp);
 
     // Through an index operator: `m[i] = v`, or `m[i] op= v` as get, op, set.
-    XTClassDeclNode* icls = [self indexOperatorClassOf:lhs];
+    XTASTNode* icls = [self indexOperatorClassOf:lhs];
     if (icls)
         {
         XTASTNode* base = nil;
@@ -1177,7 +1341,7 @@ static void XTSharedLvalue(XTASTNode* lv, NSMutableArray<XTASTNode*>* out)
         node.resolvedType = [XTType voidType];
         if (range && idx.count != 2)
             {
-            [self.diagnostics emitError:[NSString stringWithFormat:@"a range index on '%@' needs both bounds", icls.className]
+            [self.diagnostics emitError:[NSString stringWithFormat:@"a range index on '%@' needs both bounds", XTOwnerName(icls)]
                                      at:lhs.location];
             return YES;
             }
@@ -1206,7 +1370,7 @@ static void XTSharedLvalue(XTASTNode* lv, NSMutableArray<XTASTNode*>* out)
         if (![self operatorClass:icls defines:setShape] && [self operatorClass:icls defines:XTIndexShape(idx.count, range, NO)])
             {
             [self.diagnostics emitError:[NSString stringWithFormat:@"'%@' has '%@' but no '%@' to assign an element with",
-                                                                   icls.className, XTIndexSpelling(range, NO), setOp]
+                                                                   XTOwnerName(icls), XTIndexSpelling(range, NO), setOp]
                                      at:lhs.location];
             return YES;
             }
@@ -1219,7 +1383,7 @@ static void XTSharedLvalue(XTASTNode* lv, NSMutableArray<XTASTNode*>* out)
         if (!set && !ambiguous)
             {
             [idx addObject:value];
-            [self.diagnostics emitError:[NSString stringWithFormat:@"'%@' has no '%@' taking '%@'", icls.className, setOp,
+            [self.diagnostics emitError:[NSString stringWithFormat:@"'%@' has no '%@' taking '%@'", XTOwnerName(icls), setOp,
                                                                    [self describeArgTypes:idx]]
                                      at:node.location];
             }
@@ -1236,7 +1400,7 @@ static void XTSharedLvalue(XTASTNode* lv, NSMutableArray<XTASTNode*>* out)
         return NO;
     // A property's class is its setter's parameter's.
     XTType* propT = [self operatorPropertyTypeOf:lhs];
-    XTClassDeclNode* lc = [self operatorClassOfType:propT ?: lhs.resolvedType];
+    XTASTNode* lc = [self operatorOwnerOfType:propT ?: lhs.resolvedType];
     if (!lc)
         return NO;
     NSString* cShape = [NSString stringWithFormat:@"_%@=_", bop];
@@ -1251,7 +1415,7 @@ static void XTSharedLvalue(XTASTNode* lv, NSMutableArray<XTASTNode*>* out)
         XTType* rt = node.rhs.resolvedType;
         if ([self operatorClassHasOperators:lc] && !(rt && rt.isInteger) && !propT)
             {
-            [self.diagnostics emitError:[NSString stringWithFormat:@"'%@' has no '%@' or '%@' taking '%@'", lc.className, cOp, bop,
+            [self.diagnostics emitError:[NSString stringWithFormat:@"'%@' has no '%@' or '%@' taking '%@'", XTOwnerName(lc), cOp, bop,
                                                                    [self describeArgTypes:@[ node.rhs ]]]
                                      at:node.location];
             node.resolvedType = [XTType voidType];
@@ -1275,7 +1439,7 @@ static void XTSharedLvalue(XTASTNode* lv, NSMutableArray<XTASTNode*>* out)
         if (call || ambiguous || !hasP)
             {
             if (!call && !ambiguous)
-                [self.diagnostics emitError:[NSString stringWithFormat:@"'%@' has no '%@' taking '%@'", lc.className, cOp,
+                [self.diagnostics emitError:[NSString stringWithFormat:@"'%@' has no '%@' taking '%@'", XTOwnerName(lc), cOp,
                                                                        [self describeArgTypes:@[ node.rhs ]]]
                                          at:node.location];
             node.operatorCall = call;

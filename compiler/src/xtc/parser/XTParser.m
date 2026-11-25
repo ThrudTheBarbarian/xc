@@ -1393,6 +1393,15 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
                 continue;
                 }
             XTFunctionDeclNode* fn = (XTFunctionDeclNode*)sd;
+            // An operator requirement is met by a conforming object's method.
+            if (fn.operatorShape || fn.operatorFault || fn.operatorPrecedence)
+                {
+                [_diagnostics emitError:[NSString stringWithFormat:@"a protocol's static member cannot be an operator; "
+                                                                   @"make '%@' an instance method or drop ':operator(...)'",
+                                                                   fn.funcName]
+                                     at:fn.location];
+                continue;
+                }
             // Its text: the tokens before the name (the return type), and
             // between the parentheses (the parameters).
             NSMutableArray<NSString*>* ret = [NSMutableArray array];
