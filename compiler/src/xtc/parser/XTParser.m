@@ -6983,13 +6983,38 @@ static XTForCStyleNode* _Nullable parFuseLoop(XTBlockNode* body)
     return made == 1;
     }
 
+// A body uses double: a local or a cast of it, or a name of that type.
+- (BOOL)parFuseDouble:(NSDictionary*)st types:(NSDictionary*)types
+    {
+    if (st[@"double"])
+        return YES;
+    for (NSString* n in st[@"names"])
+        {
+        id t = [self parFuseTypeOf:n types:types];
+        if ([t isKindOfClass:[XTType class]] && [((XTType*)t).description containsString:@"double"])
+            return YES;
+        }
+    return NO;
+    }
+
+// A name's type: the block's capture, else the scope's binding, else the
+// global's; nil when none is known.
+- (nullable id)parFuseTypeOf:(NSString*)n types:(NSDictionary*)types
+    {
+    if (types[n])
+        return types[n];
+    NSDictionary* info = [self blkLookup:n depth:NULL];
+    if (info)
+        return info[@"type"];
+    return self.blkState[@"topVars"][n];
+    }
+
 // Two names of arrays that cannot be the same memory: each a fixed-size
 // array, or a local block of its own.
 - (BOOL)parFuseApart:(NSString*)x from:(NSString*)y types:(NSDictionary*)types end:(NSUInteger)end
     {
-    // A captured name's type, else a global's.
-    id tx = types[x] ?: self.blkState[@"topVars"][x];
-    id ty = types[y] ?: self.blkState[@"topVars"][y];
+    id tx = [self parFuseTypeOf:x types:types];
+    id ty = [self parFuseTypeOf:y types:types];
     BOOL fx = [tx isKindOfClass:[XTArrayType class]] || [self parFuseFresh:x end:end];
     BOOL fy = [ty isKindOfClass:[XTArrayType class]] || [self parFuseFresh:y end:end];
     return fx && fy;
@@ -7060,6 +7085,11 @@ static XTForCStyleNode* _Nullable parFuseLoop(XTBlockNode* body)
     NSMutableDictionary* s2 = XTParFuseScan(l2.body, iv2.varName);
     if (s1[@"bad"] || s2[@"bad"])
         return @"a body calls a function other than a maths one, or leaves its loop";
+    // A block of doubles stays itself: a GPU without doubles (Apple's) would
+    // run neither part of a fused block, and each block's own reason is what
+    // -Wpar says.
+    if ([self parFuseDouble:s1 types:a[@"frame"][@"types"]] || [self parFuseDouble:s2 types:b[@"frame"][@"types"]])
+        return @"a block uses double";
     // Bounds of numbers and names neither body writes, then the same ones.
     NSMutableSet* written = [NSMutableSet setWithSet:s1[@"scalars"]];
     [written unionSet:s2[@"scalars"]];

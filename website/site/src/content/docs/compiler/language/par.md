@@ -248,6 +248,7 @@ These two run as one loop, `scale+square`, in which each item computes `y[i]` an
 - Two arrays of different names are known to be different memory. Each is a fixed-size array, or a local set once with `new` and never set again in the function. A pointer argument may point anywhere, so a block that writes through one stays apart from a block that touches another array.
 - Neither uses the other's reduction variable, and they reduce different variables.
 - The bodies call only maths functions (`sqrt`, `sin`, `Math.sqrt`, …) and contain no `return`, `goto` or `break` out of the loop.
+- Neither uses `double`. A GPU without `double` (Apple's) could then run neither part, so such a block stays on its own.
 
 More than two blocks in a row can run as one this way. A fused block is measured, placed and reported under its own name (`scale+square`), so nothing `auto` learned about the separate blocks applies to it. `-Wpar-auto` says which blocks ran as one and, for neighbours that stayed apart, why. `-fno-par-fuse` keeps every block separate, for comparison.
 
