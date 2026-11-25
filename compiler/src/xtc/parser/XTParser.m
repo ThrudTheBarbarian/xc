@@ -336,6 +336,7 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
     // `replaceFields:` / `replaceMembers:`, so any AST node that
     // captured the placeholder picks up the real layout once the
     // body has been parsed.
+    [self fusePackSuffixes];
     [self rewriteProtocolStaticReceivers];
     [self prescanForwardTypeDeclarations];
     // The operators of their own shape the unit's classes define, before any
@@ -379,6 +380,109 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
 |* given at load. `versionMajor()` / `versionMinor()` give `:version(M.m)`.
 |* Mirrored in the port's parser, text for text.
 \****************************************************************************/
+/****************************************************************************\
+|* A float type's pack, `T:pack(eXmY)`, chooses its bit layout (one sign bit,
+|* X exponent bits, Y mantissa bits). The pack is part of the type, so the six
+|* tokens become the one type name they denote, and every place that reads a
+|* type reads it unchanged: `f16:pack(e8m7)` is `bf16`, and a type's own
+|* default pack is the type (`f16:pack(e5m10)` is `f16`). f16 takes those two
+|* packs, f32 and f64 only their own; anything else is refused, naming what to
+|* write. Only after a float type name or a type keyword, so `c ? x : pack(y)`
+|* keeps its meaning. Mirrored in the port's parser.
+\****************************************************************************/
+- (void)fusePackSuffixes
+    {
+    NSUInteger n = _tokens.count;
+    NSMutableArray<XTToken*>* t = nil;
+    // `f8 x` / `f4 x`: the widths the language will have, written as a type
+    // before they are one. Refused by name; f16 stands in so parsing goes on.
+    for (NSUInteger i = 0; i + 1 < n; i++)
+        {
+        XTToken* tk = (t ?: _tokens)[i];
+        if (tk.type != XTTokenIdentifier || !([tk.value isEqualToString:@"f8"] || [tk.value isEqualToString:@"f4"]) ||
+            (t ?: _tokens)[i + 1].type != XTTokenIdentifier)
+            continue;
+        [_diagnostics emitError:[NSString stringWithFormat:@"'%@' is not a type yet: the float types are f16, bf16, f32 and f64",
+                                                           tk.value]
+                             at:tk.location];
+        if (!t)
+            t = [_tokens mutableCopy];
+        t[i] = [[XTToken alloc] initWithType:XTTokenIdentifier value:@"f16" location:tk.location];
+        }
+    for (NSUInteger i = 0; i + 5 < n; i++)
+        {
+        XTToken* tk = (t ?: _tokens)[i];
+        NSArray<XTToken*>* src = t ?: _tokens;
+        if (src[i + 1].type != XTTokenColon || src[i + 2].type != XTTokenIdentifier ||
+            ![src[i + 2].value isEqualToString:@"pack"] || src[i + 3].type != XTTokenLParen)
+            continue;
+        NSString* base = tk.value;
+        if ([base isEqualToString:@"float"])
+            base = @"f32";
+        else if ([base isEqualToString:@"double"])
+            base = @"f64";
+        BOOL floatName = [base isEqualToString:@"f16"] || [base isEqualToString:@"f32"] ||
+                         [base isEqualToString:@"f64"] || [base isEqualToString:@"bf16"] ||
+                         [base isEqualToString:@"f8"] || [base isEqualToString:@"f4"];
+        if (!(tk.isTypeKeyword || (tk.type == XTTokenIdentifier && floatName)))
+            continue;
+        if (src[i + 4].type != XTTokenIdentifier || src[i + 5].type != XTTokenRParen)
+            {
+            [_diagnostics emitError:[NSString stringWithFormat:@"a pack is written 'pack(eXmY)', with X exponent bits and "
+                                                               @"Y mantissa bits, as in 'f16:pack(e8m7)'"]
+                                 at:src[i + 2].location];
+            continue;
+            }
+        NSString* pk = src[i + 4].value;
+        NSString* name = nil;
+        NSString* err = nil;
+        if ([base isEqualToString:@"f16"])
+            {
+            if ([pk isEqualToString:@"e5m10"])
+                name = @"f16";
+            else if ([pk isEqualToString:@"e8m7"])
+                name = @"bf16";
+            else
+                err = [NSString stringWithFormat:@"f16 has no pack '%@': it takes e5m10 (the default, IEEE binary16) or "
+                                                 @"e8m7 (bfloat16); write 'f16' or 'bf16'",
+                                                 pk];
+            }
+        else if ([base isEqualToString:@"f32"] || [base isEqualToString:@"f64"])
+            {
+            NSString* own = [base isEqualToString:@"f32"] ? @"e8m23" : @"e11m52";
+            if ([pk isEqualToString:own])
+                name = base;
+            else
+                err = [NSString stringWithFormat:@"%@ has no pack '%@': it takes only its own, %@; write '%@'",
+                                                 base, pk, own, base];
+            }
+        else if ([base isEqualToString:@"bf16"])
+            err = [NSString stringWithFormat:@"bf16 is already f16:pack(e8m7) and takes no pack; write 'bf16', or "
+                                             @"'f16:pack(%@)' for another layout of f16",
+                                             pk];
+        else if ([base isEqualToString:@"f8"] || [base isEqualToString:@"f4"])
+            err = [NSString stringWithFormat:@"'%@' is not a type yet: the float types are f16, bf16, f32 and f64",
+                                             base];
+        else
+            err = [NSString stringWithFormat:@"'%@' has no pack: a pack is written on a float type, f16, f32 or f64",
+                                             tk.value];
+        if (err)
+            {
+            [_diagnostics emitError:err at:src[i + 2].location];
+            // The base type stands for the whole, so parsing goes on.
+            name = [base isEqualToString:@"f8"] || [base isEqualToString:@"f4"] ? @"f16" : nil;
+            }
+        if (!t)
+            t = [_tokens mutableCopy];
+        XTToken* fused = name ? [[XTToken alloc] initWithType:XTTokenIdentifier value:name location:tk.location]
+                              : tk;
+        [t replaceObjectsInRange:NSMakeRange(i, 6) withObjectsFromArray:@[ fused ]];
+        n = t.count;
+        }
+    if (t)
+        _tokens = t;
+    }
+
 - (void)rewriteProtocolStaticReceivers
     {
     NSUInteger n = _tokens.count;

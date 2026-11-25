@@ -542,8 +542,45 @@ static inline BOOL xt_pp_isalpha(unichar c) { return c < 0x80 && isalpha(c); }
         [_diagnostics emitError:@"unterminated #if / #ifdef block"
                              at:[XTSourceLocation locationWithFilename:filename line:lines.count column:1]];
         }
+    // A unit that names a 16-bit float (f16, bf16) gets the conversions its
+    // operations call, at the end of the entry file: FloatPack.xc.
+    if (_sourceDepth == 1 && [XTPreprocessor textNamesFloatPack:output])
+        {
+        [self processDirective:@"#import \"FloatPack.xc\""
+                      filename:filename
+                    lineNumber:lines.count
+                        output:output];
+        }
     _sourceDepth--;
     return output;
+    }
+
+/****************************************************************************\
+|* Does the text hold the word `f16` or `bf16`?
+\****************************************************************************/
++ (BOOL)textNamesFloatPack:(NSString*)text
+    {
+    NSUInteger n = text.length;
+    NSRange r = NSMakeRange(0, n);
+    while (YES)
+        {
+        NSRange f = [text rangeOfString:@"f16" options:NSLiteralSearch range:r];
+        if (f.location == NSNotFound)
+            return NO;
+        NSUInteger at = f.location;
+        if (at > 0 && [text characterAtIndex:at - 1] == 'b')
+            at--;
+        unichar before = at > 0 ? [text characterAtIndex:at - 1] : ' ';
+        NSUInteger end = f.location + 3;
+        unichar after = end < n ? [text characterAtIndex:end] : ' ';
+        BOOL identBefore = (before >= 'A' && before <= 'Z') || (before >= 'a' && before <= 'z') ||
+                           (before >= '0' && before <= '9') || before == '_';
+        BOOL identAfter = (after >= 'A' && after <= 'Z') || (after >= 'a' && after <= 'z') ||
+                          (after >= '0' && after <= '9') || after == '_';
+        if (!identBefore && !identAfter)
+            return YES;
+        r = NSMakeRange(end, n - end);
+        }
     }
 
 /****************************************************************************\

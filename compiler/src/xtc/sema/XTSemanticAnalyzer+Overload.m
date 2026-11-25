@@ -86,6 +86,23 @@ static NSHashTable* gDualLength;
     {
     if (!argType || !paramType)
         return NSIntegerMax;
+    // A 16-bit float matches its own pack exactly and widens to float or
+    // double; anything else reaches a pack parameter only as a literal that
+    // took its type, or through a cast. Boxing as for any number.
+    if (argType.isFloatPack || paramType.isFloatPack)
+        {
+        if (argType == paramType)
+            return 0;
+        if (argType.isFloatPack && paramType.kind == XTTypeKindFloat)
+            return 3;
+        if (argType.isFloatPack && paramType.kind == XTTypeKindDouble)
+            return 4;
+        if ([self autoboxClassNameForArgType:argType toParamType:paramType])
+            return 8;
+        if ([self canUnboxRhsType:argType toLhsType:paramType])
+            return 9;
+        return NSIntegerMax;
+        }
     if (argType.kind == paramType.kind)
         {
         // PR4 upcast check: two class-typed values at the same kind
@@ -403,6 +420,8 @@ static NSHashTable* gDualLength;
     case XTTypeKindU64:
     case XTTypeKindFloat:
     case XTTypeKindDouble:
+    // A 16-bit float is boxed as the float that holds it exactly.
+    case XTTypeKindF16:
         boxedClass = @"Number";
         break;
     case XTTypeKindPointer:
@@ -492,6 +511,14 @@ static NSHashTable* gDualLength;
         NSString* factory = [boxed isEqualToString:@"String"]
                                 ? @"withCString"
                                 : @"with";
+        if (at.isFloatPack)
+            {
+            XTCastExprNode* widen = [[XTCastExprNode alloc] initWithType:[XTType floatType]
+                                                                  operand:arg
+                                                                 location:arg.location];
+            [self analyzeNode:widen];
+            arg = widen;
+            }
         XTIdentifierNode* recv =
             [[XTIdentifierNode alloc] initWithName:boxed
                                           location:arg.location];
@@ -554,6 +581,8 @@ static NSHashTable* gDualLength;
         return @"asFloat";
     case XTTypeKindDouble:
         return @"asDouble";
+    case XTTypeKindF16:
+        return @"asFloat";
     default:
         return nil;
         }
@@ -689,6 +718,13 @@ static NSHashTable* gDualLength;
                                              arguments:@[]
                                               location:rhs.location];
     [self analyzeNode:call];
+    // A 16-bit float was boxed as a float: back to its own type.
+    if (lhsType.isFloatPack)
+        {
+        XTCastExprNode* narrow = [[XTCastExprNode alloc] initWithType:lhsType operand:call location:rhs.location];
+        [self analyzeNode:narrow];
+        return narrow;
+        }
     return call;
     }
 
@@ -729,7 +765,7 @@ static NSHashTable* gDualLength;
     if ([mc.methodName isEqualToString:@"copy"])
         return e;
     XTType* elem = XTCollectionElementOf(mc.receiver.resolvedType);
-    if (!elem || !(elem.isInteger || elem.isFloating))
+    if (!elem || !(elem.isInteger || elem.isFloating || elem.isFloatPack))
         return e;
     // A typed collection of primitives holds Number boxes, so reading one
     // back needs the class. Without it the element silently stayed the box
@@ -1606,6 +1642,7 @@ static NSInteger xtIntWidth(XTType* t)
     [self analyzeNode:arg];
     self.expectedType = prev;
     [self checkNilLiteral:arg against:hint];
+    [self checkPackFlow:arg to:hint compound:NO];
     }
 
 /****************************************************************************\
@@ -3024,7 +3061,8 @@ static NSUInteger XTFmtIntWidth(void)
         if (!at)
             continue;
         BOOL isInt = at.isInteger;
-        BOOL isFloat = at.isFloating;
+        // A 16-bit float is passed as a double, as a float is.
+        BOOL isFloat = at.isFloating || at.isFloatPack;
         BOOL isPtr = [at isKindOfClass:[XTPointerType class]];
         BOOL isAgg = (at.kind == XTTypeKindStruct || at.kind == XTTypeKindClass);
         // An enum given to %@ or %e prints its member's name.
@@ -4564,6 +4602,7 @@ static NSInteger XTFmtWrapperIndex(BOOL isVarArgs, NSArray<XTParamNode*>* params
     // together — otherwise the ternary types itself as a pointer (bug 046).
     [node replaceThenExpr:[self unboxCollectionElement:node.thenExpr]];
     [node replaceElseExpr:[self unboxCollectionElement:node.elseExpr]];
+    [self checkPackOperands:node.thenExpr right:node.elseExpr at:node.location];
     XTType* t1 = node.thenExpr.resolvedType;
     XTType* t2 = node.elseExpr.resolvedType;
     node.resolvedType = (t1 && t2) ? [XTType widenType:t1 with:t2] : t1 ?
@@ -4634,6 +4673,129 @@ static NSInteger XTFmtWrapperIndex(BOOL isVarArgs, NSArray<XTParamNode*>* params
                                               @"nil is a pointer: it cannot be a '%@'",
                                               type.displayName]
                              at:expr.location];
+    }
+
+/****************************************************************************\
+|* A literal takes the 16-bit float type its context needs and is rounded to
+|* it (`f16 h = 0.1;`): a float or integer literal, or one negated. One
+|* beyond the type's range is an error. NO when the expression is no literal.
+\****************************************************************************/
+- (BOOL)packAdoptLiteral:(XTASTNode*)expr to:(XTType*)pack
+    {
+    XTASTNode* lit = expr;
+    XTUnaryExprNode* neg = nil;
+    if (lit.nodeKind == XTASTNodeKindUnaryExpr && ((XTUnaryExprNode*)lit).op == XTUnaryOpNeg)
+        {
+        neg = (XTUnaryExprNode*)lit;
+        lit = neg.operand;
+        }
+    double v;
+    if (lit.nodeKind == XTASTNodeKindLiteralFloat)
+        {
+        XTLiteralFloatNode* f = (XTLiteralFloatNode*)lit;
+        v = f.sourceText.length ? strtod(f.sourceText.UTF8String, NULL) : [XTFloatEncoding doubleFromIEEEData:f.floatData];
+        }
+    else if (lit.nodeKind == XTASTNodeKindLiteralInt && !((XTLiteralIntNode*)lit).isNil)
+        v = (double)((XTLiteralIntNode*)lit).intValue;
+    else
+        return NO;
+    lit.resolvedType = pack;
+    if (neg)
+        neg.resolvedType = pack;
+    uint16_t bits = [pack packBitsForDouble:v];
+    uint16_t inf = (uint16_t)(((1u << pack.packExpBits) - 1) << pack.packMantBits);
+    if ((bits & 0x7FFF) == inf)
+        [self.diagnostics emitError:[NSString stringWithFormat:@"a literal out of range for '%@': its largest finite value "
+                                                               @"is %@",
+                                                               pack.displayName,
+                                                               pack.packExpBits == 8 ? @"3.39e38" : @"65504"]
+                                 at:expr.location];
+    return YES;
+    }
+
+/****************************************************************************\
+|* A value given to a slot (a declaration, an assignment, a return, an
+|* argument) converts implicitly only when it is exact, if either side is a
+|* 16-bit float; anything else needs a cast. A compound assignment gives the
+|* slot its operation's result.
+\****************************************************************************/
+- (void)checkPackFlow:(XTASTNode*)expr to:(nullable XTType*)type compound:(BOOL)compound
+    {
+    XTType* from = expr.resolvedType;
+    if (!expr || !type || !from || (!type.isFloatPack && !from.isFloatPack))
+        return;
+    if (type.isFloatPack && [self packAdoptLiteral:expr to:type])
+        return;
+    if (compound)
+        {
+        if (!type.isFloatPack)
+            return;
+        from = [XTType widenType:type with:from];
+        }
+    if (!(from.isFloatPack || from.isFloating || from.isInteger) || !(type.isFloatPack || type.isFloating || type.isInteger))
+        return;
+    if ([XTType packConvertsImplicitly:from to:type])
+        return;
+    NSString* fix = compound ? [NSString stringWithFormat:@"write the assignment out with one, as 'x = (%@)(x + y)'",
+                                                          type.displayName]
+                             : [NSString stringWithFormat:@"write '(%@)' before the value", type.displayName];
+    [self.diagnostics emitError:[NSString stringWithFormat:@"'%@' does not convert to '%@' without a cast: '%@' does not "
+                                                           @"hold every '%@' value; %@",
+                                                           from.displayName, type.displayName, type.displayName,
+                                                           from.displayName, fix]
+                             at:expr.location];
+    }
+
+/****************************************************************************\
+|* A brace initialiser's 16-bit float leaves, in an array or a struct: each
+|* takes its slot's type as a declaration's value does.
+\****************************************************************************/
+- (void)packAdoptInitialiser:(XTASTNode*)init type:(nullable XTType*)type
+    {
+    if (!init || !type)
+        return;
+    if (type.isFloatPack)
+        {
+        [self checkPackFlow:init to:type compound:NO];
+        return;
+        }
+    if (init.nodeKind != XTASTNodeKindBlock)
+        return;
+    NSArray<XTASTNode*>* items = ((XTBlockNode*)init).statements;
+    if ([type isKindOfClass:[XTArrayType class]])
+        {
+        XTType* et = ((XTArrayType*)type).elementType;
+        for (XTASTNode* it in items)
+            [self packAdoptInitialiser:it type:et];
+        }
+    else if ([type isKindOfClass:[XTStructType class]])
+        {
+        NSArray<XTStructField*>* fs = ((XTStructType*)type).fields;
+        for (NSUInteger i = 0; i < items.count && i < fs.count; i++)
+            [self packAdoptInitialiser:items[i] type:fs[i].fieldType];
+        }
+    }
+
+/****************************************************************************\
+|* The operands of a binary operator or the arms of a conditional, when one is
+|* a 16-bit float: a literal takes the other's type, and two different packs
+|* have no common type.
+\****************************************************************************/
+- (void)checkPackOperands:(XTASTNode*)left right:(XTASTNode*)right at:(XTSourceLocation*)loc
+    {
+    XTType* lt = left.resolvedType;
+    XTType* rt = right.resolvedType;
+    if (!lt || !rt || (!lt.isFloatPack && !rt.isFloatPack))
+        return;
+    if (lt.isFloatPack && !rt.isFloatPack && [self packAdoptLiteral:right to:lt])
+        return;
+    if (rt.isFloatPack && !lt.isFloatPack && [self packAdoptLiteral:left to:rt])
+        return;
+    if (lt.isFloatPack && rt.isFloatPack && lt != rt)
+        [self.diagnostics emitError:[NSString stringWithFormat:@"'%@' and '%@' have no common type: neither holds every "
+                                                               @"value of the other; convert both, e.g. '(f32)a + (f32)b'",
+                                                               lt.displayName, rt.displayName]
+                                 at:loc];
     }
 
 - (void)visitLiteralInt:(XTLiteralIntNode*)node
@@ -4998,6 +5160,9 @@ static NSInteger XTFmtWrapperIndex(BOOL isVarArgs, NSArray<XTParamNode*>* params
     // `.length` by destination (#321).
     [self narrowLength:node.operand to:node.castType];
     self.expectedType = prev;
+    // `(f16)0.1` is the literal rounded once, from its digits.
+    if (node.castType.isFloatPack)
+        [self packAdoptLiteral:node.operand to:node.castType];
     // `(u16)a.get(i)` converts the VALUE, so a boxed element read unboxes
     // first. Only for a cast to a PRIMITIVE: a cast to a class pointer is how
     // the unbox rewrite itself is spelled — `((Number*)e).asI32()` — and

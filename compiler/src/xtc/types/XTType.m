@@ -140,6 +140,113 @@
     });
     return t;
     }
++ (instancetype)f16Type
+    {
+    static XTType* t;
+    static dispatch_once_t o;
+    dispatch_once(&o, ^{
+      t = [(XTType*)[self alloc] initWithKind:XTTypeKindF16 displayName:@"f16"];
+    });
+    return t;
+    }
++ (instancetype)bf16Type
+    {
+    static XTType* t;
+    static dispatch_once_t o;
+    dispatch_once(&o, ^{
+      t = [(XTType*)[self alloc] initWithKind:XTTypeKindF16 displayName:@"bf16"];
+    });
+    return t;
+    }
+- (BOOL)isFloatPack
+    {
+    return _kind == XTTypeKindF16;
+    }
+- (NSUInteger)packExpBits
+    {
+    if (_kind != XTTypeKindF16)
+        return 0;
+    return [_displayName isEqualToString:@"bf16"] ? 8 : 5;
+    }
+- (NSUInteger)packMantBits
+    {
+    if (_kind != XTTypeKindF16)
+        return 0;
+    return [_displayName isEqualToString:@"bf16"] ? 7 : 10;
+    }
+- (double)packMaxFinite
+    {
+    NSUInteger e = self.packExpBits, m = self.packMantBits;
+    if (!e)
+        return 0;
+    int bias = (1 << (e - 1)) - 1;
+    return ldexp(2.0 - ldexp(1.0, -(int)m), bias);
+    }
+// FloatPack.xc's _xt_fpk_pack_f64, the same steps: the compiler and the
+// program round a literal and a value the same way.
+- (uint16_t)packBitsForDouble:(double)v
+    {
+    uint32_t e = (uint32_t)self.packExpBits, m = (uint32_t)self.packMantBits;
+    uint64_t x;
+    memcpy(&x, &v, 8);
+    uint32_t hi = (uint32_t)(x >> 32), lo = (uint32_t)x;
+    uint32_t sign = hi >> 31;
+    uint32_t ex = (hi >> 20) & 0x7FF;
+    uint32_t mhi = hi & 0xFFFFF;
+    uint32_t sig = (mhi << 11) | (lo >> 21);
+    if (lo & 0x1FFFFF)
+        sig |= 1;
+    uint32_t inf = ((1u << e) - 1) << m;
+    if (ex == 0x7FF)
+        {
+        if (mhi == 0 && lo == 0)
+            return (uint16_t)((sign << (e + m)) | inf);
+        uint32_t top = (sig << 1) | 1;
+        return (uint16_t)((sign << (e + m)) | inf | (1u << (m - 1)) | (top >> (32 - m)));
+        }
+    if (ex == 0 && mhi == 0 && lo == 0)
+        return (uint16_t)(sign << (e + m));
+    int32_t unb = ex == 0 ? -1022 : (int32_t)ex - 1023;
+    if (ex != 0)
+        sig |= 0x80000000u;
+    int32_t bias = (int32_t)((1u << (e - 1)) - 1);
+    int32_t te = unb + bias;
+    int32_t s = 31 - (int32_t)m;
+    if (te < 1)
+        {
+        s = s + 1 - te;
+        te = 1;
+        }
+    uint32_t q = 0;
+    if (s == 32)
+        q = sig > 0x80000000u ? 1 : 0;
+    else if (s < 32)
+        {
+        q = sig >> s;
+        uint32_t rem = sig & ((1u << s) - 1);
+        uint32_t half = 1u << (s - 1);
+        if (rem > half || (rem == half && (q & 1)))
+            q++;
+        }
+    uint32_t bits = ((uint32_t)(te - 1) << m) + q;
+    if (bits > inf)
+        bits = inf;
+    return (uint16_t)((sign << (e + m)) | bits);
+    }
++ (BOOL)packConvertsImplicitly:(XTType*)from to:(XTType*)to
+    {
+    if (!from || !to)
+        return YES;
+    if (to.isFloatPack)
+        {
+        // Only the same pack: an integer, even one every value of which the
+        // pack holds, is converted with a cast (a literal takes the type).
+        return from == to;
+        }
+    if (from.isFloatPack)
+        return to.isFloating;
+    return YES;
+    }
 + (instancetype)voidType
     {
     static XTType* t;
@@ -218,6 +325,8 @@ static BOOL sFloatIsIEEE = NO;
         return [XTType floatWidth];
     case XTTypeKindDouble:
         return 8;
+    case XTTypeKindF16:
+        return 2;
     default:
         return 0;
         }
@@ -296,6 +405,12 @@ static BOOL sFloatIsIEEE = NO;
         return YES;
     if (self.isInteger && other.isFloating)
         return YES;
+    // A 16-bit float meets every number: whether the conversion needs a cast
+    // is the site's question (packConvertsImplicitly:to:), not a mismatch.
+    if ((self.isFloatPack || other.isFloatPack) &&
+        (self.isFloatPack || self.isFloating || self.isInteger) &&
+        (other.isFloatPack || other.isFloating || other.isInteger))
+        return YES;
     return NO;
     }
 
@@ -339,6 +454,27 @@ static BOOL sFloatIsIEEE = NO;
 \****************************************************************************/
 + (XTType*)widenType:(XTType*)a with:(XTType*)b
     {
+    // A 16-bit float widens to the type that holds both operands: itself for
+    // the same pack or an 8-bit integer, f32 for a 16-bit integer, f64 for a
+    // wider one; float and double win as they do over an integer. Two
+    // different packs have no common type (sema refuses them); f32 stands in.
+    if (a.isFloatPack || b.isFloatPack)
+        {
+        XTType* p = a.isFloatPack ? a : b;
+        XTType* o = a.isFloatPack ? b : a;
+        if (o.kind == XTTypeKindDouble)
+            return [XTType doubleType];
+        if (o.kind == XTTypeKindFloat || (o.isFloatPack && o != p))
+            return [XTType floatType];
+        if (o.isFloatPack || o.kind == XTTypeKindU8 || o.kind == XTTypeKindI8 || o.kind == XTTypeKindBool ||
+            o.kind == XTTypeKindEnum)
+            return p;
+        if (o.isInteger && o.byteWidth <= 2)
+            return [XTType floatType];
+        if (o.isInteger)
+            return [XTType doubleType];
+        return p;
+        }
     if (a.kind == XTTypeKindDouble || b.kind == XTTypeKindDouble)
         return [XTType doubleType];
     if (a.isFloating || b.isFloating)

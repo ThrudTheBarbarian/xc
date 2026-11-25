@@ -1266,6 +1266,9 @@ class ClassInfo
             return String.withCString("F32");
         if (isName(s, "double"))
             return String.withCString("F64");
+        // f16/bf16: the 16-bit pattern (FloatPack.xc converts it).
+        if (Types.isPack(s))
+            return String.withCString("U16");
         if (isName(s, "bool"))
             return String.withCString("Bool");
         if (isName(s, "void"))
@@ -2019,6 +2022,12 @@ class ClassInfo
         {
         if (v == 0 || from == 0 || to == 0)
             return v;
+        if (Types.isPack(stripQual(from)) || Types.isPack(stripQual(to)))
+            {
+            IRValue* pv = coercePack(v, stripQual(from), stripQual(to));
+            if (pv != 0)
+                return pv;
+            }
         // A plain function pointer reaching a `^` WIDENS into the pair: the
         // recv word carries the code address and the code word a trampoline
         // that jumps through it. Same rule wherever it lands — a parameter, a
@@ -2359,9 +2368,275 @@ class ClassInfo
 
     // `-x` is a Neg, `~x` a Not, and `!x` a comparison against false —
     // there is no boolean-negate instruction, and there does not need to be.
+    // ── 16-bit floats (f16, bf16) ────────────────────────────────────────
+    // A 16-bit float is its bit pattern, a U16, in the IR. Every conversion
+    // and operation is a call of FloatPack.xc, which the preprocessor imports
+    // into a unit that names one of the types; each call takes the pack's
+    // exponent and mantissa widths as two u32 arguments. As the reference.
+    IRValue* packConst(u32 bits)
+        {
+        return constOf((i64)bits, String.withCString("u16"));
+        }
+
+    IRValue* packCall(string name, Array* args, String* irRet)
+        {
+        String* sym = runtimeHelper(String.withCString(name));
+        String* op = String.withCString("Call");
+        String* conv = String.withCString("CallConv::Standard");
+        IRSymbol* callee = symbolNamed(sym);
+        if (callee != 0 && callee.cloaked())
+            {
+            op = String.withCString("CallCloaked");
+            conv = String.withCString("CallConv::Cloaked");
+            }
+        else if (callee != 0 && callee.banked())
+            {
+            op = String.withCString("CallBanked");
+            conv = String.withCString("CallConv::Banked");
+            }
+        IRInsn* c = IRInsn.with(op);
+        c.add(IROperand.sym(sym));
+        for (u32 i = 0; i < args.count(); i++)
+            c.add(IROperand.useVal((IRValue*)args.get(i)));
+        c.add(IROperand.useVal(_mem));
+        IRValue* r = new IRValue(irRet);
+        c.setRes(r);
+        IRValue* nm = new IRValue(String.withCString("Mem"));
+        c.setMemRes(nm);
+        c.setCc(conv);
+        _blk.add(c);
+        _mem = nm;
+        return r;
+        }
+
+    // The call with the pack's widths appended.
+    IRValue* packCallOf(string name, Array* args, String* pack, String* irRet)
+        {
+        args.add((Object*)constOf((i64)Types.packExp(pack), String.withCString("u32")));
+        args.add((Object*)constOf((i64)Types.packMant(pack), String.withCString("u32")));
+        return packCall(name, args, irRet);
+        }
+
+    // A pack's value as an f32, which holds it exactly.
+    IRValue* packToF32(IRValue* v, String* pack)
+        {
+        Array* a = new Array();
+        a.add((Object*)v);
+        return packCallOf("_xt_fpk_unpack", a, pack, String.withCString("F32"));
+        }
+
+    // An f32 rounded to a pack.
+    IRValue* packFromF32(IRValue* v, String* pack)
+        {
+        Array* a = new Array();
+        a.add((Object*)v);
+        return packCallOf("_xt_fpk_pack_f32", a, pack, String.withCString("U16"));
+        }
+
+    IRValue* packExtend(IRValue* v, String* irTo, bool sgn)
+        {
+        if (v.ty().equals(irTo))
+            return v;
+        Array* o = new Array();
+        o.add((Object*)IROperand.useVal(v));
+        if (irWidth(v.ty()) == irWidth(irTo))
+            return emit(String.withCString("Bitcast"), irTo, o);
+        return emit(String.withCString(sgn ? "SExt" : "ZExt"), irTo, o);
+        }
+
+    // The AST spelling of a scalar IR type, for an argument whose parameter is
+    // known only by its IR type.
+    static String* astOfScalarIr(String* t)
+        {
+        if (IRType.is(t, tyI8)) return String.withCString("i8");
+        if (IRType.is(t, tyU8)) return String.withCString("u8");
+        if (IRType.is(t, tyI16)) return String.withCString("i16");
+        if (IRType.is(t, tyU16)) return String.withCString("u16");
+        if (IRType.is(t, tyI32)) return String.withCString("i32");
+        if (IRType.is(t, tyU32)) return String.withCString("u32");
+        if (IRType.is(t, tyI64)) return String.withCString("i64");
+        if (IRType.is(t, tyU64)) return String.withCString("u64");
+        if (IRType.is(t, tyF32)) return String.withCString("float");
+        if (IRType.is(t, tyF64)) return String.withCString("double");
+        if (IRType.is(t, tyBool)) return String.withCString("bool");
+        return (String*)0;
+        }
+
+    // Conversions with a 16-bit float on either side: C23's rules for
+    // _Float16, with an out-of-range float-to-integer conversion saturating
+    // and NaN giving 0. 0 when neither side is one. As the reference's
+    // coercePack:fromType:toType:location:.
+    IRValue* coercePack(IRValue* v, String* from, String* to)
+        {
+        // A comparison is a Bool whatever its operands were.
+        if (Types.isPack(from) && IRType.is(v.ty(), tyBool))
+            from = String.withCString("bool");
+        if (!Types.isPack(from) && !Types.isPack(to))
+            return (IRValue*)0;
+        if (from.equals(to))
+            return v;
+        if (Types.isPack(from))
+            {
+            if (isName(to, "bool"))
+                {
+                // Nonzero, NaN included: everything but the two zeros.
+                Array* ao = new Array();
+                ao.add((Object*)IROperand.useVal(v));
+                ao.add((Object*)IROperand.useVal(packConst((u32)$7FFF)));
+                IRValue* mag = emit(String.withCString("And"), String.withCString("U16"), ao);
+                IRValue* zero = packConst(0);
+                IRInsn* c = IRInsn.with(String.withCString("ICmp"));
+                c.setRes(new IRValue(String.withCString("Bool")));
+                c.setPred(String.withCString("NE"));
+                c.add(IROperand.useVal(mag));
+                c.add(IROperand.useVal(zero));
+                _blk.add(c);
+                return c.res();
+                }
+            IRValue* f = packToF32(v, from);
+            if (Types.isPack(to))
+                return packFromF32(f, to);
+            if (isName(to, "float"))
+                return f;
+            if (isName(to, "double"))
+                {
+                Array* xo = new Array();
+                xo.add((Object*)IROperand.useVal(f));
+                return emit(String.withCString("FpExt"), String.withCString("F64"), xo);
+                }
+            if (!(Types.isInteger(to) || Types.isEnumName(to)))
+                return coerceImpl(v, String.withCString("u16"), to);
+            u32 w = astWidth(to);
+            bool sgn = Types.isSigned(to);
+            Array* args = new Array();
+            args.add((Object*)f);
+            string helper = "_xt_fpk_sat_u32";
+            String* rt = String.withCString("u32");
+            if (w >= 8 && sgn)
+                {
+                helper = "_xt_fpk_sat_i64";
+                rt = String.withCString("i64");
+                args.add((Object*)constOf((i64)-9223372036854775807 - (i64)1, rt));
+                args.add((Object*)constOf((i64)9223372036854775807, rt));
+                }
+            else if (w >= 8)
+                {
+                helper = "_xt_fpk_sat_u64";
+                rt = String.withCString("u64");
+                Array* mo = new Array();
+                mo.add((Object*)IROperand.immI((i64)-1, String.withCString("U64")));
+                args.add((Object*)emit(String.withCString("Const"), String.withCString("U64"), mo));
+                }
+            else if (sgn)
+                {
+                i64 hi = w == 1 ? (i64)127 : (w == 2 ? (i64)32767 : (i64)2147483647);
+                helper = "_xt_fpk_sat_i32";
+                rt = String.withCString("i32");
+                args.add((Object*)constOf(0 - hi - 1, rt));
+                args.add((Object*)constOf(hi, rt));
+                }
+            else
+                {
+                i64 uhi = w == 1 ? (i64)255 : (w == 2 ? (i64)65535 : (i64)4294967295);
+                args.add((Object*)constOf(uhi, rt));
+                }
+            IRValue* r = packCall(helper, args, irType(rt));
+            if (w < 4)
+                {
+                Array* to2 = new Array();
+                to2.add((Object*)IROperand.useVal(r));
+                r = emit(String.withCString("Trunc"), irType(to), to2);
+                }
+            return r;
+            }
+        // To a pack.
+        Array* a = new Array();
+        if (isName(from, "float"))
+            return packFromF32(v, to);
+        if (isName(from, "double"))
+            {
+            a.add((Object*)v);
+            return packCallOf("_xt_fpk_pack_f64", a, to, String.withCString("U16"));
+            }
+        if (IRType.is(v.ty(), tyBool) || isName(from, "bool"))
+            {
+            a.add((Object*)packExtend(v, String.withCString("U32"), false));
+            return packCallOf("_xt_fpk_pack_u32", a, to, String.withCString("U16"));
+            }
+        if (Types.isInteger(from) || Types.isEnumName(from))
+            {
+            bool sg = Types.isSigned(from);
+            if (astWidth(from) >= 8)
+                {
+                a.add((Object*)v);
+                return packCallOf(sg ? "_xt_fpk_pack_i64" : "_xt_fpk_pack_u64", a, to, String.withCString("U16"));
+                }
+            a.add((Object*)packExtend(v, String.withCString(sg ? "I32" : "U32"), sg));
+            return packCallOf(sg ? "_xt_fpk_pack_i32" : "_xt_fpk_pack_u32", a, to, String.withCString("U16"));
+            }
+        return coerceImpl(v, from, String.withCString("u16"));
+        }
+
+    // `x + 1` / `x - 1` for ++/--: a const 1 of the value's type and an Add
+    // or Sub, or for a 16-bit float the step in f32, rounded back.
+    IRValue* stepValue(IRValue* old, String* ty, bool inc)
+        {
+        if (Types.isPack(stripQual(ty)))
+            {
+            IRValue* f = packToF32(old, stripQual(ty));
+            Array* fo = new Array();
+            fo.add((Object*)IROperand.immF(String.withCString("3ff0000000000000"), String.withCString("F32")));
+            IRValue* one = emit(String.withCString("Const"), String.withCString("F32"), fo);
+            Array* so = new Array();
+            so.add((Object*)IROperand.useVal(f));
+            so.add((Object*)IROperand.useVal(one));
+            IRValue* r = emit(String.withCString(inc ? "FAdd" : "FSub"), String.withCString("F32"), so);
+            return packFromF32(r, stripQual(ty));
+            }
+        Array* co = new Array();
+        co.add((Object*)IROperand.immI((i32)1, irType(ty)));
+        IRValue* one1 = emit(String.withCString("Const"), irType(ty), co);
+        Array* ops = new Array();
+        ops.add((Object*)IROperand.useVal(old));
+        ops.add((Object*)IROperand.useVal(one1));
+        return emit(String.withCString(inc ? "Add" : "Sub"), irType(ty), ops);
+        }
+
+    // A 16-bit float in a variadic call's tail is passed as a double, as a
+    // float is (printf's %f reads one). `args` and the call's argument nodes
+    // from `kidBase` correspond one to one.
+    void promotePackVarargs(Array* args, Node* call, u32 kidBase, u32 fixed)
+        {
+        for (u32 i = fixed; i < args.count() && kidBase + i < call.kidCount(); i++)
+            {
+            String* t = call.kid(kidBase + i).ty();
+            IRValue* av = (IRValue*)args.get(i);
+            if (t != 0 && Types.isPack(stripQual(t)) && IRType.is(av.ty(), tyU16))
+                args.replaceAt(i, (Object*)coercePack(av, stripQual(t), String.withCString("double")));
+            }
+        }
+
     IRValue* lowerUnary(Node* n)
         {
         String* op = n.op();
+        // Negating a 16-bit float flips its sign bit, which is exact for every
+        // value, NaN included. A negated literal is its own constant.
+        if (isName(op, "-") && n.ty() != 0 && Types.isPack(stripQual(n.ty())))
+            {
+            String* pk = stripQual(n.ty());
+            Node* lit = n.kid(0);
+            if (lit.kind() == (u16)nkInt || lit.kind() == (u16)nkFloat)
+                return packConst(Types.packBits(Types.literalBits(lit.kind() == (u16)nkFloat, lit.name(), lit.num(), true),
+                                                Types.packExp(pk), Types.packMant(pk)));
+            IRValue* pv = lowerExpr(lit);
+            if (_failed)
+                return (IRValue*)0;
+            pv = coerce(pv, lit.ty(), pk);
+            Array* xo = new Array();
+            xo.add((Object*)IROperand.useVal(pv));
+            xo.add((Object*)IROperand.useVal(packConst((u32)$8000)));
+            return emit(String.withCString("Xor"), String.withCString("U16"), xo);
+            }
         // A negated integer LITERAL is typed by the value it negates to, which
         // can need more bytes than the literal: `-3000000000` negates a u32
         // into an i64, `-200` a u8 into an i16. Negating the literal's own
@@ -3419,14 +3694,7 @@ class ClassInfo
             return (IRValue*)0;
         String* gty = (String*)gt;
         IRValue* old = loadGlobal(gname, gty);
-        Array* gone = new Array();
-        gone.add((Object*)IROperand.immI((i32)1, irType(gty)));
-        IRValue* one3 = emit(String.withCString("Const"), irType(gty), gone);
-        Array* gops = new Array();
-        gops.add((Object*)IROperand.useVal(old));
-        gops.add((Object*)IROperand.useVal(one3));
-        IRValue* nxt3 = emit(String.withCString(isName(n.op(), "++") ? "Add" : "Sub"),
-                             irType(gty), gops);
+        IRValue* nxt3 = stepValue(old, gty, isName(n.op(), "++"));
         storeGlobalARC(gname, gty, nxt3, (Node*)0);
         return postfix ? old : nxt3;
         }
@@ -3446,14 +3714,7 @@ class ClassInfo
                 return (IRValue*)0;
             String* ety = target.ty();
             IRValue* old = loadThrough(addr, ety);
-            Array* sone = new Array();
-            sone.add((Object*)IROperand.immI((i32)1, irType(ety)));
-            IRValue* one2 = emit(String.withCString("Const"), irType(ety), sone);
-            Array* sops = new Array();
-            sops.add((Object*)IROperand.useVal(old));
-            sops.add((Object*)IROperand.useVal(one2));
-            IRValue* nxt2 = emit(String.withCString(isName(n.op(), "++") ? "Add" : "Sub"),
-                                 irType(ety), sops);
+            IRValue* nxt2 = stepValue(old, ety, isName(n.op(), "++"));
             storeThrough(addr, nxt2);
             return postfix ? old : nxt2;
             }
@@ -3468,14 +3729,7 @@ class ClassInfo
                 return (IRValue*)0;
             String* mety = target.ty();
             IRValue* mold = loadThrough(maddr, mety);
-            Array* mone = new Array();
-            mone.add((Object*)IROperand.immI((i32)1, irType(mety)));
-            IRValue* mo = emit(String.withCString("Const"), irType(mety), mone);
-            Array* mops = new Array();
-            mops.add((Object*)IROperand.useVal(mold));
-            mops.add((Object*)IROperand.useVal(mo));
-            IRValue* mnxt = emit(String.withCString(isName(n.op(), "++") ? "Add" : "Sub"),
-                                 irType(mety), mops);
+            IRValue* mnxt = stepValue(mold, mety, isName(n.op(), "++"));
             storeThrough(maddr, mnxt);
             return postfix ? mold : mnxt;
             }
@@ -3492,14 +3746,7 @@ class ClassInfo
             {
             String* pty = (String*)_pinAst.get((Hashable*)target.name());
             IRValue* old = loadThrough(pinAddr(pin), pty);
-            Array* pone = new Array();
-            pone.add((Object*)IROperand.immI((i32)1, irType(pty)));
-            IRValue* one1 = emit(String.withCString("Const"), irType(pty), pone);
-            Array* pops = new Array();
-            pops.add((Object*)IROperand.useVal(old));
-            pops.add((Object*)IROperand.useVal(one1));
-            IRValue* nxt = emit(String.withCString(isName(n.op(), "++") ? "Add" : "Sub"),
-                                irType(pty), pops);
+            IRValue* nxt = stepValue(old, pty, isName(n.op(), "++"));
             storeThrough(pinAddr(pin), nxt);
             return postfix ? old : nxt;
             }
@@ -3519,14 +3766,7 @@ class ClassInfo
                 IRValue* iaddr = ivarAddr(target.name(), target);
                 String* ity = (String*)_curClass.ivarType().get((Hashable*)target.name());
                 IRValue* iold = loadThrough(iaddr, ity);
-                Array* ione = new Array();
-                ione.add((Object*)IROperand.immI((i32)1, irType(ity)));
-                IRValue* io = emit(String.withCString("Const"), irType(ity), ione);
-                Array* iops = new Array();
-                iops.add((Object*)IROperand.useVal(iold));
-                iops.add((Object*)IROperand.useVal(io));
-                IRValue* inxt = emit(String.withCString(isName(n.op(), "++") ? "Add" : "Sub"),
-                                     irType(ity), iops);
+                IRValue* inxt = stepValue(iold, ity, isName(n.op(), "++"));
                 storeThrough(iaddr, inxt);
                 return postfix ? iold : inxt;
                 }
@@ -3535,14 +3775,7 @@ class ClassInfo
             }
         String* ty = (String*)tyo;
         IRValue* cur = (IRValue*)_locals.get((Hashable*)target.name());
-        Array* cops = new Array();
-        cops.add((Object*)IROperand.immI((i32)1, irType(ty)));
-        IRValue* one = emit(String.withCString("Const"), irType(ty), cops);
-        Array* ops = new Array();
-        ops.add((Object*)IROperand.useVal(cur));
-        ops.add((Object*)IROperand.useVal(one));
-        IRValue* next = emit(String.withCString(isName(n.op(), "++") ? "Add" : "Sub"),
-                             irType(ty), ops);
+        IRValue* next = stepValue(cur, ty, isName(n.op(), "++"));
         _locals.set((Hashable*)target.name(), (Object*)next);
         return postfix ? cur : next;
         }
@@ -4486,6 +4719,10 @@ class ClassInfo
         n = Lower.opCallOrSelf(n);
         u16 k = n.kind();
 
+        // A literal sema gave a 16-bit float type: its digits' double, rounded.
+        if ((k == (u16)nkFloat || k == (u16)nkInt) && n.ty() != 0 && Types.isPack(stripQual(n.ty())))
+            return packConst(Types.packBits(Types.literalBits(k == (u16)nkFloat, n.name(), n.num(), false),
+                                            Types.packExp(stripQual(n.ty())), Types.packMant(stripQual(n.ty()))));
         if (k == (u16)nkFloat)
             {
             // The literal reaches the IR as the 64 bits of its DOUBLE value,
@@ -5261,6 +5498,17 @@ class ClassInfo
         // narrowing happens AFTER the shift, in the result type.
         bool isRot = isName(op, "<:") || isName(op, ":>");
         bool isShift = isName(op, "<<") || isName(op, ">>") || isRot;
+        // A 16-bit float operates in f32, both operands converted exactly; an
+        // arithmetic result is rounded back to its type after every operation
+        // (the ISO _Float16 rule), and a comparison needs no rounding.
+        String* packResult = (String*)0;
+        if (!isShift && Types.isPack(stripQual(ty)))
+            {
+            if (!(isName(op, "==") || isName(op, "!=") || isName(op, "<") || isName(op, ">") || isName(op, "<=")
+                  || isName(op, ">=")))
+                packResult = stripQual(ty);
+            ty = String.withCString("float");
+            }
         if (isShift)
             {
             String* lt = n.kid((u32)0).ty();
@@ -5334,6 +5582,8 @@ class ClassInfo
         // IS the operand type; a shift operates at the wider of its operand
         // and its context and narrows on the way out, so `(1000 >> 8) & $FF`
         // shifts a u16 and yields a u8.
+        if (packResult != 0)
+            return packFromF32(emit(mn, String.withCString("F32"), ops), packResult);
         return emit(mn, irType(n.ty()), ops);
         }
 
@@ -5515,6 +5765,27 @@ class ClassInfo
     // `lhs op= rhs` as the reference rewrites it: `lhs = lhs op rhs`, the
     // binary typed at the left side's type and the left node shared between
     // the read and the store.
+    // `x op= y` on a 16-bit float: both sides in f32, the result rounded
+    // back to x's type, as the reference's `x = x op y` lowers it.
+    IRValue* packCompound(String* bop, IRValue* cur, IRValue* rhs, String* rhsTy, String* pack, Node* at)
+        {
+        String* f = String.withCString("float");
+        IRValue* l = coerce(cur, pack, f);
+        IRValue* r = coerce(rhs, rhsTy, f);
+        String* mn = arithOp(bop, f);
+        if (mn == 0)
+            {
+            String* w = String.withCString("compound op ");
+            w.append(bop);
+            giveUpAt(w, at);
+            return (IRValue*)0;
+            }
+        Array* ops = new Array();
+        ops.add((Object*)IROperand.useVal(l));
+        ops.add((Object*)IROperand.useVal(r));
+        return packFromF32(emit(mn, String.withCString("F32"), ops), pack);
+        }
+
     Node* compoundAsPlain(Node* n, Node* lhs)
         {
         Node* bin = Node.with((u16)nkBinary);
@@ -5729,6 +6000,15 @@ class ClassInfo
             // A shift count is narrowed to U8, as the reference's shift
             // lowering does.
             bool cshift = isName(mbop, "<<") || isName(mbop, ">>");
+            if (!cshift && Types.isPack(stripQual(mft)))
+                {
+                IRValue* pres = packCompound(mbop, cold, crhs, n.kid((u32)1).ty(), stripQual(mft), n);
+                if (pres == 0)
+                    return (IRValue*)0;
+                IRValue* pfa = fieldAddr(sbase, mfidx, ptrTo(irType(mft)));
+                storeThrough(pfa, pres);
+                return pres;
+                }
             if (cshift)
                 crhs = coerce(crhs, n.kid((u32)1).ty(), String.withCString("u8"));
             else
@@ -5814,6 +6094,20 @@ class ClassInfo
             // A shift count is narrowed to U8, as the reference's shift
             // lowering does.
             bool isShift = isName(bop, "<<") || isName(bop, ">>");
+            IRValue* pres = (IRValue*)0;
+            if (!isShift && Types.isPack(stripQual(ty)))
+                {
+                pres = packCompound(bop, cur, v, n.kid((u32)1).ty(), stripQual(ty), n);
+                if (pres == 0)
+                    return (IRValue*)0;
+                if (cpin != 0)
+                    storeThrough(pinAddr(cpin), pres);
+                else if (lv != 0)
+                    _locals.set((Hashable*)lhs.name(), (Object*)pres);
+                else
+                    storeGlobal(lhs.name(), ty, pres);
+                return pres;
+                }
             if (isShift)
                 v = coerce(v, n.kid((u32)1).ty(), String.withCString("u8"));
             else
@@ -6287,7 +6581,10 @@ class ClassInfo
             cargs.add((Object*)a);
             }
         if (decl.hasFlag((u32)NF_VARARGS))
+            {
+            promotePackVarargs(cargs, n, 0, fixedParamCount(decl));
             cargs = packVarargs(cargs, fixedParamCount(decl), decl);
+            }
         String* callee = decl.sym() == 0 ? n.name() : decl.sym();
         IRInsn* call = IRInsn.with(placedCallOp(decl));
         call.add(IROperand.sym(callee));
@@ -6571,6 +6868,16 @@ class ClassInfo
         String* dstIr = irType(dstAst);
         if (IRType.is(dstIr, tyVoid) || isPtrIr(dstIr))
             return v;
+        // A 16-bit float argument: to a U16 parameter it is that pack (sema
+        // refuses anything else without a cast); to any other, converted.
+        if (Types.isPack(stripQual(srcAst)) && IRType.is(v.ty(), tyU16))
+            {
+            String* da = Lower.astOfScalarIr(dstIr);
+            if (IRType.is(dstIr, tyU16) || da == 0)
+                return v;
+            IRValue* pv = coercePack(v, stripQual(srcAst), da);
+            return pv != 0 ? pv : v;
+            }
         // A plain function pointer reaching a `^` parameter WIDENS into one:
         // the pair's recv word carries the code address and its code word a
         // trampoline that jumps through it. That is what lets a free function
@@ -6861,6 +7168,9 @@ class ClassInfo
                 nested.add((Object*)Number.with((u32)0));
             return nested;
             }
+        // A 16-bit float leaf: a literal's bits, rounded to the pack.
+        if (Types.isPack(stripQual(ty)))
+            return packLeafBytes(e, stripQual(ty), width);
         if (Types.isFloating(ty))
             {
             // The leaf's value as a double, then stored at the slot's width:
@@ -7022,8 +7332,30 @@ class ClassInfo
     // global, the static local and the static ivar all share. The port's
     // static local and static ivar folded through the integer path alone, so
     // a `static double` came out zero.
+    // A 16-bit float initialiser that is a literal (a float or integer
+    // literal, or one negated): its bits, rounded to the pack from the digits'
+    // double, as `width` little-endian bytes; 0 when it is no literal. As the
+    // reference's tryFoldPack:pack:bits:.
+    Array* packLeafBytes(Node* e, String* pack, u32 width)
+        {
+        bool neg = false;
+        Node* lit = e;
+        if (lit.kind() == (u16)nkUnary && isName(lit.op(), "-") && lit.kidCount() > 0)
+            {
+            neg = true;
+            lit = lit.kid(0);
+            }
+        if (lit.kind() != (u16)nkFloat && lit.kind() != (u16)nkInt)
+            return (Array*)0;
+        u32 bits = Types.packBits(Types.literalBits(lit.kind() == (u16)nkFloat, lit.name(), lit.num(), neg),
+                                  Types.packExp(pack), Types.packMant(pack));
+        return leBytes((i64)bits, width);
+        }
+
     Array* foldInitialiser(Node* ini, String* ty)
         {
+        if (Types.isPack(stripQual(ty)) && ini.kind() != (u16)nkBlock)
+            return packLeafBytes(ini, stripQual(ty), 2);
         // A FLOAT global's payload is the literal as an IEEE DOUBLE, eight
         // bytes, whether the slot is declared `float` or `double` — the
         // backend narrows it if it has to.
@@ -7838,6 +8170,9 @@ class ClassInfo
         // double's low 32 bits, so 0.5 read as false (bug 293).
         if (isFloatIr(v.ty()))
             return truthTest(v);
+        // A 16-bit float likewise: -0.0 is false, so not its bits as they stand.
+        if (e.ty() != 0 && Types.isPack(stripQual(e.ty())) && IRType.is(v.ty(), tyU16))
+            return coercePack(v, stripQual(e.ty()), String.withCString("bool"));
         if (e.ty() == 0 || !isBoundSig(stripQual(e.ty())))
             return v;
         // The AST type is not enough on its own. Sema types a comparison as the
@@ -11980,6 +12315,9 @@ class ClassInfo
         // calloc(1, count*garbage), which failed, and the stub wrote the
         // object header through the NULL it got back. Bug 027.
         String* nm = stripQual(n.name());
+        // A 16-bit float array is stored as its bit patterns: u16's helper.
+        if (Types.isPack(nm))
+            nm = String.withCString("u16");
         String* helper = String.withCString("_xtc_new_");
         // A `new T[N]` landing in a `simd:` pointer takes the page-aligned
         // helper (par-blocks.md) — on the 64-bit targets, whose runtimes define
@@ -12896,6 +13234,7 @@ class ClassInfo
             rewriteEnumPercentE(args, n, (u32)1, fixedParamCount(decl));
             if (_failed)
                 return (IRValue*)0;
+            promotePackVarargs(args, n, 1, fixedParamCount(decl));
             args = packVarargs(args, fixedParamCount(decl), decl);
             }
         String* retTy = n.ty();
@@ -13001,6 +13340,7 @@ class ClassInfo
             rewriteEnumPercentE(args, n, (u32)0, fixedParamCount(decl));
             if (_failed)
                 return (IRValue*)0;
+            promotePackVarargs(args, n, 0, fixedParamCount(decl));
             args = packVarargs(args, fixedParamCount(decl), decl);
             }
         String* ret = n.ty();
@@ -13077,7 +13417,10 @@ class ClassInfo
                                                n.kid(i + (u32)1).ty(), want));
                 }
             if (decl.hasFlag((u32)NF_VARARGS))
+                {
+                promotePackVarargs(args, n, 1, fixedParamCount(decl));
                 args = packVarargs(args, fixedParamCount(decl), decl);
+                }
             }
         String* retTy = n.ty();
         bool hasRes = retTy != 0 && !isName(stripQual(retTy), "void");

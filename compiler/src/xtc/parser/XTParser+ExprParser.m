@@ -711,7 +711,9 @@ static BOOL parPlainDecimal(NSString* t)
     case XTTokenFloatLiteral:
         {
         [self advance];
-        return [[XTLiteralFloatNode alloc] initWithFloatData:cur.floatData location:loc];
+        XTLiteralFloatNode* lit = [[XTLiteralFloatNode alloc] initWithFloatData:cur.floatData location:loc];
+        lit.sourceText = cur.value;
+        return lit;
         }
     case XTTokenStringLiteral:
         {

@@ -133,6 +133,17 @@ class Overload
         String* parc = Overload._unqualify(par);
         if (arg.equals(parc))
             return (u32)0;
+        // A 16-bit float widens to float or double; anything else reaches a
+        // pack parameter only as a literal that took its type, or through a
+        // cast. (Boxing is the caller's last resort, as for any number.)
+        if (Types.isPack(arg) || Types.isPack(parc))
+            {
+            if (Types.isPack(arg) && Overload._is(parc, "float"))
+                return 3;
+            if (Types.isPack(arg) && Overload._is(parc, "double"))
+                return 4;
+            return Overload.noMatch();
+            }
 
         // Pointers: identical pointees are exact; a void pointee on either side
         // is the loose match the original gives rank 5.

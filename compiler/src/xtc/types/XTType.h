@@ -25,6 +25,11 @@ typedef NS_ENUM(NSInteger, XTTypeKind) {
     // DWARF struct import.
     XTTypeKindI64,
     XTTypeKindU64,
+    // A 16-bit float: f16 (IEEE binary16, pack e5m10) or bf16 (pack e8m7). The
+    // two are distinct type objects of this kind; packExpBits/packMantBits
+    // say which. The value is its 16-bit pattern: the IR holds it as a U16
+    // and every operation converts through f32 (FloatPack.xc).
+    XTTypeKindF16,
 };
 
 @interface XTType : NSObject <NSCopying>
@@ -170,6 +175,26 @@ typedef NS_ENUM(NSInteger, XTTypeKind) {
 + (instancetype)u64Type;
 + (instancetype)boolType;
 + (instancetype)floatType;
+/// f16, IEEE binary16 (pack e5m10).
++ (instancetype)f16Type;
+/// bf16, bfloat16 (pack e8m7), spelled `f16:pack(e8m7)` too.
++ (instancetype)bf16Type;
+/// YES for a 16-bit float (f16, bf16). Neither isInteger nor isFloating: its
+/// value is a bit pattern, converted through f32 for every operation.
+@property(nonatomic, readonly) BOOL isFloatPack;
+/// The pack's exponent and mantissa widths (f16 5/10, bf16 8/7); 0 otherwise.
+@property(nonatomic, readonly) NSUInteger packExpBits;
+@property(nonatomic, readonly) NSUInteger packMantBits;
+/// The pack's largest finite value (f16 65504).
+@property(nonatomic, readonly) double packMaxFinite;
+/// A double rounded to the pack (nearest, ties to even, subnormals kept, a
+/// value too large an infinity), as its 16-bit pattern.
+- (uint16_t)packBitsForDouble:(double)v;
+/// Can a value of `from` reach a slot of `to` with no cast? Only when every
+/// value converts exactly: a pack to itself, f32 or f64. An integer reaches a
+/// pack through a cast (a literal takes the pack's type at the site). Asked
+/// only when one side is a pack.
++ (BOOL)packConvertsImplicitly:(XTType*)from to:(XTType*)to;
 
 /****************************************************************************\
 |* The target's `float` storage: 4 bytes of IEEE-754 single on every native

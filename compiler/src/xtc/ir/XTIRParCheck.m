@@ -291,6 +291,28 @@ static NSMutableIndexSet* gParArrFields = nil;
 @end
 
 
+
+// Does the function, or one it calls, convert a 16-bit float (a call of
+// FloatPack.xc's _xt_fpk_*)?
+static BOOL XTParUsesFloatPack(XTIRModule* module, XTIRFunction* f, NSMutableSet<NSString*>* seen)
+    {
+    if (!f || [seen containsObject:f.name])
+        return NO;
+    [seen addObject:f.name];
+    for (XTIRBlock* b in f.blocks)
+        for (XTIRInsn* i in b.instructions)
+            {
+            if (i.opcode != XTIROpCall || !i.operands.count || i.operands[0].kind != XTIROperandKindSym)
+                continue;
+            XTIRSymbol* sym = [module symbolForId:i.operands[0].symbolId];
+            if ([sym.name hasPrefix:@"_xt_fpk_"])
+                return YES;
+            if (sym.function && XTParUsesFloatPack(module, sym.function, seen))
+                return YES;
+            }
+    return NO;
+    }
+
 @implementation XTIROptGpuEscapeTrips
 
 - (instancetype)init
@@ -1619,6 +1641,10 @@ static BOOL gEmitsWGSL = NO;
             {
             // On a target with a GPU, say why this block stays on the CPU.
             NSString* cls = [f.name substringToIndex:f.name.length - 4];
+            // A 16-bit float's operations are calls the kernels do not have:
+            // the block runs on the CPU, in the type's own precision.
+            if (XTParUsesFloatPack(module, f, [NSMutableSet set]))
+                why = @"it computes in f16 or bf16, which GPU kernels do not take yet";
             // A loop the compiler lifted by itself says so only under
             // -Wpar-auto: a plain program is not told about a block it never
             // wrote. Mirrored in the port.

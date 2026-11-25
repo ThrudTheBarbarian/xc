@@ -751,6 +751,9 @@
         // exact match and upcast-to-ancestor.
         if (node.declaredType && !node.declaredType.isAuto)
             {
+            [self checkPackFlow:node.initialiser to:node.declaredType compound:NO];
+            if (node.initialiser.nodeKind == XTASTNodeKindBlock)
+                [self packAdoptInitialiser:node.initialiser type:node.declaredType];
             [self checkClassPointerAssign:node.declaredType
                                   rhsType:node.initialiser.resolvedType
                                   rhsNode:node.initialiser
@@ -1341,6 +1344,7 @@
             [self narrowLength:node.values[i] to:retTypes.firstObject];
         // `return nil` from a function that does not return a pointer.
         [self checkNilLiteral:node.values[i] against:self.expectedType];
+        [self checkPackFlow:node.values[i] to:self.expectedType compound:NO];
         }
     self.expectedType = prev;
 
@@ -2172,6 +2176,9 @@
     // below applies.
     if ([self resolveOperatorOfBinary:node])
         return;
+    if (node.op != XTBinaryOpShl && node.op != XTBinaryOpShr && node.op != XTBinaryOpRol && node.op != XTBinaryOpRor &&
+        node.op != XTBinaryOpLogAnd && node.op != XTBinaryOpLogOr)
+        [self checkPackOperands:node.left right:node.right at:node.location];
 
     XTType* lt = node.left.resolvedType;
     XTType* rt = node.right.resolvedType;
@@ -2969,6 +2976,7 @@
     self.expectedType = prev;
     // `n = nil` into anything but a pointer.
     [self checkNilLiteral:node.rhs against:node.lhs.resolvedType];
+    [self checkPackFlow:node.rhs to:node.lhs.resolvedType compound:node.assignOp != XTAssignOpAssign];
     node.resolvedType = node.lhs.resolvedType ?: node.rhs.resolvedType ?
                                                                        : [XTType u8Type];
     // An index operator's set, or a compound operator (in place, or as
