@@ -72,6 +72,8 @@ class Parser
     u32     _parAutoCounter; // lifted loops so far
     bool    _parNoFuse;      // -fno-par-fuse: adjacent par blocks stay apart (#147)
     u32     _fnTok;          // where the function or method being parsed opens its body (#147)
+    String* _parAutoFused;   // a lifted loop fused with the loops after it: the block's name (#147)
+    Array*  _parAutoFuseSaid; // what -Wpar-auto says of them: [message, token]…, said once the block is built
     Map*    _parAutoLabels;  // a lifted loop's file:line -> how many had it
     bool    _parAutoWantsRuntime; // --par-style=auto found a loop to wrap, but Par.xc was not imported
     u32     _loopDepth;     // loops open in the code being parsed (an auto par wraps an outermost one)
@@ -4581,6 +4583,20 @@ class Parser
             _loopDepth = _loopDepth - 1;
             parGridEnter("loops", false);
         }
+        // The loops after it that lift too, while each fuses with it (#147):
+        // the merged loop is the block's loop, and the loop it falls back to.
+        _parAutoFused = (String*)0;
+        _parAutoFuseSaid = (Array*)0;
+        if (!_parNoFuse && !fromWhile && _parAutoDepthReads == depthReads) {
+            Map* fs = new Map();
+            fs.set((Hashable*)String.withCString("plain"), (Object*)plain);
+            fs.set((Hashable*)String.withCString("v"), (Object*)v);
+            fs.set((Hashable*)String.withCString("at"), (Object*)traceAt);
+            while (parAutoFuseNext(fs)) { }
+            plain = (Node*)fs.get((Hashable*)String.withCString("plain"));
+            v = (Map*)fs.get((Hashable*)String.withCString("v"));
+            _parAutoFused = (String*)fs.get((Hashable*)String.withCString("name"));
+        }
         Array* reds = (Array*)pfwGet(v, "redNodes");
         u32 goal = ((Number*)pfwGet(v, "goalN")).asU32();
         u32 gridCap = ((Number*)pfwGet(v, "gridN")).asU32();
@@ -4678,6 +4694,11 @@ class Parser
         // them a second time.
         for (u32 i = plainWarn; i < warnMark; i++) : serial
             _warnings.add(_warnings.get(i));
+        if (_parAutoFuseSaid != (Array*)0) {
+            for (u32 i = (u32)0; i + (u32)1 < _parAutoFuseSaid.count(); i = i + (u32)2)
+                warnAt(String.withCString("par-auto"), (String*)_parAutoFuseSaid.get(i), (Token*)_parAutoFuseSaid.get(i + (u32)1));
+            _parAutoFuseSaid = (Array*)0;
+        }
         // A perfect two-deep nest becomes one block over the W*H grid (the
         // reference explains).
         Token* savedMkAt0 = _mkAt;
@@ -4709,6 +4730,12 @@ class Parser
         if (lnth > (u32)1) {
             name.appendByte((u8)'#');
             name.append(String.withU32(lnth));
+        }
+        // Fused loops: named after them all, so nothing learned about one
+        // applies to the block (#147).
+        if (_parAutoFused != (String*)0) {
+            name = _parAutoFused;
+            _parAutoFused = (String*)0;
         }
         Token* savedMkAt = _mkAt;
         _mkAt = forTok;
@@ -8560,6 +8587,107 @@ class Parser
         return false;
     }
 
+    // The next statement, when it is a loop --par-style=auto lifts too, fused
+    // into the loop in st ("plain", its verdict "v", its token "at") when the
+    // rules allow; else the parse is put back. The merged loop is lifted only
+    // when the recogniser lifts it as one. True when it fused.
+    bool parAutoFuseNext(Map* st)
+    {
+        if (!check((u16)tokFor)) return false;
+        Node* plain = (Node*)st.get((Hashable*)String.withCString("plain"));
+        Map* v = (Map*)st.get((Hashable*)String.withCString("v"));
+        Token* at1 = (Token*)st.get((Hashable*)String.withCString("at"));
+        if (pfwGet(v, "scanAcc") != (Object*)0) return false;
+        Map* mark = parAutoMark();
+        u32 depthReads = _parAutoDepthReads;
+        Token* at2 = cur();
+        parGridEnter("loops", true);
+        Node* plain2 = parseFor();
+        parGridEnter("loops", false);
+        String* why = (String*)0;
+        String* first = (String*)st.get((Hashable*)String.withCString("name"));
+        if (first == (String*)0) first = parFuseLabel(mk((u16)nkPar), at1);
+        String* second = parFuseLabel(mk((u16)nkPar), at2);
+        Map* v3 = (Map*)0;
+        Node* merged = (Node*)0;
+        Map* v2 = (Map*)0;
+        if (plain2 != (Node*)0 && _parAutoDepthReads == depthReads)
+            v2 = plRecogniseFor(plain2, at2);
+        if (v2 == (Map*)0 || !Parser._same((String*)pfwGet(v2, "lift"), "1") || pfwGet(v2, "scanAcc") != (Object*)0)
+            why = String.withCString("");
+        else if (((Number*)pfwGet(v, "goalN")).asU32() != ((Number*)pfwGet(v2, "goalN")).asU32())
+            why = String.withCString("their goals differ");
+        else {
+            // The rules of written blocks, on copies of the two loops.
+            Map* a = parAutoFuseParts(plain.deepCopy(), v, at1);
+            Map* b = parAutoFuseParts(plain2.deepCopy(), v2, at2);
+            why = parFuse(a, b);
+            if (why == (String*)0) {
+                merged = ((Node*)a.get((Hashable*)String.withCString("body"))).kid((u32)0);
+                v3 = plRecogniseFor(merged, at1);
+                if (!Parser._same((String*)pfwGet(v3, "lift"), "1") || pfwGet(v3, "scanAcc") != (Object*)0)
+                    why = String.withCString("the two loops do not lift as one");
+            }
+        }
+        if (why == (String*)0) {
+            String* w = String.withCString("the loops at '");
+            w.append(first);
+            w.appendCString("' and '");
+            w.append(second);
+            w.appendCString("' run as one block (--par-style)");
+            parAutoFuseSay(w, at1);
+            String* nm = String.withString(first);
+            nm.appendByte((u8)'+');
+            nm.append(second);
+            st.set((Hashable*)String.withCString("plain"), (Object*)merged);
+            st.set((Hashable*)String.withCString("v"), (Object*)v3);
+            st.set((Hashable*)String.withCString("name"), (Object*)nm);
+            return true;
+        }
+        parAutoRollback(mark);
+        if (why.byteLength() > (u32)0) {
+            String* w = String.withCString("the loops at '");
+            w.append(first);
+            w.appendCString("' and '");
+            w.append(second);
+            w.appendCString("' run apart: ");
+            w.append(why);
+            parAutoFuseSay(w, at1);
+        }
+        return false;
+    }
+
+    // A -Wpar-auto line about fusing lifted loops, said after the loop's own
+    // warnings are given again (parAutoForAt), so it is said once.
+    void parAutoFuseSay(String* w, Token* at)
+    {
+        if (_parAutoFuseSaid == (Array*)0) _parAutoFuseSaid = new Array();
+        _parAutoFuseSaid.add((Object*)w);
+        _parAutoFuseSaid.add((Object*)at);
+    }
+
+    // A lifted loop as parFuse reads a block: its reductions, its loop as
+    // the body, no frame of its own yet.
+    Map* parAutoFuseParts(Node* loop, Map* v, Token* at)
+    {
+        Node* p = mk((u16)nkPar);
+        Array* reds = (Array*)pfwGet(v, "redNodes");
+        if (reds != (Array*)0)
+            for (u32 i = (u32)0; i < reds.count(); i = i + (u32)1) p.add((Node*)reds.get(i));
+        Node* body = mk((u16)nkBlock);
+        body.add(loop);
+        Map* frame = new Map();
+        frame.set((Hashable*)String.withCString("types"), (Object*)new Map());
+        Map* r = new Map();
+        r.set((Hashable*)String.withCString("p"), (Object*)p);
+        r.set((Hashable*)String.withCString("body"), (Object*)body);
+        r.set((Hashable*)String.withCString("frame"), (Object*)frame);
+        r.set((Hashable*)String.withCString("parAt"), (Object*)at);
+        r.set((Hashable*)String.withCString("flags"), (Object*)Number.with(((Number*)pfwGet(v, "goalN")).asU32()));
+        r.set((Hashable*)String.withCString("lifted"), (Object*)Number.with((u32)1));
+        return r;
+    }
+
     // The counted loop a block's body is: exactly `for (T i = lo; i < hi; step)`
     // with a step of one; else 0.
     static Node* parFuseLoop(Node* body)
@@ -9005,10 +9133,13 @@ class Parser
         nm.append(parFuseLabel(p2, (Token*)b.get((Hashable*)String.withCString("parAt"))));
         p1.setName(nm);
         for (u32 i = (u32)0; i < p2.kidCount(); i = i + (u32)1) p1.add(p2.kid(i));
-        // The fused block's frame, from its tree, as the first block's was made.
-        Map* frame = parFuseFrame(f1);
-        parFrameFill(frame, body1);
-        a.set((Hashable*)String.withCString("frame"), (Object*)frame);
+        // The fused block's frame, from its tree, as the first block's was
+        // made (a lifted loop's is made later, from the loop).
+        if (a.get((Hashable*)String.withCString("lifted")) == (Object*)0) {
+            Map* frame = parFuseFrame(f1);
+            parFrameFill(frame, body1);
+            a.set((Hashable*)String.withCString("frame"), (Object*)frame);
+        }
         return (String*)0;
     }
 

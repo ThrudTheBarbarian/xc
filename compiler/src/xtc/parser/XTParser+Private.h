@@ -67,6 +67,8 @@ NS_ASSUME_NONNULL_BEGIN
 // parAutoFor calls open, and the names parAutoLabels counted, in order.
 @property(nonatomic) NSUInteger parAutoDepthReads;
 @property(nonatomic) NSUInteger fnTok;   // where the function being parsed opens its body (#147)
+@property(nonatomic, copy, nullable) NSString* parAutoFused;   // fused lifted loops: the block's name (#147)
+@property(nonatomic, nullable) NSMutableArray* parAutoFuseSaid;   // their -Wpar-auto lines, said once the block is built
 @property(nonatomic) NSUInteger parAutoNest;
 @property(nonatomic, strong, nullable) NSMutableArray<NSString*>* parAutoLabelLog;
 // The par frame walk (XTParser+ParFrame.m): the frame it fills, whether it is

@@ -1,0 +1,5 @@
+the loops at 'par_fuse_auto.xc:25' and 'par_fuse_auto.xc:27' run as one block (--par-style)
+the loops at 'par_fuse_auto.xc:25+par_fuse_auto.xc:27' and 'par_fuse_auto.xc:29' run as one block (--par-style)
+the loops at 'par_fuse_auto.xc:34' and 'par_fuse_auto.xc:36' run apart: 'cs' is written by one and used at another index by the other
+the loops at 'par_fuse_auto.xc:45' and 'par_fuse_auto.xc:47' run apart: the second uses what the first reduces
+the loops at 'par_fuse_auto.xc:55' and 'par_fuse_auto.xc:57' run as one block (--par-style)

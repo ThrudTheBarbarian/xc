@@ -250,6 +250,8 @@ These two run as one loop, `scale+square`, in which each item computes `y[i]` an
 - The bodies call only maths functions (`sqrt`, `sin`, `Math.sqrt`, …) and contain no `return`, `goto` or `break` out of the loop.
 - Neither uses `double`. A GPU without `double` (Apple's) could then run neither part, so such a block stays on its own.
 
+The same holds for loops that [`--par-style`](#loops-that-become-blocks---par-style) turns into blocks: adjacent loops are merged first and the merged loop becomes one block, named after all of them (`f.xc:12+f.xc:14`). If the block is later run as a plain loop, it is the merged loop, which computes what the loops did one after the other.
+
 More than two blocks in a row can run as one this way. A fused block is measured, placed and reported under its own name (`scale+square`), so nothing `auto` learned about the separate blocks applies to it. `-Wpar-auto` says which blocks ran as one and, for neighbours that stayed apart, why. `-fno-par-fuse` keeps every block separate, for comparison.
 
 ## Running on the GPU

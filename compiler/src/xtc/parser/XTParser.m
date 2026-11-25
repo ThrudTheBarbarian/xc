@@ -5692,6 +5692,23 @@ static int64_t parAutoConst(XTASTNode* e)
         [self parAutoLoop:-1];
         [self parGridLoop:-1];
         }
+    // The loops after it that lift too, while each fuses with it (#147): the
+    // merged loop is the block's loop, and the loop it falls back to. As the
+    // port.
+    self.parAutoFused = nil;
+    self.parAutoFuseSaid = nil;
+    if (!self.parNoFuse && !fromWhile && plain && self.parAutoDepthReads == depthReads)
+        {
+        NSMutableDictionary* fs = [NSMutableDictionary dictionary];
+        fs[@"plain"] = plain;
+        fs[@"v"] = v;
+        fs[@"at"] = traceAt;
+        while ([self parAutoFuseNext:fs])
+            ;
+        plain = fs[@"plain"];
+        v = fs[@"v"];
+        self.parAutoFused = fs[@"name"];
+        }
     NSArray<NSArray<NSString*>*>* reds = v[@"redList"] ?: @[];
     NSUInteger goal = [v[@"goal"] unsignedIntegerValue];
     NSUInteger gridCap = [v[@"grid"] unsignedIntegerValue];
@@ -5809,6 +5826,9 @@ static int64_t parAutoConst(XTASTNode* e)
         else if (d.level == XTDiagnosticLevelNote)
             [_diagnostics emitNote:d.message at:d.location];
         }
+    for (NSUInteger k = 0; k + 1 < self.parAutoFuseSaid.count; k += 2)
+        [_diagnostics emitWarning:self.parAutoFuseSaid[k] category:XTWarnParAuto at:self.parAutoFuseSaid[k + 1]];
+    self.parAutoFuseSaid = nil;
     // A perfect two-deep nest becomes one block over the W*H grid (the
     // :grid form): W*H work items in one dispatch rather than H items each
     // running W serially, which matters when H is small.
@@ -5834,6 +5854,13 @@ static int64_t parAutoConst(XTASTNode* e)
     [self.parAutoLabelLog addObject:name];
     if (nth > 1)
         name = [NSString stringWithFormat:@"%@#%lu", name, (unsigned long)nth];
+    // Fused loops: named after them all, so nothing learned about one applies
+    // to the block (#147).
+    if (self.parAutoFused)
+        {
+        name = self.parAutoFused;
+        self.parAutoFused = nil;
+        }
     NSMutableArray* savedNoted = self.pfwNoted;
     self.pfwNoted = [NSMutableArray array];
     XTASTNode* out = [self parDesugarBody:body frame:frame name:name reductions:reds at:loc];
@@ -7128,13 +7155,98 @@ static XTForCStyleNode* _Nullable parFuseLoop(XTBlockNode* body)
     XTParFuseSetBody(l1, [[XTBlockNode alloc] initWithStatements:@[ l1.body, second ] location:l1.body.location]);
     a[@"name"] = [NSString stringWithFormat:@"%@+%@", [self parFuseLabel:a], [self parFuseLabel:b]];
     a[@"reductions"] = [a[@"reductions"] arrayByAddingObjectsFromArray:r2];
-    // The fused block's frame, from its tree, as the first block's was made.
-    NSMutableDictionary* frame = [self parFuseFrame:a[@"frame"]];
-    [self parFrameFill:frame body:body1];
-    if (![a[@"accuracy"] boolValue])
-        frame[@"fast"] = @YES;
-    a[@"frame"] = frame;
+    // The fused block's frame, from its tree, as the first block's was made
+    // (a lifted loop's is made later, from the loop).
+    if (!a[@"lifted"])
+        {
+        NSMutableDictionary* frame = [self parFuseFrame:a[@"frame"]];
+        [self parFrameFill:frame body:body1];
+        if (![a[@"accuracy"] boolValue])
+            frame[@"fast"] = @YES;
+        a[@"frame"] = frame;
+        }
     return nil;
+    }
+
+// The next statement, when it is a loop --par-style=auto lifts too, fused
+// into the loop in st ("plain", its verdict "v", its location "at") when the
+// rules allow; else the parse is put back. The merged loop is lifted only
+// when the recogniser lifts it as one. Whether it fused. As the port.
+- (BOOL)parAutoFuseNext:(NSMutableDictionary*)st
+    {
+    if (![self check:XTTokenFor])
+        return NO;
+    XTASTNode* plain = st[@"plain"];
+    NSDictionary* v = st[@"v"];
+    XTSourceLocation* at1 = st[@"at"];
+    if (v[@"scanAcc"])
+        return NO;
+    NSDictionary* mark = [self parAutoMark];
+    NSUInteger depthReads = self.parAutoDepthReads;
+    XTSourceLocation* at2 = [self currentLocation];
+    [self parGridLoop:1];
+    XTASTNode* plain2 = [self parseFor];
+    [self parGridLoop:-1];
+    NSString* first = st[@"name"] ?: [self parFuseLabel:@{ @"loc" : at1 }];
+    NSString* second = [self parFuseLabel:@{ @"loc" : at2 }];
+    NSString* why = nil;
+    XTASTNode* merged = nil;
+    NSDictionary* v3 = nil;
+    NSDictionary* v2 = plain2 && self.parAutoDepthReads == depthReads ? [self plRecogniseFor:plain2 at:at2] : nil;
+    if (!v2 || ![v2[@"lift"] boolValue] || v2[@"scanAcc"])
+        why = @"";
+    else if ([v[@"goal"] unsignedIntegerValue] != [v2[@"goal"] unsignedIntegerValue])
+        why = @"their goals differ";
+    else
+        {
+        // The rules of written blocks, on copies of the two loops.
+        NSMutableDictionary* a = [self parAutoFuseParts:XTASTDeepCopy(plain) verdict:v at:at1];
+        NSMutableDictionary* b = [self parAutoFuseParts:XTASTDeepCopy(plain2) verdict:v2 at:at2];
+        why = [self parFuse:a with:b];
+        if (!why)
+            {
+            merged = ((XTBlockNode*)a[@"body"]).statements[0];
+            v3 = [self plRecogniseFor:merged at:at1];
+            if (![v3[@"lift"] boolValue] || v3[@"scanAcc"])
+                why = @"the two loops do not lift as one";
+            }
+        }
+    if (!why)
+        {
+        [self parAutoFuseSay:[NSString stringWithFormat:@"the loops at '%@' and '%@' run as one block (--par-style)", first, second] at:at1];
+        st[@"plain"] = merged;
+        st[@"v"] = v3;
+        st[@"name"] = [NSString stringWithFormat:@"%@+%@", first, second];
+        return YES;
+        }
+    [self parAutoRollback:mark];
+    if (why.length > 0)
+        [self parAutoFuseSay:[NSString stringWithFormat:@"the loops at '%@' and '%@' run apart: %@", first, second, why] at:at1];
+    return NO;
+    }
+
+// A -Wpar-auto line about fusing lifted loops, said after the loop's own
+// warnings are given again (parAutoForAt), so it is said once.
+- (void)parAutoFuseSay:(NSString*)w at:(XTSourceLocation*)at
+    {
+    if (!self.parAutoFuseSaid)
+        self.parAutoFuseSaid = [NSMutableArray array];
+    [self.parAutoFuseSaid addObject:w];
+    [self.parAutoFuseSaid addObject:at];
+    }
+
+// A lifted loop as parFuse reads a block: its reductions, its loop as the
+// body, no frame of its own yet.
+- (NSMutableDictionary*)parAutoFuseParts:(XTASTNode*)loop verdict:(NSDictionary*)v at:(XTSourceLocation*)at
+    {
+    NSMutableDictionary* r = [NSMutableDictionary dictionary];
+    r[@"reductions"] = v[@"redList"] ?: @[];
+    r[@"body"] = [[XTBlockNode alloc] initWithStatements:@[ loop ] location:at];
+    r[@"frame"] = @{ @"types" : @{} };
+    r[@"loc"] = at;
+    r[@"accuracy"] = @([v[@"goal"] unsignedIntegerValue] == 2);
+    r[@"lifted"] = @YES;
+    return r;
     }
 
 - (nullable XTASTNode*)parseDefer
