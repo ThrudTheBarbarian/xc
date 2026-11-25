@@ -196,7 +196,10 @@ cover -c
 same "-c"                   $A -c -o @OUT@.o ret.xc
 # A source and an object on one line: refused, in the same words.
 "$REF" -q -A x86_64 -c -o mix.o ret.xc > /dev/null 2>&1
-text "a source and an object on one line" err -q -A x86_64 -o @OUT@ ret.xc mix.o
+run "$REF" refout -q -A x86_64 -o @OUT@ ret.xc mix.o; rrc=$RC; cat refout.out.txt refout.err.txt > mixref.txt
+run "$XC" xcout -q -A x86_64 -o @OUT@ ret.xc mix.o; xrc=$RC; cat xcout.out.txt xcout.err.txt > mixxc.txt
+[ $rrc != 0 ] && [ $xrc != 0 ] && cmp -s mixref.txt mixxc.txt && ok "a source and an object on one line" \
+    || bad "a source and an object on one line: status $rrc/$xrc, $(diff mixref.txt mixxc.txt | head -3 | tr '\n' ' ')"
 cover -a --assemble-only --emit-asm-from-ir
 equiv "-a"                  "$A -o refout.s ret.xc"  "$A -a -o xcout.s ret.xc"
 equiv "--assemble-only"     "$A -o refout.s ret.xc"  "$A --assemble-only -o xcout.s ret.xc"
