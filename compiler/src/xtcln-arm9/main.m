@@ -19,6 +19,7 @@
 #import "XAArm32Assembler.h"
 #import "XTElf32Writer.h"
 #import "XTArArchive.h"
+#import "XTDupCheck.h"
 
 int main(int argc, const char* argv[])
     {
@@ -215,7 +216,13 @@ int main(int argc, const char* argv[])
                     [defined addObject:sy.name];
             __block BOOL mergeFailed = NO;
             __block NSUInteger objSeq = 0;
-            BOOL (^mergeObj)(NSDictionary*) = ^BOOL(NSDictionary* o) {
+            // A named object's first definition of each global and where it
+            // came from (#663): name -> @[object, origin].
+            NSMutableDictionary<NSString*, NSArray*>* firstOrigin = [NSMutableDictionary dictionary];
+            // `label` is the object's path; nil for an archive member, a pool
+            // where the first definition stands without a check.
+            BOOL (^mergeObj)(NSDictionary*, NSString*) = ^BOOL(NSDictionary* o, NSString* label) {
+              NSDictionary<NSString*, NSString*>* org = label ? XTDupOrigins(label) : nil;
               // A LOCAL symbol is private to its object, so it is tagged per
               // object (`name$o<n>`), in its definition and in the object's
               // own relocations. Merged under the bare name, the first
@@ -308,7 +315,21 @@ int main(int argc, const char* argv[])
                               break;
                               }
                       if (pk == NSNotFound)
+                          {
+                          // The first stands — when both come from the same
+                          // source. Two modules each defining the name is a
+                          // clash, refused naming both objects and origins (#663).
+                          NSArray* fo = sy.isGlobal ? firstOrigin[sy.name] : nil;
+                          NSString* o2 = XTDupOriginOf(org, sy.name, NO);
+                          if (fo && o2 && ![o2 isEqualToString:fo[1]])
+                              {
+                              fprintf(stderr, "xcc-ln-arm9: error: %s\n",
+                                      XTDupMessage(sy.name, fo[0], fo[1], label, o2).UTF8String);
+                              mergeFailed = YES;
+                              return NO;
+                              }
                           continue;
+                          }
                       if (sy.section == 3 && sy.size <= msyms[pk].size)
                           continue;
                       [msyms removeObjectAtIndex:pk];
@@ -325,6 +346,12 @@ int main(int argc, const char* argv[])
                           [msyms removeObjectAtIndex:k];
                           break;
                           }
+                  if (sy.isGlobal && sy.section != 3)
+                      {
+                      NSString* o1 = XTDupOriginOf(org, sy.name, NO);
+                      if (o1)
+                          firstOrigin[sy.name] = @[label, o1];
+                      }
                   // A COMMON symbol's `value` is its ALIGNMENT, not an offset —
                   // the writer assigns its storage later. Rebasing it would turn
                   // an alignment into a bogus address.
@@ -354,7 +381,7 @@ int main(int argc, const char* argv[])
                             op.UTF8String);
                     return 1;
                     }
-                if (!mergeObj(o) || mergeFailed)
+                if (!mergeObj(o, op) || mergeFailed)
                     return 1;
                 }
             // ── pull from static archives, on demand ──────────────────────────
@@ -407,7 +434,7 @@ int main(int argc, const char* argv[])
                             continue;
                         [taken addObject:@(mi)];
                         progress = YES;
-                        if (!mergeObj(pool[mi]) || mergeFailed)
+                        if (!mergeObj(pool[mi], nil) || mergeFailed)
                             return 1;
                         }
                     }

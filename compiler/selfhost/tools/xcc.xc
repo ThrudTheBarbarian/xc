@@ -73,6 +73,7 @@
 #import "WasmDefs.xc"
 #import <Arm9>            // the ARMv7-A BACK END
 #import <Arm32>           // …its assembler
+#import <DupCheck>        // two objects defining one name from different sources (#663)
 #import "Arm32Defs.xc"
 #import <Elf32>           // …and the ET_DYN writer the XTOS loader takes
 #import "Elf32Defs.xc"
@@ -2799,6 +2800,9 @@ void writeObjectSidecars(DriverOptions* d)
         driverExit((i32)1); return;
     }
     writeSidecar(base, ".xtc.ir", d.irText());
+    // Where each definition came from (#663): the link refuses a name two
+    // objects define from different origins.
+    writeSidecar(base, ".xtc.origins", d.fe().originsText());
 }
 
 // <base><ext> holds text when there is any; otherwise it is removed. Either
@@ -2837,6 +2841,7 @@ void writeCObjectSidecars(String* xo, String* out)
     }
     writeSidecar(base, ".xtc.iface", (String*)0);
     writeSidecar(base, ".xtc.ir", (String*)0);
+    writeSidecar(base, ".xtc.origins", (String*)0);
 }
 
 // `a/b.o` -> `a/b`. The LAST dot only, and only after the last separator, so a
@@ -3814,6 +3819,10 @@ String* arm9SysrootLib(DriverOptions* d, String* libName)
 // handed to Elf32.sharedObject. The objects carry their own `_xtc_new_<T>`
 // trampolines (see `-c` in emitArm9), so nothing is generated here. Mirrors
 // the reference's object link through `xcc-ln-arm9 --shared`.
+// A named object's first definition of each global and where it came from
+// (#663): name -> [object, origin]. Reset per link.
+Map* gArm9FirstOrigin;
+
 void linkObjectsArm9(DriverOptions* d)
 {
     Array* all = new Array();
@@ -3889,6 +3898,7 @@ void linkObjectsArm9(DriverOptions* d)
 bool arm9MergeInputs(Array* objs, Array* ars, Data* text, Data* mdata, Data* mctors,
                      Array* msyms, Array* mrels)
 {
+    gArm9FirstOrigin = new Map();
     Map* defined = new Map();
     for (u32 i = (u32)0; i < msyms.count(); i = i + (u32)1) {
         AsmSymbol* sy = (AsmSymbol*)msyms.get(i);
@@ -3904,7 +3914,7 @@ bool arm9MergeInputs(Array* objs, Array* ars, Data* text, Data* mdata, Data* mct
                          "a relocation this linker does not emit)\n", op.cString());
             driverExit((i32)1); return false;
         }
-        if (!mergeArm9Object(o, text, mdata, mctors, msyms, mrels, defined, seq)) {
+        if (!mergeArm9Object(o, text, mdata, mctors, msyms, mrels, defined, seq, op)) {
             driverExit((i32)1); return false;
         }
         seq = seq + (u32)1;
@@ -3949,7 +3959,7 @@ bool arm9MergeInputs(Array* objs, Array* ars, Data* text, Data* mdata, Data* mct
             if (!defines) continue;
             taken.set((Hashable*)key, (Object*)Number.withU32((u32)1));
             progress = true;
-            if (!mergeArm9Object(o, text, mdata, mctors, msyms, mrels, defined, seq)) {
+            if (!mergeArm9Object(o, text, mdata, mctors, msyms, mrels, defined, seq, (String*)0)) {
                 driverExit((i32)1); return false;
             }
             seq = seq + (u32)1;
@@ -3966,9 +3976,13 @@ bool arm9MergeInputs(Array* objs, Array* ars, Data* text, Data* mdata, Data* mct
 // except the category-chain anchors (§4.3b), where first-wins would run one
 // module's category method as another's body. False (having said why) on
 // one of those.
+// `label` is the object's path; null for an archive member, a pool where the
+// first definition stands without a check.
 bool mergeArm9Object(Elf32Object* o, Data* mtext, Data* mdata, Data* mctors,
-                     Array* msyms, Array* mrels, Map* defined, u32 seq)
+                     Array* msyms, Array* mrels, Map* defined, u32 seq, String* label)
 {
+    if (gArm9FirstOrigin == (Map*)0) gArm9FirstOrigin = new Map();
+    Map* org = label != (String*)0 ? DupCheck.originsFor(label) : (Map*)0;
     // A LOCAL symbol is private to its object, so it is tagged per object
     // (`name$o<n>`), in its definition and in the object's own relocations.
     // Merged under the bare name, the first object's `str_0` answered for
@@ -4033,7 +4047,19 @@ bool mergeArm9Object(Elf32Object* o, Data* mtext, Data* mdata, Data* mctors,
                 AsmSymbol* q = (AsmSymbol*)msyms.get(k);
                 if (q.section() == (u32)3 && q.name().equals(nm)) { prev = q; pk = k; k = msyms.count(); }
             }
-            if (prev == (AsmSymbol*)0) continue;
+            if (prev == (AsmSymbol*)0) {
+                // The first stands — when both come from the same source. Two
+                // modules each defining the name is a clash, refused naming
+                // both objects and origins (#663).
+                Array* fo = sy.isGlobal() ? (Array*)gArm9FirstOrigin.get((Hashable*)nm) : (Array*)0;
+                String* o2 = DupCheck.originOf(org, nm, false);
+                if (fo != (Array*)0 && o2 != (String*)0 && !o2.equals((String*)fo.get((u32)1))) {
+                    Stdio.printf("xcc: error: %s\n",
+                                 DupCheck.message(nm, (String*)fo.get((u32)0), (String*)fo.get((u32)1), label, o2).cString());
+                    return false;
+                }
+                continue;
+            }
             if (sy.section() == (u32)3 && sy.size() <= prev.size()) continue;
             msyms.removeAt(pk);
         }
@@ -4045,6 +4071,15 @@ bool mergeArm9Object(Elf32Object* o, Data* mtext, Data* mdata, Data* mctors,
             if (u.section() == (u32)0 && u.name().equals(nm)) {
                 msyms.removeAt(k);
                 k = msyms.count();
+            }
+        }
+        if (sy.isGlobal() && sy.section() != (u32)3) {
+            String* o1 = DupCheck.originOf(org, nm, false);
+            if (o1 != (String*)0) {
+                Array* fa = new Array();
+                fa.add((Object*)label);
+                fa.add((Object*)o1);
+                gArm9FirstOrigin.set((Hashable*)nm, (Object*)fa);
             }
         }
         // A COMMON symbol's value is its ALIGNMENT, not an offset.

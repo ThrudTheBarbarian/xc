@@ -32,6 +32,7 @@
 #import <Mangle>
 #import <Iface>
 #import <IfaceWrite>
+#import <Origins>
 #import <Dwarf> // …and a C library's own DWARF, when it has no iface
 #import "DwarfDefs.xc"
 #import <Analyze>
@@ -109,6 +110,7 @@ class FeOptions
     String* _classTable;
     bool _analyze;      // -Wanalyze: run the static analyser
     String* _ifaceJson; // …and where it lands
+    String* _originsText; // a -c object's definition origins (#663), or null
     Array* _neededLibs; // the library FILES `#import <X>` resolved to, for the
                         //   driver: a wasm app's loader has to name the
                         //   modules it will fetch, and only the preprocessor
@@ -137,6 +139,7 @@ class FeOptions
         _classTable = (String*)0;
         _analyze = false;
         _ifaceJson = (String*)0;
+        _originsText = (String*)0;
         _neededLibs = new Array();
         _target = String.withCString("xt6502");
         _libPlatform = (String*)0;
@@ -359,6 +362,16 @@ class FeOptions
     void setIfaceJson(String* j)
         {
         _ifaceJson = j;
+        }
+
+    String* originsText(void)
+        {
+        return _originsText;
+        }
+
+    void setOriginsText(String* t)
+        {
+        _originsText = t;
         }
     Array* neededLibs(void)
         {
@@ -1254,6 +1267,9 @@ class FeOptions
                 }
             o.setIfaceJson(j);
             }
+        // Where each definition came from, for the link's clash check (#663).
+        if (o.emitIface())
+            o.setOriginsText(Origins.table(program));
 
         Lower* lower = Lower.make();
         // IR outlining (XC_PAR_PROPOSE=outline): the optimiser's blocks get

@@ -13,6 +13,7 @@
 #import "XAX86_64Assembler.h"
 #import "XTElfWriter.h"
 #import "XTElfGC.h"
+#import "XTDupCheck.h"
 
 // Merge ONE ET_REL — an explicit `.o` or an archive member — into the image.
 //
@@ -30,6 +31,9 @@
 // The size of each name a COMMON defines, for the common-vs-strong rule
 // (#686). One link per process, so one table.
 static NSMutableDictionary<NSString*, NSNumber*>* gCommonSize;
+// A named object's first definition of each name and where it came from
+// (#663): name -> @[object, origin].
+static NSMutableDictionary<NSString*, NSArray*>* gFirstOrigin;
 
 static BOOL mergeElfObject(NSDictionary* obj, NSString* label, NSUInteger tag,
                            NSMutableData* mtext, NSMutableData* mdata,
@@ -51,6 +55,8 @@ static BOOL mergeElfObject(NSDictionary* obj, NSString* label, NSUInteger tag,
     {
     if (!gCommonSize)
         gCommonSize = [NSMutableDictionary dictionary];
+    if (!gFirstOrigin)
+        gFirstOrigin = [NSMutableDictionary dictionary];
     while (mtext.length & 15)
         {
         uint8_t z = 0;
@@ -115,6 +121,9 @@ static BOOL mergeElfObject(NSDictionary* obj, NSString* label, NSUInteger tag,
         }
     NSArray<NSString*>* snames = obj[@"symnames"];
     NSArray<NSDictionary*>* sdefs = obj[@"symdefs"];
+    // Where this named object's definitions came from (#663); archive members
+    // (tag 1000 and up) are a pool, where the first stands.
+    NSDictionary<NSString*, NSString*>* org = tag < 1000 ? XTDupOrigins(label) : nil;
     NSString* (^tagged)(NSUInteger) = ^NSString*(NSUInteger si) {
       NSString* n = snames[si];
       // A SECTION symbol has no name — a relocation against one says "this
@@ -208,6 +217,17 @@ static BOOL mergeElfObject(NSDictionary* obj, NSString* label, NSUInteger tag,
                 }
             else
                 {
+                // The first stands — when both come from the same source. Two
+                // modules each defining the name is a clash, refused naming
+                // both objects and origins (#663).
+                NSArray* fo = weakDef ? nil : gFirstOrigin[nm];
+                NSString* o2 = XTDupOriginOf(org, nm, NO);
+                if (fo && o2 && ![o2 isEqualToString:fo[1]])
+                    {
+                    fprintf(stderr, "xcc-ln-x86_64: error: %s\n",
+                            XTDupMessage(nm, fo[0], fo[1], label, o2).UTF8String);
+                    return NO;
+                    }
                 continue;
                 }
             }
@@ -251,6 +271,12 @@ static BOOL mergeElfObject(NSDictionary* obj, NSString* label, NSUInteger tag,
             {
             msyms[nm] = @(dbase + off);
             [mdataSyms addObject:nm];
+            }
+        if (!weakDef && [sdefs[si][@"ext"] boolValue])
+            {
+            NSString* o1 = XTDupOriginOf(org, nm, NO);
+            if (o1)
+                gFirstOrigin[nm] = @[label, o1];
             }
         if ([sdefs[si][@"ext"] boolValue])
             [mglobals addObject:nm];

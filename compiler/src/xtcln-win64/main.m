@@ -20,11 +20,15 @@
 #import "XTRegexCompat.h"
 #import "XAX86_64Assembler.h"
 #import "XTPEWriter.h"
+#import "XTDupCheck.h"
 
 // Merge one COFF object into the growing image (defined below main).
 // Names defined so far only by a .bss (tentative) definition (#686). One link
 // per process, so one set.
 static NSMutableSet<NSString*>* gTentative;
+// A named object's first definition of each name and where it came from
+// (#663): name -> @[object, origin].
+static NSMutableDictionary<NSString*, NSArray*>* gFirstOrigin;
 
 // A data definition whose bytes are all zero, up to the next definition in the
 // object or the end of its data. xcc's win64 objects carry their BSS in .data
@@ -477,6 +481,8 @@ static BOOL mergeCoffObject(NSDictionary* obj, NSString* whence, NSUInteger oi,
     {
     if (!gTentative)
         gTentative = [NSMutableSet set];
+    if (!gFirstOrigin)
+        gFirstOrigin = [NSMutableDictionary dictionary];
         {
         while (mtext.length & 15)
             {
@@ -506,6 +512,9 @@ static BOOL mergeCoffObject(NSDictionary* obj, NSString* whence, NSUInteger oi,
               return n;
           return [NSString stringWithFormat:@"%@$o%lu", n, (unsigned long)oi];
         };
+        // Where this named object's definitions came from (#663); archive
+        // members (oi 1000 and up) are a pool, where the first stands.
+        NSDictionary<NSString*, NSString*>* org = oi < 1000 ? XTDupOrigins(whence) : nil;
         for (NSUInteger si = 0; si < snames.count; si++)
             {
             int where = [sdefs[si][@"where"] intValue];
@@ -547,10 +556,29 @@ static BOOL mergeCoffObject(NSDictionary* obj, NSString* whence, NSUInteger oi,
                 // common (#686); otherwise the FIRST definition stands (#663).
                 if (![gTentative containsObject:nm] || [sdefs[si][@"tentative"] boolValue]
                     || zeroFilledDef(obj, sdefs, si))
+                    {
+                    // The first stands — when both come from the same source.
+                    // Two modules each defining the name is a clash, refused
+                    // naming both objects and origins (#663).
+                    NSArray* fo = gFirstOrigin[nm];
+                    NSString* o2 = [sdefs[si][@"ext"] boolValue] ? XTDupOriginOf(org, nm, NO) : nil;
+                    if (fo && o2 && ![o2 isEqualToString:fo[1]])
+                        {
+                        fprintf(stderr, "xcc-ln-win64: error: %s\n",
+                                XTDupMessage(nm, fo[0], fo[1], whence, o2).UTF8String);
+                        return NO;
+                        }
                     continue;
+                    }
                 [gTentative removeObject:nm];
                 if (where == 1)
                     [mdataSyms removeObject:nm];
+                }
+            if ([sdefs[si][@"ext"] boolValue])
+                {
+                NSString* o1 = XTDupOriginOf(org, nm, NO);
+                if (o1)
+                    gFirstOrigin[nm] = @[whence, o1];
                 }
             if (where == 1)
                 msyms[nm] = @(tbase + off);

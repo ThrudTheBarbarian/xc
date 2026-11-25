@@ -814,7 +814,7 @@ $(XTCG_ARM64_BIN): $(XTCG_ARM64_OBJS) | $(BIN_DIR)
 # main + the in-house assembler and Mach-O writer.
 XTCLN_ARM64_OBJS = src/xtcln-arm64/main.o src/xtc/asm/arm64/XAArm64Assembler.o \
                    src/xtc/link/XTMachOWriter.o src/xtc/link/XTElfArm64Writer.o \
-                   src/xtc/dwarf/XTDwarfWriter.o
+                   src/xtc/dwarf/XTDwarfWriter.o src/xtc/link/XTDupCheck.o
 $(XTCLN_ARM64_BIN): $(XTCLN_ARM64_OBJS) | $(BIN_DIR)
 	$(CC) $(LDFLAGS) -o $@ $(XTCLN_ARM64_OBJS)
 
@@ -822,7 +822,7 @@ $(XTCLN_ARM64_BIN): $(XTCLN_ARM64_OBJS) | $(BIN_DIR)
 # Mac produce a Linux binary with no Linux toolchain involved.
 XTCLN_X8664_OBJS = src/xtcln-x86_64/main.o src/xtc/asm/x86_64/XAX86_64Assembler.o \
                    src/xtc/link/XTElfWriter.o src/xtc/link/XTElfGC.o src/xtc/link/XTArArchive.o \
-                   src/xtc/dwarf/XTDwarfWriter.o
+                   src/xtc/dwarf/XTDwarfWriter.o src/xtc/link/XTDupCheck.o
 $(XTCLN_X8664_BIN): $(XTCLN_X8664_OBJS) | $(BIN_DIR)
 	$(CC) $(LDFLAGS) -o $@ $(XTCLN_X8664_OBJS)
 
@@ -831,7 +831,8 @@ $(XTCLN_X8664_BIN): $(XTCLN_X8664_OBJS) | $(BIN_DIR)
 # and not on Windows, and a compiler that needs someone else's toolchain to
 # produce an object is not portable, it is merely hosted.
 XTCLN_ARM9_OBJS = src/xtcln-arm9/main.o src/xtc/asm/arm32/XAArm32Assembler.o \
-                  src/xtc/link/XTElf32Writer.o src/xtc/link/XTArArchive.o
+                  src/xtc/link/XTElf32Writer.o src/xtc/link/XTArArchive.o \
+                  src/xtc/link/XTDupCheck.o
 $(XTCLN_ARM9_BIN): $(XTCLN_ARM9_OBJS) | $(BIN_DIR)
 	$(CC) $(LDFLAGS) -o $@ $(XTCLN_ARM9_OBJS)
 
@@ -839,7 +840,7 @@ $(XTCLN_ARM9_BIN): $(XTCLN_ARM9_OBJS) | $(BIN_DIR)
 # assembler is shared verbatim with the Linux target; only the container differs.
 XTCLN_WIN64_OBJS = src/xtcln-win64/main.o src/xtc/asm/x86_64/XAX86_64Assembler.o \
                    src/xtc/link/XTPEWriter.o src/xtc/link/XTArArchive.o \
-                   src/xtc/dwarf/XTDwarfWriter.o
+                   src/xtc/dwarf/XTDwarfWriter.o src/xtc/link/XTDupCheck.o
 $(XTCLN_WIN64_BIN): $(XTCLN_WIN64_OBJS) | $(BIN_DIR)
 	$(CC) $(LDFLAGS) -o $@ $(XTCLN_WIN64_OBJS)
 

@@ -27,6 +27,7 @@
 #import <SectionBytes>
 #import "X86AsmDefs.xc"
 #import <ElfObject>
+#import <DupCheck>
 
 // A GC unit boundary: a text offset and the symbol that names it (bug 196).
 class GcUnit
@@ -162,6 +163,7 @@ class MergedImage
     SectionBytes* _bss; // zero-init (COMMON) storage — NOBITS, a size only
     Array* _bssSyms;   // String@ — names whose offset is a BSS offset
     Map* _commonSize;  // name -> Number: what a COMMON defined it with (#686)
+    Map* _firstOrigin; // name -> [object, origin]: a named object's first definition (#663)
     u32 _bssAlign;
     Map* _funcSizes;      // name -> byte extent (st_size) of a TEXT function (bug 196 GC)
     Array* _objText;      // Number@ pairs: [start, end) of each merged object's text (bug 196 GC)
@@ -200,6 +202,7 @@ class MergedImage
         _bss = new SectionBytes();
         _bssSyms = new Array();
         _commonSize = new Map();
+        _firstOrigin = new Map();
         _bssAlign = (u32)1;
         _funcSizes = new Map();
         _objText = new Array();
@@ -1688,6 +1691,19 @@ class MergedImage
         _dataSyms = keepD;
         }
 
+    Array* firstOrigin(String* n)
+        {
+        return (Array*)_firstOrigin.get((Hashable*)n);
+        }
+
+    void noteOrigin(String* n, String* obj, String* origin)
+        {
+        Array* a = new Array();
+        a.add((Object*)obj);
+        a.add((Object*)origin);
+        _firstOrigin.set((Hashable*)n, (Object*)a);
+        }
+
     Object* commonSize(String* n)
         {
         return _commonSize.get((Hashable*)n);
@@ -1925,6 +1941,9 @@ class MergedImage
             im.tls().append(o.tls());
             }
 
+        // Where this named object's definitions came from (#663); archive
+        // members (tag 1000 and up) are a pool, where the first stands.
+        Map* org = tag < (u32)1000 ? DupCheck.originsFor(label) : (Map*)0;
         Array* sd = o.symdefs();
         for (u32 si = (u32)0; si < sd.count(); si = si + (u32)1)
             {
@@ -1982,7 +2001,19 @@ class MergedImage
                 else if (!s.weak() && im.isWeakDef(nm))
                     im.dropWeakDef(nm);
                 else
+                    {
+                    // The first stands — when both come from the same source.
+                    // Two modules each defining the name is a clash, refused
+                    // naming both objects and both origins (#663).
+                    Array* fo = s.weak() ? (Array*)0 : im.firstOrigin(nm);
+                    String* o2 = DupCheck.originOf(org, nm, false);
+                    if (fo != (Array*)0 && o2 != (String*)0 && !o2.equals((String*)fo.get((u32)1)))
+                        {
+                        im.fail(DupCheck.message(nm, (String*)fo.get((u32)0), (String*)fo.get((u32)1), label, o2));
+                        return;
+                        }
                     continue;
+                    }
                 }
             // COMMON -> NOBITS bss
             if (s.where() == (u32)5)
@@ -2022,6 +2053,12 @@ class MergedImage
                 {
                 im.syms().set((Hashable*)nm, (Object*)Number.withU32(dbase + s.off()));
                 im.dataSyms().add((Object*)nm);
+                }
+            if (s.ext() && !s.weak())
+                {
+                String* o1 = DupCheck.originOf(org, nm, false);
+                if (o1 != (String*)0)
+                    im.noteOrigin(nm, label, o1);
                 }
             if (s.ext())
                 im.addGlobal(nm);

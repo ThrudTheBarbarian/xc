@@ -17,6 +17,7 @@
 #import "XAArm64Assembler.h"
 #import "XTMachOWriter.h"
 #import "XTElfArm64Writer.h"
+#import "XTDupCheck.h"
 
 // A symbol reference in a pulled object resolves to: its real name if external or
 // undefined (cross-object / import), or a per-object-unique name if it's a LOCAL
@@ -370,6 +371,9 @@ static int mergeMachOInputs(NSArray<NSString *> *objectFiles,
         // whether or not anything references them: a .o on the command line
         // is a statement that it belongs in the image.
         NSMutableSet<NSNumber *> *forced = [NSMutableSet set];
+        // A named object's first definition of each name and where it came
+        // from (#663): name -> @[object, origin].
+        NSMutableDictionary<NSString *, NSArray *> *firstOrigin = [NSMutableDictionary dictionary];
         for (NSString *op in objectFiles) {
             NSDictionary *o = [XTMachOWriter objectAtPath:op];
             if (!o) {
@@ -454,6 +458,11 @@ static int mergeMachOInputs(NSArray<NSString *> *objectFiles,
                 // symAddr uses the __DATA base.
                 NSArray<NSString *> *snames = obj[@"symnames"];
                 NSArray<NSDictionary *> *sdefs = obj[@"symdefs"];
+                // Where this named object's definitions came from (#663);
+                // archive members are a pool, where the first stands.
+                BOOL named = oi < objectFiles.count;
+                NSString *label = named ? objectFiles[oi] : @"an archive member";
+                NSDictionary<NSString *, NSString *> *org = named ? XTDupOrigins(label) : nil;
                 for (NSUInteger si=0; si<snames.count; si++) {
                     NSDictionary *sd = sdefs[si]; int where=[sd[@"where"] intValue];
                     NSString *rn = snames[si];
@@ -498,6 +507,21 @@ static int mergeMachOInputs(NSArray<NSString *> *objectFiles,
                     // command-line order, then archive members. A common
                     // still yields to a strong definition (bug 177).
                     BOOL taken = msyms[nm] != nil && commonSizes[nm] == nil;
+                    if ([sd[@"ext"] boolValue] && !((NSDictionary *)obj[@"commons"])[rn]) {
+                        NSString *o2 = XTDupOriginOf(org, nm, YES);
+                        NSArray *fo = firstOrigin[nm];
+                        // The first stands — when both come from the same
+                        // source. Two modules each defining the name is a
+                        // clash, refused naming both objects and origins (#663).
+                        if (taken && fo && o2 && ![o2 isEqualToString:fo[1]]) {
+                            fprintf(stderr, "xcc-ln-arm64: error: %s\n",
+                                    XTDupMessage([nm hasPrefix:@"_"] ? [nm substringFromIndex:1] : nm,
+                                                 fo[0], fo[1], label, o2).UTF8String);
+                            return 1;
+                        }
+                        if (!taken && o2)
+                            firstOrigin[nm] = @[label, o2];
+                    }
                     if (where==1) { if (!taken) msyms[nm] = @(base + off); }
                     else if (taken) {
                         // a strong definition (text, data or the program's) stands
