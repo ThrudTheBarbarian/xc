@@ -512,10 +512,10 @@ int main(int argc, const char* argv[])
               memoryModel:mm
               harnessPath:@"xt6502/runtime/xt6502-harness.asm"];
 
-        // Output: binary or asm?
-        NSSet<NSString*>* binExts = [NSSet setWithArray:@[ @"xex", @"exe", @"bin", @"com" ]];
+        // Output: binary or asm? Only a .s or .asm name stops before the
+        // assembler; any other name is the executable, as xcc's driver has it.
         NSString* ext = outputPath.pathExtension.lowercaseString;
-        BOOL wantBinary = outputPath && [binExts containsObject:ext];
+        BOOL wantBinary = outputPath && ![ext isEqualToString:@"s"] && ![ext isEqualToString:@"asm"];
 
         // -du needs the assembled image even when the output is assembly text:
         // the usage is what the assembler placed, not what the back end guessed.

@@ -194,6 +194,12 @@ same "--output"             $A --output @OUT@ ret.xc
 same "-o x.s"               $A -o @OUT@.s ret.xc
 cover -c
 same "-c"                   $A -c -o @OUT@.o ret.xc
+# On 6502 and m68k only a .s/.asm name stops before the assembler: any other
+# name is the executable (the reference wrote assembly text for a 6502 name
+# without .xex/.exe/.bin/.com, and for an m68k name like x.out).
+same "xt6502 -o (any name)"   -q -A xt6502 -o @OUT@ ret.xc
+same "xt6502 -o x.out"        -q -A xt6502 -o @OUT@.out ret.xc
+same "atarist -o x.out"       -q -A atarist -o @OUT@.out ret.xc
 cover -a --assemble-only --emit-asm-from-ir
 equiv "-a"                  "$A -o refout.s ret.xc"  "$A -a -o xcout.s ret.xc"
 equiv "--assemble-only"     "$A -o refout.s ret.xc"  "$A --assemble-only -o xcout.s ret.xc"

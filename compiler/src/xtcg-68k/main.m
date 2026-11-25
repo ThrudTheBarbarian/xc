@@ -247,11 +247,11 @@ int main(int argc, const char* argv[])
             return 1;
             }
 
-        // Binary output extensions (or no extension) -> assemble in-process to
-        // a GEMDOS $601A. A `.s`/`.asm` extension (or stdout) writes asm text.
+        // Any output name but .s/.asm -> assemble in-process to a GEMDOS
+        // $601A, as xcc's driver has it. A `.s`/`.asm` extension (or stdout)
+        // writes asm text.
         NSString* ext = outputPath.pathExtension.lowercaseString;
-        NSSet* binExts = [NSSet setWithArray:@[ @"prg", @"tos", @"ttp", @"app", @"acc" ]];
-        BOOL wantBinary = outputPath && ([binExts containsObject:ext] || ext.length == 0);
+        BOOL wantBinary = outputPath && ![ext isEqualToString:@"s"] && ![ext isEqualToString:@"asm"];
 
         if (wantBinary)
             {
