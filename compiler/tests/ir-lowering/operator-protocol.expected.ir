@@ -1,0 +1,59 @@
+module "operator-protocol" {
+  layout 0: size=2 align=1 fields=[(0:Ptr(Void, unbanked))]
+  layout 1: size=3 align=1 fields=[(0:Ptr(Void, unbanked)), (2:U8)]
+  layout 2: size=0 align=1
+  layout 3: size=12 align=1 fields=[(0:Ptr(Void, unbanked)), (2:Ptr(Void, unbanked)), (4:Ptr(Void, unbanked)), (6:Ptr(Void, unbanked)), (8:Ptr(Void, unbanked)), (10:Ptr(Void, unbanked))]
+  symbol V$vtbl: vtable [_, _, V$plus, V$at, V$put, V$size]
+    attributes: { banked: false, cloaked: false }
+  symbol V$plus: function (Ptr(Agg(1), unbanked), Ptr(Void, unbanked)) -> Ptr(Void, unbanked)
+    attributes: { banked: false, cloaked: false, static: false, variadic: false }
+  symbol V$at: function (Ptr(Agg(1), unbanked), U8) -> U8
+    attributes: { banked: false, cloaked: false, static: false, variadic: false }
+  symbol V$put: function (Ptr(Agg(1), unbanked), U8, U8) -> Void
+    attributes: { banked: false, cloaked: false, static: false, variadic: false }
+  symbol V$size: function (Ptr(Agg(1), unbanked)) -> U8
+    attributes: { banked: false, cloaked: false, static: false, variadic: false }
+  symbol run: function (Ptr(Void, unbanked), Ptr(Void, unbanked), U8) -> U8
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  function V$plus(%0: Ptr(Agg(1), unbanked), %1: Ptr(Void, unbanked), %2: Mem) -> (Ptr(Void, unbanked), Mem) {
+    bb_entry:
+      preds: -
+      %3 = Retain %0, %2
+      Return %0, %3
+  }
+  function V$at(%0: Ptr(Agg(1), unbanked), %1: U8, %2: Mem) -> (U8, Mem) {
+    bb_entry:
+      preds: -
+      %3:Ptr(U8, unbanked) = FieldAddr %0, #1:U8
+      %4:U8, %5 = Load %3, %2
+      %6:U8 = Add %4, %1
+      Return %6, %5
+  }
+  function V$put(%0: Ptr(Agg(1), unbanked), %1: U8, %2: U8, %3: Mem) -> Mem {
+    bb_entry:
+      preds: -
+      %4:U8 = Add %1, %2
+      %5:Ptr(U8, unbanked) = FieldAddr %0, #1:U8
+      %6 = Store %5, %4, %3
+      Return %6
+  }
+  function V$size(%0: Ptr(Agg(1), unbanked), %1: Mem) -> (U8, Mem) {
+    bb_entry:
+      preds: -
+      %2:Ptr(U8, unbanked) = FieldAddr %0, #1:U8
+      %3:U8, %4 = Load %2, %1
+      Return %3, %4
+  }
+  function run(%0: Ptr(Void, unbanked), %1: Ptr(Void, unbanked), %2: U8, %3: Mem) -> (U8, Mem) {
+    bb_entry:
+      preds: -
+      %4:U8 = Const #3:U8
+      %5 = VTblDispatch %0, #4:U16, %2, %4, %3
+      %6:Ptr(Void, unbanked), %7 = VTblDispatch %0, #2:U16, %1, %5
+      %8:U8, %9 = VTblDispatch %6, #3:U16, %2, %7
+      %10:U8, %11 = VTblDispatch %1, #5:U16, %9
+      %12:U8 = Add %8, %10
+      %13 = Release %6, %11
+      Return %12, %13
+  }
+}
