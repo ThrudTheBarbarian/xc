@@ -2079,6 +2079,27 @@ class X86_64
                 _out.appendFormat("\t%s\t%s, %s ptr %s\n", bc.cString(), d.cString(), q ? "qword" : "dword", memop.cString());
                 return;
                 }
+            // A scalar that lives in a stack slot is broadcast straight from
+            // it: one `vpbroadcastd zmm, dword ptr [rbp-N]` where a load into
+            // a GPR, a zeroing, a movd and a register broadcast were four,
+            // and a dependency chain, in the hot loop (md5_mask's per-prefix
+            // words, #30). Only a lane no wider than the value: its low
+            // bytes are the lane's value.
+            if (src.kind() == OPK_USE && src.val() != (IRValue*)0 && homeOf(src.val()) == (String*)0
+                && hasSlot(src.val()))
+                {
+                bool f64 = lane != (String*)0 && IRType.is(lane, tyF64);
+                bool f32 = lane != (String*)0 && IRType.is(lane, tyF32);
+                u32 bw = lane == (String*)0 ? (u32)4 : irWidth(lane);
+                if ((bw == (u32)4 || bw == (u32)8) && widthOfValue(src.val()) >= bw)
+                    {
+                    String* bc = String.withCString(f64 ? "vbroadcastsd" : (f32 ? "vbroadcastss"
+                                                    : (bw == (u32)8 ? "vpbroadcastq" : "vpbroadcastd")));
+                    _out.appendFormat("\t%s\t%s, %s ptr [rbp-%lu]\n", bc.cString(), d.cString(),
+                                      bw == (u32)8 ? "qword" : "dword", slotOf(src.val()));
+                    return;
+                    }
+                }
             if (lane != (String*)0 && IRType.is(lane, tyF64))
                 {
                 loadF(src, x);
