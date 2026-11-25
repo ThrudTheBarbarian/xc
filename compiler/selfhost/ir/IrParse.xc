@@ -861,6 +861,13 @@ class IrParser
             return;
             }
         expectChar((u8)':');
+        // A `speed:` with nothing after it is a BLOCK of that name (the
+        // inliner names one `inline`), not this header line.
+        if (atEnd())
+            {
+            _ci = save;
+            return;
+            }
         expectChar((u8)'[');
         while (!atChar((u8)']') && !atEnd())
             {
@@ -886,6 +893,13 @@ class IrParser
             return;
             }
         expectChar((u8)':');
+        // A `par:` with nothing after it is a BLOCK of that name (the
+        // inliner names one `inline`), not this header line.
+        if (atEnd())
+            {
+            _ci = save;
+            return;
+            }
         if (expectWord("kernel"))
             _fn.setParKernel((u8)PARK_BLOCK);
         else if (expectWord("outlined"))
@@ -903,6 +917,13 @@ class IrParser
             return;
             }
         expectChar((u8)':');
+        // A `abi:` with nothing after it is a BLOCK of that name (the
+        // inliner names one `inline`), not this header line.
+        if (atEnd())
+            {
+            _ci = save;
+            return;
+            }
         if (expectWord("sret"))
             _fn.setSretParam(true);
         nextLine();
@@ -918,6 +939,13 @@ class IrParser
             return;
             }
         expectChar((u8)':');
+        // A `inline:` with nothing after it is a BLOCK of that name (the
+        // inliner names one `inline`), not this header line.
+        if (atEnd())
+            {
+            _ci = save;
+            return;
+            }
         if (expectWord("never"))
             _fn.setNoInline(true);
         nextLine();
@@ -932,6 +960,13 @@ class IrParser
             return;
             }
         expectChar((u8)':');
+        // A `unroll:` with nothing after it is a BLOCK of that name (the
+        // inliner names one `inline`), not this header line.
+        if (atEnd())
+            {
+            _ci = save;
+            return;
+            }
         expectChar((u8)'[');
         while (!atChar((u8)']') && !atEnd())
             {
