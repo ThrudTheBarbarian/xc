@@ -35,6 +35,11 @@
         // a variable or parameter may still be called `f32`.
         _table[@"f32"] = [XTType floatType];
         _table[@"f64"] = [XTType doubleType];
+        // The 16-bit floats: `f16` (pack e5m10) and `bf16`, the name of
+        // `f16:pack(e8m7)`, which the parser spells this way. Built-in names,
+        // as f32 is, so no import is needed.
+        _table[@"f16"] = [XTType f16Type];
+        _table[@"bf16"] = [XTType bf16Type];
         _table[@"void"] = [XTType voidType];
         _table[@"pointer"] = [XTType pointerType];
         _table[@"auto"] = [XTType autoType];

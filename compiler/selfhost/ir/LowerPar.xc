@@ -332,6 +332,37 @@
     // `scan;`. Its chunks own disjoint slices of what it writes, so the
     // dependence test does not apply, and it has no GPU form. Mirrors the
     // reference's isScanBlock.
+    // Does the function, or one it calls, convert a 16-bit float (a call of
+    // FloatPack.xc's _xt_fpk_*)? As the reference's XTParUsesFloatPack.
+    final bool parUsesFloatPack(IRFunc* f, Map* seen)
+        {
+        if (f == 0 || seen.get((Hashable*)f.name()) != 0)
+            return false;
+        seen.set((Hashable*)f.name(), (Object*)f.name());
+        for (u32 b = 0; b < f.blocks().count(); b++)
+            {
+            Array* ins = ((IRBlock*)f.blocks().get(b)).insns();
+            for (u32 i = 0; i < ins.count(); i++)
+                {
+                IRInsn* ci = (IRInsn*)ins.get(i);
+                if (!isName(ci.op(), "Call") || ci.ops().count() == 0)
+                    continue;
+                IROperand* o = (IROperand*)ci.ops().get(0);
+                if (o.kind() != (u8)OPK_SYM || o.name() == 0)
+                    continue;
+                if (o.name().hasPrefix(String.withCString("_xt_fpk_")))
+                    return true;
+                for (u32 k = 0; k < _m.funcs().count(); k++)
+                    {
+                    IRFunc* g = (IRFunc*)_m.funcs().get(k);
+                    if (g.name().equals(o.name()) && parUsesFloatPack(g, seen))
+                        return true;
+                    }
+                }
+            }
+        return false;
+        }
+
     final bool parIsScanBlock(String* n)
         {
         String* plain = String.withCString("__XC_PAR_MSL_");
@@ -3618,7 +3649,12 @@
             bool lifted = parIsAutoBlock(cls.substringBytes((u32)8, cls.byteLength() - (u32)8));
             String* w = String.withCString(lifted ? "this loop runs on the CPU only (--par-style), because "
                                                   : "this 'par' block runs on the CPU only, because ");
-            w.append(_mWhy != (String*)0 ? _mWhy : String.withCString("its GPU version cannot express something it uses yet"));
+            // A 16-bit float's operations are calls the kernels do not have:
+            // the block runs on the CPU, in the type's own precision.
+            String* why = _mWhy;
+            if (parUsesFloatPack(f, new Map()))
+                why = String.withCString("it computes in f16 or bf16, which GPU kernels do not take yet");
+            w.append(why != (String*)0 ? why : String.withCString("its GPU version cannot express something it uses yet"));
             // A :scan's passes are the compiler's, not written blocks: they
             // say nothing (#144).
             if (!parIsScanBlock(cls.substringBytes((u32)8, cls.byteLength() - (u32)8)))

@@ -107,6 +107,10 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)narrowLength:(nullable XTASTNode*)e to:(nullable XTType*)want;
 - (void)narrowLengthArgs:(NSArray<XTType*>*)paramTypes arguments:(NSArray<XTASTNode*>*)args;
 - (void)narrowLengthArgsOfMethod:(XTMethodDeclNode*)m arguments:(NSArray<XTASTNode*>*)args;
+- (BOOL)packAdoptLiteral:(XTASTNode*)expr to:(XTType*)pack;
+- (void)packAdoptInitialiser:(XTASTNode*)init type:(nullable XTType*)type;
+- (void)checkPackFlow:(XTASTNode*)expr to:(nullable XTType*)type compound:(BOOL)compound;
+- (void)checkPackOperands:(XTASTNode*)left right:(XTASTNode*)right at:(XTSourceLocation*)loc;
 - (NSString*)describeArgTypes:(NSArray<XTASTNode*>*)args;
 - (BOOL)checkArityOf:(NSString*)label
                fixed:(NSUInteger)fixed

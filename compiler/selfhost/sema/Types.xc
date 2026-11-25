@@ -17,6 +17,7 @@
 // signedness is decided across BOTH operands before the width is applied.
 
 #import "Foundation.xc"
+#import <FloatEncoding>
 
 class Types
     {
@@ -59,6 +60,117 @@ class Types
         return Types._is(t, "float") || Types._is(t, "double");
         }
 
+    // A 16-bit float: f16 (IEEE binary16, pack e5m10) or bf16 (pack e8m7).
+    // Neither an integer nor floating: its value is a bit pattern, converted
+    // through f32 for every operation (FloatPack.xc). XTType.isFloatPack.
+    static bool isPack(String* t)
+        {
+        return Types._is(t, "f16") || Types._is(t, "bf16");
+        }
+
+    // The pack's exponent and mantissa widths.
+    static u32 packExp(String* t)
+        {
+        return Types._is(t, "bf16") ? 8 : 5;
+        }
+    static u32 packMant(String* t)
+        {
+        return Types._is(t, "bf16") ? 7 : 10;
+        }
+
+    // The bits of a literal's double: a float literal's digits, or an integer
+    // literal's value, read as the reference reads them (strtod, a (double)
+    // conversion), negated when asked.
+    static u64 literalBits(bool isFloat, String* text, i64 num, bool negate)
+        {
+        Data* d = (Data*)0;
+        if (isFloat)
+            {
+            String* t = text;
+            if (negate)
+                {
+                t = String.withCString("-");
+                t.append(text);
+                }
+            d = FloatEncoding.ieeeBytes(t, true);
+            }
+        else
+            d = FloatEncoding.ieeeBytes(String.withI64(negate ? 0 - num : num), true);
+        u64 bits = 0;
+        for (u32 i = 8; i > 0; i--)
+            bits = (bits << 8) | (u64)d.byteAt(i - 1);
+        return bits;
+        }
+
+    // A double, given as its bits, rounded to a pack: FloatPack.xc's
+    // _xt_fpk_pack_f64, the same steps. XTType.packBitsForDouble:.
+    static u32 packBits(u64 x, u32 e, u32 m)
+        {
+        u32 one = 1;
+        u32 hi = (u32)(x >> 32);
+        u32 lo = (u32)x;
+        u32 sign = hi >> 31;
+        u32 ex = (hi >> 20) & (u32)0x7FF;
+        u32 mhi = hi & (u32)0xFFFFF;
+        u32 sig = (mhi << 11) | (lo >> 21);
+        if ((lo & (u32)0x1FFFFF) != 0)
+            sig = sig | one;
+        u32 inf = ((one << e) - one) << m;
+        if (ex == (u32)0x7FF)
+            {
+            if (mhi == 0 && lo == 0)
+                return (sign << (e + m)) | inf;
+            u32 top = (sig << 1) | one;
+            return (sign << (e + m)) | inf | (one << (m - one)) | (top >> (32 - m));
+            }
+        if (ex == 0 && mhi == 0 && lo == 0)
+            return sign << (e + m);
+        i32 unb = ex == 0 ? -1022 : (i32)ex - 1023;
+        if (ex != 0)
+            sig = sig | (u32)0x80000000;
+        i32 bias = (i32)((one << (e - one)) - one);
+        i32 te = unb + bias;
+        i32 sh = 31 - (i32)m;
+        if (te < 1)
+            {
+            sh = sh + 1 - te;
+            te = 1;
+            }
+        u32 q = 0;
+        if (sh == 32)
+            {
+            if (sig > (u32)0x80000000)
+                q = 1;
+            }
+        else if (sh < 32)
+            {
+            u32 us = (u32)sh;
+            q = sig >> us;
+            u32 rem = sig & ((one << us) - one);
+            u32 half = one << (us - one);
+            if (rem > half || (rem == half && (q & one) != 0))
+                q = q + one;
+            }
+        u32 bits = ((u32)(te - 1) << m) + q;
+        if (bits > inf)
+            bits = inf;
+        return (sign << (e + m)) | bits;
+        }
+
+    // Can a value of `from` reach a slot of `to` with no cast? Only when every
+    // value converts exactly: a pack to itself, f32 or f64. An integer reaches
+    // a pack through a cast. XTType.packConvertsImplicitly:to:.
+    static bool packConvertsImplicitly(String* from, String* to)
+        {
+        if (from == 0 || to == 0)
+            return true;
+        if (Types.isPack(to))
+            return from.equals(to);
+        if (Types.isPack(from))
+            return Types.isFloating(to);
+        return true;
+        }
+
     static bool isInteger(String* t)
         {
         if (t == 0)
@@ -86,6 +198,8 @@ class Types
             return (u32)8;
         if (Types._is(t, "float"))
             return (u32)4;
+        if (Types.isPack(t))
+            return 2;
         if (Types._is(t, "bool"))
             return (u32)1;
         if (Types._is(t, "i8"))
@@ -158,6 +272,25 @@ class Types
             return b;
         if (b == 0)
             return a;
+        // A 16-bit float widens to the type that holds both operands; two
+        // different packs have no common type (sema refuses them).
+        if (Types.isPack(a) || Types.isPack(b))
+            {
+            String* p = Types.isPack(a) ? a : b;
+            String* o = Types.isPack(a) ? b : a;
+            if (Types._is(o, "double"))
+                return String.withCString("double");
+            if (Types._is(o, "float") || (Types.isPack(o) && !o.equals(p)))
+                return String.withCString("float");
+            if (Types.isPack(o) || Types._is(o, "u8") || Types._is(o, "i8") || Types._is(o, "bool")
+                || Types.isEnumName(o))
+                return p;
+            if (Types.isInteger(o) && Types.byteWidth(o) <= 2)
+                return String.withCString("float");
+            if (Types.isInteger(o))
+                return String.withCString("double");
+            return p;
+            }
         if (Types._is(a, "double") || Types._is(b, "double"))
             return String.withCString("double");
         if (Types.isFloating(a) || Types.isFloating(b))

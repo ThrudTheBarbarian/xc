@@ -650,6 +650,9 @@ typedef NS_ENUM(NSInteger, XTAssignOp) {
 |* 5-byte encoded form.
 \****************************************************************************/
 @property(nonatomic, readonly) NSData* floatData;
+/// The literal's digits as written (without a suffix), when the parser read
+/// it from a token: a 16-bit float literal is rounded from their double value.
+@property(nonatomic, copy, nullable) NSString* sourceText;
 /****************************************************************************\
 |* Create a float literal node from pre-encoded 5-byte data.
 |* @param data      The 5-byte encoded float data (produced at lex time).

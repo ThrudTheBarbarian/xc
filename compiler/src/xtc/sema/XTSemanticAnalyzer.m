@@ -574,6 +574,19 @@ static int xtVersionGT(NSString* a, NSString* b)
     // casting a widened free function to it where one is genuinely meant.
     if (node.isCImport || (node.isVarArgs && node.body == nil))
         {
+        // C passes _Float16 and __bf16 in floating-point registers; xc passes
+        // a 16-bit float as its bit pattern in an integer register.
+        BOOL packed = NO;
+        for (XTType* rt in node.returnTypes)
+            packed = packed || rt.isFloatPack;
+        for (XTParamNode* pp in node.parameters)
+            packed = packed || pp.paramType.isFloatPack;
+        if (packed)
+            [self.diagnostics emitError:[NSString stringWithFormat:@"a C-ABI function cannot take or return f16 or bf16 yet "
+                                                                   @"('%@'): C passes them in floating-point registers; "
+                                                                   @"declare the C side with float",
+                                                                   node.funcName]
+                                     at:node.location];
         for (XTParamNode* cbp in node.parameters)
             {
             if (cbp.paramType && cbp.paramType.boundMethodSignature != nil)

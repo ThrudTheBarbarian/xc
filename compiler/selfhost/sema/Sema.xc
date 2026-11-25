@@ -471,6 +471,147 @@ class Sema
         _errorAt(m, e);
         }
 
+    // A literal takes the 16-bit float type its context needs and is rounded
+    // to it (`f16 h = 0.1;`): a float or integer literal, or one negated. One
+    // beyond the type's range is an error. False when the expression is no
+    // literal. As the reference's packAdoptLiteral:to:.
+    bool packAdoptLiteral(Node* e, String* pack)
+        {
+        if (e == 0)
+            return false;
+        Node* lit = e;
+        Node* neg = (Node*)0;
+        if (lit.kind() == (u16)nkUnary && _isOp(lit.op(), "-") && lit.kidCount() > 0)
+            {
+            neg = lit;
+            lit = lit.kid(0);
+            }
+        if (lit.kind() != (u16)nkFloat && !(lit.kind() == (u16)nkInt && !lit.nilLit()))
+            return false;
+        lit.setTy(pack);
+        if (neg != 0)
+            neg.setTy(pack);
+        u32 e8 = Types.packExp(pack);
+        u32 m = Types.packMant(pack);
+        u32 bits = Types.packBits(Types.literalBits(lit.kind() == (u16)nkFloat, lit.name(), lit.num(), false), e8, m);
+        u32 one = 1;
+        u32 inf = ((one << e8) - one) << m;
+        if ((bits & (u32)0x7FFF) == inf)
+            {
+            String* msg = String.withCString("a literal out of range for '");
+            msg.append(pack);
+            msg.appendCString(e8 == 8 ? "': its largest finite value is 3.39e38" : "': its largest finite value is 65504");
+            _errorAt(msg, e);
+            }
+        return true;
+        }
+
+    static bool numericSpelling(String* t)
+        {
+        return Types.isPack(t) || Types.isFloating(t) || Types.isInteger(t) || Types.isEnumName(t);
+        }
+
+    // A value given to a slot (a declaration, an assignment, a return, an
+    // argument) converts implicitly only when it is exact, if either side is
+    // a 16-bit float; anything else needs a cast. A compound assignment gives
+    // the slot its operation's result. As the reference's
+    // checkPackFlow:to:compound:.
+    void checkPackFlow(Node* e, String* want, bool compound)
+        {
+        if (e == 0 || want == 0)
+            return;
+        String* from = e.ty();
+        if (from == 0 || (!Types.isPack(want) && !Types.isPack(from)))
+            return;
+        if (Types.isPack(want) && packAdoptLiteral(e, want))
+            return;
+        if (compound)
+            {
+            if (!Types.isPack(want))
+                return;
+            from = Types.widen(want, from);
+            }
+        if (!Sema.numericSpelling(from) || !Sema.numericSpelling(want))
+            return;
+        if (Types.packConvertsImplicitly(from, want))
+            return;
+        String* msg = String.withCString("'");
+        msg.append(from);
+        msg.appendCString("' does not convert to '");
+        msg.append(want);
+        msg.appendCString("' without a cast: '");
+        msg.append(want);
+        msg.appendCString("' does not hold every '");
+        msg.append(from);
+        if (compound)
+            {
+            msg.appendCString("' value; write the assignment out with one, as 'x = (");
+            msg.append(want);
+            msg.appendCString(")(x + y)'");
+            }
+        else
+            {
+            msg.appendCString("' value; write '(");
+            msg.append(want);
+            msg.appendCString(")' before the value");
+            }
+        _errorAt(msg, e);
+        }
+
+    // The operands of a binary operator or the arms of a conditional, when one
+    // is a 16-bit float: a literal takes the other's type, and two different
+    // packs have no common type. As the reference's
+    // checkPackOperands:right:at:.
+    void checkPackOperands(Node* l, Node* r, Node* at)
+        {
+        String* lt = l.ty();
+        String* rt = r.ty();
+        if (lt == 0 || rt == 0 || (!Types.isPack(lt) && !Types.isPack(rt)))
+            return;
+        if (Types.isPack(lt) && !Types.isPack(rt) && packAdoptLiteral(r, lt))
+            return;
+        if (Types.isPack(rt) && !Types.isPack(lt) && packAdoptLiteral(l, rt))
+            return;
+        if (Types.isPack(lt) && Types.isPack(rt) && !lt.equals(rt))
+            {
+            String* msg = String.withCString("'");
+            msg.append(lt);
+            msg.appendCString("' and '");
+            msg.append(rt);
+            msg.appendCString("' have no common type: neither holds every value of the other; convert both, e.g. '(f32)a + (f32)b'");
+            _errorAt(msg, at);
+            }
+        }
+
+    // A brace initialiser's 16-bit float leaves, in an array or a struct:
+    // each takes its slot's type as a declaration's value does. As the
+    // reference's packAdoptInitialiser:type:.
+    void packAdoptInitialiser(Node* init, String* ty)
+        {
+        if (init == 0 || ty == 0)
+            return;
+        if (Types.isPack(ty))
+            {
+            checkPackFlow(init, ty, false);
+            return;
+            }
+        if (init.kind() != (u16)nkBlock)
+            return;
+        u32 br = ty.lastIndexOfByte((u8)'[');
+        if (ty.byteLength() > 0 && ty.byteAt(ty.byteLength() - 1) == (u8)']' && br != String.notFound())
+            {
+            String* et = ty.substringBytes(0, br);
+            for (u32 i = 0; i < init.kidCount(); i++)
+                packAdoptInitialiser(init.kid(i), et);
+            return;
+            }
+        Node* st = (Node*)_structs.get((Hashable*)ty);
+        if (st == 0)
+            return;
+        for (u32 i = 0; i < init.kidCount() && i < st.kidCount(); i++)
+            packAdoptInitialiser(init.kid(i), st.kid(i).op());
+        }
+
     // A tuple's values are taken apart from one aggregate in registers, and a
     // struct is not a value that can be bound that way: the lowering bound it
     // as an SSA name, so a member access found no slot and was refused, but
@@ -1570,6 +1711,14 @@ class Sema
                     typeExpr(d.kid(j));
                 popScope();
                 _rangeIsInitialiser = saveRange;
+                // A 16-bit float global's literal takes its type, as a
+                // local's does.
+                if (d.kidCount() > 0 && !_isOp(d.op(), "auto"))
+                    {
+                    checkPackFlow(d.kid(0), d.op(), false);
+                    if (d.kid(0).kind() == (u16)nkBlock)
+                        packAdoptInitialiser(d.kid(0), d.op());
+                    }
                 // `auto g = expr;` — the type is the initialiser's, now that
                 // the initialiser HAS one. The declaration is stamped and
                 // registered here rather than in the forward-reference
@@ -1733,6 +1882,26 @@ class Sema
                     cbHasBody = true;
             if (decl.hasFlag((u32)NF_CABI) || (decl.hasFlag((u32)NF_VARARGS) && !cbHasBody))
                 {
+                // C passes _Float16 and __bf16 in floating-point registers; xc
+                // passes a 16-bit float as its bit pattern in an integer one.
+                bool packed = false;
+                String* rest = decl.op();
+                while (rest != 0)
+                    {
+                    String* one = firstReturn(rest);
+                    packed = packed || Types.isPack(one.trimmed());
+                    rest = one.byteLength() < rest.byteLength() ? rest.substringFromByte(one.byteLength() + 1) : (String*)0;
+                    }
+                for (u32 pi = 0; pi < decl.kidCount(); pi++)
+                    if (decl.kid(pi).kind() == (u16)nkParam && Types.isPack(decl.kid(pi).op()))
+                        packed = true;
+                if (packed)
+                    {
+                    String* pm = String.withCString("a C-ABI function cannot take or return f16 or bf16 yet ('");
+                    pm.append(decl.name());
+                    pm.appendCString("'): C passes them in floating-point registers; declare the C side with float");
+                    _errorAt(pm, decl);
+                    }
                 for (u32 pi = (u32)0; pi < decl.kidCount(); pi = pi + (u32)1)
                     {
                     Node* cbp = decl.kid(pi);
@@ -3239,6 +3408,7 @@ class Sema
             _expected = save;
             // `String* s = arr;` / `act_t^ a = someBlock;` — an initialiser is
             // an assignment and is checked as one.
+            bool declAuto = _isOp(n.op(), "auto");
             if (n.kidCount() > (u32)0 && !_isOp(n.op(), "auto"))
                 checkClassPointerAssignAt(n.op(), n.kid((u32)0).ty(),
                                           n.kid((u32)0), "initialiser", n);
@@ -3271,6 +3441,12 @@ class Sema
                 Node* u = unboxedNode(n.kid((u32)0), n.op());
                 if (u != 0)
                     n.setKid((u32)0, u);
+                }
+            if (n.kidCount() > 0 && !declAuto)
+                {
+                checkPackFlow(n.kid(0), n.op(), false);
+                if (n.kid(0).kind() == (u16)nkBlock)
+                    packAdoptInitialiser(n.kid(0), n.op());
                 }
             define(n.name(), n.op());
             n.setTy(n.op()); // a DECLARATION carries its own type; an
@@ -3469,7 +3645,10 @@ class Sema
             // refused elsewhere), as in the reference.
             if (_curReturn != 0 && !Types._is(_curReturn, "void"))
                 for (u32 i = (u32)0; i < n.kidCount(); i = i + (u32)1)
+                    {
                     checkNil(n.kid(i), _curReturn);
+                    checkPackFlow(n.kid(i), _curReturn, false);
+                    }
             _expected = save;
             // `return a.get(0)` from a u16 function unboxes at the return.
             for (u32 i = (u32)0; i < n.kidCount(); i = i + (u32)1)
@@ -3642,6 +3821,7 @@ class Sema
             _expected = save;
             // `n = nil` into anything but a pointer.
             checkNil(n.kid((u32)1), n.kid((u32)0).ty());
+            checkPackFlow(n.kid((u32)1), n.kid((u32)0).ty(), !_isOp(n.op(), "="));
             // An index operator's set form: the assignment is the call it
             // becomes.
             if (resolveOpAssign(n))
@@ -3693,6 +3873,8 @@ class Sema
             _expected = save;
             // `f(nil)` where every candidate's parameter is not a pointer.
             checkNil(n.kid(i), hint);
+            if (!(k == (u16)nkCast && i == (u32)0))
+                checkPackFlow(n.kid(i), hint, false);
             }
 
         if (k == (u16)nkInt)
@@ -3781,8 +3963,11 @@ class Sema
             // unboxes first. Only for a cast to a PRIMITIVE: a cast to a class
             // pointer is how the unbox rewrite itself is spelled, and unboxing
             // there would recurse. private:docs/bugs/046.
-            if (n.kidCount() > (u32)0 && numberAccessorFor(n.name()) != 0)
+            if (n.kidCount() > (u32)0 && numberAccessorFor(n.name()) != 0 && !Types.isPack(n.name()))
                 n.setKid((u32)0, unboxCollectionElement(n.kid((u32)0)));
+            // `(f16)0.1` is the literal rounded once, from its digits.
+            if (n.kidCount() > 0 && Types.isPack(n.name()))
+                packAdoptLiteral(n.kid(0), n.name());
             n.setTy(n.name());
             if (n.hasFlag((u32)NF_FAILABLE))
                 checkFailableCast(n);
@@ -3818,6 +4003,7 @@ class Sema
                 {
                 n.setKid((u32)1, unboxCollectionElement(n.kid((u32)1)));
                 n.setKid((u32)2, unboxCollectionElement(n.kid((u32)2)));
+                checkPackOperands(n.kid(1), n.kid(2), n);
                 n.setTy(Types.widen(n.kid((u32)1).ty(), n.kid((u32)2).ty()));
                 }
             return;
@@ -5673,6 +5859,9 @@ class Sema
         // typing below applies.
         if (resolveOperator(n))
             return;
+        if (!_isOp(n.op(), "<<") && !_isOp(n.op(), ">>") && !_isOp(n.op(), "<:") && !_isOp(n.op(), ":>")
+            && !_isOp(n.op(), "&&") && !_isOp(n.op(), "||"))
+            checkPackOperands(n.kid(0), n.kid(1), n);
         // TWO CONSTANTS fold, and the folded VALUE is what types the result:
         // `1000 & $FF` is 232, so it is a u8 — not the u16 the widening of its
         // operands would give. An operand may itself be a constant CHAIN
@@ -7357,6 +7546,9 @@ class Sema
             return String.withCString("asFloat");
         if (_isOp(t, "double"))
             return String.withCString("asDouble");
+        // A 16-bit float is boxed as the float that holds it exactly.
+        if (Types.isPack(t))
+            return String.withCString("asFloat");
         return (String*)0;
         }
 
@@ -7391,7 +7583,7 @@ class Sema
         // isInteger already covers i64/u64; `double` had to be added beside
         // `float` or an `Array<double>` stored the raw eight bytes where a
         // pointer belonged. Boxing and unboxing grow together.
-        if (Types.isInteger(argT) || Types.isFloating(argT))
+        if (Types.isInteger(argT) || Types.isFloating(argT) || Types.isPack(argT))
             box = String.withCString("Number");
         else if (_isOp(argT, "u8*") || _isOp(argT, "string"))
             box = String.withCString("String");
@@ -7435,6 +7627,13 @@ class Sema
                                                         : String.withCString("with"));
         call.setNum((i64)1);
         call.add(Node.withName((u16)nkIdent, box));
+        if (Types.isPack(e.ty()))
+            {
+            Node* widen = Node.withName((u16)nkCast, String.withCString("float"));
+            widen.add(e);
+            typeExpr(widen);
+            e = widen;
+            }
         call.add(e);
         typeExpr(call);
         return call;
@@ -7458,6 +7657,14 @@ class Sema
         call.setNum((i64)0);
         call.add(recv);
         typeExpr(call);
+        // A 16-bit float was boxed as a float: back to its own type.
+        if (Types.isPack(lhsT))
+            {
+            Node* narrow = Node.withName((u16)nkCast, lhsT);
+            narrow.add(call);
+            typeExpr(narrow);
+            return narrow;
+            }
         return call;
         }
 
@@ -8132,7 +8339,8 @@ class Sema
                 }
             else if (kind == (u32)3)
                 {
-                if (!Types.isFloating(at))
+                // A 16-bit float is passed as a double, as a float is.
+                if (!Types.isFloating(at) && !Types.isPack(at))
                     expects = "a floating-point value";
                 }
             else if (kind == (u32)4)
