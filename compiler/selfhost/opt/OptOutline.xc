@@ -15,6 +15,598 @@
     class Opt (Outline)
     {
 
+    // ── adjacent C loops fused (#147) ──
+    // Two counted loops one after the other (the first's exit block leads
+    // straight to the second's header, holding nothing but constants and
+    // addresses), over the same range, where every array one writes is
+    // touched by the other only at the loop's own index and arrays of
+    // different names are known apart, become one loop: the second body
+    // after the first in each iteration, its induction variable the first's,
+    // its other header values (sums) moved to the first header. Before the
+    // outliner, so the merged loop is judged as one; the block it becomes is
+    // named after both (cpFuseNames). As xc's parser fuses blocks.
+
+    final void cpFuseLoops(IRModule* m)
+        {
+        if (optNoParFuse())
+            return;
+        Array* stems = self.parKernelStems(m);
+        for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
+            {
+            IRFunc* fn = (IRFunc*)m.funcs().get(f);
+            if (fn.blocks().count() == (u32)0 || self.parBlockFn(fn, stems) || fn.name().hasPrefix(String.withCString("ParOut$")))
+                continue;
+            u32 guard = (u32)0;
+            while (guard < (u32)64 && cpFuseOnce(fn))
+                guard = guard + (u32)1;
+            }
+        }
+
+    // A loop of one body block: header H (phis, invariants, a compare, a
+    // conditional branch to the body or out), body B (the latch); else 0.
+    final bool cpFuseShape(LRCLoop* L)
+        {
+        if (L.body().count() != (u32)2 || L.pre() == (IRBlock*)0)
+            return false;
+        IRBlock* H = L.header();
+        IRBlock* B = L.latch();
+        if (B == H || H.term() == 0 || !H.term().isOp(opCondBranch) || B.term() == 0 || !B.term().isOp(opBranch))
+            return false;
+        return B.phis().count() == (u32)0;
+        }
+
+    // The loop's induction phi: its value from the body is phi + 1. 0 if none.
+    final IRInsn* cpFuseIv(LRCLoop* L, Map* defOf)
+        {
+        IRBlock* H = L.header();
+        for (u32 i = (u32)0; i < H.phis().count(); i = i + (u32)1)
+            {
+            IRInsn* p = (IRInsn*)H.phis().get(i);
+            IRValue* next = cpFuseIncoming(p, L.latch());
+            IRInsn* d = next != 0 ? (IRInsn*)defOf.get((Hashable*)next) : (IRInsn*)0;
+            if (d == 0 || !d.isOp(opAdd) || d.ops().count() != (u32)2)
+                continue;
+            IROperand* a = (IROperand*)d.ops().get((u32)0);
+            if (a.kind() == (u8)OPK_USE && a.val() == p.res() && self.ppConstOne((IROperand*)d.ops().get((u32)1), defOf))
+                return p;
+            }
+        return (IRInsn*)0;
+        }
+
+    final IRValue* cpFuseIncoming(IRInsn* phi, IRBlock* from)
+        {
+        for (u32 i = (u32)0; i + (u32)1 < phi.ops().count(); i = i + (u32)2)
+            if (((IROperand*)phi.ops().get(i)).blk() == from)
+                return ((IROperand*)phi.ops().get(i + (u32)1)).val();
+        return (IRValue*)0;
+        }
+
+    // The same value: one value, or two constants alike.
+    final bool cpFuseSame(IRValue* a, IRValue* b, Map* defOf)
+        {
+        if (a == b)
+            return a != 0;
+        IRInsn* da = (IRInsn*)defOf.get((Hashable*)a);
+        IRInsn* db = (IRInsn*)defOf.get((Hashable*)b);
+        if (da == 0 || db == 0 || !da.isOp(opConst) || !db.isOp(opConst) || !da.res().ty().equals(db.res().ty()))
+            return false;
+        return ((IROperand*)da.ops().get((u32)0)).text().equals(((IROperand*)db.ops().get((u32)0)).text());
+        }
+
+    // The header's compare: iv < bound (signed or unsigned), and the bound.
+    final IRInsn* cpFuseCmp(LRCLoop* L, IRInsn* iv, Map* defOf)
+        {
+        IROperand* c = (IROperand*)L.header().term().ops().get((u32)0);
+        if (c.kind() != (u8)OPK_USE)
+            return (IRInsn*)0;
+        IRInsn* d = (IRInsn*)defOf.get((Hashable*)c.val());
+        if (d == 0 || !d.isOp(opICmp) || d.ops().count() != (u32)2 || d.pred() == (String*)0)
+            return (IRInsn*)0;
+        if (!d.pred().equals(String.withCString("SLT")) && !d.pred().equals(String.withCString("ULT")))
+            return (IRInsn*)0;
+        IROperand* a = (IROperand*)d.ops().get((u32)0);
+        if (a.kind() != (u8)OPK_USE || a.val() != iv.res())
+            return (IRInsn*)0;
+        // Out of the loop on false, into the body on true.
+        if (((IROperand*)L.header().term().ops().get((u32)1)).blk() != L.latch())
+            return (IRInsn*)0;
+        return d;
+        }
+
+    // Where an access lands: "g:name" a global, "s:k" a frame slot, "v:id"
+    // any other pointer (which may be any memory); and whether its index is
+    // the loop's variable.
+    final String* cpFuseBase(IRValue* addr, IRValue* iv, Map* defOf, bool* atIv)
+        {
+        *atIv = false;
+        IRInsn* d = (IRInsn*)defOf.get((Hashable*)addr);
+        IRValue* base = addr;
+        if (d != 0 && d.isOp(opElementAddr) && d.ops().count() == (u32)2)
+            {
+            IROperand* bo = (IROperand*)d.ops().get((u32)0);
+            IROperand* io = (IROperand*)d.ops().get((u32)1);
+            if (bo.kind() != (u8)OPK_USE)
+                return String.withCString("?");
+            base = bo.val();
+            *atIv = io.kind() == (u8)OPK_USE && io.val() == iv;
+            d = (IRInsn*)defOf.get((Hashable*)base);
+            }
+        if (d != 0 && d.isOp(opAddrOf) && d.ops().count() == (u32)1)
+            {
+            IROperand* o = (IROperand*)d.ops().get((u32)0);
+            if (o.kind() == (u8)OPK_SYM)
+                return String.withFormat("g:%s", o.name().cString());
+            if (o.kind() == (u8)OPK_USE)
+                return String.withFormat("s:%u", o.val().pid());
+            }
+        return String.withFormat("v:%u", base.pid());
+        }
+
+    // One body's accesses (key -> bits: 1 read, 2 written, 4 not at the
+    // index) into acc; false when it holds anything but pure arithmetic,
+    // loads and stores.
+    final bool cpFuseScan(IRBlock* B, IRValue* iv, Map* defOf, Map* acc)
+        {
+        for (u32 i = (u32)0; i < B.insns().count(); i = i + (u32)1)
+            {
+            IRInsn* n = (IRInsn*)B.insns().get(i);
+            bool load = n.isOp(opLoad);
+            bool store = n.isOp(opStore);
+            if (!load && !store)
+                {
+                if (n.memRes() != 0)
+                    return false;
+                if (!n.opHas(OPF_PURE) && !cpFuseNoTrap(n, defOf))
+                    return false;
+                continue;
+                }
+            IROperand* a = (IROperand*)n.ops().get((u32)0);
+            if (a.kind() != (u8)OPK_USE)
+                return false;
+            bool atIv = false;
+            String* key = cpFuseBase(a.val(), iv, defOf, &atIv);
+            if (key.equals(String.withCString("?")))
+                return false;
+            Number* was = (Number*)acc.get((Hashable*)key);
+            u32 bits = (store ? (u32)2 : (u32)1) | (atIv ? (u32)0 : (u32)4);
+            acc.set((Hashable*)key, (Object*)Number.with((was != (Number*)0 ? was.asU32() : (u32)0) | bits));
+            }
+        return true;
+        }
+
+    // Why a loop's header carries a value fusing may not take, or 0.
+    final String* cpFuseCarries(LRCLoop* L, IRInsn* iv, Map* defOf)
+        {
+        IRBlock* H = L.header();
+        for (u32 i = (u32)0; i < H.phis().count(); i = i + (u32)1)
+            {
+            IRInsn* p = (IRInsn*)H.phis().get(i);
+            if (p == iv || p.res() == 0)
+                continue;
+            String* t = p.res().ty();
+            if (t.hasPrefix(String.withCString("F")))
+                return String.withCString("a loop sums floating-point values");
+            if (!t.hasPrefix(String.withCString("I")) && !t.hasPrefix(String.withCString("U")))
+                return String.withCString("a loop carries a value from one iteration to the next");
+            IRValue* next = cpFuseIncoming(p, L.latch());
+            IRInsn* d = next != 0 ? (IRInsn*)defOf.get((Hashable*)next) : (IRInsn*)0;
+            bool assoc = d != 0 && (d.isOp(opAdd) || d.isOp(opMul) || d.isOp(opAnd) || d.isOp(opOr) || d.isOp(opXor))
+                         && d.ops().count() == (u32)2;
+            bool usesPhi = false;
+            if (assoc)
+                for (u32 k = (u32)0; k < (u32)2; k = k + (u32)1)
+                    {
+                    IROperand* o = (IROperand*)d.ops().get(k);
+                    if (o.kind() == (u8)OPK_USE && o.val() == p.res())
+                        usesPhi = true;
+                    }
+            if (!usesPhi)
+                return String.withCString("a loop carries a value from one iteration to the next");
+            }
+        return (String*)0;
+        }
+
+    // An access map holds a store not at the index.
+    final bool cpFuseScatters(Map* acc)
+        {
+        Array* names = acc.allKeys();
+        for (u32 i = (u32)0; i < names.count(); i = i + (u32)1)
+            {
+            u32 bits = ((Number*)acc.get((Hashable*)names.get(i))).asU32();
+            if ((bits & (u32)6) == (u32)6)
+                return true;
+            }
+        return false;
+        }
+
+    // A division that cannot trap: a float one, or an integer one by a
+    // constant other than 0 (and, signed, other than -1).
+    final bool cpFuseNoTrap(IRInsn* n, Map* defOf)
+        {
+        if (n.isOp(opFDiv))
+            return true;
+        if (!n.isOp(opSDiv) && !n.isOp(opUDiv) && !n.isOp(opSRem) && !n.isOp(opURem))
+            return false;
+        if (n.ops().count() != (u32)2)
+            return false;
+        IROperand* d = (IROperand*)n.ops().get((u32)1);
+        if (d.kind() == (u8)OPK_USE)
+            {
+            IRInsn* c = (IRInsn*)defOf.get((Hashable*)d.val());
+            if (c == 0 || !c.isOp(opConst) || c.ops().count() == (u32)0)
+                return false;
+            d = (IROperand*)c.ops().get((u32)0);
+            }
+        if (d.kind() != (u8)OPK_IMMI || d.imm() == (i64)0)
+            return false;
+        return d.imm() != (i64)-1 || n.isOp(opUDiv) || n.isOp(opURem);
+        }
+
+    // Each array one body writes that the other touches: touched only at
+    // the index, by both, and every other array either touches known apart.
+    final String* cpFuseArrays(Map* wr, Map* other)
+        {
+        Array* names = wr.allKeys();
+        Array* onames = other.allKeys();
+        for (u32 i = (u32)0; i < names.count(); i = i + (u32)1)
+            {
+            String* x = (String*)names.get(i);
+            u32 bw = ((Number*)wr.get((Hashable*)x)).asU32();
+            if ((bw & (u32)2) == (u32)0)
+                continue;
+            Number* o = (Number*)other.get((Hashable*)x);
+            if (o != (Number*)0 && ((bw | o.asU32()) & (u32)4) != (u32)0)
+                return String.withCString("an array is written by one and used at another index by the other");
+            for (u32 j = (u32)0; j < onames.count(); j = j + (u32)1)
+                {
+                String* y = (String*)onames.get(j);
+                if (y.equals(x))
+                    continue;
+                if (x.hasPrefix(String.withCString("v:")) || y.hasPrefix(String.withCString("v:")))
+                    return String.withCString("two arrays may be the same memory");
+                }
+            }
+        return (String*)0;
+        }
+
+    // The source place a loop is named by: file:line of its first line.
+    final String* cpFuseLabel(LRCLoop* L)
+        {
+        IRInsn* at = ppFirstDbg(L);
+        if (at == (IRInsn*)0)
+            return (String*)0;
+        String* path = (String*)IRDbg.files().get(at.dbgFile());
+        if (path == (String*)0 || IRDbg.isLibraryPath(path))
+            return (String*)0;
+        return String.withFormat("%s:%ld", path.lastPathComponent().cString(), (i32)at.dbgLine());
+        }
+
+    // The values defined in blocks of `blocks`.
+    final bool cpFuseIn(Map* defOf, IRValue* v, Map* blockOf, IRBlock* a, IRBlock* b)
+        {
+        IRBlock* at = (IRBlock*)blockOf.get((Hashable*)v);
+        return at != (IRBlock*)0 && (at == a || at == b);
+        }
+
+    // One pair fused in fn; whether one was.
+    final bool cpFuseOnce(IRFunc* fn)
+        {
+        Map* defOf = new Map();
+        Map* blockOf = new Map();
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            for (u32 i = (u32)0; i < bb.phis().count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)bb.phis().get(i);
+                if (n.res() != 0) { defOf.set((Hashable*)n.res(), (Object*)n); blockOf.set((Hashable*)n.res(), (Object*)bb); }
+                }
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)bb.insns().get(i);
+                if (n.res() != 0) { defOf.set((Hashable*)n.res(), (Object*)n); blockOf.set((Hashable*)n.res(), (Object*)bb); }
+                if (n.memRes() != 0) { defOf.set((Hashable*)n.memRes(), (Object*)n); blockOf.set((Hashable*)n.memRes(), (Object*)bb); }
+                }
+            }
+        Array* loops = self.lrcLoops(fn);
+        for (u32 i = (u32)0; i < loops.count(); i = i + (u32)1)
+            {
+            LRCLoop* L1 = (LRCLoop*)loops.get(i);
+            if (!cpFuseShape(L1))
+                continue;
+            // The first loop's exit: one block, after nothing but the header,
+            // leading straight into another loop's header.
+            IRBlock* H1 = L1.header();
+            IRBlock* E1 = ((IROperand*)H1.term().ops().get((u32)2)).blk();
+            if (E1 == 0 || E1.phis().count() != (u32)0 || E1.term() == 0 || !E1.term().isOp(opBranch)
+                || self.predsOfBlock(fn, E1).count() != (u32)1)
+                continue;
+            IRBlock* H2 = ((IROperand*)E1.term().ops().get((u32)0)).blk();
+            LRCLoop* L2 = (LRCLoop*)0;
+            for (u32 j = (u32)0; j < loops.count(); j = j + (u32)1)
+                if (((LRCLoop*)loops.get(j)).header() == H2)
+                    L2 = (LRCLoop*)loops.get(j);
+            if (L2 == (LRCLoop*)0 || !cpFuseShape(L2) || L2.pre() != E1)
+                continue;
+            String* l1 = cpFuseLabel(L1);
+            String* l2 = cpFuseLabel(L2);
+            if (l1 == (String*)0 || l2 == (String*)0)
+                continue;
+            String* n1 = (String*)_cpFuseNames.get((Hashable*)H1);
+            if (n1 != (String*)0)
+                l1 = n1;
+            String* n2 = (String*)_cpFuseNames.get((Hashable*)H2);
+            if (n2 != (String*)0)
+                l2 = n2;
+            String* why = cpFuseWhy(fn, L1, L2, E1, defOf, blockOf);
+            if (why != (String*)0)
+                {
+                // Said once: the search runs again after each merge.
+                String* pair = String.withFormat("apart|%s", l1.cString());
+                if (_cpFuseNames.get((Hashable*)pair) != (Object*)0)
+                    continue;
+                _cpFuseNames.set((Hashable*)pair, (Object*)pair);
+                if (optWarnParAuto())
+                    Stdio.error(String.withFormat("%s: warning: the loops at '%s' and '%s' run apart: %s\n",
+                                                  cpFuseWhere(L1).cString(), l1.cString(), l2.cString(), why.cString()));
+                continue;
+                }
+            if (optWarnParAuto())
+                Stdio.error(String.withFormat("%s: warning: the loops at '%s' and '%s' run as one block (--par-style)\n",
+                                              cpFuseWhere(L1).cString(), l1.cString(), l2.cString()));
+            cpFuseMerge(fn, L1, L2, E1, defOf);
+            _cpFuseNames.set((Hashable*)H1, (Object*)String.withFormat("%s+%s", l1.cString(), l2.cString()));
+            return true;
+            }
+        return false;
+        }
+
+    final String* cpFuseWhere(LRCLoop* L)
+        {
+        IRInsn* at = ppFirstDbg(L);
+        String* path = at != (IRInsn*)0 ? (String*)IRDbg.files().get(at.dbgFile()) : (String*)0;
+        if (path == (String*)0)
+            return String.withCString("?");
+        return String.withFormat("%s:%ld:%ld", path.cString(), (i32)at.dbgLine(), (i32)at.dbgCol());
+        }
+
+    // Why the two loops may not run as one, or 0.
+    final String* cpFuseWhy(IRFunc* fn, LRCLoop* L1, LRCLoop* L2, IRBlock* E1, Map* defOf, Map* blockOf)
+        {
+        IRBlock* H1 = L1.header();
+        IRBlock* B1 = L1.latch();
+        IRBlock* H2 = L2.header();
+        IRBlock* B2 = L2.latch();
+        IRInsn* iv1 = cpFuseIv(L1, defOf);
+        IRInsn* iv2 = cpFuseIv(L2, defOf);
+        if (iv1 == 0 || iv2 == 0)
+            return String.withCString("a loop is not counted by one");
+        if (!iv1.res().ty().equals(iv2.res().ty()))
+            return String.withCString("their loop variables have different types");
+        IRInsn* c1 = cpFuseCmp(L1, iv1, defOf);
+        IRInsn* c2 = cpFuseCmp(L2, iv2, defOf);
+        if (c1 == 0 || c2 == 0 || !c1.pred().equals(c2.pred()))
+            return String.withCString("a loop's test is not its variable below a bound");
+        IRValue* b1 = ((IROperand*)c1.ops().get((u32)1)).val();
+        IRValue* b2 = ((IROperand*)c2.ops().get((u32)1)).val();
+        if (!cpFuseSame(cpFuseIncoming(iv1, L1.pre()), cpFuseIncoming(iv2, E1), defOf) || !cpFuseSame(b1, b2, defOf))
+            return String.withCString("their ranges differ");
+        // The bound of the second must hold before the first starts.
+        if (cpFuseIn(defOf, b2, blockOf, H1, B1))
+            return String.withCString("their ranges differ");
+        // Between them: constants and addresses only, which can go first.
+        for (u32 i = (u32)0; i < E1.insns().count(); i = i + (u32)1)
+            {
+            IRInsn* n = (IRInsn*)E1.insns().get(i);
+            if (!n.opHas(OPF_PURE) || n.memRes() != 0)
+                return String.withCString("there is code between them");
+            for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
+                {
+                IROperand* o = (IROperand*)n.ops().get(k);
+                if (o.kind() == (u8)OPK_USE && cpFuseIn(defOf, o.val(), blockOf, H1, B1))
+                    return String.withCString("there is code between them");
+                }
+            }
+        // The second header: its variable, its sums, invariants, its test.
+        for (u32 i = (u32)0; i < H2.insns().count(); i = i + (u32)1)
+            {
+            IRInsn* n = (IRInsn*)H2.insns().get(i);
+            if (n == c2)
+                continue;
+            if (!n.opHas(OPF_PURE) || n.memRes() != 0 || n.res() == 0 || cpFuseUsedOutside(fn, n.res(), H2))
+                return String.withCString("the second loop's test does more than test");
+            }
+        for (u32 i = (u32)0; i < H2.phis().count(); i = i + (u32)1)
+            {
+            IRInsn* p = (IRInsn*)H2.phis().get(i);
+            if (p == iv2)
+                continue;
+            IRValue* init = cpFuseIncoming(p, E1);
+            if (init == 0 || cpFuseIn(defOf, init, blockOf, H1, B1))
+                return String.withCString("the second uses what the first computes");
+            }
+        // The second body uses nothing the first computes but memory.
+        for (u32 i = (u32)0; i < B2.insns().count(); i = i + (u32)1)
+            {
+            IRInsn* n = (IRInsn*)B2.insns().get(i);
+            for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
+                {
+                IROperand* o = (IROperand*)n.ops().get(k);
+                if (o.kind() != (u8)OPK_USE || !cpFuseIn(defOf, o.val(), blockOf, H1, B1))
+                    continue;
+                IRInsn* d = (IRInsn*)defOf.get((Hashable*)o.val());
+                if (d == 0 || d.memRes() != o.val())
+                    return String.withCString("the second uses what the first computes");
+                }
+            }
+        // What each loop carries from one iteration to the next: its
+        // variable, and integer sums (+ * & | ^ of the header value) the
+        // outliner splits. A float sum (a block only under :goal(speed)) or
+        // any other carried value keeps the loop apart, so a loop that would
+        // be a block does not become serial in the merge.
+        String* carry = cpFuseCarries(L1, iv1, defOf);
+        if (carry == (String*)0)
+            carry = cpFuseCarries(L2, iv2, defOf);
+        if (carry != (String*)0)
+            return carry;
+        // A loop of doubles stays itself, as an xc block does: a GPU without
+        // doubles would run neither part of the fused loop.
+        if (cpFuseDouble(H1) || cpFuseDouble(B1) || cpFuseDouble(H2) || cpFuseDouble(B2))
+            return String.withCString("a loop uses double");
+        Map* a1 = new Map();
+        Map* a2 = new Map();
+        if (!cpFuseScan(B1, iv1.res(), defOf, a1) || !cpFuseScan(B2, iv2.res(), defOf, a2))
+            return String.withCString("a body calls a function or reaches memory another way");
+        // A loop that stores elsewhere than at its index (a histogram, a
+        // scatter, a value carried between iterations) stays itself: the
+        // outliner judges such a loop by what it stores, and fused with
+        // others it would make them all serial.
+        if (cpFuseScatters(a1) || cpFuseScatters(a2))
+            return String.withCString("a loop stores elsewhere than at its index");
+        String* why = cpFuseArrays(a1, a2);
+        if (why == (String*)0)
+            why = cpFuseArrays(a2, a1);
+        return why;
+        }
+
+    // Any value of the block is a double.
+    final bool cpFuseDouble(IRBlock* B)
+        {
+        for (u32 i = (u32)0; i < B.phis().count(); i = i + (u32)1)
+            {
+            IRInsn* n = (IRInsn*)B.phis().get(i);
+            if (n.res() != 0 && n.res().ty().equals(String.withCString("F64")))
+                return true;
+            }
+        for (u32 i = (u32)0; i < B.insns().count(); i = i + (u32)1)
+            {
+            IRInsn* n = (IRInsn*)B.insns().get(i);
+            if (n.res() != 0 && n.res().ty().equals(String.withCString("F64")))
+                return true;
+            }
+        return false;
+        }
+
+    // v is used outside block H.
+    final bool cpFuseUsedOutside(IRFunc* fn, IRValue* v, IRBlock* H)
+        {
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            if (bb == H)
+                continue;
+            if (cpFuseUses(bb.phis(), v) || cpFuseUses(bb.insns(), v))
+                return true;
+            if (bb.term() != 0 && cpFuseUsesOne(bb.term(), v))
+                return true;
+            }
+        return false;
+        }
+
+    final bool cpFuseUses(Array* insns, IRValue* v)
+        {
+        for (u32 i = (u32)0; i < insns.count(); i = i + (u32)1)
+            if (cpFuseUsesOne((IRInsn*)insns.get(i), v))
+                return true;
+        return false;
+        }
+
+    final bool cpFuseUsesOne(IRInsn* n, IRValue* v)
+        {
+        for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
+            {
+            IROperand* o = (IROperand*)n.ops().get(k);
+            if (o.kind() == (u8)OPK_USE && o.val() == v)
+                return true;
+            }
+        return false;
+        }
+
+    // The merge: E1's constants before the first loop, the second body in
+    // the first's, the second's variable the first's, its other phis moved
+    // to the first header, and the exit straight on.
+    final void cpFuseMerge(IRFunc* fn, LRCLoop* L1, LRCLoop* L2, IRBlock* E1, Map* defOf)
+        {
+        IRBlock* P1 = L1.pre();
+        IRBlock* H1 = L1.header();
+        IRBlock* B1 = L1.latch();
+        IRBlock* H2 = L2.header();
+        IRBlock* B2 = L2.latch();
+        IRInsn* iv1 = cpFuseIv(L1, defOf);
+        IRInsn* iv2 = cpFuseIv(L2, defOf);
+        IRBlock* E2 = ((IROperand*)H2.term().ops().get((u32)2)).blk();
+        // E1's instructions first.
+        for (u32 i = (u32)0; i < E1.insns().count(); i = i + (u32)1)
+            P1.add((IRInsn*)E1.insns().get(i));
+        E1.setInsns(new Array());
+        // The second body into the first (its step, now the first's, unused).
+        for (u32 i = (u32)0; i < B2.insns().count(); i = i + (u32)1)
+            {
+            B1.add((IRInsn*)B2.insns().get(i));
+            }
+        // The second header's other phis, now the first's: in from before
+        // the first loop and from its body.
+        Array* keep = new Array();
+        for (u32 i = (u32)0; i < H1.phis().count(); i = i + (u32)1)
+            keep.add(H1.phis().get(i));
+        for (u32 i = (u32)0; i < H2.phis().count(); i = i + (u32)1)
+            {
+            IRInsn* p = (IRInsn*)H2.phis().get(i);
+            if (p == iv2)
+                continue;
+            for (u32 k = (u32)0; k + (u32)1 < p.ops().count(); k = k + (u32)2)
+                {
+                IRBlock* from = ((IROperand*)p.ops().get(k)).blk();
+                p.ops().set(k, (Object*)IROperand.block(from == E1 ? P1 : B1));
+                }
+            keep.add((Object*)p);
+            }
+        H1.setPhis(keep);
+        // The second variable is the first.
+        self.rewriteUsesTo(fn, iv2.res(), IROperand.useVal(iv1.res()));
+        // Out of the loop straight on to what followed the second.
+        // E2, reached from the second header alone, is folded into E1 when
+        // it has no phis, so the loop after it is next to this one.
+        bool fold = E2.phis().count() == (u32)0 && self.predsOfBlock(fn, E2).count() == (u32)1 && E2 != H1;
+        if (fold)
+            {
+            for (u32 i = (u32)0; i < E2.insns().count(); i = i + (u32)1)
+                E1.add((IRInsn*)E2.insns().get(i));
+            E1.setTerm(E2.term());
+            // E2's successors' phis came in from E2: now from E1.
+            for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+                {
+                IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+                for (u32 i = (u32)0; i < bb.phis().count(); i = i + (u32)1)
+                    {
+                    IRInsn* p = (IRInsn*)bb.phis().get(i);
+                    for (u32 k = (u32)0; k + (u32)1 < p.ops().count(); k = k + (u32)2)
+                        if (((IROperand*)p.ops().get(k)).blk() == E2)
+                            p.ops().set(k, (Object*)IROperand.block(E1));
+                    }
+                }
+            }
+        else
+            {
+            E1.term().ops().set((u32)0, (Object*)IROperand.block(E2));
+            for (u32 i = (u32)0; i < E2.phis().count(); i = i + (u32)1)
+                {
+                IRInsn* p = (IRInsn*)E2.phis().get(i);
+                for (u32 k = (u32)0; k + (u32)1 < p.ops().count(); k = k + (u32)2)
+                    if (((IROperand*)p.ops().get(k)).blk() == H2)
+                        p.ops().set(k, (Object*)IROperand.block(E1));
+                }
+            }
+        for (u32 k = fn.blocks().count(); k > (u32)0; k = k - (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(k - (u32)1);
+            if (bb == H2 || bb == B2 || (fold && bb == E2))
+                fn.blocks().removeAt(k - (u32)1);
+            }
+        for (u32 k = (u32)0; k < fn.blocks().count(); k = k + (u32)1)
+            ((IRBlock*)fn.blocks().get(k)).setBix(k);
+        }
+
     final void parProposeOutline(IRModule* m)
         {
         // The functions made here are visited too (the count grows): a loop
@@ -2734,6 +3326,9 @@
             if (path != (String*)0)
                 label = String.withFormat("%s:%ld", path.lastPathComponent().cString(), (i32)at.dbgLine());
             }
+        // Fused loops (cpFuseLoops): named after them all.
+        if (_cpFuseNames != (Map*)0 && _cpFuseNames.get((Hashable*)L.header()) != (Object*)0)
+            label = (String*)_cpFuseNames.get((Hashable*)L.header());
         // The runtime keeps each block's device choice and measurements by
         // this name: a second block from the same line (a macro, a nest on
         // one line) is told apart.

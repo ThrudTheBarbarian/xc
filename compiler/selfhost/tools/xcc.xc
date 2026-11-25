@@ -6033,6 +6033,7 @@ void xccMain(void)
         cPathSetAllocRedirect(cElfArm64 && !isAndroid(d) ? cAllocRedirects(false) : (Map*)0);
         // -Wpar-auto: the outliner says what it lifted from this file, and why not.
         optSetWarnParAuto(!d.fe().warningSuppressed(String.withCString("par-auto")));
+        optSetNoParFuse(d.fe().noParFuse());
         // C and C++: unwind tables for xcc's functions, so a C++ exception
         // can pass through one (arm64: the back end reports its saves).
         arm64SetEhTables(true);

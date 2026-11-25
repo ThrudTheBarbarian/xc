@@ -586,6 +586,8 @@
         if (ppOutline())
             {
             _ppMade = new Array();
+            _cpFuseNames = new Map();
+            self.cpFuseLoops(m);
             self.parProposeOutline(m);
             _ppOutlined = true;
             self.libFallback(m, true);

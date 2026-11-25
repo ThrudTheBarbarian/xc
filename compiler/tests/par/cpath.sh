@@ -145,7 +145,9 @@ for p in scale t1 saxpy st mix; do
     want=$("$W/$p.ref")
     "$XC" -q -O2 -H . -o "$W/$p" "$W/$p.c" > "$W/$p.b" 2>&1 || { echo "FAIL cpath: $p does not build"; head -3 "$W/$p.b"; fail=1; continue; }
     [ "$("$W/$p")" = "$want" ] || { echo "FAIL cpath: $p gives $("$W/$p"), clang's $want"; fail=1; }
-    XC_PAR_OUTLINE_TRACE=1 XC_PAR_PROPOSE=outline "$XC" -q -O3 -H . -o "$W/$p.par" "$W/$p.c" > "$W/$p.pb" 2>&1 || { echo "FAIL cpath: $p does not build with outlining"; head -3 "$W/$p.pb"; fail=1; continue; }
+    # -fno-par-fuse: each loop judged as a block of its own (fused loops are
+    # cfuse.sh's), so the count below is of loops.
+    XC_PAR_OUTLINE_TRACE=1 XC_PAR_PROPOSE=outline "$XC" -q -O3 -H . -fno-par-fuse -o "$W/$p.par" "$W/$p.c" > "$W/$p.pb" 2>&1 || { echo "FAIL cpath: $p does not build with outlining"; head -3 "$W/$p.pb"; fail=1; continue; }
     for d in cpu gpu; do
         got=$(XC_PAR=$d "$W/$p.par")
         [ "$got" = "$want" ] || { echo "FAIL cpath: $p's blocks ($d) give $got, clang's $want"; fail=1; }

@@ -78,6 +78,10 @@ void optFpcMarkBlock(IRBlock* bb)
 
 void optSetWarnParAuto(bool on) { gOptWarnParAuto = on; }
 bool optWarnParAuto(void) { return gOptWarnParAuto; }
+// -fno-par-fuse: adjacent C loops are not fused before the outliner (#147).
+bool gOptNoParFuse;
+void optSetNoParFuse(bool on) { gOptNoParFuse = on; }
+bool optNoParFuse(void) { return gOptNoParFuse; }
 // A C/C++ file's suffix for the symbols the outliner makes (ParOut$<n>...),
 // so two files' objects in one program keep their blocks apart (the reader
 // gives the file's internal names the same suffix, LlvmReader.modTagFor).
@@ -2064,6 +2068,7 @@ class BeFact : Object
     String* _ppLastWhy;    // the last reason ppNo gave
 
     Map* _ppLabels;     // block labels given so far (file:line), how many each
+    Map* _cpFuseNames;  // a fused C loop's header -> the block's name, of all the loops (#147)
     String* _ppWhere;      // the loop being tried, for the trace
     IRValue* _ppLastMem;   // the memory token the last ppCtxLoad / ppCall produced
 
