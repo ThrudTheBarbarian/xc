@@ -186,6 +186,51 @@ class IfaceWrite
             if (best != (Object*)0) return best;
             a = IfaceWrite.classNamed(program, Vtable.parentName(a));
         }
+        return IfaceWrite.subclassProtocolSlot(program, vt, c, m);
+    }
+
+    // A SUBCLASS can conform through the method it inherits: `Derived : Base
+    // <Valued>` with value() declared in Base. The reference stamps the
+    // protocol slot on Base's label while it fills each conforming class, in
+    // class-name order, so the last such class (by name) and the last of its
+    // protocols wins. Only a class whose nearest implementation is this very
+    // method counts: one that overrides it stamps its own label instead.
+    static Object* subclassProtocolSlot(Node* program, Vtable* vt, Node* c, Node* m)
+    {
+        if (c.name() == (String*)0) return (Object*)0;
+        Object* best = (Object*)0;
+        String* bestClass = (String*)0;
+        for (u32 i = (u32)0; i < program.kidCount(); i = i + (u32)1) {
+            Node* k = program.kid(i);
+            if (k == (Node*)0 || k.kind() != (u16)nkClassDecl || k == c) continue;
+            String* protos = k.extra();
+            if (protos == (String*)0 || k.name() == (String*)0) continue;
+            if (bestClass != (String*)0 && k.name().compare(bestClass) < (i8)0) continue;
+            // k must descend from c without an override on the way.
+            bool inherits = false;
+            u32 guard = (u32)0;
+            for (Node* a = k; a != (Node*)0 && guard <= program.kidCount(); guard = guard + (u32)1) {
+                if (a == c) { inherits = true; break; }
+                if (Vtable.matching(a, m) != (Node*)0) break;
+                a = IfaceWrite.classNamed(program, Vtable.parentName(a));
+            }
+            if (!inherits) continue;
+            Object* found = (Object*)0;
+            Array* list = protos.splitOnByte((u8)',');
+            for (u32 j = (u32)0; j < list.count(); j = j + (u32)1) {
+                String* pn = ((String*)list.get(j)).trimmed();
+                Map* ms = vt.protoSlotsFor(pn);
+                if (ms == (Map*)0) continue;
+                Object* s = ms.get((Hashable*)m.name());
+                if (s == (Object*)0) continue;
+                Node* pd = IfaceWrite.protocolNamed(program, pn);
+                if (pd != (Node*)0 && Vtable.matching(pd, m) == (Node*)0) continue;
+                found = s;
+            }
+            if (found == (Object*)0) continue;
+            best = found;
+            bestClass = k.name();
+        }
         return best;
     }
 
