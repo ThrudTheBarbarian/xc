@@ -194,6 +194,9 @@ same "--output"             $A --output @OUT@ ret.xc
 same "-o x.s"               $A -o @OUT@.s ret.xc
 cover -c
 same "-c"                   $A -c -o @OUT@.o ret.xc
+# A source and an object on one line: refused, in the same words.
+"$REF" -q -A x86_64 -c -o mix.o ret.xc > /dev/null 2>&1
+text "a source and an object on one line" err -q -A x86_64 -o @OUT@ ret.xc mix.o
 cover -a --assemble-only --emit-asm-from-ir
 equiv "-a"                  "$A -o refout.s ret.xc"  "$A -a -o xcout.s ret.xc"
 equiv "--assemble-only"     "$A -o refout.s ret.xc"  "$A --assemble-only -o xcout.s ret.xc"
@@ -803,6 +806,18 @@ a9s() {
 if [ -n "$A9SR" ] && [ -d "$A9SR" ]; then
     a9s "arm9 -S"
     a9s "arm9 -S --emit-lib" --emit-lib
+    # An object named through -Wl joins the arm9 link (a library wrapping C
+    # stays self-contained): both drivers accept it and write the same image.
+    printf 'i32 helper(i32 x) { return x * 3; }\n' > a9h.xc
+    printf '#import "Stdio.xc"\ni32 helper(i32 x);\ni32 main(void) { Stdio.printf("%%d\\n", helper(14)); return 0; }\n' > a9m.xc
+    if "$XC" -H "$ROOT" -q -A arm9 -L "$A9SR" -c a9h.xc -o a9h.o > /dev/null 2>&1; then
+        "$REF" -H "$ROOT" -q -A arm9 -L "$A9SR" a9m.xc -Wl,a9h.o -o a9wl.ref.so > a9wl.ref.txt 2>&1; rrc=$?
+        "$XC"  -H "$ROOT" -q -A arm9 -L "$A9SR" a9m.xc -Wl,a9h.o -o a9wl.xc.so  > a9wl.xc.txt 2>&1; xrc=$?
+        if [ $rrc = 0 ] && [ $xrc = 0 ] && cmp -s a9wl.ref.so a9wl.xc.so; then ok "arm9 -Wl,<object>"
+        else bad "arm9 -Wl,<object>: status $rrc/$xrc, $(head -c 200 a9wl.xc.txt)"; fi
+    else
+        bad "arm9 -Wl,<object>: could not compile the object"
+    fi
 else
     echo "note     arm9 -S not compared: no arm9 sysroot (XTC_ARM9_SYSROOT)"
 fi
