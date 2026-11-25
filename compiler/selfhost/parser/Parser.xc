@@ -1098,6 +1098,12 @@ class Parser
         // `Object` is the built-in root class: no unit declares it, but
         // `(Object@)0` is a cast in every one of them.
         _typeNames.add((Hashable*)String.withCString("Object"));
+        // `f32` and `f64` are the float type names; `float` and `double` are
+        // aliases. They are the same types, so each reads as a built-in
+        // typedef of its keyword and the spelling stays `float`/`double`. As
+        // names, not keywords, a variable or parameter may still be `f32`.
+        addTypedef(String.withCString("f32"), String.withCString("float"));
+        addTypedef(String.withCString("f64"), String.withCString("double"));
 
         u32 i = (u32)0;
         while (i + (u32)1 < _tokens.count()) {
@@ -2271,7 +2277,8 @@ class Parser
     {
         return Parser._same(t, "i8") || Parser._same(t, "u8") || Parser._same(t, "i16") || Parser._same(t, "u16")
             || Parser._same(t, "i32") || Parser._same(t, "u32") || Parser._same(t, "i64") || Parser._same(t, "u64")
-            || Parser._same(t, "float") || Parser._same(t, "double") || Parser._same(t, "bool");
+            || Parser._same(t, "float") || Parser._same(t, "double") || Parser._same(t, "f32")
+            || Parser._same(t, "f64") || Parser._same(t, "bool");
     }
 
     static String* joinToks(Array* a, u32 n)
@@ -2307,7 +2314,8 @@ class Parser
             String* type = Parser.joinToks(p, p.count() > (u32)0 ? p.count() - (u32)1 : (u32)0);
             if (k.byteLength() > (u32)0 && k.byteAt(k.byteLength() - (u32)1) == (u8)'p') {
                 if (stars == (u32)0 && Parser.isWebNumber(base) && !Parser._same(base, "float")
-                    && !Parser._same(base, "double") && !Parser._same(base, "bool")) {
+                    && !Parser._same(base, "double") && !Parser._same(base, "f32")
+                    && !Parser._same(base, "f64") && !Parser._same(base, "bool")) {
                     k.appendByte((u8)'n');
                     continue;
                 }
@@ -10559,8 +10567,11 @@ class Parser
         // `(T)` is a cast only when T is a keyword or a declared name.
         if (!hasStar && !named && !sawQualifier) return false;
 
-        u16 after = peek(i).type();
-        return after == (u16)tokRParen || after == (u16)tokQuestion;
+        // `(T?)` is the failable form: the `?` must close at once, so
+        // `(f32 ? a : b)` with a variable named after a type stays a
+        // conditional, as in the reference.
+        if (peek(i).type() == (u16)tokQuestion) i = i + (u32)1;
+        return peek(i).type() == (u16)tokRParen;
     }
 
     // The typed va_arg intrinsic for a type spelling. Pointers all collapse to

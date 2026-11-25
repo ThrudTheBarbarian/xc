@@ -418,7 +418,8 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
 \****************************************************************************/
 + (BOOL)isWebNumber:(NSString*)t
     {
-    return [@[ @"i8", @"u8", @"i16", @"u16", @"i32", @"u32", @"i64", @"u64", @"float", @"double", @"bool" ] containsObject:t];
+    return [@[ @"i8", @"u8", @"i16", @"u16", @"i32", @"u32", @"i64", @"u64", @"float", @"double", @"f32", @"f64", @"bool" ]
+        containsObject:t];
     }
 
 + (NSString*)webKindsOf:(NSArray<NSString*>*)params ret:(NSArray<NSString*>*)ret bad:(NSString**)bad
@@ -450,7 +451,8 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
         if (k.length && [k hasSuffix:@"p"])
             {
             if (stars == 0 && [XTParser isWebNumber:base] && ![base isEqualToString:@"float"] &&
-                ![base isEqualToString:@"double"] && ![base isEqualToString:@"bool"])
+                ![base isEqualToString:@"double"] && ![base isEqualToString:@"f32"] &&
+                ![base isEqualToString:@"f64"] && ![base isEqualToString:@"bool"])
                 {
                 [k appendString:@"n"];
                 continue;

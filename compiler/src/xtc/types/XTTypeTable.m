@@ -29,6 +29,12 @@
         _table[@"bool"] = [XTType boolType];
         _table[@"float"] = [XTType floatType];
         _table[@"double"] = [XTType doubleType];
+        // `f32` and `f64` are the float type names; `float` and `double`
+        // are aliases. They are the same types, so they resolve to the same
+        // type objects and print as `float`/`double`. As names, not keywords,
+        // a variable or parameter may still be called `f32`.
+        _table[@"f32"] = [XTType floatType];
+        _table[@"f64"] = [XTType doubleType];
         _table[@"void"] = [XTType voidType];
         _table[@"pointer"] = [XTType pointerType];
         _table[@"auto"] = [XTType autoType];
