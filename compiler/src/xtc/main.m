@@ -4908,7 +4908,17 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
         return 1;
     }
     if (opts.inputFiles.count > 1) {
-        fprintf(stderr, "xcc: error: multi-file inputs not supported on the new-IR path yet\n");
+        // A source beside objects is said as xcc says it: what to do instead.
+        BOOL anyObj = NO;
+        for (NSString *f in opts.inputFiles) {
+            NSString *e = f.pathExtension;
+            if ([e isEqualToString:@"o"] || [e isEqualToString:@"obj"] || [e isEqualToString:@"a"]) anyObj = YES;
+        }
+        if (anyObj)
+            fprintf(stderr, "xcc: error: a source file and object files cannot be mixed on one line — "
+                            "compile the source with -c first, then link the objects\n");
+        else
+            fprintf(stderr, "xcc: error: multi-file inputs not supported on the new-IR path yet\n");
         return 1;
     }
     NSString *input = opts.inputFiles.firstObject;

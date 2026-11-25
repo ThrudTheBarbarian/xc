@@ -3698,6 +3698,40 @@ void emitArm9(DriverOptions* d, IRModule* mod)
         Stdio.printf("xcc: %s\n", as.why().cString());
         driverExit((i32)1); return;
     }
+    Data* mdata = as.data();
+    Array* msyms = as.symbols();
+    Array* mrels = as.relocations();
+    Data* mctors = as.ctorTable();
+
+    // The user's own objects and archives (`-Wl,shim.o -Wl,libfoo.a`, a `-l`
+    // found as an archive), merged as an object link merges them, so a
+    // library that wraps external C is self-contained, as the reference
+    // links it. Anything else has no place in this image and is refused by
+    // name rather than dropped.
+    Array* uobjs = new Array();
+    Array* uars = new Array();
+    Array* li = d.linkInputs();
+    for (u32 i = (u32)0; li != (Array*)0 && i < li.count(); i = i + (u32)1) {
+        String* lp = resolveLinkInput(d, (String*)li.get(i));
+        if (lp == (String*)0) continue;
+        if (lp.hasSuffix(String.withCString(".o"))) uobjs.add((Object*)lp);
+        else if (lp.hasSuffix(String.withCString(".a"))) uars.add((Object*)lp);
+        else {
+            Stdio.printf("xcc: error: '%s': an arm9 link takes .o objects and .a archives "
+                         "from the link line; a device library is found on the -L path "
+                         "through #import\n", lp.cString());
+            driverExit((i32)1); return;
+        }
+    }
+    if (uobjs.count() > (u32)0 || uars.count() > (u32)0) {
+        mdata = Data.withData(as.data());
+        msyms = new Array();
+        for (u32 i = (u32)0; i < as.symbols().count(); i = i + (u32)1) msyms.add(as.symbols().get(i));
+        mrels = new Array();
+        for (u32 i = (u32)0; i < as.relocations().count(); i = i + (u32)1) mrels.add(as.relocations().get(i));
+        mctors = Data.withData(as.ctorTable());
+        if (!arm9MergeInputs(uobjs, uars, text, mdata, mctors, msyms, mrels)) return;
+    }
 
     // DT_NEEDED. The loader resolves an import by NAME across the libraries it
     // has mapped, so every library that might satisfy one has to be listed —
@@ -3736,8 +3770,8 @@ void emitArm9(DriverOptions* d, IRModule* mod)
             iface.appendByte(ij.byteAt(i));
 
     Elf32* w = new Elf32();
-    w.setCtorTable(as.ctorTable());
-    Data* img = w.sharedObject(text, as.data(), as.symbols(), as.relocations(),
+    w.setCtorTable(mctors);
+    Data* img = w.sharedObject(text, mdata, msyms, mrels,
                                 needed,
                                 d.emitLib() ? baseNameOf(d.fe().output()) : (String*)0,
                                 iface);
@@ -3813,6 +3847,48 @@ void linkObjectsArm9(DriverOptions* d)
     // bounds the loader is given.
     Data* mctors = Data.withData(as.ctorTable());
 
+    Array* lobjs = new Array();
+    Array* lars = new Array();
+    for (u32 i = (u32)0; i < d.objectInputs().count(); i = i + (u32)1) {
+        String* op = (String*)d.objectInputs().get(i);
+        if (op.hasSuffix(String.withCString(".o"))) lobjs.add((Object*)op);
+        else if (op.hasSuffix(String.withCString(".a"))) lars.add((Object*)op);
+    }
+    if (!arm9MergeInputs(lobjs, lars, text, mdata, mctors, msyms, mrels)) return;
+
+    // DT_NEEDED: what the objects `#import <Lib>`ed (their .xtc.needs
+    // sidecars), then the device libc and libm, as the reference lists them.
+    Array* needed = new Array();
+    Array* on = objectNeeds(d.objectInputs());
+    for (u32 i = (u32)0; i < on.count(); i = i + (u32)1)
+        needed.add((Object*)((String*)on.get(i)).lastPathComponent());
+    if (arm9SysrootLib(d, String.withCString("libc.so")) != (String*)0)
+        needed.add((Object*)String.withCString("libc.so"));
+    if (arm9SysrootLib(d, String.withCString("libm.so")) != (String*)0)
+        needed.add((Object*)String.withCString("libm.so"));
+
+    Elf32* w = new Elf32();
+    w.setCtorTable(mctors);
+    Data* img = w.sharedObject(text, mdata, msyms, mrels, needed, (String*)0, new Data());
+    if (w.failed() || img == (Data*)0) {
+        Stdio.printf("xcc: %s\n", w.failed() ? w.why().cString() : "arm9 link failed");
+        driverExit((i32)1); return;
+    }
+    Data* out = img;
+    if (!Files.writeData(d.fe().output(), out)) {
+        Stdio.printf("xcc: error: cannot write '%s'\n", d.fe().output().cString());
+        driverExit((i32)1); return;
+    }
+    Files.setExecutable(d.fe().output());
+}
+
+// Objects, then archives pulled from to a fixpoint, merged into an arm9
+// image whose runtime (and program) are already assembled: an object link's
+// inputs, and a program's `-Wl,x.o` / `-Wl,lib.a` / `-l` archives. False
+// (having said why) when one cannot be merged.
+bool arm9MergeInputs(Array* objs, Array* ars, Data* text, Data* mdata, Data* mctors,
+                     Array* msyms, Array* mrels)
+{
     Map* defined = new Map();
     for (u32 i = (u32)0; i < msyms.count(); i = i + (u32)1) {
         AsmSymbol* sy = (AsmSymbol*)msyms.get(i);
@@ -3820,32 +3896,29 @@ void linkObjectsArm9(DriverOptions* d)
     }
     Array* pool = new Array();
     u32 seq = (u32)0; // which merged object this is, for tagging its locals
-    for (u32 i = (u32)0; i < d.objectInputs().count(); i = i + (u32)1) {
-        String* op = (String*)d.objectInputs().get(i);
-        if (op.hasSuffix(String.withCString(".o"))) {
-            Elf32Object* o = Elf32Object.read(Files.readData(op));
-            if (o == (Elf32Object*)0) {
-                Stdio.printf("xcc: error: '%s' is not a readable ARM ELF32 object (or carries "
-                             "a relocation this linker does not emit)\n", op.cString());
-                driverExit((i32)1); return;
-            }
-            if (!mergeArm9Object(o, text, mdata, mctors, msyms, mrels, defined, seq)) {
-                driverExit((i32)1); return;
-            }
-            seq = seq + (u32)1;
+    for (u32 i = (u32)0; i < objs.count(); i = i + (u32)1) {
+        String* op = (String*)objs.get(i);
+        Elf32Object* o = Elf32Object.read(Files.readData(op));
+        if (o == (Elf32Object*)0) {
+            Stdio.printf("xcc: error: '%s' is not a readable ARM ELF32 object (or carries "
+                         "a relocation this linker does not emit)\n", op.cString());
+            driverExit((i32)1); return false;
         }
+        if (!mergeArm9Object(o, text, mdata, mctors, msyms, mrels, defined, seq)) {
+            driverExit((i32)1); return false;
+        }
+        seq = seq + (u32)1;
     }
     // A `.a` is a POOL: a member joins only when it defines something still
     // undefined, and pulling one can make new names undefined, so this runs
     // to a fixpoint. Archives are read after every object, as the reference
     // separates them.
-    for (u32 i = (u32)0; i < d.objectInputs().count(); i = i + (u32)1) {
-        String* ap = (String*)d.objectInputs().get(i);
-        if (!ap.hasSuffix(String.withCString(".a"))) continue;
+    for (u32 i = (u32)0; i < ars.count(); i = i + (u32)1) {
+        String* ap = (String*)ars.get(i);
         Array* ms = ArArchive.membersOfFile(ap);
         if (ms == (Array*)0) {
             Stdio.printf("xcc: error: '%s' is not a static archive\n", ap.cString());
-            driverExit((i32)1); return;
+            driverExit((i32)1); return false;
         }
         for (u32 k = (u32)0; k < ms.count(); k = k + (u32)1) {
             Elf32Object* o = Elf32Object.read(((ArMember*)ms.get(k)).data());
@@ -3877,36 +3950,13 @@ void linkObjectsArm9(DriverOptions* d)
             taken.set((Hashable*)key, (Object*)Number.withU32((u32)1));
             progress = true;
             if (!mergeArm9Object(o, text, mdata, mctors, msyms, mrels, defined, seq)) {
-                driverExit((i32)1); return;
+                driverExit((i32)1); return false;
             }
             seq = seq + (u32)1;
         }
     }
 
-    // DT_NEEDED: what the objects `#import <Lib>`ed (their .xtc.needs
-    // sidecars), then the device libc and libm, as the reference lists them.
-    Array* needed = new Array();
-    Array* on = objectNeeds(d.objectInputs());
-    for (u32 i = (u32)0; i < on.count(); i = i + (u32)1)
-        needed.add((Object*)((String*)on.get(i)).lastPathComponent());
-    if (arm9SysrootLib(d, String.withCString("libc.so")) != (String*)0)
-        needed.add((Object*)String.withCString("libc.so"));
-    if (arm9SysrootLib(d, String.withCString("libm.so")) != (String*)0)
-        needed.add((Object*)String.withCString("libm.so"));
-
-    Elf32* w = new Elf32();
-    w.setCtorTable(mctors);
-    Data* img = w.sharedObject(text, mdata, msyms, mrels, needed, (String*)0, new Data());
-    if (w.failed() || img == (Data*)0) {
-        Stdio.printf("xcc: %s\n", w.failed() ? w.why().cString() : "arm9 link failed");
-        driverExit((i32)1); return;
-    }
-    Data* out = img;
-    if (!Files.writeData(d.fe().output(), out)) {
-        Stdio.printf("xcc: error: cannot write '%s'\n", d.fe().output().cString());
-        driverExit((i32)1); return;
-    }
-    Files.setExecutable(d.fe().output());
+    return true;
 }
 
 // One object into the image being built: its text and data appended (each
@@ -6313,7 +6363,8 @@ void emitModule(DriverOptions* d, IRModule* mod)
         && !isX86_64(d) && !isMacArm64(d)
         && !isIos(d)
         && !(d.targetRow() != (TargetRow*)0 && d.targetRow().exeFormat().equals(String.withCString("elf-pie")))
-        && !(win64 && d.frameworks().count() == (u32)0)) {
+        && !(win64 && d.frameworks().count() == (u32)0)
+        && !(isArm9(d) && d.frameworks().count() == (u32)0)) {
         Stdio.printf("xcc: error: -Xlinker/-l/-framework is not wired for '%s' in "
                      "this driver — the link would silently omit it.\n",
                      d.arch().cString());
