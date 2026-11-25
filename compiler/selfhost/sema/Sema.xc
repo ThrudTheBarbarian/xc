@@ -975,7 +975,11 @@ class Sema
             _errorAt(e, at);
             return true;
             }
-        if (Types.isFloating(lhs))
+        // A class reference can unbox (a Number* into a double), so only a
+        // raw pointer is refused.
+        String* rc = classNameOf(rhs);
+        bool classRef = rc != 0 && (_classes.get((Hashable*)rc) != 0 || _protocols.get((Hashable*)rc) != 0);
+        if (Types.isFloating(lhs) && !classRef)
             {
             String* e = String.withCString(site);
             e.appendCString(": a pointer '");
@@ -6076,6 +6080,13 @@ class Sema
             }
         if (ties == (u32)1)
             return best;
+        // No candidate converts at all: nothing TIES, and the tie-breakers
+        // below must not choose one. With bestScore still noMatch every
+        // candidate "tied" with it, so `i32 r = f(b)` took the i32-returning
+        // f by its return type alone and its arguments were never checked
+        // (a B* passed for an A*, a float* for a float).
+        if (best == (Node*)0)
+            return (Node*)0;
         // Candidates that tie with identical parameters AND an identical
         // RETURN type are the same function declared twice — a prototype and
         // its definition — not an ambiguity. The return type has to be part of

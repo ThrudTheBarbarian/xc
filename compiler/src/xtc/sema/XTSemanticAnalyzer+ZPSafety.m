@@ -1448,7 +1448,10 @@
                                  at:loc];
         return YES;
         }
-    if (lhsType.isFloating)
+    // A class reference can unbox (a Number* into a double), so only a raw
+    // pointer is refused.
+    XTType* pointee = [rhsType isKindOfClass:[XTPointerType class]] ? ((XTPointerType*)rhsType).pointeeType : nil;
+    if (lhsType.isFloating && pointee.kind != XTTypeKindClass)
         {
         [self.diagnostics emitError:[NSString stringWithFormat:
                                                   @"%@: a pointer '%@' has no '%@' value — dereference it (*p) "
