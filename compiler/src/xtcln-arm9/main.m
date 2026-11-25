@@ -296,7 +296,22 @@ int main(int argc, const char* argv[])
                           mergeFailed = YES;
                           return NO;
                           }
-                      continue;
+                      // A COMMON (a tentative `i32 g;`) yields as a C linker
+                      // has it (#686): a strong definition replaces it whatever
+                      // the order, and among commons the largest wins.
+                      // Anything else: the FIRST definition stands (#663).
+                      NSUInteger pk = NSNotFound;
+                      for (NSUInteger k = 0; k < msyms.count; k++)
+                          if (msyms[k].section == 3 && [msyms[k].name isEqualToString:sy.name])
+                              {
+                              pk = k;
+                              break;
+                              }
+                      if (pk == NSNotFound)
+                          continue;
+                      if (sy.section == 3 && sy.size <= msyms[pk].size)
+                          continue;
+                      [msyms removeObjectAtIndex:pk];
                       }
                   [defined addObject:sy.name];
                   // Drop the assembler's UNDEFINED entry for this name. The

@@ -3955,7 +3955,19 @@ bool mergeArm9Object(Elf32Object* o, Data* mtext, Data* mdata, Data* mctors,
                              nm.substringBytes((u32)0, nm.byteLength() - (u32)4).cString(), nm.cString());
                 return false;
             }
-            continue;
+            // A COMMON (a tentative `i32 g;`) yields as a C linker has it
+            // (#686): a strong definition replaces it whatever the order, and
+            // among commons the largest wins. Anything else: the FIRST
+            // definition stands (#663).
+            AsmSymbol* prev = (AsmSymbol*)0;
+            u32 pk = (u32)0;
+            for (u32 k = (u32)0; k < msyms.count(); k = k + (u32)1) {
+                AsmSymbol* q = (AsmSymbol*)msyms.get(k);
+                if (q.section() == (u32)3 && q.name().equals(nm)) { prev = q; pk = k; k = msyms.count(); }
+            }
+            if (prev == (AsmSymbol*)0) continue;
+            if (sy.section() == (u32)3 && sy.size() <= prev.size()) continue;
+            msyms.removeAt(pk);
         }
         defined.set((Hashable*)nm, (Object*)Number.withU32((u32)1));
         // Drop the UNDEFINED entry the runtime's assembly left for this name,
