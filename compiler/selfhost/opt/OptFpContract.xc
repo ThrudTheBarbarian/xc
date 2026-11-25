@@ -65,24 +65,8 @@
             for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
                 {
                 IRBlock* bb = (IRBlock*)fn.blocks().get(b);
-                if (speed.get((Hashable*)bb) == (Object*)0)
-                    continue;
-                for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
-                    {
-                    IRInsn* n = (IRInsn*)bb.insns().get(i);
-                    bool vec = n.isOp(opVAdd) || n.isOp(opVSub);
-                    if (!n.isOp(opFAdd) && !n.isOp(opFSub) && !vec)
-                        continue;
-                    if (n.res() == (IRValue*)0 || n.pred() != (String*)0)
-                        continue;
-                    // A vector add over float lanes too (the reference says why).
-                    String* t = n.res().ty();
-                    bool flt = vec ? (t.hasPrefix(String.withCString("Vec(F32")) || t.hasPrefix(String.withCString("Vec(F64")))
-                                   : (IRType.is(t, tyF32) || IRType.is(t, tyF64));
-                    if (!flt)
-                        continue;
-                    n.setPred(String.withCString("contract"));
-                    }
+                if (speed.get((Hashable*)bb) != (Object*)0)
+                    optFpcMarkBlock(bb);
                 }
             }
         }
@@ -91,14 +75,7 @@
     // explains.
     final bool fpcSpeedName(IRFunc* fn, String* name)
         {
-        Array* hs = fn.speedHeaders();
-        for (u32 k = (u32)0; k < hs.count(); k = k + (u32)1)
-            {
-            String* h = (String*)hs.get(k);
-            if (name.hasPrefix(h) && (name.byteLength() == h.byteLength() || name.byteAt(h.byteLength()) == (u8)'_'))
-                return true;
-            }
-        return false;
+        return optFpcSpeedName(fn, name);
         }
 
     // The blocks reachable from H (forward) or reaching it (backward), H's

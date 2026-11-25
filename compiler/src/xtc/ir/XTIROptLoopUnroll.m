@@ -1,3 +1,4 @@
+#import "XTIROptFpContract.h"
 #import "XTIROptLoopUnroll.h"
 #import "XTIRModule.h"
 #import "XTIRFunction.h"
@@ -335,7 +336,11 @@ static BOOL splitPhi(XTIRInsn* phi, XTIRBlock* B,
             continue; // no exit phi to rewire
         BOOL forced = H.name && [fn.forcedUnrollHeaders containsObject:H.name];
         NSUInteger bodyCap = forced ? forcedBody : maxBody;
-        if (B.instructions.count == 0 || B.instructions.count > bodyCap)
+        // Past the usual cap only for a loop of four trips or fewer, which
+        // the trip check below enforces (#24, #22). As the port.
+        NSUInteger smallBody = prof.unrollSmallTripBodyInsns;
+        BOOL bigBody = B.instructions.count > bodyCap;
+        if (B.instructions.count == 0 || B.instructions.count > MAX(bodyCap, smallBody))
             continue;
         BOOL bodyOK = YES;
         for (XTIRInsn* insn in B.instructions)
@@ -395,12 +400,15 @@ static BOOL splitPhi(XTIRInsn* phi, XTIRBlock* B,
                                       forced ? forcedTrip : maxTrip);
         if (trip < 2)
             continue; // trip 0/1 not worth the machinery
+        if (bigBody && trip > 4)
+            continue;
+        BOOL smallTrip = bigBody || (trip <= 4 && trip * B.instructions.count <= 4 * smallBody);
 
         // The unrolled body is one block and everything in it is live there.
         // Past a point that costs more in spills than the removed branches
         // save — see the note on unrollMaxTotalInsns.
         NSUInteger totalCap = prof.unrollMaxTotalInsns;
-        if (!forced && totalCap > 0 && trip * B.instructions.count > totalCap)
+        if (!forced && totalCap > 0 && !smallTrip && trip * B.instructions.count > totalCap)
             continue;
 
         // Every other header phi is an accumulator carried across iterations.
@@ -788,6 +796,12 @@ static XTIROperand* remapOp(XTIROperand* op, NSDictionary<NSNumber*, NSNumber*>*
         [clones addObject:C];
         lastMap = map;
         }
+    // A loop under `:goal(speed)`: its copies are no longer in a loop whose
+    // header fp-contract finds, so they are marked as it would have marked
+    // the body (#24): fused, as the loop was. As the port.
+    if (H.name && XTIRFpcSpeedName(fn, H.name))
+        for (XTIRBlock* cb in clones)
+            XTIRFpcMarkBlock(cb);
 
     // Wire terminators: c_j → c_{j+1}, last → E.
     for (NSUInteger j = 0; j < clones.count; j++)

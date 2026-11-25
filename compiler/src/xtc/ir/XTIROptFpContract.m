@@ -14,12 +14,31 @@
 // the loops they build after the one they came from (`<header>_esc`), and the
 // copy runs the same code under the same goal. Without this an escape-
 // vectorised loop in a par block lost its fused multiply-adds on arm64.
-static BOOL speedName(XTIRFunction* fn, NSString* name)
+BOOL XTIRFpcSpeedName(XTIRFunction* fn, NSString* name)
     {
     for (NSString* h in fn.speedLoopHeaders)
         if ([name hasPrefix:h] && (name.length == h.length || [name characterAtIndex:h.length] == '_'))
             return YES;
     return NO;
+    }
+
+void XTIRFpcMarkBlock(XTIRBlock* bb)
+    {
+    for (XTIRInsn* n in bb.instructions)
+        {
+        BOOL vec = n.opcode == XTIROpVAdd || n.opcode == XTIROpVSub;
+        if (n.opcode != XTIROpFAdd && n.opcode != XTIROpFSub && !vec)
+            continue;
+        if (!n.result || n.predicate != XTIRFpExact)
+            continue;
+        // A vector add over float lanes too, so a loop fuses the same
+        // whether it was vectorised or not (owner, 2026-10-29).
+        XTIRTypeKind k = vec ? (n.result.type.pointeeType ? n.result.type.pointeeType.kind : XTIRTypeKindVoid)
+                             : n.result.type.kind;
+        if (k != XTIRTypeKindF32 && k != XTIRTypeKindF64)
+            continue;
+        n.predicate = XTIRFpContract;
+        }
     }
 
 @implementation XTIROptFpContract
@@ -86,7 +105,7 @@ static NSSet<NSValue*>* reach(XTIRBlock* H, NSDictionary<NSValue*, NSArray<XTIRB
         NSMutableSet<NSValue*>* speed = [NSMutableSet set];
         for (XTIRBlock* H in fn.blocks)
             {
-            if (!H.name || !speedName(fn, H.name))
+            if (!H.name || !XTIRFpcSpeedName(fn, H.name))
                 continue;
             NSSet<NSValue*>* fwd = reach(H, pred, YES);
             NSSet<NSValue*>* bwd = reach(H, pred, NO);
@@ -99,23 +118,8 @@ static NSSet<NSValue*>* reach(XTIRBlock* H, NSDictionary<NSValue*, NSArray<XTIRB
             }
         for (XTIRBlock* bb in fn.blocks)
             {
-            if (![speed containsObject:[NSValue valueWithNonretainedObject:bb]])
-                continue;
-            for (XTIRInsn* n in bb.instructions)
-                {
-                BOOL vec = n.opcode == XTIROpVAdd || n.opcode == XTIROpVSub;
-                if (n.opcode != XTIROpFAdd && n.opcode != XTIROpFSub && !vec)
-                    continue;
-                if (!n.result || n.predicate != XTIRFpExact)
-                    continue;
-                // A vector add over float lanes too, so a loop fuses the same
-                // whether it was vectorised or not (owner, 2026-10-29).
-                XTIRTypeKind k = vec ? (n.result.type.pointeeType ? n.result.type.pointeeType.kind : XTIRTypeKindVoid)
-                                     : n.result.type.kind;
-                if (k != XTIRTypeKindF32 && k != XTIRTypeKindF64)
-                    continue;
-                n.predicate = XTIRFpContract;
-                }
+            if ([speed containsObject:[NSValue valueWithNonretainedObject:bb]])
+                XTIRFpcMarkBlock(bb);
             }
         }
     return YES;

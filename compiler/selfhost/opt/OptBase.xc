@@ -38,6 +38,44 @@ bool gOptPromoteScalars;
 // -Wpar-auto on a C or C++ file (the driver sets it): the outliner says what
 // it lifted and, for a loop it left, why, as xc's lowering does for xc.
 bool gOptWarnParAuto;
+
+// A speed loop's header, or a copy of one (`<header>_esc`): fp-contract and
+// the loop unroller (#24).
+bool optFpcSpeedName(IRFunc* fn, String* name)
+    {
+    Array* hs = fn.speedHeaders();
+    for (u32 k = (u32)0; k < hs.count(); k = k + (u32)1)
+        {
+        String* h = (String*)hs.get(k);
+        if (name.hasPrefix(h) && (name.byteLength() == h.byteLength() || name.byteAt(h.byteLength()) == (u8)'_'))
+            return true;
+        }
+    return false;
+    }
+
+// Every float add and subtract in a block of a speed loop may fuse with a
+// product: marked `contract`. Also the loop unroller's copies of a speed
+// loop's body, which no header names once the loop is gone (#24).
+void optFpcMarkBlock(IRBlock* bb)
+    {
+    for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+        {
+        IRInsn* n = (IRInsn*)bb.insns().get(i);
+        bool vec = n.isOp(opVAdd) || n.isOp(opVSub);
+        if (!n.isOp(opFAdd) && !n.isOp(opFSub) && !vec)
+            continue;
+        if (n.res() == (IRValue*)0 || n.pred() != (String*)0)
+            continue;
+        // A vector add over float lanes too (the reference says why).
+        String* t = n.res().ty();
+        bool flt = vec ? (t.hasPrefix(String.withCString("Vec(F32")) || t.hasPrefix(String.withCString("Vec(F64")))
+                       : (IRType.is(t, tyF32) || IRType.is(t, tyF64));
+        if (!flt)
+            continue;
+        n.setPred(String.withCString("contract"));
+        }
+    }
+
 void optSetWarnParAuto(bool on) { gOptWarnParAuto = on; }
 bool optWarnParAuto(void) { return gOptWarnParAuto; }
 // A C/C++ file's suffix for the symbols the outliner makes (ParOut$<n>...),
@@ -147,6 +185,7 @@ class OptProfile
     u32 _unrollMaxTrip;
     u32 _unrollMaxTotal;
     u32 _unrollMaxBody;
+    u32 _unrollSmallTripBody;   // a loop of trip <= 4 may have a body this big (#24, #22); 0: no exception
     u32 _unrollBudget;
     bool _unrollMultiCarried;
     bool _unrollCallsInBody;
@@ -222,6 +261,7 @@ class OptProfile
         _unrollMaxTrip = (u32)4;
         _unrollMaxTotal = (u32)0;
         _unrollMaxBody = (u32)8;
+        _unrollSmallTripBody = (u32)0;
         _unrollBudget = (u32)512;
         _unrollMultiCarried = false;
         _unrollCallsInBody = false;
@@ -381,6 +421,13 @@ class OptProfile
             p._unrollMaxBody = (u32)64;
             p._unrollBudget = (u32)8192;
             p._unrollMultiCarried = true;
+            // A loop of four trips or fewer unrolls whole with a body of up
+            // to 160 instructions: its copies are few, so the block stays
+            // within the register pool, and the next copy's independent
+            // work overlaps this one's chain (C perlin's octave loop, 133
+            // instructions, four octaves: 70.3 -> 65.4 ms on x86-64, 303 ->
+            // 286 ms on a Pi 5 core, measured by hand-unrolling).
+            p._unrollSmallTripBody = (u32)160;
             }
         if (arm64)
             {
@@ -586,6 +633,10 @@ class OptProfile
     u32 unrollMaxBody(void)
         {
         return _unrollMaxBody;
+        }
+    u32 unrollSmallTripBody(void)
+        {
+        return _unrollSmallTripBody;
         }
     u32 unrollBudget(void)
         {
@@ -2079,6 +2130,7 @@ class BeFact : Object
     i64 _luInit;
     i32 _luStep;
     u32 _luTrip;
+    bool _luBigBody;     // the body is past the usual cap: only a trip of 4 or fewer unrolls it
     Array* _luCarried;
 
     // The loop's header phi, its single-block latch, its preheader and its

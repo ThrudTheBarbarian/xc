@@ -294,7 +294,11 @@
             return false;
         if (B.phis().count() != (u32)0 || E.phis().count() != (u32)0)
             return false;
-        if (B.insns().count() == (u32)0 || B.insns().count() > unrollBodyCap(fn, H))
+        // Past the usual cap only for a loop of four trips or fewer
+        // (unrollSmallTripBody), which the trip check below enforces.
+        u32 cap = unrollBodyCap(fn, H);
+        _luBigBody = B.insns().count() > cap;
+        if (B.insns().count() == (u32)0 || B.insns().count() > (cap > _profile.unrollSmallTripBody() ? cap : _profile.unrollSmallTripBody()))
             return false;
         bool hasCall = false;
         for (u32 i = (u32)0; i < B.insns().count(); i = i + (u32)1)
@@ -383,12 +387,17 @@
                               unrollTripCap(fn, H));
         if (trip < (u32)2)
             return false; // trip 0/1 is not worth the machinery
+        // A body past the usual cap unrolls only a loop of four trips or
+        // fewer, and then whatever the total cap says (#24, #22).
+        bool smallTrip = _luBigBody || (trip <= (u32)4 && trip * B.insns().count() <= (u32)4 * _profile.unrollSmallTripBody());
+        if (_luBigBody && trip > (u32)4)
+            return false;
 
         // The unrolled body is one block and everything in it is live there.
         // Past a point that costs more in spills than the removed branches
         // save — see the note on unrollMaxTotal.
         u32 totalCap = _profile.unrollMaxTotal();
-        if (!unrollForced(fn, H) && totalCap > (u32)0
+        if (!unrollForced(fn, H) && totalCap > (u32)0 && !smallTrip
             && trip * B.insns().count() > totalCap)
             return false;
 
@@ -655,6 +664,12 @@
             clones.add((Object*)C);
             lastMap = map;
             }
+        // A loop under `:goal(speed)`: its copies are no longer in a loop
+        // whose header fp-contract finds, so they are marked as it would have
+        // marked the body (#24): fused, as the loop was.
+        if (H.name() != (String*)0 && optFpcSpeedName(fn, H.name()))
+            for (u32 j = (u32)0; j < clones.count(); j = j + (u32)1)
+                optFpcMarkBlock((IRBlock*)clones.get(j));
 
         // Wire the copies: c_j → c_{j+1}, and the last one to the exit.
         for (u32 j = (u32)0; j < clones.count(); j = j + (u32)1)

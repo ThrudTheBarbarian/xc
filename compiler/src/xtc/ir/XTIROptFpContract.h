@@ -1,6 +1,9 @@
 // XTIROptFpContract.h — float multiply-adds that may fuse under :goal(speed)
 #import "XTIROptPass.h"
 
+@class XTIRBlock;
+@class XTIRFunction;
+
 NS_ASSUME_NONNULL_BEGIN
 
 // Code under `:goal(speed)` (a `par` block's run function, a loop marked so)
@@ -15,5 +18,12 @@ NS_ASSUME_NONNULL_BEGIN
 // As the port's fp-contract (selfhost/opt/Opt.xc).
 @interface XTIROptFpContract : NSObject <XTIROptPass>
 @end
+
+// Whether a block named `name` heads a speed loop of fn, or a copy of one.
+BOOL XTIRFpcSpeedName(XTIRFunction* fn, NSString* name);
+// Every float add and subtract in bb marked to fuse with a product: a speed
+// loop's block, or the loop unroller's copy of one, which no header names
+// once the loop is gone (#24). As the port's fpcMarkBlock.
+void XTIRFpcMarkBlock(XTIRBlock* bb);
 
 NS_ASSUME_NONNULL_END

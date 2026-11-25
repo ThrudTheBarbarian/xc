@@ -51,6 +51,10 @@
     {
     return 8;
     }
+- (NSUInteger)unrollSmallTripBodyInsns
+    {
+    return 0;
+    }
 - (NSUInteger)unrollFnInsnBudget
     {
     return 512;
@@ -229,6 +233,14 @@
 - (NSUInteger)unrollMaxBodyInsns
     {
     return 64;
+    }
+// A loop of four trips or fewer unrolls whole with a body of up to 160
+// instructions: few copies keep the block within the register pool, and the
+// next copy's independent work overlaps this one's chain (C perlin's octave
+// loop). As the port.
+- (NSUInteger)unrollSmallTripBodyInsns
+    {
+    return 160;
     }
 // A fully unrolled loop is ONE basic block, and every value it computes is
 // live inside it. matrix_mul's k loop is trip 32 over a 9-instruction body:
@@ -937,6 +949,14 @@
 - (NSUInteger)unrollMaxBodyInsns
     {
     return 64;
+    }
+// A loop of four trips or fewer unrolls whole with a body of up to 160
+// instructions: few copies keep the block within the register pool, and the
+// next copy's independent work overlaps this one's chain (C perlin's octave
+// loop). As the port.
+- (NSUInteger)unrollSmallTripBodyInsns
+    {
+    return 160;
     }
 - (NSUInteger)unrollFnInsnBudget
     {

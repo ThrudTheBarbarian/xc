@@ -23,6 +23,10 @@ NS_ASSUME_NONNULL_BEGIN
 - (BOOL)laysOutHotPath;
 // Largest straight-line body (instruction count) eligible to unroll.
 - (NSUInteger)unrollMaxBodyInsns;
+// A loop of four trips or fewer may unroll whole with a body of up to this
+// many instructions (#24, #22); 0: no exception. As the port's
+// unrollSmallTripBody.
+- (NSUInteger)unrollSmallTripBodyInsns;
 // Per-function instruction ceiling above which unrolling is skipped.
 - (NSUInteger)unrollFnInsnBudget;
 // YES to unroll loops that carry more than the induction variable across
