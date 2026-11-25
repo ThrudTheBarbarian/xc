@@ -57,11 +57,11 @@ joins, instead of the toolkit offsetting a whole-pixel polyline.
 ## The stroke width rounds to a whole pixel
 
 ```c
-// strokeNative* take a double, but GDI's pen is an integer:
+// strokeNative* take an f64, but GDI's pen is an integer:
 // 1.536 is drawn at 2, 1.0 at 1, 0 at 1.
 ```
 
-A GDI pen has no fractional width, so the seam's `double` width — which the
+A GDI pen has no fractional width, so the seam's `f64` width — which the
 five real strokers draw exactly — is **rounded to the nearest pixel** here (a
 width below half a pixel becomes a hairline rather than nothing). The VDI is
 the same. It is the one place where the width the caller passed and the width

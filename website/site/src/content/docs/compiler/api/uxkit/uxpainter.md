@@ -144,7 +144,7 @@ Fill in an explicit colour, when you have components instead of a packed value.
 ### strokePath
 
 ```c
-static void strokePath(UXGraphics* g, UXShapePath* p, double width, i32 colour)
+static void strokePath(UXGraphics* g, UXShapePath* p, f64 width, i32 colour)
 ```
 
 Stroke, including any [caps](/compiler/api/uxkit/uxshapepath/#caps-belong-to-the-path)
@@ -172,8 +172,8 @@ see.
 ### strokeOutlined
 
 ```c
-static void strokeOutlined(UXGraphics* g, UXShapePath* p, double width,
-                           i32 fill, i32 outline, double rim)
+static void strokeOutlined(UXGraphics* g, UXShapePath* p, f64 width,
+                           i32 fill, i32 outline, f64 rim)
 ```
 
 A stroke with a border of `rim` pixels each side.

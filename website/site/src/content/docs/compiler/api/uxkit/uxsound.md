@@ -62,7 +62,7 @@ the first gesture.
 ### note
 
 ```c
-UXSound* note(i32 kind, double hz, double secs, double vol, double slideTo, double at)
+UXSound* note(i32 kind, f64 hz, f64 secs, f64 vol, f64 slideTo, f64 at)
 ```
 
 Adds a note: the waveform (`UXSND_SINE`, `UXSND_TRIANGLE`, `UXSND_SQUARE` or
@@ -74,7 +74,7 @@ be chained. A sound holds up to eight parts.
 ### boom
 
 ```c
-UXSound* boom(double vol, double at)
+UXSound* boom(f64 vol, f64 at)
 ```
 
 Adds a boom (filtered noise, half a second long) at peak volume `vol`, starting

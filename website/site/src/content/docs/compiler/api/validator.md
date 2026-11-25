@@ -74,7 +74,7 @@ A whole number from `lo` to `hi`.
 
 ### requireNumberRange
 ```c
-void requireNumberRange(double lo, double hi, String* message)
+void requireNumberRange(f64 lo, f64 hi, String* message)
 ```
 Any number, whole or decimal, from `lo` to `hi`.
 

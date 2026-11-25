@@ -25,19 +25,19 @@ Zero-argument methods use xcc's overloading by **return type**: `Math.rand()`
 and constants such as `Math.PI()` resolve from the type of the variable they
 are assigned to, and the compiler emits the version that produces that type.
 An argument takes the type of its parameter, so `check(Math.E())` with
-`void check(double v)` gets the `double` constant.
+`void check(f64 v)` gets the `f64` constant.
 
-Both `float` (IEEE-754 binary32) and `double` (IEEE-754 binary64) values have the
+Both `f32` (IEEE-754 binary32) and `f64` (IEEE-754 binary64) values have the
 same bit layout on every target, so a value computed on one target and read on
 another is identical.
 
 :::note[Availability]
-On **xt6502** the `double` overloads are gated behind the `ENABLE_DOUBLE` macro
+On **xt6502** the `f64` overloads are gated behind the `ENABLE_DOUBLE` macro
 (default `1`). Reachability analysis trims unused methods, so importing
-`Math.xc` does not enlarge `float`-only programs. To override the gate, pass
+`Math.xc` does not enlarge `f32`-only programs. To override the gate, pass
 `-DENABLE_DOUBLE=1` or `-DENABLE_DOUBLE=0`. On the native
-backends the `double` family is always present. The `double` constants and the
-`double`-taking overloads of [`rand`](#rand), [`abs`](#abs), [`sqrt`](#sqrt),
+backends the `f64` family is always present. The `f64` constants and the
+`f64`-taking overloads of [`rand`](#rand), [`abs`](#abs), [`sqrt`](#sqrt),
 [`sin`/`cos`/`tan`/`atan`](#sin), [`ln`](#ln), [`exp`](#exp) and [`pow`](#pow)
 are the ones the gate covers.
 :::
@@ -85,19 +85,19 @@ static u8     rand(u8 max)            // 0..max  (max exclusive of +1 wrap)
 static u8     rand(u8 lo, u8 hi)      // lo..hi inclusive
 static u16    rand(u16 max)           // 0..max
 static u16    rand(u16 lo, u16 hi)    // lo..hi inclusive
-static float  rand(void)             // [0.5, 1.0)  (native: see note)
-static double rand(void)             // [0.5, 1.0)
+static f32 rand(void)                // [0.5, 1.0)  (native: see note)
+static f64 rand(void)                // [0.5, 1.0)
 ```
 A random value. The unbounded integer overloads span the whole width; the
-bounded forms take a maximum or an inclusive `lo`/`hi` range. The `float` and
-`double` overloads return a value in `[0.5, 1.0)`, the range of the xt6502
+bounded forms take a maximum or an inclusive `lo`/`hi` range. The `f32` and
+`f64` overloads return a value in `[0.5, 1.0)`, the range of the xt6502
 implementation (exponent −1, random mantissa). The native ports inline the
 expression `0.5 + (random()/2^31)*0.5` so the IR inliner can fold it.
 
 ```c
 u8  d6   = Math.rand(1, 6);   // dice roll, 1..6
 u16 cell = Math.rand(40);        // 0..39
-float f  = Math.rand();               // 0.5 <= f < 1.0
+f32 f  = Math.rand();                 // 0.5 <= f < 1.0
 ```
 
 [↑ Topics](#topics)
@@ -109,106 +109,106 @@ float f  = Math.rand();               // 0.5 <= f < 1.0
 static i8     abs(i8 v)
 static i16    abs(i16 v)
 static i32    abs(i32 v)
-static float  abs(float v)
-static double abs(double v)          // xt6502: ENABLE_DOUBLE
+static f32 abs(f32 v)
+static f64 abs(f64 v)                // xt6502: ENABLE_DOUBLE
 ```
 Absolute value, overloaded across the signed integer widths and both float types.
 
 ### sqrt
 ```c
-static float  sqrt(float v)
-static double sqrt(double v)
+static f32 sqrt(f32 v)
+static f64 sqrt(f64 v)
 ```
 Square root.
 
 ```c
-float hyp = Math.sqrt(dx * dx + dy * dy);
+f32 hyp = Math.sqrt(dx * dx + dy * dy);
 ```
 
 ### ln
 ```c
-static float  ln(float v)
-static double ln(double v)           // xt6502: ENABLE_DOUBLE
+static f32 ln(f32 v)
+static f64 ln(f64 v)                 // xt6502: ENABLE_DOUBLE
 ```
 Natural logarithm (base `e`). For other bases divide by `Math.LN2()`,
 `Math.LN10()`, etc.
 
 ### exp
 ```c
-static float  exp(float x)
-static double exp(double x)          // xt6502: ENABLE_DOUBLE
+static f32 exp(f32 x)
+static f64 exp(f64 x)                // xt6502: ENABLE_DOUBLE
 ```
 `e^x`, the inverse of [`ln`](#ln).
 
 ### pow
 ```c
-static float  pow(float base, float power)
-static float  pow(float base, i16 power)
-static double pow(double base, double power)   // xt6502: ENABLE_DOUBLE
-static double pow(double base, i16 power)       // xt6502: ENABLE_DOUBLE
-static double pow(double base, i32 power)        // xt6502: ENABLE_DOUBLE
-static double pow(double base, u32 power)        // xt6502: ENABLE_DOUBLE
+static f32 pow(f32 base, f32 power)
+static f32 pow(f32 base, i16 power)
+static f64 pow(f64 base, f64 power)            // xt6502: ENABLE_DOUBLE
+static f64 pow(f64 base, i16 power)             // xt6502: ENABLE_DOUBLE
+static f64 pow(f64 base, i32 power)              // xt6502: ENABLE_DOUBLE
+static f64 pow(f64 base, u32 power)              // xt6502: ENABLE_DOUBLE
 ```
 `base` raised to `power`, overloaded by exponent type. For an integer exponent,
 the integer-typed overload is much cheaper than the float-by-float version.
 
 ```c
-float sq = Math.pow(r, 2);               // squared, integer fast path
-float rt = Math.pow((float)2.0, (float)0.5);  // square root via pow
+f32 sq = Math.pow(r, 2);                 // squared, integer fast path
+f32 rt = Math.pow((f32)2.0, (f32)0.5);        // square root via pow
 ```
 
 [↑ Topics](#topics)
 
 ## Trigonometry
 
-Angles are in **radians**. All four functions exist in both `float` and `double`
-precision (the `double` forms gated by `ENABLE_DOUBLE` on xt6502).
+Angles are in **radians**. All four functions exist in both `f32` and `f64`
+precision (the `f64` forms gated by `ENABLE_DOUBLE` on xt6502).
 
 ### sin
 ```c
-static float  sin(float angle)
-static double sin(double angle)      // xt6502: ENABLE_DOUBLE
+static f32 sin(f32 angle)
+static f64 sin(f64 angle)            // xt6502: ENABLE_DOUBLE
 ```
 Sine of `angle`.
 
 ### cos
 ```c
-static float  cos(float angle)
-static double cos(double angle)      // xt6502: ENABLE_DOUBLE
+static f32 cos(f32 angle)
+static f64 cos(f64 angle)            // xt6502: ENABLE_DOUBLE
 ```
 Cosine of `angle`.
 
 ### tan
 ```c
-static float  tan(float angle)
-static double tan(double angle)      // xt6502: ENABLE_DOUBLE
+static f32 tan(f32 angle)
+static f64 tan(f64 angle)            // xt6502: ENABLE_DOUBLE
 ```
 Tangent of `angle`.
 
 ### atan
 ```c
-static float  atan(float x)
-static double atan(double x)         // xt6502: ENABLE_DOUBLE
+static f32 atan(f32 x)
+static f64 atan(f64 x)               // xt6502: ENABLE_DOUBLE
 ```
 Arctangent of `x`.
 
 ```c
-float a = Math.PI() / 4;
-float s = Math.sin(a);               // ~ 0.7071
-float c = Math.cos(a);
+f32 a = Math.PI() / 4;
+f32 s = Math.sin(a);                 // ~ 0.7071
+f32 c = Math.cos(a);
 ```
 
 [↑ Topics](#topics)
 
 ## Constants
 
-Each constant is a zero-argument accessor with a `float` and a `double` overload;
-the compiler picks based on the assignment target (the `double` forms are gated
+Each constant is a zero-argument accessor with an `f32` and an `f64` overload;
+the compiler picks based on the assignment target (the `f64` forms are gated
 by `ENABLE_DOUBLE` on xt6502).
 
 ```c
-static float  PI(void)
-static double PI(void)               // xt6502: ENABLE_DOUBLE  (pattern for all constants)
+static f32 PI(void)
+static f64 PI(void)                  // xt6502: ENABLE_DOUBLE  (pattern for all constants)
 ```
 
 | Method | Value |
@@ -228,8 +228,8 @@ static double PI(void)               // xt6502: ENABLE_DOUBLE  (pattern for all 
 | `Math.SQRT1_2()` | √(1/2) |
 
 ```c
-float  pi_f = Math.PI();             // float overload
-double pi_d = Math.PI();             // double overload
+f32 pi_f = Math.PI();                // f32 overload
+f64 pi_d = Math.PI();                // f64 overload
 ```
 
 [↑ Topics](#topics)
@@ -248,7 +248,7 @@ callers never need it.
 
 ## A note on the float format
 
-`float` is **IEEE-754 binary32** (4 bytes) and `double` is **IEEE-754 binary64**
+`f32` is **IEEE-754 binary32** (4 bytes) and `f64` is **IEEE-754 binary64**
 (8 bytes) on every target, including the 6502. A literal carries IEEE bytes from
 the lexer through to the back end, so a value written in source, stored to a file
 on one target and read back on another is bit-identical.

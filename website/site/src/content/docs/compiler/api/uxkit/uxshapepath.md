@@ -362,7 +362,7 @@ Arrowhead length along the direction of travel. `0` means three times the width.
 ### capOutline
 
 ```c
-UXShapePath* capOutline(bool atStart, double width)
+UXShapePath* capOutline(bool atStart, f64 width)
 ```
 
 The cap as its own path, ready to fill. Null when that end has no cap (a closed

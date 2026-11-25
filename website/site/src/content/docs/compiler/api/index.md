@@ -118,7 +118,7 @@ and every method grouped by task with a jump-list at the top.
 | Class | Role |
 |-------|------|
 | [`Object`](/compiler/api/object/) | the runtime's root class — `equals`, `hash`, `description` |
-| [`Number`](/compiler/api/number/) | a boxed scalar (any int width, `float`, `double`) for containers |
+| [`Number`](/compiler/api/number/) | a boxed scalar (any int width, `f32`, `f64`) for containers |
 | [`String`](/compiler/api/string/) | heap-owned UTF-8 string, byte- and character-indexed |
 | [`Data`](/compiler/api/data/) | a growable byte buffer, plus the String ⇄ bytes encoding bridge |
 | [`Array`](/compiler/api/array/) | an ordered, growable list with map / filter / reduce and sort |
@@ -181,8 +181,8 @@ xcc supports overloading by **return type** for zero-arg static methods, and the
 ```c
 u8     a = Math.rand();      // resolves to the u8 overload
 u16    b = Math.rand();      // resolves to the u16 overload
-float  c = Math.rand();      // resolves to the float overload
-double d = Math.rand();      // resolves to the double overload
+f32 c = Math.rand();         // resolves to the f32 overload
+f64 d = Math.rand();         // resolves to the f64 overload
 ```
 
-The same applies to `Math.PI()`, `Math.E()` and the other constants: each has a `float`-returning and a `double`-returning overload, picked by the receiving variable's type.
+The same applies to `Math.PI()`, `Math.E()` and the other constants: each has an `f32`-returning and an `f64`-returning overload, picked by the receiving variable's type.

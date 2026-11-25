@@ -123,7 +123,7 @@ else                 { /* one opaque outline */ }
 
 ```c
 bool strokesNatively(void)
-void strokeNative(i32* ops, i32 n, double width, i32 startCap, i32 endCap, i32 join,
+void strokeNative(i32* ops, i32 n, f64 width, i32 startCap, i32 endCap, i32 join,
                   i32* dash, i32 ndash, i32 phase, i32 pen)
 ```
 
@@ -397,7 +397,7 @@ the widget has a geometric fallback.
 ### strokeNative
 
 ```c
-void strokeNative(i32* ops, i32 n, double width, i32 startCap, i32 endCap, i32 join,
+void strokeNative(i32* ops, i32 n, f64 width, i32 startCap, i32 endCap, i32 join,
                   i32* dash, i32 ndash, i32 phase, i32 pen)
 ```
 
@@ -426,7 +426,7 @@ one does all the work there.
 ### strokeNativeRGB
 
 ```c
-void strokeNativeRGB(i32* ops, i32 n, double width, i32 startCap, i32 endCap, i32 join,
+void strokeNativeRGB(i32* ops, i32 n, f64 width, i32 startCap, i32 endCap, i32 join,
                      i32* dash, i32 ndash, i32 phase, i32 red, i32 green, i32 blue)
 ```
 
@@ -435,7 +435,7 @@ void strokeNativeRGB(i32* ops, i32 n, double width, i32 startCap, i32 endCap, i3
 ### strokeNativeRGBA
 
 ```c
-void strokeNativeRGBA(i32* ops, i32 n, double width, i32 startCap, i32 endCap, i32 join,
+void strokeNativeRGBA(i32* ops, i32 n, f64 width, i32 startCap, i32 endCap, i32 join,
                       i32* dash, i32 ndash, i32 phase, i32 red, i32 green, i32 blue, i32 alpha)
 ```
 

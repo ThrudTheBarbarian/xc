@@ -107,7 +107,7 @@ progress's.
 
 ### fractionCompleted
 ```c
-double fractionCompleted(void)
+f64 fractionCompleted(void)
 ```
 0.0 to 1.0: the progress's own completed units plus each child's fraction
 times its units, over the total, kept within 0 and 1. 0 when indeterminate.

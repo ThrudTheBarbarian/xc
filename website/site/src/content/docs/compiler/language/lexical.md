@@ -56,16 +56,16 @@ point number even without a decimal point:
 
 | Suffix | Type | Example |
 |--------|------|---------|
-| `f` / `F` | `float` | `0.68f`, `1f` |
-| `d` / `D` | `double` | `0.68d`, `1d` |
+| `f` / `F` | `f32` | `0.68f`, `1f` |
+| `d` / `D` | `f64` | `0.68d`, `1d` |
 
 `f` and `d` are C's (and Java's) spellings, so a table of constants ported from
 either compiles unchanged.
 
-A literal with **no suffix is a `float`**, whatever it is assigned to, and is
-widened to `double` afterwards if that is where it lands. `double d = 0.1;` is
-therefore the `float` value `0.1` widened, printed as `0.10000000149011611`, not
-the `double` `0.1`. Write `0.1d` when the extra precision matters.
+A literal with **no suffix is an `f32`**, whatever it is assigned to, and is
+widened to `f64` afterwards if that is where it lands. `f64 d = 0.1;` is
+therefore the `f32` value `0.1` widened, printed as `0.10000000149011611`, not
+the `f64` `0.1`. Write `0.1d` when the extra precision matters.
 
 ## String and character literals
 

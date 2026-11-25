@@ -101,7 +101,7 @@ with `minimumFractionDigits` zeros.
 
 ### formatDouble
 ```c
-String* formatDouble(double v)
+String* formatDouble(f64 v)
 ```
 A double, rounded as described above. NaN is `NaN`; an infinity is `∞` between
 the prefix and suffix.

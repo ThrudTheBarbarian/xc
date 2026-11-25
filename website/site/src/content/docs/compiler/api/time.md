@@ -34,7 +34,7 @@ absent there:
 |---|---|---|
 | `clearTimer()`, `timerValue()`, `ticksSince()`, `secondsSince()`, `delayJiffies()` | yes | yes |
 | `dpSecondsSince(u32)` | yes | **no** |
-| `delaySeconds(float)` | yes | **no** |
+| `delaySeconds(f32)` | yes | **no** |
 
 Calling either of the missing two on a native backend is a compile error
 (`No method 'delaySeconds' on class 'Time'`). On the native targets
@@ -86,23 +86,23 @@ gives a wrong answer.
 
 ### secondsSince
 ```c
-static float secondsSince(u32 oldValue)
+static f32 secondsSince(u32 oldValue)
 ```
 Elapsed jiffies divided by the auto-detected frame rate (50 or 60 Hz), as a
-`float`. It reads GTIA `$D014` to pick PAL or NTSC and divides through the
+`f32`. It reads GTIA `$D014` to pick PAL or NTSC and divides through the
 `fpDiv` runtime.
 
 ### dpSecondsSince
 ```c
-static double dpSecondsSince(u32 oldValue)
+static f64 dpSecondsSince(u32 oldValue)
 ```
 The double-precision form of [`secondsSince`](#secondssince). It has its own
 name instead of a return-type overload because xcc uses return type as a
-tiebreaker only for **zero-arg** overloads, so a `secondsSince(u32) → float` and
-`secondsSince(u32) → double` pair would be flagged as a redefinition. Use it for
-long intervals where `float`'s ~7 significant digits would lose jiffy
-resolution: at ~2 years uptime a `float` second resolves to ~10 s, while the
-`double` keeps full jiffy resolution across the whole `u32` range.
+tiebreaker only for **zero-arg** overloads, so a `secondsSince(u32) → f32` and
+`secondsSince(u32) → f64` pair would be flagged as a redefinition. Use it for
+long intervals where `f32`'s ~7 significant digits would lose jiffy
+resolution: at ~2 years uptime an `f32` second resolves to ~10 s, while the
+`f64` keeps full jiffy resolution across the whole `u32` range.
 
 [↑ Topics](#topics)
 
@@ -120,7 +120,7 @@ Busy-waits for `jiffies` VBI ticks (1/50 s PAL, 1/60 s NTSC), comparing
 
 ### delaySeconds
 ```c
-static void delaySeconds(float secs)
+static void delaySeconds(f32 secs)
 ```
 Busy-waits for `secs` seconds. It converts `secs` to a jiffy count with integer
 math on the float's raw mantissa and exponent (times the auto-detected Hz), then
@@ -141,7 +141,7 @@ void main(void)
     u32 t0 = Time.timerValue();
     heavyWork();
     u32   jiffies = Time.ticksSince(t0);
-    float secs    = Time.secondsSince(t0);
+    f32 secs    = Time.secondsSince(t0);
     Stdio.printf("work took %lu jiffies (%f s)\n", jiffies, secs);
 
     Stdio.print("starting in ");

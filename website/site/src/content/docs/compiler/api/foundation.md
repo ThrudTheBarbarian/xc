@@ -83,7 +83,7 @@ an 8-bit CPU.
 Portable source compiles against both builds. A narrower caller index widens at
 the call boundary, so `for (u16 i = 0; i < a.count(); i++)` behaves the same on
 either target. The per-class pages list anything that differs. The most visible
-difference is `Array<i64>` / `Array<double>`, which need `-DENABLE_64BIT=1` on
+difference is `Array<i64>` / `Array<f64>`, which need `-DENABLE_64BIT=1` on
 xt6502 (see [Number § availability](/compiler/api/number/)).
 
 ## Element types are erased generics
@@ -102,7 +102,7 @@ names.add(Number.withU32(7));       // error: Number is not a subclass of String
 
 `Map<V>` names the **value** type; keys are anything conforming to `Hashable`.
 Each collection takes one type argument; there is no `Map<K,V>` spelling yet. A
-primitive element type works and is enforced (`Array<i32>` refuses a `float`),
+primitive element type works and is enforced (`Array<i32>` refuses an `f32`),
 but the value is stored boxed in a [`Number`](/compiler/api/number/), and
 unboxing happens in **assignment context**: `i32 v = a.get(i)`. Untyped
 `Array*` / `Map*` / `Set*` remain valid everywhere. See

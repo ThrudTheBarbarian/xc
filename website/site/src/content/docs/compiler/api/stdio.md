@@ -57,10 +57,10 @@ static void print(u16 v)
 static void print(i16 v)
 static void print(u32 v)
 static void print(i32 v)
-static void print(float f)                   // 6 dp default
-static void print(double d)                  // 10 dp default
-static void print(float f,  u8 precision)    // %.Nf
-static void print(double d, u8 precision)    // %.Nlf
+static void print(f32 f)                     // 6 dp default
+static void print(f64 d)                     // 10 dp default
+static void print(f32 f,  u8 precision)      // %.Nf
+static void print(f64 d, u8 precision)       // %.Nlf
 ```
 Prints a value in its natural decimal (or, for `string`/`String*`, verbatim)
 form. There is no `print(u8)` overload: `u8` widens implicitly to `u16`, so pass
@@ -137,16 +137,16 @@ for the width or precision takes it from an `i32` argument.
 | `%x` `%X` | integer | hex, lower / upper case, no leading zeros |
 | `%o` | integer | octal |
 | `%c` | integer | one character |
-| `%f` `%F` | `float` or `double` | fixed point, 6 places unless a precision is given |
-| `%e` `%E` | `float` or `double` | exponent form, `1.500000e+03` |
-| `%g` `%G` | `float` or `double` | the shorter of the two, trailing zeros removed |
+| `%f` `%F` | `f32` or `f64` | fixed point, 6 places unless a precision is given |
+| `%e` `%E` | `f32` or `f64` | exponent form, `1.500000e+03` |
+| `%g` `%G` | `f32` or `f64` | the shorter of the two, trailing zeros removed |
 | `%s` | `string` (`u8*`) | NUL-terminated string |
 | `%p` | pointer | `0x` and the address in hex |
 | `%@` | class instance, or an enum | the object's `description()`; an enum's name |
 | `%%` | — | literal `%` |
 
 The arguments follow C. An integer narrower than `int` is passed as an `int` and
-a `float` as a `double`, so `%c` takes a `u8` and `%f` a `float` as they are.
+an `f32` as an `f64`, so `%c` takes a `u8` and `%f` an `f32` as they are.
 `int` is 32 bits, except on xt6502, where it is 16. The length says how wide the
 integer is: none for an `int`, `h` and `hh` for narrower ones, `l` for a `long`,
 which is 64 bits on the 64-bit targets and 32 elsewhere, `ll` for 64 bits, and
@@ -156,7 +156,7 @@ When the format is a **string literal**, the compiler sets each integer
 conversion's length from the argument actually passed, so the length can be
 left off: `%d` prints an `i64` whole, and `%lld` given an `i32` reads only the
 32 bits that are there. What it cannot fix is the wrong kind of argument — a
-`double` for `%d`, an integer for `%s` — and it warns about that, and about a
+`f64` for `%d`, an integer for `%s` — and it warns about that, and about a
 count that does not match (`-Wno-printf-format` silences both). A format built
 at run time is read as C reads it, and then the length has to be right.
 
@@ -170,7 +170,7 @@ void say(string fmt, ...) { _out.appendFormat(fmt, ...); }
 ```c
 u16 score  = 1234;
 i64 millis = -50000;
-float pi   = 3.14159;
+f32 pi   = 3.14159;
 string name = "Player 1";
 
 Stdio.printf("%s scored %u in %d ms\n", name, score, millis);
@@ -216,7 +216,7 @@ fields ([printStruct](/compiler/api/stdio-xt6502/#printstruct)).
 ### Enum names
 
 Given a value **statically typed as an enum**, `%@` prints the member's name.
-`%e` does the same with an enum; with a `float` or `double` it is C's exponent
+`%e` does the same with an enum; with an `f32` or `f64` it is C's exponent
 form. The translation happens at **compile time**: the conversion becomes `%s`,
 and a small `_enum_lookup_<EnumName>(value)` helper, emitted once per enum,
 supplies the name.

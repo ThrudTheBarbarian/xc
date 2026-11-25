@@ -5,7 +5,7 @@ description: "An Object wrapping any sized integer or float, with lazy cached cr
 
 `Number` is an [`Object`](/compiler/api/object/) that wraps a single primitive:
 any of xc's sized integers (`i8`/`u8`/`i16`/`u16`/`i32`/`u32`/`i64`/`u64`) **or**
-a `float`/`double`. A typed collection stores primitives in it (an `Array<i32>`
+an `f32`/`f64`. A typed collection stores primitives in it (an `Array<i32>`
 keeps its elements as `Number`s), and it lets a heterogeneous collection hold
 mixed values.
 
@@ -21,9 +21,9 @@ set the kind, the predicates [`isInt`](#isint--isfloat) / [`isFloat`](#isint--is
 report it, and the getters read the value back in whatever type you ask for.
 
 **Two slots, widest of their kind.** Integers are held bit-preserving in an
-`i64` slot, floats in an IEEE-754 `double` slot. Every narrow accessor
+`i64` slot, floats in an IEEE-754 `f64` slot. Every narrow accessor
 (`asI8`, `asU16`, `asFloat` …) is a cast from one of the two. The wide slots
-are what make `Array<i64>` and `Array<double>` possible.
+are what make `Array<i64>` and `Array<f64>` possible.
 
 **Cross-kind conversion is lazy and cached.** Each `Number` tracks a two-bit
 valid bitmap. Reading a float out of an int `Number` (or an int out of a float
@@ -39,8 +39,8 @@ As a result, `withU32(0xFFFFFFFF).asFloat()` converts from the *signed* view
 if you need the unsigned magnitude.
 
 :::note[Availability]
-On xt6502, `Array<i64>` / `Array<double>`, and so a `Number` that boxes a 64-bit
-value, need **`-DENABLE_64BIT=1`**. The wide `i64`/`double` slots cost ~4.5 KB
+On xt6502, `Array<i64>` / `Array<f64>`, and so a `Number` that boxes a 64-bit
+value, need **`-DENABLE_64BIT=1`**. The wide `i64`/`f64` slots cost ~4.5 KB
 in any 6502 program that uses the class, so wide storage is off by default
 there. The 32-bit generic build (arm64, arm9, m68k, x86_64) is always wide.
 With the option off, a 64-bit element type is a compile error, not a
@@ -88,7 +88,7 @@ static Number* with(i8 v)      static Number* with(u8 v)
 static Number* with(i16 v)     static Number* with(u16 v)
 static Number* with(i32 v)     static Number* with(u32 v)
 static Number* with(i64 v)     static Number* with(u64 v)
-static Number* with(float v)   static Number* with(double v)
+static Number* with(f32 v)   static Number* with(f64 v)
 ```
 Overloaded on the argument's type: the compiler picks the storage kind from
 `v`. Use it when the literal's natural type is the one you want;
@@ -133,10 +133,10 @@ on xt6502 (see [Availability](#overview)).
 
 ### withFloat / withDouble
 ```c
-static Number* withFloat(float v)
-static Number* withDouble(double v)
+static Number* withFloat(f32 v)
+static Number* withDouble(f64 v)
 ```
-A `Number` holding a floating-point value (both stored in the `double` slot).
+A `Number` holding a floating-point value (both stored in the `f64` slot).
 
 ### withBool
 ```c
@@ -164,7 +164,7 @@ void set(i8 v)      void set(u8 v)
 void set(i16 v)     void set(u16 v)
 void set(i32 v)     void set(u32 v)
 void set(i64 v)     void set(u64 v)
-void set(float v)   void set(double v)
+void set(f32 v)   void set(f64 v)
 ```
 The mutating counterpart of [`with`](#with): overloaded on the argument's type,
 it stores a new value in an existing `Number`, picking the kind from `v`.
@@ -207,8 +207,8 @@ Store a 64-bit integer.
 
 ### setFloat / setDouble
 ```c
-void setFloat(float v)
-void setDouble(double v)
+void setFloat(f32 v)
+void setDouble(f64 v)
 ```
 Store a floating-point value, pinning the float kind.
 
@@ -229,12 +229,12 @@ i8  value(void)     u8  value(void)
 i16 value(void)     u16 value(void)
 i32 value(void)     u32 value(void)
 i64 value(void)     u64 value(void)
-float value(void)   double value(void)
+f32 value(void)   f64 value(void)
 ```
 Overloaded on return type: `value()` picks its type from the expected-type
 context (assignment LHS, variable declaration, call argument), the same
-mechanism `Math.rand()` uses to pick `i16` or `float`. `i32 v = n.value();`
-reads the int view; `float f = n.value();` reads the float view. Each narrow
+mechanism `Math.rand()` uses to pick `i16` or `f32`. `i32 v = n.value();`
+reads the int view; `f32 f = n.value();` reads the float view. Each narrow
 overload goes through the cache-aware conversion points, so kind conversion
 happens at most once.
 
@@ -273,16 +273,16 @@ i64 asI64(void)
 u64 asU64(void)
 ```
 The full 64-bit integer view. `asI64` is a conversion point: on a float `Number`
-it converts via the `(i64)double` cast (truncate toward zero, saturate to 0 on
+it converts via the `(i64)f64` cast (truncate toward zero, saturate to 0 on
 overflow), caches the result, and returns the cached value on later calls.
 
 ### asFloat / asDouble
 ```c
-float  asFloat(void)
-double asDouble(void)
+f32 asFloat(void)
+f64 asDouble(void)
 ```
 The floating-point view. `asDouble` is a conversion point: on an int `Number` it
-converts via `(double)i64` (exact to 2^53, losing precision beyond), caches the
+converts via `(f64)i64` (exact to 2^53, losing precision beyond), caches the
 result, and returns the cached value on later calls. `asFloat` narrows that to
 binary32.
 
@@ -375,7 +375,7 @@ i32 main(void)
     Number* f = Number.withFloat(3.25);
     Stdio.printf("%s\n", f.description().cString());        // 3.250000
 
-    // Cross-kind equality: promotes to float.
+    // Cross-kind equality: promotes to f32.
     Number* a = Number.with(42);
     Number* b = Number.withFloat(42.0);
     Stdio.printf("%d\n", (i16)a.equals(b));                 // 1 (true)

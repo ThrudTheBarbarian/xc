@@ -158,8 +158,8 @@ Decimal rendering of a 64-bit signed / unsigned integer.
 
 ### withFloat
 ```c
-static String* withFloat(float f, u8 precision)
-static String* withFloat(float f)               // precision 6
+static String* withFloat(f32 f, u8 precision)
+static String* withFloat(f32 f)                 // precision 6
 ```
 Renders `f` with `precision` digits after the point (default 6).
 
@@ -414,7 +414,7 @@ void appendFormat(string fmt, ...)
 ```
 Appends formatted text: C's `printf` conversions, flags, widths and precisions,
 plus `%@` for an object's `description()` (or an enum's name). `%f`, `%e` and
-`%g` convert the `double` exactly and round half to even, as C does, so the
+`%g` convert the `f64` exactly and round half to even, as C does, so the
 digits match a C program's. See [Stdio → Format specifiers](/compiler/api/stdio/#format-specifiers)
 for the full contract, which `Stdio.printf` shares.
 

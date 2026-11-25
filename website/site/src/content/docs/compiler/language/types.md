@@ -11,8 +11,8 @@ description: The fixed-width scalars, structs, enums, pointers, arrays, type inf
 | `u16`, `i16` | 2 bytes | 16-bit unsigned / signed integer |
 | `u32`, `i32` | 4 bytes | 32-bit unsigned / signed integer |
 | `u64`, `i64` | 8 bytes | 64-bit unsigned / signed integer |
-| `float` | 4 bytes | IEEE-754 binary32 |
-| `double` | 8 bytes | IEEE-754 binary64 |
+| `f32` | 4 bytes | IEEE-754 binary32; `float` is an alias |
+| `f64` | 8 bytes | IEEE-754 binary64; `double` is an alias |
 | `bool` | 1 byte | alias of `u8`; values are `true` and `false` |
 | `void` | — | absence of value (function returns, parameter list `(void)`) |
 | `string` | pointer | alias of `u8*` (pointer to null-terminated bytes) |
@@ -33,6 +33,19 @@ fills the 16-bit address and gives bank 0, so its sign never reaches the bank.
 Floating point is IEEE-754 on every target, including the 6502, where a software
 runtime or hardware on the FPGA does the arithmetic.
 
+### `f32` and `f64`
+
+`f32` and `f64` name the floating point types, as `i32` and `u64` name the
+integer ones. `float` is another name for `f32`, and `double` another name for
+`f64`: each pair is one type, so values pass between the two spellings with no
+conversion, `sizeof(f32)` and `sizeof(float)` are both 4, and an `Array<f32>` is
+an `Array<float>`. Two functions whose parameters differ only in the spelling
+have the same signature, and declaring both is a redefinition. Diagnostics,
+interfaces and the debugger show these types as `float` and `double`.
+
+`f32` and `f64` are built-in type names, not keywords, so a variable, parameter
+or field may still be called `f32` or `f64`.
+
 ### `i64` / `u64` on every target
 
 64-bit arithmetic works on all seven targets. `arm64`, `x86_64` and `win64` do it
@@ -52,7 +65,7 @@ containing an `i64` lays out identically everywhere.
 
 - Assigning a wider integer to a narrower one **truncates**, with no sign
   extension.
-- Assigning `float`/`double` to an integer takes the **integral part**, truncated
+- Assigning `f32`/`f64` to an integer takes the **integral part**, truncated
   toward zero: `(i32)3.7` is `3`, `(i32)-3.7` is `-3`. Magnitudes that overflow
   the destination saturate to `0`.
 - **Same-width arithmetic stays at that width.** There is no C-style promotion to
@@ -310,7 +323,7 @@ auto x = 257;        // u16
 auto x = -259;       // i16
 auto x = 65589;      // u32
 auto x = -555_555;   // i32
-auto x = 4.5;        // float
+auto x = 4.5;        // f32
 auto x = "hi";       // string (u8*)
 auto x = true;       // bool
 ```
@@ -405,8 +418,8 @@ i32 main(void)
     Stdio.printf("both pointers: %d %d\n", *x, *y);
 
     bool ok = true;
-    float f = 1.5;
-    double d = 3.1d;
+    f32 f = 1.5;
+    f64 d = 3.1d;
     Stdio.printf("bool=%d float=%f double=%lf\n", ok ? (u16)1 : (u16)0, f, d);
     return 0;
 }

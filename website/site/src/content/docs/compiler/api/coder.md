@@ -205,15 +205,15 @@ void encodeU64(u64 v, string key)
 
 ### encodeFloat
 ```c
-void encodeFloat(float v, string key)
+void encodeFloat(f32 v, string key)
 ```
-Written in the shortest form that reads back as the same `float`.
+Written in the shortest form that reads back as the same `f32`.
 
 ### encodeDouble
 ```c
-void encodeDouble(double v, string key)
+void encodeDouble(f64 v, string key)
 ```
-Written in the shortest form that reads back as the same `double`.
+Written in the shortest form that reads back as the same `f64`.
 
 ## Decoding
 
@@ -255,12 +255,12 @@ u64 decodeU64(string key)
 
 ### decodeFloat
 ```c
-float decodeFloat(string key)
+f32 decodeFloat(string key)
 ```
 
 ### decodeDouble
 ```c
-double decodeDouble(string key)
+f64 decodeDouble(string key)
 ```
 
 ### containsKey

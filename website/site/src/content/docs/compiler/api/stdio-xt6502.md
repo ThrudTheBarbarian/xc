@@ -101,10 +101,10 @@ static void print(u32 v)
 static void print(i32 v)
 static void print(u64 v)
 static void print(i64 v)
-static void print(float f)                   // 6 places
-static void print(double d)                  // 10 places
-static void print(float f,  u8 precision)    // %.Nf
-static void print(double d, u8 precision)    // %.Nlf
+static void print(f32 f)                     // 6 places
+static void print(f64 d)                     // 10 places
+static void print(f32 f,  u8 precision)      // %.Nf
+static void print(f64 d, u8 precision)       // %.Nlf
 ```
 The same overloads as the other targets, plus `print(u64)` and `print(i64)` as
 public methods (elsewhere the 64-bit widths are printed by `printf` through
@@ -122,9 +122,9 @@ Fixed-width, uppercase, zero-padded hex with no `$` prefix. There is no
 
 ### printFpDec
 ```c
-static void printFpDec(double v, u8 keep, u8 roundAt)
+static void printFpDec(f64 v, u8 keep, u8 roundAt)
 ```
-The fixed-point float formatter behind `print(float)`, `print(double)` and the
+The fixed-point float formatter behind `print(f32)`, `print(f64)` and the
 `%.Nf` / `%.Nlf` conversions. It extracts `v`'s integer part and fractional
 digits with the MECH float operations, rounds half-up at decimal place
 `roundAt`, and prints the first `keep` places. A bare `%f` uses
