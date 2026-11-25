@@ -116,6 +116,7 @@
 @property(nonatomic) XTDiagnosticEngine* diag;
 @property(nonatomic) BOOL aborted;       // per-function abort flag
 @property(nonatomic) BOOL nativeVarargs; // AAPCS va_list target (arm9)
+@property(nonatomic) BOOL currentFnCPackRet; // returns a pack as C's carrier
 @property(nonatomic) BOOL tupleWanted;   // lowerTupleAssignStmt: this method call returns several values
 
 // Module-level state, populated during pre-scan.
@@ -564,6 +565,29 @@ static BOOL XTFnIsCABI(XTFunctionDeclNode* fn)
     return fn.isCImport || (fn.isVarArgs && fn.body == nil);
     }
 
+// 16-bit floats across the C ABI. C passes a _Float16 or __bf16 where it
+// passes a float, its bits in the low half of the register (an FP register on
+// arm64, x86-64 and win64, a core register under arm9's soft-float
+// convention). A function C calls or is called by (a C import, a bodyless
+// variadic, an `extern` function) takes and returns a pack as that carrier,
+// an F32 or U32 holding the pattern zero-extended; inside xc the value stays a
+// U16. The symbol marks each such parameter `half_<i>` and the result
+// `half_ret`, which is what the arm64 back end reads to pack a stack-passed
+// one in two bytes, as Darwin does. As the port's cPackFn.
+static NSString* sCPackCarrier = @"";
+
+static BOOL XTFnPassesCPack(XTFunctionDeclNode* fn)
+    {
+    if (sCPackCarrier.length == 0 || fn.returnTypes.count > 1)
+        return NO;
+    return fn.isCImport || fn.isExtern || (fn.isVarArgs && fn.body == nil);
+    }
+
+static XTIRType* XTCPackCarrierType(void)
+    {
+    return [sCPackCarrier isEqualToString:@"F32"] ? [XTIRType f32Type] : [XTIRType u32Type];
+    }
+
 // Race-free static-init once (private:docs/Design/threading.md §9.5). -1 = decide per
 // module (the default), 0/1 = forced by -fno-thread-safe-arc / -fthread-safe-arc.
 //
@@ -658,6 +682,11 @@ static void setDbgLocFromNode(XTASTNode* node)
 + (void)setThreadSafeStatics:(int)mode
     {
     sThreadSafeStatics = mode;
+    }
+
++ (void)setCPackCarrier:(NSString*)carrier
+    {
+    sCPackCarrier = carrier ?: @"";
     }
 + (int)threadSafeStatics
     {
@@ -11405,8 +11434,10 @@ static const NSUInteger kVarargSlotBytes = 8;
         if (!av)
             return nil;
         // Coerce arg type to match callee's i-th param. (paramTypes
-        // ends with Mem; user-visible params are at indices 0..N-2.)
-        if (calleeFn && i < calleeFn.paramTypes.count - 1)
+        // ends with Mem; user-visible params are at indices 0..N-2.) A pack
+        // C's carrier takes is that pack already, carried below.
+        if (calleeFn && i < calleeFn.paramTypes.count - 1
+            && !sym.attributes[[NSString stringWithFormat:@"half_%lu", (unsigned long)i]].boolValue)
             {
             XTIRType* dstIR = calleeFn.paramTypes[i];
             // By-value struct arg from an lvalue (e.g. a global `g`):
@@ -11551,10 +11582,67 @@ static const NSUInteger kVarargSlotBytes = 8;
                        ? [self cVarargPromote:args fixedCount:fcu]
                        : [self packVarargsFrom:args fixedCount:fcu];
         }
+    // A pack to a C-ABI callee goes as C's carrier (XTFnPassesCPack).
+    BOOL cpkRet = sym.attributes[@"half_ret"].boolValue;
+    BOOL cpkAny = cpkRet;
+    for (NSUInteger i = 0; i < callArgs.count && !cpkAny; i++)
+        cpkAny = sym.attributes[[NSString stringWithFormat:@"half_%lu", (unsigned long)i]].boolValue;
+    if (cpkAny)
+        {
+        NSMutableArray<XTIRValue*>* carried = [callArgs mutableCopy];
+        for (NSUInteger i = 0; i < carried.count; i++)
+            if (sym.attributes[[NSString stringWithFormat:@"half_%lu", (unsigned long)i]].boolValue)
+                {
+                XTIRValue* cv = [self packToCarrier:carried[i]];
+                if (!cv)
+                    return nil;
+                carried[i] = cv;
+                }
+        callArgs = carried;
+        }
+    if (cpkRet)
+        {
+        XTIRValue* cr = [self emitCall:sid
+                              callConv:[XTIRCallConv standard]
+                             argValues:callArgs
+                            resultType:XTCPackCarrierType()];
+        return cr ? [self packFromCarrier:cr] : nil;
+        }
     return [self emitCall:sid
                  callConv:[XTIRCallConv standard]
                 argValues:callArgs
                resultType:resultIR];
+    }
+
+// A pack's pattern as the carrier C reads it from: zero-extended to a U32,
+// and as an F32 of those bits where C passes it in an FP register.
+- (nullable XTIRValue*)packToCarrier:(XTIRValue*)v
+    {
+    XTIRValue* w = [self emitInsnOpcode:XTIROpZExt
+                                 result:[XTIRType u32Type]
+                               operands:@[ [XTIROperand useWithValueId:v.valueId] ]];
+    if (!w || ![sCPackCarrier isEqualToString:@"F32"])
+        return w;
+    return [self emitInsnOpcode:XTIROpBitcast
+                         result:[XTIRType f32Type]
+                       operands:@[ [XTIROperand useWithValueId:w.valueId] ]];
+    }
+
+// The pattern back out of a carrier: its low 16 bits.
+- (nullable XTIRValue*)packFromCarrier:(XTIRValue*)v
+    {
+    XTIRValue* w = v;
+    if (v.type.kind == XTIRTypeKindF32)
+        {
+        w = [self emitInsnOpcode:XTIROpBitcast
+                          result:[XTIRType u32Type]
+                        operands:@[ [XTIROperand useWithValueId:v.valueId] ]];
+        if (!w)
+            return nil;
+        }
+    return [self emitInsnOpcode:XTIROpTrunc
+                         result:[XTIRType u16Type]
+                       operands:@[ [XTIROperand useWithValueId:w.valueId] ]];
     }
 
 #pragma mark - Statement dispatch
@@ -16666,8 +16754,9 @@ typedef NS_ENUM(NSInteger, XTStructARCMode) {
         // differs.
         XTType* srcAST = returnAstType;
         XTIRType* dstIR = self.currentFunction.returnType;
-        // A class's bytes are already the return type: nothing to coerce.
-        if (srcAST && dstIR && dstIR.kind != XTIRTypeKindVoid && !classByValue)
+        // A class's bytes are already the return type: nothing to coerce. A
+        // pack leaving as C's carrier is that pack already, carried below.
+        if (srcAST && dstIR && dstIR.kind != XTIRTypeKindVoid && !classByValue && !self.currentFnCPackRet)
             {
             BOOL srcFloat = v.type && XTIRTypeKindIsFloating(v.type.kind);
             BOOL dstFloat = XTIRTypeKindIsFloating(dstIR.kind);
@@ -16762,6 +16851,12 @@ typedef NS_ENUM(NSInteger, XTStructARCMode) {
                         return;
                     }
                 }
+            }
+        if (self.currentFnCPackRet)
+            {
+            v = [self packToCarrier:v];
+            if (!v)
+                return;
             }
         [operands addObject:[XTIROperand useWithValueId:v.valueId]];
         }
@@ -19295,10 +19390,14 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
         irRetType = [XTIRType i32Type];
         }
 
+    // A pack to or from a C-ABI function travels as C's carrier.
+    BOOL cpk = XTFnPassesCPack(fnDecl);
+    if (cpk && astRetType.isFloatPack)
+        irRetType = XTCPackCarrierType();
     NSMutableArray<XTIRType*>* paramTypes = [NSMutableArray array];
     for (XTParamNode* p in fnDecl.parameters)
         {
-        XTIRType* t = [self irTypeForASTTypeQuiet:p.paramType];
+        XTIRType* t = (cpk && p.paramType.isFloatPack) ? XTCPackCarrierType() : [self irTypeForASTTypeQuiet:p.paramType];
         if (!t)
             return YES;
         [paramTypes addObject:t];
@@ -19336,6 +19435,14 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
         attrs[@"hwstack"] = @YES;
     if (fnDecl.forwardsVarargs)
         attrs[@"vaforward"] = @YES;
+    if (cpk)
+        {
+        for (NSUInteger i = 0; i < fnDecl.parameters.count; i++)
+            if (fnDecl.parameters[i].paramType.isFloatPack)
+                attrs[[NSString stringWithFormat:@"half_%lu", (unsigned long)i]] = @YES;
+        if (astRetType.isFloatPack)
+            attrs[@"half_ret"] = @YES;
+        }
     // Call sites read this to decide whether to emit an error check after the
     // call — see lowerCallExpr / emitErrorCheckAfterCallTo:.
     if (fnDecl.throwsError)
@@ -20058,6 +20165,20 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
             }
         }
     self.currentSelf = selfValue;
+
+    // Each pack C's carrier brings (XTFnPassesCPack): the U16 the body knows
+    // is made from it first, so the pre-scan below pins that value.
+    XTIRSymbol* cpkSym = [self.module symbolForName:fn.name];
+    self.currentFnCPackRet = cpkSym.attributes[@"half_ret"].boolValue;
+    for (NSUInteger i = 0; i < paramNames.count && i + 1 < fn.paramTypes.count; i++)
+        {
+        if (!cpkSym.attributes[[NSString stringWithFormat:@"half_%lu", (unsigned long)i]].boolValue)
+            continue;
+        self.currentBlock = fn.entryBlock;
+        XTIRValue* pv = [self packFromCarrier:self.locals[paramNames[i]]];
+        if (pv)
+            self.locals[paramNames[i]] = pv;
+        }
 
     // Pre-scan the body for `&<identifier>` references. Each
     // address-taken local gets pinned: allocated a value-id +

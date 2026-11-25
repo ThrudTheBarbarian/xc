@@ -3991,6 +3991,12 @@
                     && ((IROperand*)n.ops().get((u32)0)).kind() == (u8)OPK_SYM
                     && ppPureFn(((IROperand*)n.ops().get((u32)0)).name(), (u32)0))
                     continue;
+                // A 16-bit float's conversion (FloatPack.xc): it reads only
+                // its arguments, whatever locals it works through.
+                if (oc == opCall && n.ops().count() > 0
+                    && ((IROperand*)n.ops().get((u32)0)).kind() == (u8)OPK_SYM
+                    && ((IROperand*)n.ops().get((u32)0)).name().hasPrefix(String.withCString("_xt_fpk_")))
+                    continue;
                 if (st || oc == opLoad)
                     {
                     IRValue* addr = ((IROperand*)n.ops().get((u32)0)).val();
@@ -4394,6 +4400,10 @@
         // A class's one-time initialisation (Math.sqrt in a loop brings it):
         // thread-safe, and after the first time a load and a compare.
         if (callee.equals(String.withCString("_xtc_sinit_run")))
+            return (String*)0;
+        // A 16-bit float's conversions (FloatPack.xc): pure functions of their
+        // arguments. A block calling them runs on the CPU (the check says why).
+        if (callee.hasPrefix(String.withCString("_xt_fpk_")))
             return (String*)0;
         IRFunc* f = self.funcNamed(_ppModule, callee);
         if (f == (IRFunc*)0 || f.blocks().count() == (u32)0)

@@ -19,6 +19,14 @@
 // LLVM's pointers are opaque (`ptr`). xc's are typed, so a pointer is read
 // as Ptr(U8) and given its element type where it is used: a getelementptr,
 // a load or a store casts it (Bitcast) to the type it addresses.
+//
+// `half` and `bfloat` (C's _Float16 and __bf16) are xc's f16 and bf16: a U16
+// holding the pattern. Their arithmetic, comparisons and conversions are calls
+// of FloatPack.xc (which the driver lowers into the module first), each
+// operation worked in f32 and rounded once, as xc's own lowering does. A
+// function takes and returns one as C passes it, the pattern in the low half
+// of an F32 (the carrier the C ABI's FP register holds), its symbol marking
+// each such parameter `half_<i>` and the result `half_ret`.
 
 #import "Foundation.xc"
 #import <Ir>
@@ -40,6 +48,8 @@ class LlvmReader
     bool _sawSret;          // ... or an `sret(T)`: the hidden result pointer
     IRValue* _sretParam;    // the function's sret parameter, which it returns
     Array* _zxParams;       // a function's zeroext parameters: name, value
+    Array* _halfParams;     // a function's half / bfloat parameters: name, carrier value
+    bool _retHalf;          // the function returns a half or bfloat, as its carrier
     Map* _aggParams;        // a function's [N x iK] parameters: name -> Array of its N values
     bool _readHandlers;     // read invoke / landingpad / resume (a target whose back end writes their tables)
     IRInsn* _pendingInvoke; // an invoke whose `to label … unwind label …` line comes next
@@ -796,6 +806,7 @@ class LlvmReader
         if (t.equals(String.withCString("i64"))) return String.withCString("I64");
         if (t.equals(String.withCString("float"))) return String.withCString("F32");
         if (t.equals(String.withCString("double"))) return String.withCString("F64");
+        if (LlvmReader.isHalfTy(t)) return String.withCString("U16");
         if (t.equals(String.withCString("ptr"))) return String.withCString("Ptr(U8, unbanked)");
         if (t.equals(String.withCString("void"))) return String.withCString("Void");
         return (String*)0;
@@ -805,10 +816,86 @@ class LlvmReader
         if (irT.hasPrefix(String.withCString("Agg(")))
             return layoutOf(irT).size();
         if (irT.equals(String.withCString("Bool")) || irT.equals(String.withCString("I8"))) return (u32)1;
-        if (irT.equals(String.withCString("I16"))) return (u32)2;
+        if (irT.equals(String.withCString("I16")) || irT.equals(String.withCString("U16"))) return (u32)2;
         if (irT.equals(String.withCString("I32")) || irT.equals(String.withCString("F32"))) return (u32)4;
         return (u32)8;
         }
+
+    // ── half and bfloat ─────────────────────────────────────────────────
+
+    static bool isHalfTy(String* t)
+        {
+        return t != (String*)0 && (t.equals(String.withCString("half")) || t.equals(String.withCString("bfloat")));
+        }
+    // The pack's exponent and mantissa widths: e5m10 (half), e8m7 (bfloat).
+    static i64 halfExp(String* t)
+        {
+        return t.equals(String.withCString("bfloat")) ? (i64)8 : (i64)5;
+        }
+    static i64 halfMant(String* t)
+        {
+        return t.equals(String.withCString("bfloat")) ? (i64)7 : (i64)10;
+        }
+    // The module has FloatPack's routines (the driver lowered them in).
+    bool haveFloatPack(void)
+        {
+        if (_m.symNamed(String.withCString("_xt_fpk_unpack")) != (IRSymbol*)0)
+            return true;
+        fail("a half or bfloat value, without the 16-bit float routines");
+        return false;
+        }
+    // A call of FloatPack's `name` with `args` and the pack's widths
+    // appended; its result is `res` (0: unnamed).
+    IRValue* fpkCall(string name, Array* args, String* llt, String* ret, String* res)
+        {
+        IRInsn* c = IRInsn.with(String.withCString("Call"));
+        c.setCc(String.withCString("CallConv::Standard"));
+        c.add(IROperand.sym(String.withCString(name)));
+        for (u32 i = (u32)0; i < args.count(); i = i + (u32)1)
+            c.add(IROperand.useVal((IRValue*)args.get(i)));
+        c.add(IROperand.useVal(emit(String.withCString("Const"), String.withCString("U32"), IROperand.immI(LlvmReader.halfExp(llt), String.withCString("U32")), (IROperand*)0, (IROperand*)0)));
+        c.add(IROperand.useVal(emit(String.withCString("Const"), String.withCString("U32"), IROperand.immI(LlvmReader.halfMant(llt), String.withCString("U32")), (IROperand*)0, (IROperand*)0)));
+        c.add(IROperand.useVal(_mem));
+        IRValue* r = res != (String*)0 ? valNamed(res, ret) : new IRValue(ret);
+        r.setTy(ret);
+        c.setRes(r);
+        IRValue* mo = new IRValue(String.withCString("Mem"));
+        c.setMemRes(mo);
+        _blk.add(c);
+        _mem = mo;
+        return r;
+        }
+    // A pack's value as the f32 that holds it exactly.
+    IRValue* halfToF32(IRValue* v, String* llt, String* res)
+        {
+        Array* a = new Array();
+        a.add((Object*)v);
+        return fpkCall("_xt_fpk_unpack", a, llt, String.withCString("F32"), res);
+        }
+    // An f32 or f64 rounded to the pack.
+    IRValue* halfFromFloat(IRValue* v, String* llt, String* res)
+        {
+        Array* a = new Array();
+        a.add((Object*)v);
+        return fpkCall(v.ty().equals(String.withCString("F64")) ? "_xt_fpk_pack_f64" : "_xt_fpk_pack_f32", a, llt,
+                       String.withCString("U16"), res);
+        }
+    // The pattern as C's carrier: zero-extended into an F32's bits.
+    IRValue* halfToCarrier(IRValue* v)
+        {
+        IRValue* w = emit(String.withCString("ZExt"), String.withCString("U32"), IROperand.useVal(v), (IROperand*)0, (IROperand*)0);
+        return emit(String.withCString("Bitcast"), String.withCString("F32"), IROperand.useVal(w), (IROperand*)0, (IROperand*)0);
+        }
+    // ... and back: the carrier's low 16 bits, named `res` (0: unnamed).
+    IRValue* halfFromCarrier(IRValue* v, String* res)
+        {
+        IRValue* w = emit(String.withCString("Bitcast"), String.withCString("U32"), IROperand.useVal(v), (IROperand*)0, (IROperand*)0);
+        if (res == (String*)0)
+            return emit(String.withCString("Trunc"), String.withCString("U16"), IROperand.useVal(w), (IROperand*)0, (IROperand*)0);
+        define(res, String.withCString("Trunc"), String.withCString("U16"), IROperand.useVal(w), (IROperand*)0, (IROperand*)0, (String*)0);
+        return valNamed(res, String.withCString("U16"));
+        }
+
     IRLayout* layoutOf(String* aggT)
         {
         u32 id = (u32)0;
@@ -1276,10 +1363,15 @@ class LlvmReader
             return;
         String* sym = symFor(name);
         String* irRet = zx ? unsignedOf(irOf(ret)) : irOf(ret);
+        // A half or bfloat travels as C passes it: in an F32's low half.
+        bool retHalf = LlvmReader.isHalfTy(ret);
+        if (retHalf)
+            irRet = String.withCString("F32");
         _retTy.set((Hashable*)name, (Object*)irRet);
         if (!decl)
             _defined.set((Hashable*)name, (Object*)Number.with((u32)1));
         Array* ptys = new Array();
+        Array* halves = new Array();    // the indices of the half / bfloat parameters
         Array* llps = new Array();      // the LLVM parameter types, for a `declare`
         bool variadic = false;
         bool sret0 = false;             // the first parameter is `sret`
@@ -1299,7 +1391,13 @@ class LlvmReader
                 if (_sawSret && ptys.count() == (u32)0)
                     sret0 = true;
                 // A zeroext narrow parameter is the unsigned type (eatZeroExt).
-                ptys.add((Object*)(_sawZext ? unsignedOf(irOf(pt)) : irOf(pt)));
+                if (LlvmReader.isHalfTy(pt))
+                    {
+                    halves.add((Object*)Number.withU32(ptys.count()));
+                    ptys.add((Object*)String.withCString("F32"));
+                    }
+                else
+                    ptys.add((Object*)(_sawZext ? unsignedOf(irOf(pt)) : irOf(pt)));
                 llps.add((Object*)(_sawZext ? String.withFormat("%s zeroext", pt.cString()) : pt));
                 if (peek() == (u8)'%')
                     word();
@@ -1344,6 +1442,10 @@ class LlvmReader
         if (!hasSym(sym))
             {
             IRSymbol* fs = IRSymbol.func(sym, sig, variadic, decl || _cabiAll);
+            for (u32 i = (u32)0; i < halves.count(); i = i + (u32)1)
+                fs.setAttr(String.withFormat("half_%u", ((Number*)halves.get(i)).asU32()), true);
+            if (retHalf)
+                fs.setAttr(String.withCString("half_ret"), true);
             // Split, clang's code calls it: a root for dead-function removal.
             if (_split && !decl)
                 fs.setAttr(String.withCString("exported"), true);
@@ -1443,6 +1545,10 @@ class LlvmReader
                 }
             }
         _fn.setRet(zx ? unsignedOf(irOf(ret)) : irOf(ret));
+        _retHalf = LlvmReader.isHalfTy(ret);
+        if (_retHalf)
+            _fn.setRet(String.withCString("F32"));
+        _halfParams = new Array();
         _vals = new Map();
         _pins = new Map();
         _blocks = new Map();
@@ -1514,11 +1620,20 @@ class LlvmReader
                     }
                 String* pn = word();
                 String* ut = _sawZext ? unsignedOf(irOf(pt)) : irOf(pt);
+                bool halfP = LlvmReader.isHalfTy(pt);
+                if (halfP)
+                    ut = String.withCString("F32");
                 if (!ut.hasPrefix(String.withCString("F")))
                     gprs = gprs + (u32)1;
                 IRValue* v = new IRValue(ut);
                 _fn.addParam(v);
                 _vals.set((Hashable*)pn, (Object*)v);
+                // C's carrier, its pattern taken out before the first instruction.
+                if (halfP)
+                    {
+                    _halfParams.add((Object*)pn);
+                    _halfParams.add((Object*)v);
+                    }
                 if (sretHere)
                     {
                     _sretParam = v;
@@ -1526,7 +1641,7 @@ class LlvmReader
                     if (_fn.ret().equals(String.withCString("Void")))
                         _fn.setRet(ut);
                     }
-                if (!ut.equals(irOf(pt)))
+                if (!halfP && !ut.equals(irOf(pt)))
                     {
                     // Narrowed to the signed type before the first instruction.
                     _zxParams.add((Object*)pn);
@@ -1585,6 +1700,14 @@ class LlvmReader
                     _vals.set((Hashable*)_zxParams.get(k), (Object*)toSigned(u, st));
                     }
                 _zxParams = new Array();
+                }
+            if (_halfParams.count() > (u32)0)
+                {
+                if (!haveFloatPack())
+                    break;
+                for (u32 k = (u32)0; k + (u32)1 < _halfParams.count(); k = k + (u32)2)
+                    _vals.set((Hashable*)_halfParams.get(k), (Object*)halfFromCarrier((IRValue*)_halfParams.get(k + (u32)1), (String*)0));
+                _halfParams = new Array();
                 }
             lineOf(t);
             if (_readHandlers && readHandlerLine(t))
@@ -1738,6 +1861,14 @@ class LlvmReader
             if (t.hasPrefix(String.withCString("F")))
                 return emit(String.withCString("Const"), t, IROperand.immF(String.withCString("0000000000000000"), t), (IROperand*)0, (IROperand*)0);
             return emit(String.withCString("Const"), t, IROperand.immI((i64)0, t), (IROperand*)0, (IROperand*)0);
+            }
+        // A half (`0xH3C00`) or bfloat (`0xR3F80`) constant: its pattern.
+        if ((w.hasPrefix(String.withCString("0xH")) || w.hasPrefix(String.withCString("0xR"))) && w.byteLength() == (u32)7)
+            {
+            i64 bits = (i64)0;
+            for (u32 k = (u32)3; k < (u32)7; k = k + (u32)1)
+                bits = bits * (i64)16 + (i64)LlvmReader.hexNibble(w.byteAt(k));
+            return emit(String.withCString("Const"), String.withCString("U16"), IROperand.immI(bits, String.withCString("U16")), (IROperand*)0, (IROperand*)0);
             }
         if (t.hasPrefix(String.withCString("F")))
             {
@@ -2173,7 +2304,25 @@ class LlvmReader
                 }
             String* cpred = contract && (bin.equals(String.withCString("FAdd")) || bin.equals(String.withCString("FSub")))
                             ? String.withCString("contract") : (String*)0;
-            String* t = irOf(llType());
+            String* blt = llType();
+            String* t = irOf(blt);
+            // half / bfloat: worked in f32 and rounded once, C's _Float16 rule.
+            if (LlvmReader.isHalfTy(blt))
+                {
+                IRValue* ha = operand(t);
+                eat(",");
+                IRValue* hb = operand(t);
+                if (ha == (IRValue*)0 || hb == (IRValue*)0 || !haveFloatPack())
+                    {
+                    fail("an arithmetic instruction not read");
+                    return;
+                    }
+                IRValue* fa = halfToF32(ha, blt, (String*)0);
+                IRValue* fb = halfToF32(hb, blt, (String*)0);
+                IRValue* fr = emit(bin, String.withCString("F32"), IROperand.useVal(fa), IROperand.useVal(fb), (IROperand*)0);
+                halfFromFloat(fr, blt, res);
+                return;
+                }
             IRValue* a = operand(t);
             eat(",");
             // `xor x, -1` is C's ~x (LLVM has no not): read as xc's Not, so the
@@ -2220,10 +2369,17 @@ class LlvmReader
         if (op.equals(String.withCString("fneg")))
             {
             eatFastMath();
-            String* t = irOf(llType());
+            String* nlt = llType();
+            String* t = irOf(nlt);
             IRValue* a = operand(t);
             if (a == (IRValue*)0)
                 return;
+            // A half's negation flips its sign bit.
+            if (LlvmReader.isHalfTy(nlt))
+                {
+                define(res, String.withCString("Xor"), t, IROperand.useVal(a), IROperand.immI((i64)$8000, t), (IROperand*)0, (String*)0);
+                return;
+                }
             define(res, String.withCString("FNeg"), t, IROperand.useVal(a), (IROperand*)0, (IROperand*)0, (String*)0);
             IRValue* r = valNamed(res, t);
             if (r != (IRValue*)0)
@@ -2237,7 +2393,8 @@ class LlvmReader
                 {
                 }
             String* pred = word().uppercased();
-            String* t = irOf(llType());
+            String* clt = llType();
+            String* t = irOf(clt);
             IRValue* a = operand(t);
             eat(",");
             IRValue* b = operand(t);
@@ -2245,6 +2402,14 @@ class LlvmReader
                 {
                 fail("a compare not read");
                 return;
+                }
+            // half / bfloat: compared as the f32s that hold them exactly.
+            if (LlvmReader.isHalfTy(clt))
+                {
+                if (!haveFloatPack())
+                    return;
+                a = halfToF32(a, clt, (String*)0);
+                b = halfToF32(b, clt, (String*)0);
                 }
             define(res, String.withCString(op.equals(String.withCString("icmp")) ? "ICmp" : "FCmp"), String.withCString("Bool"),
                    IROperand.useVal(a), IROperand.useVal(b), (IROperand*)0, pred);
@@ -2257,16 +2422,32 @@ class LlvmReader
             // trunc's `nuw` / `nsw` (LLVM 19): promises, nothing to compute.
             eat("nuw");
             eat("nsw");
-            IRValue* a = typedOperand();
+            String* slt = llType();
+            IRValue* a = (IRValue*)0;
+            if (irOf(slt) == (String*)0)
+                fail("an operand of a type not read");
+            else
+                {
+                skipAttrs();
+                a = operand(irOf(slt));
+                }
             if (!eat("to"))
                 {
                 fail("a cast not read");
                 return;
                 }
-            String* t = irOf(llType());
+            String* dlt = llType();
+            String* t = irOf(dlt);
             if (a == (IRValue*)0 || t == (String*)0)
                 {
                 fail("a cast not read");
+                return;
+                }
+            // To or from a half or bfloat (bitcast aside, a pattern's own
+            // move): FloatPack's conversions, each rounding once.
+            if ((LlvmReader.isHalfTy(slt) || LlvmReader.isHalfTy(dlt)) && !cast.equals(String.withCString("Bitcast")))
+                {
+                readHalfCast(res, cast, a, slt, t, dlt);
                 return;
                 }
             // `sext i1 %b`: all ones when b is true (libstdc++'s deque counts
@@ -2472,6 +2653,9 @@ class LlvmReader
                     IRValue* m = emit(String.withCString("And"), String.withCString("I32"), IROperand.useVal(w), IROperand.immI(mask, String.withCString("I32")), (IROperand*)0);
                     v = emit(String.withCString("Trunc"), rt, IROperand.useVal(m), (IROperand*)0, (IROperand*)0);
                     }
+                // A half leaves as C's carrier.
+                if (_retHalf)
+                    v = halfToCarrier(v);
                 r.add(IROperand.useVal(v));
                 }
             r.add(IROperand.useVal(_mem));
@@ -2641,6 +2825,156 @@ class LlvmReader
         if (b != (IROperand*)0) n.add(b);
         if (c != (IROperand*)0) n.add(c);
         _blk.add(n);
+        }
+
+    // llvm.<op>.f16 / .bf16 (readCall): `args` of the pack whose LLVM type is
+    // rlt, the result named res.
+    void readHalfIntrinsic(String* res, String* callee, Array* args, String* rlt)
+        {
+        String* sfx = rlt.equals(String.withCString("bfloat")) ? String.withCString(".bf16") : String.withCString(".f16");
+        String* u = String.withCString("U16");
+        if (callee.equals(String.withCString("@llvm.fabs").appending(sfx)) && args.count() == (u32)1)
+            {
+            define(res, String.withCString("And"), u, IROperand.useVal((IRValue*)args.get((u32)0)), IROperand.immI((i64)$7FFF, u), (IROperand*)0, (String*)0);
+            return;
+            }
+        if (callee.equals(String.withCString("@llvm.copysign").appending(sfx)) && args.count() == (u32)2)
+            {
+            IRValue* mag = emit(String.withCString("And"), u, IROperand.useVal((IRValue*)args.get((u32)0)), IROperand.immI((i64)$7FFF, u), (IROperand*)0);
+            IRValue* sgn = emit(String.withCString("And"), u, IROperand.useVal((IRValue*)args.get((u32)1)), IROperand.immI((i64)$8000, u), (IROperand*)0);
+            define(res, String.withCString("Or"), u, IROperand.useVal(mag), IROperand.useVal(sgn), (IROperand*)0, (String*)0);
+            return;
+            }
+        // sqrt in f32 rounded once to the pack is the correctly rounded root.
+        if (callee.equals(String.withCString("@llvm.sqrt").appending(sfx)) && args.count() == (u32)1)
+            {
+            IRValue* f = halfToF32((IRValue*)args.get((u32)0), rlt, (String*)0);
+            String* n = String.withCString("@sqrtf");
+            if (_globals.get((Hashable*)n) == (Object*)0)
+                {
+                _globals.set((Hashable*)n, (Object*)String.withCString("sqrtf"));
+                if (!hasSym(String.withCString("sqrtf")))
+                    _m.addSym(IRSymbol.func(String.withCString("sqrtf"), String.withCString("(F32) -> F32"), false, true));
+                }
+            IRInsn* c = IRInsn.with(String.withCString("Call"));
+            c.setCc(String.withCString("CallConv::Standard"));
+            c.add(IROperand.sym((String*)_globals.get((Hashable*)n)));
+            c.add(IROperand.useVal(f));
+            c.add(IROperand.useVal(_mem));
+            IRValue* r = new IRValue(String.withCString("F32"));
+            c.setRes(r);
+            IRValue* mo = new IRValue(String.withCString("Mem"));
+            c.setMemRes(mo);
+            _blk.add(c);
+            _mem = mo;
+            halfFromFloat(r, rlt, res);
+            return;
+            }
+        // a * b + c: fused (C's default, setFuseMulAdd), the product and sum
+        // are exact in f64 and the result rounds once; unfused, each rounds
+        // to the pack in turn.
+        if (callee.equals(String.withCString("@llvm.fmuladd").appending(sfx)) && args.count() == (u32)3)
+            {
+            IRValue* fa = halfToF32((IRValue*)args.get((u32)0), rlt, (String*)0);
+            IRValue* fb = halfToF32((IRValue*)args.get((u32)1), rlt, (String*)0);
+            IRValue* fc = halfToF32((IRValue*)args.get((u32)2), rlt, (String*)0);
+            if (_fuseMulAdd)
+                {
+                String* d = String.withCString("F64");
+                IRValue* da = emit(String.withCString("FpExt"), d, IROperand.useVal(fa), (IROperand*)0, (IROperand*)0);
+                IRValue* db = emit(String.withCString("FpExt"), d, IROperand.useVal(fb), (IROperand*)0, (IROperand*)0);
+                IRValue* dc = emit(String.withCString("FpExt"), d, IROperand.useVal(fc), (IROperand*)0, (IROperand*)0);
+                IRValue* p = emit(String.withCString("FMul"), d, IROperand.useVal(da), IROperand.useVal(db), (IROperand*)0);
+                IRValue* sum = emit(String.withCString("FAdd"), d, IROperand.useVal(p), IROperand.useVal(dc), (IROperand*)0);
+                halfFromFloat(sum, rlt, res);
+                return;
+                }
+            IRValue* p = emit(String.withCString("FMul"), String.withCString("F32"), IROperand.useVal(fa), IROperand.useVal(fb), (IROperand*)0);
+            IRValue* pr = halfToF32(halfFromFloat(p, rlt, (String*)0), rlt, (String*)0);
+            IRValue* sum = emit(String.withCString("FAdd"), String.withCString("F32"), IROperand.useVal(pr), IROperand.useVal(fc), (IROperand*)0);
+            halfFromFloat(sum, rlt, res);
+            return;
+            }
+        fail(String.withFormat("an intrinsic not read: %s", callee.cString()).cString());
+        }
+
+    // A cast with a half or bfloat on one side (readInsn): `a` of LLVM type
+    // slt to IR type t (LLVM type dlt), named res. C leaves an out-of-range
+    // float-to-integer conversion undefined, so that one is unchecked, as
+    // for float.
+    void readHalfCast(String* res, String* cast, IRValue* a, String* slt, String* t, String* dlt)
+        {
+        if (!haveFloatPack())
+            return;
+        if (LlvmReader.isHalfTy(slt))
+            {
+            // fpext to float or double; fptosi / fptoui to an integer.
+            if (cast.equals(String.withCString("FpExt")) && t.equals(String.withCString("F32")))
+                {
+                halfToF32(a, slt, res);
+                return;
+                }
+            IRValue* f = halfToF32(a, slt, (String*)0);
+            if (cast.equals(String.withCString("FpExt")) && t.equals(String.withCString("F64")))
+                {
+                define(res, String.withCString("FpExt"), t, IROperand.useVal(f), (IROperand*)0, (IROperand*)0, (String*)0);
+                return;
+                }
+            if (cast.equals(String.withCString("FpToSI")) || cast.equals(String.withCString("FpToUI")))
+                {
+                define(res, cast, t, IROperand.useVal(f), (IROperand*)0, (IROperand*)0, String.withCString("unchecked"));
+                return;
+                }
+            fail("a cast of a half not read");
+            return;
+            }
+        // fptrunc from float or double.
+        if (cast.equals(String.withCString("FpTrunc")) && (a.ty().equals(String.withCString("F32")) || a.ty().equals(String.withCString("F64"))))
+            {
+            halfFromFloat(a, dlt, res);
+            return;
+            }
+        // sitofp / uitofp: an integer, one rounding even from 64 bits.
+        bool sg = cast.equals(String.withCString("SIToFp"));
+        if (!sg && !cast.equals(String.withCString("UIToFp")))
+            {
+            fail("a cast to a half not read");
+            return;
+            }
+        String* st = a.ty();
+        IRValue* v = a;
+        Array* args = new Array();
+        if (st.equals(String.withCString("I64")) || st.equals(String.withCString("U64")))
+            {
+            if (!sg && !st.equals(String.withCString("U64")))
+                v = emit(String.withCString("Bitcast"), String.withCString("U64"), IROperand.useVal(v), (IROperand*)0, (IROperand*)0);
+            args.add((Object*)v);
+            fpkCall(sg ? "_xt_fpk_pack_i64" : "_xt_fpk_pack_u64", args, dlt, String.withCString("U16"), res);
+            return;
+            }
+        if (st.equals(String.withCString("Bool")))
+            {
+            fail("a cast of an i1 to a half not read");
+            return;
+            }
+        // A narrower integer widens by its signedness first.
+        if (st.equals(String.withCString("I8")) || st.equals(String.withCString("I16")))
+            {
+            if (sg)
+                v = emit(String.withCString("SExt"), String.withCString("I32"), IROperand.useVal(v), (IROperand*)0, (IROperand*)0);
+            else
+                {
+                IRValue* w = emit(String.withCString("ZExt"), String.withCString("I32"), IROperand.useVal(v), (IROperand*)0, (IROperand*)0);
+                v = emit(String.withCString("And"), String.withCString("I32"), IROperand.useVal(w),
+                         IROperand.immI(st.equals(String.withCString("I8")) ? (i64)255 : (i64)65535, String.withCString("I32")), (IROperand*)0);
+                }
+            }
+        else if (st.equals(String.withCString("U8")) || st.equals(String.withCString("U16")))
+            v = emit(String.withCString("ZExt"), String.withCString("I32"), IROperand.useVal(v), (IROperand*)0, (IROperand*)0);
+        if (!sg)
+            v = emit(String.withCString("Bitcast"), String.withCString("U32"), IROperand.useVal(v), (IROperand*)0, (IROperand*)0);
+        args.add((Object*)v);
+        fpkCall(sg ? "_xt_fpk_pack_i32" : "_xt_fpk_pack_u32", args, dlt, String.withCString("U16"), res);
         }
 
     static String* binOp(String* op)
@@ -3165,7 +3499,8 @@ class LlvmReader
         // zeroext i1 @g`), zeroext among them.
         skipAttrs();
         bool zx = _sawZext;
-        String* rt = irOf(llType());
+        String* rlt = llType();
+        String* rt = irOf(rlt);
         if (rt == (String*)0)
             {
             fail("a call of a type not read");
@@ -3204,12 +3539,14 @@ class LlvmReader
             return;
         Array* args = new Array();
         Array* zxArg = new Array();
+        Array* argLl = new Array();     // each argument's LLVM type
         bool sretCall = false;
         if (eat("("))
             {
             while (more() && peek() != (u8)')')
                 {
-                String* at = irOf(llType());
+                String* alt = llType();
+                String* at = irOf(alt);
                 if (at == (String*)0)
                     {
                     fail("an operand of a type not read");
@@ -3233,8 +3570,21 @@ class LlvmReader
                     return;
                 args.add((Object*)a);
                 zxArg.add((Object*)Number.with(z ? (u32)1 : (u32)0));
+                argLl.add((Object*)alt);
                 eat(",");
                 }
+            }
+        bool anyHalf = LlvmReader.isHalfTy(rlt);
+        for (u32 i = (u32)0; i < argLl.count(); i = i + (u32)1)
+            anyHalf = anyHalf || LlvmReader.isHalfTy((String*)argLl.get(i));
+        if (anyHalf && !haveFloatPack())
+            return;
+        // The intrinsics of a half or bfloat: fabs and copysign on its sign
+        // bit, sqrt and the multiply-add through f32 or f64.
+        if (anyHalf && callee.hasPrefix(String.withCString("@llvm.")))
+            {
+            readHalfIntrinsic(res, callee, args, rlt);
+            return;
             }
         // a * b + c: a multiply and an add, the add marked `contract` where C
         // fuses it (setFuseMulAdd).
@@ -3521,16 +3871,44 @@ class LlvmReader
             c.setCc(String.withCString(sretCall ? "CallConv::Sret" : "CallConv::Standard"));
             c.add(IROperand.sym(sym));
             }
+        // Through a pointer, a half past the eighth FP argument would need the
+        // callee's marks to be placed (Darwin packs it in two bytes): clang's.
+        if (fptr != (IRValue*)0 && anyHalf)
+            {
+            u32 fps = (u32)0;
+            for (u32 i = (u32)0; i < args.count(); i = i + (u32)1)
+                if (((IRValue*)args.get(i)).ty().hasPrefix(String.withCString("F")) || LlvmReader.isHalfTy((String*)argLl.get(i)))
+                    fps = fps + (u32)1;
+            if (fps > (u32)8)
+                {
+                fail("an indirect call passing a half on the stack");
+                return;
+                }
+            }
         // A zeroext narrow argument goes as the unsigned type, as the callee
-        // (clang's code too) reads the whole register.
+        // (clang's code too) reads the whole register. A half goes as C's carrier.
         for (u32 i = (u32)0; i < args.count(); i = i + (u32)1)
             {
             IRValue* a = (IRValue*)args.get(i);
             if (((Number*)zxArg.get(i)).asU32() == (u32)1)
                 a = toUnsigned(a);
+            if (LlvmReader.isHalfTy((String*)argLl.get(i)))
+                a = halfToCarrier(a);
             c.add(IROperand.useVal(a));
             }
         c.add(IROperand.useVal(_mem));
+        // A half result arrives as C's carrier.
+        if (LlvmReader.isHalfTy(rlt))
+            {
+            IRValue* cr = new IRValue(String.withCString("F32"));
+            c.setRes(cr);
+            IRValue* hmo = new IRValue(String.withCString("Mem"));
+            c.setMemRes(hmo);
+            _blk.add(c);
+            _mem = hmo;
+            halfFromCarrier(cr, res);
+            return;
+            }
         // A zeroext narrow result arrives as the unsigned type: read it so,
         // then narrow it to the signed type the reader works in.
         String* ut = zx ? unsignedOf(rt) : rt;

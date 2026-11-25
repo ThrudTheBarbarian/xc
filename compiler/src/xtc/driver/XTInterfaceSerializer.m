@@ -362,11 +362,19 @@ static void appendCanonicalJSON(NSMutableString *out, id v) {
             }
             NSMutableArray *rets = [NSMutableArray array];
             for (XTType *r in f.returnTypes) [rets addObject:r.displayName ?: @"void"];
-            [functions addObject:@{ @"name":    f.funcName,
-                                    @"symbol":  f.mangledName.length ? f.mangledName : f.funcName,
-                                    @"varargs": @(f.isVarArgs),
-                                    @"params":  params,
-                                    @"returns": rets }];
+            NSMutableDictionary *fj = [@{ @"name":    f.funcName,
+                                          @"symbol":  f.mangledName.length ? f.mangledName : f.funcName,
+                                          @"varargs": @(f.isVarArgs),
+                                          @"params":  params,
+                                          @"returns": rets } mutableCopy];
+            // An `extern` function passes a 16-bit float by C's convention, so
+            // a client calls it that way (only said where it matters).
+            BOOL takesPack = NO;
+            if (f.returnTypes.count == 1) takesPack = f.returnTypes[0].isFloatPack;
+            for (XTParamNode *pn in f.parameters) takesPack = takesPack || pn.paramType.isFloatPack;
+            if (f.isExtern && takesPack)
+                fj[@"extern"] = @YES;
+            [functions addObject:fj];
         } else if ([d isKindOfClass:[XTVariableDeclNode class]]) {
             XTVariableDeclNode *v = (XTVariableDeclNode *)d;
             if (v.varName.length == 0) continue;

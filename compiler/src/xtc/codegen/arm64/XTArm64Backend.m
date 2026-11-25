@@ -1227,8 +1227,10 @@ static unsigned xtArm64GlobalP2Align(uint32_t size) {
             stackOff += 8;
             continue;
         }
-        XTIRType *ty = (entry == [NSNull null]) ? nil : (XTIRType *)entry;
-        BOOL isFloat = ty && XTIRTypeKindIsFloating(ty.kind);
+        // A half (arm64HalfTypes) is a float packed in two bytes.
+        BOOL isHalf = [entry isKindOfClass:[NSString class]];
+        XTIRType *ty = (entry == [NSNull null] || isHalf) ? nil : (XTIRType *)entry;
+        BOOL isFloat = isHalf || (ty && XTIRTypeKindIsFloating(ty.kind));
         BOOL isAgg   = ty && ty.kind == XTIRTypeKindAgg;
         if (isAgg) {
             XTIRTypeKind ek = XTIRTypeKindVoid;
@@ -1256,7 +1258,7 @@ static unsigned xtArm64GlobalP2Align(uint32_t size) {
         } else if (isFloat) {
             if (fpIdx < 8) { fpIdx++; [offs addObject:@(-1)]; }
             else {
-                NSUInteger sz = slot((ty.kind == XTIRTypeKindF64) ? 8 : 4);
+                NSUInteger sz = slot(isHalf ? 2 : (ty.kind == XTIRTypeKindF64) ? 8 : 4);
                 stackOff = (stackOff + sz - 1) & ~(sz - 1);
                 [offs addObject:@((NSInteger)stackOff)]; stackOff += sz;
             }
@@ -1421,12 +1423,35 @@ static char kArm64VtblForSelfKey, kArm64VtblForSelfCountKey;
 + (NSArray *)arm64ArgTypesForInsn:(XTIRInsn *)insn from:(NSUInteger)first
                             count:(NSUInteger)argCount ctx:(XTArm64FnCtx *)ctx {
     NSMutableArray *types = [NSMutableArray arrayWithCapacity:argCount];
+    XTIRSymbol *hs = [self arm64HalfCalleeForInsn:insn from:first ctx:ctx];
     for (NSUInteger i = 0; i < argCount; i++) {
         XTIROperand *a = insn.operands[first + i];
         XTIRValue *av = (a.kind == XTIROperandKindUse) ? [ctx.fn valueForId:a.valueId] : nil;
-        [types addObject:(av && av.type) ? (id)av.type : (id)[NSNull null]];
+        if ([self arm64Half:hs at:i])
+            [types addObject:@"half"];
+        else
+            [types addObject:(av && av.type) ? (id)av.type : (id)[NSNull null]];
     }
     return types;
+}
+
+// A 16-bit float the C ABI passes travels as an F32 holding its bits (the
+// lowering's carrier), and its symbol marks it `half_<i>`. In a register that
+// is all there is to it; on the stack Darwin packs one in two bytes, as clang
+// does, where a float takes four. Plain AAPCS64 gives every stack argument
+// eight bytes, so only Darwin reads the marks, and the classifier sees such an
+// argument as the string "half" in place of its type. As the port.
++ (BOOL)arm64Half:(nullable XTIRSymbol *)sym at:(NSUInteger)i {
+    return sym && [sym.attributes[[NSString stringWithFormat:@"half_%lu", (unsigned long)i]] boolValue];
+}
+
+// The symbol whose marks a call's arguments take: a direct call's, under
+// Darwin's packing. nil otherwise.
++ (nullable XTIRSymbol *)arm64HalfCalleeForInsn:(XTIRInsn *)insn from:(NSUInteger)first
+                                            ctx:(XTArm64FnCtx *)ctx {
+    if (sArm64Aapcs64Abi || first != 1 || !arm64IsDirectCallOpcode(insn.opcode)) return nil;
+    XTIROperand *c = insn.operands[0];
+    return c.kind == XTIROperandKindSym ? [ctx.module symbolForId:c.symbolId] : nil;
 }
 
 // Outgoing stack bytes a single call insn needs (0 for non-calls / all-register
@@ -6237,6 +6262,10 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
                                   toFrame:NO ctx:ctx];
                     } else if (![self marshalAggArg:a.valueId type:av.type
                                         gpIdx:&gpIdx fpIdx:&fpIdx ctx:ctx]) continue;
+                } else if ([aTypes[i] isKindOfClass:[NSString class]] && stkOff[i].integerValue >= 0) {
+                    // A packed half (arm64Half:at:): its two bytes.
+                    [self loadValue:a.valueId intoReg:@"s16" ctx:ctx];
+                    [ctx.out appendFormat:@"    str h16, [sp, #%ld]\n", (long)stkOff[i].integerValue];
                 } else {
                     [self marshalArgOperand:a value:av stackOffset:stkOff[i].integerValue
                                       gpIdx:&gpIdx fpIdx:&fpIdx ctx:ctx];
@@ -10066,7 +10095,11 @@ static BOOL vecPhiInLive(XTIRFunction* fn, XTIRInsn* p, NSUInteger h, XTIRValueI
     // Incoming stack params: the caller's outgoing-args area sits just above this
     // frame, so a param spilled to the stack lives at [sp, #frameSize + <off>].
     // Same classifier as the caller, so the offsets match exactly.
-    NSArray *pTypes = [fn.paramTypes subarrayWithRange:NSMakeRange(0, userParams)];
+    NSMutableArray *pTypes = [[fn.paramTypes subarrayWithRange:NSMakeRange(0, userParams)] mutableCopy];
+    XTIRSymbol *hs = sArm64Aapcs64Abi ? nil : [ctx.module symbolForName:fn.name];
+    for (NSUInteger i = 0; i < userParams; i++)
+        if ([self arm64Half:hs at:i])
+            pTypes[i] = @"half";
     NSArray<NSNumber *> *pStk = [self arm64ArgStackOffsets:pTypes startGP:0 startFP:0 totalBytes:NULL];
     int gpIdx = 0, fpIdx = 0;
     for (NSUInteger i = 0; i < userParams; i++) {
@@ -10076,8 +10109,10 @@ static BOOL vecPhiInLive(XTIRFunction* fn, XTIRInsn* p, NSUInteger h, XTIRValueI
             if (soff >= 0) {   // arrived on the stack (above a possibly-big frame)
                 NSString *sc = [self fregName:16 forType:pty];
                 NSUInteger po = ctx.frameSize + (NSUInteger)soff;
-                [out appendFormat:@"    ldr %@, %@\n", sc,
-                 [self spMemForOff:po reg:sc ctx:ctx]];
+                // A packed half (arm64Half:at:) loads its two bytes, zero-extended.
+                NSString *ld = [pTypes[i] isKindOfClass:[NSString class]] ? @"h16" : sc;
+                [out appendFormat:@"    ldr %@, %@\n", ld,
+                 [self spMemForOff:po reg:ld ctx:ctx]];
                 [self storeReg:sc intoValue:(XTIRValueId)i ctx:ctx];
                 continue;
             }

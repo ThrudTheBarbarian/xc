@@ -5935,6 +5935,7 @@ void xccMain(void)
         cPathSetFuseMulAdd(true);
         if (d.fe().goalDefault() == (u32)2)
             cPathSetFpContract(String.withCString("off"));
+        cPathSetFe(d.fe());
         if (optOutline() || Platform.env(String.withCString("XC_PAR_PROPOSE")).equals(String.withCString("outline")))
             mod = CPath.lowerWith(cin, CPath.scratch(), cIncs, cDefs, d.fe());
         else

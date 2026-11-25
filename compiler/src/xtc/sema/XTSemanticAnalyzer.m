@@ -108,6 +108,7 @@ static int xtVersionGT(NSString* a, NSString* b)
         _diagnostics = diagnostics;
         _globalScope = [[XTScope alloc] initWithParent:nil];
         _allocator = @"bump";
+        _cPackCarrier = @"F32";
         _scopeStack = [NSMutableArray arrayWithObject:_globalScope];
         _registeredEnumNames = [NSMutableSet set];
         _classesByName = [NSMutableDictionary dictionary];
@@ -574,16 +575,16 @@ static int xtVersionGT(NSString* a, NSString* b)
     // casting a widened free function to it where one is genuinely meant.
     if (node.isCImport || (node.isVarArgs && node.body == nil))
         {
-        // C passes _Float16 and __bf16 in floating-point registers; xc passes
-        // a 16-bit float as its bit pattern in an integer register.
+        // A target whose C has no _Float16 or __bf16 (wasm32, m68k, xt6502)
+        // has no C convention to pass one by.
         BOOL packed = NO;
         for (XTType* rt in node.returnTypes)
             packed = packed || rt.isFloatPack;
         for (XTParamNode* pp in node.parameters)
             packed = packed || pp.paramType.isFloatPack;
-        if (packed)
-            [self.diagnostics emitError:[NSString stringWithFormat:@"a C-ABI function cannot take or return f16 or bf16 yet "
-                                                                   @"('%@'): C passes them in floating-point registers; "
+        if (packed && self.cPackCarrier.length == 0)
+            [self.diagnostics emitError:[NSString stringWithFormat:@"a C-ABI function cannot take or return f16 or bf16 on this target "
+                                                                   @"('%@'): its C has no _Float16 or __bf16; "
                                                                    @"declare the C side with float",
                                                                    node.funcName]
                                      at:node.location];

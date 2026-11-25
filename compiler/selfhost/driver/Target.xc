@@ -52,6 +52,10 @@ class TargetRow
     bool _itableAlways; // protocol calls always go through it (else: a library build or an import)
     bool _nativeVarargs; // a variadic's arguments ride the C ABI, not the pack buffer
     bool _threads;      // a par block has threads to run on (else it runs serially)
+    // How C passes a _Float16 or __bf16: "F32" (its bits in the low half of
+    // an FP register, as a float's are), "U32" (in a core register, arm9's
+    // soft-float convention), or "" where C has neither type.
+    String* _cPackCarrier;
     // A C program built for the row off its host (cTriple): the root of that
     // target's C headers, and the variable that overrides it; a C++ program's,
     // which links the target's libstdc++. 0 where the row has no cTriple.
@@ -106,6 +110,7 @@ class TargetRow
     bool itableAlways(void) { return _itableAlways; }
     bool nativeVarargs(void) { return _nativeVarargs; }
     bool threads(void) { return _threads; }
+    String* cPackCarrier(void) { return _cPackCarrier; }
     String* cRoot(void) { return _cRoot; }
     String* cRootVar(void) { return _cRootVar; }
     String* cxxRoot(void) { return _cxxRoot; }
@@ -159,6 +164,7 @@ class TargetRow
         _itableAlways = b.equals(String.withCString("arm9"));
         _nativeVarargs = b.equals(String.withCString("arm9")) || b.equals(String.withCString("arm64"));
         _threads = wide || b.equals(String.withCString("wasm32"));
+        _cPackCarrier = String.withCString(wide ? "F32" : b.equals(String.withCString("arm9")) ? "U32" : "");
         }
     static String* orNull(string s)
         {

@@ -409,6 +409,11 @@ class ClassInfo
     // as real arguments instead of packed into `__xtc_va_buf`. That is what
     // lets an xtc `printf` hand a REAL va_list on to libc.
     bool _nativeVarargs;
+    // How C passes a _Float16 or __bf16 (TargetRow.cPackCarrier): "F32", "U32",
+    // or "" where its C has neither type and a pack keeps xc's convention.
+    String* _cPackCarrier;
+    // The function being lowered returns a pack by C's convention.
+    bool _fnCPackRet;
     // Race-free static-init once (private:docs/Design/threading.md §9.5). -1 = decide
     // per module, 0/1 = forced by -f[no-]thread-safe-arc. Mirrors
     // XTIRLowering's sThreadSafeStatics; the two lowerings must agree
@@ -859,6 +864,8 @@ class ClassInfo
         _pendingCatLay = (IRLayout*)0;
         _pendingCatSym = (IRSymbol*)0;
         _nativeVarargs = false;
+        _cPackCarrier = String.withCString("");
+        _fnCPackRet = false;
         _tssMode = (i32)-1;
         _boundsCheck = false;
         _vtSite = (Node*)0;
@@ -970,6 +977,10 @@ class ClassInfo
     void setNativeVarargs(bool v)
         {
         _nativeVarargs = v;
+        }
+    void setCPackCarrier(String* v)
+        {
+        _cPackCarrier = v;
         }
     void setThreadSafeStatics(i32 mode)
         {
@@ -2415,6 +2426,78 @@ class ClassInfo
         args.add((Object*)constOf((i64)Types.packExp(pack), String.withCString("u32")));
         args.add((Object*)constOf((i64)Types.packMant(pack), String.withCString("u32")));
         return packCall(name, args, irRet);
+        }
+
+    // ── 16-bit floats across the C ABI ──────────────────────────────────
+    // C passes a _Float16 or __bf16 where it passes a float, its bits in the
+    // low half of the register (an FP register on arm64, x86-64 and win64, a
+    // core register under arm9's soft-float convention). A function C calls
+    // or is called by (a C import, a bodyless variadic, an `extern` function)
+    // takes and returns a pack as that carrier, an F32 or U32 holding the
+    // pattern zero-extended; inside xc the value stays a U16. The symbol marks
+    // each such parameter `half_<i>` and the result `half_ret`, which is what
+    // the arm64 back end reads to pack a stack-passed one in two bytes, as
+    // Darwin does. As the reference.
+    bool cPackFn(Node* d)
+        {
+        if (d == 0 || _cPackCarrier.byteLength() == 0 || isMultiReturn(d.op()))
+            return false;
+        if (d.hasFlag((u32)NF_CABI) || d.hasFlag((u32)NF_EXTERN))
+            return true;
+        return d.hasFlag((u32)NF_VARARGS) && fnBodyOf(d) == 0;
+        }
+
+    // The IR type a value of AST type t travels as to or from such a function.
+    String* cPackIrType(String* t)
+        {
+        if (Types.isPack(stripQual(t)))
+            return _cPackCarrier;
+        return irType(t);
+        }
+
+    // A pack's pattern as the carrier C reads it from.
+    IRValue* packToCarrier(IRValue* v)
+        {
+        Array* zo = new Array();
+        zo.add((Object*)IROperand.useVal(v));
+        IRValue* w = emit(String.withCString("ZExt"), String.withCString("U32"), zo);
+        if (!isName(_cPackCarrier, "F32"))
+            return w;
+        Array* bo = new Array();
+        bo.add((Object*)IROperand.useVal(w));
+        return emit(String.withCString("Bitcast"), String.withCString("F32"), bo);
+        }
+
+    // The pattern back out of a carrier: its low 16 bits.
+    IRValue* packFromCarrier(IRValue* v)
+        {
+        IRValue* w = v;
+        if (IRType.is(v.ty(), tyF32))
+            {
+            Array* bo = new Array();
+            bo.add((Object*)IROperand.useVal(v));
+            w = emit(String.withCString("Bitcast"), String.withCString("U32"), bo);
+            }
+        Array* to = new Array();
+        to.add((Object*)IROperand.useVal(w));
+        return emit(String.withCString("Trunc"), String.withCString("U16"), to);
+        }
+
+    // Marks the symbol of a function that passes packs by C's convention.
+    void markCPacks(IRSymbol* fsym, Node* d)
+        {
+        u32 pi = 0;
+        for (u32 i = 0; i < d.kidCount(); i++)
+            {
+            Node* p = d.kid(i);
+            if (p.kind() != (u16)nkParam)
+                continue;
+            if (Types.isPack(stripQual(p.op())))
+                fsym.setAttr(String.withFormat("half_%u", pi), true);
+            pi++;
+            }
+        if (Types.isPack(stripQual(firstReturn(d.op()))))
+            fsym.setAttr(String.withCString("half_ret"), true);
         }
 
     // A pack's value as an f32, which holds it exactly.
@@ -6597,16 +6680,25 @@ class ClassInfo
             site.append(String.withU32(n.col()));
             callSites().set((Hashable*)callee, (Object*)site);
             }
+        // A pack to a C-ABI callee goes as C's carrier (cPackFn).
+        bool cpk = cPackFn(decl);
         for (u32 i = (u32)0; i < cargs.count(); i = i + (u32)1)
-            call.add(IROperand.useVal((IRValue*)cargs.get(i)));
+            {
+            IRValue* ca = (IRValue*)cargs.get(i);
+            if (cpk && i < fixedParamCount(decl) && Types.isPack(stripQual(paramTypeAt(decl, i))))
+                ca = packToCarrier(ca);
+            call.add(IROperand.useVal(ca));
+            }
         call.add(IROperand.useVal(_mem));
         IRValue* nextMem = new IRValue(String.withCString("Mem"));
         call.setMemRes(nextMem);
         String* ret = firstReturn(decl.op());
         IRValue* res = (IRValue*)0;
+        bool cpkRet = cpk && Types.isPack(stripQual(ret));
         if (!isName(stripQual(ret), "void"))
             {
-            res = new IRValue(returnsByValue(decl, fnBodyOf(decl)) ? valueClassOf(ret).agg() : irType(ret));
+            res = new IRValue(cpkRet ? _cPackCarrier
+                              : returnsByValue(decl, fnBodyOf(decl)) ? valueClassOf(ret).agg() : irType(ret));
             call.setRes(res);
             }
         call.setCc(placedCallConv(decl));
@@ -6618,6 +6710,8 @@ class ClassInfo
         // the several return sites — one of which would eventually be missed.
         if (decl.hasFlag((u32)NF_THROWS))
             emitErrorCheckAfterCall();
+        if (cpkRet)
+            res = packFromCarrier(res);
         return res;
         }
 
@@ -9968,6 +10062,8 @@ class ClassInfo
                 // its operand type, so returning `n == 0` as a bool truncates.
                 if (!forwards)
                     v = coerceArg(v, n.kid((u32)0).ty(), _fnReturn);
+                if (_fnCPackRet)
+                    v = packToCarrier(v);
                 r.add(IROperand.useVal(v));
                 }
             else
@@ -17043,6 +17139,9 @@ class ClassInfo
         // line. The IR was self-consistent either way, which is why it only
         // showed up as a byte-identity failure.
         String* ret = irReturnOf(d);
+        bool cp = cPackFn(d);
+        if (cp && Types.isPack(stripQual(returnOf(d))))
+            ret = _cPackCarrier;
         String* s = String.withCString("(");
         u32 n = (u32)0;
         for (u32 i = (u32)0; i < d.kidCount(); i = i + (u32)1)
@@ -17052,7 +17151,7 @@ class ClassInfo
                 continue;
             if (n > (u32)0)
                 s.appendCString(", ");
-            s.append(irType(p.op()));
+            s.append(cp ? cPackIrType(p.op()) : irType(p.op()));
             n = n + (u32)1;
             }
         s.appendCString(") -> ");
@@ -17408,6 +17507,7 @@ class ClassInfo
         _fnReturn = ret;
         _fnRetAgg = (String*)0;
         _fnRetParts = (Array*)0;
+        _fnCPackRet = false;
         _fn.setRet(irType(_fnReturn));
         _locals = new Map();
         // Per FUNCTION, not per module. `T@ p = new T[N]` records N against the
@@ -17551,9 +17651,35 @@ class ClassInfo
             }
         else if (returnsByValue(d, body))
             _fn.setRet(valueClassOf(returnOf(d)).agg());
+        // An `extern` function C may call takes and returns its packs as C's
+        // carrier (cPackFn).
+        bool cpk = cPackFn(d);
+        if (cpk && Types.isPack(stripQual(returnOf(d))))
+            {
+            _fnCPackRet = true;
+            _fn.setRet(_cPackCarrier);
+            }
         bindParams(d);
         _mem = new IRValue(String.withCString("Mem"));
         _fn.addParam(_mem);
+        // Each carried pack arrives as C's carrier, and the U16 the body knows
+        // is made from it first, so the pre-scan below pins that value.
+        IRBlock* early = (IRBlock*)0;
+        if (cpk)
+            {
+            _blk = new IRBlock(String.withCString("bb_entry"));
+            _fn.addBlock(_blk);
+            early = _blk;
+            for (u32 i = 0; i < d.kidCount(); i++)
+                {
+                Node* p = d.kid(i);
+                if (p.kind() != (u16)nkParam || !Types.isPack(stripQual(p.op())))
+                    continue;
+                IRValue* cv = (IRValue*)_locals.get((Hashable*)p.name());
+                cv.setTy(_cPackCarrier);
+                _locals.set((Hashable*)p.name(), (Object*)packFromCarrier(cv));
+                }
+            }
 
         // Which locals get frame slots is settled before any block is lowered —
         // it changes how every mention of those names lowers, and the slots'
@@ -17562,8 +17688,11 @@ class ClassInfo
         if (_failed)
             return;
 
-        _blk = new IRBlock(String.withCString("bb_entry"));
-        _fn.addBlock(_blk);
+        if (early == (IRBlock*)0)
+            {
+            _blk = new IRBlock(String.withCString("bb_entry"));
+            _fn.addBlock(_blk);
+            }
         pushArcScope();
         emitPinnedParamCopies();
         // Deferred global initialisers: main's prologue is the earliest point

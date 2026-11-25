@@ -1628,8 +1628,11 @@ static int xaEncodeSME(NSString *mn, NSArray<NSString *> *ops, uint32_t *out, NS
     if (([mn isEqualToString:@"ldr"]||[mn isEqualToString:@"str"]) && ops.count>=2) {
         int ft,fz; if (parseFReg(ops[0],&ft,&fz)) {
             BOOL isL=[mn isEqualToString:@"ldr"]; int fscale=fz; // s->2, d->3, q->4
+            // b and h (fz 0, 1) carry their size in bits 31:30 as s and d do.
             uint32_t fbase = (fz==4)?(isL?0x3DC00000u:0x3D800000u)  // 128-bit q (NEON)
-                           : (fz==3)?(isL?0xFD400000u:0xFD000000u):(isL?0xBD400000u:0xBD000000u);
+                           : (fz==3)?(isL?0xFD400000u:0xFD000000u)
+                           : (fz==2)?(isL?0xBD400000u:0xBD000000u)
+                           : ((uint32_t)fz<<30)|(isL?0x3D400000u:0x3D000000u);
             NSString *fmem=ops[1];
             NSString *fin=([fmem hasPrefix:@"["]&&[fmem hasSuffix:@"]"])?[fmem substringWithRange:NSMakeRange(1,fmem.length-2)]:fmem;
             if ([fin rangeOfString:@"@PAGEOFF"].location!=NSNotFound) {   // [Xn, sym@PAGEOFF]
@@ -1683,7 +1686,7 @@ static int xaEncodeSME(NSString *mn, NSArray<NSString *> *ops, uint32_t *out, NS
                 return fbase | ((uint32_t)(foff>>fscale)<<10) | ((uint32_t)fbn<<5) | (uint32_t)ft;
             if (foff < -256 || foff > 255) { if(error)*error=asmErr(@"load/store offset out of range (the unscaled and indexed forms reach -256..255)"); return 0; }
             uint32_t imm9=(uint32_t)(foff&0x1FF);
-            uint32_t unscBase=(fbase&0x3FFFFFFFu)|((fz==3)?0xC0000000u:0x80000000u);
+            uint32_t unscBase=(fbase&0x3FFFFFFFu)|((fz==3)?0xC0000000u:(fz<2)?((uint32_t)fz<<30):0x80000000u);
             uint32_t idx=(fmode==1)?0xC00u:(fmode==2)?0x400u:0x000u;
             return (unscBase & ~0x00000C00u) | (imm9<<12) | idx | ((uint32_t)fbn<<5) | (uint32_t)ft;
         }

@@ -84,6 +84,10 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, readonly) BOOL itableAlways;       // protocol calls always go through it
 @property(nonatomic, readonly) BOOL nativeVarargs;      // a variadic's arguments ride the C ABI
 @property(nonatomic, readonly) BOOL threads;            // a par block has threads to run on
+// How C passes a _Float16 or __bf16: "F32" (its bits in the low half of an FP
+// register, as a float's are), "U32" (in a core register, arm9's soft-float
+// convention), or "" where C has neither type.
+@property(nonatomic, readonly, copy) NSString* cPackCarrier;
 
 // Every row, in the order both compilers list them.
 + (NSArray<XTTarget*>*)rows;

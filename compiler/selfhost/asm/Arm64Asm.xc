@@ -3028,9 +3028,11 @@ class Arm64Asm
     {
         bool isL = mc == a64Ldr;
         u32 fscale = t.sz();
+        // b and h (sz 0, 1) carry their size in bits 31:30 as s and d do.
         u32 fbase = t.sz() == (u32)4 ? (isL ? (u32)$3DC00000 : (u32)$3D800000)
                   : t.sz() == (u32)3 ? (isL ? (u32)$FD400000 : (u32)$FD000000)
-                                     : (isL ? (u32)$BD400000 : (u32)$BD000000);
+                  : t.sz() == (u32)2 ? (isL ? (u32)$BD400000 : (u32)$BD000000)
+                                     : (t.sz() << (u32)30) | (isL ? (u32)$3D400000 : (u32)$3D000000);
         String* fmem = opAt(ops, (u32)1);
         String* fin = (fmem.hasPrefix(String.withCString("[")) && fmem.hasSuffix(String.withCString("]")))
                     ? fmem.substringBytes((u32)1, fmem.byteLength() - (u32)2) : fmem;
@@ -3089,7 +3091,7 @@ class Arm64Asm
         }
         u32 imm9 = (u32)_memImm & (u32)$1FF;
         u32 unscBase = (fbase & (u32)$3FFFFFFF)
-                     | (t.sz() == (u32)3 ? (u32)$C0000000 : (u32)$80000000);
+                     | (t.sz() == (u32)3 ? (u32)$C0000000 : t.sz() < (u32)2 ? (t.sz() << (u32)30) : (u32)$80000000);
         u32 idx = _memMode == (u32)1 ? (u32)$C00 : _memMode == (u32)2 ? (u32)$400 : (u32)0;
         return (unscBase & ~(u32)$00000C00) | (imm9 << (u32)12) | idx
              | (_memRn << (u32)5) | t.num();

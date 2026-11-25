@@ -1620,6 +1620,10 @@ class DwCur
         u32 e = die.encoding();
         if (e == (u32)DW_ATE_boolean)
             return cache(die, String.withCString("bool"));
+        // A 2-byte float is C's _Float16 (f16) or __bf16 (bf16), told apart
+        // by name, as the reference.
+        if (e == (u32)DW_ATE_float && sz == (u32)2)
+            return cache(die, String.withCString(die.name() != (String*)0 && die.name().contains(String.withCString("bf16")) ? "bf16" : "f16"));
         if (e == (u32)DW_ATE_float)
             return cache(die, String.withCString(sz >= (u32)8 ? "double" : "float"));
         if (e == (u32)DW_ATE_signed || e == (u32)DW_ATE_signed_char)
