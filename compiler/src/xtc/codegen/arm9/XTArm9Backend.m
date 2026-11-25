@@ -1300,6 +1300,27 @@ static const NSUInteger kArm9VaForwardWords = 16;
 // arguments already occupy. Slots 0-3 are r0-r3, slots >= 4 the outgoing stack
 // at [sp,#(slot-4)*4]. Slots k..3 are disjoint from the 0..k-1 that marshalArgs
 // just filled, so this runs after it and clobbers nothing.
+// A forwarder's call through a method table relays its tail as a direct
+// call to a variadic does (#661). The target is not known at the call, but a
+// vaforward function reads no varargs of its own, so the relay is the tail for
+// a variadic target and only fills slots past the arguments of any other.
++ (void)emitDispatchRelayTypes:(NSArray<XTIRType*>*)argTypes
+                          sret:(BOOL)sret
+                     vaListOff:(NSUInteger)vaListOff
+                           out:(NSMutableString*)out
+    {
+    NSArray<NSArray<NSNumber*>*>* alocs = [self classifyArgTypes:argTypes
+                                                            sret:sret
+                                                        varargAt:NSNotFound
+                                                   outStackBytes:NULL];
+    NSUInteger k = sret ? 1 : 0;
+    for (NSArray<NSNumber*>* L in alocs)
+        k += L[1].unsignedIntegerValue;
+    if (k & 1)
+        k++; // the tail's base is 8-aligned
+    [self emitVaForwardRelayK:k vaListOff:vaListOff out:out];
+    }
+
 + (void)emitVaForwardRelayK:(NSUInteger)k
                   vaListOff:(NSUInteger)vaListOff
                         out:(NSMutableString*)out
@@ -2207,6 +2228,8 @@ static const NSUInteger kArm9VaForwardWords = 16;
             }
         BOOL sret = res && ![self isMemValue:res] && [self returnsViaSret:res.type];
         [self marshalArgs:args types:argTypes sret:sret result:res slot:slot out:out];
+        if ([mod symbolForName:fn.name].attributes[@"vaforward"].boolValue)
+            [self emitDispatchRelayTypes:argTypes sret:sret vaListOff:vaListOff out:out];
         // Receiver landed in r0 (or r1 when sret took r0). Load vtable → fn ptr.
         NSString* recvReg = sret ? @"r1" : @"r0";
         [out appendFormat:@"\tldr\tr12, [%@]\n", recvReg];
@@ -2248,6 +2271,8 @@ static const NSUInteger kArm9VaForwardWords = 16;
             }
         BOOL sret = res && ![self isMemValue:res] && [self returnsViaSret:res.type];
         [self marshalArgs:args types:argTypes sret:sret result:res slot:slot out:out];
+        if ([mod symbolForName:fn.name].attributes[@"vaforward"].boolValue)
+            [self emitDispatchRelayTypes:argTypes sret:sret vaListOff:vaListOff out:out];
         NSString* recvReg = sret ? @"r1" : @"r0";
         [self emitItableLookup:recvReg protoId:(uint32_t)ops[1].intValue out:out];
         [self emitFarLoad:@"r12" base:@"r12" off:(NSUInteger)(ops[2].intValue * 4) out:out];
@@ -3639,7 +3664,9 @@ typedef NS_ENUM(NSUInteger, XTArm9PhiKind) {
             // A forwarding call also writes the relayed tail into the outgoing
             // area, past whatever the explicit args used — reserve for it or the
             // relay lands on this function's own locals.
-            if (vaForward && in.opcode == XTIROpCall)
+            // A dispatch from a forwarder relays too (#661).
+            if (vaForward && (in.opcode == XTIROpCall || in.opcode == XTIROpVTblDispatch ||
+                              in.opcode == XTIROpProtoDispatch))
                 {
                 NSUInteger k = cSret ? 1 : 0;
                 for (NSArray<NSNumber*>* L in clocs)
