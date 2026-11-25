@@ -2269,6 +2269,13 @@ class Parser
                     Node* sm = parseMember();
                     u32 to = _pos;
                     if (sm == (Node*)0 || sm.kind() != (u16)nkMethodDecl) continue;
+                    // An operator requirement is met by a conforming object's method.
+                    if (sm.opPat() != (String*)0 || sm.opPrec() != (String*)0) {
+                        _errorAtTok(String.withFormat("a protocol's static member cannot be an operator; make '%s' an instance method or drop ':operator(...)'",
+                                                      sm.name().cString()), (Token*)_tokens.get(from));
+                        while (_pendingMembers.count() > (u32)0) _pendingMembers.removeAt((u32)0);
+                        continue;
+                    }
                     protocolStatic(nameTok.value(), sm, from, to);
                     while (_pendingMembers.count() > (u32)0) _pendingMembers.removeAt((u32)0);
                     continue;
@@ -3291,12 +3298,12 @@ class Parser
         }
     }
 
-    // The operators of their own shape that an imported class defines, for
-    // the parse to read. The driver calls it before parse() for each class
-    // it reconstructed from an interface.
+    // The operators of their own shape that an imported class or protocol
+    // defines, for the parse to read. The driver calls it before parse() for
+    // each class and protocol it reconstructed from an interface.
     void addImportedOperatorShapes(Node* cls)
     {
-        if (cls == 0 || cls.kind() != (u16)nkClassDecl) return;
+        if (cls == 0 || (cls.kind() != (u16)nkClassDecl && cls.kind() != (u16)nkProtocolDecl)) return;
         for (u32 i = 0; i < cls.kidCount(); i++) : serial {
             Node* m = cls.kid(i);
             if (m.kind() == (u16)nkMethodDecl && Node.isUserShape(m.opShape()))

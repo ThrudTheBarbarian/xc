@@ -10,6 +10,8 @@
 @class XTBinaryExprNode;
 @class XTUnaryExprNode;
 @class XTAssignExprNode;
+@class XTMethodDeclNode;
+@class XTClassDeclNode;
 
 NS_ASSUME_NONNULL_BEGIN
 
@@ -19,10 +21,22 @@ NS_ASSUME_NONNULL_BEGIN
 |* operand name is `self` or a parameter, once; every parameter appears; an
 |* instance method's pattern uses `self` and a static one's does not; the
 |* method returns one value; a static operator has an operand of its class.
-|* Refuses the annotation on a free function or a protocol method, and
-|* reports a pattern the parser could not take.
+|* Refuses the annotation on a free function and on an `optional` protocol
+|* method, and reports a pattern the parser could not take.
 \****************************************************************************/
 - (void)checkOperatorMethods:(XTProgramNode*)program;
+/****************************************************************************\
+|* A protocol requirement that is an operator (`req`), implemented by `impl`
+|* (found in `implCls`) for `cls`, which conforms to protocol `pname`: the
+|* implementing method must be the same operator, the same shape with the
+|* operands in the same roles. An override is the operator of the method it
+|* overrides. Reports what to write when it is not.
+\****************************************************************************/
+- (void)checkOperatorRequirement:(XTMethodDeclNode*)req
+                        protocol:(NSString*)pname
+                            impl:(XTMethodDeclNode*)impl
+                              in:(XTClassDeclNode*)implCls
+                           class:(XTClassDeclNode*)cls;
 /****************************************************************************\
 |* Resolve `a OP b` against the operands' operator methods. Returns NO when
 |* neither operand's class defines OP, so the built-in meaning applies; YES

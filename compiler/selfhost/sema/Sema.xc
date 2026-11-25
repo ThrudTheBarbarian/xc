@@ -1209,11 +1209,18 @@ class Sema
                     Node* req = proto.kid(mi);
                     if (req.kind() != (u16)nkMethodDecl || req.hasFlag((u32)NF_OPTIONAL))
                         continue;
-                    bool found = false;
-                    for (Node* c = cls; c != 0 && !found; c = parentOf(c))
-                        found = Vtable.matching(c, req) != 0;
-                    if (found)
+                    Node* impl = (Node*)0;
+                    Node* implCls = (Node*)0;
+                    for (Node* c = cls; c != 0 && impl == 0; c = parentOf(c))
+                        {
+                        impl = Vtable.matching(c, req);
+                        implCls = c;
+                        }
+                    if (impl != 0)
+                        {
+                        checkOpRequirement(req, pn, impl, implCls, cls);
                         continue;
+                        }
                     String* e = String.withCString("Class '");
                     e.append(cls.name());
                     e.appendCString("' claims conformance to protocol '");
@@ -4120,6 +4127,11 @@ class Sema
     //   * The chosen method is called as an ordinary method call, hung on the
     //     operator node past its operands (NF_OPCALL), and lowering lowers it
     //     in the operator's place.
+    //   * A protocol method may be an operator too. A value typed as the
+    //     protocol takes the protocol's operators as a class instance takes
+    //     its class's (and gives up the built-in meaning of each), the call
+    //     dispatching through the protocol; a class that conforms must define
+    //     the same operator (checkOpRequirement).
 
     // The class an operand belongs to: a pointer to a class instance, or an
     // instance by value. 0 for anything else, a protocol-typed pointer too.
@@ -4139,10 +4151,39 @@ class Sema
         return (Node*)_classes.get((Hashable*)c);
         }
 
+    // Where an operand's operators are found: its class (opClassOf), or for
+    // a pointer typed as a protocol, the protocol, whose requirements may be
+    // operators. 0 for anything else.
+    Node* opOwnerOf(String* t)
+        {
+        Node* cls = opClassOf(t);
+        if (cls != 0 || t == 0)
+            return cls;
+        String* c = Vtable.canonical(t);
+        u32 len = c.byteLength();
+        if (len > (u32)1 && c.byteAt(len - (u32)1) == (u8)'*')
+            {
+            String* b = c.substringBytes((u32)0, len - (u32)1);
+            if (b.byteAt(b.byteLength() - (u32)1) == (u8)'*')
+                return (Node*)0;
+            return (Node*)_protocols.get((Hashable*)b);
+            }
+        return (Node*)0;
+        }
+
+    // The owner an owner's operators are inherited from: a class's parent,
+    // nothing for a protocol.
+    Node* opParentOf(Node* c)
+        {
+        if (c.kind() == (u16)nkProtocolDecl)
+            return (Node*)0;
+        return parentOf(c);
+        }
+
     // Does the class or an ancestor define an operator of this shape?
     bool opClassDefines(Node* cls, String* shape)
         {
-        for (Node* c = cls; c != 0; c = parentOf(c))
+        for (Node* c = cls; c != 0; c = opParentOf(c))
             for (u32 i = (u32)0; i < c.kidCount(); i = i + (u32)1)
                 {
                 Node* m = c.kid(i);
@@ -4155,7 +4196,7 @@ class Sema
     // Does the class or an ancestor define any operator?
     bool opClassHasOperators(Node* cls)
         {
-        for (Node* c = cls; c != 0; c = parentOf(c))
+        for (Node* c = cls; c != 0; c = opParentOf(c))
             for (u32 i = 0; i < c.kidCount(); i++)
                 {
                 Node* m = c.kid(i);
@@ -4169,7 +4210,7 @@ class Sema
     // that does gives up the built-in index for its pointers.
     bool opClassDefinesIndex(Node* cls)
         {
-        for (Node* c = cls; c != 0; c = parentOf(c))
+        for (Node* c = cls; c != 0; c = opParentOf(c))
             for (u32 i = 0; i < c.kidCount(); i++)
                 {
                 Node* m = c.kid(i);
@@ -4305,8 +4346,8 @@ class Sema
         }
 
     // Check every `:operator(pattern)` in the program against its method,
-    // refuse it on a free function or a protocol method, and report a pattern
-    // the parser could not take.
+    // refuse it on a free function and on an `optional` protocol method, and
+    // report a pattern the parser could not take.
     // A `:precedence` spec as written: "above *, right" for ">*,right".
     static String* precedenceSpelling(String* spec)
         {
@@ -4358,108 +4399,276 @@ class Sema
                 if (d.opPat() != 0 || d.opPrec() != 0)
                     _errorAt(String.withFormat("'%s' is not a method: an operator is defined by a method of one of its operands' classes", d.name().cString()), d);
                 }
-            else if (k == (u16)nkProtocolDecl)
-                {
-                for (u32 j = (u32)0; j < d.kidCount(); j = j + (u32)1)
-                    {
-                    Node* m = d.kid(j);
-                    if (m.kind() == (u16)nkMethodDecl && (m.opPat() != 0 || m.opPrec() != 0))
-                        {
-                        _errorAt(String.withFormat("protocol method '%s' cannot be an operator yet", m.name().cString()), m);
-                        m.setOpPat((String*)0);
-                        }
-                    }
-                }
-            else if (k == (u16)nkClassDecl)
+            else if (k == (u16)nkProtocolDecl || k == (u16)nkClassDecl)
                 {
                 for (u32 j = (u32)0; j < d.kidCount(); j = j + (u32)1)
                     {
                     Node* m = d.kid(j);
                     if (m.kind() != (u16)nkMethodDecl || (m.opPat() == 0 && m.opPrec() == 0))
                         continue;
-                    if (m.opFault() != 0)
-                        {
-                        _errorAt(m.opFault(), m);
-                        continue;
-                        }
-                    if (m.opShape() == 0)
-                        {
-                        _errorAt(opPrecedenceFault(m), m);
-                        continue;
-                        }
-                    String* fault = opPatternFault(m, d);
-                    if (fault != 0)
-                        {
-                        _errorAt(fault, m);
-                        m.setOpPat((String*)0);
-                        continue;
-                        }
-                    _anyOps = true;
-                    String* pf = opPrecedenceFault(m);
-                    if (pf != 0)
-                        {
-                        _errorAt(pf, m);
-                        continue;
-                        }
-                    // One meaning for a bracket in a class: `|M|` is the
-                    // determinant or the norm, not both.
-                    if (Node.shapeIsBracket(m.opShape()))
-                        for (u32 q = (u32)0; q < j; q = q + (u32)1)
-                            {
-                            Node* o = d.kid(q);
-                            if (o.kind() == (u16)nkMethodDecl && o.opShape() != 0 && o.opShape().equals(m.opShape())
-                                && o.hasFlag((u32)NF_STATIC) == m.hasFlag((u32)NF_STATIC) && Vtable.sameParams(o, m))
-                                {
-                                String* msg = String.withCString("'");
-                                msg.append(d.name());
-                                msg.appendCString(".");
-                                msg.append(m.name());
-                                msg.appendCString("' gives ");
-                                msg.append(Node.shapeSpelling(m.opShape()));
-                                msg.appendCString(" a second meaning: '");
-                                msg.append(d.name());
-                                msg.appendCString(".");
-                                msg.append(o.name());
-                                msg.appendCString("' defines it already; remove ':operator' from one of them and call it by name");
-                                _errorAt(msg, m);
-                                break;
-                                }
-                            }
-                    if (m.opPrec() == 0)
-                        continue;
-                    // One operator, one precedence: the parse reads it before
-                    // any type is known.
-                    Array* first = (Array*)precOf.get((Hashable*)m.opShape());
-                    if (first == 0)
-                        {
-                        Array* rec = new Array();
-                        rec.add((Object*)m.opPrec());
-                        rec.add((Object*)d.name());
-                        rec.add((Object*)m.name());
-                        precOf.set((Hashable*)m.opShape(), (Object*)rec);
-                        }
-                    else if (!((String*)first.get(0)).equals(m.opPrec()))
-                        {
-                        String* msg = String.withCString("operator '");
-                        msg.append(Node.shapeCore(m.opShape()));
-                        msg.appendCString("' has the precedence '");
-                        msg.append(Sema.precedenceSpelling((String*)first.get(0)));
-                        msg.appendCString("' in '");
-                        msg.append((String*)first.get(1));
-                        msg.appendCString(".");
-                        msg.append((String*)first.get(2));
-                        msg.appendCString("' and '");
-                        msg.append(Sema.precedenceSpelling(m.opPrec()));
-                        msg.appendCString("' in '");
-                        msg.append(d.name());
-                        msg.appendCString(".");
-                        msg.append(m.name());
-                        msg.appendCString("': an operator has one precedence; give both the same ':precedence', or leave it off one of them");
-                        _errorAt(msg, m);
-                        }
+                    checkOperatorMethod(m, d, j, precOf);
                     }
                 }
             }
+        }
+
+    // One method of a class or protocol (`d`, whose kid `j` it is): its
+    // pattern, its `:precedence`, one meaning per bracket, and one precedence
+    // per shape across the program (`precOf`: each shape's first
+    // `:precedence`, [spec, owner, method]). A protocol's operator
+    // requirement cannot be `optional`.
+    void checkOperatorMethod(Node* m, Node* d, u32 j, Map* precOf)
+        {
+        if (m.opFault() != 0)
+            {
+            _errorAt(m.opFault(), m);
+            return;
+            }
+        if (m.opShape() == 0)
+            {
+            _errorAt(opPrecedenceFault(m), m);
+            return;
+            }
+        if (m.hasFlag((u32)NF_OPTIONAL) && d.kind() == (u16)nkProtocolDecl)
+            {
+            _errorAt(String.withFormat("an operator requirement cannot be optional; make '%s' a required method or drop ':operator(...)'",
+                                       m.name().cString()), m);
+            m.setOpPat((String*)0);
+            return;
+            }
+        String* fault = opPatternFault(m, d);
+        if (fault != 0)
+            {
+            _errorAt(fault, m);
+            m.setOpPat((String*)0);
+            return;
+            }
+        _anyOps = true;
+        String* pf = opPrecedenceFault(m);
+        if (pf != 0)
+            {
+            _errorAt(pf, m);
+            return;
+            }
+        // One meaning for a bracket in a class: `|M|` is the determinant or
+        // the norm, not both.
+        if (Node.shapeIsBracket(m.opShape()))
+            for (u32 q = (u32)0; q < j; q = q + (u32)1)
+                {
+                Node* o = d.kid(q);
+                if (o.kind() == (u16)nkMethodDecl && o.opShape() != 0 && o.opShape().equals(m.opShape())
+                    && o.hasFlag((u32)NF_STATIC) == m.hasFlag((u32)NF_STATIC) && Vtable.sameParams(o, m))
+                    {
+                    String* msg = String.withCString("'");
+                    msg.append(d.name());
+                    msg.appendCString(".");
+                    msg.append(m.name());
+                    msg.appendCString("' gives ");
+                    msg.append(Node.shapeSpelling(m.opShape()));
+                    msg.appendCString(" a second meaning: '");
+                    msg.append(d.name());
+                    msg.appendCString(".");
+                    msg.append(o.name());
+                    msg.appendCString("' defines it already; remove ':operator' from one of them and call it by name");
+                    _errorAt(msg, m);
+                    break;
+                    }
+                }
+        if (m.opPrec() == 0)
+            return;
+        // One operator, one precedence: the parse reads it before any type is
+        // known.
+        Array* first = (Array*)precOf.get((Hashable*)m.opShape());
+        if (first == 0)
+            {
+            Array* rec = new Array();
+            rec.add((Object*)m.opPrec());
+            rec.add((Object*)d.name());
+            rec.add((Object*)m.name());
+            precOf.set((Hashable*)m.opShape(), (Object*)rec);
+            }
+        else if (!((String*)first.get(0)).equals(m.opPrec()))
+            {
+            String* msg = String.withCString("operator '");
+            msg.append(Node.shapeCore(m.opShape()));
+            msg.appendCString("' has the precedence '");
+            msg.append(Sema.precedenceSpelling((String*)first.get(0)));
+            msg.appendCString("' in '");
+            msg.append((String*)first.get(1));
+            msg.appendCString(".");
+            msg.append((String*)first.get(2));
+            msg.appendCString("' and '");
+            msg.append(Sema.precedenceSpelling(m.opPrec()));
+            msg.appendCString("' in '");
+            msg.append(d.name());
+            msg.appendCString(".");
+            msg.append(m.name());
+            msg.appendCString("': an operator has one precedence; give both the same ':precedence', or leave it off one of them");
+            _errorAt(msg, m);
+            }
+        }
+
+    // ── OPERATOR REQUIREMENTS ─────────────────────────────────────────
+    // A protocol method may be an operator; a class that conforms must define
+    // its method as the same operator. Mirrors the reference's
+    // checkOperatorRequirement:.
+
+    // A pattern as it is written, from its shape and operand names:
+    // `self + o`, `-self`, `|self|`, `self[r, c] = x`, `self += o`.
+    String* patternText(String* shape, Array* names)
+        {
+        if (!opIsIndex(shape) && Node.shapeIsInfix(shape))
+            {
+            String* out = String.withString(Sema.patternName(names, (u32)0));
+            out.appendCString(" ");
+            out.append(Node.shapeCore(shape));
+            out.appendCString(" ");
+            out.append(Sema.patternName(names, (u32)1));
+            return out;
+            }
+        String* out = String.withCString("");
+        u32 next = 0;
+        for (u32 i = 0; i < shape.byteLength(); i++) : serial
+            {
+            u8 c = shape.byteAt(i);
+            if (c == (u8)'_')
+                {
+                out.append(Sema.patternName(names, next));
+                next++;
+                }
+            else if (c == (u8)',')
+                out.appendCString(", ");
+            else if (c == (u8)'=' && i > 0 && shape.byteAt(i - 1) == (u8)']')
+                out.appendCString(" = ");
+            else
+                out.appendByte(c);
+            }
+        return out;
+        }
+
+    static String* patternName(Array* names, u32 i)
+        {
+        return i < names.count() ? (String*)names.get(i) : String.withCString("_");
+        }
+
+    // Each operand of a pattern by its role: `self`, or the parameter's
+    // position (`#0`).
+    static Array* patternRoles(Node* m)
+        {
+        Array* roles = new Array();
+        Array* names = m.opNames();
+        for (u32 i = 0; i < names.count(); i++) : serial
+            {
+            String* op = (String*)names.get(i);
+            String* role = op;
+            u32 at = 0;
+            for (u32 j = 0; j < m.kidCount(); j++) : serial
+                {
+                Node* p = m.kid(j);
+                if (p.kind() != (u16)nkParam)
+                    continue;
+                if (p.name() != 0 && p.name().equals(op))
+                    {
+                    role = String.withCString("#");
+                    role.append(String.withI64((i64)at));
+                    }
+                at++;
+                }
+            roles.add((Object*)role);
+            }
+        return roles;
+        }
+
+    static bool sameRoles(Array* a, Array* b)
+        {
+        if (a.count() != b.count())
+            return false;
+        for (u32 i = 0; i < a.count(); i++)
+            if (!((String*)a.get(i)).equals((String*)b.get(i)))
+                return false;
+        return true;
+        }
+
+    // The pattern of `req` written with the parameter names of `m`.
+    String* patternTextFor(Node* req, Node* m)
+        {
+        Array* params = new Array();
+        for (u32 j = 0; j < m.kidCount(); j++) : serial
+            if (m.kid(j).kind() == (u16)nkParam)
+                params.add((Object*)m.kid(j).name());
+        Array* roles = Sema.patternRoles(req);
+        Array* names = new Array();
+        for (u32 i = 0; i < roles.count(); i++) : serial
+            {
+            String* role = (String*)roles.get(i);
+            String* name = role;
+            if (role.byteLength() > 1 && role.byteAt(0) == (u8)'#')
+                {
+                u32 at = 0;
+                for (u32 k = 1; k < role.byteLength(); k++) : serial
+                    at = at * 10 + (u32)(role.byteAt(k) - (u8)'0');
+                if (at < params.count())
+                    name = (String*)params.get(at);
+                }
+            names.add((Object*)name);
+            }
+        return patternText(req.opShape(), names);
+        }
+
+    // A protocol requirement that is an operator (`req`), implemented by
+    // `impl` (found in `implCls`) for `cls`, which conforms to protocol `pn`:
+    // the implementing method must be the same operator, the same shape with
+    // the operands in the same roles. An override is the operator of the
+    // method it overrides. Reports what to write when it is not.
+    void checkOpRequirement(Node* req, String* pn, Node* impl, Node* implCls, Node* cls)
+        {
+        if (req.opShape() == 0)
+            return;
+        Node* eff = impl;
+        Node* effCls = implCls;
+        for (Node* c = parentOf(implCls); c != 0 && eff.opShape() == 0; c = parentOf(c))
+            {
+            Node* o = Vtable.matching(c, req);
+            if (o != 0 && o.opShape() != 0)
+                {
+                eff = o;
+                effCls = c;
+                }
+            }
+        if (eff.opShape() != 0 && eff.opShape().equals(req.opShape())
+            && Sema.sameRoles(Sema.patternRoles(eff), Sema.patternRoles(req)))
+            return;
+        String* want = patternText(req.opShape(), req.opNames());
+        String* msg = String.withCString("class '");
+        msg.append(cls.name());
+        msg.appendCString("' conforms to '");
+        msg.append(pn);
+        msg.appendCString("', which requires '");
+        msg.append(req.name());
+        msg.appendCString("' to be the operator '");
+        msg.append(want);
+        msg.appendCString("'; ");
+        if (eff.opShape() == 0)
+            {
+            msg.appendCString("add ':operator(");
+            msg.append(patternTextFor(req, impl));
+            msg.appendCString(")' to ");
+            msg.append(implCls.name());
+            msg.appendCString("'s ");
+            msg.append(impl.name());
+            }
+        else
+            {
+            msg.append(effCls.name());
+            msg.appendCString("'s ");
+            msg.append(eff.name());
+            msg.appendCString(" is the operator '");
+            msg.append(patternText(eff.opShape(), eff.opNames()));
+            msg.appendCString("': change it to ':operator(");
+            msg.append(patternTextFor(req, eff));
+            msg.appendCString(")'");
+            }
+        _errorAt(msg, cls);
         }
 
     // Add the operator methods of `cls` and its ancestors — the instance ones
@@ -4469,7 +4678,7 @@ class Sema
     void addOpCandidates(Node* cls, String* shape, bool wantStatic, Array* cands, Array* owners)
         {
         u32 first = cands.count();
-        for (Node* c = cls; c != 0; c = parentOf(c))
+        for (Node* c = cls; c != 0; c = opParentOf(c))
             {
             u32 nearer = cands.count();
             for (u32 i = (u32)0; i < c.kidCount(); i = i + (u32)1)
@@ -4484,7 +4693,7 @@ class Sema
                 // would.
                 Node* use = m;
                 Node* useOwner = c;
-                for (Node* nc = cls; !wantStatic && nc != 0 && nc != c && use == m; nc = parentOf(nc))
+                for (Node* nc = cls; !wantStatic && nc != 0 && nc != c && use == m; nc = opParentOf(nc))
                     for (u32 q = (u32)0; q < nc.kidCount() && use == m; q = q + (u32)1)
                         {
                         Node* o = nc.kid(q);
@@ -4641,10 +4850,10 @@ class Sema
     // left operand's, else the right's. 0 when neither does.
     Node* opOwnerOfShape(String* shape, Array* ops)
         {
-        Node* lc = opClassOf(((Node*)ops.get(0)).ty());
+        Node* lc = opOwnerOf(((Node*)ops.get(0)).ty());
         if (lc != 0 && opClassDefines(lc, shape))
             return lc;
-        Node* rc = ops.count() > 1 ? opClassOf(((Node*)ops.get(1)).ty()) : (Node*)0;
+        Node* rc = ops.count() > 1 ? opOwnerOf(((Node*)ops.get(1)).ty()) : (Node*)0;
         if (rc != 0 && opClassDefines(rc, shape))
             return rc;
         return (Node*)0;
@@ -4936,8 +5145,8 @@ class Sema
             ops.add((Object*)n.kid((u32)1));
         if (user && userOperatorUndefined(n, shape, op, ops))
             return true;
-        Node* lc = opClassOf(n.kid((u32)0).ty());
-        Node* rc = binary ? opClassOf(n.kid((u32)1).ty()) : (Node*)0;
+        Node* lc = opOwnerOf(n.kid((u32)0).ty());
+        Node* rc = binary ? opOwnerOf(n.kid((u32)1).ty()) : (Node*)0;
         bool optL = lc != 0 && opClassDefines(lc, shape);
         bool optR = rc != 0 && opClassDefines(rc, shape);
         if (!optL && !optR)
@@ -5007,7 +5216,7 @@ class Sema
         {
         if (!_anyOps || n == 0 || (n.kind() != (u16)nkSubscript && n.kind() != (u16)nkSlice) || n.kidCount() == 0)
             return (Node*)0;
-        Node* cls = opClassOf(n.kid(0).ty());
+        Node* cls = opOwnerOf(n.kid(0).ty());
         if (cls != 0 && opClassDefinesIndex(cls))
             return cls;
         return (Node*)0;
@@ -5175,7 +5384,7 @@ class Sema
         if (indexOperatorClassOf(lhs) != 0)
             return false;
         String* propT = opPropertyType(lhs);
-        Node* lc = opClassOf(propT != 0 ? propT : lhs.ty());
+        Node* lc = opOwnerOf(propT != 0 ? propT : lhs.ty());
         if (lc == 0)
             return false;
         String* cShape = String.withCString("_");
@@ -5241,7 +5450,7 @@ class Sema
         Node* oc = Node.opCallOf(recv);
         if (oc != 0 && oc.kind() == (u16)nkMethodCall)
             {
-            Node* oo = oc.kidCount() > 0 ? opClassOf(oc.kid(0).ty()) : (Node*)0;
+            Node* oo = oc.kidCount() > 0 ? opOwnerOf(oc.kid(0).ty()) : (Node*)0;
             if (oo != 0)
                 owner = oo.name();
             if (k == (u16)nkSubscript)
@@ -5253,7 +5462,7 @@ class Sema
             }
         else if (k == (u16)nkMethodCall)
             {
-            Node* ro = recv.kidCount() > 0 ? opClassOf(recv.kid(0).ty()) : (Node*)0;
+            Node* ro = recv.kidCount() > 0 ? opOwnerOf(recv.kid(0).ty()) : (Node*)0;
             if (ro != 0)
                 owner = ro.name();
             src = recv.name();
@@ -5359,7 +5568,7 @@ class Sema
             return false;
         // A property's class is its setter's parameter's.
         String* propT = opPropertyType(lhs);
-        Node* lc = opClassOf(propT != 0 ? propT : lhs.ty());
+        Node* lc = opOwnerOf(propT != 0 ? propT : lhs.ty());
         if (lc == 0)
             return false;
         String* cShape = String.withCString("_");

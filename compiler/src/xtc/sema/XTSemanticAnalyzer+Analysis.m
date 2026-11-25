@@ -2495,6 +2495,7 @@
                                              at:cls.location];
                     continue;
                     }
+                [self checkOperatorRequirement:reqM protocol:pname impl:impl in:implCls class:cls];
                 NSNumber* slotNum = self.protocolMethodSlots[pname][reqM.methodName];
                 if (!slotNum)
                     continue;

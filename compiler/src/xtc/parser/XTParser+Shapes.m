@@ -9,7 +9,7 @@
 |*     `:operator(...)` patterns and `:precedence(...)` annotations, and the
 |*     shapes go into a table with their precedence and associativity
 |*     (prescanOperatorShapes). An imported interface adds its classes'
-|*     shapes (addImportedOperatorShapes:).
+|*     and protocols' shapes (addImportedOperatorShapes:).
 |*   * A shape is made of symbol characters: + - * / % < > = ! & | ^ ~ ? : @
 |*     and the Unicode Mathematical Operators block (U+2200 to U+22FF), which
 |*     the lexer gives one token a character. The lexer is otherwise as it
@@ -553,9 +553,12 @@ NSString* XTPrecedenceSpecOf(NSArray<XTToken*>* t)
     {
     for (XTASTNode* d in decls)
         {
-        if (![d isKindOfClass:[XTClassDeclNode class]])
-            continue;
-        for (XTMethodDeclNode* m in ((XTClassDeclNode*)d).methods)
+        NSArray<XTMethodDeclNode*>* methods = nil;
+        if ([d isKindOfClass:[XTClassDeclNode class]])
+            methods = ((XTClassDeclNode*)d).methods;
+        else if ([d isKindOfClass:[XTProtocolDeclNode class]])
+            methods = ((XTProtocolDeclNode*)d).methods;
+        for (XTMethodDeclNode* m in methods)
             if (XTIsUserShape(m.operatorShape))
                 [self addOperatorShape:m.operatorShape spec:m.operatorPrecedence];
         }
