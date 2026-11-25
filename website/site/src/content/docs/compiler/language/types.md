@@ -15,6 +15,7 @@ description: The fixed-width scalars, structs, enums, pointers, arrays, type inf
 | `f64` | 8 bytes | IEEE-754 binary64; `double` is an alias |
 | `f16` | 2 bytes | IEEE-754 binary16 (pack `e5m10`) |
 | `bf16` | 2 bytes | bfloat16, `f16:pack(e8m7)` |
+| `f8` | 1 byte | OCP FP8 E4M3 (pack `e4m3`, `finite`) |
 | `bool` | 1 byte | alias of `u8`; values are `true` and `false` |
 | `void` | — | absence of value (function returns, parameter list `(void)`) |
 | `string` | pointer | alias of `u8*` (pointer to null-terminated bytes) |
@@ -48,83 +49,161 @@ interfaces and the debugger show these types as `float` and `double`.
 `f32` and `f64` are built-in type names, not keywords, so a variable, parameter
 or field may still be called `f32` or `f64`.
 
-### `f16` and `bf16`
+### Small floats: `f16`, `bf16` and `f8`
 
 `f16` is the IEEE-754 binary16 type: one sign bit, 5 exponent bits and 10
 mantissa bits, with a largest finite value of 65504. `bf16` is bfloat16: 8
 exponent bits and 7 mantissa bits, the range of `f32` with less precision
 (largest finite value about 3.39e38). Both are 2 bytes, aligned as `u16` is on
-the target, and both work on every target, in locals, globals, arrays, struct
-fields, ivars, parameters, returns and `Array<f16>`. They have infinities, NaN
-and subnormals as IEEE-754 defines them.
+the target.
 
-`f16` and `bf16` are built-in type names, so no import is needed.
+`f8` is the OCP FP8 E4M3 type: one sign bit, 4 exponent bits and 3 mantissa
+bits. It has no infinity, and only the all-ones patterns (`0x7F` and `0xFF`)
+are NaN, which gives it one more binade: its largest finite value is 448.
+`f8:pack(e5m2)` is OCP FP8 E5M2, with IEEE's infinities and NaNs and a largest
+finite value of 57344. `f8:pack(ue8m0)` is the unsigned scale of the OCP
+microscaling formats: 8 exponent bits and no sign or mantissa, holding the
+powers of two from 2^-127 to 2^127; `0xFF` is NaN, and it has no zero and no
+infinity. Every `f8` pack is 1 byte, aligned to 1.
+
+All of them work on every target, in locals, globals, arrays, struct fields,
+ivars, parameters, returns, `Array<T>`, `new T[n]` and library interfaces, and
+all keep subnormals as IEEE-754 defines them. `f16`, `bf16` and `f8` are
+built-in type names, so no import is needed.
 
 #### Packs
 
 A float type's bit layout is its pack, written `:pack(eXmY)` after the type: one
-sign bit, X exponent bits and Y mantissa bits. The pack is part of the type, so
-it can appear anywhere a type can: in declarations, fields, parameters, returns,
-casts, `Array<…>`, typedefs, `sizeof` and `new`.
+sign bit, X exponent bits and Y mantissa bits, with 1 + X + Y the type's width.
+The pack is part of the type, so it can appear anywhere a type can: in
+declarations, fields, parameters, returns, casts, `Array<…>`, typedefs,
+`sizeof` and `new`.
 
 | Spelling | Type |
 |----------|------|
 | `f16:pack(e5m10)` | `f16` (its default pack) |
 | `f16:pack(e8m7)` | `bf16` |
+| `f16:pack(e6m9)`, `f16:pack(e7m8)` | other 16-bit packs |
+| `f8:pack(e4m3)` | `f8` (its default pack) |
+| `f8:pack(e5m2)` | OCP FP8 E5M2 |
+| `f8:pack(e2m5)` … `f8:pack(e6m1)` | other 8-bit packs |
+| `f8:pack(ue8m0)` | the unsigned scale |
 | `f32:pack(e8m23)` | `f32` (its only pack) |
 | `f64:pack(e11m52)` | `f64` (its only pack) |
 
-Every pack is a distinct type. Any other pack is an error that names what to
-write.
+A pack also fixes its special values, its kind, which a custom pack may name
+after the split, as in `f8:pack(e3m4, finite)`:
+
+| Kind | Meaning | Default for |
+|------|---------|-------------|
+| `ieee` | the all-ones exponent is infinity (mantissa 0) or NaN | every pack but E4M3 |
+| `finite` | no infinity; only the all-ones pattern is NaN | `f8` (E4M3) |
+| `none` | no infinity and no NaN | — |
+
+A `finite` or `none` pack has at most 7 exponent bits. `ue8m0` takes no kind.
+Every pack is a distinct type, and every pack with its kind: `f8:pack(e5m2)`
+and `f8:pack(e5m2, finite)` are two types. Diagnostics write a pack as it is
+spelled here. Any other pack is an error that names what to write.
 
 #### Conversions and type rules
 
-A value converts implicitly only when the conversion is exact:
+A value converts implicitly only when every value of its type, its infinities
+and NaNs included, converts exactly:
 
-- `f16` and `bf16` convert implicitly to `f32` and `f64`.
-- Everything else needs a cast: `f32` or `f64` to `f16`, `f16` to `bf16` and
-  back, an integer to either, and either to an integer.
-- A literal takes the type its context needs and is rounded to it, so
-  `f16 h = 0.1;`, `h + 1` and `h * 0.5` need no cast. A literal beyond the
-  type's range is an error: `f16 h = 70000.0;` is refused.
+| From | Converts implicitly to |
+|------|------------------------|
+| `f8` (E4M3) | `f16`, `bf16`, `f32`, `f64` |
+| `f8:pack(e5m2)` | `f16`, `bf16`, `f32`, `f64` |
+| `f8:pack(ue8m0)` | `bf16`, `f32`, `f64` |
+| `f16`, `bf16` | `f32`, `f64` |
+| any other pack | each pack, `f32` and `f64` with the mantissa bits, the range and the special values to hold it |
 
-Mixed arithmetic widens to the type that holds both operands: `f16 + f32` is
-`f32`, and `f16 + u8` is `f16`. `f16 + bf16` is an error, since neither holds
-every value of the other; convert both, as in `(f32)a + (f32)b`.
+Everything else needs a cast: `f32` or `f64` to any pack, `f16` to `bf16` and
+back, `f8` to `f8:pack(e5m2)` and back, an integer to a pack, and a pack to an
+integer. A literal takes the type its context needs and is rounded to it, so
+`f8 w = 0.1;`, `w + 1` and `w * 0.5` need no cast. A literal beyond the type's
+range is an error, in every pack: `f8 w = 500.0;` is refused, and a literal of
+`f8:pack(ue8m0)` must be above zero.
+
+Mixed arithmetic widens to the type that holds both operands: `f8 + f16` is
+`f16`, `f16 + f32` is `f32`, and `f16 + u8` is `f16`. Two packs neither of which
+holds the other have no common type: `f16 + bf16` and `f8 + f8:pack(e5m2)` are
+errors; convert both, as in `(f32)a + (f32)b`. `f8:pack(ue8m0)` is a scale and
+mixes with no other type: `s * x` with an `f32` `x` needs `(f32)s * x`. It
+cannot be negated.
 
 Conversions round to nearest, ties to even, and keep subnormals. A value too
-large for the type becomes an infinity of its sign. A NaN stays a NaN, with its
-sign. A conversion to an integer takes the integral part, truncated toward zero;
+large for the type becomes an infinity of its sign where the pack has one
+(`ieee`). Where it has none (`finite`, `none`, `ue8m0`) the value saturates to
+the largest finite value of its sign, and so does an infinity. A NaN stays a
+NaN, with its sign, except in a `none` pack, which has no NaN and gives +0. For
+`ue8m0`, zero and values below 2^-127 give 2^-127, and a negative value gives
+NaN. A conversion to an integer takes the integral part, truncated toward zero;
 a value beyond the integer type's range saturates to its end, and a NaN gives
 0. A conversion to `bool` is `false` for both zeros and `true` for anything
-else, NaN included.
+else, NaN included (every `ue8m0` value is `true`).
 
-`printf` and other variadic functions receive an `f16` or `bf16` as a `double`,
-as they do a `float`, so `%f` prints it.
+`printf` and other variadic functions receive a small float as a `double`, as
+they do a `float`, so `%f` prints it.
+
+#### Explicit conversions
+
+`Fp8.xc` has the conversions to the standard 8-bit packs with the overflow rule
+a cast does not give, as the OCP FP8 specification's saturating and
+non-saturating conversions do, and the default ones by name:
+
+| Function | Result | Beyond the largest finite value, and an infinity |
+|----------|--------|---------------------------------------------------|
+| `fp8E4M3(f64 x)` | `f8` | the largest finite value (the cast's rule) |
+| `fp8E4M3Nan(f64 x)` | `f8` | NaN |
+| `fp8E5M2(f64 x)` | `f8:pack(e5m2)` | infinity (the cast's rule) |
+| `fp8E5M2Sat(f64 x)` | `f8:pack(e5m2)` | the largest finite value |
+| `fp8UE8M0(f64 x)` | `f8:pack(ue8m0)` | 2^127 (the cast's rule) |
+| `fp8UE8M0Nan(f64 x)` | `f8:pack(ue8m0)` | NaN |
+
+`fp8E4M3Value`, `fp8E5M2Value` and `fp8UE8M0Value` give a value as an `f32`,
+exactly. All of them round to nearest, ties to even, and are `extern`, so C can
+call them (see below).
+
+```c
+#import "Fp8.xc"
+
+f8 a = (f8)big;               // 448 when big is beyond it
+f8 b = fp8E4M3Nan(big);       // NaN when big is beyond 448
+```
 
 #### Arithmetic
 
 `+`, `-`, `*`, `/`, unary minus, the comparisons, compound assignment, `++` and
-`--` work on both types. Each operation converts its operands to `f32`, works
-in `f32`, and rounds the result to the operands' type. Because `f32` has more
-than twice the precision of either type plus two bits, the result is the
-correctly rounded result of the operation, and a chain of operations rounds
-after every step, as ISO C's `_Float16` does. Negation flips the sign bit. The
-square root is `(f16)Math.sqrt((f32)h)`, which rounds once and is exact in the
-same way.
+`--` work on every pack. Each operation converts its operands to `f32`, works
+in `f32`, and rounds the result to the operands' type, saturating or becoming
+an infinity as a conversion does. Because `f32` has more than twice the
+precision of any pack plus two bits, the result is the correctly rounded
+result of the operation, and a chain of operations rounds after every step, as
+ISO C's `_Float16` does. Negation flips the sign bit. The square root is
+`(f16)Math.sqrt((f32)h)`, which rounds once and is exact in the same way.
 
 ```c
 f16 a = 1.0;
 f16 b = 0.0004887;
 f16 s = a + b;                   // 1.0009765625, the f16 nearest the sum
 f32 t = (f32)a + (f32)b;         // 1.0004887
+f8 w = 448.0;
+f8 x = w * 2;                    // 448: E4M3 saturates
 ```
 
 The arithmetic is done in software on every target. A `par` block that
-computes in `f16` or `bf16` runs on the CPU; the compiler says so when the
-block could otherwise use the GPU.
+computes in `f16`, `bf16` or `f8` runs on the CPU; the compiler says so when
+the block could otherwise use the GPU.
 
 #### Calling C
+
+C has no 8-bit float type. An `f8` of any pack, and a 16-bit pack other than
+`f16` and `bf16`, crosses to and from C as its bit pattern: C sees a
+`uint8_t` (or `uint16_t`), and an `extern` function taking or returning one
+passes it as that integer on every target. C converts with `Fp8.xc`'s
+functions, which take and return those patterns (`uint8_t fp8E4M3Nan(double)`,
+`float fp8E4M3Value(uint8_t)`).
 
 `f16` and `bf16` are C's `_Float16` and `__bf16`. Between xc functions either
 travels as its 16-bit pattern, in an integer register or stack slot. A function

@@ -120,7 +120,7 @@ own, as ISO C describes.
 
 ## 16-bit floats
 
-`_Float16` and `__bf16` are xc's [`f16` and `bf16`](/compiler/language/types/#f16-and-bf16),
+`_Float16` and `__bf16` are xc's [`f16` and `bf16`](/compiler/language/types/#small-floats-f16-bf16-and-f8),
 and `xcc` compiles the functions that use them. Each operation is worked in
 `float` and rounded to the type once, the result ISO C gives for `_Float16` under
 `FLT_EVAL_METHOD` 0. Where `clang` itself evaluates a `_Float16` expression in
@@ -131,6 +131,21 @@ fused instruction does. A function taking or returning either type passes it as
 C does, so it calls and is called by the functions `clang` compiles. A loop over
 `_Float16` arrays becomes a `par` block that runs on the CPU's threads. A vector
 of either type leaves its function to `clang`.
+
+## 8-bit floats
+
+C has no 8-bit float type. In C an xc [`f8`](/compiler/language/types/#small-floats-f16-bf16-and-f8)
+of any pack is its bit pattern, a `uint8_t`: an `extern` xc function declared
+as taking or returning an `f8` is, to C, one taking or returning a `uint8_t`,
+on every target. `Fp8.xc`'s conversions are `extern`, so C code linked into an
+xc program can call them, by name or through a pointer:
+
+```c
+uint8_t fp8E4M3(double x);       /* round to E4M3, saturating */
+uint8_t fp8E4M3Nan(double x);    /* round to E4M3, NaN beyond 448 */
+uint8_t fp8E5M2Sat(double x);    /* round to E5M2, saturating */
+float fp8E4M3Value(uint8_t v);   /* an E4M3 pattern's value */
+```
 
 ## C++
 
