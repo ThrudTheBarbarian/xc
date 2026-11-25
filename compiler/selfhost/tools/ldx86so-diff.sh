@@ -35,7 +35,7 @@ RUN_INCS=(-I selfhost/lexer -I selfhost/link -I selfhost/driver -I selfhost/defs
           -I selfhost/asm -I selfhost/defs)
 
 pass=0; fail=0; oracle=0
-declare -a FAILED
+FAILED=()
 
 FILES=$(find tests support selfhost -name '*.xc' -not -path 'tests/fuzz/findings/*' | sort | awk -v i="${SHARD_I:-0}" -v n="${SHARD_N:-1}" 'NR % n == i')
 for f in $FILES; do
@@ -49,6 +49,15 @@ for f in $FILES; do
     if ! "$BIN/xcc-cg-x86_64" -O0 -q -o "$WORK/a.s" "$WORK/a.ir" >/dev/null 2>&1 \
        || [ ! -s "$WORK/a.s" ]; then
         oracle=$((oracle+1)); continue
+    fi
+    # A function with a stack guard reads __xt_stack_guard RIP-relative. A
+    # real library links the runtime, which defines it (hidden, in .bss), so
+    # the read resolves inside the .so; this link takes the one unit alone,
+    # so it gets the runtime's definition, as ldandroid-diff does. Without it
+    # the reference refuses the undefined data symbol and every file was an
+    # oracle failure: the harness compared nothing.
+    if grep -q '__xt_stack_guard' "$WORK/a.s" && ! grep -q '^__xt_stack_guard:' "$WORK/a.s"; then
+        printf '\t.hidden\t__xt_stack_guard\n\t.type\t__xt_stack_guard,@object\n\t.bss\n\t.globl\t__xt_stack_guard\n\t.p2align\t3, 0x0\n__xt_stack_guard:\n\t.quad\t0\n\t.size\t__xt_stack_guard, 8\n' >> "$WORK/a.s"
     fi
     IFACE="$WORK/a.ir.iface"; [ -f "$IFACE" ] || IFACE=-
     if ! "$BIN/xcc-ln-x86_64" -shared -soname libX.so -iface "$IFACE" \
