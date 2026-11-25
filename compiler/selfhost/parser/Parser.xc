@@ -8734,7 +8734,11 @@ class Parser
             for (u32 i = (u32)1; i < n.kidCount(); i = i + (u32)1) parFuseWalk(n.kid(i), st, iv, loops);
             return;
         }
+        if (k == (u16)nkCast && n.name() != (String*)0 && n.name().contains(String.withCString("double")))
+            st.set((Hashable*)String.withCString("double"), (Object*)Number.with((u32)1));
         if (k == (u16)nkVariableDecl) {
+            if (n.op() != (String*)0 && n.op().contains(String.withCString("double")))
+                st.set((Hashable*)String.withCString("double"), (Object*)Number.with((u32)1));
             if (n.name() != (String*)0) {
                 ((Set*)st.get((Hashable*)String.withCString("decls"))).add((Hashable*)n.name());
                 if (n.op() != (String*)0)
@@ -8842,15 +8846,36 @@ class Parser
         return made == (u32)1;
     }
 
+    // A body uses double: a local or a cast of it, or a name of that type.
+    bool parFuseDouble(Map* st, Map* types)
+    {
+        if (st.get((Hashable*)String.withCString("double")) != (Object*)0) return true;
+        Array* names = ((Set*)st.get((Hashable*)String.withCString("names"))).allObjects();
+        for (u32 i = (u32)0; i < names.count(); i = i + (u32)1) {
+            String* t = parFuseTypeOf((String*)names.get(i), types);
+            if (t != (String*)0 && t.contains(String.withCString("double"))) return true;
+        }
+        return false;
+    }
+
+    // A name's type: the block's capture, else the scope's binding, else the
+    // global's; 0 when none is known.
+    String* parFuseTypeOf(String* n, Map* types)
+    {
+        String* t = (String*)types.get((Hashable*)n);
+        if (t != (String*)0) return t;
+        Map* info = blkLookup(n, (u32*)0);
+        if (info != (Map*)0) return (String*)info.get((Hashable*)String.withCString("ty"));
+        if (_parTopVars != (Map*)0) return (String*)_parTopVars.get((Hashable*)n);
+        return (String*)0;
+    }
+
     // Two names of arrays that cannot be the same memory: each a fixed-size
     // array, or a local block of its own (parFuseFresh).
     bool parFuseApart(String* x, String* y, Map* types, u32 end)
     {
-        // A captured name's type, else a global's.
-        String* tx = (String*)types.get((Hashable*)x);
-        String* ty = (String*)types.get((Hashable*)y);
-        if (tx == (String*)0 && _parTopVars != (Map*)0) tx = (String*)_parTopVars.get((Hashable*)x);
-        if (ty == (String*)0 && _parTopVars != (Map*)0) ty = (String*)_parTopVars.get((Hashable*)y);
+        String* tx = parFuseTypeOf(x, types);
+        String* ty = parFuseTypeOf(y, types);
         bool fx = (tx != (String*)0 && tx.indexOfByte((u8)'[') != (u32)$FFFFFFFF) || parFuseFresh(x, end);
         bool fy = (ty != (String*)0 && ty.indexOfByte((u8)'[') != (u32)$FFFFFFFF) || parFuseFresh(y, end);
         return fx && fy;
@@ -8925,6 +8950,12 @@ class Parser
         Map* s2 = parFuseScan(l2.kid((u32)3), iv2.name());
         if (s1.get((Hashable*)String.withCString("bad")) != (Object*)0 || s2.get((Hashable*)String.withCString("bad")) != (Object*)0)
             return String.withCString("a body calls a function other than a maths one, or leaves its loop");
+        // A block of doubles stays itself: a GPU without doubles (Apple's)
+        // would run neither part of a fused block, and each block's own
+        // reason is what -Wpar says.
+        if (parFuseDouble(s1, (Map*)((Map*)a.get((Hashable*)String.withCString("frame"))).get((Hashable*)String.withCString("types")))
+            || parFuseDouble(s2, (Map*)((Map*)b.get((Hashable*)String.withCString("frame"))).get((Hashable*)String.withCString("types"))))
+            return String.withCString("a block uses double");
         // The same range, of names neither body writes.
         Set* written = new Set();
         Array* sc = ((Set*)s1.get((Hashable*)String.withCString("scalars"))).allObjects();

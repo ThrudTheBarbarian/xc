@@ -267,9 +267,13 @@ static void pfuWalk(id _Nullable n, NSMutableDictionary* st, NSString* iv, NSUIn
             pfuWalk(a, st, iv, loops);
         return;
         }
+    if ([n isKindOfClass:[XTCastExprNode class]] && [((XTCastExprNode*)n).castType.description containsString:@"double"])
+        st[@"double"] = @YES;
     if ([n isKindOfClass:[XTVariableDeclNode class]])
         {
         XTVariableDeclNode* d = n;
+        if ([d.declaredType.description containsString:@"double"])
+            st[@"double"] = @YES;
         [st[@"decls"] addObject:d.varName];
         if ([d.declaredType isKindOfClass:[XTArrayType class]])
             [st[@"arrays"] addObject:d.varName];
