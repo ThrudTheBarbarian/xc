@@ -120,7 +120,11 @@ daemon "$L/xcd2.log" XCD_HOME="$L/home1" XC_PAR_REPORT=1 -- -port $PORT2 -nimby 
 XCD2=$XPID
 f=par_simd_buffers
 mkdir -p "$L/st_nimby"
-XCC_SETTINGS_DIR="$L/st_nimby" XC_PAR_REMOTE=127.0.0.1:$PORT2 XC_PAR=all XC_PAR_REPORT=1 "$L/$f" > "$L/nimby.out" 2> "$L/nimby.err"
+# The daemon on the queue for certain (XC_PAR_WORKERS names it, with the CPU
+# to do the work it declines): with XC_PAR=all a loaded host's own devices
+# could take every tile before the daemon is offered one, and it would never
+# get to decline.
+XCC_SETTINGS_DIR="$L/st_nimby" XC_PAR_REMOTE=127.0.0.1:$PORT2 XC_PAR_WORKERS=remote,cpu XC_PAR_REPORT=1 "$L/$f" > "$L/nimby.out" 2> "$L/nimby.err"
 if grep -v '^par:' "$L/nimby.out" | diff -q - "tests/fixtures/$f.expected.out" > /dev/null && grep -q 'does not take' "$L/nimby.out"; then
     echo "PASS remote nimby"
 else
