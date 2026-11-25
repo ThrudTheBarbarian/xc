@@ -1,5 +1,5 @@
 //xtc-na: xt6502, m68k — par has no threads there
-//xtc-warn: because it computes in f16 or bf16, which GPU kernels do not take yet
+//xtc-warn: because it computes in f16, bf16 or f8, which GPU kernels do not take yet
 // par_f16.xc — `par` blocks over f16 and bf16 arrays. Each element's
 // operations round to the element type as anywhere else. GPU kernels do not
 // take the 16-bit floats yet, so the block marked for the GPU runs on the CPU,

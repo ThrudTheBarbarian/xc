@@ -1,0 +1,82 @@
+38 30: 3c 30 30 40
+7e 7e: 7e 0 7e 38
+7e fe: 0 7e fe b8
+1 1: 2 0 0 38
+3c 3a: 43 28 3f 3a
+38 0: 38 38 0 7e
+0 0: 0 0 0 nan
+7f 38: nan nan nan nan
+38 8: 38 38 8 68
+3e 30: 41 3a 36 46
+3f 31: 42 3a 38 45
+1 80: 1 1 80 fe
+8 3c: 3c bc c 5
+7b 7b: 7c 0 7c 3c
+7c fc: nan 7c fc nan
+7c 0: 7c 7c nan 7c
+3c 0: 3c 3c 0 7c
+1 1: 2 0 0 3c
+3c 30: 3c 3b 30 48
+3d 39: 40 39 3a 40
+7e 3c: nan nan nan nan
+fe eb: nan nan nan nan
+2d 41: 41 c1 32 28
+c1 11: c1 c1 96 ec
+19 6c: 6c ec 49 0
+7f 80: 80 nan 80 7e
+fe fe: fe 0 fe 7f
+0 0: 1 0 0 7f
+81 7f: 81 80 81 81
+ff 7f: nan nan nan nan
+7e 82: 82 nan 81 7b
+60 59: 60 60 3a 86
+9e 2a: 9e 9e 49 f3
+1b d2: d2 nan 6e 0
+4e b4: b4 nan 83 19
+9a 67: 9a 9a 82 b2
+f3 75: f3 f3 e9 fd
+6f 6f: 70 0 70 30
+1 1: 2 0 0 30
+3c 35: 48 1c 42 35
+30 0: 30 30 0 70
+e4 55: d3 ee f0 be
+16 f: 22 7 5 37
+a ee: ee 6e c3 81
+b2 c5: ce 38 48 1b
+5f a2: 5d 61 d1 ec
+f4 e8: nan nan nan nan
+a4 e1: e2 60 55 5
+75 45: nan nan nan nan
+7e 7e: 7e 0 7e 3c
+7e 3c: 7e 7e 7e 7e
+3c 0: 3c 3c 0 7e
+1 40: 40 c0 2 0
+d0 5f: 5e e0 f3 ad
+41 6: 41 41 c 77
+bc e2: e2 62 62 15
+60 e4: e0 66 fe b8
+11 3e: 3e be 14 f
+f1 db: f1 f1 7e 52
+4b 6c: 6c ec 7b 1b
+8b 83: 8c 8a 0 45
+7f 7f: 7f 0 7f 20
+20 0: 20 20 0 7f
+0 0: 0 0 0 0
+21 23: 42 82 24 1e
+1 a0: 9f 21 81 81
+32 a1: 11 4a b4 b0
+26 51: 62 bc 5a c
+36 d3: b0 67 eb 91
+23 5d: 67 cc 61 9
+80 ee: ee 6e 0 0
+8a a3: ad 19 b 9
+d3 fe: ff 64 7f d
+step 7e b0 7e 54
+neg ff 80 fc
+cmp 0 1 1 1
+scale 81 83 1
+zero false
+scale true
+wide 6300 7b0e 6ae4
+f32 448.250000
+print 448.000000 57344.000000 7.875000

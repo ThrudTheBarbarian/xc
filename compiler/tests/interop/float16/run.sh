@@ -4,7 +4,7 @@
 # go on the stack), C calls half16.xc's `extern` functions back through
 # pointers, and a variadic C function and printf take halves as doubles. The
 # program must print what half16main.c, the same calls made from C and built
-# by clang, prints. With each compiler built here: arm64 on macOS (and win64
+# by clang, prints. half16b.xc calls them without naming either type. With each compiler built here: arm64 on macOS (and win64
 # under Wine, given clang's mingw root), x86-64 on Linux.
 #
 #   bash tests/interop/float16/run.sh
@@ -49,6 +49,15 @@ for c in xcc-xc xcc; do
         check "$c, $tgt" "$(LD_LIBRARY_PATH="$work" "$work/h16-$c")"
     else
         echo "FAIL float16 interop ($c, $tgt): does not build"; fail=1
+    fi
+    # The types only in the library's debug information: the conversions
+    # still link.
+    if "$xc" -q -H "$root" -A $tgt -O2 -L "$work" -o "$work/h16b-$c" "$here/half16b.xc"; then
+        got=$(LD_LIBRARY_PATH="$work" "$work/h16b-$c")
+        [ "$got" = "$(printf 'h_add 1.75\nh_neg -2\nbf_id 3.5')" ] && echo "float16 interop ($c, $tgt, unnamed): ok" \
+            || { echo "FAIL float16 interop ($c, $tgt, unnamed):"; echo "$got"; fail=1; }
+    else
+        echo "FAIL float16 interop ($c, $tgt, unnamed): does not build"; fail=1
     fi
     [ $w64 = 1 ] || continue
     if "$xc" -q -H "$root" -A win64 -O2 -L "$work/w64" -o "$work/w64/h16-$c.exe" "$here/half16.xc"; then
