@@ -96,6 +96,18 @@ for C in xcc-xc xcc; do
         [ "$got" = "$(cat tests/fixtures/par_resident_send.expected.out)" ] \
             || { echo "FAIL resident ($C): a kept array sent through a socket: '$got'"; fail=1; }
     fi
+    # Blocks that hand a kept array on: the next block writes it whole, or
+    # half of it, or reads it from another slot, or its reduction takes the
+    # slot a kept array is in. Each answers as the CPU does.
+    if [ "$cuda" -gt 0 ] && [ ! "$PLAT" = osx ]; then
+        for fx in par_writes_own par_vec_chain_sum par_inplace_rounds par_auto_array_reduce; do
+            "$XC" -q -O2 -H . -o "$W/f.$C" "tests/fixtures/$fx.xc" > "$W/fb.$C" 2>&1 \
+                || { echo "FAIL resident ($C): $fx does not build"; fail=1; continue; }
+            got=$( (cd "$W" && env XC_PAR=gpu XC_PAR_GPU=cuda XC_PAR_RESIDENT=1 ./f.$C) 2>/dev/null)
+            [ "$got" = "$(cat "tests/fixtures/$fx.expected.out")" ] \
+                || { echo "FAIL resident ($C): $fx with outputs kept: '$(echo "$got" | head -2)'"; fail=1; }
+        done
+    fi
     [ "$PLAT" = osx ] && [ -n "$HOST" ] && ssh "$HOST" "rm -rf $RD"
 done
 [ $fail = 0 ] && echo "resident: ok"

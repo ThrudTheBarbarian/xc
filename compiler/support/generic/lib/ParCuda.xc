@@ -870,7 +870,10 @@ class ParCuda
             anyRes = anyRes || resOut[nd];
             // Anything resident the tiles use comes back first, but an output
             // this run keeps in its own slot (uploadKeeping finds it there).
-            if (!resOut[nd])
+            // One kept in another slot comes back too, written whole or not:
+            // the copy there would be fetched over this run's results later,
+            // and what the run does not write is only there.
+            if (!resOut[nd] || ParDevice.residentIn(owner(), nd) != h)
                 ParDevice.fetchResident(h, false);
             asWhole[nd] = resOut[nd] || (l.bufFp[i] != (i64)0 && l.bufIn[i] != (i64)0 && wholeAgain(nd, h, l.bufLen[i], &budget));
             // Written whole and not read, it is not sent, unless its slot
@@ -1350,7 +1353,14 @@ class ParCuda
             }
         for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
             {
-            dev[nd] = uploadKeeping(nd, l.bufOut[i] != (i64)0 ? (pointer)0 : *(pointer*)(obj + l.bufOff[i]), l.bufLen[i],
+            // An array written whole is not sent, but a copy of it kept in
+            // another slot comes back first: fetched later, it would land
+            // over this run's results, and what lies past the run's writes
+            // is only there (#15).
+            pointer h = *(pointer*)(obj + l.bufOff[i]);
+            if (l.bufOut[i] != (i64)0 && ParDevice.residentIn(owner(), nd) != h)
+                ParDevice.fetchResident(h, false);
+            dev[nd] = uploadKeeping(nd, l.bufOut[i] != (i64)0 ? (pointer)0 : h, l.bufLen[i],
                                     l.bufIn[i] != (i64)0);
             nd = nd + (u32)1;
             }
