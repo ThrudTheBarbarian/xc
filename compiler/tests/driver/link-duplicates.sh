@@ -79,8 +79,22 @@ for a in $targets; do
                 if [ "$a" = arm9 ]; then
                     # A program linked from arm9 objects cannot print yet (#687):
                     # read the image instead — `g` is the initialised definition.
-                    out=$($NM "$d/t$ext" 2>/dev/null | awk '$3 == "g" { print $2 }')
-                    [ "$out" = "D" ] || [ "$out" = "d" ] && ok || bad "$a $n [$order]: g is '$out' in the image, not the initialised data definition"
+                    addr=$($NM -D "$d/t$ext" 2>/dev/null | awk '$3 == "g" { print $1 }')
+                    out=$(python3 - "$d/t$ext" "$addr" <<'PY'
+import struct, sys
+b = open(sys.argv[1], 'rb').read()
+va = int(sys.argv[2] or '0', 16)
+phoff, = struct.unpack_from('<I', b, 28)
+phent, phnum = struct.unpack_from('<HH', b, 42)
+for i in range(phnum):
+    t, off, vaddr, _, filesz, _, _, _ = struct.unpack_from('<8I', b, phoff + i * phent)
+    if t == 1 and vaddr <= va < vaddr + filesz:
+        print(struct.unpack_from('<i', b, off + va - vaddr)[0]); break
+else:
+    print('bss')
+PY
+)
+                    [ "$out" = "5" ] && ok || bad "$a $n [$order]: g holds '$out' in the image, not the initialiser 5"
                     continue
                 fi
                 out=$(runit "$a" "$d/t$ext")
