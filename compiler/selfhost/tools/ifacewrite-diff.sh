@@ -67,7 +67,7 @@ INCS=(-I support/generic/lib -I support/arm64/lib
       -I selfhost/asm -I selfhost/link -I selfhost/driver -I selfhost/defs)
 
 pass=0; fail=0; oracle=0
-declare -a FAILED
+FAILED=()
 FILES=$(find tests support selfhost -name '*.xc' -not -path 'tests/fuzz/findings/*' | sort \
         | awk -v i="${SHARD_I:-0}" -v n="${SHARD_N:-1}" 'NR % n == i')
 for f in $FILES; do
