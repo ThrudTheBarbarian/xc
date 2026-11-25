@@ -171,8 +171,8 @@ precedence (see [Operators of your own](#operators-of-your-own)).
   which are statements and return `void`. It takes no `...`.
 - An index or compound-assignment pattern applies its operator to `self`:
   `self[i]`, `self[i] = v`, `self += o`.
-- Operators are methods: a free function or a protocol method cannot carry
-  `:operator`.
+- Operators are methods: a free function cannot carry `:operator`. A protocol
+  method can (see [Protocols](#protocols)).
 
 A static method is how a value of another type goes on the left: `:operator(k * v)`
 on `scaledBy(float k, Vec2* v)` gives `2.0 * a`.
@@ -180,7 +180,8 @@ on `scaledBy(float k, Vec2* v)` gives `2.0 * a`.
 ### How an operator expression is resolved
 
 An operator applies when one of its operands is a class instance (a pointer to
-one, or an instance by value) whose class, or an ancestor, defines that operator.
+one, or an instance by value) whose class, or an ancestor, defines that operator,
+or a value typed as a protocol that requires it.
 The candidates are the instance methods of the left operand's class whose
 pattern is `self OP _`, then the static methods of either operand's class whose
 pattern is `_ OP _`. They are ranked as the overloads of a call are, by how well
@@ -435,9 +436,77 @@ nest freely: `⌊|x|⌋`, `|⌊x⌋|`.
 
 ### Across modules
 
-A library's interface carries its classes' operator shapes and their
-precedence, so a program that imports the library reads `a ** b` and `|v|` as
-the library does.
+A library's interface carries its classes' and protocols' operator shapes and
+their precedence, so a program that imports the library reads `a ** b` and `|v|`
+as the library does.
+
+## Protocols
+
+A protocol method can carry `:operator(pattern)`, and generic code over the
+protocol then writes the operator:
+
+```c
+protocol Numeric
+    {
+    Numeric* plus(Numeric* o) :operator(self + o);
+    i32 value(void);
+    }
+
+class Money <Numeric>
+    {
+    i32 cents;
+    static Money* of(i32 c) { Money* m = new Money(); m.cents = c; return m; }
+    Numeric* plus(Numeric* other) :operator(self + other) { return Money.of(cents + other.value()); }
+    i32 value(void) { return cents; }
+    }
+
+Numeric* sum3(Numeric* a, Numeric* b, Numeric* c)
+    {
+    return a + b + c;      // a.plus(b).plus(c)
+    }
+```
+
+A requirement can be any operator a class's method can be: arithmetic, prefix,
+relational, index get and set, compound assignment, and operators of its own
+shape, with `:precedence`, bracket operators included. A protocol's shapes and
+precedences count as a class's do, so a shape has one precedence in a program.
+An operator requirement cannot be `optional`, and a protocol's `static` member
+cannot be an operator.
+
+### Conforming
+
+A class that conforms implements the method as it implements any requirement,
+and its method is the same operator: the same shape, with `self` and each
+parameter in the same place. Parameter names may differ, since operands match
+by position, so `self + other` above meets `self + o`. The method may be
+inherited, and an override is the operator of the method it overrides, as for
+classes. A method without the operator, or with another, is an error that says
+what to write:
+
+```
+error: class 'Vec2' conforms to 'Numeric', which requires 'plus' to be the operator 'self + o'; add ':operator(self + other)' to Vec2's plus
+```
+
+### Protocol values
+
+On a value typed as the protocol, `a + b` calls the protocol's method,
+dispatched on the object as `a.plus(b)` is. The other operand is checked as an
+argument of a call through the protocol is. Index operators, compound
+assignment (with `a = a + b` when the protocol requires `+` and not `+=`) and
+the choice between two readings work as they do for classes.
+
+With a protocol value on one side and a class instance on the other, the left
+operand's operators come first, as for two classes (see [How an operator
+expression is resolved](#how-an-operator-expression-is-resolved)): `p + m` is
+the protocol's `+`, `m + p` the class's, and where the protocol has no such
+operator, a static operator of the right operand's class applies.
+
+A protocol that requires an operator gives up that operator's built-in meaning
+for its values, as a class does: `p + 1` on a `Numeric*` is an error, not a
+pointer step. Its other operators keep their built-in meaning.
+
+A library's interface carries its protocols' operator requirements, so a client
+can conform to such a protocol and use its operators.
 
 ## Compound assignment
 

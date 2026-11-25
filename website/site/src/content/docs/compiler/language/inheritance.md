@@ -217,6 +217,12 @@ if (resized) { resized(w, h); }              // this IS respondsTo
 Calling an `optional` method directly is a compile error, because it might be absent. Take
 `&delegate.method` and test it.
 
+### Operator requirements
+
+A protocol method can be an operator, `Numeric* plus(Numeric* o) :operator(self + o);`,
+so generic code over the protocol writes `a + b`. A conforming class defines its
+method as the same operator. See [Operators → Protocols](/compiler/language/operators/#protocols).
+
 ### Static members: an interface between programs
 
 A protocol may also declare `static` members and a version. They are the
