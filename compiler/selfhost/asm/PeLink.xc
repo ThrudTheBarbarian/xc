@@ -102,6 +102,30 @@ class PeLink
         a.appendData(d);
         }
 
+    // A data definition whose bytes are all zero, up to the next definition
+    // in the object or the end of its data. xcc's win64 objects carry their
+    // BSS in .data (the assembler appends it there), so `i32 g;` shows only
+    // as a zero-filled definition: it is TENTATIVE as a .bss one is (#686).
+    static bool zeroFilled(CoffObject* obj, Array* sdefs, u32 si)
+        {
+        ElfSymDef* sd = (ElfSymDef*)sdefs.get(si);
+        if (sd.where() != (u32)2)
+            return false;
+        u32 end = obj.data().length();
+        for (u32 k = (u32)0; k < sdefs.count(); k = k + (u32)1)
+            {
+            ElfSymDef* o = (ElfSymDef*)sdefs.get(k);
+            if (o.where() == (u32)2 && o.off() > sd.off() && o.off() < end)
+                end = o.off();
+            }
+        if (end <= sd.off())
+            return false;
+        for (u32 i = sd.off(); i < end; i = i + (u32)1)
+            if (obj.data().byteAt(i) != (u8)0)
+                return false;
+        return true;
+        }
+
     static void dropName(Array* a, String* n)
         {
         for (u32 i = (u32)0; i < a.count(); i = i + (u32)1)
@@ -180,7 +204,8 @@ class PeLink
                 // A tentative definition (`i32 g;`, in .bss) yields to an
                 // initialised one whatever the order, as a C linker merges a
                 // common (#686); otherwise the FIRST definition stands (#663).
-                if (_tentative.get((Hashable*)nm) == (Object*)0 || sd.tentative())
+                if (_tentative.get((Hashable*)nm) == (Object*)0 || sd.tentative()
+                    || PeLink.zeroFilled(obj, sdefs, si))
                     continue;
                 _tentative.remove((Hashable*)nm);
                 if (sd.where() == (u32)1)
@@ -194,7 +219,7 @@ class PeLink
                 msyms.set((Hashable*)nm, (Object*)Number.withU32(dbase + sd.off()));
                 if (!listed)
                     mdataSyms.add((Object*)nm);
-                if (sd.tentative())
+                if (sd.tentative() || PeLink.zeroFilled(obj, sdefs, si))
                     _tentative.set((Hashable*)nm, (Object*)Number.withU32((u32)1));
                 }
             }

@@ -26,6 +26,32 @@
 // per process, so one set.
 static NSMutableSet<NSString*>* gTentative;
 
+// A data definition whose bytes are all zero, up to the next definition in the
+// object or the end of its data. xcc's win64 objects carry their BSS in .data
+// (the assembler appends it there), so `i32 g;` shows only as a zero-filled
+// definition: it is TENTATIVE as a .bss one is (#686).
+static BOOL zeroFilledDef(NSDictionary* obj, NSArray<NSDictionary*>* sdefs, NSUInteger si)
+    {
+    if ([sdefs[si][@"where"] intValue] != 2)
+        return NO;
+    NSData* d = obj[@"data"];
+    uint64_t off = [sdefs[si][@"off"] unsignedLongLongValue];
+    uint64_t end = d.length;
+    for (NSDictionary* o in sdefs)
+        {
+        uint64_t oo = [o[@"off"] unsignedLongLongValue];
+        if ([o[@"where"] intValue] == 2 && oo > off && oo < end)
+            end = oo;
+        }
+    if (end <= off)
+        return NO;
+    const uint8_t* b = d.bytes;
+    for (uint64_t i = off; i < end; i++)
+        if (b[i])
+            return NO;
+    return YES;
+    }
+
 static BOOL mergeCoffObject(NSDictionary* obj, NSString* whence, NSUInteger oi,
                             NSMutableData* mtext, NSMutableData* mdata,
                             NSMutableDictionary<NSString*, NSNumber*>* msyms,
@@ -500,7 +526,8 @@ static BOOL mergeCoffObject(NSDictionary* obj, NSString* whence, NSUInteger oi,
                 // A tentative definition (`i32 g;`, in .bss) yields to an
                 // initialised one whatever the order, as a C linker merges a
                 // common (#686); otherwise the FIRST definition stands (#663).
-                if (![gTentative containsObject:nm] || [sdefs[si][@"tentative"] boolValue])
+                if (![gTentative containsObject:nm] || [sdefs[si][@"tentative"] boolValue]
+                    || zeroFilledDef(obj, sdefs, si))
                     continue;
                 [gTentative removeObject:nm];
                 if (where == 1)
@@ -512,7 +539,7 @@ static BOOL mergeCoffObject(NSDictionary* obj, NSString* whence, NSUInteger oi,
                 {
                 msyms[nm] = @(dbase + off);
                 [mdataSyms addObject:nm];
-                if ([sdefs[si][@"tentative"] boolValue])
+                if ([sdefs[si][@"tentative"] boolValue] || zeroFilledDef(obj, sdefs, si))
                     [gTentative addObject:nm];
                 }
             }
