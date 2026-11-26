@@ -3,6 +3,224 @@ title: ChangeLog
 description: Release notes for the xcc toolchain, with bug fixes and new features per version.
 ---
 
+## Version 1.0.3 — operators defined by a class, 16-bit floats, and C++ programs
+
+Everything since 1.0.2.
+
+### New
+
+- **A class can define the built-in operators.** A method becomes an
+  operator by carrying `:operator(pattern)`, the operator written out with the
+  method's own names: `Vec2* plus(Vec2* o) :operator(self + o)`, or a static
+  `scaledBy(float k, Vec2* v) :operator(k * v)` for a scalar on the left.
+  Arithmetic, prefix, bitwise, shift, rotate and relational operators can be
+  defined; precedence never changes, and `==` and `!=` stay identity. An
+  operator is the method call it resolves to, virtual where the type is not
+  exact, and subclasses inherit it. A class that defines no operators keeps C
+  pointer arithmetic; one that defines `+` gives up built-in `+` for its
+  pointers. See [Operators defined by a class](/compiler/language/operators/#operators-defined-by-a-class).
+- **Index operators and compound assignment.** `:operator(self[i])` and
+  `:operator(self[i] = x)` make `v[i]` and `v[i] = x` method calls, with
+  several indices (`m[r, c]`) or a range (`v[lo..hi]`). `:operator(self += o)`
+  defines `+=` in place; a class that defines `+` alone has `a += b` as
+  `a = a + b`. The base and indices are evaluated once each, in source order.
+  A write into a temporary copy of a by-value result is refused with a
+  message saying how to keep it.
+- **Operators of a class's own shape, with `:precedence`.** A pattern can name
+  an operator the language does not have, from `+ - * / % < > = ! & | ^ ~ ? :
+  @` and the Mathematical Operators block: `self ** e`, `self ⊗ o`,
+  `self <=> o`, `√self`. A shape takes the precedence of its first character
+  unless `:precedence(above *, right)` (or `below`, or the name of an
+  operator) says otherwise. Where a shape could also be read the old way
+  (`a**b` as `a * *b`), the operand types decide.
+- **Bracket operators:** `|x|`, `‖x‖`, `⌊x⌋`, `⌈x⌉` and `⟨x⟩`, as in
+  `float len() :operator(|self|)`. A `|` opens a bar only where an operand is
+  expected and only when a class in the program defines `|x|`; otherwise `|`
+  and `||` keep their meaning.
+- **A protocol can require an operator,** of any of these kinds, so generic
+  code over the protocol can write `a + b`. A conforming class's method must
+  carry the same pattern, and the error says what to add. Operators and
+  precedences, a class's or a protocol's, travel in its interface and work
+  across modules.
+- **`f32` and `f64` are the names of the float types,** matching `i32` and
+  `u64`. `float` and `double` are aliases for them; every existing program
+  compiles to the same output.
+- **`f16` and `bf16`, 16-bit float types on every target.** `f16` is IEEE
+  binary16; `bf16` is bfloat16, also written `f16:pack(e8m7)`. Conversions
+  round to nearest even, keep subnormals and overflow to ±inf; arithmetic
+  rounds to the type after every operation, as ISO C's `_Float16` does. They
+  widen implicitly only to `f32` and `f64`, and mixing the two is an error
+  that names the cast. They cross into C as clang passes `_Float16` and
+  `__bf16` on arm64, x86-64 and win64. A `par` block that computes in them
+  runs on the CPU for now, and says so.
+- **Class instances held by value.** A class-typed ivar written without `*`
+  (`Inner inner;`) is an instance held inside its owner, set up before the
+  owner's `init` and torn down with it; it was an uninitialised pointer. A
+  class instance declared at file scope (`P g;`) is built before `main`, never
+  freed, and visible to C as `extern struct P g`; it was a slot nothing
+  allocated, and using it crashed.
+- **Arrays kept on the GPU between runs.** On a CUDA card,
+  `XC_PAR_RESIDENT=1` leaves a block's outputs on the card after a run and
+  sends nothing for them on the next, copying an output back only when the
+  host reads or writes it; `XC_PAR_RESIDENT=auto` learns per block whether
+  the host touches its outputs between runs. Ten runs over a 16 MB
+  accumulator take 0.51 ms where copying back took 17.4 ms. `Par.sync(p)`
+  fetches an array before it is handed to a C function. Off by default.
+- **Running totals and histograms as blocks.** `par :scan(+ total)` runs a
+  prefix sum (`total += x[i]; out[i] = total;`) as blocks over 256 slices,
+  with `+ | & ^ min max`, and `--par-style=auto` lifts such loops itself; under
+  65,536 items a scan runs as the loop. `:reduce(+ hist[])` reduces into an integer
+  array updated at a data index (`hist[key[i]] += 1`); on Metal over 32-bit
+  elements, on the CPU's threads elsewhere.
+- **`main` gets `argc` and `argv` on the Atari ST and on wasm32** (under
+  node). The Atari ST's start-up keeps a 64 KB stack, `-ss` sets it, and a
+  program that overran it says so at exit (in every function's prologue under
+  `-fbounds-check`). On wasm32 the stack (1 MiB, `-ss`) sits below all static
+  and library data, so a large library loads and a stack overflow traps.
+
+### Changed
+
+- **`@` is no longer a pointer sigil or a dereference.** `u8@ p` and `@p` are
+  errors that say to write `*`. `*` has been the sigil since August; `@` is
+  now free for operators of a class's own.
+- **`.length` is `u64` on arm64, x86-64 and win64,** and `u32` where it is
+  assigned, returned, cast or passed to something 32 bits or narrower. That
+  `u32` form is checked: a count past 2^32 - 1 stops the program with "an
+  array's length does not fit a u32; use u64". An array of more than 2^32
+  elements reports its whole length, and `for … in` visits every element. A
+  call resolves with `.length` as `u32`, so overload sets choose as before.
+- **An array declared past 4 GB (global, local or field) is an error** saying
+  to allocate it with `new T[n]`, which takes any size on the 64-bit targets.
+  A count past 32 bits wrapped, and a global past 4 GB got less storage than
+  its `.length` said.
+- **Array's sorts are not stable, and order equal elements differently from
+  1.0.2.** The quicksort takes the median of three as its pivot and
+  partitions so that a run of equal keys splits in the middle; already
+  ordered input no longer makes it quadratic or recurse as deep as the array
+  is long. A sort by a key with ties can print the ties in another order;
+  comparing a second key (an index or sequence number) fixes it.
+- **A local class instance whose address is taken lives on the heap.** With
+  `&y` anywhere in its function (stored in a pointer, a field or a container,
+  returned, passed to a strong parameter), `y` is a reference-counted heap
+  object released at the end of its scope, so a pointer kept elsewhere keeps
+  it alive and `weak:` pointers to it are cleared. A pointer into an instance
+  (`&o.inner`), into an array of instances, or to a by-value parameter is
+  refused with what to write instead.
+- **Overloads: the smaller widening wins a tie.** With `(u32, u32)` and
+  `(u64, u64)` overloads, a `(u32, u16)` call takes the first instead of
+  being ambiguous. No call that resolved before resolves differently.
+- **A name two objects define: the first definition stands,** in every
+  linker: the program's own image, then objects in command-line order, then
+  archive members. arm64 macOS kept the last. A tentative `i32 g;` yields to
+  an initialised `i32 g = 5;` in either order; on x86-64, win64 and arm9 the
+  program read 0 when the tentative one came first.
+- **Code that compiled and then ran wrong is refused:** a string literal or
+  pointer stored in a number; a subclass instance copied by value into a
+  superclass value, which sliced it; a function defined twice with the same
+  parameter types; an integer literal past `u64`, which wrapped to 0; a
+  global array of class instances; and `-Os`, `-Oz` or `-Og`, which picked a
+  meaningless level.
+- **arm64: an explicit `:goal(accuracy)` on a matrix-multiply nest is strict
+  ISO,** with no SME kernel and nothing fused. Without it, every arm64 OS
+  fuses a recognised nest as arm64 macOS's kernel does, so macOS, Linux and
+  Android give the same answer at every size.
+
+### Faster
+
+- **Adjacent `par` blocks run as one.** Two written blocks over the same
+  range, with nothing between them and each touching what the other writes
+  only at `[i]`, become one block: one launch, and on a GPU no round trip
+  between them. `-Wpar-auto` says which blocks ran as one; `-fno-par-fuse`
+  keeps them apart.
+- **Vulkan: an input the host has not written is not sent again,** and on a
+  discrete card an array the kernel only reads is not copied back: saxpy on
+  an RTX 5070, 25.7 ms to 14.7 ms.
+- **Loops:** an outer loop around a data-dependent inner loop runs two to
+  four copies per trip, as clang's do (sort_small, 0.800 s to 0.739 s on
+  x86-64); a loop of four trips or fewer unrolls with a body of up to 160
+  instructions, and an unrolled `:goal(speed)` loop keeps its fused
+  multiply-adds (perlin, 2–4%); a float-to-integer conversion proven in range
+  drops its range check. On x86-64, AVX2 loops get the vector combines, code
+  is padded with multi-byte NOPs, and a compare after arithmetic that set the
+  flags goes.
+
+### Fixed
+
+- **x86-64 and win64: `Math.sqrt` at `-O0` never returned.** The runtime's
+  `sqrt` and `sqrtf` called themselves.
+- **An array operand of `+` or `-`** (`b + 1` with `u32 b[8]`) was typed as
+  a narrow integer: a crash or a wrong address on every target. It decays to
+  a pointer to its element.
+- **Stack instances release their object ivars, and copies retain them.** A
+  stack instance leaked what its ivars held, and a by-value copy shared them
+  without a retain, so replacing one left the copy reading freed memory. An
+  object made in one arm of `?:` is released at the end of that arm.
+- **The optimiser:** an invariant load guarded by an `if` was hoisted out of
+  its loop and faulted through null; a load was hoisted past an indirect call
+  or a vector store that wrote it; an arm64 vector reload was dropped after a
+  write to its register; at `-O0` and `-O1` a constant through a narrowing
+  cast (`x / (i32)(i8)300`) was used unconverted.
+- **x86-64 calls:** a float argument past the eighth and a struct argument
+  past the integer registers go on the stack, where SysV puts them; taking a
+  method's address no longer overwrites a live value in r10 or r11.
+- **Variadic calls on x86-64, win64, wasm32, m68k and the 6502** pack a
+  narrow integer as `int`; a forwarded `...` or a format that is not a
+  literal printed stale bytes.
+- **Compound assignment:** `h[i] += 1`, `*p += 1`, `n += 5` on a bare ivar and
+  `x <:= n` were refused; `ps[at(1)].x += 3` called `at` twice.
+- **`--par-style=auto` lifted loops whose iterations raced:** a body writing
+  its loop variable or bound, taking the address of an outer variable, or
+  passing an outer array or pointer to a call. They stay loops, and
+  `-Wpar-auto` says why; a written block that passes such a pointer to a call
+  that may write through it warns.
+- **par:** on the GPU, two arrays in one large block (a static pool) got
+  overlapping device buffers and one copy-back undid the other; one array
+  passed as two arguments and written gave the values from before the run; a
+  program's own function named `max` or `sqrt` became the GPU's built-in. In
+  a library linked with an archive (`-Wl,lib.a`) every block ran serially.
+  Two programs at once crashed xcd.
+- **Links:** an xc library that takes libRuntime loads into a program linked
+  from objects; a Mach-O page or GOT reference to a symbol defined elsewhere
+  was left zero; an x86-64 Linux link of objects is the dynamic glibc one, as
+  a build from source is; a static musl program's threads start;
+  `$XTC_LDFLAGS` reaches the clang link once.
+- **`Bignum`: an RSA modulus over 2528 bits** gave a wrong `modexp` and an
+  invalid signature.
+- **`#if` read `0x10` as `00`** and `10UL` as `100`, and evaluated in 32 bits.
+- **m68k:** `new u64[n]` allocated the wrong size; dispatched and indirect
+  calls passed 8-byte and aggregate arguments as one long, and aggregate
+  fields lost their upper half. **arm9:** a variadic forwarder called through
+  a method table lost its tail. `-fbounds-check` builds and reports on the
+  6502 and wasm32, and for arm64 Linux from a Linux host.
+
+### C and C++
+
+- **C++ programs.** `xcc mandel.cpp -o mandel` builds a C++ program as it
+  builds a C one, lifting its loops into `par` blocks, with exceptions, RTTI,
+  virtual calls and global constructors linked in-house. Functions with
+  exception handlers are compiled by xcc on arm64 macOS, arm64 Linux, x86-64
+  Linux and win64, and xcc's functions carry unwind tables, so an exception
+  passes through them. See [C++ programs](/compiler/usage/cpp-programs/).
+- **Several source files on one command line** (`xcc a.cpp b.cpp c.c -o
+  prog`), C and C++ mixed, win64 included.
+- **C and C++ code xcc reads itself:** atomics (C11 and `std::atomic`, so
+  `shared_ptr` copies too), large results through a hidden pointer (a
+  function returning a `std::string`), local arrays, `memset` and `memcpy`,
+  and calls through a pointer. Such functions went to clang whole.
+- **Thread-local variables** (`_Thread_local`, and `thread_local` with a
+  destructor) link and run on arm64 macOS, x86-64 and arm64 Linux, and win64.
+- **`_Float16` and `__bf16`** read as `f16` and `bf16`, rounding after every
+  operation as clang's do.
+- **More loops become blocks:** running totals, histograms (`h[key[i]] += 1`
+  into a global array), a float sum under `-fgoal=speed`, and loops over
+  `malloc`'d memory on Linux with glibc, whose large blocks now come from a
+  heap the runtime can size. `-Wpar-auto` names each loop lifted or left
+  serial, with the reason.
+- **Faster builds.** A C or C++ program with lifted loops links
+  libRuntimeSupport, the runtime's standard library prebuilt, instead of
+  compiling it: C mandelbrot builds in 0.39 s, from 1.60 s, on arm64 macOS. A
+  program whose loops are not lifted carries no par runtime.
+
 ## Version 1.0.2 — fixes
 
 Everything since 1.0.1.
