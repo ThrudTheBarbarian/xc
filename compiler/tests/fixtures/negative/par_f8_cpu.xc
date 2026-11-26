@@ -1,6 +1,6 @@
 // A par block that computes in f8 runs on the CPU, and the compiler says why
 // where it could otherwise have used the GPU.
-// xtc: warn "this 'par' block runs on the CPU only, because it computes in f16, bf16 or f8, which GPU kernels do not take yet"
+// xtc: warn "this 'par' block runs on the CPU only, because it computes in f16, bf16, f8 or f4, which GPU kernels do not take yet"
 #import "Stdio.xc"
 #import "Par.xc"
 

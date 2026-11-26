@@ -1,5 +1,5 @@
 //xtc-na: xt6502, m68k — par has no threads there
-//xtc-warn: because it computes in f16, bf16 or f8, which GPU kernels do not take yet
+//xtc-warn: because it computes in f16, bf16, f8 or f4, which GPU kernels do not take yet
 // par_f8.xc — `par` blocks over f8 (E4M3), f8:pack(e5m2) and f8:pack(ue8m0)
 // arrays. Each element's operations round to the element type as anywhere
 // else, saturating at 448 in E4M3. GPU kernels do not take the 8-bit floats
