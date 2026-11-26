@@ -1,0 +1,626 @@
+---
+title: Operators
+description: Full operator precedence table including the rotate and byte-extract operators, and operators defined by classes.
+slug: versions/1.0.3/compiler/language/operators
+banner:
+  content: 'This is the documentation for xc 1.0.3. <a href="/compiler/">The current documentation</a> describes the newest version.'
+pagefind: false
+---
+
+xcc operators are mostly a subset of C's, with two additions: a pair of **rotate** operators (`<:` and `:>`) that map to the 6502's `ROL` / `ROR` instructions, and four **byte-extract** prefix operators (`<`, `>`, `>>`, `>>>`) that select individual bytes of wider constants and symbols. The byte-extract operators apply only inside [`asm { ... }`](/versions/1.0.3/compiler/language/inline-asm/) blocks.
+
+## Precedence table
+
+Listed from highest to lowest. Rows at the same level have the same precedence; within a level, **Assoc** records the associativity.
+
+| Operators | Assoc | Notes |
+|-----------|-------|-------|
+| `a[i]`, `f(...)`, `.`, `->`, postfix `++`, postfix `--` | left | primary |
+| prefix `+ -`, `!`, `~`, prefix `++`, prefix `--`, `*` (deref), `&` (addr-of), `(type)` cast, `sizeof()`, `<` `>` `>>` `>>>` (byte extract, asm) | right | unary |
+| `*`, `/`, `%` | left | multiplicative |
+| `+`, `-` | left | additive |
+| `<:`, `:>` | left | rotate (ROL / ROR) |
+| `<<`, `>>` | left | shift (ASL / ASR) |
+| `<`, `>`, `<=`, `>=` | left | relational |
+| `==`, `!=` | left | equality |
+| `&` | left | bitwise AND |
+| `^` | left | bitwise XOR |
+| `\|` | left | bitwise OR |
+| `&&` | left | logical AND |
+| `\|\|` | left | logical OR |
+| `? :` | right | ternary |
+| `=`, `+=`, `-=`, `*=`, `/=`, `%=`, `&=`, `\|=`, `^=`, `<<=`, `>>=`, `<:=`, `:>=` | right | assignment |
+
+## Notes on specific operators
+
+### Rotate vs shift
+
+`<:` and `:>` **rotate** through carry. They map to the 6502 `ROL` / `ROR` instructions, which read and write the carry flag. `<<` and `>>` are **arithmetic shifts** (`ASL`, and `ASR` for the right shift). Use rotate to chain bytes through carry; use shift to multiply or divide by powers of two.
+
+```c
+u8 a = $80;
+u8 b = a <: 1;    // a is rotated left through carry; one-bit shift left + carry-in
+u8 c = a << 1;    // arithmetic left shift; bit 7 lost
+```
+
+### Equality against `nil`
+
+`==` and `!=` compare a pointer of any type with [`nil`](/versions/1.0.3/compiler/language/types/#the-null-pointer-nil),
+the null pointer: `if (p == nil)`, `while (node != nil)`. `nil` goes into no
+other operator (`nil + 1`, `nil < p`) and is not compared with an integer; the
+compiler refuses both.
+
+### Pointer dereference and address-of
+
+`*` is the unary dereference operator; `&` takes an address. Each undoes the other:
+
+```c
+u8 v   = 42;
+u8* p  = &v;
+u8 q   = *p;     // q == 42
+*p     = 99;     // v becomes 99
+```
+
+`->` dereferences and then accesses a member: `p->x` is the same as `(*p).x`. xcc also accepts the dot form `p.x` on a pointer and dereferences automatically. See [Types → Pointers](/versions/1.0.3/compiler/language/types/#pointers) for the rationale.
+
+### Cast extensions
+
+Inside the `(type)` cast, two forms have non-C semantics:
+
+- `(Dog*) animal` — runtime-checked downcast. Traps on mismatch.
+- `(Dog* ?) animal` — failable downcast. Yields `(Dog*)0` on mismatch.
+
+These are class-pointer-only; `(u16 ?)x` is a compile-time error. Details on [Inheritance & protocols](/versions/1.0.3/compiler/language/inheritance/).
+
+### `sizeof`
+
+`sizeof(T)` evaluates to a compile-time byte count. Works on any type, including `struct` and `class`.
+
+Its type is the target's size type, like C's `size_t`: `u64` on the 64-bit
+targets (arm64, x86-64, Windows, Android, iOS), `u32` on the 32-bit ones (arm9,
+m68k, wasm32) and `u16` on the 6502. On the 6502 a size over 65535 bytes does not
+fit, so `sizeof` of it is an error that names the size.
+
+### Byte-extract prefixes (asm context)
+
+These operators apply only inside an `asm { ... }` block. They select individual bytes of a constant or symbol that the assembler would otherwise treat as a 16- or 32-bit address:
+
+| Prefix | Meaning |
+|--------|---------|
+| `<x`   | low 8 bits of `x` |
+| `>x`   | bits 8..15 of `x` |
+| `>>x`  | bits 16..23 of `x` |
+| `>>>x` | bits 24..31 of `x` |
+
+```c
+u16 val = $1234;
+
+asm {
+    lda #<val;    // LDA #$34
+    ldx #>val;    // LDX #$12
+}
+```
+
+Outside an `asm` block these tokens have their normal meaning: `<` and `>` are relational comparisons and `>>` is the shift operator. Inside a block the byte-extract reading is unambiguous, because the assembler grammar accepts only constants and symbols after the prefix.
+
+### Prefix `+`
+
+Prefix `+` has no meaning of its own. It is accepted only on an instance of a
+class that defines it with `:operator(+self)` (next section); on a number it is
+an error.
+
+## Operators defined by a class
+
+A method becomes an operator by carrying `:operator(pattern)`. The pattern is
+the operator written out with the method's own names as its operands: `self`
+for the receiver and the parameter names for the arguments.
+
+```c
+class Vec2
+    {
+    float x;
+    float y;
+
+    static Vec2* make(float a, float b) { Vec2* v = new Vec2(); v.x = a; v.y = b; return v; }
+
+    Vec2* plus(Vec2* o)   :operator(self + o) { return Vec2.make(x + o.x, y + o.y); }
+    Vec2* minus(Vec2* o)  :operator(self - o) { return Vec2.make(x - o.x, y - o.y); }
+    Vec2* negated()       :operator(-self)    { return Vec2.make(-x, -y); }
+    Vec2* scaled(float k) :operator(self * k) { return Vec2.make(x * k, y * k); }
+    static Vec2* scaledBy(float k, Vec2* v) :operator(k * v) { return v.scaled(k); }
+    bool less(Vec2* o)    :operator(self < o) { return x * x + y * y < o.x * o.x + o.y * o.y; }
+    }
+
+Vec2* c = a + b * 2.0 - -d;    // a.plus(b.scaled(2.0)).minus(d.negated())
+Vec2* e = 2.0 * a;             // Vec2.scaledBy(2.0, a)
+```
+
+An operator is an ordinary method call. The method keeps its name, so
+`a.plus(b)` still works, and the name is what stack traces and errors show.
+Operators work on every target.
+
+### What can be defined
+
+| Group | Operators |
+|-------|-----------|
+| Arithmetic | `+ - * / %` |
+| Prefix | `-x`, `+x`, `~x`, `!x` |
+| Bitwise and shift | `& \| ^ << >>` |
+| Rotate | `<: :>` |
+| Relational | `< <= > >=` |
+| Index | `self[i]` (get), `self[i] = v` (set), several indices `self[i, j]`, a range `self[lo..hi]` or `self[lo...hi]` |
+| Compound assignment | `+= -= *= /= %= &= \|= ^= <<= >>= <:= :>=` |
+| Of a class's own shape | infix, prefix and bracket operators the language does not have, such as `self ** o`, `self ⊗ o`, `√self`, `\|self\|` or `⌊self⌋` (see [Operators of your own](#operators-of-your-own)) |
+
+A relational operator returns whatever its method returns, so a class can
+return a mask or a flag object rather than a `bool`.
+
+These operators keep their fixed meaning and cannot be defined: `&&`, `||`,
+`? :`, `=`, `.`, `->`, prefix `&` and `*`, `,`, calls, the byte-extract
+prefixes, `++` and `--`. `==` and `!=` compare identity on objects; value
+equality is the `equals` method.
+
+Precedence and associativity are the built-in ones. Defining `*` does not
+change how `a + b * c` groups. An operator of a class's own shape has its own
+precedence (see [Operators of your own](#operators-of-your-own)).
+
+### Rules for a pattern
+
+- The pattern is one operator applied to names: `self + o`, `-self`, `k * v`.
+- Each name is `self` or a parameter of the method, and appears once. Every
+  parameter appears.
+- An instance method's pattern uses `self`. A static method's pattern does not,
+  and one of its parameters is of its own class (or a subclass).
+- The method returns one value, except an index set and a compound assignment,
+  which are statements and return `void`. It takes no `...`.
+- An index or compound-assignment pattern applies its operator to `self`:
+  `self[i]`, `self[i] = v`, `self += o`.
+- Operators are methods: a free function cannot carry `:operator`. A protocol
+  method can (see [Protocols](#protocols)).
+
+A static method is how a value of another type goes on the left: `:operator(k * v)`
+on `scaledBy(float k, Vec2* v)` gives `2.0 * a`.
+
+### How an operator expression is resolved
+
+An operator applies when one of its operands is a class instance (a pointer to
+one, or an instance by value) whose class, or an ancestor, defines that operator,
+or a value typed as a protocol that requires it.
+The candidates are the instance methods of the left operand's class whose
+pattern is `self OP _`, then the static methods of either operand's class whose
+pattern is `_ OP _`. They are ranked as the overloads of a call are, by how well
+the operands convert to the parameters. Two candidates that fit equally well
+are an error that names both.
+
+Operators are inherited and can be overridden like any method, with or without
+repeating the pattern. Through a parent pointer the call dispatches on the
+object, as any method call does.
+
+### Classes without operators keep pointer arithmetic
+
+Defining an operator is a choice per class and per operator. A class that
+defines no operator keeps C's meaning for every operator on its pointers:
+`p + 1` steps one instance and `p < q` compares addresses. A class that defines
+`+`, or inherits it, gives up the built-in `+` for its pointers. An unmatched
+`+` on it is then an error, never a pointer step:
+
+```
+error: 'Vec2' has no '+' taking 'i32'
+```
+
+It keeps the built-in meaning of the operators it does not define, so its
+pointers still compare with `<` unless it defines `<` too.
+
+### Index operators
+
+`:operator(self[i])` makes `v[i]` a call of the method, and
+`:operator(self[i] = x)` makes `v[i] = x` one. A pattern may take several
+indices, `self[r, c]`, and is then written `m[r, c]`.
+
+```c
+class Matrix
+    {
+    float cells[9];
+    float at(i32 r, i32 c) :operator(self[r, c]) { return cells[r * 3 + c]; }
+    void put(i32 r, i32 c, float x) :operator(self[r, c] = x) { cells[r * 3 + c] = x; }
+    }
+
+m[0, 2] = 2.5;          // m.put(0, 2, 2.5)
+float d = m[1, 1];      // m.at(1, 1)
+m[1, 1] += 1.5;         // m.put(1, 1, m.at(1, 1) + 1.5)
+```
+
+A range index, `self[lo..hi]` or `self[lo...hi]`, takes the two bounds as two
+parameters, so `s[2..5]` is a call with 2 and 5. `..` and `...` are separate
+operators: a class decides what each one means. Both bounds are needed. A range
+index has a set form too, `self[lo..hi] = x`.
+
+`v[i] op= x` reads with the get, applies `op` (the built-in one at the element's
+type, or the element class's operator) and writes with the set. The base and the
+indices are evaluated once each, in source order, before the get: in
+`f()[g()] += h()`, `f`, `g` and `h` each run once, in that order.
+
+In `g[i][j] = v` the get reads `g[i]`, and the set assigns `[j] = v` on what it
+returned. Reading `g[i][j]` is a get and then a get. A get that returns a
+built-in pointer is indexed the built-in way, and an element of a built-in array
+of objects is indexed with its class's operator.
+
+A class that defines any index operator, or inherits one, gives up the built-in
+index for its pointers: `p[i]` on it is an operator, and an index no operator
+takes is an error. A class without index operators keeps C's pointer indexing.
+Several indices are accepted only by an index operator.
+
+When a get returns a class by value, `g[i][j] = v` would set an element of a
+temporary copy, and the write would be lost. That is an error when the class
+holds no pointer or reference, directly or in a by-value member; store the
+value in a variable first (`Row r = g[i]; r[j] = v;`), or have the get return a
+pointer. A class that does hold a pointer is treated as a view into its owner,
+so writing through it is allowed. The same applies to compound assignment.
+
+An element read through an index operator is a call's result, so `&v[i]`,
+`v[i]++` and `--v[i]` are errors. `for … in` cannot iterate a range index made by
+an operator; assign it to a variable first.
+
+### Compound assignment
+
+`:operator(self += o)` defines `+=` in place: `a += b` is a call of the method.
+When a class defines `+` and no `+=` that takes `b`, `a += b` is `a = a + b`: the
+result of `+` is assigned to `a`, the old value is released, and whatever the
+address of `a` is computed from is evaluated once. For a class returned by value,
+it is a by-value assignment.
+
+The built-in compound assignment applies when the class defines neither `+=` nor
+`+`, so `p += 1` still steps a pointer. A class that defines operators gets no
+`p += q` of two pointers: that is an error. A compound operator cannot assign
+through a property's setter; write the assignment out.
+
+### Results and memory
+
+The result of an operator is the result of its method call. A class pointer
+returned by the method is released at the end of the full expression, unless it
+is stored. A method that returns its instance by value
+(`Vec2 plus(Vec2 o) :operator(self + o)`) needs no heap allocation: in
+`a + b + c` each intermediate gets its own slot in the caller's frame.
+
+## Operators of your own
+
+A class can define an operator the language does not have by writing its shape
+in the pattern:
+
+```c
+class Num
+    {
+    i32 v;
+    static Num* of(i32 x) { Num* n = new Num(); n.v = x; return n; }
+
+    Num* pow(Num* e)     :operator(self ** e) :precedence(above *, right) { … }
+    Num* kron(Num* o)    :operator(self ⊗ o)   { … }
+    i32  cmp(Num* o)     :operator(self <=> o) { return v < o.v ? -1 : (v > o.v ? 1 : 0); }
+    Num* root()          :operator(√self)      { … }
+    Num* matmul(Num* o)  :operator(self @ o)   { … }
+    }
+
+Num* r = 2 * a ** b ** c;      // 2 * (a ** (b ** c))
+i32 s = a <=> b;               // a.cmp(b)
+Num* t = √a ⊗ b;               // a.root().kron(b)
+```
+
+Such an operator is resolved as the built-in ones are (see [How an operator
+expression is resolved](#how-an-operator-expression-is-resolved)), and it is
+inherited. It has no built-in meaning: where no operand's class defines it, it
+is an error.
+
+```
+error: no class defines the operator '⊗' for (i32, i32); one operand must be an instance of a class that defines it with :operator(...)
+```
+
+A shape means one thing per class: a class with `self ** o` cannot use `**` for
+something else, so a second meaning is a named method.
+
+### Characters
+
+An operator is made of the characters `+ - * / % < > = ! & | ^ ~ ? : @` and of the
+Unicode Mathematical Operators block, U+2200 to U+22FF (`⊗ ∘ ∙ √ ≡ ≤ ⊕` and the
+rest). Letters, digits, `$`, `#`, `.`, `,`, `;`, brackets, quotes and `\` are
+never part of one; brackets make [bracket operators](#bracket-operators). Its characters are written together: `self * * o` is two
+operators.
+
+No operator of a class's own is spelt as a built-in one (`==`, `->`, `&&`, `=`,
+`++` and the rest). A longer shape that contains one, such as `==>` or `&&&`, is
+allowed. A shape that starts with an assignment, `?` or `:`, followed by
+characters that are prefix operators, is refused: between two operands `=-`
+already reads as `= -`.
+
+`@` is an operator character. `a @ b` is free for a class to define, as matrix
+multiplication is in Python and NumPy, with `*` element-wise.
+
+### Precedence
+
+An infix operator takes the precedence and associativity of its first
+character: `**` binds as `*` does, `<=>` as `<`, `|>` as `|`. All of them group
+from the left.
+
+| First character | Binds as |
+|-----------------|----------|
+| `*` `/` `%` `~` `?` `@`, and the Unicode block | `*` |
+| `+` `-` | `+` |
+| `:` | `:>` |
+| `<` `>` | `<` |
+| `=` `!` | `==` |
+| `&` | `&` |
+| `^` | `^` |
+| `\|` | `\|` |
+
+A prefix operator binds as the built-in prefix operators do.
+
+`:precedence(...)` beside `:operator(...)` sets an infix operator's precedence:
+
+- `:precedence(%)`: the level of a built-in binary operator.
+- `:precedence(above *)` or `:precedence(below |)`: a new level directly above
+  or below one. Every operator that says `above *` shares that level.
+- `, right` after either makes it group from the right: `:precedence(above *, right)`.
+
+The parser needs an operator's precedence before it knows any type, so a shape
+has one precedence in a program. Two classes that give the same shape different
+precedences are an error naming both; classes that agree, or leave it unset,
+are not. `:precedence` cannot change a built-in operator, and a prefix operator
+cannot take one.
+
+### Characters that also read as built-in operators
+
+Some shapes are also built-in operators written together: `a**b` is `a * *b`,
+`x-->0` is `x-- > 0`, `m +%101` is `m + %101` (a binary literal). Where an
+operator of a class's own could be read the old way, the operand types choose:
+
+- when the left operand's class, or the right operand's for a static pattern,
+  defines the shape, it is that operator;
+- otherwise the characters keep their built-in meaning, so code that does not use
+  the class means what it did.
+
+When both readings mean something, it is an error rather than a choice. The
+built-in reading means something when each of its operators is defined for its
+operands: arithmetic on numbers, pointer arithmetic and comparison, a
+dereference of a pointer, or a class's operator.
+
+```
+error: '+%' reads two ways here and both type-check: as the operator of 'Money' and as the built-in operators it is spelt with; write those operators apart, or call the method by name
+```
+
+`m +% 101` and `m + %101` each read one way, and so does a call of the method by its name. The readings of one expression are
+chosen together, so `a ** b + x ** p`, with `a` a class that defines `**` and
+`x` a number, is an error; parentheses make two expressions of it.
+
+### Bracket operators
+
+A bracket operator puts its one operand between two brackets: the same
+character on both sides, `|self|` or `‖self‖`, or an opening and closing pair,
+`⌊self⌋`, `⌈self⌉` or `⟨self⟩`. Those are the brackets an operator can use;
+another, such as `⟦`, is an error. A static method writes its parameter
+instead of `self`: `static i32 dollars(Amount* a) :operator(⌈a⌉)`.
+
+```c
+class Vec
+    {
+    i32 x;
+    i32 y;
+    i32 length2() :operator(|self|) { return x * x + y * y; }
+    i32 norm()    :operator(‖self‖) { … }
+    }
+
+i32 d = 2 * |a| + ‖b‖;         // 2 * a.length2() + b.norm()
+```
+
+A bracket operator binds as parentheses do, so it takes no `:precedence`.
+Postfix operators after it apply to its result: `|x|.t` is `(|x|).t`. Like
+the other operators of a class's own, it has no built-in meaning, and a class
+gives a bracket one meaning: `|M|` is the determinant or the norm, and the
+other is a named method.
+
+```
+error: no class defines |x| for 'i32'; the operand must be an instance of a class that defines it with :operator(|self|)
+```
+
+`|` is also bitwise or, and `||` logical or. Bars follow these rules:
+
+- A `|` opens a bar only where an operand starts. There, `|` has no other
+  meaning.
+- A `|` after an operand is bitwise or, except inside `|...|`, where the first
+  `|` after an operand closes the bar. Bitwise or inside bars is written in
+  parentheses: `|(a | b)|`. Inside parentheses, an argument list or an index,
+  `|` is an operator again.
+- A `||` where an operand starts is two opening bars: `||v||` is `|(|v|)|`. After
+  an operand inside `|...|` it closes two bars, so `||a| + |b||` is
+  `|(|a| + |b|)|`. Elsewhere it is logical or.
+- Bars open only in a program where a class defines `|self|`. Without one, `|`
+  and `||` keep their meaning everywhere.
+
+So `|a| + |b|` is two operands added, `|a| | n` is a bitwise or of `|a|` and
+`n`, and `|‖v‖|` is `|(‖v‖)|`. The other brackets mean nothing else, so they
+nest freely: `⌊|x|⌋`, `|⌊x⌋|`.
+
+### Across modules
+
+A library's interface carries its classes' and protocols' operator shapes and
+their precedence, so a program that imports the library reads `a ** b` and `|v|`
+as the library does.
+
+## Protocols
+
+A protocol method can carry `:operator(pattern)`, and generic code over the
+protocol then writes the operator:
+
+```c
+protocol Numeric
+    {
+    Numeric* plus(Numeric* o) :operator(self + o);
+    i32 value(void);
+    }
+
+class Money <Numeric>
+    {
+    i32 cents;
+    static Money* of(i32 c) { Money* m = new Money(); m.cents = c; return m; }
+    Numeric* plus(Numeric* other) :operator(self + other) { return Money.of(cents + other.value()); }
+    i32 value(void) { return cents; }
+    }
+
+Numeric* sum3(Numeric* a, Numeric* b, Numeric* c)
+    {
+    return a + b + c;      // a.plus(b).plus(c)
+    }
+```
+
+A requirement can be any operator a class's method can be: arithmetic, prefix,
+relational, index get and set, compound assignment, and operators of its own
+shape, with `:precedence`, bracket operators included. A protocol's shapes and
+precedences count as a class's do, so a shape has one precedence in a program.
+An operator requirement cannot be `optional`, and a protocol's `static` member
+cannot be an operator.
+
+### Conforming
+
+A class that conforms implements the method as it implements any requirement,
+and its method is the same operator: the same shape, with `self` and each
+parameter in the same place. Parameter names may differ, since operands match
+by position, so `self + other` above meets `self + o`. The method may be
+inherited, and an override is the operator of the method it overrides, as for
+classes. A method without the operator, or with another, is an error that says
+what to write:
+
+```
+error: class 'Vec2' conforms to 'Numeric', which requires 'plus' to be the operator 'self + o'; add ':operator(self + other)' to Vec2's plus
+```
+
+### Protocol values
+
+On a value typed as the protocol, `a + b` calls the protocol's method,
+dispatched on the object as `a.plus(b)` is. The other operand is checked as an
+argument of a call through the protocol is. Index operators, compound
+assignment (with `a = a + b` when the protocol requires `+` and not `+=`) and
+the choice between two readings work as they do for classes.
+
+With a protocol value on one side and a class instance on the other, the left
+operand's operators come first, as for two classes (see [How an operator
+expression is resolved](#how-an-operator-expression-is-resolved)): `p + m` is
+the protocol's `+`, `m + p` the class's, and where the protocol has no such
+operator, a static operator of the right operand's class applies.
+
+A protocol that requires an operator gives up that operator's built-in meaning
+for its values, as a class does: `p + 1` on a `Numeric*` is an error, not a
+pointer step. Its other operators keep their built-in meaning.
+
+A library's interface carries its protocols' operator requirements, so a client
+can conform to such a protocol and use its operators.
+
+## Compound assignment
+
+Every arithmetic, bitwise and shift binary operator has a compound-assignment form: `+=`, `-=`, `*=`, `/=`, `%=`, `&=`, `|=`, `^=`, `<<=`, `>>=`, plus the rotate forms `<:=` and `:>=`. Each behaves as its expansion:
+
+```c
+x += 1;            // x = x + 1
+flags &= ~MASK;    // flags = flags & ~MASK
+acc <:= 1;         // acc = acc <: 1
+```
+
+When the left-hand side goes through a property setter (see [Classes → Properties](/versions/1.0.3/compiler/language/classes/#properties)), the expansion evaluates the base expression twice. This costs nothing for identifiers and `self`, and matters only if the base has a side effect.
+
+## Worked example
+
+The operators that differ from C, and the ones that do not:
+
+```c
+// operators.xc — the operators that differ from C, and the ones that don't.
+#import "Foundation.xc"
+#import "Stdio.xc"
+
+i32 main(void)
+{
+    // ---- Arithmetic, at the operands' own width -----------------------------
+    // Same-width arithmetic stays at that width, so these WRAP rather than
+    // promoting to int as C would: 300 & $FF = 44, 600 & $FF = 88.
+    u8 a = 200;
+    u8 b = 100;
+    Stdio.printf("u8   200+100=%d  200*3=%d\n", (u16)(a + b), (u16)(a * 3));
+    // Widening the OPERANDS is what gets the true sum.
+    Stdio.printf("wide 200+100=%d\n", (u16)a + (u16)b);
+
+    // Division and modulo. Integer division truncates toward zero.
+    i16 n = -17;
+    Stdio.printf("-17/5=%d  -17%%5=%d\n", n / (i16)5, n % (i16)5);
+
+    // ---- Shift vs rotate ----------------------------------------------------
+    // `<<` and `>>` shift; `<:` and `:>` ROTATE through the carry flag, which
+    // is what lets you chain bytes together. On the 6502 they are ROL / ROR.
+    u8 hi = $81;
+    Stdio.printf("$81 << 1 = $%02X   $81 >> 1 = $%02X\n",
+                 (u16)(hi << 1), (u16)(hi >> 1));
+    Stdio.printf("$81 <: 1 = $%02X   $81 :> 1 = $%02X\n",
+                 (u16)(hi <: 1), (u16)(hi :> 1));
+
+    // ---- Bitwise ------------------------------------------------------------
+    u8 m = $F0;
+    u8 k = $AA;
+    Stdio.printf("and=$%02X or=$%02X xor=$%02X not=$%02X\n",
+                 (u16)(m & k), (u16)(m | k), (u16)(m ^ k), (u16)(~m));
+
+    // ---- Logical, and short-circuit ----------------------------------------
+    // && and || evaluate left to right and stop as soon as the answer is known.
+    u16 zero = 0;
+    bool safe = (zero != 0) && (100 / zero > 1);   // never divides
+    Stdio.printf("short-circuit ok: %d\n", safe ? (u16)1 : (u16)0);
+
+    // ---- Comparison and the ternary ----------------------------------------
+    u16 x = 7;
+    u16 y = 11;
+    Stdio.printf("max=%d  eq=%d  ne=%d\n",
+                 x > y ? x : y,
+                 (u16)(x == y ? 1 : 0),
+                 (u16)(x != y ? 1 : 0));
+
+    // ---- Compound assignment, including the rotates ------------------------
+    u8 acc = 1;
+    acc += 4;       // 5
+    acc *= 3;       // 15
+    acc <<= 1;      // 30
+    acc |= 1;       // 31
+    Stdio.printf("compound=%d\n", (u16)acc);
+
+    // ---- Increment / decrement ---------------------------------------------
+    // Prefix updates then yields; postfix yields then updates.
+    u16 i = 5;
+    u16 pre = ++i;      // i=6, pre=6
+    u16 post = i++;     // post=6, i=7
+    Stdio.printf("pre=%d post=%d i=%d\n", pre, post, i);
+
+    // ---- sizeof -------------------------------------------------------------
+    // A compile-time constant. Pointer width is the only one that varies by
+    // target; every scalar is the same everywhere.
+    Stdio.printf("sizeof u8=%d u16=%d u32=%d u64=%d float=%d double=%d\n",
+                 (u16)sizeof(u8), (u16)sizeof(u16), (u16)sizeof(u32),
+                 (u16)sizeof(u64), (u16)sizeof(float), (u16)sizeof(double));
+
+    // ---- Address-of and dereference ----------------------------------------
+    u16 v = 42;
+    u16* p = &v;
+    *p = *p + 1;
+    Stdio.printf("through pointer: %d\n", v);
+    return 0;
+}
+```
+
+```
+u8   200+100=44  200*3=88
+wide 200+100=300
+-17/5=-3  -17%5=-2
+$81 << 1 = $02   $81 >> 1 = $40
+$81 <: 1 = $03   $81 :> 1 = $C0
+and=$A0 or=$FA xor=$5A not=$0F
+short-circuit ok: 0
+max=11  eq=0  ne=1
+compound=31
+pre=6 post=6 i=7
+sizeof u8=1 u16=2 u32=4 u64=8 float=4 double=8
+through pointer: 43
+```
+
+In the first line, `u8 + u8` and `u8 * u8` stay at 8 bits and wrap (44 and 88). C would promote both to `int` and print 300 and 600. To get the full value, widen the **operands**.
