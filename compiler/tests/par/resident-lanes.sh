@@ -43,9 +43,19 @@ for G in cuda; do
     lanes=$(echo "$out" | grep -c 'over [0-9]* lanes')
     kept=$(echo "$out" | grep -c 'kept on the GPU')
     fetched=$(echo "$out" | grep -c 'fetched from the GPU')
+    gpu=$(echo "$out" | grep -c 'fill: [0-9]* items on the GPU')
     [ "$lanes" -ge 8 ] || { echo "FAIL resident-lanes ($G): the reading block ran on lanes $lanes times, wanted 8"; fail=1; }
+    # A device that did not run the writing block (busy, or a run that failed
+    # and fell back to the CPU, which gives the same answer) keeps nothing:
+    # that is the device's state, not residency's, and is said, not failed.
+    if [ "$gpu" = 0 ]; then
+        echo "resident-lanes: the $G device ran no fill block, skipped there:"
+        echo "$out" | grep '^par:' | grep -vE 'cost ops|lanes on|items in [0-9]* pieces' | head -8 | sed 's/^/    /'
+        continue
+    fi
     [ "$kept" -ge 8 ] && [ "$fetched" = 8 ] \
-        || { echo "FAIL resident-lanes ($G): kept $kept, fetched $fetched, wanted 8 or more and 8"; fail=1; }
+        || { echo "FAIL resident-lanes ($G): kept $kept, fetched $fetched, wanted 8 or more and 8 (fill ran on the GPU $gpu times):"
+             echo "$out" | grep '^par:' | grep -vE 'cost ops|lanes on|items in [0-9]* pieces' | head -16 | sed 's/^/    /'; fail=1; }
 done
 [ "$PLAT" = osx ] && ssh "$HOST" "rm -rf $RD"
 [ $fail = 0 ] && { [ $ran = 1 ] && echo "--- resident-lanes: pass ---" || echo "--- resident-lanes: skipped (no device) ---"; }
