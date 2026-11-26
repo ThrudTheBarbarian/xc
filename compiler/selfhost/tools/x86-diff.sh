@@ -60,6 +60,13 @@ echo "building xtcgx86 (xtc → native arm64 host binary)…"
 RUN_INCS=(-I selfhost/lexer -I selfhost/asm -I selfhost/link -I selfhost/driver -I selfhost/defs -I selfhost/preproc -I selfhost/parser
           -I selfhost/sema -I selfhost/defs -I selfhost/ir -I selfhost/codegen)
 
+# X86_CG_FLAGS: extra flags for the reference code generator, e.g.
+# --simd=avx2, whose F16C conversions (pack-native) the port's back end is
+# then compared on. The port is given the reference's post-opt IR at every
+# level, since its own -O0 pipeline does not take the flags.
+CGF=()
+[ -n "${X86_CG_FLAGS:-}" ] && read -r -a CGF <<< "$X86_CG_FLAGS"
+
 pass=0; fail=0; unsup=0; oracle=0
 declare -a FAILED
 
@@ -78,12 +85,12 @@ for f in $FILES; do
          >/dev/null 2>&1 || [ ! -s "$WORK/a.ir" ]; then
         oracle=$((oracle+1)); continue
     fi
-    if ! "$BIN/xcc-cg-x86_64" "-O$LEVEL" -q -o "$WORK/a.s" "$WORK/a.ir" >/dev/null 2>&1; then
+    if ! "$BIN/xcc-cg-x86_64" "-O$LEVEL" ${CGF[@]+"${CGF[@]}"} -q -o "$WORK/a.s" "$WORK/a.ir" >/dev/null 2>&1; then
         oracle=$((oracle+1)); continue
     fi
     IN="$WORK/a.ir"
-    if [ "$LEVEL" != 0 ]; then
-        "$BIN/xcc-cg-x86_64" "-O$LEVEL" --dump-opt-ir -q "$WORK/a.ir" > "$WORK/opt.ir" 2>/dev/null \
+    if [ "$LEVEL" != 0 ] || [ ${#CGF[@]} -gt 0 ]; then
+        "$BIN/xcc-cg-x86_64" "-O$LEVEL" ${CGF[@]+"${CGF[@]}"} --dump-opt-ir -q "$WORK/a.ir" > "$WORK/opt.ir" 2>/dev/null \
             || { oracle=$((oracle+1)); continue; }
         IN="$WORK/opt.ir"
     fi

@@ -35,6 +35,11 @@ RUN_INCS=(-I selfhost/lexer -I selfhost/link -I selfhost/driver -I selfhost/defs
           -I selfhost/sema -I selfhost/defs -I selfhost/ir -I selfhost/opt -I selfhost/codegen
           -I selfhost/asm -I selfhost/defs)
 
+# ASX86_FLAGS: extra flags for the compile that makes each file's assembly,
+# e.g. -mavx2, so the VEX and F16C forms that level emits are compared too.
+XF=()
+[ -n "${ASX86_FLAGS:-}" ] && read -r -a XF <<< "$ASX86_FLAGS"
+
 pass=0; fail=0; oracle=0
 declare -a FAILED
 
@@ -44,7 +49,7 @@ declare -a FAILED
 FILES=$(find tests support selfhost -name '*.xc' -not -path 'tests/fuzz/findings/*' | sort | awk -v i="${SHARD_I:-0}" -v n="${SHARD_N:-1}" 'NR % n == i')
 for f in $FILES; do
     [ -n "$PATTERN" ] && [[ "$f" != *"$PATTERN"* ]] && continue
-    if ! "$BIN/xcc" -A x86_64 -H . "${RUN_INCS[@]}" -S -o "$WORK/a.s" "$f" \
+    if ! "$BIN/xcc" -A x86_64 ${XF[@]+"${XF[@]}"} -H . "${RUN_INCS[@]}" -S -o "$WORK/a.s" "$f" \
          >/dev/null 2>&1 || [ ! -s "$WORK/a.s" ]; then
         oracle=$((oracle+1)); continue
     fi
