@@ -58,10 +58,11 @@ grep -q "xtc.iface" libTheLib.wasm || { echo "FAIL: no xtc.iface custom section"
 
 # 3. Twin byte-identity, lib AND app, WAT and .wasm, -O0 and -O2.
 #    (tools built -O1: the -O2 call-body unroller tips Wasm32$placeData
-#    over the 16 KB arm64 frame budget — same note as wasm-diff.sh.)
-"$BIN/xcc" -O1 -A arm64 -H "$ROOT" -q -o xtcgwasm "$ROOT/selfhost/tools/xtcgwasm.xc" \
+#    over the 16 KB arm64 frame budget — same note as wasm-diff.sh. Built for
+#    this machine, so the test runs on an x86-64 Linux host as on arm64 macOS.)
+"$BIN/xcc" -O1 -H "$ROOT" -q -o xtcgwasm "$ROOT/selfhost/tools/xtcgwasm.xc" \
     -I "$ROOT/selfhost/ir" -I "$ROOT/selfhost/opt" -I "$ROOT/selfhost/codegen" -I "$ROOT/selfhost/asm" -I "$ROOT/selfhost/defs"
-"$BIN/xcc" -O1 -A arm64 -H "$ROOT" -q -o xtlnwasm "$ROOT/selfhost/tools/xtlnwasm.xc" \
+"$BIN/xcc" -O1 -H "$ROOT" -q -o xtlnwasm "$ROOT/selfhost/tools/xtlnwasm.xc" \
     -I "$ROOT/selfhost/asm" -I "$ROOT/selfhost/defs"
 "$BIN/xcc-fe" -A wasm32 -H "$ROOT" -q --emit-lib "$LIB" -o lib.ir >/dev/null 2>&1
 "$BIN/xcc-fe" -A wasm32 -H "$ROOT" -q -L . "$APP" -o app.ir >/dev/null 2>&1

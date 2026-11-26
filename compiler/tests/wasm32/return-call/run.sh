@@ -22,11 +22,12 @@ fi
 
 # 3. Twin byte-identity WITH the option, at both levels: WAT and .wasm.
 #    (tools built -O1: the -O2 call-body unroller tips Wasm32$placeData
-#    over the 16 KB arm64 frame budget — same note as wasm-diff.sh.)
+#    over the 16 KB arm64 frame budget — same note as wasm-diff.sh. Built for
+#    this machine, so the test runs on an x86-64 Linux host as on arm64 macOS.)
 "$BIN/xcc-fe" -A wasm32 -H "$ROOT" "$SRC" -o a.ir -q >/dev/null 2>&1
-"$BIN/xcc" -O1 -A arm64 -H "$ROOT" -q -o xtcgwasm "$ROOT/selfhost/tools/xtcgwasm.xc" \
+"$BIN/xcc" -O1 -H "$ROOT" -q -o xtcgwasm "$ROOT/selfhost/tools/xtcgwasm.xc" \
     -I "$ROOT/selfhost/ir" -I "$ROOT/selfhost/opt" -I "$ROOT/selfhost/codegen" -I "$ROOT/selfhost/asm" -I "$ROOT/selfhost/defs"
-"$BIN/xcc" -O1 -A arm64 -H "$ROOT" -q -o xtlnwasm "$ROOT/selfhost/tools/xtlnwasm.xc" \
+"$BIN/xcc" -O1 -H "$ROOT" -q -o xtlnwasm "$ROOT/selfhost/tools/xtlnwasm.xc" \
     -I "$ROOT/selfhost/asm" -I "$ROOT/selfhost/defs"
 for O in 0 2; do
     "$BIN/xcc-cg-wasm32" -O$O -q -x-wasm32,return-call -o a.wat a.ir
