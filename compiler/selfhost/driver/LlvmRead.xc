@@ -2738,9 +2738,21 @@ class LlvmReader
                     }
                 // A constant (`[ false, %land.lhs ]`, C's && and ||), or a
                 // slot's address: made in the predecessor, where it flows from.
+                // It ends at the first comma outside brackets: a constant
+                // expression has its own (`getelementptr inbounds
+                // inrange(-16, 24) (i8, ptr @vtable, i64 16)`, a thrown
+                // exception's vtable).
                 u32 cs = _p;
-                while (_p < _s.byteLength() && _s.byteAt(_p) != (u8)',')
+                i32 depth = (i32)0;
+                while (_p < _s.byteLength() && (depth > (i32)0 || _s.byteAt(_p) != (u8)','))
+                    {
+                    u8 c = _s.byteAt(_p);
+                    if (c == (u8)'(' || c == (u8)'[' || c == (u8)'{' || c == (u8)'<')
+                        depth = depth + (i32)1;
+                    else if (c == (u8)')' || c == (u8)']' || c == (u8)'}' || c == (u8)'>')
+                        depth = depth - (i32)1;
                     _p = _p + (u32)1;
+                    }
                 u32 ce = _p;
                 eat(",");
                 String* bn = word().substringFromByte((u32)1);

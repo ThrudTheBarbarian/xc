@@ -33,6 +33,15 @@ for O in -O0 -O2; do
         echo "FAIL c-reads $O: functions left to clang:"; grep 'because of' "$W/b" | head -4; fail=1
     fi
 done
+# A phi of constant expressions with commas of their own (the vtable
+# address of one of two thrown types): read, nothing left to clang.
+V=tests/par/c-reads/vtphi.cpp
+if clang++ --version >/dev/null 2>&1; then
+    clang++ -O2 -o "$W/vref" "$V" || { echo "FAIL c-reads: clang++ does not build vtphi.cpp"; exit 1; }
+    XC_C_TRACE=1 "$XC" -q -O2 -H . -o "$W/vx" "$V" > "$W/vb" 2>&1 || { echo "FAIL c-reads: vtphi.cpp does not build"; grep -v warning "$W/vb" | head -3; fail=1; }
+    [ -x "$W/vx" ] && { [ "$("$W/vx")" = "$("$W/vref")" ] || { echo "FAIL c-reads: vtphi.cpp gives '$("$W/vx")', clang++'s '$("$W/vref")'"; fail=1; }; }
+    grep -q 'left to clang' "$W/vb" && { echo "FAIL c-reads: vtphi.cpp left to clang:"; grep 'because of' "$W/vb" | head -2; fail=1; }
+fi
 # sext.c through clang's optimised IR (XC_C_LL), where `x ? -1 : 0` is
 # `sext i1`: all ones, not 1.
 G=tests/par/c-reads/sext.c
