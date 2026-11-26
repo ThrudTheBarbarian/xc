@@ -3247,9 +3247,13 @@ static XTIRValue* xtvApplyConv(XTIRFunction* fn, XTIRInsn* n, XTVecCand* c, XTIR
         if (![elemIds containsObject:@(elemOp.valueId)])
             continue;
         // A big body must fit the vector registers: the back ends do not spill
-        // a vector, and running out is a build error.
+        // a vector, and running out is a build error. The pool is the one for
+        // this loop's vector width, as the unroller's check of the same body
+        // (vecInterleaveFits): an AVX-512 loop has 30 registers, not 14.
         if (B.instructions.count > XTIR_VEC_SPLAT_BIG_BODY &&
-            !vecScalarBodyFits(B, elemIds, vecPoolFor(fn, self.profile ?: [XTIROptTargetProfile conservativeProfile])))
+            !vecScalarBodyFits(B, elemIds,
+                               vecPoolForTy(fn, self.profile ?: [XTIROptTargetProfile conservativeProfile],
+                                            [XTIRType vecWithLane:laneType bytes:(uint32_t)[self vectorBytes]])))
             continue;
         // The accumulator lane type must match the loads (i32/u32 add, or f32
         // in a float reduction).

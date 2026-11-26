@@ -1821,8 +1821,12 @@
         if (!self.hasValue(elems, elemOp.val()))
             return (String*)0;
         // A big body must fit the vector registers: the back ends do not
-        // spill a vector, and running out is a build error.
-        if (B.insns().count() > (u32)VEC_SPLAT_BIG_BODY && !self.vecScalarBodyFits(B, elems, self.vecPoolFor(_vecFn)))
+        // spill a vector, and running out is a build error. The pool is the
+        // one for this loop's vector width, as the unroller's check of the
+        // same body (vecInterleaveFits): an AVX-512 loop has 30 registers,
+        // not 14.
+        if (B.insns().count() > (u32)VEC_SPLAT_BIG_BODY
+            && !self.vecScalarBodyFits(B, elems, self.vecPoolForTy(_vecFn, self.vecTyOf(laneTy, self.vectorBytes()))))
             return (String*)0;
         return laneTy;
         }
