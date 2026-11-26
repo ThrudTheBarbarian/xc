@@ -93,6 +93,12 @@ String* gCSplitOut;
 // relocatable form): -c of a C/C++ file writes its two objects, xcc's at the
 // output and clang's beside it (<name>.rest.o), for the one link to take both.
 bool gCSplitPair;
+// --shared-runtime-object (internal: an xc file of a several-source build
+// that has C or C++ files too): -c of the xc file takes the target's
+// libRuntime as a C/C++ file's xcc half does (the canary guard through the
+// GOT, the object asking for -lRuntime), so the program has one runtime,
+// shared with the C/C++ objects.
+bool gXcSharedRuntime;
 bool gHalfXcArgs;       // the C path: xcc's half has a par block (--xc-* options, #148)
 // -c of a C file: cSplitLink makes one relocatable object, not a program.
 bool gCSplitRelocatable;
@@ -823,7 +829,7 @@ void resolveRuntimeLib(DriverOptions* d)
     // the GOT, compiled for the library, and its link takes it. An -flto link
     // compiles the program again and takes it as a build from source does.
     if (isX86_64(d) && d.compileOnly() && d.fe().input() != (String*)0
-        && Languages.forFile(d.fe().input()) == (LanguageRow*)0) return;
+        && Languages.forFile(d.fe().input()) == (LanguageRow*)0 && !gXcSharedRuntime) return;
     if (!d.lto() && isX86_64(d) && objectsReadGuardDirectly(d)) return;
     // A C or C++ program takes it too (2026-11-14): its xc half's objects
     // then share one runtime, so a program of several C/C++ objects has one.
@@ -2903,7 +2909,7 @@ void emitX86_64(DriverOptions* d, IRModule* mod)
         // it reads the library's canary guard through the GOT, as a program
         // that takes it does (linkX86_64Glibc), the rewrite made here since
         // the link sees only the object.
-        if (gCSplitOut != (String*)0 && d.fe().runtimeLibFile() != (String*)0 && !d.caps().staticLink())
+        if ((gCSplitOut != (String*)0 || gXcSharedRuntime) && d.fe().runtimeLibFile() != (String*)0 && !d.caps().staticLink())
             prog = guardThroughGotX86(prog);
         String* one = new String();
         one.append(x86ClassAllocStubs(prog, false));
@@ -4897,8 +4903,10 @@ bool addObjectDepLibs(DriverOptions* d)
 Array* objectLinkerOptions(DriverOptions* d)
 {
     Array* out = new Array();
-    // C/C++ objects only: an xc object stays byte for byte as it was.
-    if (gCSplitOut == (String*)0) return out;
+    // C/C++ objects only, and an xc object of a several-source C/C++ build
+    // (--shared-runtime-object): any other xc object stays byte for byte as
+    // it was.
+    if (gCSplitOut == (String*)0 && !gXcSharedRuntime) return out;
     Map* seen = new Map();
     Array* fws = new Array();
     Array* nl = d.fe().neededLibs();
@@ -4928,7 +4936,7 @@ Array* objectLinkerOptions(DriverOptions* d)
         g.add((Object*)String.withCString(rb.hasPrefix(String.withCString("libRuntimeSupport.")) ? "-lRuntimeSupport" : "-lRuntime"));
         out.add((Object*)g);
     }
-    if (d.targetRow() != (TargetRow*)0) {
+    if (d.targetRow() != (TargetRow*)0 && gCSplitOut != (String*)0) {
         Array* libs = CPath.language().libsFor(d.targetRow().os());
         for (u32 i = (u32)0; i < libs.count(); i = i + (u32)1) {
             Array* g = new Array();
@@ -5681,6 +5689,11 @@ i32 multiSourceBuild(DriverOptions* d)
     }
     String* self = Process.argument((u32)0);
     Array* objs = new Array();
+    // A line with C or C++ files: its xc files take the shared runtime too
+    // (--shared-runtime-object), so the program has one runtime.
+    bool anyC = false;
+    for (u32 k = (u32)0; k < srcs.count(); k = k + (u32)1)
+        if (Languages.forFile((String*)srcs.get(k)) != (LanguageRow*)0) anyC = true;
     for (u32 k = (u32)0; k < srcs.count(); k = k + (u32)1) {
         String* src = (String*)srcs.get(k);
         String* obj = (String*)0;
@@ -5708,6 +5721,8 @@ i32 multiSourceBuild(DriverOptions* d)
             argv.add((Object*)f);
         }
         argv.add((Object*)String.withCString("-c"));
+        if (anyC && lr == (LanguageRow*)0)
+            argv.add((Object*)String.withCString("--shared-runtime-object"));
         // win64 has no relocatable COFF link: a C/C++ file's two objects.
         if (!cOnly && isWin64(d))
             argv.add((Object*)String.withCString("--c-pair"));
@@ -6470,7 +6485,7 @@ void emitModule(DriverOptions* d, IRModule* mod)
         // the ELF spelling of the names (no leading underscore), as the image
         // path assembles them; ElfLinkArm64 reads it back at the link.
         // A C/C++ file's xcc half links libRuntime: the guard through the GOT.
-        if (gCSplitOut != (String*)0 && d.fe().runtimeLibFile() != (String*)0 && !isAndroid(d))
+        if ((gCSplitOut != (String*)0 || gXcSharedRuntime) && d.fe().runtimeLibFile() != (String*)0 && !isAndroid(d))
             prog = guardThroughGot(prog);
         String* one0 = new String();
         one0.append(classAllocStubs(prog));
@@ -6511,7 +6526,7 @@ void emitModule(DriverOptions* d, IRModule* mod)
         // A C/C++ file's xcc half that links libRuntime reads the guard
         // through the GOT, as on the ELF rows: the image does not define it,
         // and an @PAGE reference to an import is not patched.
-        if (gCSplitOut != (String*)0 && d.fe().runtimeLibFile() != (String*)0 && !isIos(d))
+        if ((gCSplitOut != (String*)0 || gXcSharedRuntime) && d.fe().runtimeLibFile() != (String*)0 && !isIos(d))
             prog = guardThroughGot(prog);
         String* one = new String();
         one.append(classAllocStubs(prog));
@@ -8394,7 +8409,8 @@ enum DriverOptionId = {
     doptMinBanked,
     doptDumpPlacement,
     doptDumpUsage,
-    doptCPair
+    doptCPair,
+    doptSharedRuntimeObject
 };
 
 class DriverOption
@@ -8529,6 +8545,7 @@ Array* driverOptions(void)
     driverOption((u32)doptDumpPlacement, (u32)doptkExact, "-dp --dump-placement", (u32)0);
     driverOption((u32)doptDumpUsage, (u32)doptkExact, "-du --dump-usage", (u32)0);
     driverOption((u32)doptCPair, (u32)doptkExact, "--c-pair", (u32)0);
+    driverOption((u32)doptSharedRuntimeObject, (u32)doptkExact, "--shared-runtime-object", (u32)0);
     return gDriverOptions;
 }
 
@@ -9130,6 +9147,10 @@ u32 applyOption(DriverOptions* d, u32 id, String* a, u32 i, u32 argc)
     }
     if (id == (u32)doptCPair) {
         gCSplitPair = true;
+        return (u32)1;
+    }
+    if (id == (u32)doptSharedRuntimeObject) {
+        gXcSharedRuntime = true;
         return (u32)1;
     }
     return (u32)0;

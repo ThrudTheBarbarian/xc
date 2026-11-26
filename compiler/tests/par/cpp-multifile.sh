@@ -36,5 +36,17 @@ got=$("$W/x")
     || { echo "FAIL cpp-multifile: the one-command build fails"; grep -v warning "$W/bo" | head -3; fail=1; }
 got=$("$W/one" 2>&1)
 [ "$got" = "$want" ] || { echo "FAIL cpp-multifile: the one-command program gives '$got', clang++'s '$want'"; fail=1; }
+# With an xc file too (tests/par/c-multi-xc: main.cpp, add.c, twice.xc), in
+# one command: the xc file takes the shared runtime the C/C++ objects take,
+# so the program has one. Where this tree has no runtime libraries (make
+# runtime-libs) there is no shared runtime to take, and the case is skipped.
+if ls support/runtime-lib/*/libRuntime.* >/dev/null 2>&1; then
+    M=tests/par/c-multi-xc
+    "$XC" -q -O2 -H . -o "$W/mx" $M/main.cpp $M/add.c $M/twice.xc > "$W/bmx" 2>&1 \
+        || { echo "FAIL cpp-multifile: main.cpp, add.c and twice.xc do not build in one command"; grep -v warning "$W/bmx" | head -3; fail=1; }
+    [ -x "$W/mx" ] && { got=$("$W/mx"); [ "$got" = 36840 ] || { echo "FAIL cpp-multifile: the program with an xc file gives '$got', not 36840"; fail=1; }; }
+else
+    echo "cpp-multifile: no runtime libraries in this tree; the case with an xc file is skipped"
+fi
 [ $fail = 0 ] && echo "--- cpp-multifile: pass ---" || echo "--- cpp-multifile: FAIL ---"
 exit $fail
