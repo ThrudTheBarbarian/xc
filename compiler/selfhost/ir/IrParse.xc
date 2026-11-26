@@ -38,15 +38,19 @@ class IrDbgAt
     u32 _file;
     u32 _line;
     u32 _col;
+    bool _vb; // the line ends ` !vecbegin` (IRInsn.vecBegin)
 
     void init(void)
         {
         _has = false;
+        _vb = false;
         _file = (u32)0;
         _line = (u32)0;
         _col = (u32)0;
         }
     bool has(void)  { return _has; }
+    bool vb(void)   { return _vb; }
+    void setVb(void) { _vb = true; }
     u32 file(void)  { return _file; }
     u32 line(void)  { return _line; }
     u32 col(void)   { return _col; }
@@ -194,6 +198,12 @@ class IrParser
     void addLine(String* line)
         {
         IrDbgAt* at = new IrDbgAt();
+        // ` !vecbegin`, the last thing on the line (IRInsn.dbgSuffix).
+        if (line.hasSuffix(String.withCString(" !vecbegin")))
+            {
+            line = line.substringBytes((u32)0, line.byteLength() - (u32)10);
+            at.setVb();
+            }
         u32 kl = (u32)6; // " !dbg "
         u32 found = String.notFound();
         // From the end, comparing bytes: this runs on every line of the IR.
@@ -1366,6 +1376,8 @@ class IrParser
             insn.setDbg(idb.file(), idb.line(), idb.col());
         else
             insn.clearDbg();
+        if (_li < _dbgs.count() && ((IrDbgAt*)_dbgs.get(_li)).vb())
+            insn.setVecBegin(true);
         insn.setRes(res);
         insn.setMemRes(mem);
         operands(insn, oc);

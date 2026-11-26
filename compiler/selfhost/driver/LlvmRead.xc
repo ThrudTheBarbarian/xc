@@ -82,6 +82,10 @@ class LlvmReader
     Map* _blockNames;       // the IR names given (blockNamed)
     Array* _swEdges;        // (switch's block, chain block, target) triples (readSwitch)
     Map* _noInlineGroups;   // `#N` -> its line, for each attribute group with noinline
+    // The struct-path TBAA tags (`!N`) that mark a load of a std::vector's
+    // begin pointer (vectorBeginTags): such a Load is marked vecBegin.
+    Map* _vecTags;
+    String* _full;          // the instruction's whole line, its metadata too (readInsn)
     u32 _pinOff;
 
     // The line being read, and where in it.
@@ -238,6 +242,71 @@ class LlvmReader
 
     // The C program's functions and globals added to m (a module lowered
     // from xc: the par runtime, for the outliner's blocks).
+    // The TBAA access tags `!N = !{!B, !S, i64 0}` whose base type node !B is
+    // a std::vector's own: libc++'s `_ZTSNSt3__16vectorI...` or libstdc++'s
+    // `_ZTSNSt12_Vector_baseI..._Vector_impl_dataE`, three pointer fields at
+    // offsets 0, 8 and 16 (begin, end, end of storage) and nothing else. A load
+    // with such a tag reads a vector's begin; any other spelling or shape is
+    // not taken (#705).
+    static Map* vectorBeginTags(Array* lines)
+        {
+        Map* md = new Map();
+        for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1)
+            {
+            String* l = (String*)lines.get(i);
+            if (l.byteLength() < (u32)4 || l.byteAt((u32)0) != (u8)'!' || l.byteAt((u32)1) < (u8)'0' || l.byteAt((u32)1) > (u8)'9')
+                continue;
+            u32 eq = l.byteIndexOf(String.withCString(" = "));
+            if (eq == String.notFound())
+                continue;
+            md.set((Hashable*)l.substringBytes((u32)0, eq), (Object*)l.substringFromByte(eq + (u32)3));
+            }
+        Map* tags = new Map();
+        Array* keys = md.allKeys();
+        for (u32 i = (u32)0; i < keys.count(); i = i + (u32)1)
+            {
+            String* k = (String*)keys.get(i);
+            String* v = (String*)md.get((Hashable*)k);
+            // `!{!B, !S, i64 0}`
+            if (!v.hasPrefix(String.withCString("!{!")) || !v.hasSuffix(String.withCString(", i64 0}")))
+                continue;
+            Array* parts = v.substringBytes((u32)2, v.byteLength() - (u32)3).splitOnByte((u8)',');
+            if (parts.count() != (u32)3)
+                continue;
+            String* base = (String*)md.get((Hashable*)((String*)parts.get((u32)0)).trimmed());
+            if (base == (String*)0 || !LlvmReader.vectorShape(base))
+                continue;
+            tags.set((Hashable*)k.substringFromByte((u32)1), (Object*)k);
+            }
+        return tags;
+        }
+
+    // A TBAA struct node that is a std::vector's: `!{!"<name>", !S, i64 0,
+    // !S, i64 8, !S, i64 16}`, one member type thrice, name as above.
+    static bool vectorShape(String* v)
+        {
+        if (!v.hasPrefix(String.withCString("!{!\"")))
+            return false;
+        u32 q = LlvmReader.byteAfter(v, (u8)'"', (u32)4);
+        if (q == (u32)$FFFFFFFF)
+            return false;
+        String* name = v.substringBytes((u32)4, q - (u32)4);
+        bool libcxx = name.hasPrefix(String.withCString("_ZTSNSt3__16vectorI"));
+        bool libstdcxx = name.hasPrefix(String.withCString("_ZTSNSt12_Vector_baseI"))
+                         && name.hasSuffix(String.withCString("17_Vector_impl_dataE"));
+        if (!libcxx && !libstdcxx)
+            return false;
+        Array* f = v.substringBytes(q + (u32)1, v.byteLength() - q - (u32)2).splitOnByte((u8)',');
+        // "", " !S", " i64 0", " !S", " i64 8", " !S", " i64 16"
+        if (f.count() != (u32)7 || ((String*)f.get((u32)0)).trimmed().byteLength() != (u32)0)
+            return false;
+        String* m = ((String*)f.get((u32)1)).trimmed();
+        return ((String*)f.get((u32)3)).trimmed().equals(m) && ((String*)f.get((u32)5)).trimmed().equals(m)
+               && ((String*)f.get((u32)2)).trimmed().equals(String.withCString("i64 0"))
+               && ((String*)f.get((u32)4)).trimmed().equals(String.withCString("i64 8"))
+               && ((String*)f.get((u32)6)).trimmed().equals(String.withCString("i64 16"));
+        }
+
     IRModule* readInto(String* text, IRModule* m)
         {
         _m = m;
@@ -254,6 +323,7 @@ class LlvmReader
             if (sp != (u32)$FFFFFFFF)
                 _noInlineGroups.set((Hashable*)l.substringBytes((u32)11, sp - (u32)11), (Object*)l);
             }
+        _vecTags = LlvmReader.vectorBeginTags(lines);
         _locs = new Map();
         if (_path != (String*)0)
             {
@@ -2449,6 +2519,7 @@ class LlvmReader
         // The metadata attached after the operands (`, !dbg !29, !tbaa !20`)
         // is not read: the line ends where it starts.
         String* line = full;
+        _full = full;
         for (u32 i = (u32)0; i + (u32)2 < full.byteLength(); i = i + (u32)1)
             if (full.byteAt(i) == (u8)',' && full.byteAt(i + (u32)1) == (u8)' ' && full.byteAt(i + (u32)2) == (u8)'!')
                 {
@@ -2544,6 +2615,19 @@ class LlvmReader
             ld.setMemRes(mo);
             ld.add(IROperand.useVal(addr));
             ld.add(IROperand.useVal(_mem));
+            if (IRType.isPtr(t) && _vecTags != (Map*)0 && _vecTags.count() > (u32)0)
+                {
+                u32 tg = _full.byteIndexOf(String.withCString(", !tbaa !"));
+                if (tg != String.notFound())
+                    {
+                    u32 b = tg + (u32)9; // past ", !tbaa !"
+                    u32 e = b;
+                    while (e < _full.byteLength() && _full.byteAt(e) >= (u8)'0' && _full.byteAt(e) <= (u8)'9')
+                        e = e + (u32)1;
+                    if (_vecTags.get((Hashable*)_full.substringBytes(b, e - b)) != (Object*)0)
+                        ld.setVecBegin(true);
+                    }
+                }
             _blk.add(ld);
             _mem = mo;
             return;

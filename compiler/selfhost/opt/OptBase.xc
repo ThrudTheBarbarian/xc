@@ -2135,6 +2135,12 @@ class BeFact : Object
     Array* _ppScanAt;      // Number@: their arrays' capture positions
     IRFunc* _ppFn;         // and its function
     Array* _ppRangeA;      // Number@: a stored array...
+    // A stored array beside a read-only one whose base is a std::vector's
+    // begin (a Load marked vecBegin, #705): s, x, and the vector object's
+    // address, whose field 1 the call site loads as the end.
+    Array* _ppVecA;
+    Array* _ppVecB;
+    Array* _ppVecObj;
     Array* _ppRangeB;      // Number@: ...a read-only one read away from [i] within bounds: a range test
     IRValue* _ppGuardMem;  // ppOverlapGuard's memory token after its calls
     // The pairs that need a check at run time (indices into the above).

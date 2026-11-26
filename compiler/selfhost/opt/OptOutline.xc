@@ -1304,20 +1304,51 @@
             if (!self.ppInRangeB(g))
                 ranged.set(at, (Object*)Number.with((u32)0));
             }
+        // A pointer the loop never stores through is read-only, whether it
+        // reads through it or only uses its value (a std::vector's end, for
+        // its size): the runtime's overlap check took such an end pointer, of
+        // no known span, as possibly written (#705). Any store through a base
+        // that leads to no live-in has made every answer 0 (unknown).
         for (u32 i = (u32)0; i < liveIns.count(); i = i + (u32)1)
-            _ppRO.add((Object*)Number.with(!unknown && ((Number*)read.get(i)).asU32() != (u32)0
-                                           && ((Number*)stored.get(i)).asU32() == (u32)0 ? (u32)1 : (u32)0));
+            _ppRO.add((Object*)Number.with(!unknown && ((Number*)stored.get(i)).asU32() == (u32)0 ? (u32)1 : (u32)0));
         for (u32 i = (u32)0; i < liveIns.count(); i = i + (u32)1)
             _ppChk.add((Object*)Number.with(((Number*)_ppRO.get(i)).asU32() != (u32)0
                                             && ((Number*)ranged.get(i)).asU32() != (u32)0 ? (u32)1 : (u32)0));
         }
 
+    // The address of the std::vector object whose begin pointer base is: a
+    // Load the C/C++ reader marked vecBegin (clang's TBAA says it reads a
+    // vector's field 0), through casts, with an address no block of the
+    // loop defines; else 0 (#705).
+    final IRValue* ppVectorObject(IRValue* base, Map* defOf, Map* defBlk, Array* body)
+        {
+        IRInsn* d = (IRInsn*)defOf.get((Hashable*)base);
+        for (u32 k = (u32)0; k < (u32)8 && d != (IRInsn*)0 && d.isOp(opBitcast) && d.ops().count() == (u32)1
+                             && ((IROperand*)d.ops().get((u32)0)).kind() == (u8)OPK_USE; k = k + (u32)1)
+            d = (IRInsn*)defOf.get((Hashable*)((IROperand*)d.ops().get((u32)0)).val());
+        if (d == (IRInsn*)0 || !d.isOp(opLoad) || !d.vecBegin() || d.ops().count() < (u32)1)
+            return (IRValue*)0;
+        IROperand* a = (IROperand*)d.ops().get((u32)0);
+        if (a.kind() != (u8)OPK_USE || a.val() == (IRValue*)0)
+            return (IRValue*)0;
+        IRBlock* db = (IRBlock*)defBlk.get((Hashable*)a.val());
+        if (db != (IRBlock*)0 && self.hasBlock(body, db))
+            return (IRValue*)0;
+        IRBlock* lb = (IRBlock*)defBlk.get((Hashable*)d.res());
+        if (lb != (IRBlock*)0 && self.hasBlock(body, lb))
+            return (IRValue*)0;
+        return a.val();
+        }
+
     // Whether array g (of _ppGBase) is one the call site compares by range
-    // with each stored array (_ppRangeB).
+    // with each stored array (_ppRangeB, or a vector's _ppVecB).
     final bool ppInRangeB(u32 g)
         {
         for (u32 p = (u32)0; _ppRangeB != (Array*)0 && p < _ppRangeB.count(); p = p + (u32)1)
             if (((Number*)_ppRangeB.get(p)).asU32() == g)
+                return true;
+        for (u32 p = (u32)0; _ppVecB != (Array*)0 && p < _ppVecB.count(); p = p + (u32)1)
+            if (((Number*)_ppVecB.get(p)).asU32() == g)
                 return true;
         return false;
         }
@@ -3106,6 +3137,43 @@
             acc = ppEmit(P, String.withCString("Or"), bt, IROperand.useVal(acc), IROperand.useVal(ov), (IROperand*)0);
             }
         String* i64t = String.withCString("I64");
+        // A stored array beside a std::vector read anywhere (#705): the
+        // vector's bytes are [begin, end), end its object's field 1, loaded
+        // here. Serial unless end >= begin, the length is whole elements, and
+        // the stored array's range misses it.
+        for (u32 p = 0; _ppVecA != (Array*)0 && p < _ppVecA.count(); p = p + 1)
+            {
+            u32 s = ((Number*)_ppVecA.get(p)).asU32();
+            u32 x = ((Number*)_ppVecB.get(p)).asU32();
+            self.ppRangeOf(P, s, lo64, hi64);
+            IRValue* sLo = _ppRangeLo;
+            IRValue* sHi = _ppRangeHi;
+            IRValue* bi = self.ppEmit(P, String.withCString("PtrToInt"), i64t, IROperand.useVal((IRValue*)_ppGBase.get(x)), (IROperand*)0, (IROperand*)0);
+            IRValue* oi = self.ppEmit(P, String.withCString("PtrToInt"), i64t, IROperand.useVal((IRValue*)_ppVecObj.get(p)), (IROperand*)0, (IROperand*)0);
+            IRValue* ei = self.ppEmit(P, String.withCString("Add"), i64t, IROperand.useVal(oi), IROperand.immI((i64)8, i64t), (IROperand*)0);
+            IRValue* ep = self.ppEmit(P, String.withCString("IntToPtr"), String.withCString("Ptr(I64, unbanked)"), IROperand.useVal(ei), (IROperand*)0, (IROperand*)0);
+            IRInsn* ld = IRInsn.with(String.withCString("Load"));
+            IRValue* endv = new IRValue(i64t);
+            IRValue* lm = new IRValue(String.withCString("Mem"));
+            ld.setRes(endv);
+            ld.setMemRes(lm);
+            ld.add(IROperand.useVal(ep));
+            ld.add(IROperand.useVal(_ppGuardMem));
+            P.add(ld);
+            _ppGuardMem = lm;
+            IRValue* back = self.ppCmp(P, String.withCString("ULT"), endv, bi);
+            IRValue* len = self.ppEmit(P, String.withCString("Sub"), i64t, IROperand.useVal(endv), IROperand.useVal(bi), (IROperand*)0);
+            IRValue* es = self.ppEmit(P, String.withCString("Const"), i64t, IROperand.immI((i64)((Number*)_ppGElem.get(x)).asU32(), i64t), (IROperand*)0, (IROperand*)0);
+            IRValue* rem = self.ppEmit(P, String.withCString("URem"), i64t, IROperand.useVal(len), IROperand.useVal(es), (IROperand*)0);
+            IRValue* zero = self.ppEmit(P, String.withCString("Const"), i64t, IROperand.immI((i64)0, i64t), (IROperand*)0, (IROperand*)0);
+            IRValue* ragged = self.ppCmp(P, String.withCString("NE"), rem, zero);
+            IRValue* c1 = self.ppCmp(P, String.withCString("ULT"), sLo, endv);
+            IRValue* c2 = self.ppCmp(P, String.withCString("ULT"), bi, sHi);
+            IRValue* ov = self.ppEmit(P, String.withCString("And"), bt, IROperand.useVal(c1), IROperand.useVal(c2), (IROperand*)0);
+            ov = self.ppEmit(P, String.withCString("Or"), bt, IROperand.useVal(ov), IROperand.useVal(back), (IROperand*)0);
+            ov = self.ppEmit(P, String.withCString("Or"), bt, IROperand.useVal(ov), IROperand.useVal(ragged), (IROperand*)0);
+            acc = self.ppEmit(P, String.withCString("Or"), bt, IROperand.useVal(acc), IROperand.useVal(ov), (IROperand*)0);
+            }
         // A stored pointer beside a read-only one read anywhere: apart only
         // in different heap blocks. Two pointers into one block share its
         // end (base + Par.spanOf); either span unknown counts as one block.
@@ -4161,6 +4229,9 @@
         _ppSpanB = new Array();
         _ppRangeA = new Array();
         _ppRangeB = new Array();
+        _ppVecA = new Array();
+        _ppVecB = new Array();
+        _ppVecObj = new Array();
         _ppGBnd = new Array();
         _ppGLoT = new Array();
         _ppGHiT = new Array();
@@ -4302,6 +4373,18 @@
                         }
                     if (!apart)
                         return ppNo("an array that may overlap a stored one, read away from [i]");
+                    // A std::vector's begin (the reader's vecBegin load, from
+                    // an object the loop does not define): the call site
+                    // takes [begin, end) from the object, checked (#705).
+                    IRValue* vobj = self.ppVectorObject((IRValue*)_ppGBase.get(x), defOf, defBlk, body);
+                    if (vobj != (IRValue*)0 && ((Number*)_ppGElem.get(s)).asU32() != (u32)0
+                        && ((Number*)_ppGElem.get(x)).asU32() != (u32)0)
+                        {
+                        _ppVecA.add((Object*)Number.with(s));
+                        _ppVecB.add((Object*)Number.with(x));
+                        _ppVecObj.add((Object*)vobj);
+                        continue;
+                        }
                     _ppSpanA.add((Object*)Number.with(s));
                     _ppSpanB.add((Object*)Number.with(x));
                     continue;

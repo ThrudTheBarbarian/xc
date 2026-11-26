@@ -1106,6 +1106,11 @@ class IRType
     u32 _dbgFile;
     u32 _dbgLine;
     u32 _dbgCol;
+    // A Load the C/C++ reader knows reads a std::vector's begin pointer (its
+    // object's field 0, by clang's struct-path TBAA), printed ` !vecbegin`:
+    // the outliner's guard may then take the vector's end from field 1. A
+    // pass that copies the load without it only loses the fact.
+    bool _vecBegin;
 
     void init(void)
         {
@@ -1113,6 +1118,7 @@ class IRType
         _op = String.withCString("?");
         _opc = opUnknown;
         _dbg = false;
+        _vecBegin = false;
         }
 
     static IRInsn* with(String* mnemonic)
@@ -1164,12 +1170,23 @@ class IRType
             _dbgCol = from.dbgCol();
             }
         }
-    // ` !dbg f:l:c`, or nothing at all without a location.
+    bool vecBegin(void)
+        {
+        return _vecBegin;
+        }
+    void setVecBegin(bool b)
+        {
+        _vecBegin = b;
+        }
+    // ` !dbg f:l:c`, or nothing at all without a location; then ` !vecbegin`
+    // where it is one.
     String* dbgSuffix(void)
         {
         String* s = String.withCString("");
         if (_dbg)
             s.appendFormat(" !dbg %ld:%ld:%ld", (i32)_dbgFile, (i32)_dbgLine, (i32)_dbgCol);
+        if (_vecBegin)
+            s.appendCString(" !vecbegin");
         return s;
         }
 
