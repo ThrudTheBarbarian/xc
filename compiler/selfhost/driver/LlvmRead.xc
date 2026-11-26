@@ -61,6 +61,9 @@ class LlvmReader
     u32 _fileId;
     Map* _locs;             // "!N" -> Number@ line << 16 | column, from the DILocations
     Map* _structs;          // "%struct.X" -> "Agg(<layout id>)"
+    Map* _pairTys;          // a two-word result's LLVM type -> "Agg(<layout id>)"
+    Array* _retPair;        // the function's two-word result: its parts' IR types, else 0
+    bool _pairRegs;         // the target returns a two-word aggregate in two registers
     Map* _packedIds;        // layout id -> 1 for a packed struct (`<{ ... }>`): no padding, aligned 1
     bool _cabiAll;          // every function through the C ABI (clang's object calls them, or they its)
     bool _split;            // clang compiles the rest: globals are its, and a function not read stays its
@@ -94,6 +97,7 @@ class LlvmReader
         _retTy = new Map();
         _defined = new Map();
         _structs = new Map();
+        _pairTys = new Map();
         _packedIds = new Map();
         _declOf = new Map();
         _readFns = new Array();
@@ -274,6 +278,22 @@ class LlvmReader
             String* l = (String*)lines.get(i);
             if (l.hasPrefix(String.withCString("target triple")) && l.contains(String.withCString("windows-msvc")))
                 _msvc = true;
+            }
+        // Two-word results in two registers: AAPCS64 (x0:x1) and System V
+        // x86-64 (rax:rdx). Win64 returns over 8 bytes through a hidden
+        // pointer, and the other targets are not checked: there a pair
+        // result is not read.
+        _pairRegs = false;
+        for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1)
+            {
+            String* l = (String*)lines.get(i);
+            if (!l.hasPrefix(String.withCString("target triple")))
+                continue;
+            bool arch = l.contains(String.withCString("\"aarch64")) || l.contains(String.withCString("\"arm64"))
+                || l.contains(String.withCString("\"x86_64"));
+            _pairRegs = arch && !l.contains(String.withCString("windows")) && !l.contains(String.withCString("win32"))
+                && !l.contains(String.withCString("mingw")) && !l.contains(String.withCString("cygwin"));
+            break;
             }
         // Struct types first (a global or a function names them), then
         // globals and declarations: a function may use one defined below it.
@@ -790,6 +810,87 @@ class LlvmReader
         if (w.byteLength() == (u32)0)
             return (String*)0;
         return w;
+        }
+
+    // At `{`: a literal struct's text (`{ ptr, i8 }`), else 0 and nothing read.
+    String* litStruct(void)
+        {
+        ws();
+        if (peek() != (u8)'{')
+            return (String*)0;
+        u32 b = _p;
+        u32 depth = (u32)0;
+        while (_p < _s.byteLength())
+            {
+            u8 c = _s.byteAt(_p);
+            _p = _p + (u32)1;
+            if (c == (u8)'{') depth = depth + (u32)1;
+            else if (c == (u8)'}') { depth = depth - (u32)1; if (depth == (u32)0) break; }
+            }
+        return _s.substringBytes(b, _p - b);
+        }
+
+    // A result of two integer words, 16 bytes at most: `[2 x i64]` (arm64's
+    // std::pair<iterator, bool>), `{ ptr, i8 }` or `{ i64, i64 }` (x86-64's).
+    // Both C ABIs return it in two registers (x0:x1, rax:rdx), as an xc
+    // aggregate of its size: read as one, "Agg(<id>)", its two words the
+    // parts of the value (as an aggregate parameter's). Otherwise 0.
+    String* pairTy(String* t)
+        {
+        if (t == (String*)0 || !_pairRegs)
+            return (String*)0;
+        String* got = (String*)_pairTys.get((Hashable*)t);
+        if (got != (String*)0)
+            return got;
+        Array* el = LlvmReader.intArrayElems(t);
+        if (el != (Array*)0 && el.count() != (u32)2)
+            return (String*)0;
+        if (el == (Array*)0)
+            {
+            if (!t.hasPrefix(String.withCString("{ ")) || !t.hasSuffix(String.withCString(" }")))
+                return (String*)0;
+            String* body = t.substringBytes((u32)2, t.byteLength() - (u32)4);
+            u32 c = body.byteIndexOf(String.withCString(", "));
+            if (c == String.notFound())
+                return (String*)0;
+            el = new Array();
+            el.add((Object*)body.substringBytes((u32)0, c));
+            el.add((Object*)body.substringFromByte(c + (u32)2));
+            }
+        IRLayout* L = IRLayout.with((u32)0, (u32)1);
+        u32 off = (u32)0;
+        u32 maxA = (u32)1;
+        for (u32 k = (u32)0; k < (u32)2; k = k + (u32)1)
+            {
+            String* lt = (String*)el.get(k);
+            String* it = irOf(lt);
+            if (it == (String*)0 || !(lt.equals(String.withCString("ptr")) || lt.equals(String.withCString("i64"))
+                || lt.equals(String.withCString("i32")) || lt.equals(String.withCString("i16")) || lt.equals(String.withCString("i8"))))
+                return (String*)0;
+            u32 a = alignOf(it);
+            if (a > maxA)
+                maxA = a;
+            off = (off + a - (u32)1) / a * a;
+            L.addField(off, it);
+            off = off + widthOf(it);
+            }
+        off = (off + maxA - (u32)1) / maxA * maxA;
+        if (off > (u32)16)
+            return (String*)0;
+        L.setSize(off);
+        String* at = String.withFormat("Agg(%u)", _m.addLayout(L));
+        _pairTys.set((Hashable*)t, (Object*)at);
+        return at;
+        }
+
+    // The parts' IR types of a pair type pairTy made.
+    Array* pairParts(String* aggT)
+        {
+        IRLayout* L = layoutOf(aggT);
+        Array* out = new Array();
+        out.add((Object*)L.typeAt((u32)0));
+        out.add((Object*)L.typeAt((u32)1));
+        return out;
         }
 
     // The IR type of an LLVM type (a scalar, ptr, or a struct read already),
@@ -1352,7 +1453,9 @@ class LlvmReader
                 }
             u32 save = _p;
             String* t = llType();
-            if (t != (String*)0 && irOf(t) != (String*)0)
+            if (t == (String*)0)
+                t = litStruct();
+            if (t != (String*)0 && (irOf(t) != (String*)0 || pairTy(t) != (String*)0))
                 ret = t;
             if (_p == save)
                 _p = _p + (u32)1;
@@ -1363,7 +1466,8 @@ class LlvmReader
         if (name.hasPrefix(String.withCString("@llvm.")))
             return;
         String* sym = symFor(name);
-        String* irRet = zx ? unsignedOf(irOf(ret)) : irOf(ret);
+        // A two-word result (pairTy): the aggregate it is read as.
+        String* irRet = irOf(ret) == (String*)0 ? pairTy(ret) : (zx ? unsignedOf(irOf(ret)) : irOf(ret));
         // A half or bfloat travels as C passes it: in an F32's low half.
         bool retHalf = LlvmReader.isHalfTy(ret);
         if (retHalf)
@@ -1518,7 +1622,9 @@ class LlvmReader
                 }
             u32 save = _p;
             String* t = llType();
-            if (t != (String*)0 && irOf(t) != (String*)0)
+            if (t == (String*)0)
+                t = litStruct();
+            if (t != (String*)0 && (irOf(t) != (String*)0 || pairTy(t) != (String*)0))
                 ret = t;
             if (_p == save)
                 _p = _p + (u32)1;
@@ -1545,7 +1651,9 @@ class LlvmReader
                 q = LlvmReader.byteAfter(hl, (u8)'#', e);
                 }
             }
-        _fn.setRet(zx ? unsignedOf(irOf(ret)) : irOf(ret));
+        String* pairRet = irOf(ret) == (String*)0 ? pairTy(ret) : (String*)0;
+        _retPair = pairRet != (String*)0 ? pairParts(pairRet) : (Array*)0;
+        _fn.setRet(pairRet != (String*)0 ? pairRet : (zx ? unsignedOf(irOf(ret)) : irOf(ret)));
         _retHalf = LlvmReader.isHalfTy(ret);
         if (_retHalf)
             _fn.setRet(String.withCString("F32"));
@@ -2006,6 +2114,25 @@ class LlvmReader
             IRValue* g = gepValue();
             eat(")");
             return g;
+            }
+        // `ptrtoint (ptr @g to i64)` (a pointer difference against a global)
+        // and `inttoptr (i64 K to ptr)`: the conversion, made here.
+        bool p2i = _s.substringFromByte(_p).hasPrefix(String.withCString("ptrtoint ("));
+        if (p2i || _s.substringFromByte(_p).hasPrefix(String.withCString("inttoptr (")))
+            {
+            word();
+            eat("(");
+            IRValue* a = typedOperand();
+            if (a == (IRValue*)0)
+                return (IRValue*)0;
+            eat("to");
+            String* tt = irOf(llType());
+            if (tt == (String*)0 || !eat(")"))
+                {
+                fail("a constant expression not read");
+                return (IRValue*)0;
+                }
+            return emit(String.withCString(p2i ? "PtrToInt" : "IntToPtr"), tt, IROperand.useVal(a), (IROperand*)0, (IROperand*)0);
             }
         u32 cb = _p;
         while (_p < _s.byteLength() && _s.byteAt(_p) != (u8)',' && _s.byteAt(_p) != (u8)')'
@@ -2817,6 +2944,32 @@ class LlvmReader
                 if (_sretParam != (IRValue*)0)
                     r.add(IROperand.useVal(_sretParam));
                 }
+            else if (_retPair != (Array*)0)
+                {
+                // The two words made into the aggregate the function returns.
+                aggType();
+                ws();
+                String* an = word();
+                Array* parts = (Array*)_aggParams.get((Hashable*)an);
+                if (parts == (Array*)0)
+                    {
+                    fail("a return of a pair not read");
+                    return;
+                    }
+                IRInsn* b = IRInsn.with(String.withCString("AggBuild"));
+                for (u32 k = (u32)0; k < (u32)2; k = k + (u32)1)
+                    {
+                    String* pt = (String*)_retPair.get(k);
+                    IRValue* pv = k < parts.count() ? (IRValue*)parts.get(k) : (IRValue*)0;
+                    if (pv == (IRValue*)0)
+                        pv = emit(String.withCString("Const"), pt, IROperand.immI((i64)0, pt), (IROperand*)0, (IROperand*)0);
+                    b.add(IROperand.useVal(pv));
+                    }
+                IRValue* av = new IRValue(_fn.ret());
+                b.setRes(av);
+                _blk.add(b);
+                r.add(IROperand.useVal(av));
+                }
             else
                 {
                 IRValue* v = typedOperand();
@@ -2896,9 +3049,10 @@ class LlvmReader
                 lp.add(IROperand.immI((i64)2, String.withCString("I32")));
             return;
             }
-        if (_readHandlers && op.equals(String.withCString("insertvalue")))
+        if (op.equals(String.withCString("insertvalue")) && (_readHandlers || _retPair != (Array*)0))
             {
             // insertvalue { ptr, i32 } <agg | poison | undef>, <ty> <v>, <k>
+            // (a landing pad's, or the pair a function returns).
             aggType();
             ws();
             String* base = word();
@@ -3680,7 +3834,14 @@ class LlvmReader
         skipAttrs();
         bool zx = _sawZext;
         String* rlt = llType();
+        if (rlt == (String*)0)
+            rlt = litStruct();
         String* rt = irOf(rlt);
+        // A pair result: the call's aggregate, its two words taken out after
+        // it (an invoke's in its normal block) as the parts of the value.
+        String* pairRt = rt == (String*)0 ? pairTy(rlt) : (String*)0;
+        if (pairRt != (String*)0)
+            rt = pairRt;
         if (rt == (String*)0)
             {
             fail("a call of a type not read");
@@ -4123,6 +4284,22 @@ class LlvmReader
         String* ut = zx ? unsignedOf(rt) : rt;
         bool narrowBack = !ut.equals(rt);
         IRValue* wide = (IRValue*)0;
+        if (pairRt != (String*)0)
+            {
+            IRValue* pr = new IRValue(pairRt);
+            c.setRes(pr);
+            IRValue* pmo = new IRValue(String.withCString("Mem"));
+            c.setMemRes(pmo);
+            _blk.add(c);
+            _mem = pmo;
+            Array* pts = pairParts(pairRt);
+            Array* parts = new Array();
+            for (u32 k = (u32)0; k < (u32)2; k = k + (u32)1)
+                parts.add((Object*)emit(String.withCString("AggExtract"), (String*)pts.get(k), IROperand.useVal(pr),
+                                        IROperand.immI((i64)k, String.withCString("I32")), (IROperand*)0));
+            aggDefined(res, parts);
+            return;
+            }
         if (!rt.equals(String.withCString("Void")))
             {
             if (narrowBack)

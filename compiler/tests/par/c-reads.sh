@@ -23,6 +23,16 @@ if ! clang --version >/dev/null 2>&1; then echo "--- c-reads: skipped (no clang)
 W=$(mktemp -d); trap 'rm -rf "${W:?}"' EXIT
 F=tests/par/c-reads/reads.c
 fail=0
+# pair.cpp: results of two integer words ([2 x i64] on arm64; { ptr, i8 },
+# { i64, i64 } and { i64, i32 } on x86-64), from calls and invokes, read as
+# the aggregate both ABIs return in two registers: nothing left to clang.
+P=tests/par/c-reads/pair.cpp
+if clang++ --version >/dev/null 2>&1; then
+    clang++ -O2 -o "$W/pref" "$P" || { echo "FAIL c-reads: clang++ does not build pair.cpp"; exit 1; }
+    XC_C_TRACE=1 "$XC" -q -O2 -H . -o "$W/px" "$P" > "$W/pb" 2>&1 || { echo "FAIL c-reads: pair.cpp does not build"; grep -v warning "$W/pb" | head -3; fail=1; }
+    [ -x "$W/px" ] && { [ "$("$W/px")" = "$("$W/pref")" ] || { echo "FAIL c-reads: pair.cpp gives '$("$W/px")', clang++'s '$("$W/pref")'"; fail=1; }; }
+    grep -q 'left to clang' "$W/pb" && { echo "FAIL c-reads: pair.cpp left to clang:"; grep 'because of' "$W/pb" | head -2; fail=1; }
+fi
 clang -O2 -o "$W/ref" "$F" || { echo "FAIL c-reads: clang does not build it"; exit 1; }
 want=$("$W/ref")
 for O in -O0 -O2; do
