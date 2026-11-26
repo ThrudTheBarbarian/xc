@@ -451,7 +451,9 @@
             }
         m.funcs().removeAll();
         m.funcs().addAll(kept);
+        _held = held;
         self.runPasses(m);
+        _held = (Array*)0;
         m.funcs().addAll(held);
         }
 
@@ -1113,10 +1115,17 @@
     final void dropBase(IRModule* m)
         {
         Map* base = m.baseNames();
-        Map* fns = Map.withCapacity(m.funcs().count() + (u32)1);
-        for (u32 i = (u32)0; i < m.funcs().count(); i = i + (u32)1)
+        // The functions with handlers, held out while the passes run
+        // (Opt.run), are the program's too: what they call stays (the C
+        // heap's operator new, which a C++ main's renamed call names).
+        Array* all = new Array();
+        all.addAll(m.funcs());
+        if (_held != (Array*)0)
+            all.addAll(_held);
+        Map* fns = Map.withCapacity(all.count() + (u32)1);
+        for (u32 i = (u32)0; i < all.count(); i = i + (u32)1)
             {
-            IRFunc* f = (IRFunc*)m.funcs().get(i);
+            IRFunc* f = (IRFunc*)all.get(i);
             if (f.name() != (String*)0 && fns.get((Hashable*)f.name()) == (Object*)0)
                 fns.set((Hashable*)f.name(), (Object*)f);
             }
@@ -1125,9 +1134,9 @@
         // The roots: the program's functions (main among them) and
         // initialisers, and the class-name root for an object the command
         // line joins (the C++ library's archive is not one).
-        for (u32 i = (u32)0; i < m.funcs().count(); i = i + (u32)1)
+        for (u32 i = (u32)0; i < all.count(); i = i + (u32)1)
             {
-            String* n = ((IRFunc*)m.funcs().get(i)).name();
+            String* n = ((IRFunc*)all.get(i)).name();
             if (n != (String*)0 && base.get((Hashable*)n) == (Object*)0)
                 dropBaseMark(m, reach, work, n);
             }

@@ -2026,6 +2026,7 @@ class BeFact : Object
     // partial results, come with the block's class (stage 3).
     u32 _ppOutN;
     Array* _ppMade;     // ParOutBlock@: the blocks made, for the kernel printers
+    Array* _held;       // IRFunc@: the functions with handlers, out of the module while the passes run (Opt.run)
     bool _ppOutlined;   // the outliner has run (the runtime need not be kept for it)
     i64 _ppRowC;
     i64 _ppRowLo;
