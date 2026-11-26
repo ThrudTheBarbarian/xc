@@ -84,6 +84,10 @@ i32 clock_gettime(i32 clock, pointer ts);
 i32 sysinfo(pointer info);
 pointer memset(pointer dst, i32 c, u64 n);
 #endif
+#elif ARCH_armv7
+// XTOS: libc's gettimeofday, newlib's 64-bit seconds and microseconds (#718).
+struct _ParTimeval { i64 sec; i32 usec; i32 pad; }
+i32 gettimeofday(pointer tv, pointer tz);
 #else
 // Darwin's monotonic clock, in nanoseconds, and the CPU's model for the
 // hardware key.
@@ -555,6 +559,15 @@ class ParDevice
         _ParTimespec ts;
         clock_gettime((i32)1, (pointer)&ts);   // CLOCK_MONOTONIC on Linux
         return ts.sec * (i64)1000000 + ts.nsec / (i64)1000;
+#elif ARCH_armv7
+        // XTOS has no monotonic clock; until its kernel answers this, it reads
+        // 0 and auto has nothing to compare, which on arm9 (no GPU) is no
+        // loss: the block runs on the CPU's threads.
+        _ParTimeval tv;
+        tv.sec = (i64)0;
+        tv.usec = (i32)0;
+        gettimeofday((pointer)&tv, (pointer)0);
+        return tv.sec * (i64)1000000 + (i64)tv.usec;
 #else
         return (i64)(clock_gettime_nsec_np((i32)6) / (u64)1000); // CLOCK_MONOTONIC
 #endif

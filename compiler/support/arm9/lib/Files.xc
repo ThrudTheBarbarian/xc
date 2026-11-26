@@ -67,7 +67,6 @@ i32 _xt_file_read(i32 handle, u8* buf, u32 n);
 i32 _xt_file_write(i32 handle, u8* buf, u32 n);
 void _xt_file_close(i32 handle);
 i32 _xt_file_size(u8* path);
-i32 _xt_mkdir(u8* path);
 i32 _xt_file_exists(u8* path);
 i32 _xt_file_exists_exact(u8* path);
 
@@ -173,11 +172,15 @@ class Files
     // Create a directory, tolerating one that is already there. The caller that
     // needs this is a compiler writing a cache under $HOME on a machine that
     // has never run it — so "already exists" is success, not a clash.
+    // XTOS has no call that makes a directory, so one that is already there
+    // is the only success; a program asking for a new one (the par learned
+    // cache) goes without. No runtime defines _xt_mkdir here, so calling it
+    // left a par program unable to load (#718).
     static bool createDirectory(String* path)
         {
         if (path == 0 || path.byteLength() == (u32)0)
             return false;
-        return _xt_mkdir(path.cString()) != (i32)0;
+        return exists(path);
         }
 
     static bool exists(String* path)
