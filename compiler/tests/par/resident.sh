@@ -41,7 +41,7 @@ for C in xcc-xc xcc; do
         "$XC" -q -O2 -H . -o "$W/r.$C" "$F" > "$W/b.$C" 2>&1 || { echo "FAIL resident ($C): no build: $(head -c 300 "$W/b.$C")"; fail=1; continue; }
         run() { (cd "$W" && env $1 ./r.$C $2); }
     fi
-    cuda=$(run "XC_PAR=gpu XC_PAR_GPU=cuda XC_PAR_REPORT=1" "" 2>&1 | grep -c "CUDA device")
+    cuda=$(run "XC_PAR=gpu XC_PAR_GPU=cuda XC_PAR_REPORT=1" "" 2>&1 | grep -cE "^par: CUDA device [0-9]+ is")
     for args in "" "x" "x y"; do
         want=$(run "XC_PAR=cpu" "$args" 2>/dev/null)
         for R in 0 1; do

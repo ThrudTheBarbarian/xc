@@ -34,7 +34,7 @@ fail=0
 ran=0
 for G in cuda; do
     out=$(run "XC_PAR=gpu XC_PAR_GPU=$G XC_PAR_RESIDENT=1 XC_PAR_RESIDENT_SLOW_MS=50 XC_PAR_REPORT=1" 2>&1)
-    if ! echo "$out" | grep -q "CUDA device"; then
+    if ! echo "$out" | grep -qE "^par: CUDA device [0-9]+ is"; then
         echo "resident-lanes: no $G device, skipped there"; continue
     fi
     ran=1
