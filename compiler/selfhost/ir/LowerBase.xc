@@ -8621,6 +8621,9 @@ class ClassInfo
         // annotation syntax, which is why this sits under isFor's blocks.
         if (isFor && n.hasFlag((u32)NF_UNROLL))
             _fn.addUnrollHeader(hn);
+        // `: serial`: no pass may make the loop parallel (#727).
+        if (isFor && n.hasSrc(SRC_SERIAL))
+            _fn.addSerialHeader(hn);
         // `:goal(speed)` on this loop or one around it (a par block's
         // included), for a while loop as for a for loop (the reference
         // explains).

@@ -96,6 +96,9 @@ typedef NS_ENUM(uint8_t, XTIRParKernelKind) {
 // one around it, `#goal accuracy` or -fgoal=accuracy), not the default: strict
 // ISO results (#569). Printed as `accuracy: [...]` when non-empty.
 @property(nonatomic, readonly) NSMutableSet<NSString*>* accuracyLoopHeaders;
+// The loop headers a `: serial` annotation marked: no pass may make them
+// parallel (#727). Printed as `serial: [...]` when non-empty.
+@property(nonatomic, readonly) NSMutableSet<NSString*>* serialLoopHeaders;
 
 /// Runtime SIMD dispatch (x86-64). A clone made for a wider vector level has
 /// its own lane width (0 = the target profile's), its level name ("avx2") and

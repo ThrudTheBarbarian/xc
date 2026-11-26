@@ -12622,6 +12622,9 @@ static const NSUInteger kVarargSlotBytes = 8;
         [self.currentFunction.speedLoopHeaders addObject:headerBlock.name];
     else if (self.loopGoal == 2 && headerBlock.name)
         [self.currentFunction.accuracyLoopHeaders addObject:headerBlock.name];
+    // `: serial`: no pass may make the loop parallel (#727).
+    if ((node.srcFacts & XTSrcSerial) && headerBlock.name)
+        [self.currentFunction.serialLoopHeaders addObject:headerBlock.name];
     XTIRBlock* bodyBlock = [self addBlockWithName:[prefix stringByAppendingString:@"_for_body"]];
     XTIRBlock* exitBlock = [self addBlockWithName:[prefix stringByAppendingString:@"_for_exit"]];
 

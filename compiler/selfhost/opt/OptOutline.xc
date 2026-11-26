@@ -84,6 +84,9 @@
                         // standard library's (the runtime's own loops among them:
                         // outlining Data.withLength's made a block that made a
                         // block), stays.
+                    // A loop the program marked `: serial` runs as written (#727).
+                    if (ppSerialLoop(fn, L))
+                        continue;
                     IRInsn* at = ppFirstDbg(L);
                     if (at == (IRInsn*)0)
                         continue;
@@ -175,6 +178,23 @@
         if (b.term() != (IRInsn*)0)
             out.add((Object*)b.term());
         return out;
+        }
+
+    // L's header is one a `: serial` marked, or a copy of one (`<header>_…`)
+    // (#727).
+    final bool ppSerialLoop(IRFunc* fn, LRCLoop* L)
+        {
+        String* name = L.header().name();
+        if (name == (String*)0)
+            return false;
+        Array* hs = fn.serialHeaders();
+        for (u32 k = (u32)0; k < hs.count(); k = k + (u32)1)
+            {
+            String* h = (String*)hs.get(k);
+            if (name.hasPrefix(h) && (name.byteLength() == h.byteLength() || name.byteAt(h.byteLength()) == (u8)'_'))
+                return true;
+            }
+        return false;
         }
 
     final bool ppOutlineLoop(IRModule* m, IRFunc* fn, LRCLoop* L, IRInsn* at)

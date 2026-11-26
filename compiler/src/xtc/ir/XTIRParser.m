@@ -2162,11 +2162,14 @@ static NSUInteger gPendingVa;
         // back the same way.
         // accuracy: [bb_x, ...] — those under an explicit `:goal(accuracy)`
         // (#569), the same way.
-        if ([kw isEqualToString:@"unroll"] || [kw isEqualToString:@"speed"] || [kw isEqualToString:@"accuracy"])
+        // serial: [bb_x, ...] — those a `: serial` marked (#727), the same way.
+        if ([kw isEqualToString:@"unroll"] || [kw isEqualToString:@"speed"] || [kw isEqualToString:@"accuracy"]
+            || [kw isEqualToString:@"serial"])
             {
-            NSMutableSet<NSString*>* into = [kw isEqualToString:@"unroll"] ? state.currentFunction.forcedUnrollHeaders
-                                          : [kw isEqualToString:@"speed"]  ? state.currentFunction.speedLoopHeaders
-                                                                           : state.currentFunction.accuracyLoopHeaders;
+            NSMutableSet<NSString*>* into = [kw isEqualToString:@"unroll"]   ? state.currentFunction.forcedUnrollHeaders
+                                          : [kw isEqualToString:@"speed"]    ? state.currentFunction.speedLoopHeaders
+                                          : [kw isEqualToString:@"serial"]   ? state.currentFunction.serialLoopHeaders
+                                                                             : state.currentFunction.accuracyLoopHeaders;
             NSUInteger pos = 1;
             if ([self tok:tokens at:pos].kind == XTIRTokColon)
                 pos++;

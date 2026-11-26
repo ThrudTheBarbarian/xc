@@ -81,6 +81,7 @@
         _forcedUnrollHeaders = [NSMutableSet set];
         _speedLoopHeaders = [NSMutableSet set];
         _accuracyLoopHeaders = [NSMutableSet set];
+        _serialLoopHeaders = [NSMutableSet set];
         _values = [NSMutableDictionary dictionary];
         _nextValueId = 0;
         }
