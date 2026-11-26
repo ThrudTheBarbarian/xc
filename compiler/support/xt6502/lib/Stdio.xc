@@ -943,8 +943,8 @@ class Stdio
     // The math coprocessor gives IEEE f32/f64 arithmetic, so a float now
     // prints by MECH digit extraction — no fp2Asc/dp2Asc softfloat formatter.
     // printFpDec extracts |v|'s integer part and its fractional digits (all via
-    // MECH float ops), rounds half-up at decimal place `roundAt`, and prints the
-    // first `keep`. This mirrors the native oracle exactly: bare %f/%lf round at
+    // MECH float ops), rounds at decimal place `roundAt` (half to even, as C
+    // does), and prints the first `keep`. This mirrors the native oracle exactly: bare %f/%lf round at
     // the default width (keep==roundAt==6 / 10), while `%.Nf`/`%.Nlf` round at
     // N+1 then keep N (keep=N, roundAt=N+1) — the `_xtc_pfp`/`_xtc_pdp` stubs'
     // "snprintf %.(N+1)f then drop the last digit" behaviour.
@@ -998,11 +998,28 @@ class Stdio
             i = i + 1;
             }
 
-        // Round half-up at digits[roundAt], propagating the carry left (into ip).
+        // Round at digits[roundAt], propagating the carry left (into ip). A
+        // value EXACTLY halfway (a 5 with nothing after it) rounds to even, as
+        // C's printf does: 0.1015625 prints 0.101562, not 0.101563 (#696).
         carry = 0;
-        if (digits[roundAt] >= 5)
+        if (digits[roundAt] > 5)
             {
             carry = 1;
+            }
+        else if (digits[roundAt] == 5)
+            {
+            if (frac > 0.0d)
+                {
+                carry = 1;
+                }
+            else if (roundAt > 0)
+                {
+                carry = digits[roundAt - 1] & 1;
+                }
+            else
+                {
+                carry = (u8)(ip & 1);
+                }
             }
         i = roundAt;
         while (i > 0 && carry == 1)
