@@ -77,6 +77,7 @@ class LlvmReader
     Map* _pins;             // "%name" -> IRPinned@ (an alloca)
     Map* _blocks;           // label -> IRBlock@
     Map* _blockNames;       // the IR names given (blockNamed)
+    Array* _swEdges;        // (switch's block, chain block, target) triples (readSwitch)
     Map* _noInlineGroups;   // `#N` -> its line, for each attribute group with noinline
     u32 _pinOff;
 
@@ -1554,6 +1555,7 @@ class LlvmReader
         _blocks = new Map();
         _blockNames = new Map();
         _pairFixups = new Array();
+        _swEdges = new Array();
         _pinOff = (u32)0;
         _bad = false;
         _fnWhy = (String*)0;
@@ -1709,11 +1711,28 @@ class LlvmReader
                     _vals.set((Hashable*)_halfParams.get(k), (Object*)halfFromCarrier((IRValue*)_halfParams.get(k + (u32)1), (String*)0));
                 _halfParams = new Array();
                 }
+            // A switch's cases are on the lines up to its `]`: one line.
+            if (t.hasSuffix(String.withCString("[")) && t.contains(String.withCString("switch ")))
+                {
+                String* all = t.copy();
+                while (i + (u32)1 < end)
+                    {
+                    i = i + (u32)1;
+                    String* ct = ((String*)lines.get(i)).trimmed();
+                    all.appendCString(" ");
+                    all.append(ct);
+                    if (ct.hasPrefix(String.withCString("]")))
+                        break;
+                    }
+                t = all;
+                }
             lineOf(t);
             if (_readHandlers && readHandlerLine(t))
                 continue;
             readInsn(t);
             }
+        if (!_bad && _swEdges.count() > (u32)0)
+            fixSwitchPhis();
         if (_readHandlers && !_bad)
             fixPairPhis();
         if (_readHandlers && !_bad)
@@ -1730,6 +1749,130 @@ class LlvmReader
         _fn.setPinnedSize(_pinOff);
         _m.addFunc(_fn);
         _readFns.add((Object*)name);
+        }
+
+    // `switch iN %x, label %default [ iN K, label %case ... ]` (after
+    // `switch`): a chain of compares, this block the first, each block
+    // going to its case's target when x is K, else to the next block, and
+    // the last to the default. A case going to the default is dropped.
+    // Each edge is noted for fixSwitchPhis.
+    void readSwitch(void)
+        {
+        String* t = irOf(llType());
+        if (t == (String*)0)
+            {
+            fail("a switch on a type not read");
+            return;
+            }
+        IRValue* x = operand(t);
+        if (x == (IRValue*)0)
+            return;
+        eat(",");
+        eat("label");
+        IRBlock* dflt = blockNamed(word().substringFromByte((u32)1));
+        if (!eat("["))
+            {
+            fail("a switch not read");
+            return;
+            }
+        IRBlock* src = _blk;
+        String* label = _blk.name();
+        IRBlock* cur = _blk;
+        u32 n = (u32)0;
+        while (more() && !eat("]"))
+            {
+            if (llType() == (String*)0)
+                {
+                fail("a switch case not read");
+                return;
+                }
+            _blk = cur;
+            IRValue* k = operand(t);
+            if (k == (IRValue*)0)
+                return;
+            eat(",");
+            eat("label");
+            IRBlock* tgt = blockNamed(word().substringFromByte((u32)1));
+            if (tgt == dflt)
+                continue;
+            n = n + (u32)1;
+            IRBlock* next = blockNamed(String.withFormat("%s.sw%u", label.cString(), n));
+            _fn.addBlock(next);
+            IRInsn* z = IRInsn.with(String.withCString("ICmp"));
+            IRValue* zv = new IRValue(String.withCString("Bool"));
+            z.setRes(zv);
+            z.setPred(String.withCString("EQ"));
+            z.add(IROperand.useVal(x));
+            z.add(IROperand.useVal(k));
+            cur.add(z);
+            IRInsn* b = IRInsn.with(String.withCString("CondBranch"));
+            b.add(IROperand.useVal(zv));
+            b.add(IROperand.block(tgt));
+            b.add(IROperand.block(next));
+            cur.setTerm(b);
+            _swEdges.add((Object*)src);
+            _swEdges.add((Object*)cur);
+            _swEdges.add((Object*)tgt);
+            cur = next;
+            }
+        IRInsn* d = IRInsn.with(String.withCString("Branch"));
+        d.add(IROperand.block(dflt));
+        cur.setTerm(d);
+        _swEdges.add((Object*)src);
+        _swEdges.add((Object*)cur);
+        _swEdges.add((Object*)dflt);
+        _blk = src;
+        }
+
+    // A phi's entry from a switch's block becomes one entry, of the same
+    // value, from each block of its chain that goes to the phi's block.
+    void fixSwitchPhis(void)
+        {
+        Array* done = new Array();
+        for (u32 e = (u32)0; e < _swEdges.count(); e = e + (u32)3)
+            {
+            IRBlock* tgt = (IRBlock*)_swEdges.get(e + (u32)2);
+            if (done.contains((Object*)tgt))
+                continue;
+            done.add((Object*)tgt);
+            Array* phis = tgt.phis();
+            for (u32 q = (u32)0; q < phis.count(); q = q + (u32)1)
+                {
+                IRInsn* phi = (IRInsn*)phis.get(q);
+                Array* ops = phi.ops();
+                Array* out = new Array();
+                Array* seen = new Array();
+                for (u32 j = (u32)0; j + (u32)1 < ops.count(); j = j + (u32)2)
+                    {
+                    IROperand* bo = (IROperand*)ops.get(j);
+                    IROperand* vo = (IROperand*)ops.get(j + (u32)1);
+                    bool fromSwitch = false;
+                    for (u32 f = (u32)0; f < _swEdges.count(); f = f + (u32)3)
+                        if ((IRBlock*)_swEdges.get(f) == bo.blk() && (IRBlock*)_swEdges.get(f + (u32)2) == tgt)
+                            {
+                            fromSwitch = true;
+                            break;
+                            }
+                    if (!fromSwitch)
+                        {
+                        out.add((Object*)bo);
+                        out.add((Object*)vo);
+                        continue;
+                        }
+                    if (seen.contains((Object*)bo.blk()))
+                        continue;
+                    seen.add((Object*)bo.blk());
+                    for (u32 f = (u32)0; f < _swEdges.count(); f = f + (u32)3)
+                        if ((IRBlock*)_swEdges.get(f) == bo.blk() && (IRBlock*)_swEdges.get(f + (u32)2) == tgt)
+                            {
+                            out.add((Object*)IROperand.block((IRBlock*)_swEdges.get(f + (u32)1)));
+                            out.add((Object*)vo);
+                            }
+                    }
+                ops.removeAll();
+                ops.addAll(out);
+                }
+            }
         }
 
     IRBlock* blockNamed(String* label)
@@ -2621,6 +2764,11 @@ class LlvmReader
                 phi.add(IROperand.useVal(cv));
                 }
             _blk.addPhi(phi);
+            return;
+            }
+        if (op.equals(String.withCString("switch")))
+            {
+            readSwitch();
             return;
             }
         if (op.equals(String.withCString("br")))

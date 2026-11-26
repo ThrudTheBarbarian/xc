@@ -11,7 +11,8 @@
 #
 # tests/par/c-reads/reads.c: xcc builds it with no function left to clang,
 # and it gives clang's output. sext.c, read from clang's optimised IR, has a
-# `sext i1` (all ones when true). Skipped without clang.
+# `sext i1` (all ones when true). switch.c's switches are read as chains of
+# compares (2026-11-26). Skipped without clang.
 #
 #   bash tests/par/c-reads.sh
 set -u
@@ -41,5 +42,18 @@ grep -q 'sext i1' "$W/sext.ll" || { echo "FAIL c-reads: clang's IR for sext.c ha
 XC_C_LL="$W/sext.ll" XC_C_TRACE=1 "$XC" -q -O2 -H . -o "$W/sx" "$G" > "$W/sb" 2>&1 || { echo "FAIL c-reads: sext.c does not build"; head -3 "$W/sb"; fail=1; }
 [ -x "$W/sx" ] && { [ "$("$W/sx")" = "$("$W/sref")" ] || { echo "FAIL c-reads: sext.c gives '$("$W/sx")', clang's '$("$W/sref")'"; fail=1; }; }
 grep -q 'left to clang' "$W/sb" && { echo "FAIL c-reads: sext.c left to clang:"; grep 'because of' "$W/sb" | head -2; fail=1; }
+# switch.c, from the read build and from clang's optimised IR, where a
+# case goes straight to a join block whose phi names the switch's block.
+H=tests/par/c-reads/switch.c
+clang -O2 -o "$W/wref" "$H" && clang -O1 -S -emit-llvm -fno-discard-value-names -o "$W/switch.ll" "$H" \
+    || { echo "FAIL c-reads: clang does not build switch.c"; exit 1; }
+grep -q 'switch i32' "$W/switch.ll" && grep -q '= phi' "$W/switch.ll" || { echo "FAIL c-reads: clang's IR for switch.c has no switch with a phi"; fail=1; }
+for how in read ll; do
+    if [ $how = ll ]; then env XC_C_LL="$W/switch.ll" XC_C_TRACE=1 "$XC" -q -O2 -H . -o "$W/w" "$H" > "$W/wb" 2>&1
+    else XC_C_TRACE=1 "$XC" -q -O2 -H . -o "$W/w" "$H" > "$W/wb" 2>&1; fi \
+        || { echo "FAIL c-reads: switch.c ($how) does not build"; grep -v warning "$W/wb" | head -3; fail=1; continue; }
+    [ "$("$W/w")" = "$("$W/wref")" ] || { echo "FAIL c-reads: switch.c ($how) gives '$("$W/w")', clang's '$("$W/wref")'"; fail=1; }
+    grep -q 'left to clang' "$W/wb" && { echo "FAIL c-reads: switch.c ($how) left to clang:"; grep 'because of' "$W/wb" | head -2; fail=1; }
+done
 [ $fail = 0 ] && echo "--- c-reads: pass ---" || echo "--- c-reads: FAIL ---"
 exit $fail
