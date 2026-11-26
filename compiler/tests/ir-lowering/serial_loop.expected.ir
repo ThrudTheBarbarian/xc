@@ -1,0 +1,65 @@
+module "serial_loop" {
+  layout 0: size=256 align=1 array=(U32 x 64)
+  symbol main: function () -> I32
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  symbol a: dataglobal Agg(0)
+    attributes: { banked: false, cloaked: false }
+    flags: { escapes: true }
+  function main(%0: Mem) -> (I32, Mem) {
+    serial: [bb_1_for_header]
+    bb_entry:
+      preds: -
+      %1:U8 = Const #0:U8
+      %2:U32 = ZExt %1
+      %3:U8 = Const #0:U8
+      %4:U32 = ZExt %3
+      Branch bb_1_for_header
+    bb_1_for_header:
+      preds: bb_entry, bb_1_for_body
+      %5:U32 = Phi [(bb_entry, %4), (bb_1_for_body, %16)]
+      %6:U8 = Const #64:U8
+      %7:U32 = ZExt %6
+      %8:Bool = ICmp ULT, %5, %7
+      CondBranch %8, bb_1_for_body, bb_1_for_exit
+    bb_1_for_body:
+      preds: bb_1_for_header
+      %9:Ptr(U32, unbanked) = AddrOf @a
+      %10:Ptr(U32, unbanked) = ElementAddr %9, %5
+      %11:U8 = Const #3:U8
+      %12:U32 = ZExt %11
+      %13:U32 = Mul %5, %12
+      %14 = Store %10, %13, %0
+      %15:U32 = Const #1:U32
+      %16:U32 = Add %5, %15
+      Branch bb_1_for_header
+    bb_1_for_exit:
+      preds: bb_1_for_header
+      %17:U8 = Const #0:U8
+      %18:U32 = ZExt %17
+      Branch bb_4_for_header
+    bb_4_for_header:
+      preds: bb_1_for_exit, bb_4_for_body
+      %19:U32 = Phi [(bb_1_for_exit, %18), (bb_4_for_body, %30)]
+      %20:U32 = Phi [(bb_1_for_exit, %2), (bb_4_for_body, %28)]
+      %21:U8 = Const #64:U8
+      %22:U32 = ZExt %21
+      %23:Bool = ICmp ULT, %19, %22
+      CondBranch %23, bb_4_for_body, bb_4_for_exit
+    bb_4_for_body:
+      preds: bb_4_for_header
+      %24:Ptr(U32, unbanked) = AddrOf @a
+      %25:Ptr(U32, unbanked) = ElementAddr %24, %19
+      %26:U32, %27 = Load %25, %14
+      %28:U32 = Add %20, %26
+      %29:U32 = Const #1:U32
+      %30:U32 = Add %19, %29
+      Branch bb_4_for_header
+    bb_4_for_exit:
+      preds: bb_4_for_header
+      %31:U8 = Const #255:U8
+      %32:U32 = ZExt %31
+      %33:U32 = And %20, %32
+      %34:I32 = Bitcast %33
+      Return %34, %27
+  }
+}
