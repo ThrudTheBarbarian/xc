@@ -634,6 +634,25 @@ class Par
             ParDevice.ranAdd(proto, String.withCString("serial"));
             return;
             }
+        // A block writing f4 arrays (`pairs=` on its header line) runs on the
+        // CPU's threads, its chunks cut on the parity that keeps each byte to
+        // one thread: it has no GPU form, and the tile queue cuts without it.
+        // `pairs=2`: its writes could not be placed, so it runs on one thread.
+        i32 pairs = Par.pairsOf(proto.gpuSource());
+        if (pairs == (i32)2)
+            {
+            proto.lo = lo;
+            proto.hi = hi;
+            proto.run();
+            ParDevice.ranAdd(proto, String.withCString("serial"));
+            return;
+            }
+        if (pairs >= (i32)0)
+            {
+            Par.runCpu(proto, lo, hi);
+            ParDevice.ranAdd(proto, String.withCString("cpu"));
+            return;
+            }
 #if (ARCH_arm64 && !OS_ios) || ARCH_x86_64 || ARCH_wasm32
         // One array passed twice and written runs on the CPU's threads: a
         // device binds each of the two as its own buffer (#264).
@@ -880,6 +899,34 @@ class Par
 #endif
         }
 
+    // The parity a block's chunks start on, from ` pairs=<p>` on its header
+    // line: a block writing f4 arrays, two elements to a byte, at k * i + c
+    // with k odd needs every chunk but the first to start where k * i + c is
+    // even, so that no two threads write the two halves of one byte: 0 or 1,
+    // or 2 for a block whose writes could not be placed, which runs on one
+    // thread. -1 for any other block.
+    static i32 pairsOf(u8* src)
+        {
+        if (src == (u8*)0)
+            return (i32)-1;
+        for (u32 i = (u32)0; src[i] != (u8)0 && src[i] != (u8)10; i = i + (u32)1)
+            if (src[i] == (u8)' ' && src[i + (u32)1] == (u8)'p' && src[i + (u32)2] == (u8)'a' && src[i + (u32)3] == (u8)'i'
+                && src[i + (u32)4] == (u8)'r' && src[i + (u32)5] == (u8)'s' && src[i + (u32)6] == (u8)'=')
+                return (i32)(src[i + (u32)7] - (u8)'0');
+        return (i32)-1;
+        }
+
+    // Where chunk j of k starts in [lo, lo + n): an equal cut, moved up one
+    // item for a block that needs another parity (pairsOf), so a chunk is
+    // one item longer or shorter; pair -1 leaves it.
+    static i64 cut(i64 lo, i64 n, i64 j, i64 k, i32 pair)
+        {
+        i64 b = lo + (n * j) / k;
+        if (pair >= (i32)0 && j > (i64)0 && j < k && ((b ^ (i64)pair) & (i64)1) != (i64)0)
+            b = b + (i64)1;
+        return b;
+        }
+
     // The CPU path: one chunk per thread.
     static void runCpu(ParChunk* proto, i64 lo, i64 hi)
         {
@@ -912,16 +959,17 @@ class Par
         // block costs k - 1 spawns and its reductions land in proto directly.
         Array* chunks = new Array();
         Array* threads = new Array();
+        i32 pair = Par.pairsOf(proto.gpuSource());
         for (i32 j = (i32)1; j < k; j = j + (i32)1)
             {
             ParChunk* c = proto.copyChunk();
-            c.lo = lo + (n * (i64)j) / (i64)k;
-            c.hi = lo + (n * (i64)(j + (i32)1)) / (i64)k;
+            c.lo = Par.cut(lo, n, (i64)j, (i64)k, pair);
+            c.hi = Par.cut(lo, n, (i64)(j + (i32)1), (i64)k, pair);
             chunks.add((Object*)c);
             threads.add((Object*)Thread.spawn(&c.go));
             }
         proto.lo = lo;
-        proto.hi = lo + n / (i64)k;
+        proto.hi = Par.cut(lo, n, (i64)1, (i64)k, pair);
         proto.run();
         for (u32 j = (u32)0; j < threads.count(); j = j + (u32)1)
             ((Thread*)threads.get(j)).join();

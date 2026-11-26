@@ -4,6 +4,41 @@
 #import "XTSemanticAnalyzer+Private.h"
 #import "XTSemanticAnalyzer+Overload.h"
 
+/****************************************************************************\
+|* f4 (step F4): an element is half a byte, two to a byte, so it has no
+|* address; an `f4[]` is indexed, never dereferenced or stepped. Mirrored in
+|* the port (Sema.checkF4Unary).
+\****************************************************************************/
+static NSString* const XTF4StepMessage =
+    @"an 'f4[]' cannot step: two elements share each byte; keep an index and write a[i]";
+
+// An operand `+` or `-` would step: an f4[] or an f4 array, which decays to
+// one.
+static BOOL XTF4Steps(XTType* _Nullable t)
+    {
+    return [XTType isF4Ref:t] || [XTType isF4Array:t];
+    }
+
+static void XTCheckF4Unary(XTDiagnosticEngine* diags, XTUnaryExprNode* node)
+    {
+    XTASTNode* o = node.operand;
+    BOOL f4Elem = [o isKindOfClass:[XTSubscriptExprNode class]] && !((XTSubscriptExprNode*)o).operatorCall &&
+                  o.resolvedType.isF4;
+    // `&a[0]` is the array's own first byte: the array as an `f4[]`.
+    XTASTNode* ix = f4Elem ? ((XTSubscriptExprNode*)o).index : nil;
+    if (ix.nodeKind == XTASTNodeKindLiteralInt && ((XTLiteralIntNode*)ix).intValue == 0)
+        f4Elem = NO;
+    if (node.op == XTUnaryOpAddrOf && f4Elem)
+        [diags emitError:@"'&' cannot take the address of an f4 element: two elements share a byte; pass the array as "
+                         @"'f4[]' with the index"
+                      at:node.location];
+    else if (node.op == XTUnaryOpDeref && [XTType isF4Ref:o.resolvedType])
+        [diags emitError:@"'*' cannot read through an 'f4[]': an f4 element has no byte address; index it, as in a[0]"
+                      at:node.location];
+    else if ((node.op == XTUnaryOpPreInc || node.op == XTUnaryOpPreDec) && [XTType isF4Ref:o.resolvedType])
+        [diags emitError:XTF4StepMessage at:node.location];
+    }
+
 @implementation XTSemanticAnalyzer (ZPSafety)
 
 #pragma mark - Stage 4c: transitive ZP-safety analysis
@@ -2179,6 +2214,9 @@
     if (node.op != XTBinaryOpShl && node.op != XTBinaryOpShr && node.op != XTBinaryOpRol && node.op != XTBinaryOpRor &&
         node.op != XTBinaryOpLogAnd && node.op != XTBinaryOpLogOr)
         [self checkPackOperands:node.left right:node.right at:node.location];
+    if ((node.op == XTBinaryOpAdd || node.op == XTBinaryOpSub) &&
+        (XTF4Steps(node.left.resolvedType) || XTF4Steps(node.right.resolvedType)))
+        [self.diagnostics emitError:XTF4StepMessage at:node.location];
 
     XTType* lt = node.left.resolvedType;
     XTType* rt = node.right.resolvedType;
@@ -2768,6 +2806,7 @@
             [self.diagnostics emitError:@"'++' and '--' cannot step an element read through an index operator; use '+= 1' or '-= 1'"
                                      at:node.location];
         }
+    XTCheckF4Unary(self.diagnostics, node);
     switch (node.op)
         {
     case XTUnaryOpPlus:
@@ -2944,6 +2983,8 @@
     if (XTIsOperatorIndex(node.operand))
         [self.diagnostics emitError:@"'++' and '--' cannot step an element read through an index operator; use '+= 1' or '-= 1'"
                                  at:node.operand.location];
+    if ([XTType isF4Ref:node.operand.resolvedType])
+        [self.diagnostics emitError:XTF4StepMessage at:node.location];
     }
 
 /****************************************************************************\

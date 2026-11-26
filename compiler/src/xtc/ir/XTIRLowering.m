@@ -144,6 +144,13 @@
 @property(nonatomic, nullable) XTIRBlock* currentBlock;
 @property(nonatomic) NSMutableDictionary<NSString*, XTIRValue*>* locals; // name → current value
 @property(nonatomic, nullable) XTIRValue* memToken;                      // current memory token
+// f4 elements (step F4): each ElementAddr of an f4 array's byte, the nibble's
+// shift in it (0 or 4, a U8) and the element's index, side by side. A load or
+// store through such an address reads or rewrites the one nibble (emitLoad,
+// emitStore); the par check reads the index.
+@property(nonatomic, nullable) NSMutableArray<XTIRValue*>* nibAddrs;
+@property(nonatomic, nullable) NSMutableArray<XTIRValue*>* nibShifts;
+@property(nonatomic, nullable) NSMutableArray<XTIRValue*>* nibIdx;
 // The goal of the innermost `for (...) :goal(...)` being lowered: 0 none
 // (accuracy), 1 speed, 2 accuracy. A for loop lowered under speed has its
 // header recorded in the function's speedLoopHeaders.
@@ -487,6 +494,8 @@
 // Classes with a generated `_xtc_cname_<C>` (runtime class names): their
 // itable carries the (XTClassNameId, &_xtc_cname_<C>) pair.
 @property(nonatomic) NSMutableSet<NSString*>* classNameFunctions;
+- (XTIRValue*)emitLoadRaw:(XTIRValue*)pointer pointeeType:(XTIRType*)pointeeType;
+- (void)emitStoreRaw:(XTIRValue*)pointer value:(XTIRValue*)value;
 @end
 
 static BOOL sItableProtocols = NO;
@@ -644,6 +653,11 @@ static BOOL XTIsBuiltinSubscript(XTASTNode* node)
     {
     return node.nodeKind == XTASTNodeKindSubscriptExpr && !((XTSubscriptExprNode*)node).operatorCall;
     }
+
+// A run-time `.length` of an f4[] on a target whose heap block counts bytes.
+static NSString* const XTF4LengthMessage =
+    @"the length of an f4[] is known here only where 'new f4[n]' gives it a constant: on this target its heap block "
+    @"counts bytes, not elements; keep the count beside the array";
 
 @implementation XTIRLowering
 
@@ -1205,9 +1219,11 @@ static NSString* XTDescribeNodeKind(XTASTNodeKind k)
                                                         (unsigned long)at.elementCount, elemW,
                                                         (unsigned long long)elemW * (unsigned long long)at.elementCount]
                           at:nil];
-    // The array form: one element type and a count, no field objects.
+    // The array form: one element type and a count, no field objects. An f4
+    // array is its ceil(n / 2) bytes, two elements to each.
     XTIRLayout* L = [[XTIRLayout alloc] initArrayOf:elemIR
-                                              count:(uint32_t)at.elementCount
+                                              count:(uint32_t)(at.elementType.isF4 ? (at.elementCount + 1) / 2
+                                                                                   : at.elementCount)
                                              stride:elemW
                                           alignment:1];
     [self.module addLayout:L];
@@ -2894,7 +2910,102 @@ static NSString* XTDescribeNodeKind(XTASTNodeKind k)
 
 #pragma mark - Memory-threaded op helpers (Load / Store / Retain / Release)
 
+// The nibble shift of an f4 element's address, or nil for any other.
+- (nullable XTIRValue*)nibShiftOf:(XTIRValue*)addr
+    {
+    for (NSUInteger i = self.nibAddrs.count; i > 0; i--)
+        if (self.nibAddrs[i - 1] == addr)
+            return self.nibShifts[i - 1];
+    return nil;
+    }
+
+// A Const of an IR type.
+- (XTIRValue*)constOfIR:(int64_t)v type:(XTIRType*)t
+    {
+    return [self emitInsnOpcode:XTIROpConst result:t operands:@[ [XTIROperand immIWithType:t value:v] ]];
+    }
+
+- (XTIRValue*)emitBinOp:(XTIROpcode)op type:(XTIRType*)t lhs:(XTIRValue*)a rhs:(XTIRValue*)b
+    {
+    return [self emitInsnOpcode:op
+                         result:t
+                       operands:@[ [XTIROperand useWithValueId:a.valueId], [XTIROperand useWithValueId:b.valueId] ]];
+    }
+
+// Element idx of an f4 array at base: a nibble of byte idx >> 1, the low one
+// for an even idx. The byte's address, recorded with the nibble's shift and
+// the element's index for emitLoad, emitStore and the par check. Mirrored in
+// the port (Lower.f4ElementAddr).
+- (XTIRValue*)f4ElementAddress:(XTIRValue*)base index:(XTIRValue*)idx type:(XTIRType*)pty
+    {
+    XTIRType* u8 = [XTIRType u8Type];
+    XTIRValue* one = [self constOfIR:1 type:idx.type];
+    XTIRValue* low = [self emitBinOp:XTIROpAnd type:idx.type lhs:idx rhs:one];
+    if (idx.type.kind != XTIRTypeKindU8)
+        low = [self emitInsnOpcode:XTIROpTrunc result:u8 operands:@[ [XTIROperand useWithValueId:low.valueId] ]];
+    XTIRValue* two = [self constOfIR:2 type:u8];
+    XTIRValue* sh = [self emitBinOp:XTIROpShl type:u8 lhs:low rhs:two];
+    XTIRValue* oneU8 = [self constOfIR:1 type:u8];
+    XTIRValue* bi = [self emitBinOp:XTIROpLShr type:idx.type lhs:idx rhs:oneU8];
+    XTIRValue* ea = [self emitInsnOpcode:XTIROpElementAddr
+                                  result:pty
+                                operands:@[ [XTIROperand useWithValueId:base.valueId],
+                                            [XTIROperand useWithValueId:bi.valueId] ]];
+    if (!self.nibAddrs)
+        {
+        self.nibAddrs = [NSMutableArray array];
+        self.nibShifts = [NSMutableArray array];
+        self.nibIdx = [NSMutableArray array];
+        }
+    [self.nibAddrs addObject:ea];
+    [self.nibShifts addObject:sh];
+    [self.nibIdx addObject:idx];
+    for (XTIRInsn* in in self.currentBlock.instructions.reverseObjectEnumerator)
+        if (in.result == ea)
+            {
+            XTIRF4NoteElement(in, idx);
+            break;
+            }
+    return ea;
+    }
+
+// An f4 element read: its byte, shifted down and masked to 4 bits.
+- (XTIRValue*)loadNibble:(XTIRValue*)addr shift:(XTIRValue*)sh
+    {
+    XTIRType* u8 = [XTIRType u8Type];
+    XTIRValue* b = [self emitLoadRaw:addr pointeeType:u8];
+    XTIRValue* v = [self emitBinOp:XTIROpLShr type:u8 lhs:b rhs:sh];
+    XTIRValue* m = [self constOfIR:15 type:u8];
+    return [self emitBinOp:XTIROpAnd type:u8 lhs:v rhs:m];
+    }
+
+// An f4 element write: a read-modify-write of its byte, the other nibble
+// kept. Not atomic: two threads writing the two halves of one byte race,
+// which par's even split rules out and Fp4.xc's f4StoreAtomic serves.
+- (void)storeNibble:(XTIRValue*)addr shift:(XTIRValue*)sh value:(XTIRValue*)v
+    {
+    XTIRType* u8 = [XTIRType u8Type];
+    XTIRValue* m15 = [self constOfIR:15 type:u8];
+    XTIRValue* low = [self emitBinOp:XTIROpAnd type:u8 lhs:v rhs:m15];
+    XTIRValue* nv = [self emitBinOp:XTIROpShl type:u8 lhs:low rhs:sh];
+    XTIRValue* mask = [self emitBinOp:XTIROpShl type:u8 lhs:m15 rhs:sh];
+    XTIRValue* ff = [self constOfIR:255 type:u8];
+    XTIRValue* inv = [self emitBinOp:XTIROpXor type:u8 lhs:mask rhs:ff];
+    XTIRValue* b = [self emitLoadRaw:addr pointeeType:u8];
+    XTIRValue* keep = [self emitBinOp:XTIROpAnd type:u8 lhs:b rhs:inv];
+    XTIRValue* nb = [self emitBinOp:XTIROpOr type:u8 lhs:keep rhs:nv];
+    [self emitStoreRaw:addr value:nb];
+    }
+
 - (XTIRValue*)emitLoad:(XTIRValue*)pointer pointeeType:(XTIRType*)pointeeType
+    {
+    XTIRValue* nsh = self.nibAddrs.count ? [self nibShiftOf:pointer] : nil;
+    if (nsh)
+        return [self loadNibble:pointer shift:nsh];
+    return [self emitLoadRaw:pointer pointeeType:pointeeType];
+    }
+
+- (XTIRValue*)emitLoadRaw:(XTIRValue*)pointer pointeeType:(XTIRType*)pointeeType
     {
     XTIRValue* r = [self allocateValueOfType:pointeeType atSite:self.currentBlock];
     XTIRValue* newMem = [self allocateValueOfType:[XTIRType memoryType]
@@ -2954,8 +3065,19 @@ static NSString* XTDescribeNodeKind(XTASTNodeKind k)
 - (void)emitStore:(XTIRValue*)pointer value:(XTIRValue*)value
     consumesOwnership:(BOOL)consumes
     {
+    XTIRValue* nsh = self.nibAddrs.count ? [self nibShiftOf:pointer] : nil;
+    if (nsh)
+        {
+        [self storeNibble:pointer shift:nsh value:value];
+        return;
+        }
     if (consumes)
         [self consumeOwnedTemp:value];
+    [self emitStoreRaw:pointer value:value];
+    }
+
+- (void)emitStoreRaw:(XTIRValue*)pointer value:(XTIRValue*)value
+    {
     XTIRValue* newMem = [self allocateValueOfType:[XTIRType memoryType]
                                            atSite:self.currentBlock];
     XTIRInsn* insn = [[XTIRInsn alloc] initWithOpcode:XTIROpStore
@@ -8368,6 +8490,12 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
     // 2/3 bytes, every counted-header target is >= 4. private:docs/bugs/045.
     if ([node.memberName isEqualToString:@"length"] && node.base.resolvedType && [node.base.resolvedType isKindOfClass:[XTPointerType class]])
         {
+        if ([XTType isF4Ref:node.base.resolvedType] && [XTPointerType heapCountWidth] < 8)
+            {
+            [self.diag emitError:XTF4LengthMessage at:node.location];
+            self.aborted = YES;
+            return nil;
+            }
         if ([XTPointerType heapPointerWidth] >= 4)
             {
             XTIRValue* bv = [self lowerExpression:node.base];
@@ -10013,6 +10141,16 @@ static NSString* _Nullable primElemNameForType(XTType* t)
         {
         countVal = [self emitU16Const:1];
         }
+    // An f4 array is ceil(n / 2) bytes from u8's helper.
+    BOOL f4Arr = !ci && [XTType packTypeNamed:node.className].isF4;
+    XTIRValue* f4Elems = countVal;
+    if (f4Arr)
+        {
+        XTIRValue* one = [self constOfIR:1 type:countVal.type];
+        XTIRValue* up = [self emitBinOp:XTIROpAdd type:countVal.type lhs:countVal rhs:one];
+        XTIRValue* oneU8 = [self constOfIR:1 type:[XTIRType u8Type]];
+        countVal = [self emitBinOp:XTIROpLShr type:countVal.type lhs:up rhs:oneU8];
+        }
     // Allocator args. A CLASS allocator takes (count, elemSize): it writes
     // both into the object header so `delete` of an array-of-class iterates
     // dealloc once per element (count steps by elemSize). count=1 for a
@@ -10258,6 +10396,26 @@ static NSString* _Nullable primElemNameForType(XTType* t)
         [self emitClassIdStampFor:instance class:ci];
         [self setUpValueMembersAt:instance class:ci];
         }
+    // The block's header counts f4 ELEMENTS, so `.length` and the bounds
+    // checks read n where the 64-bit targets' header has its count (8 bytes
+    // at payload - 32, heapCount:'s); elsewhere the header keeps the byte
+    // count, and a run-time `.length` of an f4 array is refused.
+    if (f4Arr && [XTPointerType heapCountWidth] >= 8)
+        {
+        XTIRType* u64 = [XTIRType u64Type];
+        XTIRValue* pi = [self emitInsnOpcode:XTIROpPtrToInt result:u64
+                                    operands:@[ [XTIROperand useWithValueId:instance.valueId] ]];
+        XTIRValue* hp = [self emitInsnOpcode:XTIROpSub result:u64
+                                    operands:@[ [XTIROperand useWithValueId:pi.valueId],
+                                                [XTIROperand immIWithType:u64 value:32] ]];
+        XTIRValue* ap = [self emitInsnOpcode:XTIROpIntToPtr
+                                      result:[XTIRType ptrToType:u64 window:XTIRWindowUnbanked]
+                                    operands:@[ [XTIROperand useWithValueId:hp.valueId] ]];
+        if (f4Elems.type.kind != XTIRTypeKindU64)
+            f4Elems = [self emitInsnOpcode:XTIROpZExt result:u64
+                                  operands:@[ [XTIROperand useWithValueId:f4Elems.valueId] ]];
+        [self emitStore:ap value:f4Elems consumesOwnership:NO];
+        }
     // Track only a class instance (+1); a non-class `new T[N]`/`new u16`
     // buffer is not ARC-managed.
     if (ci)
@@ -10408,6 +10566,13 @@ static NSString* _Nullable primElemNameForType(XTType* t)
                                 at:loc];
     else
         [self emitBoundsCheckPtr:basePtr index:idxVal at:loc];
+    // An f4 element: the checks above count elements, the address is its
+    // byte's.
+    XTType* elemT = [baseAST isKindOfClass:[XTPointerType class]] ? ((XTPointerType*)baseAST).pointeeType
+                    : [baseAST isKindOfClass:[XTArrayType class]]  ? ((XTArrayType*)baseAST).elementType
+                                                                   : nil;
+    if (elemT.isF4)
+        return [self f4ElementAddress:basePtr index:idxVal type:resultPtrIR];
     XTIRValue* elemAddr = [self emitInsnOpcode:XTIROpElementAddr
                                         result:resultPtrIR
                                       operands:@[ [XTIROperand useWithValueId:basePtr.valueId],
@@ -12896,6 +13061,12 @@ static const NSUInteger kVarargSlotBytes = 8;
         // `_xtc_count` helper, on the targets whose runtime writes one
         // (everything but the xt6502 — see the `.length` note). The class
         // case stays with the Enumerable dispatch above. private:docs/bugs/045.
+        if ([XTType isF4Ref:collType] && [XTPointerType heapCountWidth] < 8)
+            {
+            [self.diag emitError:XTF4LengthMessage at:collection.location];
+            self.aborted = YES;
+            return;
+            }
         XTIRValue* hv = [self lowerExpression:collection];
         if (!hv)
             return;
@@ -13100,10 +13271,13 @@ static const NSUInteger kVarargSlotBytes = 8;
         }
     else
         {
-        XTIRValue* elemAddr = [self emitInsnOpcode:XTIROpElementAddr
-                                            result:elemPtrIR
-                                          operands:@[ [XTIROperand useWithValueId:baseAddr.valueId],
-                                                      [XTIROperand useWithValueId:indexVal.valueId] ]];
+        XTType* walked = isSliceBase ? sliceBaseAST : collType;
+        XTIRValue* elemAddr = ([XTType isF4Array:walked] || [XTType isF4Ref:walked])
+                                  ? [self f4ElementAddress:baseAddr index:indexVal type:elemPtrIR]
+                                  : [self emitInsnOpcode:XTIROpElementAddr
+                                                  result:elemPtrIR
+                                                operands:@[ [XTIROperand useWithValueId:baseAddr.valueId],
+                                                            [XTIROperand useWithValueId:indexVal.valueId] ]];
         // Load the element value.
         elemVal = [self emitLoad:elemAddr pointeeType:elemIR];
         }

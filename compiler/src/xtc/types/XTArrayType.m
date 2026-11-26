@@ -40,11 +40,15 @@
     }
 
 /****************************************************************************\
-|* Total byte size of the array (element width * count).
+|* Total byte size of the array (element width * count; ceil(count / 2) for
+|* f4).
 |* @return The total size in bytes.
 \****************************************************************************/
 - (NSUInteger)byteWidth
     {
+    // An f4 array packs two elements to a byte, element 0 in the low nibble.
+    if (_elementType.isF4)
+        return (_elementCount + 1) / 2;
     return _elementType.byteWidth * _elementCount;
     }
 

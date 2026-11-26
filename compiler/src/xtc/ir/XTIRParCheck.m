@@ -313,6 +313,68 @@ static BOOL XTParUsesFloatPack(XTIRModule* module, XTIRFunction* f, NSMutableSet
     return NO;
     }
 
+// The f4 element addresses the lowering formed: each ElementAddr instruction
+// to the element index it came from.
+static NSMapTable<XTIRInsn*, XTIRValue*>* XTIRF4Elements(void)
+    {
+    static NSMapTable* m;
+    static dispatch_once_t o;
+    dispatch_once(&o, ^{
+      m = [NSMapTable mapTableWithKeyOptions:NSPointerFunctionsStrongMemory | NSPointerFunctionsObjectPointerPersonality
+                                valueOptions:NSPointerFunctionsStrongMemory];
+    });
+    return m;
+    }
+
+XTIRValue* _Nullable XTIRF4ElementIndex(XTIRInsn* ea)
+    {
+    NSMapTable* m = XTIRF4Elements();
+    @synchronized(m)
+        {
+        return m.count ? [m objectForKey:ea] : nil;
+        }
+    }
+
+void XTIRF4NoteElement(XTIRInsn* ea, XTIRValue* idx)
+    {
+    NSMapTable* m = XTIRF4Elements();
+    @synchronized(m)
+        {
+        [m setObject:idx forKey:ea];
+        }
+    }
+
+// Does the function, or one it calls, read or write an f4 array element (an
+// ElementAddr the lowering formed for one, XTIRF4ElementIndex)? A GPU kernel
+// would rewrite a byte two work items share, so such a block has no form.
+static BOOL XTParTouchesF4(XTIRModule* module, XTIRFunction* f, NSMutableSet<NSString*>* seen)
+    {
+    if (!f || [seen containsObject:f.name])
+        return NO;
+    [seen addObject:f.name];
+    for (XTIRBlock* b in f.blocks)
+        for (XTIRInsn* i in b.instructions)
+            {
+            if (i.opcode == XTIROpElementAddr && XTIRF4ElementIndex(i))
+                return YES;
+            if (i.opcode != XTIROpCall || !i.operands.count || i.operands[0].kind != XTIROperandKindSym)
+                continue;
+            XTIRSymbol* sym = [module symbolForId:i.operands[0].symbolId];
+            if (sym.function && XTParTouchesF4(module, sym.function, seen))
+                return YES;
+            }
+    return NO;
+    }
+
+// The parity each chunk of a block writing f4 arrays starts on, so that no
+// two threads share a byte (`pairs=<p>` on its header line, Par.cut): 0 for
+// the work items k * i + c, k odd and c even, 1 for c odd; 2 to run on one
+// thread, where the writes cannot be placed; -1 when no write constrains it.
+// Set by dependenceIn:, by block in checkModule:.
+static NSInteger gParF4Pair = -1;
+static NSString* const XTParSmallFloatWhy = @"it computes in f16, bf16, f8 or f4, which GPU kernels do not take yet";
+static NSMutableDictionary<NSString*, NSNumber*>* gParPairs = nil;
+
 @implementation XTIROptGpuEscapeTrips
 
 - (instancetype)init
@@ -1543,7 +1605,12 @@ static BOOL gEmitsWGSL = NO;
         BOOL scanPass = !serialBlock && !lost && !arrRed && [self isScanBlock:module number:[fcls substringFromIndex:8]];
         if (scanPass)
             mslWhy = ptxWhy = wgslWhy = spvWhy = @"it is a pass of a :scan block, which has no GPU version yet";
-        BOOL noForms = serialBlock || lost || scanPass;
+        // A block that reads or writes f4 array elements has no form: a
+        // kernel would rewrite a byte two work items share.
+        BOOL f4Pass = !serialBlock && !lost && !arrRed && !scanPass && XTParTouchesF4(module, f, [NSMutableSet set]);
+        if (f4Pass)
+            mslWhy = ptxWhy = wgslWhy = spvWhy = XTParSmallFloatWhy;
+        BOOL noForms = serialBlock || lost || scanPass || f4Pass;
         NSString* msl = gEmitsMetal && !noForms ? metalOf(&mslWhy) : nil;
         NSString* ptx = gEmitsPTX && !noForms && !arrRed ? ptxOf(&ptxWhy) : nil;
         NSString* wgsl = gEmitsWGSL && !noForms && !arrRed ? wgslOf(&wgslWhy) : nil;
@@ -1644,7 +1711,7 @@ static BOOL gEmitsWGSL = NO;
             // A 16-bit float's operations are calls the kernels do not have:
             // the block runs on the CPU, in the type's own precision.
             if (XTParUsesFloatPack(module, f, [NSMutableSet set]))
-                why = @"it computes in f16, bf16 or f8, which GPU kernels do not take yet";
+                why = XTParSmallFloatWhy;
             // A loop the compiler lifted by itself says so only under
             // -Wpar-auto: a plain program is not told about a block it never
             // wrote. Mirrored in the port.
@@ -1681,6 +1748,9 @@ static BOOL gEmitsWGSL = NO;
                     continue;
                 [hdr appendFormat:@" buf=%u:%lu:%u", fl[k].byteOffset, (unsigned long)(k - 3), e.byteWidth];
                 }
+            // A block writing f4 arrays: the parity its chunks start on.
+            if (gParPairs[cls])
+                [hdr appendFormat:@" pairs=%ld", (long)gParPairs[cls].integerValue];
             [hdr appendString:@"\n"];
             kernel = [hdr dataUsingEncoding:NSUTF8StringEncoding];
             }
@@ -1717,6 +1787,7 @@ static BOOL gEmitsWGSL = NO;
 
     BOOL ok = YES;
     gParGuards = [NSMutableDictionary dictionary];
+    gParPairs = [NSMutableDictionary dictionary];
     // The auto blocks (--par-style=auto made them from plain loops) par-check would
     // refuse: demoted to a serial run instead, with a warning (par-auto).
     NSMutableSet<NSString*>* serial = [NSMutableSet set];
@@ -1750,6 +1821,8 @@ static BOOL gEmitsWGSL = NO;
             NSString* scatter = nil;
             NSMutableArray<NSString*>* guards = [NSMutableArray array];
             NSString* dep = [c dependenceIn:f ivarNames:[c ivarNamesOf:decl in:classDecls] scatter:&scatter guards:guards];
+            if (!dep && gParF4Pair >= 0)
+                gParPairs[cls] = @(gParF4Pair);
             // A loop the compiler lifted by itself is a block only when its
             // items are PROVED apart: a write the shapes do not cover (every
             // item writing one element, or an index from data) keeps it serial.
@@ -2824,6 +2897,7 @@ static BOOL parIsComputeOp(XTIROpcode op)
                             scatter:(NSString* _Nullable* _Nonnull)scatter
                              guards:(nullable NSMutableArray<NSString*>*)guards
     {
+    gParF4Pair = -1;
     NSMutableDictionary<NSNumber*, XTIRInsn*>* def = [NSMutableDictionary dictionary];
     XTIRValueId firstPhi = 0;
     BOOL haveIV = NO;
@@ -2845,7 +2919,21 @@ static BOOL parIsComputeOp(XTIROpcode op)
                 def[@(i.result.valueId)] = i;
         }
     if (!haveIV || f.paramTypes.count == 0)
+        {
+        // No induction variable to place its writes by (under -g the loop's
+        // counter lives in a slot): a block writing an f4 array runs on one
+        // thread (pairs=2), since its chunks could not be cut safely.
+        for (XTIRBlock* b in f.blocks)
+            for (XTIRInsn* i in b.instructions)
+                if ((i.opcode == XTIROpStore || i.opcode == XTIROpStoreVolatile) && i.operands.count &&
+                    i.operands[0].kind == XTIROperandKindUse)
+                    {
+                    XTIRInsn* ea = def[@(i.operands[0].valueId)];
+                    if (ea.opcode == XTIROpElementAddr && XTIRF4ElementIndex(ea))
+                        gParF4Pair = 2;
+                    }
         return nil;
+        }
     // The induction variable is the phi the loop's GUARD compares, not only
     // the first phi: a reduction's accumulator is a phi too, and a block with
     // reductions lists one of those first, so "the first phi" reads an
@@ -2862,6 +2950,9 @@ static BOOL parIsComputeOp(XTIROpcode op)
             [arrBufs addObject:ivars[k - 1]];
     NSMutableDictionary<NSString*, NSMutableArray<NSValue*>*>* writes = [NSMutableDictionary dictionary];
     NSMutableArray<NSArray*>* reads = [NSMutableArray array]; // [buffer, NSValue(index)]
+    // f4 arrays: their elements are tested, not their bytes; a write the
+    // chunks cannot keep apart (two to a byte) is a dependence.
+    NSString* f4Why = nil;
     for (XTIRBlock* b in f.blocks)
         {
         for (XTIRInsn* i in b.instructions)
@@ -2876,17 +2967,37 @@ static BOOL parIsComputeOp(XTIROpcode op)
             NSString* buf = [self bufferOf:ea.operands[0] self:selfId ivars:ivars defs:def];
             if (!buf || [arrBufs containsObject:buf])
                 continue;
-            XTParIndex x = [self indexOf:ea.operands[1] iv:iv defs:def depth:0];
+            XTIRValue* f4i = XTIRF4ElementIndex(ea);
+            XTIROperand* idxOp = f4i ? [XTIROperand useWithValueId:f4i.valueId] : ea.operands[1];
+            XTParIndex x = [self indexOf:idxOp iv:iv defs:def depth:0];
             if (!x.affine)
-                x = [self gridIndexOf:ea.operands[1] iv:iv self:selfId ivars:ivars defs:def];
+                x = [self gridIndexOf:idxOp iv:iv self:selfId ivars:ivars defs:def];
+            // An f4 write: two elements share each byte, so the chunks must
+            // start on one parity of k * i + c (k odd); one every item writes
+            // (k 0) or an index from data cannot be kept apart.
+            if (f4i && isStore && !f4Why)
+                {
+                if (!x.affine || x.k == 0)
+                    f4Why = [NSString stringWithFormat:@"writes the f4 array '%@' at an index that is not k * i + c, "
+                                                       @"so two work items could write the two halves of one byte",
+                                                       shownName(buf)];
+                else if (x.k % 2 != 0)
+                    {
+                    NSInteger p = (NSInteger)(((x.c % 2) + 2) % 2);
+                    if (gParF4Pair >= 0 && gParF4Pair != p)
+                        f4Why = @"writes f4 arrays at offsets of both parities (as a[i] and a[i + 1]), so no split of "
+                                @"its items keeps each byte on one thread";
+                    gParF4Pair = p;
+                    }
+                }
             NSValue* xv = [NSValue valueWithBytes:&x objCType:@encode(XTParIndex)];
             XTParSym sx = { NO, 0, 0, -1, 0 };
             if (guards)
                 sx = x.affine ? (XTParSym){ YES, x.k, x.c, -1, 0 }
-                              : [self symIndexOf:ea.operands[1] iv:iv self:selfId defs:def depth:0];
+                              : [self symIndexOf:idxOp iv:iv self:selfId defs:def depth:0];
             // …and in a grid, the point's flat index plus captured integers.
             if (guards && !sx.affine)
-                sx = [self gridSymIndexOf:ea.operands[1] iv:iv self:selfId ivars:ivars defs:def];
+                sx = [self gridSymIndexOf:idxOp iv:iv self:selfId ivars:ivars defs:def];
             NSValue* sv = [NSValue valueWithBytes:&sx objCType:@encode(XTParSym)];
             // A symbolic write with stride k != 0 is no scatter: items write
             // distinct elements, and the guard settles it against the reads.
@@ -2908,6 +3019,8 @@ static BOOL parIsComputeOp(XTIROpcode op)
                 [reads addObject:@[ buf, xv, sv ]];
             }
         }
+    if (f4Why)
+        return f4Why;
     for (NSArray* r in reads)
         {
         NSArray<NSArray*>* ws = writes[r[0]];

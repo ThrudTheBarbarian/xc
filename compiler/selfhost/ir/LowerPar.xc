@@ -33,6 +33,7 @@
     final void parCheck(void)
         {
         _parGuards = new Map();
+        _parPairs = new Map();
         _parFns = new Map();
         _parSyms = new Map();
         _parVerdict = new Map();
@@ -80,6 +81,8 @@
                 _parScatter = (String*)0;
                 _parGuardList = new Array();
                 String* dep = parDependence(f, parIvarNames(cls));
+                if (dep == (String*)0 && _parF4Pair >= (i32)0)
+                    _parPairs.set((Hashable*)cls, (Object*)Number.with((u32)_parF4Pair));
                 // A loop the compiler lifted by itself is a block only when its
                 // items are proved apart: a scatter keeps it serial (a written
                 // block's stays a warning). As the reference.
@@ -334,6 +337,50 @@
     // reference's isScanBlock.
     // Does the function, or one it calls, convert a 16-bit float (a call of
     // FloatPack.xc's _xt_fpk_*)? As the reference's XTParUsesFloatPack.
+    // The element index an f4 array element's ElementAddr (the address of its
+    // byte) was formed from (f4ElementAddr), or 0 for any other value.
+    final IRValue* f4IndexOf(IRValue* ea)
+        {
+        if (ea == (IRValue*)0)
+            return (IRValue*)0;
+        for (u32 i = _nibAddrs.count(); i > (u32)0; i = i - (u32)1)
+            if ((IRValue*)_nibAddrs.get(i - (u32)1) == ea)
+                return (IRValue*)_nibIdx.get(i - (u32)1);
+        return (IRValue*)0;
+        }
+
+    // Does the function, or one it calls, read or write an f4 array element?
+    // A GPU kernel would rewrite a byte two work items share, so such a block
+    // has no form. As the reference's XTParTouchesF4.
+    final bool parTouchesF4(IRFunc* f, Map* seen)
+        {
+        if (f == 0 || seen.get((Hashable*)f.name()) != 0)
+            return false;
+        seen.set((Hashable*)f.name(), (Object*)f.name());
+        for (u32 b = 0; b < f.blocks().count(); b++)
+            {
+            Array* ins = ((IRBlock*)f.blocks().get(b)).insns();
+            for (u32 i = 0; i < ins.count(); i++)
+                {
+                IRInsn* ci = (IRInsn*)ins.get(i);
+                if (ci.isOp(opElementAddr) && f4IndexOf(ci.res()) != (IRValue*)0)
+                    return true;
+                if (!isName(ci.op(), "Call") || ci.ops().count() == 0)
+                    continue;
+                IROperand* o = (IROperand*)ci.ops().get(0);
+                if (o.kind() != (u8)OPK_SYM || o.name() == 0)
+                    continue;
+                for (u32 k = 0; k < _m.funcs().count(); k++)
+                    {
+                    IRFunc* g = (IRFunc*)_m.funcs().get(k);
+                    if (g.name().equals(o.name()) && parTouchesF4(g, seen))
+                        return true;
+                    }
+                }
+            }
+        return false;
+        }
+
     final bool parUsesFloatPack(IRFunc* f, Map* seen)
         {
         if (f == 0 || seen.get((Hashable*)f.name()) != 0)
@@ -1914,6 +1961,7 @@
     // result: that is a scan, not a par. Returns the complaint, or 0.
     final String* parDependence(IRFunc* f, Array* ivars)
         {
+        _parF4Pair = (i32)-1;
         Map* def = new Map();
         IRValue* iv = (IRValue*)0;
         for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
@@ -1936,7 +1984,27 @@
                 }
             }
         if (iv == (IRValue*)0 || f.params().count() == (u32)0)
+            {
+            // No induction variable to place its writes by (under -g the
+            // loop's counter lives in a slot): a block writing an f4 array runs
+            // on one thread (pairs=2), since its chunks could not be cut
+            // safely.
+            for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
+                {
+                IRBlock* bb = (IRBlock*)f.blocks().get(b);
+                for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                    {
+                    IRInsn* ip = (IRInsn*)bb.insns().get(i);
+                    if ((ip.opc() == opStore || ip.opc() == opStoreVolatile) && ip.ops().count() > (u32)0)
+                        {
+                        IROperand* a0 = (IROperand*)ip.ops().get((u32)0);
+                        if (a0.kind() == (u8)OPK_USE && f4IndexOf(a0.val()) != (IRValue*)0)
+                            _parF4Pair = (i32)2;
+                        }
+                    }
+                }
             return (String*)0;
+            }
         // The induction variable is the phi the loop's GUARD compares, not
         // simply the first phi: a reduction's accumulator is a phi too, and a
         // block with reductions lists one of those first (the reference's IR
@@ -1954,6 +2022,9 @@
         Map* wShown = new Map();        // buffer -> its first write's index, as shown
         Map* wSym = new Map();          // buffer -> Array of its writes' symbolic forms (ParIdx)
         Array* reads = new Array();     // [buffer, form, shown]
+        // f4 arrays: their elements are tested, not their bytes; a write the
+        // chunks cannot keep apart (two to a byte) is a dependence.
+        String* f4Why = (String*)0;
         for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
             {
             IRBlock* bb = (IRBlock*)f.blocks().get(b);
@@ -1974,16 +2045,37 @@
                 String* buf = parBufferOf((IROperand*)ea.ops().get((u32)0), selfVal, ivars, def);
                 if (buf == (String*)0 || arrBufs.contains((Hashable*)buf))
                     continue;
-                ParIdx* px = parIndex((IROperand*)ea.ops().get((u32)1), iv, def, (u32)0);
+                IRValue* f4i = f4IndexOf(ea.res());
+                IROperand* idxOp = f4i != (IRValue*)0 ? IROperand.useVal(f4i) : (IROperand*)ea.ops().get((u32)1);
+                ParIdx* px = parIndex(idxOp, iv, def, (u32)0);
                 if (!px.affine)
-                    px = parGridIndex((IROperand*)ea.ops().get((u32)1), iv, selfVal, ivars, def);
+                    px = parGridIndex(idxOp, iv, selfVal, ivars, def);
                 bool af = px.affine; i64 k = px.k; i64 c = px.c;
+                // An f4 write: two elements share each byte, so the chunks
+                // must start on one parity of k * i + c (k odd); one every item
+                // writes (k 0) or an index from data cannot be kept apart.
+                if (f4i != (IRValue*)0 && isStore && f4Why == (String*)0)
+                    {
+                    if (!af || k == (i64)0)
+                        {
+                        f4Why = String.withCString("writes the f4 array '");
+                        f4Why.append(self.parShown(buf));
+                        f4Why.appendCString("' at an index that is not k * i + c, so two work items could write the two halves of one byte");
+                        }
+                    else if (k % (i64)2 != (i64)0)
+                        {
+                        i32 pr = (i32)(((c % (i64)2) + (i64)2) % (i64)2);
+                        if (_parF4Pair >= (i32)0 && _parF4Pair != pr)
+                            f4Why = String.withCString("writes f4 arrays at offsets of both parities (as a[i] and a[i + 1]), so no split of its items keeps each byte on one thread");
+                        _parF4Pair = pr;
+                        }
+                    }
                 ParIdx* sx = ParIdx.of(false, (i64)0, (i64)0);
                 if (_parGuardList != (Array*)0)
-                    sx = af ? ParIdx.of(true, k, c) : parSymIndex((IROperand*)ea.ops().get((u32)1), iv, selfVal, def, (u32)0);
+                    sx = af ? ParIdx.of(true, k, c) : parSymIndex(idxOp, iv, selfVal, def, (u32)0);
                 // …and in a grid, the point's flat index plus captured integers.
                 if (_parGuardList != (Array*)0 && !sx.affine)
-                    sx = parGridSym((IROperand*)ea.ops().get((u32)1), iv, selfVal, ivars, def);
+                    sx = parGridSym(idxOp, iv, selfVal, ivars, def);
                 // A symbolic write with stride k != 0 is no scatter (as the reference).
                 bool symStrided = sx.affine && sx.k != (i64)0;
                 String* form = String.withCString(af ? "1 " : "0 ");
@@ -2031,6 +2123,8 @@
                     }
                 }
             }
+        if (f4Why != (String*)0)
+            return f4Why;
         for (u32 i = (u32)0; i < reads.count(); i = i + (u32)1)
             {
             Array* r = (Array*)reads.get(i);
@@ -3536,8 +3630,13 @@
         // threads. As the reference.
         bool arrRed = !serialBlock && lost == (String*)0 && _mArrRed.count() > (u32)0;
         String* arrWhy = arrRed ? String.withCString("it has an array reduction (:reduce(op a[])), which has no GPU version yet") : (String*)0;
-        if (!serialBlock && lost == (String*)0 && !arrRed && parIsScanBlock(fcls.substringBytes((u32)8, fcls.byteLength() - (u32)8)))
+        bool scanPass = !serialBlock && lost == (String*)0 && !arrRed && parIsScanBlock(fcls.substringBytes((u32)8, fcls.byteLength() - (u32)8));
+        if (scanPass)
             lostWhy = String.withCString("it is a pass of a :scan block, which has no GPU version yet");
+        // A block that reads or writes f4 array elements has no form: a
+        // kernel would rewrite a byte two work items share.
+        if (!serialBlock && lost == (String*)0 && !arrRed && !scanPass && parTouchesF4(f, new Map()))
+            lostWhy = String.withCString("it computes in f16, bf16, f8 or f4, which GPU kernels do not take yet");
         bool noForms = serialBlock || lostWhy != (String*)0;
         _mWhy = lostWhy;
         String* mslText = _parMetal && !noForms ? parMslK(f, kfUse, kmod) : (String*)0;
@@ -3653,7 +3752,7 @@
             // the block runs on the CPU, in the type's own precision.
             String* why = _mWhy;
             if (parUsesFloatPack(f, new Map()))
-                why = String.withCString("it computes in f16, bf16 or f8, which GPU kernels do not take yet");
+                why = String.withCString("it computes in f16, bf16, f8 or f4, which GPU kernels do not take yet");
             w.append(why != (String*)0 ? why : String.withCString("its GPU version cannot express something it uses yet"));
             // A :scan's passes are the compiler's, not written blocks: they
             // say nothing (#144).
@@ -3708,6 +3807,13 @@
                 msl.append(String.withU32(k - (u32)3));
                 msl.appendCString(":");
                 msl.append(String.withU32(self.irWidth(e)));
+                }
+            // A block writing f4 arrays: the parity its chunks start on.
+            Object* pp = _parPairs != (Map*)0 ? _parPairs.get((Hashable*)fcls) : (Object*)0;
+            if (pp != (Object*)0)
+                {
+                msl.appendCString(" pairs=");
+                msl.append(String.withU32(((Number*)pp).asU32()));
                 }
             msl.appendCString("\n");
             }

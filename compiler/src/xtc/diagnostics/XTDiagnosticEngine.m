@@ -156,13 +156,21 @@ static BOOL XTPackIdentChar(unichar c)
 
 static NSString* XTPackSpelling(NSString* text)
     {
-    if ([text rangeOfString:@"$"].location == NSNotFound)
+    if ([text rangeOfString:@"$"].location == NSNotFound && [text rangeOfString:@"f4*"].location == NSNotFound)
         return text;
     NSUInteger n = text.length;
     NSMutableString* out = [NSMutableString string];
     NSUInteger i = 0;
     while (i < n)
         {
+        // An f4 array reference, a pointer to f4 inside, is written `f4[]`.
+        if (i + 3 <= n && [[text substringWithRange:NSMakeRange(i, 3)] isEqualToString:@"f4*"] &&
+            (i == 0 || !XTPackIdentChar([text characterAtIndex:i - 1])))
+            {
+            [out appendString:@"f4[]"];
+            i += 3;
+            continue;
+            }
         NSUInteger head = 0;
         if (i + 3 <= n && [[text substringWithRange:NSMakeRange(i, 3)] isEqualToString:@"f8$"])
             head = 3;

@@ -4782,6 +4782,13 @@ static NSInteger XTFmtWrapperIndex(BOOL isVarArgs, NSArray<XTParamNode*>* params
         }
     if (init.nodeKind != XTASTNodeKindBlock)
         return;
+    // An f4 array's elements are nibbles, which no list lays out.
+    if ([XTType isF4Array:type])
+        {
+        [self.diagnostics emitError:@"an f4 array takes no initialiser list: its elements are nibbles; assign them one by one"
+                                 at:init.location];
+        return;
+        }
     NSArray<XTASTNode*>* items = ((XTBlockNode*)init).statements;
     if ([type isKindOfClass:[XTArrayType class]])
         {

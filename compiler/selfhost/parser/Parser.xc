@@ -1137,11 +1137,13 @@ class Parser
         addTypedef(String.withCString("f32"), String.withCString("float"));
         addTypedef(String.withCString("f64"), String.withCString("double"));
         // The small floats: `f16` (pack e5m10), `bf16`, the name of
-        // `f16:pack(e8m7)`, which fusePackSuffixes spells this way, and `f8`
-        // (OCP E4M3). Every other pack is added by name as it is fused.
+        // `f16:pack(e8m7)`, which fusePackSuffixes spells this way, `f8`
+        // (OCP E4M3) and `f4` (OCP MX FP4, e2m1). Every other pack is added
+        // by name as it is fused.
         _typeNames.add((Hashable*)String.withCString("f16"));
         _typeNames.add((Hashable*)String.withCString("bf16"));
         _typeNames.add((Hashable*)String.withCString("f8"));
+        _typeNames.add((Hashable*)String.withCString("f4"));
 
         u32 i = (u32)0;
         while (i + (u32)1 < _tokens.count()) {
@@ -1541,20 +1543,10 @@ class Parser
     // any other is its canonical name (`f8:pack(e5m2)`), added to the type
     // names. A refused pack is an error saying what to write. Only after a
     // float type name or a type keyword, so `c ? x : pack(y)` keeps its
-    // meaning. `f4 x` is refused by name, f16 standing in. As the reference's
-    // fusePackSuffixes.
+    // meaning. As the reference's fusePackSuffixes.
     void fusePackSuffixes(void)
     {
         u32 n = _tokens.count();
-        for (u32 i = 0; i + 1 < n; i++) {
-            Token* t = (Token*)_tokens.get(i);
-            if (t.type() != (u16)tokIdentifier || !Parser._same(t.value(), "f4")
-                || ((Token*)_tokens.get(i + 1)).type() != (u16)tokIdentifier) continue;
-            _errorAtTok(String.withCString("'f4' is not a type yet: the float types are f8, f16, bf16, f32 and f64"), t);
-            Token* r = Token.with((u16)tokIdentifier, String.withCString("f16"), t.line(), t.col());
-            r.setFileId(t.fileId());
-            _tokens.replaceAt(i, (Object*)r);
-        }
         u32 i = 0;
         while (i + 5 < n) {
             Token* t = (Token*)_tokens.get(i);
@@ -1590,10 +1582,8 @@ class Parser
             String* kw = (String*)0;
             if (len == 8) kw = ((Token*)_tokens.get(i + 6)).value();
             String* name = Types.packNameFor(base, w.value(), kw);
-            if (name == (String*)0) {
+            if (name == (String*)0)
                 _errorAtTok(Types.packError(), pk);
-                if (Parser._same(base, "f4")) name = String.withCString("f16");
-            }
             Token* fused = t;
             if (name != (String*)0) {
                 fused = Token.with((u16)tokIdentifier, name, t.line(), t.col());
@@ -1604,6 +1594,24 @@ class Parser
             _tokens.replaceAt(i, (Object*)fused);
             n = _tokens.count();
             i++;
+        }
+        // `f4[]`: an f4 array passed or held by reference (a function's
+        // parameter, `new f4[n]`'s result), element 0 in the low nibble of
+        // its first byte. It is a pointer to f4: the brackets become a `*`
+        // spelled `[]`, so every place that reads a type reads it, and only
+        // that `*` follows f4 (parseTypeSpelling). Diagnostics write it back
+        // as `f4[]` (Types.packSpelling).
+        for (u32 j = 0; j + 2 < n; j++) {
+            Token* t = (Token*)_tokens.get(j);
+            if (t.type() != (u16)tokIdentifier || !Parser._same(t.value(), "f4")
+                || ((Token*)_tokens.get(j + 1)).type() != (u16)tokLBracket
+                || ((Token*)_tokens.get(j + 2)).type() != (u16)tokRBracket) continue;
+            Token* lb = (Token*)_tokens.get(j + 1);
+            Token* st = Token.with((u16)tokStar, String.withCString("[]"), lb.line(), lb.col());
+            st.setFileId(lb.fileId());
+            _tokens.removeAt(j + 2);
+            _tokens.replaceAt(j + 1, (Object*)st);
+            n = _tokens.count();
         }
     }
 
@@ -2026,6 +2034,11 @@ class Parser
             sawWeak = false;                    // consumed by the bound type
         }
 
+        // `f4[]` reaches here as `f4` and a `*` spelled `[]` (fusePackSuffixes),
+        // a pointer to f4 that nothing else can write: an f4 element has no
+        // byte address, so a `*` written after f4 is refused.
+        if (Parser._same(out, "f4") && isPointerSigil(curType()) && !Parser._same(cur().value(), "[]"))
+            _error(String.withCString("an f4 element has no byte address, so there is no pointer to f4; pass an f4 array as 'f4[]', and keep an index for one element"));
         bool firstPointer = true;
         while (matchPointerSigil()) {
             if (firstPointer) {

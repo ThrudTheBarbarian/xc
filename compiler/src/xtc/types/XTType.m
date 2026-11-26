@@ -200,6 +200,8 @@ static BOOL XTParsePackSplit(NSString* pk, unsigned* e, unsigned* m, BOOL* uns)
 
 static unsigned XTPackDefaultKind(unsigned w, unsigned e, unsigned m)
     {
+    if (w == 4)
+        return 2;
     return (w == 8 && e == 4 && m == 3) ? 1 : 0;
     }
 
@@ -218,6 +220,8 @@ static NSString* XTPackCanonicalName(unsigned w, unsigned e, unsigned m, unsigne
         return @"bf16";
     if (w == 8 && e == 4 && m == 3 && kind == 1)
         return @"f8";
+    if (w == 4)
+        return @"f4";
     if (kind == XTPackDefaultKind(w, e, m))
         return [NSString stringWithFormat:@"f%u$e%um%u", w, e, m];
     return [NSString stringWithFormat:@"f%u$e%um%u$%@", w, e, m, XTPackKindWord(kind)];
@@ -240,6 +244,11 @@ static BOOL XTParsePackName(NSString* name, unsigned* w, unsigned* e, unsigned* 
     if ([name isEqualToString:@"f8"])
         {
         *w = 8, *e = 4, *m = 3, *kind = 1;
+        return YES;
+        }
+    if ([name isEqualToString:@"f4"])
+        {
+        *w = 4, *e = 2, *m = 1, *kind = 2;
         return YES;
         }
     unsigned width;
@@ -319,6 +328,10 @@ static BOOL XTParsePackName(NSString* name, unsigned* w, unsigned* e, unsigned* 
     {
     return (id)[self packTypeNamed:@"f8"];
     }
++ (instancetype)f4Type
+    {
+    return (id)[self packTypeNamed:@"f4"];
+    }
 
 + (nullable NSString*)packNameForBase:(NSString*)base
                                  pack:(NSString*)pk
@@ -346,14 +359,23 @@ static BOOL XTParsePackName(NSString* name, unsigned* w, unsigned* e, unsigned* 
                                           pk];
         return nil;
         }
+    // f4 has one pack, e2m1 (OCP MX FP4), of kind none: 1 + X + Y = 4 with
+    // X >= 2 and Y >= 1, as f8's packs have, leaves no other split, and the
+    // other kinds would leave six or seven finite values.
     if ([base isEqualToString:@"f4"])
         {
-        *err = @"'f4' is not a type yet: the float types are f8, f16, bf16, f32 and f64";
-        return nil;
+        if (![pk isEqualToString:@"e2m1"])
+            *err = [NSString stringWithFormat:@"f4 has no pack '%@': its one pack is e2m1 (OCP MX FP4, no infinity or NaN, "
+                                              @"largest value 6); write 'f4'",
+                                              pk];
+        else if (kind && ![kind isEqualToString:@"none"])
+            *err = [NSString stringWithFormat:@"f4 takes no special-value kind '%@': e2m1 has no infinity or NaN; write 'f4'",
+                                              kind];
+        return *err ? nil : base;
         }
     if (![base isEqualToString:@"f16"] && ![base isEqualToString:@"f8"])
         {
-        *err = [NSString stringWithFormat:@"'%@' has no pack: a pack is written on a float type, f8, f16, f32 or f64",
+        *err = [NSString stringWithFormat:@"'%@' has no pack: a pack is written on a float type, f4, f8, f16, f32 or f64",
                                           base];
         return nil;
         }
@@ -436,6 +458,19 @@ static BOOL XTParsePackName(NSString* name, unsigned* w, unsigned* e, unsigned* 
     if (_kind != XTTypeKindPack)
         return 0;
     return _pk | (_pu ? 4u : 0u);
+    }
+- (BOOL)isF4
+    {
+    return _kind == XTTypeKindPack && _pw == 4;
+    }
++ (BOOL)isF4Ref:(XTType*)t
+    {
+    return t.kind == XTTypeKindPointer && [t isKindOfClass:[XTPointerType class]]
+           && ((XTPointerType*)t).pointeeType.isF4;
+    }
++ (BOOL)isF4Array:(XTType*)t
+    {
+    return t.kind == XTTypeKindArray && [t isKindOfClass:[XTArrayType class]] && ((XTArrayType*)t).elementType.isF4;
     }
 - (BOOL)isCPack
     {
@@ -792,7 +827,7 @@ static BOOL sFloatIsIEEE = NO;
     case XTTypeKindDouble:
         return 8;
     case XTTypeKindPack:
-        return _pw / 8;
+        return (_pw + 7) / 8;
     default:
         return 0;
         }

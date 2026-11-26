@@ -32,6 +32,15 @@ NS_ASSUME_NONNULL_BEGIN
 
 @end
 
+@class XTIRInsn;
+@class XTIRValue;
+// f4 (step F4): the lowering notes each ElementAddr it forms for an f4 array
+// element (the address of its byte) with the element index it came from; the
+// par check reads it back to test the element, not the byte. nil for any
+// other instruction.
+void XTIRF4NoteElement(XTIRInsn* ea, XTIRValue* idx);
+XTIRValue* _Nullable XTIRF4ElementIndex(XTIRInsn* ea);
+
 // The word a kernel holds an array of structs of type t in: the struct's one
 // number type when its fields are all that type, packed; else an unsigned
 // word as wide as its widest field, up to 32 bits. nil when a field is not a

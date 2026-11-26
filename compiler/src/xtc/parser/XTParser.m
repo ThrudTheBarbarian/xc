@@ -397,19 +397,6 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
     {
     NSUInteger n = _tokens.count;
     NSMutableArray<XTToken*>* t = nil;
-    // `f4 x`: the width the language will have, written as a type before it
-    // is one. Refused by name; f16 stands in so parsing goes on.
-    for (NSUInteger i = 0; i + 1 < n; i++)
-        {
-        XTToken* tk = (t ?: _tokens)[i];
-        if (tk.type != XTTokenIdentifier || ![tk.value isEqualToString:@"f4"] ||
-            (t ?: _tokens)[i + 1].type != XTTokenIdentifier)
-            continue;
-        [_diagnostics emitError:@"'f4' is not a type yet: the float types are f8, f16, bf16, f32 and f64" at:tk.location];
-        if (!t)
-            t = [_tokens mutableCopy];
-        t[i] = [[XTToken alloc] initWithType:XTTokenIdentifier value:@"f16" location:tk.location];
-        }
     for (NSUInteger i = 0; i + 5 < n; i++)
         {
         XTToken* tk = (t ?: _tokens)[i];
@@ -450,13 +437,31 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
             {
             [_diagnostics emitError:err at:src[i + 2].location];
             // The base type stands for the whole, so parsing goes on.
-            name = [base isEqualToString:@"f4"] ? @"f16" : nil;
+            name = nil;
             }
         if (!t)
             t = [_tokens mutableCopy];
         XTToken* fused = name ? [[XTToken alloc] initWithType:XTTokenIdentifier value:name location:tk.location]
                               : tk;
         [t replaceObjectsInRange:NSMakeRange(i, len) withObjectsFromArray:@[ fused ]];
+        n = t.count;
+        }
+    // `f4[]`: an f4 array passed or held by reference (a function's
+    // parameter, `new f4[n]`'s result), element 0 in the low nibble of its
+    // first byte. It is a pointer to f4: the brackets become a `*` spelled
+    // `[]`, so every place that reads a type reads it, and only that `*`
+    // follows f4 (parseType). Diagnostics write it back as `f4[]`
+    // (XTPackSpelling).
+    for (NSUInteger j = 0; j + 2 < n; j++)
+        {
+        NSArray<XTToken*>* src = t ?: _tokens;
+        if (src[j].type != XTTokenIdentifier || ![src[j].value isEqualToString:@"f4"] ||
+            src[j + 1].type != XTTokenLBracket || src[j + 2].type != XTTokenRBracket)
+            continue;
+        if (!t)
+            t = [_tokens mutableCopy];
+        XTToken* st = [[XTToken alloc] initWithType:XTTokenStar value:@"[]" location:src[j + 1].location];
+        [t replaceObjectsInRange:NSMakeRange(j + 1, 2) withObjectsFromArray:@[ st ]];
         n = t.count;
         }
     if (t)
@@ -2999,6 +3004,13 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
     // picks up an explicit placement qualifier; deeper levels get
     // the default (main) placement so `main:u8@@` means a
     // main-memory pointer to a (main) u8@.
+    // `f4[]` reaches here as `f4` and a `*` spelled `[]` (fusePackSuffixes),
+    // a pointer to f4 that nothing else can write: an f4 element has no byte
+    // address, so a `*` written after f4 is refused.
+    if (base.isF4 && XTIsPointerSigil([self currentToken].type) && ![[self currentToken].value isEqualToString:@"[]"])
+        [_diagnostics emitError:@"an f4 element has no byte address, so there is no pointer to f4; pass an f4 array as "
+                                @"'f4[]', and keep an index for one element"
+                             at:[self currentLocation]];
     BOOL firstPointer = YES;
     while ([self matchPointerSigil])
         {

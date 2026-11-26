@@ -183,6 +183,9 @@ typedef NS_ENUM(NSInteger, XTTypeKind) {
 + (instancetype)bf16Type;
 /// f8, OCP FP8 E4M3 (pack e4m3, finite).
 + (instancetype)f8Type;
+/// f4, OCP MX FP4 (pack e2m1, none): a byte as a scalar, a nibble in an
+/// array (XTArrayType).
++ (instancetype)f4Type;
 /// The pack type a canonical name denotes (`f16`, `bf16`, `f8`, `f8$e5m2`,
 /// `f8$ue8m0`, `f8$e4m3$ieee`, `f16$e6m9`), one object per name; nil for any
 /// other name. A diagnostic writes `f8$e5m2` as `f8:pack(e5m2)`.
@@ -211,6 +214,15 @@ typedef NS_ENUM(NSInteger, XTTypeKind) {
 /// The routines' pack word beyond (e, m): the kind, with 4 for unsigned.
 /// 0 for an ieee signed pack, which FloatPack.xc's routines take as (e, m).
 @property(nonatomic, readonly) uint32_t packFlags;
+/// YES for f4 (step F4). An f4 array element is half a byte, two to a byte
+/// with element 0 in the low nibble, so it has no address: `f4[]`, a pointer
+/// to f4 inside, references an array's first byte and is indexed, never
+/// dereferenced or stepped.
+@property(nonatomic, readonly) BOOL isF4;
+/// An `f4[]` (a pointer to f4).
++ (BOOL)isF4Ref:(nullable XTType*)t;
+/// An f4 array, `f4[N]` (or `f4[]` before its initialiser sizes it).
++ (BOOL)isF4Array:(nullable XTType*)t;
 /// YES for the two packs C has (_Float16 and __bf16): f16 and bf16.
 @property(nonatomic, readonly) BOOL isCPack;
 /// The pack's sign bit (0x8000 for f16, 0x80 for f8), 0 when unsigned.

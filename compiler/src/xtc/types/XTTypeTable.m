@@ -36,12 +36,14 @@
         _table[@"f32"] = [XTType floatType];
         _table[@"f64"] = [XTType doubleType];
         // The small floats: `f16` (pack e5m10), `bf16`, the name of
-        // `f16:pack(e8m7)`, which the parser spells this way, and `f8` (OCP
-        // E4M3). Built-in names, as f32 is, so no import is needed. Every
+        // `f16:pack(e8m7)`, which the parser spells this way, `f8` (OCP E4M3)
+        // and `f4` (OCP MX FP4). Built-in names, as f32 is, so no import is
+        // needed. Every
         // other pack is found by its canonical name (typeForName:).
         _table[@"f16"] = [XTType f16Type];
         _table[@"bf16"] = [XTType bf16Type];
         _table[@"f8"] = [XTType f8Type];
+        _table[@"f4"] = [XTType f4Type];
         _table[@"void"] = [XTType voidType];
         _table[@"pointer"] = [XTType pointerType];
         _table[@"auto"] = [XTType autoType];

@@ -86,6 +86,8 @@ class Types
             return Types.packDescOf(16, 8, 7, 0, false);
         if (Types._is(t, "f8"))
             return Types.packDescOf(8, 4, 3, 1, false);
+        if (Types._is(t, "f4"))
+            return Types.packDescOf(4, 2, 1, 2, false);
         u32 w = 0;
         u32 at = 0;
         if (t.hasPrefix(String.withCString("f8$")))
@@ -195,6 +197,8 @@ class Types
         {
         if (w == 8 && e == 4 && m == 3)
             return 1;
+        if (w == 4)
+            return 2;
         return 0;
         }
 
@@ -217,6 +221,8 @@ class Types
             return String.withCString("bf16");
         if (w == 8 && e == 4 && m == 3 && kind == 1)
             return String.withCString("f8");
+        if (w == 4)
+            return String.withCString("f4");
         String* r = String.withCString("f");
         r.append(String.withU32(w));
         r.appendCString("$e");
@@ -233,17 +239,26 @@ class Types
 
     // A small float's canonical type name as the source writes it: `f8$e5m2`
     // is `f8:pack(e5m2)`, `f8$e4m3$ieee` is `f8:pack(e4m3, ieee)`. Every
-    // diagnostic's text passes through here (Frontend.printDiagnostic). As
-    // the reference's XTPackSpelling.
+    // diagnostic's text passes through here (Frontend.printDiagnostic). An
+    // f4 array reference, spelled `f4*` inside, is written `f4[]`. As the
+    // reference's XTPackSpelling.
     static String* packSpelling(String* text)
         {
-        if (text == 0 || text.byteIndexOf(String.withCString("$")) == String.notFound())
+        if (text == 0 || (text.byteIndexOf(String.withCString("$")) == String.notFound()
+                          && text.byteIndexOf(String.withCString("f4*")) == String.notFound()))
             return text;
         u32 n = text.byteLength();
         String* out = String.withCString("");
         u32 i = 0;
         while (i < n)
             {
+            if (i + 3 <= n && text.byteAt(i) == (u8)'f' && text.byteAt(i + 1) == (u8)'4' && text.byteAt(i + 2) == (u8)'*'
+                && (i == 0 || !Types.isIdentByte(text.byteAt(i - 1))))
+                {
+                out.appendCString("f4[]");
+                i = i + 3;
+                continue;
+                }
             u32 head = 0;
             if (i + 3 <= n && text.byteAt(i) == (u8)'f' && text.byteAt(i + 1) == (u8)'8' && text.byteAt(i + 2) == (u8)'$')
                 head = 3;
@@ -365,16 +380,34 @@ class Types
             _packErr = er;
             return (String*)0;
             }
+        // f4 has one pack, e2m1 (OCP MX FP4), of kind none: 1 + X + Y = 4
+        // with X >= 2 and Y >= 1, as f8's packs have, leaves no other split,
+        // and the other kinds would leave six or seven finite values.
         if (Types._is(base, "f4"))
             {
-            _packErr = String.withCString("'f4' is not a type yet: the float types are f8, f16, bf16, f32 and f64");
-            return (String*)0;
+            if (!pk.equals(String.withCString("e2m1")))
+                {
+                String* er = String.withCString("f4 has no pack '");
+                er.append(pk);
+                er.appendCString("': its one pack is e2m1 (OCP MX FP4, no infinity or NaN, largest value 6); write 'f4'");
+                _packErr = er;
+                return (String*)0;
+                }
+            if (kind != (String*)0 && !Types._is(kind, "none"))
+                {
+                String* er = String.withCString("f4 takes no special-value kind '");
+                er.append(kind);
+                er.appendCString("': e2m1 has no infinity or NaN; write 'f4'");
+                _packErr = er;
+                return (String*)0;
+                }
+            return base;
             }
         if (!Types._is(base, "f16") && !Types._is(base, "f8"))
             {
             String* er = String.withCString("'");
             er.append(base);
-            er.appendCString("' has no pack: a pack is written on a float type, f8, f16, f32 or f64");
+            er.appendCString("' has no pack: a pack is written on a float type, f4, f8, f16, f32 or f64");
             _packErr = er;
             return (String*)0;
             }
@@ -448,6 +481,26 @@ class Types
     static bool isPack(String* t)
         {
         return Types.packDesc(t) != 0;
+        }
+
+    // f4 arrays (step F4). An element is half a byte, two to a byte with
+    // element 0 in the low nibble, so it has no address: `f4[]` (spelled
+    // `f4*` inside, with any qualifier before it) references an array's
+    // first byte and is indexed, never dereferenced or stepped.
+    static bool isF4Ref(String* t)
+        {
+        if (t == 0 || !t.hasSuffix(String.withCString("f4*")))
+            return false;
+        u32 n = t.byteLength();
+        return n == (u32)3 || t.byteAt(n - (u32)4) == (u8)':';
+        }
+
+    // `f4[N]` (or `f4[]` before its initialiser sizes it).
+    static bool isF4Array(String* t)
+        {
+        if (t == 0 || !t.hasPrefix(String.withCString("f4[")))
+            return false;
+        return t.byteIndexOf(String.withCString("][")) == String.notFound();
         }
 
     // The pack's exponent and mantissa widths, kind, signedness and width.
@@ -902,7 +955,7 @@ class Types
         if (Types._is(t, "float"))
             return (u32)4;
         if (Types.isPack(t))
-            return Types.packWidth(t) / 8;
+            return (Types.packWidth(t) + (u32)7) / (u32)8;
         if (Types._is(t, "bool"))
             return (u32)1;
         if (Types._is(t, "i8"))

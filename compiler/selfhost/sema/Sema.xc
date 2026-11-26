@@ -639,6 +639,12 @@ class Sema
             }
         if (init.kind() != (u16)nkBlock)
             return;
+        // An f4 array's elements are nibbles, which no list lays out.
+        if (Types.isF4Array(ty))
+            {
+            _errorAt(String.withCString("an f4 array takes no initialiser list: its elements are nibbles; assign them one by one"), init);
+            return;
+            }
         u32 br = ty.lastIndexOfByte((u8)'[');
         if (ty.byteLength() > 0 && ty.byteAt(ty.byteLength() - 1) == (u8)']' && br != String.notFound())
             {
@@ -4069,6 +4075,8 @@ class Sema
             // slot to step.
             if (n.kidCount() > 0 && Sema.isOpIndex(n.kid(0)))
                 _errorAt(String.withCString("'++' and '--' cannot step an element read through an index operator; use '+= 1' or '-= 1'"), n.kid(0));
+            if (n.kidCount() > 0 && Types.isF4Ref(n.kid(0).ty()))
+                _errorAt(Sema.f4StepMessage(), n);
             return;
             }
         if (k == (u16)nkTernary)
@@ -5939,6 +5947,9 @@ class Sema
         if (!_isOp(n.op(), "<<") && !_isOp(n.op(), ">>") && !_isOp(n.op(), "<:") && !_isOp(n.op(), ":>")
             && !_isOp(n.op(), "&&") && !_isOp(n.op(), "||"))
             checkPackOperands(n.kid(0), n.kid(1), n);
+        if ((_isOp(n.op(), "+") || _isOp(n.op(), "-"))
+            && (Sema.f4Steps(n.kid(0).ty()) || Sema.f4Steps(n.kid(1).ty())))
+            _errorAt(Sema.f4StepMessage(), n);
         // TWO CONSTANTS fold, and the folded VALUE is what types the result:
         // `1000 & $FF` is 232, so it is a u8 — not the u16 the widening of its
         // operands would give. An operand may itself be a constant CHAIN
@@ -6111,6 +6122,43 @@ class Sema
     // `-x` on an unsigned integer yields the SIGNED type of the same width —
     // the value can now be negative and the type has to be able to say so.
     // `!x` is bool, `&x` adds a pointer level, `@p` removes one.
+    // f4 (step F4): an element is half a byte, two to a byte, so it has no
+    // address; an `f4[]` is indexed, never dereferenced or stepped. As the
+    // reference's checkF4Unary:.
+    static String* f4StepMessage(void)
+        {
+        return String.withCString("an 'f4[]' cannot step: two elements share each byte; keep an index and write a[i]");
+        }
+
+    // An operand `+` or `-` would step: an f4[] or an f4 array, which decays
+    // to one.
+    static bool f4Steps(String* t)
+        {
+        return Types.isF4Ref(t) || Types.isF4Array(t);
+        }
+
+    // A built-in subscript reading an f4 element, other than `a[0]`: `&a[0]`
+    // is the array's own first byte, the array as an `f4[]`.
+    static bool isF4Element(Node* e)
+        {
+        if (e == 0 || e.kind() != (u16)nkSubscript || e.hasFlag((u32)NF_OPCALL) || e.ty() == 0
+            || !e.ty().equals(String.withCString("f4")))
+            return false;
+        return !(e.kidCount() > (u32)1 && e.kid(1).kind() == (u16)nkInt && e.kid(1).num() == (i64)0);
+        }
+
+    void checkF4Unary(Node* n)
+        {
+        String* op = n.op();
+        Node* o = n.kid(0);
+        if (_isOp(op, "&") && Sema.isF4Element(o))
+            _errorAt(String.withCString("'&' cannot take the address of an f4 element: two elements share a byte; pass the array as 'f4[]' with the index"), n);
+        else if (_isOp(op, "*") && Types.isF4Ref(o.ty()))
+            _errorAt(String.withCString("'*' cannot read through an 'f4[]': an f4 element has no byte address; index it, as in a[0]"), n);
+        else if ((_isOp(op, "++") || _isOp(op, "--")) && Types.isF4Ref(o.ty()))
+            _errorAt(Sema.f4StepMessage(), n);
+        }
+
     void typeUnary(Node* n)
         {
         if (n.kidCount() == (u32)0)
@@ -6127,6 +6175,7 @@ class Sema
             else if (_isOp(op, "++") || _isOp(op, "--"))
                 _errorAt(String.withCString("'++' and '--' cannot step an element read through an index operator; use '+= 1' or '-= 1'"), n);
             }
+        checkF4Unary(n);
         // Prefix `+` has no built-in meaning.
         if (_isOp(op, "+"))
             {

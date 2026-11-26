@@ -533,6 +533,13 @@ class ClassInfo
     // so the index or pointer expression is evaluated once.
     Node* _cmpLhs;
     IRValue* _cmpAddr;
+    // f4 elements (step F4): each ElementAddr of an f4 array's byte, the
+    // nibble's shift in it (0 or 4, a U8) and the element's index, side by
+    // side. A load or store through such an address reads or rewrites the
+    // one nibble (loadThrough, storeThrough); the par check reads the index.
+    Array* _nibAddrs;
+    Array* _nibShifts;
+    Array* _nibIdx;
     // The operands an operator assignment reads twice (Node.opSharedCount),
     // each lowered once, first: the node and its value, side by side. A
     // lowering of one of these nodes takes the value.
@@ -675,6 +682,11 @@ class ClassInfo
     String* _parScatter; // the first unprovable write of the block being checked
     Array* _parGuardList; // the run's checks parDependence collects ("slot:m:d0:k"), or 0
     Map* _parGuards;      // block class -> its guard list, for the header's guard= words
+    // f4 writes (step F4): the parity each chunk of the block being checked
+    // starts on (-1 when nothing constrains it), and by block class, for the
+    // header's pairs= word (Par.pairsOf).
+    i32 _parF4Pair;
+    Map* _parPairs;
 
     // Each buffer's footprint, for the runtime's header line:
     // `fp=<captured-array>:<k>:<lo>:<hi>` (item i touches elements
@@ -871,6 +883,9 @@ class ClassInfo
         _vtSite = (Node*)0;
         _cmpLhs = (Node*)0;
         _cmpAddr = (IRValue*)0;
+        _nibAddrs = new Array();
+        _nibShifts = new Array();
+        _nibIdx = new Array();
         _opSharedNodes = new Array();
         _opSharedValues = new Array();
         _debugInfo = false;
@@ -1280,7 +1295,7 @@ class ClassInfo
         // A small float: its bit pattern (FloatPack.xc converts it), a U16 or
         // a U8.
         if (Types.isPack(s))
-            return String.withCString(Types.packWidth(s) == (u32)8 ? "U8" : "U16");
+            return String.withCString(Types.packWidth(s) <= (u32)8 ? "U8" : "U16");
         if (isName(s, "bool"))
             return String.withCString("Bool");
         if (isName(s, "void"))
@@ -1665,6 +1680,10 @@ class ClassInfo
         // one. Sizing it as a scalar leaves every ivar after it overlapping.
         if (isBoundSig(stripQual(t)))
             return astWidth(String.withCString("u8*")) * (u32)2;
+        // An f4 array packs two elements to a byte, element 0 in the low
+        // nibble: ceil(n / 2) bytes.
+        if (Types.isF4Array(t))
+            return (arrayCount(t) + (u32)1) / (u32)2;
         if (isArrayLike(t))
             return sizeOf(elementOf(t)) * arrayCount(t);
         Node* st = structDeclFor(t);
@@ -1804,6 +1823,9 @@ class ClassInfo
                 m.appendFormat("%u elements of %u bytes is %llu bytes, past 4 GB; allocate it with new T[n] (heap arrays take any size on the 64-bit targets)", n, w, (u64)w * (u64)n);
                 errorAtNode(m, (Node*)0);
                 }
+            // An f4 array is its ceil(n / 2) bytes, two elements to each.
+            if (Types.isF4Array(spelling))
+                n = (n + (u32)1) / (u32)2;
             arrayL = IRLayout.array(eIr, n, w, (u32)1);
             size = w * n;
             }
@@ -2407,7 +2429,7 @@ class ClassInfo
     // u16. As the reference.
     static String* packIr(String* pack)
         {
-        return String.withCString(Types.packWidth(pack) == (u32)8 ? "U8" : "U16");
+        return String.withCString(Types.packWidth(pack) <= (u32)8 ? "U8" : "U16");
         }
 
     // Is v a pack's pattern (its IR type)?
@@ -2418,7 +2440,7 @@ class ClassInfo
 
     IRValue* packConst(u32 bits, String* pack)
         {
-        return constOf((i64)bits, String.withCString(Types.packWidth(pack) == (u32)8 ? "u8" : "u16"));
+        return constOf((i64)bits, String.withCString(Types.packWidth(pack) <= (u32)8 ? "u8" : "u16"));
         }
 
     IRValue* packCall(string name, Array* args, String* irRet)
@@ -2473,7 +2495,7 @@ class ClassInfo
     IRValue* packResultCallOf(string name, Array* args, String* pack)
         {
         IRValue* r = packCallOf(name, args, pack, String.withCString("U16"));
-        if (Types.packWidth(pack) == (u32)8)
+        if (Types.packWidth(pack) <= (u32)8)
             {
             Array* to = new Array();
             to.add((Object*)IROperand.useVal(r));
@@ -2559,7 +2581,7 @@ class ClassInfo
     // A pack's value as an f32, which holds it exactly.
     IRValue* packToF32(IRValue* v, String* pack)
         {
-        if (Types.packWidth(pack) == (u32)8)
+        if (Types.packWidth(pack) <= (u32)8)
             {
             Array* zo = new Array();
             zo.add((Object*)IROperand.useVal(v));
@@ -2653,7 +2675,7 @@ class ClassInfo
                 return emit(String.withCString("FpExt"), String.withCString("F64"), xo);
                 }
             if (!(Types.isInteger(to) || Types.isEnumName(to)))
-                return coerceImpl(v, String.withCString(Types.packWidth(from) == (u32)8 ? "u8" : "u16"), to);
+                return coerceImpl(v, String.withCString(Types.packWidth(from) <= (u32)8 ? "u8" : "u16"), to);
             u32 w = astWidth(to);
             bool sgn = Types.isSigned(to);
             Array* args = new Array();
@@ -2722,7 +2744,7 @@ class ClassInfo
             a.add((Object*)packExtend(v, String.withCString(sg ? "I32" : "U32"), sg));
             return packResultCallOf(sg ? "_xt_fpk_pack_i32" : "_xt_fpk_pack_u32", a, to);
             }
-        return coerceImpl(v, from, String.withCString(Types.packWidth(to) == (u32)8 ? "u8" : "u16"));
+        return coerceImpl(v, from, String.withCString(Types.packWidth(to) <= (u32)8 ? "u8" : "u16"));
         }
 
     // `x + 1` / `x - 1` for ++/--: a const 1 of the value's type and an Add
@@ -3961,8 +3983,63 @@ class ClassInfo
 
     // A Load takes an address and the memory token and hands back the value
     // and the next token. Every read of memory in this file goes through it.
+    // The nibble shift of an f4 element's address, or 0 for any other.
+    IRValue* nibShiftOf(IRValue* addr)
+        {
+        for (u32 i = _nibAddrs.count(); i > (u32)0; i = i - (u32)1)
+            if ((IRValue*)_nibAddrs.get(i - (u32)1) == addr)
+                return (IRValue*)_nibShifts.get(i - (u32)1);
+        return (IRValue*)0;
+        }
+
+    // An f4 element read: its byte, shifted down and masked to 4 bits.
+    IRValue* loadNibble(IRValue* addr, IRValue* sh)
+        {
+        String* u8T = String.withCString("U8");
+        IRValue* b = loadThroughIr(addr, u8T);
+        IRValue* v = emitBin(String.withCString("LShr"), u8T, b, sh);
+        IRValue* m = constOfIr((i64)15, u8T);
+        return emitBin(String.withCString("And"), u8T, v, m);
+        }
+
+    // A Const of an IR type.
+    IRValue* constOfIr(i64 v, String* irTy)
+        {
+        Array* ops = new Array();
+        ops.add((Object*)IROperand.immI((i32)v, irTy));
+        return emit(String.withCString("Const"), irTy, ops);
+        }
+
+    // An f4 element write: a read-modify-write of its byte, the other nibble
+    // kept. Not atomic: two threads writing the two halves of one byte race,
+    // which par's even split rules out and Fp4.xc's f4StoreAtomic serves.
+    void storeNibble(IRValue* addr, IRValue* sh, IRValue* v)
+        {
+        String* u8T = String.withCString("U8");
+        IRValue* m15 = constOfIr((i64)15, u8T);
+        IRValue* low = emitBin(String.withCString("And"), u8T, v, m15);
+        IRValue* nv = emitBin(String.withCString("Shl"), u8T, low, sh);
+        IRValue* mask = emitBin(String.withCString("Shl"), u8T, m15, sh);
+        IRValue* ff = constOfIr((i64)255, u8T);
+        IRValue* inv = emitBin(String.withCString("Xor"), u8T, mask, ff);
+        IRValue* b = loadThroughIr(addr, u8T);
+        IRValue* keep = emitBin(String.withCString("And"), u8T, b, inv);
+        IRValue* nb = emitBin(String.withCString("Or"), u8T, keep, nv);
+        IRInsn* st = IRInsn.with(String.withCString("Store"));
+        IRValue* nextMem = new IRValue(String.withCString("Mem"));
+        st.setMemRes(nextMem);
+        st.add(IROperand.useVal(addr));
+        st.add(IROperand.useVal(nb));
+        st.add(IROperand.useVal(_mem));
+        _blk.add(st);
+        _mem = nextMem;
+        }
+
     IRValue* loadThrough(IRValue* addr, String* astTy)
         {
+        IRValue* nsh = _nibAddrs.count() > (u32)0 ? nibShiftOf(addr) : (IRValue*)0;
+        if (nsh != (IRValue*)0)
+            return loadNibble(addr, nsh);
         IRInsn* ld = IRInsn.with(String.withCString("Load"));
         IRValue* res = new IRValue(irType(astTy));
         IRValue* nextMem = new IRValue(String.withCString("Mem"));
@@ -4007,6 +4084,12 @@ class ClassInfo
     // outcome was exactly as predicted: it leaked.
     void storeThrough(IRValue* addr, IRValue* v, bool consumes)
         {
+        IRValue* nsh = _nibAddrs.count() > (u32)0 ? nibShiftOf(addr) : (IRValue*)0;
+        if (nsh != (IRValue*)0)
+            {
+            storeNibble(addr, nsh, v);
+            return;
+            }
         // Storing a +1 into memory transfers ownership to that slot.
         if (consumes)
             consumeOwnedTemp(v);
@@ -4800,6 +4883,10 @@ class ClassInfo
             emitBoundsCheckN(base, idx, arrayCount(bdecl), n);
         else
             emitBoundsCheck(base, idx, n);
+        // An f4 element: the checks above count elements, the address is
+        // its byte's.
+        if (isName(stripQual(n.ty()), "f4"))
+            return f4ElementAddr(base, idx, pty);
         Array* ops = new Array();
         ops.add((Object*)IROperand.useVal(base));
         ops.add((Object*)IROperand.useVal(idx));
@@ -4809,6 +4896,35 @@ class ClassInfo
         if (!weakElem)
             return ea;
         return fieldAddr(ea, (u32)2, ptrTo(irType(n.ty())));
+        }
+
+    // Element idx of an f4 array at base: a nibble of byte idx >> 1, the low
+    // one for an even idx. The byte's address, recorded with the nibble's
+    // shift and the element's index for loadThrough, storeThrough and the par
+    // check. As the reference's f4ElementAddress:index:type:.
+    IRValue* f4ElementAddr(IRValue* base, IRValue* idx, String* pty)
+        {
+        String* u8T = String.withCString("U8");
+        IRValue* one = constOfIr((i64)1, idx.ty());
+        IRValue* low = emitBin(String.withCString("And"), idx.ty(), idx, one);
+        if (!IRType.is(idx.ty(), tyU8))
+            {
+            Array* to = new Array();
+            to.add((Object*)IROperand.useVal(low));
+            low = emit(String.withCString("Trunc"), u8T, to);
+            }
+        IRValue* two = constOfIr((i64)2, u8T);
+        IRValue* sh = emitBin(String.withCString("Shl"), u8T, low, two);
+        IRValue* oneU8 = constOfIr((i64)1, u8T);
+        IRValue* bi = emitBin(String.withCString("LShr"), idx.ty(), idx, oneU8);
+        Array* ops = new Array();
+        ops.add((Object*)IROperand.useVal(base));
+        ops.add((Object*)IROperand.useVal(bi));
+        IRValue* ea = emit(String.withCString("ElementAddr"), pty, ops);
+        _nibAddrs.add((Object*)ea);
+        _nibShifts.add((Object*)sh);
+        _nibIdx.add((Object*)idx);
+        return ea;
         }
 
     // An operator assignment whose operands are read twice — `f()[g()] += h()`
@@ -5001,6 +5117,11 @@ class ClassInfo
             // compile-time-only diagnostic). Mirror of the original.
             // private:docs/bugs/045.
             String* pbt = n.kid((u32)0).ty();
+            if (pbt != 0 && Types.isF4Ref(stripQual(pbt)) && _cntW < (u32)8)
+                {
+                errorAtNode(String.withCString("the length of an f4[] is known here only where 'new f4[n]' gives it a constant: on this target its heap block counts bytes, not elements; keep the count beside the array"), n);
+                return (IRValue*)0;
+                }
             if (pbt != 0 && Types.isPointer(pbt) && _ptrW >= (u32)4)
                 {
                 IRValue* pv = lowerExpr(n.kid((u32)0));
@@ -7513,7 +7634,7 @@ class ClassInfo
     Array* foldInitialiser(Node* ini, String* ty)
         {
         if (Types.isPack(stripQual(ty)) && ini.kind() != (u16)nkBlock)
-            return packLeafBytes(ini, stripQual(ty), Types.packWidth(stripQual(ty)) / (u32)8);
+            return packLeafBytes(ini, stripQual(ty), Types.byteWidth(stripQual(ty)));
         // A FLOAT global's payload is the literal as an IEEE DOUBLE, eight
         // bytes, whether the slot is declared `float` or `double` — the
         // backend narrows it if it has to.
@@ -8702,6 +8823,11 @@ class ClassInfo
             // Runtime-sized heap pointer: the count comes from the allocation
             // header via `_xtc_count`, same rule as `.length` (private:docs/bugs/045).
             // The CLASS case belongs to the Enumerable dispatch, not here.
+            if (Types.isF4Ref(stripQual(coll.ty())) && _cntW < (u32)8)
+                {
+                errorAtNode(String.withCString("the length of an f4[] is known here only where 'new f4[n]' gives it a constant: on this target its heap block counts bytes, not elements; keep the count beside the array"), coll);
+                return;
+                }
             if (Types.isPointer(coll.ty()) && classFor(pointeeOf(coll.ty())) == 0 && _ptrW >= (u32)4)
                 {
                 IRValue* hv = lowerExpr(coll);
@@ -9057,10 +9183,16 @@ class ClassInfo
         if (_failed)
             return;
         IRValue* idx = sliceIndex(rawIdx);
-        Array* eops = new Array();
-        eops.add((Object*)IROperand.useVal(base));
-        eops.add((Object*)IROperand.useVal(idx));
-        IRValue* ea = emit(String.withCString("ElementAddr"), elemPtr, eops);
+        IRValue* ea = (IRValue*)0;
+        if (Types.isF4Array(coll.ty()) || Types.isF4Ref(stripQual(coll.ty())))
+            ea = f4ElementAddr(base, idx, elemPtr);
+        else
+            {
+            Array* eops = new Array();
+            eops.add((Object*)IROperand.useVal(base));
+            eops.add((Object*)IROperand.useVal(idx));
+            ea = emit(String.withCString("ElementAddr"), elemPtr, eops);
+            }
         _locals.set((Hashable*)loopVar.name(), (Object*)loadThrough(ea, loopVar.ty()));
         _localTypes.set((Hashable*)loopVar.name(), (Object*)loopVar.ty());
         }
@@ -12494,10 +12626,12 @@ class ClassInfo
         // `f32` is float, and a typedef is its target.
         String* el = stripQual(pointeeOf(n.ty()));
         // A small float array is stored as its bit patterns: u16's helper, or
-        // u8's for an f8 (written so, or through a typedef).
+        // u8's for an f8 (written so, or through a typedef). An f4 array is
+        // ceil(n / 2) bytes from u8's.
+        bool f4Arr = isName(nm, "f4");
         String* pk = Types.isPack(nm) ? nm : (Types.isPack(el) ? el : (String*)0);
         if (pk != (String*)0)
-            nm = String.withCString(Types.packWidth(pk) == (u32)8 ? "u8" : "u16");
+            nm = String.withCString(Types.packWidth(pk) <= (u32)8 ? "u8" : "u16");
         else if (!isPrimElemName(nm))
             {
             // The helper's shape and element width come from its NAME alone,
@@ -12525,6 +12659,14 @@ class ClassInfo
         IRValue* cv = hasCount ? lowerCount(n.kid((u32)0)) : u16Const((u32)1);
         if (_failed)
             return (IRValue*)0;
+        IRValue* elems = cv;
+        if (f4Arr)
+            {
+            IRValue* one = constOfIr((i64)1, cv.ty());
+            IRValue* up = emitBin(String.withCString("Add"), cv.ty(), cv, one);
+            IRValue* oneU8 = constOfIr((i64)1, String.withCString("U8"));
+            cv = emitBin(String.withCString("LShr"), cv.ty(), up, oneU8);
+            }
         // The stride, for an aggregate element only. `Agg(N)` in the IR
         // type names the layout whose size this is.
         IRValue* sv = (IRValue*)0;
@@ -12557,6 +12699,30 @@ class ClassInfo
         c.setCc(String.withCString("CallConv::Standard"));
         _blk.add(c);
         _mem = pm;
+        // The block's header counts f4 ELEMENTS, so `.length` and the bounds
+        // checks read n where the 64-bit targets' header has its count (8
+        // bytes at payload - 32, heapCount's); elsewhere the header keeps the
+        // byte count, and a run-time `.length` of an f4 array is refused.
+        if (f4Arr && _cntW >= (u32)8)
+            {
+            Array* a = new Array();
+            a.add((Object*)IROperand.useVal(r));
+            IRValue* pi = emit(String.withCString("PtrToInt"), String.withCString("U64"), a);
+            Array* so = new Array();
+            so.add((Object*)IROperand.useVal(pi));
+            so.add((Object*)IROperand.immI((i32)32, String.withCString("U64")));
+            IRValue* hp = emit(String.withCString("Sub"), String.withCString("U64"), so);
+            Array* c2 = new Array();
+            c2.add((Object*)IROperand.useVal(hp));
+            IRValue* ap = emit(String.withCString("IntToPtr"), ptrTo(String.withCString("U64")), c2);
+            if (!IRType.is(elems.ty(), tyU64))
+                {
+                Array* zo = new Array();
+                zo.add((Object*)IROperand.useVal(elems));
+                elems = emit(String.withCString("ZExt"), String.withCString("U64"), zo);
+                }
+            storeThrough(ap, elems, false);
+            }
         return r;
         }
 

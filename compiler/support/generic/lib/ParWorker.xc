@@ -221,6 +221,7 @@ class ParCpuJob : Object
     i64 _n;
     i32 _pieces;
     i32 _groups;        // one a lane
+    i32 _pair;          // the parity pieces start on (Par.pairsOf), or -1
     Array* _parts;      // ParChunk@, one per piece
     Array* _next;       // Atomic@ a group: its next piece, from its first
 
@@ -243,8 +244,8 @@ class ParCpuJob : Object
                 if (i >= end)
                     break;
                 ParChunk* c = (ParChunk*)_parts.get((u32)i);
-                c.lo = _lo + (_n * (i64)i) / (i64)_pieces;
-                c.hi = _lo + (_n * (i64)(i + (i32)1)) / (i64)_pieces;
+                c.lo = Par.cut(_lo, _n, (i64)i, (i64)_pieces, _pair);
+                c.hi = Par.cut(_lo, _n, (i64)(i + (i32)1), (i64)_pieces, _pair);
                 c.run();
                 }
             }
@@ -484,6 +485,7 @@ class ParCpuLanes
         job._lo = lo;
         job._n = n;
         job._pieces = (i32)pieces;
+        job._pair = Par.pairsOf(proto.gpuSource());
         job._parts = new Array();
         job._parts.add((Object*)proto);
         for (i64 j = (i64)1; j < pieces; j = j + (i64)1)
@@ -521,7 +523,7 @@ class ParCpuLanes
 #endif
         // Piece 0 on the block itself, then whatever is left.
         proto.lo = lo;
-        proto.hi = lo + n / pieces;
+        proto.hi = Par.cut(lo, n, (i64)1, pieces, job._pair);
         proto.run();
         job.work((i32)0);
         for (i32 j = (i32)1; j < k; j = j + (i32)1)
