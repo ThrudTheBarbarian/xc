@@ -927,6 +927,22 @@ class FeOptions
                     }
                 }
             }
+        // A program's own `extern` of a global a wasm library defines resolves
+        // in that library's package, as its functions do: without it the
+        // program imported `env.__addr_<name>`, which no host supplies (#648).
+        for (u32 i = (u32)0; i < importedIfaces.count(); i = i + (u32)1)
+            {
+            IfaceImport* im = (IfaceImport*)importedIfaces.get(i);
+            if (im.pkg() == (String*)0 || im.globals().count() == (u32)0)
+                continue;
+            for (u32 j = (u32)0; j < program.kidCount(); j = j + (u32)1)
+                {
+                Node* d = program.kid(j);
+                if (d.kind() == (u16)nkVariableDecl && d.hasFlag((u32)NF_EXTERN) && d.kidCount() == (u32)0
+                    && im.globals().contains((Hashable*)d.name()))
+                    d.setPkg(im.pkg());
+                }
+            }
 
         // #9 conformance downcast: on a backend that carries the conformance
         // itable, the `(P@ ?)obj` cast lowers to a call to a runtime helper that

@@ -345,7 +345,13 @@
             // GOT, no storage here. Without this it was emitted as a common
             // symbol, so the program read its own zeroed copy.
             if (d.hasFlag((u32)NF_EXTERN))
+                {
                 g.setAttr(String.withCString("extern"), true);
+                // One a wasm library defines: its address getter is imported
+                // from that library's package (#648).
+                if (d.pkg() != (String*)0 && d.pkg().byteLength() > (u32)0)
+                    g.setAttr(String.withFormat("pkg_%s", d.pkg().cString()), true);
+                }
             // An initialised global carries its bytes, little-endian, folded
             // at compile time — the backend bakes the payload in, so the
             // initialiser is not code that runs.

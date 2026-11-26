@@ -20310,6 +20310,14 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
     // `extern` — defined in another module. Emit a reference, reserve no storage.
     if (decl.isExternalGlobal)
         sym.isExternalGlobal = YES;
+    // One a wasm library defines: its address getter is imported from that
+    // library's package (#648).
+    if (decl.isExternalGlobal && decl.importPackage.length)
+        {
+        NSMutableDictionary* a = [sym.attributes mutableCopy];
+        a[[@"pkg_" stringByAppendingString:decl.importPackage]] = @YES;
+        sym.attributes = a;
+        }
     if (decl.initialiser && !decl.isExternalGlobal)
         {
         NSData* bytes = [self tryFoldInitialiser:decl.initialiser toType:astTy];

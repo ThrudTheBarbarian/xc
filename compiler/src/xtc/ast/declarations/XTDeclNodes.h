@@ -269,6 +269,9 @@ typedef NS_ENUM(NSInteger, XTPlacement) {
 |* that distinction.
 \****************************************************************************/
 @property(nonatomic) BOOL isExternalGlobal;
+/// wasm32: the package of the library that defines this `extern` global, so
+/// its address getter is imported from there (#648); nil otherwise.
+@property(nonatomic, copy, nullable) NSString* importPackage;
 /****************************************************************************\
 |* `extern` on a global WITH an initialiser (§6): an exported definition —
 |* this module owns the storage and publishes it. On wasm32 the global's

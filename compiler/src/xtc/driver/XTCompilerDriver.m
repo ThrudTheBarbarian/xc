@@ -1891,7 +1891,7 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
         // benign shape. Classes already merge by construction: classesByName
         // is written in declaration order, so the local class, parsed after
         // these prepended imports, wins.
-        NSMutableSet<NSString*>* localFnSigs = [NSMutableSet set];
+        NSMutableDictionary<NSString*, XTFunctionDeclNode*>* localFnSigs = [NSMutableDictionary dictionary];
         NSMutableSet<NSString*>* localEnums = [NSMutableSet set];
         for (XTASTNode* d in ast.declarations)
             {
@@ -1901,8 +1901,8 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
                 NSMutableArray<NSString*>* ps = [NSMutableArray array];
                 for (XTParamNode* p in fn.parameters)
                     [ps addObject:p.paramType.displayName ?: @""];
-                [localFnSigs addObject:[NSString stringWithFormat:@"%@(%@)",
-                                                                  fn.funcName, [ps componentsJoinedByString:@","]]];
+                localFnSigs[[NSString stringWithFormat:@"%@(%@)",
+                                                       fn.funcName, [ps componentsJoinedByString:@","]]] = fn;
                 }
             else if ([d isKindOfClass:[XTEnumDeclNode class]])
                 {
@@ -1920,8 +1920,17 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
                     [ps addObject:p.paramType.displayName ?: @""];
                 NSString* sig = [NSString stringWithFormat:@"%@(%@)",
                                                            fn.funcName, [ps componentsJoinedByString:@","]];
-                if ([localFnSigs containsObject:sig])
+                XTFunctionDeclNode* local = localFnSigs[sig];
+                if (local)
+                    {
+                    // A local prototype standing in for a wasm library's
+                    // function is still that library's import: it takes the
+                    // package, or the program imported `env.<name>`, which no
+                    // host supplies (#648).
+                    if (!local.body && !local.importPackage.length && fn.importPackage.length)
+                        local.importPackage = fn.importPackage;
                     continue;
+                    }
                 }
             else if ([d isKindOfClass:[XTEnumDeclNode class]])
                 {
@@ -1971,6 +1980,24 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
             return nil;
             }
         }
+    // A program's own `extern` of a global a wasm library defines resolves in
+    // that library's package, as its functions do: without it the program
+    // imported `env.__addr_<name>`, which no host supplies (#648).
+    if (_options.useWasm32Backend)
+        for (NSUInteger li = 0; li < xtcLibJsons.count && li < xtcLibPaths.count; li++)
+            {
+            NSSet<NSString*>* globals = [XTInterfaceImporter globalNamesFromJSON:xtcLibJsons[li]];
+            if (globals.count == 0)
+                continue;
+            NSString* stem = xtcLibPaths[li].lastPathComponent;
+            if ([stem hasPrefix:@"lib"])
+                stem = [stem substringFromIndex:3];
+            stem = stem.stringByDeletingPathExtension;
+            for (XTASTNode* d in ast.declarations)
+                if ([d isKindOfClass:[XTVariableDeclNode class]] && ((XTVariableDeclNode*)d).isExternalGlobal &&
+                    !((XTVariableDeclNode*)d).initialiser && [globals containsObject:((XTVariableDeclNode*)d).varName])
+                    ((XTVariableDeclNode*)d).importPackage = stem;
+            }
 
     // XG-NIB (2): a class with any `outlet` field or `:action` method auto-conforms
     // to the binding protocol — synthesise setOutlet/wireAction, a per-module

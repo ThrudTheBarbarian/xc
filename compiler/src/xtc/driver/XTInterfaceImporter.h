@@ -42,6 +42,11 @@ NS_ASSUME_NONNULL_BEGIN
 \****************************************************************************/
 + (nullable NSString*)classTableFromJSON:(NSString*)json;
 
+/// The names of the globals the module defines (its `globals` section). They
+/// are not imported as declarations; a client's own `extern` of one resolves
+/// in the module's wasm package (#648).
++ (NSSet<NSString*>*)globalNamesFromJSON:(NSString*)json;
+
 /****************************************************************************\
 |* Type names an imported interface NAMED but that could not be resolved. Drained
 |* by the driver and turned into real, FATAL diagnostics — printing to stderr and

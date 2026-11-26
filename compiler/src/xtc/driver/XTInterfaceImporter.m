@@ -584,6 +584,19 @@ static NSMutableSet<NSString*>* sUnresolved = nil;
     return [t isKindOfClass:[NSString class]] && t.length ? t : nil;
     }
 
++ (NSSet<NSString*>*)globalNamesFromJSON:(NSString*)json
+    {
+    NSData* jd = [json dataUsingEncoding:NSUTF8StringEncoding];
+    NSDictionary* root = jd ? [NSJSONSerialization JSONObjectWithData:jd options:0 error:NULL] : nil;
+    if (![root isKindOfClass:[NSDictionary class]])
+        return [NSSet set];
+    NSMutableSet<NSString*>* names = [NSMutableSet set];
+    for (NSDictionary* g in (root[@"globals"] ?: @[]))
+        if ([g isKindOfClass:[NSDictionary class]] && [g[@"name"] length])
+            [names addObject:g[@"name"]];
+    return names;
+    }
+
 + (NSDictionary*)slotsFromJSON:(NSString*)json
     {
     NSData* jd = [json dataUsingEncoding:NSUTF8StringEncoding];

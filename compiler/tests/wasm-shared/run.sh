@@ -31,6 +31,12 @@ out=$(node sapp.js 2>&1)
 echo "$out" | grep -q 'lenOwn 3' || { echo "091: FAIL — library's own object"; echo "$out"|head -3; exit 1; }
 echo "$out" | grep -q 'lenOf  6' || { echo "091: FAIL — APP's object across the boundary"; echo "$out"|head -3; exit 1; }
 echo "091: PASS (lenOwn 3, lenOf 6 — both vtable directions)"
+# A global and a free function the library defines, which the app declares
+# itself (`extern`, and a prototype): both are imported from the library's
+# package, not from `env`, which no host supplies (#648). The app writes 10,
+# the library adds one.
+echo "$out" | grep -q 'global 11' || { echo "extern global: FAIL"; echo "$out"|head -3; exit 1; }
+echo "extern global: PASS (global 11)"
 
 # A struct-returning library function: the app's import must carry the same
 # hidden result pointer the library's export takes, or the arguments arrive

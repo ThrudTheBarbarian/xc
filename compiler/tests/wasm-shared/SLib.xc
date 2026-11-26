@@ -6,6 +6,15 @@ struct SRect
     i16 h;
     }
 
+// A global the library defines and a free function: the app declares both
+// itself, writes the global and reads it back after the function adds one
+// (#648).
+u16 gSCounter;
+void sbump(void)
+    {
+    gSCounter = gSCounter + (u16)1;
+    }
+
 class SLib
     {
     // the APP's object

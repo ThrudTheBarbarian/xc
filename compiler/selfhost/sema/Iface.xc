@@ -442,6 +442,10 @@ class JsonVal
     String* _classTab;
     // The wasm package the module's symbols resolve in, or null.
     String* _pkg;
+    // The names of the globals the module defines. Not declarations (a client
+    // copy would be a second variable): a client's own `extern` of one of them
+    // resolves in the module's package (#648).
+    Set* _globals;
 
     void init(void)
         {
@@ -451,6 +455,7 @@ class JsonVal
         _protoSlots = new Map();
         _classTab = (String*)0;
         _pkg = (String*)0;
+        _globals = new Set();
         }
 
     String* classTab(void)
@@ -469,6 +474,17 @@ class JsonVal
     Array* decls(void)
         {
         return _decls;
+        }
+    Set* globals(void)
+        {
+        return _globals;
+        }
+    void readGlobals(JsonVal* gs)
+        {
+        if (gs == 0)
+            return;
+        for (u32 i = (u32)0; i < gs.count(); i = i + (u32)1)
+            _globals.add((Hashable*)String.withString(gs.at(i).memberStr((u8*)"name")));
         }
     Map* methodSlots(void)
         {
@@ -970,6 +986,7 @@ class JsonVal
         im.readCategories(root.member((u8*)"categories"));
         im.readProtocols(root.member((u8*)"protocols"));
         im.readFunctions(root.member((u8*)"functions"));
+        im.readGlobals(root.member((u8*)"globals"));
         im.readSlots(root);
         return im;
         }
