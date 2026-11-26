@@ -5,7 +5,7 @@
 // each checked element by element against a serial loop, over several runs.
 // The blocks have no GPU form and run on the CPU's threads.
 //xtc-na: xt6502, m68k — par has no threads there
-//xtc-warn: runs on the CPU only, because it computes in f16, bf16, f8 or f4
+//xtc-warn: runs on the CPU only, because it reads or writes f4 array elements
 #define ENABLE_64BIT 1
 #import "Stdio.xc"
 #import "Foundation.xc"

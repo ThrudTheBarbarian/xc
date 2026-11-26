@@ -1,0 +1,9 @@
+f16 widen 0 round trip 0
+bf16 widen 0
+f8 widen 0
+round f16 0 bf16 0 f8 0
+op 0: f16 0 bf16 0 compare 0 sum eeb24560
+op 1: f16 0 bf16 0 compare 0 sum 29acf1f2
+op 2: f16 0 bf16 0 compare 0 sum b5158da8
+op 3: f16 0 bf16 0 compare 0 sum b0c17704
+f8 ops 0
