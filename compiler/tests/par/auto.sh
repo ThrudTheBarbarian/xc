@@ -294,7 +294,8 @@ for k in 104:hi 106:lo 109:lo; do
 done
 XC_PAR_REPORT=1 "$W/names" > "$W/rep6" 2>&1
 for k in 54 56 71 74 77 92 94 96 98 100 102; do
-    grep -q "par_auto_library_names\.xc:$k:" "$W/rep6" || { echo "FAIL auto: the loop at line $k of $LN did not run as a block"; fail=1; }
+    # A loop fused with the ones beside it runs in their block (#147).
+    grep -qE "par_auto_library_names\.xc:$k[:+]" "$W/rep6" || { echo "FAIL auto: the loop at line $k of $LN did not run as a block"; fail=1; }
 done
 for k in 44 104 106 109; do
     grep -q "par_auto_library_names\.xc:$k:" "$W/rep6" && { echo "FAIL auto: the loop at line $k of $LN ran as a block"; fail=1; }

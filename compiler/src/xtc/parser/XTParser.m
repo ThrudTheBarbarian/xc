@@ -5633,6 +5633,8 @@ static int64_t parAutoConst(XTASTNode* e)
     {
     BOOL fromWhile = self.parAutoFromWhile;
     self.parAutoFromWhile = NO;
+    BOOL noFuseHere = self.parAutoNoFuseOnce;
+    self.parAutoNoFuseOnce = NO;
     XTSourceLocation* traceAt = [self currentLocation];
     // A counted `while` (parAutoWhileShape): the parses below build its `for`
     // from the `while` (parseAutoWhile).
@@ -5697,7 +5699,7 @@ static int64_t parAutoConst(XTASTNode* e)
     // port.
     self.parAutoFused = nil;
     self.parAutoFuseSaid = nil;
-    if (!self.parNoFuse && !fromWhile && plain && self.parAutoDepthReads == depthReads)
+    if (!self.parNoFuse && !noFuseHere && !fromWhile && plain && self.parAutoDepthReads == depthReads)
         {
         NSMutableDictionary* fs = [NSMutableDictionary dictionary];
         fs[@"plain"] = plain;
@@ -5709,6 +5711,7 @@ static int64_t parAutoConst(XTASTNode* e)
         v = fs[@"v"];
         self.parAutoFused = fs[@"name"];
         }
+    BOOL fusedHere = self.parAutoFused != nil;
     NSArray<NSArray<NSString*>*>* reds = v[@"redList"] ?: @[];
     NSUInteger goal = [v[@"goal"] unsignedIntegerValue];
     NSUInteger gridCap = [v[@"grid"] unsignedIntegerValue];
@@ -5769,6 +5772,9 @@ static int64_t parAutoConst(XTASTNode* e)
     for (NSUInteger k = plainDiag; k < diagMark; k++)
         if (_diagnostics.diagnostics[k].level == XTDiagnosticLevelError)
             {
+            // Fused loops whose block form is refused: each loop on its own.
+            if (fusedHere)
+                return [self parAutoUnfused:mark];
             [self parAutoRefusedWhy:_diagnostics.diagnostics[k].message at:loc];
             [self parAutoTraceAt:traceAt verdict:@"serial" rule:@"block-refused" form:form name:nil reds:nil grid:0 impl:nil];
             if (fromWhile)
@@ -5807,6 +5813,8 @@ static int64_t parAutoConst(XTASTNode* e)
     [self parFrameFill:frame body:loop];
     self.pfwAuto = NO;
     self.pfwRoot = nil;
+    if (_diagnostics.errorCount > errMark && fusedHere)
+        return [self parAutoUnfused:mark];
     if (_diagnostics.errorCount > errMark)
         {
         [self parAutoTakeBack:diagMark at:loc];
@@ -5866,6 +5874,8 @@ static int64_t parAutoConst(XTASTNode* e)
     XTASTNode* out = [self parDesugarBody:body frame:frame name:name reductions:reds at:loc];
     [self pfwRegister:out body:loop params:nil noted:self.pfwNoted kind:2 plain:plain];
     self.pfwNoted = savedNoted;
+    if ((!out || _diagnostics.errorCount > errMark) && fusedHere)
+        return [self parAutoUnfused:mark];
     if (!out || _diagnostics.errorCount > errMark)
         {
         [self parAutoTakeBack:diagMark at:loc];
@@ -7172,6 +7182,26 @@ static XTForCStyleNode* _Nullable parFuseLoop(XTBlockNode* body)
 // into the loop in st ("plain", its verdict "v", its location "at") when the
 // rules allow; else the parse is put back. The merged loop is lifted only
 // when the recogniser lifts it as one. Whether it fused. As the port.
+// The site parsed again with each loop on its own: the block form of the
+// loops fused was refused. As the port.
+- (nullable XTASTNode*)parAutoUnfused:(NSDictionary*)mark
+    {
+    [self parAutoRollback:mark];
+    self.parAutoFused = nil;
+    self.parAutoFuseSaid = nil;
+    self.parAutoNoFuseOnce = YES;
+    return [self parAutoForAt];
+    }
+
+// Whether a lifted loop's verdict has an array reduction. As the port.
+- (BOOL)parAutoArrayRed:(NSDictionary*)v
+    {
+    for (NSArray* r in v[@"redList"] ?: @[])
+        if (r.count > 2)
+            return YES;
+    return NO;
+    }
+
 - (BOOL)parAutoFuseNext:(NSMutableDictionary*)st
     {
     if (![self check:XTTokenFor])
@@ -7197,6 +7227,8 @@ static XTForCStyleNode* _Nullable parFuseLoop(XTBlockNode* body)
         why = @"";
     else if ([v[@"goal"] unsignedIntegerValue] != [v2[@"goal"] unsignedIntegerValue])
         why = @"their goals differ";
+    else if ([self parAutoArrayRed:v] || [self parAutoArrayRed:v2])
+        why = @"a body has an array reduction";
     else
         {
         // The rules of written blocks, on copies of the two loops.

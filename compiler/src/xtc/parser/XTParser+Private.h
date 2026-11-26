@@ -68,6 +68,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic) NSUInteger parAutoDepthReads;
 @property(nonatomic) NSUInteger fnTok;   // where the function being parsed opens its body (#147)
 @property(nonatomic, copy, nullable) NSString* parAutoFused;   // fused lifted loops: the block's name (#147)
+@property(nonatomic) BOOL parAutoNoFuseOnce;                    // the site parses again without fusing: the fused block form was refused
 @property(nonatomic, nullable) NSMutableArray* parAutoFuseSaid;   // their -Wpar-auto lines, said once the block is built
 @property(nonatomic) NSUInteger parAutoNest;
 @property(nonatomic, strong, nullable) NSMutableArray<NSString*>* parAutoLabelLog;

@@ -73,6 +73,7 @@ class Parser
     bool    _parNoFuse;      // -fno-par-fuse: adjacent par blocks stay apart (#147)
     u32     _fnTok;          // where the function or method being parsed opens its body (#147)
     String* _parAutoFused;   // a lifted loop fused with the loops after it: the block's name (#147)
+    bool _parAutoNoFuseOnce; // the site parses again without fusing: the fused block form was refused
     Array*  _parAutoFuseSaid; // what -Wpar-auto says of them: [message, token]…, said once the block is built
     Map*    _parAutoLabels;  // a lifted loop's file:line -> how many had it
     bool    _parAutoWantsRuntime; // --par-style=auto found a loop to wrap, but Par.xc was not imported
@@ -4527,6 +4528,8 @@ class Parser
     {
         bool fromWhile = _parAutoFromWhile;
         _parAutoFromWhile = false;
+        bool noFuseHere = _parAutoNoFuseOnce;
+        _parAutoNoFuseOnce = false;
         Token* traceAt = cur();
         // A counted `while` (parAutoWhileShape): the parses below build its
         // `for` from the `while` (parseAutoWhile).
@@ -4587,7 +4590,7 @@ class Parser
         // the merged loop is the block's loop, and the loop it falls back to.
         _parAutoFused = (String*)0;
         _parAutoFuseSaid = (Array*)0;
-        if (!_parNoFuse && !fromWhile && _parAutoDepthReads == depthReads) {
+        if (!_parNoFuse && !noFuseHere && !fromWhile && _parAutoDepthReads == depthReads) {
             Map* fs = new Map();
             fs.set((Hashable*)String.withCString("plain"), (Object*)plain);
             fs.set((Hashable*)String.withCString("v"), (Object*)v);
@@ -4597,6 +4600,7 @@ class Parser
             v = (Map*)fs.get((Hashable*)String.withCString("v"));
             _parAutoFused = (String*)fs.get((Hashable*)String.withCString("name"));
         }
+        bool fusedHere = _parAutoFused != (String*)0;
         Array* reds = (Array*)pfwGet(v, "redNodes");
         u32 goal = ((Number*)pfwGet(v, "goalN")).asU32();
         u32 gridCap = ((Number*)pfwGet(v, "gridN")).asU32();
@@ -4644,6 +4648,9 @@ class Parser
         u32 errMark = _errors.count();
         u32 warnMark = _warnings.count();
         bool fatalMark = _fatal;
+        // Fused loops whose block form is refused: each loop on its own.
+        if (errMark > plainErr && fusedHere)
+            return parAutoUnfused(mark);
         if (errMark > plainErr) {
             parAutoRefusedWhy((String*)_errors.get(plainErr), forTok);
             parAutoTraceLine(traceAt, "serial", String.withCString("block-refused"), form, (String*)0, (String*)0, 0, (String*)0);
@@ -4683,6 +4690,10 @@ class Parser
         _pfwTokTo = plainEnd;
         parFrameFill(frame, loop);
         _pfwAuto = false;
+        if (_errors.count() > errMark && fusedHere) {
+            _parTok = savedParTok;
+            return parAutoUnfused(mark);
+        }
         if (_errors.count() > errMark) {
             parAutoRefused(errMark, warnMark, fatalMark, plainEnd, forTok);
             _parTok = savedParTok;
@@ -4746,6 +4757,8 @@ class Parser
         _pfwNoted = savedNoted;
         _mkAt = savedMkAt;
         _parTok = savedParTok;
+        if ((out == (Node*)0 || _errors.count() > errMark) && fusedHere)
+            return parAutoUnfused(mark);
         if (out == (Node*)0 || _errors.count() > errMark) {
             parAutoRefused(errMark, warnMark, fatalMark, plainEnd, forTok);
             parAutoTraceLine(traceAt, "serial", String.withCString("block-refused"), form, (String*)0, (String*)0, 0, (String*)0);
@@ -8617,6 +8630,8 @@ class Parser
             why = String.withCString("");
         else if (((Number*)pfwGet(v, "goalN")).asU32() != ((Number*)pfwGet(v2, "goalN")).asU32())
             why = String.withCString("their goals differ");
+        else if (parAutoArrayRed(v) || parAutoArrayRed(v2))
+            why = String.withCString("a body has an array reduction");
         else {
             // The rules of written blocks, on copies of the two loops.
             Map* a = parAutoFuseParts(plain.deepCopy(), v, at1);
@@ -8654,6 +8669,30 @@ class Parser
             w.append(why);
             parAutoFuseSay(w, at1);
         }
+        return false;
+    }
+
+    // The site parsed again with each loop on its own: the block form of
+    // the loops fused was refused (one captures a name a block cannot), and
+    // that is no reason for the others to stay loops (#147).
+    Node* parAutoUnfused(Map* mark)
+    {
+        parAutoRollback(mark);
+        _parAutoFused = (String*)0;
+        _parAutoFuseSaid = (Array*)0;
+        _parAutoNoFuseOnce = true;
+        return parAutoForAt();
+    }
+
+    // Whether a lifted loop's verdict has an array reduction (`h[k] += …`):
+    // its block runs per chunk on copies of h, which a loop fused with it
+    // would share; and its device choice is its own.
+    bool parAutoArrayRed(Map* v)
+    {
+        Array* reds = (Array*)pfwGet(v, "redNodes");
+        if (reds == (Array*)0) return false;
+        for (u32 q = 0; q < reds.count(); q++)
+            if (((Node*)reds.get(q)).num() == 1) return true;
         return false;
     }
 
