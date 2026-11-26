@@ -18779,7 +18779,13 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
     // declared again in an inner scope would share the outer one's slot, a
     // pinned class reference is retained and released differently from an
     // SSA one, and structs and arrays already have slots of their own shape.
-    if (sDebugInfo)
+    //
+    // A par block's kernel is left as it is without -g: the independence
+    // check and the GPU version read its loop counter and indices as SSA
+    // values, so with every local in a slot a block whose items depend on
+    // each other was let through and ran wrong, and every block ran on the
+    // CPU only (#708).
+    if (sDebugInfo && fn.parKernel == XTIRParKernelNone)
         {
         BOOL (^plain)(XTType*) = ^BOOL(XTType* t) {
           if (!t)

@@ -16693,7 +16693,13 @@ class ClassInfo
         // declared again in an inner scope would share the outer one's slot, a
         // pinned class reference is retained and released differently from an
         // SSA one, and structs and arrays already have slots of their own shape.
-        if (_debugInfo && _dbgPin)
+        //
+        // A par block's kernel is left as it is without -g: the independence
+        // check and the GPU version read its loop counter and indices as SSA
+        // values, so with every local in a slot a block whose items depend on
+        // each other was let through and ran wrong, and every block ran on the
+        // CPU only (#708).
+        if (_debugInfo && _dbgPin && _fn.parKernel() == (u8)PARK_NONE)
             {
             Array* all = new Array();
             collectDbgLocalNames(body, all);
