@@ -2595,6 +2595,15 @@ static NSInteger xtIntWidth(XTType* t)
                     }
                 if (bestM && !amb)
                     {
+                    // Box and unbox as the explicit spelling does, before the
+                    // format is fitted and checked: a typed collection's
+                    // element passed to bare `printf("%f", a.get(0))` reached
+                    // the call as its Number box and printed garbage.
+                    NSMutableArray<XTType*>* bestPt = [NSMutableArray array];
+                    for (XTParamNode* p in bestM.parameters)
+                        [bestPt addObject:p.paramType];
+                    [self applyAutoboxToArguments:node paramTypes:bestPt];
+                    [self applyUnboxToArguments:node paramTypes:bestPt];
                     // The BARE spelling of Stdio.printf/printfAt (via `use`)
                     // gets the SAME treatment as the explicit one: lengths
                     // fitted to the arguments, the format check, and the

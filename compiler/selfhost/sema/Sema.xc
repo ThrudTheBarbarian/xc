@@ -7609,6 +7609,23 @@ class Sema
         n.setSym(m.sym());
         noteCallEdge(clsLabel(owner2 != 0 ? owner2.name() : owner, m.sym() != 0 ? m.sym() : m.name()));
         noteClassNameUse(owner2 != 0 ? owner2.name() : owner, m);
+        // Which KIND of receiver reached this method decides whether its
+        // prologue retains self. Only an EXPLICIT receiver counts: a bare call
+        // promoted by `use`, or an implicit-self call inside the class, leaves
+        // the method unmarked — the original stamps this where a receiver
+        // expression was actually written. A heap pointer and a stack instance can both
+        // reach the same method in one program, so these are cumulative facts
+        // about the method, not about this call.
+        if (recv != 0 && Types.isPointer(recv))
+            m.setHeapRecv();
+        else
+            m.setStackRecv();
+        checkStackStrongArgs(n, m, (u32)1, quotedName(owner, m.name(), ""));
+        checkThrowsCall(m, n, m.name());
+        applyBoxing(n, m, (u32)1);
+        // The format is fitted, checked and promoted after the boxing, as the
+        // bare and free-function spellings are: a typed collection's element
+        // is judged, and promoted, as the element it is unboxed to.
         rewriteFormat(n, owner);
         checkFormat(n, owner);
         promoteFormat(n, owner);
@@ -7627,20 +7644,6 @@ class Sema
                 formatCallAt(n, wk, cname);
                 }
             }
-        // Which KIND of receiver reached this method decides whether its
-        // prologue retains self. Only an EXPLICIT receiver counts: a bare call
-        // promoted by `use`, or an implicit-self call inside the class, leaves
-        // the method unmarked — the original stamps this where a receiver
-        // expression was actually written. A heap pointer and a stack instance can both
-        // reach the same method in one program, so these are cumulative facts
-        // about the method, not about this call.
-        if (recv != 0 && Types.isPointer(recv))
-            m.setHeapRecv();
-        else
-            m.setStackRecv();
-        checkStackStrongArgs(n, m, (u32)1, quotedName(owner, m.name(), ""));
-        checkThrowsCall(m, n, m.name());
-        applyBoxing(n, m, (u32)1);
         }
 
     // ── BOXING ────────────────────────────────────────────────────────────
