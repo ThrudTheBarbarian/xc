@@ -433,10 +433,11 @@ static BOOL smallLeaf(XTIRFunction* f)
         // port's dvResultAs explains).
         XTIRValue* res = d.result ? [self value:d.result.type in:T] : nil;
         XTIRValue* cres = res ? [self resultOf:body as:res in:T] : nil;
+        // The dispatch's convention: a variadic tail's start rides on it (#664).
         XTIRInsn* call = [[XTIRInsn alloc] initWithOpcode:XTIROpCall
                                                    result:cres
                                                  operands:ops
-                                                 callConv:[XTIRCallConv standard]
+                                                 callConv:d.callConv ?: [XTIRCallConv standard]
                                                    dbgLoc:d.dbgLoc];
         call.memoryResult = [self value:[XTIRType memoryType] in:T];
         [T.instructions addObject:call];
@@ -990,10 +991,11 @@ static XTIRInsn* cloneInsn(XTIRInsn* n, NSDictionary<NSNumber*, XTIRValue*>* vma
         [ops addObject:mapOp(d.operands[k], vmap, nil)];
     XTIRValue* want = d.result ? vmap[@(d.result.valueId)] : nil;
     XTIRValue* cres = want ? [self resultOf:body as:want in:nb] : nil;
+    // The dispatch's convention: a variadic tail's start rides on it (#664).
     XTIRInsn* call = [[XTIRInsn alloc] initWithOpcode:XTIROpCall
                                                result:cres
                                              operands:ops
-                                             callConv:[XTIRCallConv standard]
+                                             callConv:d.callConv ?: [XTIRCallConv standard]
                                                dbgLoc:d.dbgLoc];
     call.memoryResult = vmap[@(d.memoryResult.valueId)];
     [nb.instructions addObject:call];

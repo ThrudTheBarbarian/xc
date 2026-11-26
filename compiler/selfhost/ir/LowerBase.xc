@@ -424,6 +424,8 @@ class ClassInfo
     // none of this and links none of the runtime.
     bool _boundsCheck;
     Node* _vtSite;          // the position a vtable check names (#34): set before each dispatch
+    u32 _dispVa;            // a dispatch to a variadic method: where its tail starts (receiver
+                            // counted), or 0 — set before each dispatch (#664)
     Map* _symSeen;          // symbolExists: the names of _m's symbols seen so far
     IRModule* _symSeenM;
     u32 _symSeenN;
@@ -13493,6 +13495,23 @@ class ClassInfo
                     return (IRValue*)0;
                 pargs.add((Object*)a);
                 }
+            // A VARIADIC requirement's tail travels as a direct call to a
+            // variadic method's does: packed into the shared buffer on a
+            // buffer target, promoted per the C ABI on a native-va_list one.
+            // It went unpacked, so the callee read its va_arg buffer stale
+            // (#664). Packing leaves the fixed arguments, which the coercion
+            // below then matches to the requirement.
+            Node* vreq = variadicRequirement(n, pargs.count());
+            u32 vaTail = (u32)0;
+            if (vreq != (Node*)0)
+                {
+                vaTail = (u32)1 + fixedParamCount(vreq);
+                rewriteEnumPercentE(pargs, n, (u32)1, fixedParamCount(vreq));
+                if (_failed)
+                    return (IRValue*)0;
+                promotePackVarargs(pargs, n, 1, fixedParamCount(vreq));
+                pargs = packVarargs(pargs, fixedParamCount(vreq), vreq);
+                }
             // Widen each argument to the REQUIREMENT's declared parameter
             // type. The dispatch pushes arguments at their own IR width, so a
             // narrow literal — `p.ping(5)` into an `i32` parameter — reaches
@@ -13516,6 +13535,7 @@ class ClassInfo
                 pty = req.op();
                 }
             IRValue* pres = (IRValue*)0;
+            _dispVa = vaTail;
             if (_itableDispatch && n.proto() != 0 && n.protoIdx() >= (i32)0)
                 pres = emitProtoDispatch(pv, n.proto(), (u32)n.protoIdx(), pargs, pty);
             else
@@ -13639,7 +13659,10 @@ class ClassInfo
             res = emitCatDispatch(recvVal, ci.catAnchor(),
                                   (u32)catSlotFor(ci, n), args, retTy);
         else if (vs >= (i32)0)
+            {
+            _dispVa = (decl != 0 && decl.hasFlag((u32)NF_VARARGS)) ? (u32)1 + fixedParamCount(decl) : (u32)0;
             res = emitDispatch(recvVal, (u32)vs, args, retTy);
+            }
         else
             res = emitMethodCall(methodSymbolFor(ci, n), recvVal, args, retTy, hasRes);
         _tupleIrRet = (String*)0;
@@ -13724,6 +13747,28 @@ class ClassInfo
             if (fixedParamCount(m) != argc)
                 continue;
             return m;
+            }
+        return (Node*)0;
+        }
+
+    // The VARIADIC requirement a call through a protocol reaches, or nil.
+    // protocolRequirement matches the argument count exactly, which a
+    // variadic call never does (#664).
+    Node* variadicRequirement(Node* n, u32 argc)
+        {
+        if (n.proto() == 0)
+            return (Node*)0;
+        Object* pd = _protocols.get((Hashable*)n.proto());
+        if (pd == 0)
+            return (Node*)0;
+        Node* proto = (Node*)pd;
+        for (u32 i = (u32)0; i < proto.kidCount(); i = i + (u32)1)
+            {
+            Node* m = proto.kid(i);
+            if (m.kind() != (u16)nkMethodDecl || !m.name().equals(n.name()) || !m.hasFlag((u32)NF_VARARGS))
+                continue;
+            if (fixedParamCount(m) <= argc)
+                return m;
             }
         return (Node*)0;
         }
@@ -13882,7 +13927,7 @@ class ClassInfo
             }
         IRValue* nm = new IRValue(String.withCString("Mem"));
         d.setMemRes(nm);
-        d.setCc(String.withCString("CallConv::Standard"));
+        d.setCc(dispatchConv());
         _blk.add(d);
         _mem = nm;
         if (_tupleIrRet == (String*)0)
@@ -14033,12 +14078,29 @@ class ClassInfo
             }
         IRValue* nm = new IRValue(String.withCString("Mem"));
         d.setMemRes(nm);
-        d.setCc(String.withCString("CallConv::Standard"));
+        d.setCc(dispatchConv());
         _blk.add(d);
         _mem = nm;
         if (_tupleIrRet == (String*)0)
             noteOwnedTemp(r, retTy);
         return r;
+        }
+
+    // A dispatch's calling convention: Standard, or `CallConv::Va<N>` when the
+    // method is variadic, N the position its tail starts (the receiver
+    // counted). The back end cannot see a dispatch's callee — with -c the
+    // vtable may not be in the module at all — and arm9 starts an xc variadic
+    // tail 8-aligned, so a dispatch has to say where (#664). Every pass that
+    // clones or devirtualises an instruction carries the convention.
+    String* dispatchConv(void)
+        {
+        u32 va = _dispVa;
+        _dispVa = (u32)0;
+        if (va == (u32)0)
+            return String.withCString("CallConv::Standard");
+        String* c = String.withCString("CallConv::Va");
+        c.append(String.withU32(va));
+        return c;
         }
 
     // The call OPCODE follows the callee's PLACEMENT, not the call site: a

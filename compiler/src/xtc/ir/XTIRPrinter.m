@@ -478,6 +478,8 @@ static NSString* dbgSuffix(XTIRInsn* insn)
     switch (cc.kind)
         {
     case XTIRCallConvStandard:
+        if (cc.vaStart)
+            return [NSString stringWithFormat:@"CallConv::Va%lu", (unsigned long)cc.vaStart];
         return @"CallConv::Standard";
     case XTIRCallConvCloaked:
         return @"CallConv::Cloaked";
@@ -660,6 +662,10 @@ static NSString* dbgSuffix(XTIRInsn* insn)
             [line appendString:@" "];
             [line appendString:[parts componentsJoinedByString:@", "]];
             }
+        // A dispatch to a variadic method: ` !va <N>`, where its tail starts
+        // (#664). A call says it in its CallConv; a dispatch prints none.
+        if ((insn.opcode == XTIROpVTblDispatch || insn.opcode == XTIROpProtoDispatch) && insn.callConv.vaStart)
+            [line appendFormat:@" !va %lu", (unsigned long)insn.callConv.vaStart];
         break;
         }
         }

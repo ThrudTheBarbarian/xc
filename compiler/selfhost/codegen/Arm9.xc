@@ -1268,7 +1268,13 @@ class Arm9
                         z = insn.ops().count();
                         }
                     }
-                u32 cVaAt = varargTailIndexFor(cCallee);
+                // The instruction's own `CallConv::Va<N>` first — a dispatch
+                // has no callee to ask, and its tail starts 8-aligned like a
+                // direct call's, so sizing it as plain AAPCS left the area a
+                // word short (#664) — then the callee's signature.
+                u32 cVaAt = vaFromConv(insn);
+                if (cVaAt == (u32)$FFFFFFFF)
+                    cVaAt = varargTailIndexFor(cCallee);
                 Array* clocs = classifyArgsAt(ats, cSret, cVaAt);
                 u32 need = _lastStackBytes;
                 // A forwarding call also writes the relayed tail into the
@@ -2001,12 +2007,12 @@ class Arm9
             }
         if (op == opVTblDispatch)
             {
-            emitDispatch(ops, res, (u32)2, false);
+            emitDispatch(ops, res, (u32)2, false, vaFromConv(insn));
             return;
             }
         if (op == opProtoDispatch)
             {
-            emitDispatch(ops, res, (u32)3, true);
+            emitDispatch(ops, res, (u32)3, true, vaFromConv(insn));
             return;
             }
         if (op == opVTblLoad)
@@ -2204,7 +2210,12 @@ class Arm9
             argTypes.add((Object*)o.val().ty());
             }
         bool sret = res != 0 && !Arm9.isMemTy(res.ty()) && returnsViaSret(res.ty());
-        u32 vaAt = indirect ? (u32)$FFFFFFFF : varargTailIndexFor(callee);
+        // The call's own `CallConv::Va<N>` first (a devirtualised dispatch
+        // keeps it, and the callee may be in another object), then the
+        // callee's signature when it is in this module (#664).
+        u32 vaAt = vaFromConv(insn);
+        if (vaAt == (u32)$FFFFFFFF && !indirect)
+            vaAt = varargTailIndexFor(callee);
         marshalArgsAt(args, argTypes, sret, res, vaAt);
         // A forwarding call inside a `vaforward` function relays this function's
         // own incoming tail into the callee's slots. Sema guarantees such a
@@ -2246,7 +2257,25 @@ class Arm9
     // vtable dispatch indexes a fixed slot, an itable one scans for a protocol
     // id first. Everything either side of that — marshalling, the call, the
     // result — is the same, so it is written once.
-    void emitDispatch(Array* ops, IRValue* res, u32 firstArg, bool viaItable)
+    // Where a call's or dispatch's variadic tail starts, from its
+    // `CallConv::Va<N>` (#664), or $FFFFFFFF when it carries none.
+    u32 vaFromConv(IRInsn* insn)
+        {
+        String* c = insn.cc();
+        if (c == (String*)0 || !c.hasPrefix(String.withCString("CallConv::Va")))
+            return (u32)$FFFFFFFF;
+        u32 v = (u32)0;
+        for (u32 i = (u32)12; i < c.byteLength(); i = i + (u32)1)
+            {
+            u8 b = c.byteAt(i);
+            if (b < (u8)'0' || b > (u8)'9')
+                break;
+            v = v * (u32)10 + (u32)(b - (u8)'0');
+            }
+        return v;
+        }
+
+    void emitDispatch(Array* ops, IRValue* res, u32 firstArg, bool viaItable, u32 vaAt)
         {
         if (ops.count() < firstArg)
             return;
@@ -2271,7 +2300,9 @@ class Arm9
             argTypes.add((Object*)o.val().ty());
             }
         bool sret = res != 0 && !Arm9.isMemTy(res.ty()) && returnsViaSret(res.ty());
-        marshalArgs(args, argTypes, sret, res);
+        // A variadic method's tail where the callee reads it: the dispatch
+        // says where it starts (#664), as a direct call's callee does.
+        marshalArgsAt(args, argTypes, sret, res, vaAt);
         // A forwarder's call through a method table relays its tail as a
         // direct call to a variadic does (#661). The target is not known here,
         // but a vaforward function reads no varargs of its own, so the relay
@@ -2279,7 +2310,7 @@ class Arm9
         // arguments of any other.
         if (isVaForward())
             {
-            Array* alocs = classifyArgsAt(argTypes, sret, (u32)$FFFFFFFF);
+            Array* alocs = classifyArgsAt(argTypes, sret, vaAt);
             u32 k = sret ? (u32)1 : (u32)0;
             for (u32 i = (u32)0; i < alocs.count(); i = i + (u32)1)
                 k = k + ((Number*)((Array*)alocs.get(i)).get((u32)1)).asU32();

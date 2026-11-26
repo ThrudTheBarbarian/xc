@@ -1323,6 +1323,13 @@ class IRType
             line.appendCString(i == (u32)0 ? " " : ", ");
             line.append(((IROperand*)_ops.get(i)).text());
             }
+        // A dispatch to a variadic method: ` !va <N>`, where its tail starts
+        // (#664). A call says it in its CallConv; a dispatch prints none.
+        if (IROp.has(_opc, OPF_DISPATCH) && _cc != (String*)0 && _cc.hasPrefix(String.withCString("CallConv::Va")))
+            {
+            line.appendCString(" !va ");
+            line.append(_cc.substringFromByte((u32)12));
+            }
         return line;
         }
     }

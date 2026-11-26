@@ -1035,8 +1035,16 @@ typedef NS_ENUM(NSUInteger, XTIRTokKind) {
         return [XTIRCallConv inlineConv];
     if ([k.text isEqualToString:@"RuntimeHelper"])
         return [XTIRCallConv runtimeHelper];
+    // `CallConv::Va<N>`: a call made from a dispatch to a variadic method,
+    // its tail starting at N (#664).
+    if ([k.text hasPrefix:@"Va"] && k.text.length > 2)
+        return [XTIRCallConv varargsFrom:(NSUInteger)[k.text substringFromIndex:2].integerValue];
     return [XTIRCallConv standard];
     }
+
+// A dispatch line's ` !va <N>` (#664), taken off the line by processLine and
+// given to the instruction it builds.
+static NSUInteger gPendingVa;
 
 #pragma mark Pass 2 — build instructions
 
@@ -1237,6 +1245,9 @@ typedef NS_ENUM(NSUInteger, XTIRTokKind) {
         }
         }
 
+    if (!cc && gPendingVa)
+        cc = [XTIRCallConv varargsFrom:gPendingVa];
+    gPendingVa = 0;
     XTIRInsn* insn;
     if (cc)
         {
@@ -1358,6 +1369,16 @@ typedef NS_ENUM(NSUInteger, XTIRTokKind) {
         return YES;
         }
     NSRange dbg = [line rangeOfString:@" !dbg " options:NSBackwardsSearch];
+    NSRange vaR = [line rangeOfString:@" !va " options:NSBackwardsSearch];
+    if (vaR.location != NSNotFound && (dbg.location == NSNotFound || vaR.location < dbg.location))
+        {
+        // ` !va <N>` sits before any ` !dbg `: take it off and keep N for the
+        // instruction this line builds.
+        NSUInteger end = dbg.location == NSNotFound ? line.length : dbg.location;
+        gPendingVa = (NSUInteger)[line substringWithRange:NSMakeRange(NSMaxRange(vaR), end - NSMaxRange(vaR))].integerValue;
+        line = [[line substringToIndex:vaR.location] stringByAppendingString:[line substringFromIndex:end]];
+        dbg = [line rangeOfString:@" !dbg " options:NSBackwardsSearch];
+        }
     if (dbg.location != NSNotFound)
         {
         NSArray<NSString*>* parts =

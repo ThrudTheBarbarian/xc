@@ -455,6 +455,9 @@
 // The source position a vtable check names (#34): set just before each
 // dispatch through a vtable is emitted.
 @property(nonatomic, nullable) XTSourceLocation* vtblSiteLoc;
+// A dispatch to a variadic method: where its tail starts (the receiver
+// counted), or 0 — set before each dispatch, taken by the emitter (#664).
+@property(nonatomic) NSUInteger dispatchVaStart;
 - (void)emitVtblCheck:(XTIRValue*)recv;
 // Globals whose initialiser could not constant-fold (a string literal is an
 // ADDRESS; a float leaf; an expression). Lowered as ordinary stores at the
@@ -2501,6 +2504,30 @@ static NSString* XTDescribeNodeKind(XTASTNodeKind k)
 |* protocol-relative index — neither of which any two modules need to agree on in
 |* advance. See private:docs/Design/protocol-slot-collisions.md.
 \****************************************************************************/
+// A dispatch's calling convention: standard, or varargs-from-N when the
+// method is variadic (N the position its tail starts, the receiver counted).
+// The back end cannot see a dispatch's callee — with -c the vtable may not be
+// in the module at all — and arm9 starts an xc variadic tail 8-aligned, so a
+// dispatch has to say where (#664). The port's dispatchConv.
+- (XTIRCallConv*)dispatchConv
+    {
+    NSUInteger va = self.dispatchVaStart;
+    self.dispatchVaStart = 0;
+    return va ? [XTIRCallConv varargsFrom:va] : [XTIRCallConv standard];
+    }
+
+// The VARIADIC requirement a call through a protocol reaches, or nil.
+// protocolMethodOf: matches the argument count exactly, which a variadic call
+// never does (#664). The port's variadicRequirement.
+- (nullable XTMethodDeclNode*)variadicRequirementOf:(XTMethodCallExprNode*)node argCount:(NSUInteger)argc
+    {
+    XTProtocolDeclNode* proto = self.protocolDeclsByName[node.resolvedProtocolName];
+    for (XTMethodDeclNode* m in proto.methods)
+        if ([m.methodName isEqualToString:node.methodName] && m.isVarArgs && m.parameters.count <= argc)
+            return m;
+    return nil;
+    }
+
 - (XTIRValue*)emitProtoDispatch:(XTIRValue*)recv
                        protocol:(NSString*)protoName
                           index:(NSUInteger)idx
@@ -2524,7 +2551,7 @@ static NSString* XTDescribeNodeKind(XTASTNodeKind k)
     XTIRInsn* insn = [[XTIRInsn alloc] initWithOpcode:XTIROpProtoDispatch
                                                result:r
                                              operands:ops
-                                             callConv:[XTIRCallConv standard]
+                                             callConv:[self dispatchConv]
                                                dbgLoc:nil];
     insn.memoryResult = newMem;
     [self.currentBlock appendInstruction:insn];
@@ -2562,7 +2589,7 @@ static NSString* XTDescribeNodeKind(XTASTNodeKind k)
     XTIRInsn* insn = [[XTIRInsn alloc] initWithOpcode:XTIROpVTblDispatch
                                                result:r
                                              operands:ops
-                                             callConv:[XTIRCallConv standard]
+                                             callConv:[self dispatchConv]
                                                dbgLoc:nil];
     insn.memoryResult = newMem;
     [self.currentBlock appendInstruction:insn];
@@ -9632,6 +9659,25 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
             // one slot short and shift its frame (bug 013). The direct-call and
             // implicit-self paths already coerce; this brings the explicit
             // protocol-receiver path to parity.
+            // A VARIADIC requirement's tail travels as a direct call to a
+            // variadic method's does: packed into the shared buffer on a buffer
+            // target, promoted per the C ABI on a native-va_list one. It went
+            // unpacked, so the callee read its va_arg buffer stale (#664).
+            // Packing leaves the fixed arguments, which the coercion below
+            // then matches to the requirement.
+            XTMethodDeclNode* vreq = [self variadicRequirementOf:node argCount:args.count];
+            NSUInteger vaTail = 0;
+            if (vreq)
+                {
+                NSUInteger fcu = vreq.parameters.count;
+                vaTail = 1 + fcu;
+                if (fcu > 0)
+                    [self rewriteEnumPercentEInArgs:args astArgs:node.arguments fmtIdx:fcu - 1];
+                [self promotePackVarargs:args asts:node.arguments from:fcu];
+                NSArray<XTIRValue*>* packed = self.nativeVarargs ? [self cVarargPromote:args fixedCount:fcu]
+                                                                 : [self packVarargsFrom:args fixedCount:fcu];
+                args = [packed mutableCopy];
+                }
             [self coerceArgs:args toProtocolMethodOf:node];
             XTIRType* resultIR = nil;
             XTType* callResultAST = node.erasedReturnType ?: node.resolvedType;
@@ -9659,6 +9705,7 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
             // targets: the flat slot number cannot be agreed between two
             // independently built libraries, but a protocol-relative index needs no
             // agreeing.
+            self.dispatchVaStart = vaTail;
             if (sItableProtocols && node.resolvedProtocolName.length && node.resolvedProtocolIndex != nil)
                 {
                 return [self emitProtoDispatch:recvVal
@@ -9880,6 +9927,10 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
     if (vslot && !isStaticCall && recvCi.needsVtable)
         {
         self.vtblSiteLoc = node.location;
+        // A variadic method: its tail starts after self and the fixed
+        // parameters (paramTypes ends with the Memory token) (#664).
+        self.dispatchVaStart = (sym.attributes[@"variadic"].boolValue && sym.function && sym.function.paramTypes.count > 1)
+                                   ? sym.function.paramTypes.count - 1 : 0;
         return [self retypeErasedResult:[self emitVTblDispatch:recvVal
                                                           slot:vslot.unsignedIntegerValue
                                                      argValues:passArgs

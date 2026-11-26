@@ -63,6 +63,7 @@ class IrParser
     {
     Array* _lines; // String@, comments stripped and continuations joined
     Array* _dbgs;  // IrDbgAt@ per line: its -g location, if it had one
+    Array* _vas;   // Number per line: a dispatch's ` !va <N>`, or 0 (#664)
     u32 _li;       // the line being read
     String* _cur;  // …its text
     u32 _ci;       // …and the cursor into it
@@ -158,6 +159,7 @@ class IrParser
         {
         _lines = new Array();
         _dbgs = new Array();
+        _vas = new Array();
         Array* raw = text.splitOnByte((u8)10);
         String* pending = (String*)0;
         for (u32 i = (u32)0; i < raw.count(); i = i + (u32)1)
@@ -214,8 +216,34 @@ class IrParser
                        IrParser.leadingNumber((String*)parts.get((u32)1)),
                        IrParser.leadingNumber((String*)parts.get((u32)2)));
             }
+        // A dispatch's ` !va <N>` (#664), now the last thing on the line.
+        u32 va = (u32)0;
+        u32 vk = line.byteLength() >= (u32)6 ? line.byteLength() - (u32)5 : (u32)0;
+        for (u32 j = vk; j > (u32)0; j = j - (u32)1)
+            {
+            u32 k = j - (u32)1;
+            if (k + (u32)5 <= line.byteLength() && line.byteAt(k) == (u8)' ' && line.byteAt(k + (u32)1) == (u8)'!'
+                && line.byteAt(k + (u32)2) == (u8)'v' && line.byteAt(k + (u32)3) == (u8)'a'
+                && line.byteAt(k + (u32)4) == (u8)' ')
+                {
+                va = IrParser.leadingNumber(line.substringFromByte(k + (u32)5));
+                line = line.substringBytes((u32)0, k);
+                break;
+                }
+            if (line.byteAt(k) == (u8)',' || line.byteAt(k) == (u8)'=')
+                break;
+            }
         _lines.add((Object*)line);
         _dbgs.add((Object*)at);
+        _vas.add((Object*)Number.withU32(va));
+        }
+
+    // The ` !va <N>` the current line carried, or 0.
+    u32 lineVa(void)
+        {
+        if (_li >= _vas.count())
+            return (u32)0;
+        return ((Number*)_vas.get(_li)).asU32();
         }
 
     // The decimal number a string starts with (leading blanks skipped), 0 when
@@ -1302,6 +1330,12 @@ class IrParser
             }
         IRInsn* insn = IRInsn.with(op);
         // -g: the line's own location, and none when it has none.
+        if (lineVa() != (u32)0)
+            {
+            String* vc = String.withCString("CallConv::Va");
+            vc.append(String.withU32(lineVa()));
+            insn.setCc(vc);
+            }
         IrDbgAt* idb = lineDbg();
         if (idb != 0)
             insn.setDbg(idb.file(), idb.line(), idb.col());

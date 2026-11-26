@@ -433,7 +433,8 @@
                 }
             IRInsn* call = IRInsn.with(String.withCString("Call"));
             call.copyDbg(d);
-            call.setCc(String.withCString("CallConv::Standard"));
+            // The dispatch's convention: a variadic tail's start rides on it (#664).
+            call.setCc(d.cc() != (String*)0 ? d.cc() : String.withCString("CallConv::Standard"));
             call.add(IROperand.sym(impl));
             call.add(recv);
             for (u32 k = (u32)2; k < d.ops().count(); k = k + (u32)1)
@@ -993,7 +994,8 @@
             }
         IRInsn* call = IRInsn.with(String.withCString("Call"));
         call.copyDbg(d);
-        call.setCc(String.withCString("CallConv::Standard"));
+        // The dispatch's convention: a variadic tail's start rides on it (#664).
+        call.setCc(d.cc() != (String*)0 ? d.cc() : String.withCString("CallConv::Standard"));
         call.add(IROperand.sym(impl));
         call.add(recv);
         for (u32 k = (u32)2; k < d.ops().count(); k = k + (u32)1)

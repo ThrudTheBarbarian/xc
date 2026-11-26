@@ -44,9 +44,18 @@
     return [(XTIRCallConv*)[self alloc] initWithKind:XTIRCallConvRuntimeHelper hwStack:YES naked:NO];
     }
 
++ (instancetype)varargsFrom:(NSUInteger)vaStart
+    {
+    XTIRCallConv* c = [(XTIRCallConv*)[self alloc] initWithKind:XTIRCallConvStandard hwStack:YES naked:NO];
+    c->_vaStart = vaStart;
+    return c;
+    }
+
 - (id)copyWithZone:(nullable NSZone*)zone
     {
-    return [[XTIRCallConv alloc] initWithKind:self.kind hwStack:self.hwStack naked:self.naked];
+    XTIRCallConv* c = [[XTIRCallConv alloc] initWithKind:self.kind hwStack:self.hwStack naked:self.naked];
+    c->_vaStart = self.vaStart;
+    return c;
     }
 
 - (BOOL)isEqual:(nullable id)object
@@ -54,7 +63,8 @@
     if (![object isKindOfClass:[XTIRCallConv class]])
         return NO;
     XTIRCallConv* other = (XTIRCallConv*)object;
-    return self.kind == other.kind && self.hwStack == other.hwStack && self.naked == other.naked;
+    return self.kind == other.kind && self.hwStack == other.hwStack && self.naked == other.naked
+        && self.vaStart == other.vaStart;
     }
 
 - (NSUInteger)hash

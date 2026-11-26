@@ -1306,12 +1306,13 @@ static const NSUInteger kArm9VaForwardWords = 16;
 // a variadic target and only fills slots past the arguments of any other.
 + (void)emitDispatchRelayTypes:(NSArray<XTIRType*>*)argTypes
                           sret:(BOOL)sret
+                      varargAt:(NSUInteger)varargAt
                      vaListOff:(NSUInteger)vaListOff
                            out:(NSMutableString*)out
     {
     NSArray<NSArray<NSNumber*>*>* alocs = [self classifyArgTypes:argTypes
                                                             sret:sret
-                                                        varargAt:NSNotFound
+                                                        varargAt:varargAt
                                                    outStackBytes:NULL];
     NSUInteger k = sret ? 1 : 0;
     for (NSArray<NSNumber*>* L in alocs)
@@ -2162,8 +2163,12 @@ static const NSUInteger kArm9VaForwardWords = 16;
                 }
             }
         BOOL sret = res && ![self isMemValue:res] && [self returnsViaSret:res.type];
-        NSUInteger vaAt = indirect ? NSNotFound
-                                   : [self varargTailIndexFor:callee module:mod];
+        // The call's own varargs-from-N first (a devirtualised dispatch keeps
+        // it, and the callee may be in another object), then the callee's
+        // signature when it is in this module (#664).
+        NSUInteger vaAt = in.callConv.vaStart ? in.callConv.vaStart : NSNotFound;
+        if (vaAt == NSNotFound && !indirect)
+            vaAt = [self varargTailIndexFor:callee module:mod];
         [self marshalArgs:args
                     types:argTypes
                      sret:sret
@@ -2227,9 +2232,12 @@ static const NSUInteger kArm9VaForwardWords = 16;
                 }
             }
         BOOL sret = res && ![self isMemValue:res] && [self returnsViaSret:res.type];
-        [self marshalArgs:args types:argTypes sret:sret result:res slot:slot out:out];
+        // A variadic method's tail where the callee reads it: the dispatch says
+        // where it starts (#664), as a direct call's callee does.
+        NSUInteger dvaAt = in.callConv.vaStart ? in.callConv.vaStart : NSNotFound;
+        [self marshalArgs:args types:argTypes sret:sret result:res varargAt:dvaAt slot:slot out:out];
         if ([mod symbolForName:fn.name].attributes[@"vaforward"].boolValue)
-            [self emitDispatchRelayTypes:argTypes sret:sret vaListOff:vaListOff out:out];
+            [self emitDispatchRelayTypes:argTypes sret:sret varargAt:dvaAt vaListOff:vaListOff out:out];
         // Receiver landed in r0 (or r1 when sret took r0). Load vtable → fn ptr.
         NSString* recvReg = sret ? @"r1" : @"r0";
         [out appendFormat:@"\tldr\tr12, [%@]\n", recvReg];
@@ -2270,9 +2278,12 @@ static const NSUInteger kArm9VaForwardWords = 16;
                 }
             }
         BOOL sret = res && ![self isMemValue:res] && [self returnsViaSret:res.type];
-        [self marshalArgs:args types:argTypes sret:sret result:res slot:slot out:out];
+        // A variadic method's tail where the callee reads it: the dispatch says
+        // where it starts (#664), as a direct call's callee does.
+        NSUInteger dvaAt = in.callConv.vaStart ? in.callConv.vaStart : NSNotFound;
+        [self marshalArgs:args types:argTypes sret:sret result:res varargAt:dvaAt slot:slot out:out];
         if ([mod symbolForName:fn.name].attributes[@"vaforward"].boolValue)
-            [self emitDispatchRelayTypes:argTypes sret:sret vaListOff:vaListOff out:out];
+            [self emitDispatchRelayTypes:argTypes sret:sret varargAt:dvaAt vaListOff:vaListOff out:out];
         NSString* recvReg = sret ? @"r1" : @"r0";
         [self emitItableLookup:recvReg protoId:(uint32_t)ops[1].intValue out:out];
         [self emitFarLoad:@"r12" base:@"r12" off:(NSUInteger)(ops[2].intValue * 4) out:out];
@@ -3654,8 +3665,13 @@ typedef NS_ENUM(NSUInteger, XTArm9PhiKind) {
                     cCallee = [mod symbolForId:o.symbolId].name;
                     break;
                     }
-            NSUInteger cVaAt = cIndirect ? NSNotFound
-                                         : [self varargTailIndexFor:cCallee module:mod];
+            // The instruction's own varargs-from-N first — a dispatch has no
+            // callee to ask, and its tail starts 8-aligned like a direct
+            // call's, so sizing it as plain AAPCS left the area a word short
+            // (#664) — then the callee's signature.
+            NSUInteger cVaAt = in.callConv.vaStart ? in.callConv.vaStart : NSNotFound;
+            if (cVaAt == NSNotFound && !cIndirect)
+                cVaAt = [self varargTailIndexFor:cCallee module:mod];
             NSArray<NSArray<NSNumber*>*>* clocs =
                 [self classifyArgTypes:ats
                                   sret:cSret

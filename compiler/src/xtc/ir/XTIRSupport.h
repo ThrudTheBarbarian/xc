@@ -40,6 +40,10 @@ typedef NS_ENUM(uint8_t, XTIRCallConvKind) {
 @property(nonatomic, readonly) XTIRCallConvKind kind;
 @property(nonatomic, readonly) BOOL hwStack;
 @property(nonatomic, readonly) BOOL naked;
+// A dispatch (or a call made from one) to a variadic method: where its tail
+// starts, the receiver counted; 0 for none. Printed `CallConv::Va<N>` on a
+// call and ` !va <N>` on a dispatch (#664).
+@property(nonatomic, readonly) NSUInteger vaStart;
 
 - (instancetype)initWithKind:(XTIRCallConvKind)kind
                      hwStack:(BOOL)hwStack
@@ -50,6 +54,7 @@ typedef NS_ENUM(uint8_t, XTIRCallConvKind) {
 + (instancetype)banked;
 + (instancetype)inlineConv;
 + (instancetype)runtimeHelper;
++ (instancetype)varargsFrom:(NSUInteger)vaStart;
 @end
 
 #pragma mark - Comparison predicates (IR-SPEC §6.5)
