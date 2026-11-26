@@ -1394,19 +1394,6 @@ static void dump_emit_char(uint16_t addr, uint8_t sc)
     uint32_t cap = (uint32_t)base + 40 * XTS_DUMP_ROWS;
     if (cap > 0xC000)
         cap = 0xC000;
-        /* LOG ALL calls that guard-pass — limit to first 1000 */
-        {
-        static uint64_t pass_cnt = 0;
-        if (addr >= base && (uint32_t)addr < cap)
-            {
-            if (pass_cnt < 1000)
-                {
-                fprintf(stderr, "GUARD_PASS cnt=%llu base=$%04X cap=$%04X addr=$%04X val=$%02X\n",
-                        (unsigned long long)pass_cnt, base, (uint16_t)cap, addr, sc);
-                }
-            pass_cnt++;
-            }
-        }
     if (addr < base || (uint32_t)addr >= cap)
         return;
     uint16_t off = addr - base;
@@ -1440,10 +1427,17 @@ static void dump_emit_char(uint16_t addr, uint8_t sc)
         }
     /* Treat the write stream as a log: a continuation of the current row
        prints inline, a next-row write emits a single newline, and any
-       other jump (forward skip, cursor move via printfAt) also emits a
-       single newline. We never pad with blank rows or leading spaces —
-       the -d stream mirrors what the program *printed*, not where on
-       the screen it landed. */
+       other jump (cursor move via printfAt) also emits a single newline.
+       We never pad with leading spaces — the -d stream mirrors what the
+       program *printed*, not where on the screen it landed. Rows are the
+       exception, so an empty line is output: Stdio's newline moves the
+       cursor to the start of the next row, so `\n\n` leaves a row nothing
+       writes, and the next write lands at column 0 two rows down. A write
+       at column 0 further down than the next row emits a newline for each
+       row it passed (a setCursor to column 0 of a later row reads the same,
+       and shows the rows it skipped). A line that ended in the last column
+       already left the cursor at the start of the next row, and its newline
+       moved it one row more, so that row is not an empty line. */
     if (dump_last_row >= 0)
         {
         int same_row = (row == dump_last_row && col == dump_last_col + 1);
@@ -1455,7 +1449,13 @@ static void dump_emit_char(uint16_t addr, uint8_t sc)
            and broke naive line-based verification. */
         int wrap = (dump_last_col == 39 && row == dump_last_row + 1 && col == 0);
         if (!same_row && !wrap)
-            putchar('\n');
+            {
+            int lines = 1;
+            if (col == 0 && row > dump_last_row + 1)
+                lines = row - dump_last_row - (dump_last_col == 39 ? 1 : 0);
+            for (int i = 0; i < lines; i++)
+                putchar('\n');
+            }
         }
     putchar(screen_code_to_ascii(sc));
     dump_last_row = row;
