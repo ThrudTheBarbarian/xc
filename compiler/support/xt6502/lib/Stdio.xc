@@ -1062,7 +1062,11 @@ class Stdio
             }
 
         print(ip);
-        putChar((u8)$2E); // '.'
+        // No point when no digit follows it: `%.0f` of 2.5 is "2" (#703).
+        if (keep > 0)
+            {
+            putChar((u8)$2E); // '.'
+            }
         i = 0;
         while (i < keep)
             {
@@ -1400,11 +1404,11 @@ class Stdio
             }
         }
 
-    // printf's %f and %lf: six places unless `.N` says otherwise (`prec` 0
-    // is none), rounded at the last one kept.
+    // printf's %f and %lf: six places unless `.N` says otherwise (`prec`
+    // 255 is none, so `%.0f` keeps none, #703), rounded at the last one kept.
     static void _printF(double d, u8 prec) XTC_CLOAKED
         {
-        if (prec == 0)
+        if (prec == 255)
             {
             prec = 6;
             }
@@ -1495,9 +1499,10 @@ class Stdio
                     fmt = fmt + 1;
                     spec = *fmt;
                     }
-                prec = 0;
+                prec = 255; // no `.N`
                 if (spec == $2E) // '.'
                     {
+                    prec = 0;
                     fmt = fmt + 1;
                     spec = *fmt;
                     while (spec >= $30 && spec <= $39)
