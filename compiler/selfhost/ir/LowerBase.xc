@@ -2031,16 +2031,11 @@ class ClassInfo
         {
         Array* ops = new Array();
         String* ty = irType(astTy);
-        // A negative value in an UNSIGNED slot is not negative: it is a
-        // literal that overflowed the parser's signed range — `$FFFFFFFF` is
-        // written as a large positive and read back as one. A source-level
-        // minus never arrives here, because `-5` parses as a unary operator
-        // applied to 5. With a 64-bit payload this only bites at the 64-bit
-        // boundary now, not the 32-bit one.
-        if (v < (i64)0 && !Types.isSigned(astTy))
-            ops.add((Object*)IROperand.immU64((u64)v, ty));
-        else
-            ops.add((Object*)IROperand.immI(v, ty));
+        // The payload is the literal's 64 bits, as the reference writes it: a
+        // u64 at or above 2^63 (#709) is `#-1:U64`, its type saying how the
+        // bits read. Spelled as a magnitude here, the two compilers' IR and
+        // assembly differed (`mov rax, 18446744073709551615` against -1).
+        ops.add((Object*)IROperand.immI(v, ty));
         return emit(String.withCString("Const"), ty, ops);
         }
 
