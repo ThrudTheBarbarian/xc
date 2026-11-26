@@ -235,6 +235,9 @@ int main(int argc, const char* argv[])
             armProfile.matMulInts = matMul;
             armProfile.inlineChecks = inlineChecks;
             armProfile.rotateChains = rotateChains;
+            // FEAT_FP16 arithmetic on a row with LSE (the ARMv8.1+ cores: Apple's);
+            // the conversions are in every ARMv8 FP unit.
+            armProfile.packF16Arith = lseAtomics;
             XTIROptPipeline* pipe =
                 [XTIROptPipeline standardPipelineAtLevel:optLevel
                                                  profile:armProfile];

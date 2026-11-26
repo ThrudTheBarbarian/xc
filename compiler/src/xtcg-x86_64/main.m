@@ -197,6 +197,9 @@ int main(int argc, const char* argv[])
             x86Profile.vectorLaneBytes = simdLaneBytes; // 32 under -mavx2: the back end emits ymm
             x86Profile.simdDispatch = simdDispatch;
             x86Profile.inlineChecks = inlineChecks;
+            // F16C under a fixed AVX2 or AVX-512 level; the dispatched and base
+            // builds' scalar code runs on any x86-64.
+            x86Profile.packF16Hardware = !simdDispatch && simdLaneBytes >= 32;
             // The matrix kernel for the module's vector tier (`_auto`: all
             // three, picked at load).
             if (matMul)

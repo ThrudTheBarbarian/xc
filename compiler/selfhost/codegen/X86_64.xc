@@ -1888,6 +1888,25 @@ class X86_64
         {
         if (n.res() == (IRValue*)0 || n.ops().count() < (u32)1)
             return;
+        // An f16 pattern (a U16) to f32 and back: F16C, only ever made under a
+        // fixed AVX2 or AVX-512 level (pack-native, float sizes F5a); to f16
+        // rounds to nearest even (immediate 0). As the reference.
+        IROperand* h0 = (IROperand*)n.ops().get(0);
+        if (widen && h0.kind() == OPK_USE && h0.val() != (IRValue*)0 && IRType.is(h0.val().ty(), tyU16))
+            {
+            loadZX(h0, (u8)'a');
+            String* Dh = fdstFor(n.res(), (IROperand*)0, (IROperand*)0);
+            _out.appendFormat("\tvmovd\txmm0, eax\n\tvcvtph2ps\t%s, xmm0\n", Dh.cString());
+            storeF(Dh, n.res());
+            return;
+            }
+        if (!widen && IRType.is(n.res().ty(), tyU16))
+            {
+            String* Sh = fsrcFor(h0);
+            _out.appendFormat("\tvcvtps2ph\txmm0, %s, 0\n\tvmovd\teax, xmm0\n", Sh.cString());
+            store((u8)'a', n.res());
+            return;
+            }
         String* Sc = fsrcFor((IROperand*)n.ops().get((u32)0));
         String* Dc = fdstFor(n.res(), (IROperand*)0, (IROperand*)0);
         _out.appendFormat("\t%s\t%s, %s\n", widen ? "cvtss2sd" : "cvtsd2ss",
@@ -4889,7 +4908,7 @@ class X86_64
     // Mnemonics whose operand 0 is a written destination register.
     static bool writesOp0(String* m)
         {
-        return inWordList("mov movzx movsx movsxd lea add sub imul and or xor neg not sar shl shr inc dec cmove cmovne cmovl cmovg cmovle cmovge cmovb cmova cmovbe cmovae", m);
+        return inWordList("mov movzx movsx movsxd lea vmovd add sub imul and or xor neg not sar shl shr inc dec cmove cmovne cmovl cmovg cmovle cmovge cmovb cmova cmovbe cmovae", m);
         }
 
     // Control transfers — a scratch register is dead out past them.

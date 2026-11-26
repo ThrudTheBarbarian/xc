@@ -269,7 +269,7 @@ enum X86Mnemonic = {
     x86Sqrtss, x86Sub, x86Subpd, x86Subps, x86Subsd, x86Subss,
     x86Syscall, x86Test, x86Ucomisd, x86Ucomiss, x86Ud2, x86Unpckhpd,
     x86Unpckhps, x86Unpcklpd, x86Unpcklps, x86Vbroadcastsd, x86Vbroadcastss, x86Vcomisd,
-    x86Vcomiss, x86Vcvtdq2ps, x86Vcvttps2dq, x86Vcvttsd2si, x86Vcvttss2si, x86Vextractf128,
+    x86Vcomiss, x86Vcvtdq2ps, x86Vcvtph2ps, x86Vcvtps2ph, x86Vcvttps2dq, x86Vcvttsd2si, x86Vcvttss2si, x86Vextractf128,
     x86Vextracti128, x86Vmovaps, x86Vmovd, x86Vmovdqa, x86Vmovdqu, x86Vmovq,
     x86Vmovsd, x86Vmovss, x86Vmovups, x86Vpabsb, x86Vpabsd, x86Vpabsw,
     x86Vpblendd, x86Vpbroadcastb, x86Vpbroadcastd, x86Vpbroadcastq, x86Vpbroadcastw, x86Vpshufd,
@@ -361,6 +361,7 @@ class X86Mn
         X86Mn.def(x86Unpckhps, "unpckhps"); X86Mn.def(x86Unpcklpd, "unpcklpd"); X86Mn.def(x86Unpcklps, "unpcklps");
         X86Mn.def(x86Vbroadcastsd, "vbroadcastsd"); X86Mn.def(x86Vbroadcastss, "vbroadcastss"); X86Mn.def(x86Vcomisd, "vcomisd");
         X86Mn.def(x86Vcomiss, "vcomiss"); X86Mn.def(x86Vcvtdq2ps, "vcvtdq2ps"); X86Mn.def(x86Vcvttps2dq, "vcvttps2dq");
+        X86Mn.def(x86Vcvtph2ps, "vcvtph2ps"); X86Mn.def(x86Vcvtps2ph, "vcvtps2ph");
         X86Mn.def(x86Vcvttsd2si, "vcvttsd2si"); X86Mn.def(x86Vcvttss2si, "vcvttss2si"); X86Mn.def(x86Vextractf128, "vextractf128");
         X86Mn.def(x86Vextracti128, "vextracti128"); X86Mn.def(x86Vmovaps, "vmovaps"); X86Mn.def(x86Vmovd, "vmovd");
         X86Mn.def(x86Vmovdqa, "vmovdqa"); X86Mn.def(x86Vmovdqu, "vmovdqu"); X86Mn.def(x86Vmovq, "vmovq");
@@ -2727,6 +2728,8 @@ class X86Mn
         // and the lane conversions, int to float and float to int (#27).
         else if (mc == x86Vcvtdq2ps) { pp = 0; map = 1; ld = $5B; }
         else if (mc == x86Vcvttps2dq) { pp = 2; map = 1; ld = $5B; }
+        // F16C: four halves to floats (VEX.128.66.0F38.W0 13 /r).
+        else if (mc == x86Vcvtph2ps) { pp = 1; map = 2; ld = $13; }
         // The scalar compares, and the scalar moves to or from memory (a
         // register-to-register vmovss takes three operands, encVex128): what an
         // AVX function's scalar float code uses. As the reference.
@@ -2787,6 +2790,27 @@ class X86Mn
             eModRM(regop.reg(), rmop);
             _hit = true;
             return true;
+            }
+        if (mc == x86Vcvtps2ph && _ops.count() == 3 && a != (XOperand*)0 && b != (XOperand*)0
+            && b.kind() == (u32)OP_REG && b.size() == 16)
+            {
+            // F16C, VEX.128.66.0F3A.W0 1D /r ib: reg = the xmm source, r/m =
+            // the destination, the immediate the rounding control. As the
+            // reference.
+            XOperand* im = (XOperand*)_ops.get(2);
+            if (im.kind() == (u32)OP_IMM)
+                {
+                i32 bb = a.kind() == (u32)OP_REG ? (i32)a.reg() : a.rmReg();
+                i32 xx = a.kind() == (u32)OP_REG ? 0 : a.index();
+                if (bb < 0) bb = 0;
+                if (xx < 0) xx = 0;
+                eVex(b.reg(), xx, bb, 3, $0F, 0, 1);
+                e8($1D);
+                eModRM(b.reg(), a);
+                e8((u32)im.disp() & $FF);
+                _hit = true;
+                return true;
+                }
             }
         bool exti = mc == x86Vextracti128;
         bool extf = mc == x86Vextractf128;

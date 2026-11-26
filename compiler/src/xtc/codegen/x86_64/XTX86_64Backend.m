@@ -1982,7 +1982,7 @@ static BOOL x86WritesOp0(NSString* m)
     {
     static NSSet* s = nil;
     if (!s)
-        s = [NSSet setWithArray:@[ @"mov", @"movzx", @"movsx", @"movsxd", @"lea",
+        s = [NSSet setWithArray:@[ @"mov", @"movzx", @"movsx", @"movsxd", @"lea", @"vmovd",
                                    @"add", @"sub", @"imul", @"and", @"or", @"xor", @"neg", @"not",
                                    @"sar", @"shl", @"shr", @"inc", @"dec", @"cmove", @"cmovne", @"cmovl",
                                    @"cmovg", @"cmovle", @"cmovge", @"cmovb", @"cmova", @"cmovbe", @"cmovae" ]];
@@ -6251,6 +6251,18 @@ static BOOL xtConstThrough(XTIRValueId v, XTIRInsn* (^defOf)(XTIRValueId), int d
         {
         if (!res || ops.count < 1)
             return;
+        // An f16 pattern (a U16) to f32: F16C's vcvtph2ps, only ever made
+        // under a fixed AVX2 or AVX-512 level (pack-native, float sizes F5a).
+        // As the port.
+        XTIRValue* hv = ops[0].kind == XTIROperandKindUse ? fn.values[@(ops[0].valueId)] : nil;
+        if (hv && hv.type.kind == XTIRTypeKindU16)
+            {
+            [self loadZX:ops[0] into:'a' fn:fn slot:slot out:out];
+            NSString* Dh = [self fdstFor:res clobbering:nil as:nil];
+            [out appendFormat:@"\tvmovd\txmm0, eax\n\tvcvtph2ps\t%@, xmm0\n", Dh];
+            [self storeF:Dh into:res slot:slot out:out];
+            return;
+            }
         NSString* Sc = [self fsrcFor:ops[0] fn:fn slot:slot out:out];
         NSString* Dc = [self fdstFor:res clobbering:nil as:nil];
         [out appendFormat:@"\tcvtss2sd\t%@, %@\n", Dc, Sc];
@@ -6262,6 +6274,15 @@ static BOOL xtConstThrough(XTIRValueId v, XTIRInsn* (^defOf)(XTIRValueId), int d
         {
         if (!res || ops.count < 1)
             return;
+        // f32 to an f16 pattern (a U16): vcvtps2ph, rounding to nearest even
+        // (immediate 0). As the port.
+        if (res.type.kind == XTIRTypeKindU16)
+            {
+            NSString* Sh = [self fsrcFor:ops[0] fn:fn slot:slot out:out];
+            [out appendFormat:@"\tvcvtps2ph\txmm0, %@, 0\n\tvmovd\teax, xmm0\n", Sh];
+            [self store:'a' into:res slot:slot out:out];
+            return;
+            }
         NSString* Sc = [self fsrcFor:ops[0] fn:fn slot:slot out:out];
         NSString* Dc = [self fdstFor:res clobbering:nil as:nil];
         [out appendFormat:@"\tcvtsd2ss\t%@, %@\n", Dc, Sc];

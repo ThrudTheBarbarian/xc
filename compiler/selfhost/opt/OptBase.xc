@@ -223,6 +223,13 @@ class OptProfile
     u32 _inlineMax;        // the largest callee (IR instructions) the inliner splices
     bool _dceTrace;        // name each function dead-function elimination removes
     bool _inlineChecks;    // -fbounds-check=light: inline the subscript checks in loops after bounds-elide
+    // pack-native (float sizes F5a): the 16-bit floats' FloatPack calls in the
+    // target's own instructions. The reference's profile says what each means.
+    bool _packF16Hw;       // f16 to and from f32 in hardware (arm64; x86-64 F16C under a fixed AVX2/AVX-512 level)
+    bool _packF16From64;   // ...and from f64 in one rounding (arm64)
+    bool _packF16Arith;    // f16 arithmetic and comparisons (arm64 FEAT_FP16, a row with LSE)
+    bool _packBf16;        // bf16 by integer operations (arm64, x86-64, win64)
+    bool _packNanOrder;    // f32 arithmetic prefers a signalling NaN operand (arm64)
 
     void init(void)
         {
@@ -237,6 +244,11 @@ class OptProfile
         _inlineMax = (u32)64;
         _dceTrace = false;
         _inlineChecks = false;
+        _packF16Hw = false;
+        _packF16From64 = false;
+        _packF16Arith = false;
+        _packBf16 = false;
+        _packNanOrder = false;
         _nativeVarargs = false;
         _sqrtIntrinsic = false;
         _powSquare = false;
@@ -296,6 +308,13 @@ class OptProfile
     void setMatMulContract(bool b) { _matMulContract = b; }
     bool inlineChecks(void) { return _inlineChecks; }
     void setInlineChecks(bool b) { _inlineChecks = b; }
+    bool packF16Hw(void) { return _packF16Hw; }
+    void setPackF16Hw(bool b) { _packF16Hw = b; }
+    bool packF16From64(void) { return _packF16From64; }
+    bool packF16Arith(void) { return _packF16Arith; }
+    void setPackF16Arith(bool b) { _packF16Arith = b; }
+    bool packBf16(void) { return _packBf16; }
+    bool packNanOrder(void) { return _packNanOrder; }
 
     bool ptr64(void)
         {
@@ -394,6 +413,14 @@ class OptProfile
         // stay abstract for the backend and the pack-buffer expand is skipped.
         if (arm64)
             p._nativeVarargs = true;
+        // pack-native: half-precision conversions are in every ARMv8 FP unit;
+        // bf16 by integer operations on the 64-bit hosts (FEAT_BF16 is not on
+        // M1 or the Cortex-A76). f16 arithmetic and x86-64's F16C are set by
+        // the code generator (setPackF16Arith, setPackF16Hw). As the reference.
+        p._packF16Hw = arm64;
+        p._packF16From64 = arm64;
+        p._packNanOrder = arm64;
+        p._packBf16 = wide;
         // arm64, x86_64 and win64 (which uses the x86_64 profile) have a
         // hardware sqrt; the 6502 and the 68000 do not, and their profiles say
         // so — the pass is a no-op there rather than a different lowering.

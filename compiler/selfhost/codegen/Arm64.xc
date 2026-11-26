@@ -5274,6 +5274,20 @@ class Arm64
     {
         if (n.res() == (IRValue*)0 || n.ops().count() < (u32)2) { unsupported(n.op()); return; }
         String* ty = n.res().ty();
+        // Half precision (FEAT_FP16): the operands and the result are f16
+        // patterns, U16s in core registers (pack-native, float sizes F5a).
+        // As the reference.
+        if (IRType.is(ty, tyU16)) {
+            String* ha = operandReg((IROperand*)n.ops().get(0), String.withCString("w16"));
+            _out.appendFormat("    fmov s0, %s\n", ha.cString());
+            String* hb = operandReg((IROperand*)n.ops().get(1), String.withCString("w16"));
+            _out.appendFormat("    fmov s1, %s\n", hb.cString());
+            _out.appendFormat("    %s h0, h0, h1\n", mnem.cString());
+            String* hd = resultReg(n.res(), String.withCString("w16"));
+            _out.appendFormat("    fmov %s, s0\n", hd.cString());
+            storeReg(hd, n.res());
+            return;
+        }
         String* a = operandReg((IROperand*)n.ops().get((u32)0), fregName((u32)0, ty));
         String* b = operandReg((IROperand*)n.ops().get((u32)1), fregName((u32)1, ty));
         String* d = resultReg(n.res(), fregName((u32)0, ty));
@@ -5286,6 +5300,15 @@ class Arm64
     {
         if (n.res() == (IRValue*)0 || n.ops().count() < (u32)1) { unsupported(n.op()); return; }
         String* ty = n.res().ty();
+        if (IRType.is(ty, tyU16)) {   // an f16 pattern (the square root)
+            String* ha = operandReg((IROperand*)n.ops().get(0), String.withCString("w16"));
+            _out.appendFormat("    fmov s0, %s\n", ha.cString());
+            _out.appendFormat("    %s h0, h0\n", mnem.cString());
+            String* hd = resultReg(n.res(), String.withCString("w16"));
+            _out.appendFormat("    fmov %s, s0\n", hd.cString());
+            storeReg(hd, n.res());
+            return;
+        }
         String* a = operandReg((IROperand*)n.ops().get((u32)0), fregName((u32)0, ty));
         String* d = resultReg(n.res(), fregName((u32)0, ty));
         _out.appendFormat("    %s %s, %s\n", mnem.cString(), d.cString(), a.cString());
@@ -5308,6 +5331,16 @@ class Arm64
     String* emitCompareF(IRInsn* n)
     {
         String* at = opType((IROperand*)n.ops().get((u32)0));
+        // Two f16 patterns (U16s): compared in half precision (FEAT_FP16),
+        // which orders them as their f32 values do. As the reference.
+        if (at != (String*)0 && IRType.is(at, tyU16)) {
+            String* ha = operandReg((IROperand*)n.ops().get(0), String.withCString("w16"));
+            _out.appendFormat("    fmov s0, %s\n", ha.cString());
+            String* hb = operandReg((IROperand*)n.ops().get(1), String.withCString("w16"));
+            _out.appendFormat("    fmov s1, %s\n", hb.cString());
+            _out.appendCString("    fcmp h0, h1\n");
+            return fcmpCond(n.pred());
+        }
         String* a = operandReg((IROperand*)n.ops().get((u32)0), fregName((u32)0, at));
         String* b = operandReg((IROperand*)n.ops().get((u32)1), fregName((u32)1, at));
         _out.appendFormat("    fcmp %s, %s\n", a.cString(), b.cString());
@@ -5430,6 +5463,24 @@ class Arm64
     {
         if (n.res() == (IRValue*)0 || n.ops().count() < (u32)1) { unsupported(n.op()); return; }
         String* at = opType((IROperand*)n.ops().get((u32)0));
+        // An f16 pattern (a U16) to or from f32/f64: the half-precision fcvt,
+        // through h0/h1 (pack-native, float sizes F5a). As the reference.
+        if (at != (String*)0 && IRType.is(at, tyU16)) {
+            String* ha = operandReg((IROperand*)n.ops().get(0), String.withCString("w16"));
+            _out.appendFormat("    fmov s0, %s\n", ha.cString());
+            String* hd = resultReg(n.res(), fregName(1, n.res().ty()));
+            _out.appendFormat("    fcvt %s, h0\n", hd.cString());
+            storeReg(hd, n.res());
+            return;
+        }
+        if (IRType.is(n.res().ty(), tyU16)) {
+            String* hs = operandReg((IROperand*)n.ops().get(0), fregName(0, at));
+            _out.appendFormat("    fcvt h1, %s\n", hs.cString());
+            String* hd = resultReg(n.res(), String.withCString("w16"));
+            _out.appendFormat("    fmov %s, s1\n", hd.cString());
+            storeReg(hd, n.res());
+            return;
+        }
         String* src = operandReg((IROperand*)n.ops().get((u32)0), fregName((u32)0, at));
         String* d = resultReg(n.res(), fregName((u32)1, n.res().ty()));
         _out.appendFormat("    fcvt %s, %s\n", d.cString(), src.cString());

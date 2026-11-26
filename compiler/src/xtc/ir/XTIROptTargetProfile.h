@@ -320,6 +320,21 @@ NS_ASSUME_NONNULL_BEGIN
 // -fbounds-check=light (the driver's --inline-checks): the subscript checks that
 // bounds-elide could not prove inline, in loops only. NO: they stay calls.
 @property(nonatomic) BOOL inlineChecks;
+// The 16-bit floats' conversions in the target's own instructions (pack-native,
+// float sizes F5a). packF16Hardware: f16 to and from f32 (arm64 `fcvt`, every
+// row; x86-64 F16C, set by the code generator under a fixed -mavx2/-mavx512
+// level, every AVX2 CPU having F16C). packF16FromF64: and from f64 in one
+// rounding (arm64). packF16Arith: f16 arithmetic and comparisons (arm64
+// FEAT_FP16; the code generator sets it on a row with LSE, the ARMv8.1+ cores).
+// packBF16Inline: bf16 by integer operations (arm64, x86-64, win64).
+// packNaNPrecedence: f32 arithmetic prefers a signalling NaN operand over a
+// quiet one (arm64), so a widened signalling half must stay signalling where
+// it reaches one.
+@property(nonatomic) BOOL packF16Hardware;
+@property(nonatomic) BOOL packF16FromF64;
+@property(nonatomic) BOOL packF16Arith;
+@property(nonatomic) BOOL packBF16Inline;
+@property(nonatomic) BOOL packNaNPrecedence;
 
 + (instancetype)conservativeProfile;
 

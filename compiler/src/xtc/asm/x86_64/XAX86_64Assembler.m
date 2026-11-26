@@ -1212,6 +1212,8 @@ static BOOL namesHighZmm(NSString *s) {
                      @"vsqrtps":@[@0,@1,@0x51,@0], @"vsqrtpd":@[@1,@1,@0x51,@0],
                      // and the lane conversions, int to float and float to int (#27).
                      @"vcvtdq2ps":@[@0,@1,@0x5B,@0], @"vcvttps2dq":@[@2,@1,@0x5B,@0],
+                     // F16C: four halves to floats (VEX.128.66.0F38.W0 13 /r).
+                     @"vcvtph2ps":@[@1,@2,@0x13,@0],
                      // The scalar compares, and the scalar moves to or from
                      // memory (a register-to-register vmovss takes three
                      // operands, below): what an AVX function's scalar float
@@ -1273,6 +1275,21 @@ static BOOL namesHighZmm(NSString *s) {
             }
             emit8(out, (uint8_t)op);
             emitModRM(out, regop->reg, rmop);
+            CLEANUP(); return out;
+        }
+        if ([mn isEqualToString:@"vcvtps2ph"] && opCount == 3 && a && b && b->kind == OpReg
+            && b->size == 16 && opv[2].kind == OpImm) {
+            // F16C, VEX.128.66.0F3A.W0 1D /r ib: reg = the xmm source, r/m = the
+            // destination, the immediate the rounding control. As the port.
+            int rr = b->reg, bb = a->kind == OpReg ? a->reg : a->base;
+            int xx = a->kind == OpReg ? 0 : a->index;
+            bb = bb < 0 ? 0 : bb; xx = xx < 0 ? 0 : xx;
+            emit8(out, 0xC4);
+            emit8(out, (uint8_t)(((rr & 8) ? 0 : 0x80) | ((xx & 8) ? 0 : 0x40) | ((bb & 8) ? 0 : 0x20) | 3));
+            emit8(out, (uint8_t)((0x0F << 3) | 1));
+            emit8(out, 0x1D);
+            emitModRM(out, rr, a);
+            emit8(out, (uint8_t)opv[2].imm);
             CLEANUP(); return out;
         }
         if (([mn isEqualToString:@"vextracti128"] || [mn isEqualToString:@"vextractf128"])

@@ -29,6 +29,7 @@ void main(void)
     bool simdDispatch = false; // --simd=auto: runtime SIMD dispatch clones
     bool matMul = false;       // --matmul: idiom-matmul's kernel for the target
     bool inlineChecks = false; // --inline-checks: -fbounds-check=light's checks inline
+    bool lse = true;           // --no-lse-atomics: an ARMv8.0 row (no FEAT_FP16 arithmetic either)
     String* simdName = String.withCString("base");
     u32 argc = Process.argumentCount();
     u32 i = (u32)1;
@@ -95,6 +96,12 @@ void main(void)
             i = i + (u32)1;
             continue;
             }
+        if (a.equals(String.withCString("--no-lse-atomics")))
+            {
+            lse = false;
+            i = i + 1;
+            continue;
+            }
         if (a.hasPrefix(String.withCString("--simd=")))
             {
             simdBytes = a.substringFromByte((u32)7).equals(String.withCString("avx512")) ? (u32)64
@@ -138,6 +145,13 @@ void main(void)
     prof.setVectorLaneBytes(simdBytes);
     prof.setSimdDispatch(simdDispatch);
     prof.setInlineChecks(inlineChecks);
+    // pack-native, as xcc-cg-arm64 and xcc-cg-x86_64 set it: FEAT_FP16
+    // arithmetic on a row with LSE, F16C under a fixed AVX2/AVX-512 level.
+    if (target.equals(String.withCString("arm64")))
+        prof.setPackF16Arith(lse);
+    if ((target.equals(String.withCString("x86_64")) || target.equals(String.withCString("win64")))
+        && simdBytes >= 32 && !simdDispatch)
+        prof.setPackF16Hw(true);
     if (matMul && target.equals(String.withCString("arm64")))
         {
         prof.setMatMul(String.withCString("__xt_sme_gemm_"), String.withCString(""));

@@ -4082,11 +4082,21 @@ static XTIROperand *icmpZeroTestValue(XTIRInsn *icmp, XTArm64FnCtx *ctx) {
 }
 
 + (NSString *)emitCompareForFCmp:(XTIRInsn *)insn ctx:(XTArm64FnCtx *)ctx {    XTIRValue *av = [ctx.fn valueForId:insn.operands[0].valueId];
-    NSString *s0 = [self fregName:0 forType:av.type];
-    NSString *s1 = [self fregName:1 forType:av.type];
-    NSString *a = [self operandReg:insn.operands[0] intoScratch:s0 ctx:ctx];
-    NSString *b = [self operandReg:insn.operands[1] intoScratch:s1 ctx:ctx];
-    [ctx.out appendFormat:@"    fcmp %@, %@\n", a, b];
+    // Two f16 patterns (U16s): compared in half precision (FEAT_FP16), which
+    // orders them as their f32 values do. As the port.
+    if (av.type.kind == XTIRTypeKindU16) {
+        NSString *a = [self operandReg:insn.operands[0] intoScratch:@"w16" ctx:ctx];
+        [ctx.out appendFormat:@"    fmov s0, %@\n", a];
+        NSString *b = [self operandReg:insn.operands[1] intoScratch:@"w16" ctx:ctx];
+        [ctx.out appendFormat:@"    fmov s1, %@\n", b];
+        [ctx.out appendString:@"    fcmp h0, h1\n"];
+    } else {
+        NSString *s0 = [self fregName:0 forType:av.type];
+        NSString *s1 = [self fregName:1 forType:av.type];
+        NSString *a = [self operandReg:insn.operands[0] intoScratch:s0 ctx:ctx];
+        NSString *b = [self operandReg:insn.operands[1] intoScratch:s1 ctx:ctx];
+        [ctx.out appendFormat:@"    fcmp %@, %@\n", a, b];
+    }
     switch (insn.predicate) {
         case XTIRFCmpOEQ: return @"eq";
         case XTIRFCmpONE: return @"ne";
@@ -7631,6 +7641,22 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
         case XTIROpFAdd: case XTIROpFSub:
         case XTIROpFMul: case XTIROpFDiv: {
             if (insn.operands.count < 2 || !insn.result) break;
+            // Half precision (FEAT_FP16): the operands and the result are f16
+            // patterns, U16s in core registers (pack-native, float sizes F5a).
+            // As the port.
+            if (insn.result.type.kind == XTIRTypeKindU16) {
+                NSString *mn = insn.opcode == XTIROpFAdd ? @"fadd" : insn.opcode == XTIROpFSub ? @"fsub"
+                             : insn.opcode == XTIROpFMul ? @"fmul" : @"fdiv";
+                NSString *a = [self operandReg:insn.operands[0] intoScratch:@"w16" ctx:ctx];
+                [ctx.out appendFormat:@"    fmov s0, %@\n", a];
+                NSString *b = [self operandReg:insn.operands[1] intoScratch:@"w16" ctx:ctx];
+                [ctx.out appendFormat:@"    fmov s1, %@\n", b];
+                [ctx.out appendFormat:@"    %@ h0, h0, h1\n", mn];
+                NSString *d = [self resultReg:insn.result.valueId scratch:@"w16" ctx:ctx];
+                [ctx.out appendFormat:@"    fmov %@, s0\n", d];
+                [self storeReg:d intoValue:insn.result.valueId ctx:ctx];
+                break;
+            }
             NSString *s0 = [self fregName:0 forType:insn.result.type];
             NSString *s1 = [self fregName:1 forType:insn.result.type];
             NSString *a = [self operandReg:insn.operands[0] intoScratch:s0 ctx:ctx];
@@ -7661,6 +7687,15 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
             // ABI marshalling. The SqrtIntrinsic IR pass canonicalised the libm
             // sqrt[f] call to this op; the backend just selects the instruction.
             if (insn.operands.count < 1 || !insn.result) break;
+            if (insn.result.type.kind == XTIRTypeKindU16) {   // an f16 pattern
+                NSString *a = [self operandReg:insn.operands[0] intoScratch:@"w16" ctx:ctx];
+                [ctx.out appendFormat:@"    fmov s0, %@\n", a];
+                [ctx.out appendString:@"    fsqrt h0, h0\n"];
+                NSString *d = [self resultReg:insn.result.valueId scratch:@"w16" ctx:ctx];
+                [ctx.out appendFormat:@"    fmov %@, s0\n", d];
+                [self storeReg:d intoValue:insn.result.valueId ctx:ctx];
+                break;
+            }
             NSString *s0 = [self fregName:0 forType:insn.result.type];
             NSString *a = [self operandReg:insn.operands[0] intoScratch:s0 ctx:ctx];
             NSString *d = [self resultReg:insn.result.valueId scratch:s0 ctx:ctx];
@@ -7751,6 +7786,27 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
         case XTIROpFpExt: case XTIROpFpTrunc: {
             if (insn.operands.count < 1 || !insn.result) break;
             XTIRValue *av = [ctx.fn valueForId:insn.operands[0].valueId];
+            // An f16 pattern (a U16) to or from f32/f64: the half-precision
+            // fcvt, through h0/h1 (pack-native, float sizes F5a). As the port.
+            if (av.type.kind == XTIRTypeKindU16) {
+                NSString *a = [self operandReg:insn.operands[0] intoScratch:@"w16" ctx:ctx];
+                [ctx.out appendFormat:@"    fmov s0, %@\n", a];
+                NSString *dst = [self resultReg:insn.result.valueId
+                                        scratch:[self fregName:1 forType:insn.result.type]
+                                            ctx:ctx];
+                [ctx.out appendFormat:@"    fcvt %@, h0\n", dst];
+                [self storeReg:dst intoValue:insn.result.valueId ctx:ctx];
+                break;
+            }
+            if (insn.result.type.kind == XTIRTypeKindU16) {
+                NSString *src = [self operandReg:insn.operands[0]
+                                     intoScratch:[self fregName:0 forType:av.type] ctx:ctx];
+                [ctx.out appendFormat:@"    fcvt h1, %@\n", src];
+                NSString *d = [self resultReg:insn.result.valueId scratch:@"w16" ctx:ctx];
+                [ctx.out appendFormat:@"    fmov %@, s1\n", d];
+                [self storeReg:d intoValue:insn.result.valueId ctx:ctx];
+                break;
+            }
             NSString *src = [self operandReg:insn.operands[0]
                                  intoScratch:[self fregName:0 forType:av.type] ctx:ctx];
             NSString *dst = [self resultReg:insn.result.valueId

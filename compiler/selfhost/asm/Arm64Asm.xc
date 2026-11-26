@@ -2155,7 +2155,8 @@ class Arm64Asm
         if (f3 != (u32)0 && ops.count() == (u32)3 && d.ok()) {
             FRegRef* n = parseFReg(opAt(ops, (u32)1));
             FRegRef* m = parseFReg(opAt(ops, (u32)2));
-            u32 ty = d.sz() == (u32)3 ? (u32)$00400000 : (u32)0;
+            // ftype (bits 23:22): 00 single, 01 double, 11 half (FEAT_FP16).
+            u32 ty = d.sz() == (u32)3 ? (u32)$00400000 : d.sz() == 1 ? $00C00000 : (u32)0;
             _hit = true;
             return f3 | ty | (m.num() << (u32)16) | (n.num() << (u32)5) | d.num();
         }
@@ -2174,7 +2175,7 @@ class Arm64Asm
         }
         if (mc == a64Fneg || mc == a64Fsqrt) {
             FRegRef* n = parseFReg(opAt(ops, (u32)1));
-            u32 ty = d.sz() == (u32)3 ? (u32)$00400000 : (u32)0;
+            u32 ty = d.sz() == (u32)3 ? (u32)$00400000 : d.sz() == 1 ? $00C00000 : (u32)0;
             u32 base = mc == a64Fneg ? $1E214000 : $1E21C000;
             _hit = true;
             return base | ty | (n.num() << (u32)5) | d.num();
@@ -2182,18 +2183,21 @@ class Arm64Asm
         if (mc == a64Fcmp) {
             FRegRef* n = parseFReg(opAt(ops, (u32)0));
             FRegRef* m = parseFReg(opAt(ops, (u32)1));
-            u32 ty = n.sz() == (u32)3 ? (u32)$00400000 : (u32)0;
+            u32 ty = n.sz() == (u32)3 ? (u32)$00400000 : n.sz() == 1 ? $00C00000 : (u32)0;
             _hit = true;
             return (u32)$1E202000 | ty | (m.num() << (u32)16) | (n.num() << (u32)5);
         }
         if (mc == a64Fcvt) {
+            // ftype (bits 23:22) the source's size, opc (bits 16:15) the
+            // destination's: 00 single, 01 double, 11 half. As the reference.
             FRegRef* n = parseFReg(opAt(ops, (u32)1));
-            u32 base = (u32)0;
-            if (n.sz() == (u32)2 && d.sz() == (u32)3) base = (u32)$1E22C000;
-            else if (n.sz() == (u32)3 && d.sz() == (u32)2) base = (u32)$1E624000;
-            if (base == (u32)0) { fail(String.withCString("unsupported fcvt")); return (u32)0; }
+            bool okd = ops.count() == 2 && d.ok() && d.sz() >= 1 && d.sz() <= 3;
+            bool okn = ops.count() == 2 && n.ok() && n.sz() >= 1 && n.sz() <= 3;
+            if (!okd || !okn || d.sz() == n.sz()) { fail(String.withCString("unsupported fcvt")); return (u32)0; }
+            u32 ft = n.sz() == 1 ? 3 : n.sz() - 2;
+            u32 opc = d.sz() == 1 ? 3 : d.sz() - 2;
             _hit = true;
-            return base | (n.num() << (u32)5) | d.num();
+            return $1E224000 | (ft << 22) | (opc << 15) | (n.num() << (u32)5) | d.num();
         }
         if (mc == a64Fmov) return encFmov(ops);
 

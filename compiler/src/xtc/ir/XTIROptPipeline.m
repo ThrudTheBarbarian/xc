@@ -19,6 +19,7 @@
 #import "XTIROptDevirtualise.h"
 #import "XTIROptPowSquare.h"
 #import "XTIROptSqrtIntrinsic.h"
+#import "XTIROptPackNative.h"
 #import "XTIROptConstHoist.h"
 #import "XTIROptLICM.h"
 #import "XTIROptArcSelfRetain.h"
@@ -382,6 +383,12 @@
         layout.profile = profile;
         [p addPass:layout];
         }
+    // The 16-bit floats' FloatPack calls the target can do in its own
+    // instructions, at every level and after everything else, so no pass
+    // sees the half-precision forms it makes. It adds no block.
+    XTIROptPackNative* packNative = [[XTIROptPackNative alloc] init];
+    packNative.profile = profile;
+    [p addPass:packNative];
     return p;
     }
 

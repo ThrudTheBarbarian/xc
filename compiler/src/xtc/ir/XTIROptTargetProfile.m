@@ -214,6 +214,20 @@
 
 @implementation XTIRArm64TargetProfile
 
+// Half-precision conversions are in every ARMv8 FP unit; bf16 by integer
+// operations (FEAT_BF16 is not on M1 or the Cortex-A76).
+- (instancetype)init
+    {
+    if ((self = [super init]))
+        {
+        self.packF16Hardware = YES;
+        self.packF16FromF64 = YES;
+        self.packBF16Inline = YES;
+        self.packNaNPrecedence = YES;
+        }
+    return self;
+    }
+
 - (BOOL)inlinesAggregateParams
     {
     return YES;   // aggregates are ordinary addressable memory
@@ -833,6 +847,15 @@
 @end
 
 @implementation XTIRX86_64TargetProfile
+
+// bf16 by integer operations; f16 in hardware only under a fixed AVX2 or
+// AVX-512 level (packF16Hardware, set by the code generator).
+- (instancetype)init
+    {
+    if ((self = [super init]))
+        self.packBF16Inline = YES;
+    return self;
+    }
 // vpternlogd and vprold: one instruction each, at 64 bytes only.
 - (BOOL)vectorizesWideBitSelect
     {

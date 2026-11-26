@@ -66,6 +66,7 @@
 #import <OptSelectBranch>
 #import <OptSimplify>
 #import <OptSqrtIntrinsic>
+#import <OptPackNative>
 #import <OptStaticInitGuard>
 #import <OptTailRecursion>
 #import <OptVecCombine>
@@ -867,6 +868,12 @@
         if (_level >= (u32)2)
             self.blockLayout(m);
         if (stopHere(String.withCString("block-layout")))
+            return;
+        // The 16-bit floats' FloatPack calls the target can do in its own
+        // instructions, at every level and after everything else, so no pass
+        // sees the half-precision forms it makes. It adds no block.
+        self.packNative(m);
+        if (stopHere(String.withCString("pack-native")))
             return;
         // Values that no surviving instruction defines are dropped. A pass that
         // deletes an instruction leaves its result registered — the function's

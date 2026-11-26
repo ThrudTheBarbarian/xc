@@ -6414,6 +6414,9 @@ void emitModule(DriverOptions* d, IRModule* mod)
 
     OptProfile* prof = OptProfile.forTarget(backendTargetOf(d));
     if (d.targetRow().rotateChain()) prof.setLoopRotateChain(true);
+    // FEAT_FP16 arithmetic on a row with LSE (the ARMv8.1+ cores: Apple's), as
+    // xcc-cg-arm64 decides from --no-lse-atomics.
+    prof.setPackF16Arith(d.targetRow().lseAtomics());
     Opt.setUnrollOverride(prof, d.unroll());
     applyOptFlags(d, prof);
     Opt* opt = Opt.atLevel(d.opt(), prof);
@@ -7933,6 +7936,11 @@ void applyOptFlags(DriverOptions* d, OptProfile* p)
                              : (simd.equals(String.withCString("avx2")) ? (u32)32 : (u32)16));
         // -msimd=auto: base code plus avx2 clones, picked at load.
         p.setSimdDispatch(simd.equals(String.withCString("auto")));
+        // F16C under a fixed AVX2 or AVX-512 level (pack-native): every AVX2
+        // CPU has it, and the dispatched and base builds' scalar code runs on
+        // any x86-64. As the reference's code generators.
+        if (p.vectorLaneBytes() >= 32 && !p.simdDispatch())
+            p.setPackF16Hw(true);
     }
     if (matMul && mmKind != (String*)0 && mmKind.equals(String.withCString("x86")))
     {

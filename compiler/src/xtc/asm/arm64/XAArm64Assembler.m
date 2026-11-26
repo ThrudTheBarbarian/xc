@@ -1095,9 +1095,10 @@ static int xaEncodeSME(NSString *mn, NSArray<NSString *> *ops, uint32_t *out, NS
         }
         // arithmetic: fadd/fsub/fmul/fdiv Fd,Fn,Fm
         static NSDictionary *f3; if(!f3) f3=@{@"fadd":@0x1E202800,@"fsub":@0x1E203800,@"fmul":@0x1E200800,@"fdiv":@0x1E201800};
+        // ftype (bits 23:22): 00 single, 01 double, 11 half (FEAT_FP16).
         if (f3[mn] && ops.count==3 && parseFReg(ops[0],&fd,&fdz)) {
             parseFReg(ops[1],&fn,&fnz); parseFReg(ops[2],&fm,&fmz);
-            uint32_t ty=(fdz==3)?0x00400000u:0;
+            uint32_t ty=(fdz==3)?0x00400000u:(fdz==1)?0x00C00000u:0;
             return [f3[mn] unsignedIntValue]|ty|((uint32_t)fm<<16)|((uint32_t)fn<<5)|(uint32_t)fd;
         }
         // fcsel Fd,Fn,Fm,cond — the FP conditional select. The integer csel
@@ -1114,19 +1115,22 @@ static int xaEncodeSME(NSString *mn, NSArray<NSString *> *ops, uint32_t *out, NS
         // 2-reg fp: fneg/fsqrt Fd,Fn ; fcvt Fd,Fn (precision) ; fcmp Fn,Fm
         if ([mn isEqualToString:@"fneg"]||[mn isEqualToString:@"fsqrt"]) {
             parseFReg(ops[0],&fd,&fdz); parseFReg(ops[1],&fn,&fnz);
-            uint32_t ty=(fdz==3)?0x00400000u:0; uint32_t base=[mn isEqualToString:@"fneg"]?0x1E214000u:0x1E21C000u;
+            uint32_t ty=(fdz==3)?0x00400000u:(fdz==1)?0x00C00000u:0; uint32_t base=[mn isEqualToString:@"fneg"]?0x1E214000u:0x1E21C000u;
             return base|ty|((uint32_t)fn<<5)|(uint32_t)fd;
         }
         if ([mn isEqualToString:@"fcmp"]) {
             parseFReg(ops[0],&fn,&fnz); parseFReg(ops[1],&fm,&fmz);
-            uint32_t ty=(fnz==3)?0x00400000u:0;
+            uint32_t ty=(fnz==3)?0x00400000u:(fnz==1)?0x00C00000u:0;
             return 0x1E202000u|ty|((uint32_t)fm<<16)|((uint32_t)fn<<5);
         }
         if ([mn isEqualToString:@"fcvt"]) {   // precision convert; encode by src/dst size
-            parseFReg(ops[0],&fd,&fdz); parseFReg(ops[1],&fn,&fnz);
-            uint32_t base = (fnz==2 && fdz==3)?0x1E22C000u : (fnz==3 && fdz==2)?0x1E624000u : 0;
-            if(!base){if(error)*error=asmErr(@"unsupported fcvt");return 0;}
-            return base|((uint32_t)fn<<5)|(uint32_t)fd;
+            // ftype (bits 23:22) the source's size, opc (bits 16:15) the
+            // destination's: 00 single, 01 double, 11 half.
+            BOOL okd = ops.count==2 && parseFReg(ops[0],&fd,&fdz) && fdz>=1 && fdz<=3;
+            BOOL okn = ops.count==2 && parseFReg(ops[1],&fn,&fnz) && fnz>=1 && fnz<=3;
+            if(!okd||!okn||fdz==fnz){if(error)*error=asmErr(@"unsupported fcvt");return 0;}
+            uint32_t ft = fnz==1 ? 3u : (uint32_t)(fnz-2), opc = fdz==1 ? 3u : (uint32_t)(fdz-2);
+            return 0x1E224000u|(ft<<22)|(opc<<15)|((uint32_t)fn<<5)|(uint32_t)fd;
         }
         // fmov: reg-reg, gpr->fp, fp->gpr, immediate
         if ([mn isEqualToString:@"fmov"]) {
