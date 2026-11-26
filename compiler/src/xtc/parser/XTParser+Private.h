@@ -185,6 +185,7 @@ BOOL XTParFuseSame(XTASTNode* _Nullable a, XTASTNode* _Nullable b);
 BOOL XTParFuseBound(XTASTNode* _Nullable e, NSSet* written);
 BOOL XTParFuseMath(NSString* _Nullable n);
 void XTParFuseSetBody(XTForCStyleNode* loop, XTASTNode* body);
+void XTParFuseRename(id n, NSString* x, NSString* iv, NSString* to);
 void parAutoGoals(XTASTNode* n, NSInteger g);
 
 // The --par-style=auto recogniser (XTParser+ParLift.m).

@@ -1,0 +1,6 @@
+the 'par' blocks 'w1' and 'w2' run as one block
+the block 'w1+w2' keeps each item of 'y' in a register: nothing else uses it
+the loops at 'par_fuse_scalar.xc:41' and 'par_fuse_scalar.xc:43' run as one block (--par-style)
+the block 'par_fuse_scalar.xc:41+par_fuse_scalar.xc:43' keeps each item of 't' in a register: nothing else uses it
+the 'par' blocks 'a1' and 'a2' run as one block
+the 'par' blocks 'b1' and 'b2' run apart: 'r' and 'v' may be the same memory

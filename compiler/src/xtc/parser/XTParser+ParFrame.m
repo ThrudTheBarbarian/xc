@@ -424,6 +424,39 @@ BOOL XTParFuseMath(NSString* _Nullable n)
     return n && [ok containsObject:n];
     }
 
+// Every x[iv] under n made the name to (a fused block's intermediate array,
+// kept in a register, #147). As the port's parFuseRename.
+void XTParFuseRename(id n, NSString* x, NSString* iv, NSString* to)
+    {
+    pfwEachIvar(n, ^(Ivar ivar, id val) {
+      BOOL (^hit)(id) = ^BOOL(id k) {
+        if (![k isKindOfClass:[XTSubscriptExprNode class]])
+            return NO;
+        XTSubscriptExprNode* sub = k;
+        return [sub.base isKindOfClass:[XTIdentifierNode class]] && [((XTIdentifierNode*)sub.base).identName isEqualToString:x] &&
+               [sub.index isKindOfClass:[XTIdentifierNode class]] && [((XTIdentifierNode*)sub.index).identName isEqualToString:iv];
+      };
+      if (pfwTreeObject(val))
+          {
+          if (hit(val))
+              pfwSetIvar(n, ivar, [[XTIdentifierNode alloc] initWithName:to location:((XTASTNode*)val).location]);
+          else
+              XTParFuseRename(val, x, iv, to);
+          }
+      else
+          {
+          NSMutableArray* arr = (NSMutableArray*)val;
+          for (NSUInteger k = 0; k < arr.count; k++)
+              {
+              if (hit(arr[k]))
+                  arr[k] = [[XTIdentifierNode alloc] initWithName:to location:((XTASTNode*)arr[k]).location];
+              else if (pfwTreeObject(arr[k]))
+                  XTParFuseRename(arr[k], x, iv, to);
+              }
+          }
+    });
+    }
+
 // The loop's body replaced (the fused body).
 void XTParFuseSetBody(XTForCStyleNode* loop, XTASTNode* body)
     {

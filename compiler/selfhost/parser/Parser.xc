@@ -4612,6 +4612,12 @@ class Parser
             plain = (Node*)fs.get((Hashable*)String.withCString("plain"));
             v = (Map*)fs.get((Hashable*)String.withCString("v"));
             _parAutoFused = (String*)fs.get((Hashable*)String.withCString("name"));
+            // The merged loop's intermediate arrays, each value kept in it.
+            if (_parAutoFused != (String*)0) {
+                Node* wrap = mk((u16)nkBlock);
+                wrap.add(plain);
+                parFuseScalarise(wrap, new Map(), forPos, _parAutoFused, traceAt, true);
+            }
         }
         bool fusedHere = _parAutoFused != (String*)0;
         Array* reds = (Array*)pfwGet(v, "redNodes");
@@ -8524,8 +8530,20 @@ class Parser
         if (a.get((Hashable*)String.withCString("scanned")) != (Object*)0)
             return (Node*)a.get((Hashable*)String.withCString("node"));
         // The blocks after it, while each fuses with what is built so far.
-        if (!_parNoFuse)
+        if (!_parNoFuse) {
             while (parFuseNext(a)) { }
+            // A fused run's intermediate arrays, each value kept in the block.
+            Node* p = (Node*)a.get((Hashable*)String.withCString("p"));
+            if (p.name() != (String*)0 && p.name().indexOfByte((u8)'+') != (u32)$FFFFFFFF
+                && parFuseScalarise((Node*)a.get((Hashable*)String.withCString("body")),
+                                    (Map*)((Map*)a.get((Hashable*)String.withCString("frame"))).get((Hashable*)String.withCString("types")),
+                                    parTokIndex((Token*)a.get((Hashable*)String.withCString("parAt"))), p.name(),
+                                    (Token*)a.get((Hashable*)String.withCString("parAt")), false)) {
+                Map* frame = parFuseFrame((Map*)a.get((Hashable*)String.withCString("frame")));
+                parFrameFill(frame, (Node*)a.get((Hashable*)String.withCString("body")));
+                a.set((Hashable*)String.withCString("frame"), (Object*)frame);
+            }
+        }
         return parBuild(a);
     }
 
@@ -8716,6 +8734,109 @@ class Parser
         if (_parAutoFuseSaid == (Array*)0) _parAutoFuseSaid = new Array();
         _parAutoFuseSaid.add((Object*)w);
         _parAutoFuseSaid.add((Object*)at);
+    }
+
+    // Where a token is in the token list (0 if not found).
+    u32 parTokIndex(Token* t)
+    {
+        for (u32 i = (u32)0; i < _tokens.count(); i = i + (u32)1)
+            if ((Token*)_tokens.get(i) == t) return i;
+        return (u32)0;
+    }
+
+    // Whether name n appears in the function only as `T* n = new …` and
+    // within the tokens [from, to).
+    bool parFuseOnlyHere(String* n, u32 from, u32 to, u32 end)
+    {
+        u32 outside = (u32)0;
+        for (u32 i = _fnTok; i < end; i = i + (u32)1) {
+            if (i >= from && i < to) continue;
+            Token* t = (Token*)_tokens.get(i);
+            if (t.type() != (u16)tokIdentifier || !t.value().equals(n)) continue;
+            u16 after = i + (u32)1 < _tokens.count() ? ((Token*)_tokens.get(i + (u32)1)).type() : (u16)0;
+            u16 next = i + (u32)2 < _tokens.count() ? ((Token*)_tokens.get(i + (u32)2)).type() : (u16)0;
+            if (after != (u16)tokAssign || next != (u16)tokNew) return false;
+            outside = outside + (u32)1;
+        }
+        return outside == (u32)1;
+    }
+
+    // A scalar type a fused block may hold an element of in a register.
+    static bool parFuseScalarType(String* t)
+    {
+        String* key = String.withCString(" ");
+        key.append(t);
+        key.appendCString(" ");
+        return String.withCString(" u8 i8 u16 i16 u32 i32 u64 i64 float double bool ").contains(key);
+    }
+
+    // Every x[iv] under n made the name to.
+    void parFuseRename(Node* n, String* x, String* iv, String* to)
+    {
+        for (u32 i = (u32)0; i < n.kidCount(); i = i + (u32)1) {
+            Node* k = n.kid(i);
+            if (k == (Node*)0) continue;
+            if (k.kind() == (u16)nkSubscript && k.kidCount() == (u32)2 && k.kid((u32)0).kind() == (u16)nkIdent
+                && k.kid((u32)0).name().equals(x) && k.kid((u32)1).kind() == (u16)nkIdent && k.kid((u32)1).name().equals(iv)) {
+                n.setKid(i, mkNamed((u16)nkIdent, String.withString(to)));
+                continue;
+            }
+            parFuseRename(k, x, iv, to);
+        }
+    }
+
+    // A fused block's (or merged loop's) intermediate arrays (#147): an
+    // array the body writes and reads only at the index, a local the
+    // function sets once with `new` and names nowhere but there and in this
+    // block, holds each item's value for that item alone and is never read
+    // after. Each value is kept in the block (a local of the iteration,
+    // zero as a new array's elements are), so nothing reads or writes the
+    // array and a GPU sends it nowhere. True when one was.
+    bool parFuseScalarise(Node* body, Map* types, u32 from, String* label, Token* at, bool lifted)
+    {
+        Node* loop = Parser.parFuseLoop(body);
+        if (loop == (Node*)0) return false;
+        String* iv = loop.kid((u32)0).kid((u32)0).name();
+        Node* inner = loop.kid((u32)3);
+        Map* st = parFuseScan(inner, iv);
+        if (st.get((Hashable*)String.withCString("bad")) != (Object*)0) return false;
+        Map* acc = (Map*)st.get((Hashable*)String.withCString("acc"));
+        Set* decls = (Set*)st.get((Hashable*)String.withCString("decls"));
+        u32 end = parFuseFnEnd();
+        Array* names = acc.allKeys();
+        Array* made = new Array();
+        for (u32 i = (u32)0; i < names.count(); i = i + (u32)1) {
+            String* x = (String*)names.get(i);
+            u32 bits = ((Number*)acc.get((Hashable*)x)).asU32();
+            if ((bits & (u32)4) != (u32)0 || (bits & (u32)2) == (u32)0 || decls.contains((Hashable*)x)) continue;
+            String* t = parFuseTypeOf(x, types);
+            if (t == (String*)0 || !t.hasSuffix(String.withCString("*"))) continue;
+            String* et = t.substringBytes((u32)0, t.byteLength() - (u32)1);
+            if (!Parser.parFuseScalarType(et)) continue;
+            if (!parFuseFresh(x, end) || !parFuseOnlyHere(x, from, _pos, end)) continue;
+            String* tmp = String.withCString("__fx_");
+            tmp.append(x);
+            parFuseRename(inner, x, iv, tmp);
+            made.add((Object*)Array.with((Object*)tmp, (Object*)et));
+            String* w = String.withCString("the block '");
+            w.append(label);
+            w.appendCString("' keeps each item of '");
+            w.append(x);
+            w.appendCString("' in a register: nothing else uses it");
+            // A lifted loop's, said once with its fusing (parAutoFuseSay).
+            if (lifted) parAutoFuseSay(w, at);
+            else warnAt(String.withCString("par-auto"), w, at);
+        }
+        if (made.count() == (u32)0) return false;
+        // The locals first in each iteration, then the body as it was.
+        Node* nb = mk((u16)nkBlock);
+        for (u32 i = (u32)0; i < made.count(); i = i + (u32)1) {
+            Array* m = (Array*)made.get(i);
+            nb.add(parTypedDecl((String*)m.get((u32)0), (String*)m.get((u32)1), parInt((i64)0)));
+        }
+        nb.add(inner);
+        loop.setKid((u32)3, nb);
+        return true;
     }
 
     // A lifted loop as parFuse reads a block: its reductions, its loop as

@@ -309,6 +309,8 @@ These two run as one loop, `scale+square`, in which each item computes `y[i]` an
 
 The same holds for loops that [`--par-style`](#loops-that-become-blocks---par-style) turns into blocks: adjacent loops are merged first and the merged loop becomes one block, named after all of them (`f.xc:12+f.xc:14`). If the block is later run as a plain loop, it is the merged loop, which computes what the loops did one after the other.
 
+An array used only to pass values from one part of a fused block to the next is not kept at all. If it is a local set once with `new`, the fused block writes and reads it only at index `i`, and nothing else in the function uses it, each item's value stays in a register, so the array is neither read nor written and is never sent to a GPU. `-Wpar-auto` names each array kept this way.
+
 More than two blocks in a row can run as one this way. A fused block is measured, placed and reported under its own name (`scale+square`), so nothing `auto` learned about the separate blocks applies to it. `-Wpar-auto` says which blocks ran as one and, for neighbours that stayed apart, why. `-fno-par-fuse` keeps every block separate, for comparison.
 
 ## Running on the GPU

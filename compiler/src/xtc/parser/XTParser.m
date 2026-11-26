@@ -5722,6 +5722,10 @@ static int64_t parAutoConst(XTASTNode* e)
         plain = fs[@"plain"];
         v = fs[@"v"];
         self.parAutoFused = fs[@"name"];
+        // The merged loop's intermediate arrays, each value kept in it.
+        if (self.parAutoFused)
+            [self parFuseScalarise:[[XTBlockNode alloc] initWithStatements:@[ plain ] location:traceAt] types:@{}
+                              from:forPos label:self.parAutoFused at:traceAt lifted:YES];
         }
     BOOL fusedHere = self.parAutoFused != nil;
     NSArray<NSArray<NSString*>*>* reds = v[@"redList"] ?: @[];
@@ -6557,6 +6561,7 @@ static NSString* scCombine(NSString* op, NSString* r, NSString* v)
         return done;
         }
     XTSourceLocation* loc = [self currentLocation];
+    NSUInteger tokAt = _pos;
     [self advance]; // consume 'par'
     NSString* name = nil;
     if ([self check:XTTokenIdentifier])
@@ -6830,6 +6835,7 @@ static NSString* scCombine(NSString* op, NSString* r, NSString* v)
     r[@"body"] = body;
     r[@"frame"] = frame;
     r[@"loc"] = loc;
+    r[@"tok"] = @(tokAt);
     r[@"accuracy"] = @(accuracy);
     if (head)
         r[@"head"] = head;
@@ -6848,8 +6854,21 @@ static NSString* scCombine(NSString* op, NSString* r, NSString* v)
         return a[@"node"];
     // The blocks after it, while each fuses with what is built so far.
     if (!self.parNoFuse)
+        {
         while ([self parFuseNext:a])
             ;
+        // A fused run's intermediate arrays, each value kept in the block.
+        if ([a[@"name"] containsString:@"+"] &&
+            [self parFuseScalarise:a[@"body"] types:a[@"frame"][@"types"] from:[a[@"tok"] unsignedIntegerValue]
+                             label:a[@"name"] at:a[@"loc"] lifted:NO])
+            {
+            NSMutableDictionary* frame = [self parFuseFrame:a[@"frame"]];
+            [self parFrameFill:frame body:a[@"body"]];
+            if (![a[@"accuracy"] boolValue])
+                frame[@"fast"] = @YES;
+            a[@"frame"] = frame;
+            }
+        }
     return [self parBuild:a];
     }
 
@@ -7267,6 +7286,82 @@ static XTForCStyleNode* _Nullable parFuseLoop(XTBlockNode* body)
     if (why.length > 0)
         [self parAutoFuseSay:[NSString stringWithFormat:@"the loops at '%@' and '%@' run apart: %@", first, second, why] at:at1];
     return NO;
+    }
+
+// Whether name n appears in the function only as `T* n = new …` and within
+// the tokens [from, to).
+- (BOOL)parFuseOnlyHere:(NSString*)n from:(NSUInteger)from to:(NSUInteger)to end:(NSUInteger)end
+    {
+    NSUInteger outside = 0;
+    for (NSUInteger i = self.fnTok; i < end; i++)
+        {
+        if (i >= from && i < to)
+            continue;
+        XTToken* t = _tokens[i];
+        if (t.type != XTTokenIdentifier || ![t.value isEqualToString:n])
+            continue;
+        XTTokenType after = i + 1 < _tokens.count ? _tokens[i + 1].type : (XTTokenType)0;
+        XTTokenType next = i + 2 < _tokens.count ? _tokens[i + 2].type : (XTTokenType)0;
+        if (after != XTTokenAssign || next != XTTokenNew)
+            return NO;
+        outside++;
+        }
+    return outside == 1;
+    }
+
+// A fused block's (or merged loop's) intermediate arrays (#147): an array
+// the body writes and reads only at the index, a local the function sets
+// once with `new` and names nowhere but there and in this block, holds each
+// item's value for that item alone and is never read after. Each value is
+// kept in the block (a local of the iteration, zero as a new array's
+// elements are). Whether one was. As the port.
+- (BOOL)parFuseScalarise:(XTBlockNode*)body types:(NSDictionary*)types from:(NSUInteger)from
+                   label:(NSString*)label at:(XTSourceLocation*)at lifted:(BOOL)lifted
+    {
+    XTForCStyleNode* loop = parFuseLoop(body);
+    if (!loop)
+        return NO;
+    NSString* iv = ((XTVariableDeclNode*)loop.loopInit).varName;
+    XTASTNode* inner = loop.body;
+    NSMutableDictionary* st = XTParFuseScan(inner, iv);
+    if (st[@"bad"])
+        return NO;
+    NSDictionary* acc = st[@"acc"];
+    NSSet* decls = st[@"decls"];
+    NSUInteger end = [self parFuseFnEnd];
+    NSSet* scalars = [NSSet setWithArray:@[ @"u8", @"i8", @"u16", @"i16", @"u32", @"i32", @"u64", @"i64", @"float", @"double", @"bool" ]];
+    NSMutableArray* made = [NSMutableArray array];
+    for (NSString* x in [acc.allKeys sortedArrayUsingSelector:@selector(compare:)])
+        {
+        NSUInteger bits = [acc[x] unsignedIntegerValue];
+        if ((bits & 4) || !(bits & 2) || [decls containsObject:x])
+            continue;
+        id t = [self parFuseTypeOf:x types:types];
+        if (![t isKindOfClass:[XTPointerType class]])
+            continue;
+        XTType* et = ((XTPointerType*)t).pointeeType;
+        if (![scalars containsObject:et.description])
+            continue;
+        if (![self parFuseFresh:x end:end] || ![self parFuseOnlyHere:x from:from to:_pos end:end])
+            continue;
+        NSString* tmp = [@"__fx_" stringByAppendingString:x];
+        XTParFuseRename(inner, x, iv, tmp);
+        [made addObject:[[XTVariableDeclNode alloc] initWithName:tmp type:et
+                                                     initialiser:[[XTLiteralIntNode alloc] initWithValue:0 location:at]
+                                                        location:at]];
+        NSString* w = [NSString stringWithFormat:@"the block '%@' keeps each item of '%@' in a register: nothing else uses it", label, x];
+        // A lifted loop's, said once with its fusing (parAutoFuseSay).
+        if (lifted)
+            [self parAutoFuseSay:w at:at];
+        else
+            [_diagnostics emitWarning:w category:XTWarnParAuto at:at];
+        }
+    if (made.count == 0)
+        return NO;
+    // The locals first in each iteration, then the body as it was.
+    [made addObject:inner];
+    XTParFuseSetBody(loop, [[XTBlockNode alloc] initWithStatements:made location:inner.location]);
+    return YES;
     }
 
 // A -Wpar-auto line about fusing lifted loops, said after the loop's own
