@@ -2280,10 +2280,10 @@ class Languages
 
     // Each counted loop's exit test in a function's body lines [from, end)
     // in the form the outliner takes. Clang's passes end a loop counting i
-    // from 0 by 1 with `icmp eq i, n` and branch to the exit on true; with
-    // n set before the loop, `i == n` there is `!(i <u n)`, so the test is
-    // written `icmp ult` and the branch's targets swapped (`icmp ne` keeps
-    // them).
+    // by 1 with `icmp eq i, n` and branch to the exit on true; with n set
+    // before the loop, `i == n` there is `!(i < n)`, so the test is written
+    // `icmp ult` or `icmp slt` (countPred) and the branch's targets swapped
+    // (`icmp ne` keeps them).
     static void counted(Array* lines, u32 from, u32 end)
         {
         u32 blockStart = from;
@@ -2333,16 +2333,21 @@ class Languages
             // Or a is that count's step (`a = add i, 1`, libstdc++'s fill
             // testing i + 1): a counts from 1, and `a == n` there is
             // `!(a <u n)` alike.
+            String* iv = a;
             bool counts = Languages.countsFromZero(lines, blockStart, i, from, end, a, ty);
             if (!counts)
                 {
                 String* stepOf = Languages.stepSource(lines, blockStart, i, a, ty);
                 counts = stepOf != (String*)0 && Languages.countsFromZero(lines, blockStart, i, from, end, stepOf, ty);
+                iv = stepOf;
                 }
             if (!counts || Languages.definedIn(lines, blockStart, brAt, b))
                 continue;
+            String* pred = Languages.countPred(lines, blockStart, i, from, end, iv, a, b, ty);
+            if (pred == (String*)0)
+                continue;
             lines.set(i, (Object*)l.replacing(String.withFormat(" = icmp %s %s ", eq ? "eq" : "ne", ty.cString()),
-                                              String.withFormat(" = icmp ult %s ", ty.cString())));
+                                              String.withFormat(" = icmp %s %s ", pred.cString(), ty.cString())));
             if (eq)
                 {
                 String* m = (String*)lines.get(brAt);
@@ -2363,6 +2368,84 @@ class Languages
                 lines.set(brAt, (Object*)nm);
                 }
             }
+        }
+
+    // The compare `i == n` is `!(i < n)` in, for the count iv (tested
+    // itself, or as its step `tested = iv + 1`). Clang writes `i == n` where
+    // the start is at most n in the source loop's own compare. A bound of
+    // smax(m, start) is signed ("slt"), umax(m, start) unsigned ("ult").
+    // Otherwise signed for a signed count, whose step is `nsw` (and not
+    // `nuw`), so "slt"; unsigned
+    // otherwise (a size_t count's plain or `nuw` step; clang bounds it with
+    // umax where the start could pass n), so "ult". A start of a constant
+    // 0 or more, or a zext, is "ult" either way (at most n, and not
+    // negative). A signed count from -2 to 2 is not `i <u 3` (2026-11-26: a
+    // C++ loop over b = -2..2 ran no iteration). 0 when no step is found.
+    static String* countPred(Array* lines, u32 blockStart, u32 upto, u32 from, u32 end, String* iv, String* tested, String* n, String* ty)
+        {
+        // n = smax(m, start) / umax(m, start): clang's own bound where the
+        // start could pass m, in the source compare's signedness.
+        if (Languages.definedAs(lines, from, end, n, String.withFormat("tail call %s @llvm.smax.", ty.cString()))
+            || Languages.definedAs(lines, from, end, n, String.withFormat("call %s @llvm.smax.", ty.cString())))
+            return String.withCString("slt");
+        if (Languages.definedAs(lines, from, end, n, String.withFormat("tail call %s @llvm.umax.", ty.cString()))
+            || Languages.definedAs(lines, from, end, n, String.withFormat("call %s @llvm.umax.", ty.cString())))
+            return String.withCString("ult");
+        String* head = String.withFormat("%s = phi %s ", iv.cString(), ty.cString());
+        String* start = (String*)0;
+        String* inc = (String*)0;
+        for (u32 i = blockStart; i < upto && start == (String*)0; i = i + 1)
+            {
+            String* t = ((String*)lines.get(i)).trimmed();
+            if (!t.hasPrefix(head))
+                continue;
+            Array* ins = t.substringFromByte(head.byteLength()).splitOnByte((u8)'[');
+            for (u32 k = 0; k < ins.count(); k = k + 1)
+                {
+                String* e = ((String*)ins.get(k)).trimmed();
+                u32 comma = Languages.byteFrom(e, (u8)',', 0);
+                if (e.byteLength() == 0 || comma == String.notFound())
+                    continue;
+                String* v = e.substringBytes(0, comma).trimmed();
+                if (Languages.isIncOf(lines, from, end, v, iv, ty))
+                    inc = v;
+                else
+                    start = v;
+                }
+            }
+        if (start == (String*)0 || inc == (String*)0)
+            return (String*)0;
+        bool digits = start.byteLength() > 0;
+        for (u32 k = 0; k < start.byteLength(); k = k + 1)
+            if (start.byteAt(k) < (u8)'0' || start.byteAt(k) > (u8)'9')
+                digits = false;
+        if (digits || Languages.definedAs(lines, from, end, start, String.withCString("zext ")))
+            return String.withCString("ult");
+        // The step's flags: the tested value's add when it is the step.
+        String* step = tested.equals(iv) ? inc : tested;
+        String* addHead = step.appending(String.withCString(" = add "));
+        for (u32 k = from; k < end; k = k + 1)
+            {
+            String* m = ((String*)lines.get(k)).trimmed();
+            if (!m.hasPrefix(addHead))
+                continue;
+            String* r = m.substringFromByte(addHead.byteLength());
+            return String.withCString(r.hasPrefix(String.withCString("nsw ")) ? "slt" : "ult");
+            }
+        return (String*)0;
+        }
+
+    // Whether v is made in lines [from, end) by an instruction starting
+    // `op` (`v = zext ...`).
+    static bool definedAs(Array* lines, u32 from, u32 end, String* v, String* op)
+        {
+        if (!v.hasPrefix(String.withCString("%")))
+            return false;
+        String* head = String.withFormat("%s = %s", v.cString(), op.cString());
+        for (u32 k = from; k < end; k = k + 1)
+            if (((String*)lines.get(k)).trimmed().hasPrefix(head))
+                return true;
+        return false;
         }
 
     // The count a steps (`a = add [nuw] [nsw] ty %i, 1` among lines
