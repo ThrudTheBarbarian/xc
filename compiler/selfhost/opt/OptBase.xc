@@ -2073,6 +2073,11 @@ class BeFact : Object
 
     Map* _ppLabels;     // block labels given so far (file:line), how many each
     Map* _cpFuseNames;  // a fused C loop's header -> the block's name, of all the loops (#147)
+    Map* _cpFuseChecked; // a header whose pair now runs fused under an overlap check (#147)
+    Map* _cpFuseCopies;  // the headers of a checked pair's copy, run when arrays overlap: never fused
+    IRValue* _cpBase;    // cpFuseBase's pointer, and its element's bytes (0: not a plain scalar)
+    IROperand* _cpAddrOf; // and, for a global or a frame slot, what its address is taken of
+    u32 _cpElem;
     String* _ppWhere;      // the loop being tried, for the trace
     IRValue* _ppLastMem;   // the memory token the last ppCtxLoad / ppCall produced
 

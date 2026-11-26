@@ -1,8 +1,10 @@
-the loops at 'fuse.c:16' and 'fuse.c:17' run as one block (--par-style)
-the loops at 'fuse.c:16+fuse.c:17' and 'fuse.c:18' run as one block (--par-style)
-the loops at 'fuse.c:16+fuse.c:17+fuse.c:18' and 'fuse.c:20' run apart: a loop sums floating-point values
-the loops at 'fuse.c:20' and 'fuse.c:23' run apart: their ranges differ
-the loops at 'fuse.c:23' and 'fuse.c:24' run apart: an array is written by one and used at another index by the other
-the loops at 'fuse.c:24' and 'fuse.c:26' run apart: their ranges differ
-the loops at 'fuse.c:26' and 'fuse.c:31' run apart: there is code between them
-the loops at 'fuse.c:10' and 'fuse.c:11' run apart: two arrays may be the same memory
+the loops at 'fuse.c:18' and 'fuse.c:19' run as one block (--par-style)
+the loops at 'fuse.c:18+fuse.c:19' and 'fuse.c:20' run as one block (--par-style)
+the loops at 'fuse.c:18+fuse.c:19+fuse.c:20' and 'fuse.c:22' run apart: a loop sums floating-point values
+the loops at 'fuse.c:22' and 'fuse.c:25' run apart: their ranges differ
+the loops at 'fuse.c:25' and 'fuse.c:26' run apart: an array is written by one and used at another index by the other
+the loops at 'fuse.c:26' and 'fuse.c:28' run apart: their ranges differ
+the loops at 'fuse.c:28' and 'fuse.c:33' run apart: there is code between them
+the loops at 'fuse.c:33' and 'fuse.c:35' run apart: their ranges differ
+the loops at 'fuse.c:35' and 'fuse.c:38' run apart: there is code between them
+the loops at 'fuse.c:12' and 'fuse.c:13' run as one block (--par-style), when their arrays do not overlap

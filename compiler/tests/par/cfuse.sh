@@ -2,7 +2,8 @@
 # cfuse.sh — adjacent C loops --par-style lifts, fused before the outliner
 # (#147): tests/par/cfuse/fuse.c has a chain of elementwise loops that runs as
 # one block, and pairs that stay apart (a sum of doubles, different ranges,
-# a neighbour read, code between, two pointer arguments). -Wpar-auto says
+# a neighbour read, code between); two pointer arguments run as one block
+# when their arrays do not overlap. -Wpar-auto says
 # which (cfuse/fuse.expected); the program prints the same fused, apart
 # (-fno-par-fuse) and serially (--par-style=cpu), on the CPU and the GPU.
 #

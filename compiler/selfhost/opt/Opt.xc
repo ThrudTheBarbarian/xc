@@ -587,6 +587,8 @@
             {
             _ppMade = new Array();
             _cpFuseNames = new Map();
+            _cpFuseChecked = new Map();
+            _cpFuseCopies = new Map();
             self.cpFuseLoops(m);
             self.parProposeOutline(m);
             _ppOutlined = true;

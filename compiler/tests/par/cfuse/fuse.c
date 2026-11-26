@@ -3,12 +3,14 @@
  * next loop reads, two pointer arguments, and a call keep loops apart. */
 #include <stdio.h>
 #define N 300007
-static float x[N], y[N], z[N], w[N];
+static float x[N], y[N], z[N], w[N], o[N + 8];
 
-static void viaPointers(float *p, float *q)
+/* Two pointers: one block when the arrays do not overlap, the loops as
+ * written when they do (main calls it both ways). */
+static void viaPointers(float *p, float *q, int n)
 {
-    for (int i = 0; i < N; i++) p[i] = (float)i * 0.5f;
-    for (int i = 0; i < N; i++) q[i] = q[i] + 1.0f;
+    for (int i = 0; i < n; i++) p[i] = (float)i * 0.5f;
+    for (int i = 0; i < n; i++) q[i] = q[i] + 1.0f;
 }
 
 int main(void)
@@ -26,9 +28,14 @@ int main(void)
     for (int i = 0; i < N; i++) s2 += y[i];
     printf("neighbour %.1f\n", s2);
 
-    viaPointers(w, z);
+    viaPointers(w, z, N);
     double s3 = 0;
     for (int i = 0; i < N; i++) s3 += w[i] + z[i];
     printf("pointers %.1f\n", s3);
+    for (int i = 0; i < N + 8; i++) o[i] = 1.0f;
+    viaPointers(o, o + 1, N);
+    double s4 = 0;
+    for (int i = 0; i < N + 8; i++) s4 += o[i];
+    printf("overlapping %.1f\n", s4);
     return 0;
 }

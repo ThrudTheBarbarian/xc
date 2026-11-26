@@ -11,6 +11,8 @@
 #import <OptBase>
 #import <OptInline>
 #import <OptVectorizeShapes>
+#import <OptDevirt>
+#import <OptBoundsElide>
 
     class Opt (Outline)
     {
@@ -119,6 +121,7 @@
     final String* cpFuseBase(IRValue* addr, IRValue* iv, Map* defOf, bool* atIv)
         {
         *atIv = false;
+        _cpElem = cpFuseElemBytes(addr.ty());
         IRInsn* d = (IRInsn*)defOf.get((Hashable*)addr);
         IRValue* base = addr;
         if (d != 0 && d.isOp(opElementAddr) && d.ops().count() == (u32)2)
@@ -131,9 +134,12 @@
             *atIv = io.kind() == (u8)OPK_USE && io.val() == iv;
             d = (IRInsn*)defOf.get((Hashable*)base);
             }
+        _cpBase = base;
+        _cpAddrOf = (IROperand*)0;
         if (d != 0 && d.isOp(opAddrOf) && d.ops().count() == (u32)1)
             {
             IROperand* o = (IROperand*)d.ops().get((u32)0);
+            _cpAddrOf = o;
             if (o.kind() == (u8)OPK_SYM)
                 return String.withFormat("g:%s", o.name().cString());
             if (o.kind() == (u8)OPK_USE)
@@ -142,10 +148,30 @@
         return String.withFormat("v:%u", base.pid());
         }
 
+    // The bytes of a pointer type's element when it is a plain scalar, else 0.
+    final u32 cpFuseElemBytes(String* pt)
+        {
+        if (pt == (String*)0 || !IRType.isPtr(pt))
+            return (u32)0;
+        u32 comma = (u32)$FFFFFFFF;
+        for (u32 k = pt.byteLength(); k > (u32)0; k = k - (u32)1)
+            if (pt.byteAt(k - (u32)1) == (u8)',')
+                {
+                comma = k - (u32)1;
+                break;
+                }
+        if (comma == (u32)$FFFFFFFF || comma < (u32)4)
+            return (u32)0;
+        String* et = pt.substringBytes((u32)4, comma - (u32)4);
+        if (IRType.isAgg(et) || IRType.isPtr(et))
+            return (u32)0;
+        return IRType.bytes(et);
+        }
+
     // One body's accesses (key -> bits: 1 read, 2 written, 4 not at the
     // index) into acc; false when it holds anything but pure arithmetic,
     // loads and stores.
-    final bool cpFuseScan(IRBlock* B, IRValue* iv, Map* defOf, Map* acc)
+    final bool cpFuseScan(IRBlock* B, IRValue* iv, Map* defOf, Map* acc, Map* bases)
         {
         for (u32 i = (u32)0; i < B.insns().count(); i = i + (u32)1)
             {
@@ -164,9 +190,21 @@
             if (a.kind() != (u8)OPK_USE)
                 return false;
             bool atIv = false;
+            _cpBase = (IRValue*)0;
             String* key = cpFuseBase(a.val(), iv, defOf, &atIv);
             if (key.equals(String.withCString("?")))
                 return false;
+            // A pointer's base and element bytes, for an overlap check (0
+            // bytes: none can be made).
+            if (_cpBase != (IRValue*)0)
+                {
+                Number* had = (Number*)bases.get((Hashable*)String.withFormat("%s#", key.cString()));
+                u32 es = had != (Number*)0 && had.asU32() != _cpElem ? (u32)0 : _cpElem;
+                bases.set((Hashable*)key, (Object*)_cpBase);
+                bases.set((Hashable*)String.withFormat("%s#", key.cString()), (Object*)Number.with(es));
+                if (_cpAddrOf != (IROperand*)0)
+                    bases.set((Hashable*)String.withFormat("%s@", key.cString()), (Object*)_cpAddrOf);
+                }
             Number* was = (Number*)acc.get((Hashable*)key);
             u32 bits = (store ? (u32)2 : (u32)1) | (atIv ? (u32)0 : (u32)4);
             acc.set((Hashable*)key, (Object*)Number.with((was != (Number*)0 ? was.asU32() : (u32)0) | bits));
@@ -244,7 +282,7 @@
 
     // Each array one body writes that the other touches: touched only at
     // the index, by both, and every other array either touches known apart.
-    final String* cpFuseArrays(Map* wr, Map* other)
+    final String* cpFuseArrays(Map* wr, Map* other, Array* pairs)
         {
         Array* names = wr.allKeys();
         Array* onames = other.allKeys();
@@ -262,8 +300,25 @@
                 String* y = (String*)onames.get(j);
                 if (y.equals(x))
                     continue;
-                if (x.hasPrefix(String.withCString("v:")) || y.hasPrefix(String.withCString("v:")))
+                if (!x.hasPrefix(String.withCString("v:")) && !y.hasPrefix(String.withCString("v:")))
+                    continue;
+                // Both reached only at the index, in both loops: a check that
+                // their byte ranges do not overlap can choose (cpFuseVersion).
+                Number* xo = (Number*)other.get((Hashable*)x);
+                Number* yw = (Number*)wr.get((Hashable*)y);
+                Number* yo = (Number*)other.get((Hashable*)y);
+                u32 any = bw | (xo != (Number*)0 ? xo.asU32() : (u32)0) | (yw != (Number*)0 ? yw.asU32() : (u32)0)
+                          | (yo != (Number*)0 ? yo.asU32() : (u32)0);
+                if (pairs == (Array*)0 || (any & (u32)4) != (u32)0)
                     return String.withCString("two arrays may be the same memory");
+                String* pr = x.compare(y) < (i8)0 ? String.withFormat("%s|%s", x.cString(), y.cString())
+                                                   : String.withFormat("%s|%s", y.cString(), x.cString());
+                bool have = false;
+                for (u32 k = (u32)0; k < pairs.count(); k = k + (u32)1)
+                    if (((String*)pairs.get(k)).equals(pr))
+                        have = true;
+                if (!have)
+                    pairs.add((Object*)pr);
                 }
             }
         return (String*)0;
@@ -279,6 +334,234 @@
         if (path == (String*)0 || IRDbg.isLibraryPath(path))
             return (String*)0;
         return String.withFormat("%s:%ld", path.lastPathComponent().cString(), (i32)at.dbgLine());
+        }
+
+    // A pair whose arrays may overlap, made a choice (#147 3b): E1's
+    // constants go before the first loop, the two loops are copied, and a
+    // check before them runs the originals (fused next) when no pair of
+    // arrays overlaps over [lo, hi), and the copies, as written, when one
+    // does. As bounds-version copies a loop. False, and nothing changed,
+    // when it cannot be made: a loop value read after them (a sum), a bound
+    // not known before the first loop, an array that is not of plain
+    // scalars, or a second exit with phis to join.
+    final bool cpFuseVersion(IRFunc* fn, LRCLoop* L1, LRCLoop* L2, IRBlock* E1, Array* pairs, Map* bases,
+                             Map* defOf, Map* blockOf)
+        {
+        IRBlock* P1 = L1.pre();
+        IRBlock* H1 = L1.header();
+        IRBlock* B1 = L1.latch();
+        IRBlock* H2 = L2.header();
+        IRBlock* B2 = L2.latch();
+        IRBlock* X = ((IROperand*)H2.term().ops().get((u32)2)).blk();
+        if (P1.term() == 0 || !P1.term().isOp(opBranch) || X == 0 || X.phis().count() != (u32)0
+            || self.predsOfBlock(fn, X).count() != (u32)1)
+            return false;
+        IRInsn* iv1 = cpFuseIv(L1, defOf);
+        IRInsn* c1 = cpFuseCmp(L1, iv1, defOf);
+        IRValue* lo = cpFuseIncoming(iv1, P1);
+        IRValue* hi = ((IROperand*)c1.ops().get((u32)1)).val();
+        // The range: known before the first loop, or a constant made there.
+        IRBlock* loAt = (IRBlock*)blockOf.get((Hashable*)lo);
+        IRBlock* hiAt = (IRBlock*)blockOf.get((Hashable*)hi);
+        bool loInside = loAt == H1 || loAt == B1;
+        bool hiInside = hiAt == H1 || hiAt == B1;
+        if ((loInside && !self.ppConstChain(lo, defOf, (u32)0)) || (hiInside && !self.ppConstChain(hi, defOf, (u32)0)))
+            return false;
+        // Each array a plain scalar one.
+        for (u32 k = (u32)0; k < pairs.count(); k = k + (u32)1)
+            {
+            String* pr = (String*)pairs.get(k);
+            u32 bar = pr.indexOfByte((u8)'|');
+            String* x = pr.substringBytes((u32)0, bar);
+            String* y = pr.substringFromByte(bar + (u32)1);
+            for (u32 q = (u32)0; q < (u32)2; q = q + (u32)1)
+                {
+                String* key = q == (u32)0 ? x : y;
+                Number* es = (Number*)bases.get((Hashable*)String.withFormat("%s#", key.cString()));
+                if (bases.get((Hashable*)key) == (Object*)0 || es == (Number*)0 || es.asU32() == (u32)0)
+                    return false;
+                // A pointer the loops make is known before them only when it
+                // is a cast or copy of one from before them (a C pointer cast
+                // in the loop).
+                if (key.hasPrefix(String.withCString("v:"))
+                    && !cpFuseBefore((IRValue*)bases.get((Hashable*)key), defOf, blockOf, H1, B1, H2, B2))
+                    return false;
+                }
+            }
+        // No loop value read after them, but their memory, which stays the
+        // originals' (as bounds-version leaves it).
+        Map* inLoops = new Map();
+        inLoops.set((Hashable*)H1, (Object*)H1);
+        inLoops.set((Hashable*)B1, (Object*)B1);
+        inLoops.set((Hashable*)H2, (Object*)H2);
+        inLoops.set((Hashable*)B2, (Object*)B2);
+        inLoops.set((Hashable*)E1, (Object*)E1);
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* ob = (IRBlock*)fn.blocks().get(b);
+            if (inLoops.get((Hashable*)ob) != (Object*)0)
+                continue;
+            if (self.bvUsesLoop(ob, inLoops, blockOf))
+                return false;
+            }
+        // E1's constants first, so both paths have them.
+        for (u32 i = (u32)0; i < E1.insns().count(); i = i + (u32)1)
+            P1.add((IRInsn*)E1.insns().get(i));
+        E1.setInsns(new Array());
+        // The check, in P1.
+        String* i64t = String.withCString("I64");
+        String* bt = String.withCString("Bool");
+        IRValue* loV = loInside ? self.ppRemat(P1, lo, defOf) : lo;
+        IRValue* hiV = hiInside ? self.ppRemat(P1, hi, defOf) : hi;
+        bool sgn = iv1.res().ty().hasPrefix(String.withCString("I"));
+        IRValue* lo64 = cpFuseWiden(P1, loV, sgn);
+        IRValue* hi64 = cpFuseWiden(P1, hiV, sgn);
+        IRValue* ov = self.ppEmit(P1, String.withCString("Const"), bt, IROperand.immI((i64)0, bt), (IROperand*)0, (IROperand*)0);
+        for (u32 k = (u32)0; k < pairs.count(); k = k + (u32)1)
+            {
+            String* pr = (String*)pairs.get(k);
+            u32 bar = pr.indexOfByte((u8)'|');
+            String* x = pr.substringBytes((u32)0, bar);
+            String* y = pr.substringFromByte(bar + (u32)1);
+            IRValue* xb = cpFuseBaseIn(P1, x, bases, defOf, blockOf, H1, B1, H2, B2);
+            IRValue* yb = cpFuseBaseIn(P1, y, bases, defOf, blockOf, H1, B1, H2, B2);
+            IRValue* xlo = cpFuseByteAt(P1, x, xb, bases, lo64);
+            IRValue* xhi = cpFuseByteAt(P1, x, xb, bases, hi64);
+            IRValue* ylo = cpFuseByteAt(P1, y, yb, bases, lo64);
+            IRValue* yhi = cpFuseByteAt(P1, y, yb, bases, hi64);
+            IRValue* a = self.ppCmp(P1, String.withCString("ULT"), xlo, yhi);
+            IRValue* b2 = self.ppCmp(P1, String.withCString("ULT"), ylo, xhi);
+            IRValue* both = self.ppEmit(P1, String.withCString("And"), bt, IROperand.useVal(a), IROperand.useVal(b2), (IROperand*)0);
+            ov = self.ppEmit(P1, String.withCString("Or"), bt, IROperand.useVal(ov), IROperand.useVal(both), (IROperand*)0);
+            }
+        // The copies, as written.
+        u32 tag = fn.blocks().count();
+        Array* orig = Array.with((Object*)H1, (Object*)B1);
+        orig.add((Object*)E1);
+        orig.add((Object*)H2);
+        orig.add((Object*)B2);
+        Map* vmap = new Map();
+        Map* bmap = new Map();
+        Array* copies = new Array();
+        for (u32 b = (u32)0; b < orig.count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)orig.get(b);
+            for (u32 i = (u32)0; i < bb.phis().count(); i = i + (u32)1)
+                self.dvName(vmap, (IRInsn*)bb.phis().get(i));
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                self.dvName(vmap, (IRInsn*)bb.insns().get(i));
+            IRBlock* nb = new IRBlock(String.withFormat("%s_ov%lu", bb.name().cString(), tag));
+            bmap.set((Hashable*)bb, (Object*)nb);
+            copies.add((Object*)nb);
+            }
+        IRBlock* pf = new IRBlock(String.withFormat("cpf%lu_fused", tag));
+        IRBlock* pa = new IRBlock(String.withFormat("cpf%lu_apart", tag));
+        for (u32 b = (u32)0; b < orig.count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)orig.get(b);
+            IRBlock* nb = (IRBlock*)bmap.get((Hashable*)bb);
+            for (u32 i = (u32)0; i < bb.phis().count(); i = i + (u32)1)
+                {
+                IRInsn* np = self.dvCloneInsn((IRInsn*)bb.phis().get(i), vmap, bmap);
+                for (u32 q = (u32)0; q + (u32)1 < np.ops().count(); q = q + (u32)2)
+                    if (((IROperand*)np.ops().get(q)).blk() == P1)
+                        np.ops().set(q, (Object*)IROperand.block(pa));
+                nb.phis().add(np);
+                }
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                nb.add(self.dvCloneInsn((IRInsn*)bb.insns().get(i), vmap, bmap));
+            nb.setTerm(self.dvCloneInsn(bb.term(), vmap, bmap));
+            }
+        // The originals now come from pf.
+        for (u32 i = (u32)0; i < H1.phis().count(); i = i + (u32)1)
+            {
+            IRInsn* ph = (IRInsn*)H1.phis().get(i);
+            for (u32 q = (u32)0; q + (u32)1 < ph.ops().count(); q = q + (u32)2)
+                if (((IROperand*)ph.ops().get(q)).blk() == P1)
+                    ph.ops().set(q, (Object*)IROperand.block(pf));
+            }
+        IRInsn* tf = IRInsn.with(String.withCString("Branch"));
+        tf.add(IROperand.block(H1));
+        pf.setTerm(tf);
+        IRInsn* ta = IRInsn.with(String.withCString("Branch"));
+        ta.add(IROperand.block((IRBlock*)bmap.get((Hashable*)H1)));
+        pa.setTerm(ta);
+        IRInsn* cb = IRInsn.with(String.withCString("CondBranch"));
+        cb.add(IROperand.useVal(ov));
+        cb.add(IROperand.block(pa));
+        cb.add(IROperand.block(pf));
+        cb.copyDbg(P1.term());
+        P1.setTerm(cb);
+        // In after P1, the paths and the copies; each loop leaves for X.
+        u32 at = (u32)0;
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            if (fn.blocks().get(b) == (Object*)P1)
+                at = b + (u32)1;
+        fn.blocks().insert(at, (Object*)pa);
+        fn.blocks().insert(at, (Object*)pf);
+        for (u32 b = (u32)0; b < copies.count(); b = b + (u32)1)
+            fn.blocks().add(copies.get(b));
+        for (u32 k = (u32)0; k < fn.blocks().count(); k = k + (u32)1)
+            ((IRBlock*)fn.blocks().get(k)).setBix(k);
+        _cpFuseChecked.set((Hashable*)H1, (Object*)H1);
+        _cpFuseCopies.set(bmap.get((Hashable*)H1), (Object*)H1);
+        _cpFuseCopies.set(bmap.get((Hashable*)H2), (Object*)H2);
+        return true;
+        }
+
+    // v is to be had before the loops: defined outside them, or a cast or
+    // copy there of a value defined outside them.
+    final bool cpFuseBefore(IRValue* v, Map* defOf, Map* blockOf, IRBlock* H1, IRBlock* B1, IRBlock* H2, IRBlock* B2)
+        {
+        IRBlock* at = (IRBlock*)blockOf.get((Hashable*)v);
+        if (at != H1 && at != B1 && at != H2 && at != B2)
+            return true;
+        IRInsn* d = (IRInsn*)defOf.get((Hashable*)v);
+        if (d == 0 || d.ops().count() != (u32)1 || !(d.isOp(opBitcast) || d.isOp(opCopy)))
+            return false;
+        IROperand* o = (IROperand*)d.ops().get((u32)0);
+        if (o.kind() != (u8)OPK_USE)
+            return false;
+        IRBlock* oat = (IRBlock*)blockOf.get((Hashable*)o.val());
+        return oat != H1 && oat != B1 && oat != H2 && oat != B2;
+        }
+
+    // Array key's base, as a value P can use: a global's or a frame slot's
+    // address taken in P, a cast made again in P, or the pointer itself.
+    final IRValue* cpFuseBaseIn(IRBlock* P, String* key, Map* bases, Map* defOf, Map* blockOf,
+                                IRBlock* H1, IRBlock* B1, IRBlock* H2, IRBlock* B2)
+        {
+        IRValue* base = (IRValue*)bases.get((Hashable*)key);
+        IROperand* addrOf = (IROperand*)bases.get((Hashable*)String.withFormat("%s@", key.cString()));
+        if (addrOf != (IROperand*)0)
+            return self.ppEmit(P, String.withCString("AddrOf"), base.ty(), addrOf, (IROperand*)0, (IROperand*)0);
+        IRBlock* at = (IRBlock*)blockOf.get((Hashable*)base);
+        if (at != H1 && at != B1 && at != H2 && at != B2)
+            return base;
+        IRInsn* d = (IRInsn*)defOf.get((Hashable*)base);
+        return self.ppEmit(P, d.op(), base.ty(), (IROperand*)d.ops().get((u32)0), (IROperand*)0, (IROperand*)0);
+        }
+
+    // v as an I64, signed or not.
+    final IRValue* cpFuseWiden(IRBlock* P, IRValue* v, bool sgn)
+        {
+        if (v.ty().equals(String.withCString("I64")) || v.ty().equals(String.withCString("U64")))
+            return v;
+        return self.ppEmit(P, sgn ? String.withCString("SExt") : String.withCString("ZExt"), String.withCString("I64"),
+                           IROperand.useVal(v), (IROperand*)0, (IROperand*)0);
+        }
+
+    // The byte address of element `at` (an I64) of the array `key`: its base
+    // as an integer plus at * its element's bytes. A global or a frame
+    // slot's base is taken here.
+    final IRValue* cpFuseByteAt(IRBlock* P, String* key, IRValue* base, Map* bases, IRValue* at)
+        {
+        String* i64t = String.withCString("I64");
+        Number* es = (Number*)bases.get((Hashable*)String.withFormat("%s#", key.cString()));
+        IRValue* bi = self.ppEmit(P, String.withCString("PtrToInt"), i64t, IROperand.useVal(base), (IROperand*)0, (IROperand*)0);
+        IRValue* sz = self.ppEmit(P, String.withCString("Const"), i64t, IROperand.immI((i64)es.asU32(), i64t), (IROperand*)0, (IROperand*)0);
+        IRValue* off = self.ppEmit(P, String.withCString("Mul"), i64t, IROperand.useVal(at), IROperand.useVal(sz), (IROperand*)0);
+        return self.ppEmit(P, String.withCString("Add"), i64t, IROperand.useVal(bi), IROperand.useVal(off), (IROperand*)0);
         }
 
     // The values defined in blocks of `blocks`.
@@ -312,7 +595,7 @@
         for (u32 i = (u32)0; i < loops.count(); i = i + (u32)1)
             {
             LRCLoop* L1 = (LRCLoop*)loops.get(i);
-            if (!cpFuseShape(L1))
+            if (!cpFuseShape(L1) || _cpFuseCopies.get((Hashable*)L1.header()) != (Object*)0)
                 continue;
             // The first loop's exit: one block, after nothing but the header,
             // leading straight into another loop's header.
@@ -326,7 +609,7 @@
             for (u32 j = (u32)0; j < loops.count(); j = j + (u32)1)
                 if (((LRCLoop*)loops.get(j)).header() == H2)
                     L2 = (LRCLoop*)loops.get(j);
-            if (L2 == (LRCLoop*)0 || !cpFuseShape(L2) || L2.pre() != E1)
+            if (L2 == (LRCLoop*)0 || !cpFuseShape(L2) || L2.pre() != E1 || _cpFuseCopies.get((Hashable*)H2) != (Object*)0)
                 continue;
             String* l1 = cpFuseLabel(L1);
             String* l2 = cpFuseLabel(L2);
@@ -338,7 +621,19 @@
             String* n2 = (String*)_cpFuseNames.get((Hashable*)H2);
             if (n2 != (String*)0)
                 l2 = n2;
-            String* why = cpFuseWhy(fn, L1, L2, E1, defOf, blockOf);
+            Array* pairs = new Array();
+            Map* bases = new Map();
+            String* why = cpFuseWhy(fn, L1, L2, E1, defOf, blockOf, pairs, bases);
+            // Arrays that may overlap: the pair is copied, and a check before
+            // it runs the fused loop when they do not and the copy, as
+            // written, when they do. Then (the next round) the fusing.
+            bool checked = _cpFuseChecked.get((Hashable*)H1) != (Object*)0;
+            if (why == (String*)0 && pairs.count() > (u32)0 && !checked)
+                {
+                if (cpFuseVersion(fn, L1, L2, E1, pairs, bases, defOf, blockOf))
+                    return true;
+                why = String.withCString("two arrays may be the same memory, and a check cannot choose");
+                }
             if (why != (String*)0)
                 {
                 // Said once: the search runs again after each merge.
@@ -352,8 +647,9 @@
                 continue;
                 }
             if (optWarnParAuto())
-                Stdio.error(String.withFormat("%s: warning: the loops at '%s' and '%s' run as one block (--par-style)\n",
-                                              cpFuseWhere(L1).cString(), l1.cString(), l2.cString()));
+                Stdio.error(String.withFormat("%s: warning: the loops at '%s' and '%s' run as one block (--par-style)%s\n",
+                                              cpFuseWhere(L1).cString(), l1.cString(), l2.cString(),
+                                              checked ? ", when their arrays do not overlap" : ""));
             cpFuseMerge(fn, L1, L2, E1, defOf);
             _cpFuseNames.set((Hashable*)H1, (Object*)String.withFormat("%s+%s", l1.cString(), l2.cString()));
             return true;
@@ -371,7 +667,8 @@
         }
 
     // Why the two loops may not run as one, or 0.
-    final String* cpFuseWhy(IRFunc* fn, LRCLoop* L1, LRCLoop* L2, IRBlock* E1, Map* defOf, Map* blockOf)
+    final String* cpFuseWhy(IRFunc* fn, LRCLoop* L1, LRCLoop* L2, IRBlock* E1, Map* defOf, Map* blockOf,
+                            Array* pairs, Map* bases)
         {
         IRBlock* H1 = L1.header();
         IRBlock* B1 = L1.latch();
@@ -455,7 +752,7 @@
             return String.withCString("a loop uses double");
         Map* a1 = new Map();
         Map* a2 = new Map();
-        if (!cpFuseScan(B1, iv1.res(), defOf, a1) || !cpFuseScan(B2, iv2.res(), defOf, a2))
+        if (!cpFuseScan(B1, iv1.res(), defOf, a1, bases) || !cpFuseScan(B2, iv2.res(), defOf, a2, bases))
             return String.withCString("a body calls a function or reaches memory another way");
         // A loop that stores elsewhere than at its index (a histogram, a
         // scatter, a value carried between iterations) stays itself: the
@@ -463,9 +760,9 @@
         // others it would make them all serial.
         if (cpFuseScatters(a1) || cpFuseScatters(a2))
             return String.withCString("a loop stores elsewhere than at its index");
-        String* why = cpFuseArrays(a1, a2);
+        String* why = cpFuseArrays(a1, a2, pairs);
         if (why == (String*)0)
-            why = cpFuseArrays(a2, a1);
+            why = cpFuseArrays(a2, a1, pairs);
         return why;
         }
 
