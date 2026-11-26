@@ -9854,6 +9854,56 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
                        operands:@[ [XTIROperand useWithValueId:cnt.valueId] ]];
     }
 
+// The primitive helper name for a resolved element type: the spelling
+// `new float[N]` uses, or nil for an aggregate or anything else with no
+// primitive helper. An enum is stored as its underlying integer.
+static NSString* _Nullable primElemNameForType(XTType* t)
+    {
+    switch (t.kind)
+        {
+        case XTTypeKindI8: return @"i8";
+        case XTTypeKindU8: return @"u8";
+        case XTTypeKindI16: return @"i16";
+        case XTTypeKindU16: return @"u16";
+        case XTTypeKindI32: return @"i32";
+        case XTTypeKindU32: return @"u32";
+        case XTTypeKindI64: return @"i64";
+        case XTTypeKindU64: return @"u64";
+        case XTTypeKindBool: return @"bool";
+        case XTTypeKindFloat: return @"float";
+        case XTTypeKindDouble: return @"double";
+        // A 16-bit float array is stored as its bit patterns.
+        case XTTypeKindF16: return @"u16";
+        case XTTypeKindPointer: return @"pointer";
+        case XTTypeKindEnum:
+            {
+            XTType* u = [t isKindOfClass:[XTEnumType class]] ? ((XTEnumType*)t).underlyingType : nil;
+            return u ? primElemNameForType(u) : nil;
+            }
+        default: return nil;
+        }
+    }
+
+// The `_xtc_new_<T>` suffix for a non-class `new T`. The helper's shape and
+// element width come from its NAME alone (XTIRElemKind.h), so a type written
+// through another name (`f32`, `f64`, a typedef of a primitive, a typedef of a
+// typedef) must reach the stub as the primitive it resolves to. The written
+// name made the stub take it for a struct and read a stride that was never
+// passed (#723). A name already in the primitive set is kept as written, and
+// an aggregate keeps its own name and the struct form.
+- (NSString*)newElemNameFor:(XTNewExprNode*)node
+    {
+    NSString* written = node.className;
+    if ([written isEqualToString:@"f16"] || [written isEqualToString:@"bf16"])
+        return @"u16";
+    if (XTIRIsPrimitiveElemName(written))
+        return written;
+    XTType* rt = node.resolvedType;
+    XTType* elem = [rt isKindOfClass:[XTPointerType class]] ? ((XTPointerType*)rt).pointeeType : nil;
+    NSString* prim = elem ? primElemNameForType(elem) : nil;
+    return prim ?: written;
+    }
+
 - (nullable XTIRValue*)lowerNewExpr:(XTNewExprNode*)node
     {
     // Class allocations route through a per-class runtime helper
@@ -9996,10 +10046,8 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
         // on luck alone — its second register happened to hold something small.
         // Bug 027. The name test mirrors the stub generator's own primitive set
         // (xtc/main.m) so caller and callee cannot disagree about the shape.
-        // A 16-bit float array is stored as its bit patterns: u16's helper.
-        NSString* elemName = ([node.className isEqualToString:@"f16"] || [node.className isEqualToString:@"bf16"])
-                                 ? @"u16"
-                                 : node.className;
+        // The helper is named for the RESOLVED element type (newElemNameFor:).
+        NSString* elemName = [self newElemNameFor:node];
         XTIRValue* structStride = nil;
         if (node.countExpr || node.resolvedType)
             {

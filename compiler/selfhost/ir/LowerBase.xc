@@ -1620,6 +1620,22 @@ class ClassInfo
         return nm.equals(String.withCString("pointer")) || nm.equals(String.withCString("bool")) || nm.equals(String.withCString("i8")) || nm.equals(String.withCString("u8")) || nm.equals(String.withCString("i16")) || nm.equals(String.withCString("u16")) || nm.equals(String.withCString("i32")) || nm.equals(String.withCString("u32")) || nm.equals(String.withCString("i64")) || nm.equals(String.withCString("u64")) || nm.equals(String.withCString("float")) || nm.equals(String.withCString("double")) || nm.equals(String.withCString("string"));
         }
 
+    // The primitive helper name for a resolved element spelling: the one
+    // `new float[N]` uses, or 0 for an aggregate or anything else with no
+    // primitive helper. A pointer is `pointer` and an enum its integer.
+    String* primElemNameFor(String* t)
+        {
+        if (t == 0 || t.byteLength() == 0)
+            return (String*)0;
+        if (Types.isPack(t))
+            return String.withCString("u16");
+        if (Types.isPointer(t))
+            return String.withCString("pointer");
+        if (isPrimElemName(t))
+            return t;
+        return enumBase(t);
+        }
+
     // `Agg(N)` -> the size the table records for layout N.
     u32 layoutSizeOf(String* agg)
         {
@@ -12411,9 +12427,23 @@ class ClassInfo
         // calloc(1, count*garbage), which failed, and the stub wrote the
         // object header through the NULL it got back. Bug 027.
         String* nm = stripQual(n.name());
+        // The element type the name RESOLVES to, as sema typed the `new`:
+        // `f32` is float, and a typedef is its target.
+        String* el = stripQual(pointeeOf(n.ty()));
         // A 16-bit float array is stored as its bit patterns: u16's helper.
         if (Types.isPack(nm))
             nm = String.withCString("u16");
+        else if (!isPrimElemName(nm))
+            {
+            // The helper's shape and element width come from its NAME alone,
+            // so a type written through another name reaches it as the
+            // primitive it resolves to; the written name was taken for a
+            // struct's and read a stride that was never passed (#723). An
+            // aggregate keeps the name as written.
+            String* prim = primElemNameFor(el);
+            if (prim != 0)
+                nm = prim;
+            }
         String* helper = String.withCString("_xtc_new_");
         // A `new T[N]` landing in a `simd:` pointer takes the page-aligned
         // helper (par-blocks.md) — on the 64-bit targets, whose runtimes define
@@ -12433,9 +12463,9 @@ class ClassInfo
         // The stride, for an aggregate element only. `Agg(N)` in the IR
         // type names the layout whose size this is.
         IRValue* sv = (IRValue*)0;
-        if (!isPrimElemName(nm) && structDeclFor(nm) != 0)
+        if (!isPrimElemName(nm) && el != 0 && structDeclFor(el) != 0)
             {
-            u32 lid = layoutFor(nm);
+            u32 lid = layoutFor(el);
             if (lid < _m.layouts().count())
                 sv = wordConst(((IRLayout*)_m.layouts().get(lid)).size());
             }

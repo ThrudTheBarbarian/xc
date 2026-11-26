@@ -618,6 +618,27 @@ class Sema
             packAdoptInitialiser(init.kid(i), st.kid(i).op());
         }
 
+    // The type a `new T` names: `f32` and `f64` are float and double, and a
+    // typedef is its target, followed to the end of a chain. The parser
+    // resolves these names everywhere else a type is written; `new` keeps the
+    // name as written (#723).
+    String* newTargetType(String* nm)
+        {
+        String* r = nm;
+        for (u32 hop = 0; r != 0 && hop < 16; hop = hop + 1)
+            {
+            if (r.equals(String.withCString("f32")))
+                return String.withCString("float");
+            if (r.equals(String.withCString("f64")))
+                return String.withCString("double");
+            String* next = (String*)_typedefTargets.get((Hashable*)r);
+            if (next == 0)
+                return r;
+            r = next;
+            }
+        return r;
+        }
+
     // A tuple's values are taken apart from one aggregate in registers, and a
     // struct is not a value that can be bound that way: the lowering bound it
     // as an SSA name, so a member access found no slot and was refused, but
@@ -4052,7 +4073,7 @@ class Sema
             }
         if (k == (u16)nkNew)
             {
-            String* t = String.withString(n.name());
+            String* t = String.withString(newTargetType(n.name()));
             t.appendByte((u8)'*');
             n.setTy(t);
             // `new T` runs T's init; the name it resolved to is what the
