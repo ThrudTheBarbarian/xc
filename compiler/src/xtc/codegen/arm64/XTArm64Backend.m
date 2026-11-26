@@ -7405,7 +7405,10 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
             // Receiver consumed x0, so the GP counter starts at 1; the
             // FP bank (v0..v7) is independent and starts at 0.
             NSArray *vaTypes = [self arm64ArgTypesForInsn:insn from:first count:argCount ctx:ctx];
-            NSInteger vFrom = viaItable ? -1 : [self arm64CVariadicFromForInsn:insn ctx:ctx];
+            // A protocol call to a variadic requirement says where its tail
+            // starts in its calling convention, as a virtual call does (#664);
+            // a library build cannot devirtualise one, so it reaches here.
+            NSInteger vFrom = [self arm64CVariadicFromForInsn:insn ctx:ctx];
             NSArray<NSNumber *> *vStk = [self arm64ArgStackOffsets:vaTypes startGP:1 startFP:0
                                                          totalBytes:NULL variadicFrom:vFrom];
             int gpIdx = 1, fpIdx = 0;
