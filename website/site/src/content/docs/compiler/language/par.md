@@ -218,6 +218,44 @@ The calling thread keeps the CPU it runs on when its first block starts, and
 the other threads take the CPUs after it, so programs running blocks at the
 same time spread over the machine. `XC_PAR_PIN=0` leaves the threads unpinned.
 
+### Small floats on the GPU
+
+A block that computes in `f16`, `bf16`, `f8` or another 16- or 8-bit pack has
+a kernel for every GPU interface, and its results are the CPU's, bit for bit:
+each operation is rounded to the element type, whatever the block's goal.
+
+| GPU interface | `f16` | `bf16` | `f8` and the other packs |
+|---|---|---|---|
+| Metal | converted to and from `float` in Metal's `half`; `+ - * /` in `float`, rounded back | converted in the kernel; `+ - * /`, square roots and comparisons in integer arithmetic | converted in the kernel; arithmetic in `float` |
+| CUDA | converted in the kernel; arithmetic in `float` | converted in the kernel; arithmetic in `float` | converted in the kernel; arithmetic in `float` |
+| Vulkan and WebGPU | converted in the kernel; arithmetic in `float` | as Metal | converted in the kernel; arithmetic in `float` |
+
+"Converted in the kernel" means integer operations that every GPU has, the
+same steps as the CPU's routines, so no device feature is needed (no
+`shaderFloat16`, no `shader-f16`) and every device runs these kernels. The
+arrays are 16- and 8-bit buffers, as `u16` and `u8` arrays are. One `float`
+rounding gives the correctly rounded `f16`, `bf16` or `f8` result, so the
+rounded `float` operation is exact. The kernels use the precise forms of the
+`float` operations even when the block's goal is speed: correctly rounded
+division (Metal's own; Vulkan and WebGPU divide in integer arithmetic, as for
+an accuracy block), and Metal compiles them without fast maths.
+
+`bf16` values, and the products and quotients of `f16:pack(e7m8)` values,
+reach below `float`'s smallest normal value, and GPUs may flush such `float`s
+to zero (Apple's do, through Metal and through WebGPU). A block in those packs
+does its `float` `+ - * /`, square roots and comparisons in integer
+arithmetic on Metal, Vulkan and WebGPU, so subnormals are kept as the CPU
+keeps them. CUDA keeps subnormals in its own arithmetic.
+
+A NaN result is a NaN on every device, but which NaN (its payload and sign)
+an operation returns is the device's own, as it differs between CPUs.
+`XC_PAR_REPORT=1` names the packs a block converts each time it runs on the
+GPU:
+
+```
+par: scale: computes in f16, bf16 on the GPU, converting in the kernel
+```
+
 ### f4 arrays
 
 An f4 array packs two elements to a byte, and writing an element rewrites its
@@ -233,8 +271,9 @@ A block whose f4 writes cannot be kept apart this way is refused: one that
 writes an f4 array at an index computed from data (`a[idx[i]]`), or one
 element from every item (`a[0]`), and one that writes at offsets of both
 parities (`a[i]` and `b[i + 1]`). A loop `--par-style=auto` would lift stays a
-loop instead. Such a block runs on the CPU's threads, never on a GPU, and the
-compiler says so where the GPU could otherwise be used.
+loop instead. A block that reads or writes f4 array elements runs on the CPU's
+threads, never on a GPU, and the compiler says so where the GPU could
+otherwise be used.
 
 ## Blocks next to each other run as one
 

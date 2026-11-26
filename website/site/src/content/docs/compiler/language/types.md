@@ -207,8 +207,12 @@ results are the same bits the software routines give, NaN payloads included:
 
 arm64 Linux and Android rows target ARMv8.0, which has the half-precision
 conversions but not the arithmetic. A `par` block that computes in `f16`,
-`bf16`, `f8` or `f4` runs on the CPU; the compiler says so when the block could
-otherwise use the GPU.
+`bf16`, `f8` or another 16- or 8-bit pack runs on the GPU too, with the CPU's
+results: Metal converts `f16` in its own `half` type, and every other type and
+interface converts in the kernel ([Small floats on the
+GPU](/compiler/language/par/#small-floats-on-the-gpu)). A block that reads or
+writes `f4` array elements runs on the CPU; the compiler says so when the
+block could otherwise use the GPU.
 
 #### Calling C
 
