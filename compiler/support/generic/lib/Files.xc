@@ -206,11 +206,17 @@ class Files
     // Create a directory, tolerating one that is already there. The caller that
     // needs this is a compiler writing a cache under $HOME on a machine that has
     // never run it — so "already exists" is success, not a clash.
+    //
+    // The answer is whether the directory is there afterwards: the hosts'
+    // _xt_mkdir do not agree on what they return (1 for done on arm64, 0 on
+    // x86-64 Linux and win64), and the call's own result read as the answer
+    // turned it upside down on the latter (#719).
     static bool createDirectory(String* path)
         {
         if (path == 0 || path.byteLength() == (u32)0)
             return false;
-        return _xt_mkdir(path.cString()) != (i32)0;
+        _xt_mkdir(path.cString());
+        return exists(path);
         }
 
     static bool exists(String* path)
