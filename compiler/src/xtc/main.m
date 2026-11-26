@@ -858,11 +858,8 @@ static BOOL linkJoinsObjects(XTCommandLineOptions *opts) {
 // Whether that link takes an xcc object or archive (one that names the
 // runtime): the program is then numbered as a -c object is, so the two lay
 // out every class's vtable alike (#654). A C or Objective-C object does not
-// decide it. Not on arm9, whose back end does not yet pass a variadic tail
-// through a virtual call: numbered so, the program's own Stdio.printf would
-// make one. As the port.
+// decide it. As the port.
 static BOOL linkJoinsXcObjects(XTCommandLineOptions *opts) {
-    if (opts.useArm9Backend) return NO;
     NSMutableArray<NSString *> *toks = [NSMutableArray array];
     for (NSString *arg in opts.linkerArgs) {
         if ([arg hasPrefix:@"-Wl,"])

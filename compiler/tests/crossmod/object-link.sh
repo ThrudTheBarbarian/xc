@@ -21,9 +21,10 @@
 #   arm64   built and run here (macOS arm64 host)
 #   x86_64  -static and dynamic, run on $XTC_X86_HOST / $XTC_LINUX_HOST
 #   win64   run under wine
-#   arm9    statics, the program built with -c as well and the objects
-#           linked: built with $XTC_ARM9_SYSROOT, run on the XTOS loader under
-#           qemu when the sysroot holds freertos-hosttest.elf
+#   arm9    strings and statics, built with $XTC_ARM9_SYSROOT, and statics
+#           again with the program built with -c as well and the objects
+#           linked; run on the XTOS loader under qemu when the sysroot holds
+#           freertos-hosttest.elf
 #
 # Both compilers build every object and program; they are compared byte for
 # byte, and the xc compiler's are run.
@@ -41,8 +42,7 @@ trap 'rm -rf "$TMP"' EXIT
 fail=0
 bad() { echo "FAIL  $*"; fail=$((fail+1)); }
 # Flags for every compile and link of the target being built (arm9's -L),
-# and OBJLINK=1 to build the program with -c as well and link the objects
-# (arm9, whose driver takes no -Wl, objects).
+# and OBJLINK=1 to build the program with -c as well and link the objects.
 XFLAGS=()
 OBJLINK=0
 
@@ -145,13 +145,20 @@ if command -v wine >/dev/null 2>&1; then
 fi
 SR=${XTC_ARM9_SYSROOT:-}
 if [ -n "$SR" ] && [ -d "$SR" ]; then
-    XFLAGS=(-L "$SR"); OBJLINK=1
+    XFLAGS=(-L "$SR")
     if [ -f "$SR/freertos-hosttest.elf" ] && command -v qemu-system-arm >/dev/null 2>&1; then
+        build arm9 str-arm9 olmain.so olstr \
+            && check arm9 "$STR_WHAT" "$WANT_STR" "$(run_arm9 "$TMP/str-arm9/xcc-xc/olmain.so")"
         statics arm9 si-arm9 .so run_arm9
+        OBJLINK=1; statics arm9 si-arm9-objs .so run_arm9; OBJLINK=0
     else
-        statics arm9 si-arm9 .so && echo "PASS  arm9: statics built and compared (not run: no loader kernel)"
+        build arm9 str-arm9 olmain.so olstr \
+            && statics arm9 si-arm9 .so \
+            && { OBJLINK=1; statics arm9 si-arm9-objs .so; } \
+            && echo "PASS  arm9: built and compared (not run: no loader kernel)"
+        OBJLINK=0
     fi
-    XFLAGS=(); OBJLINK=0
+    XFLAGS=()
 else
     echo "SKIP  arm9: no \$XTC_ARM9_SYSROOT"
 fi

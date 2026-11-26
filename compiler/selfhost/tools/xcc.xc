@@ -717,12 +717,9 @@ bool namesRuntime(String* path)
 // Whether a program's link takes an xcc object or archive (one that names the
 // runtime): the program is then numbered as a -c object is, so the two lay out
 // every class's vtable alike (#654). A C or Objective-C object does not decide
-// it. Not on arm9, whose back end does not yet pass a variadic tail through a
-// virtual call: numbered so, the program's own Stdio.printf would make one. As
-// the reference.
+// it. As the reference.
 bool linkJoinsXcObjects(DriverOptions* d)
 {
-    if (isArm9(d)) return false;
     Array* li = d.linkInputs();
     for (u32 i = (u32)0; i < li.count(); i = i + (u32)1) {
         String* t = (String*)li.get(i);
