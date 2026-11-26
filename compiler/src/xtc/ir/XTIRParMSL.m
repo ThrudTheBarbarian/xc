@@ -76,6 +76,7 @@ static NSString* unsignedName(XTIRType* t)
     }
 
 static NSString* gParExtraMeta = nil;
+static BOOL gParKeepSubnormals = NO;
 // The block's :constant captures, by field index (par-check reads them from
 // the placeholder's `c<field>;` words): bound in Metal's constant address
 // space, which is read-only and broadcast to every thread.
@@ -109,6 +110,14 @@ static NSString* spaceName(XTParSpace s)
 + (NSString*)extraMeta
     {
     return gParExtraMeta ?: @"";
+    }
++ (void)setKeepSubnormals:(BOOL)keep
+    {
+    gParKeepSubnormals = keep;
+    }
++ (BOOL)keepSubnormals
+    {
+    return gParKeepSubnormals;
     }
 
 + (nullable NSString*)sourceForKernel:(XTIRFunction*)run module:(XTIRModule*)module fast:(BOOL)fast
@@ -1148,6 +1157,60 @@ static NSString* arrFn(unichar c)
     return (ok && !self.failed) ? out : nil;
     }
 
+// An operand's integer constant (an immediate, or a Use of a Const), or -1.
+- (int64_t)packConst:(XTIROperand*)o
+    {
+    if (o.kind == XTIROperandKindImmI)
+        return o.intValue;
+    XTIRInsn* d = o.kind == XTIROperandKindUse ? self.def[@(o.valueId)] : nil;
+    if (d && d.opcode == XTIROpConst && d.operands.count && d.operands[0].kind == XTIROperandKindImmI)
+        return d.operands[0].intValue;
+    return -1;
+    }
+
+// The name a function of the program prints under, printed once before the
+// kernel (the subset check has walked it), or nil with the reason.
+- (nullable NSString*)helperNamed:(NSString*)callee
+    {
+    XTIRFunction* target = nil;
+    for (XTIRFunction* g in self.module.functions)
+        if ([g.name isEqualToString:callee])
+            target = g;
+    if (!target)
+        return nil;
+    NSString* fn = [@"h_" stringByAppendingString:[callee stringByReplacingOccurrencesOfString:@"$" withString:@"_"]];
+    if (![self.helperNames containsObject:callee])
+        {
+        [self.helperNames addObject:callee];
+        XTIRParMSL* h = [XTIRParMSL new];
+        h.module = self.module;
+        h.fn = target;
+        h.helperMode = YES;
+        h.fast = self.fast;
+        h.helperText = self.helperText;
+        h.helperNames = self.helperNames;
+        NSString* text = [h printHelper:fn];
+        if (!text)
+            {
+            [self because:[self callFailed:callee helper:h]];
+            return nil;
+            }
+        [self.helperText addObject:text];
+        }
+    return fn;
+    }
+
+// A float operation of a block that keeps subnormals (setKeepSubnormals:):
+// its ParSoftFloat.xc routine, or nil with the reason.
+- (nullable NSString*)softFloat:(NSString*)routine
+    {
+    NSString* fn = [self helperNamed:routine];
+    if (!fn)
+        [self because:@"it computes in bf16 or another pack whose values reach below float's normal range, and its GPU "
+                      @"version has no float arithmetic that keeps them"];
+    return fn;
+    }
+
 - (nullable NSString*)binary:(XTIRInsn*)i
     {
     XTIRType* t = i.result.type;
@@ -1156,6 +1219,13 @@ static NSString* arrFn(unichar c)
     if (!a || !b)
         return nil;
     NSString* n = scalarName(t);
+    if (gParKeepSubnormals && t.kind == XTIRTypeKindF32
+        && (i.opcode == XTIROpFAdd || i.opcode == XTIROpFSub || i.opcode == XTIROpFMul || i.opcode == XTIROpFDiv))
+        {
+        NSString* fn = [self softFloat:i.opcode == XTIROpFAdd ? @"xcFaddRn" : i.opcode == XTIROpFSub ? @"xcFsubRn"
+                                     : i.opcode == XTIROpFMul ? @"xcFmulRn" : @"xcFdivRn"];
+        return fn ? [NSString stringWithFormat:@"%@(%@, %@)", fn, a, b] : nil;
+        }
     switch (i.opcode)
         {
         // Signed overflow is undefined in MSL (as in C++): a signed + - * <<
@@ -1205,6 +1275,14 @@ static NSString* arrFn(unichar c)
         static NSString* fops[] = { @"==", @"!=", @"<", @">", @"<=", @">=" };
         if (i.predicate > XTIRFCmpOGE)
             return nil;
+        if (gParKeepSubnormals && t.kind == XTIRTypeKindF32)
+            {
+            // > and >= are < and <= the other way round.
+            static NSString* sops[] = { @"xcFeqRn", @"xcFneRn", @"xcFltRn", @"xcFltRn", @"xcFleRn", @"xcFleRn" };
+            NSString* fn = [self softFloat:sops[i.predicate]];
+            BOOL swap = i.predicate == XTIRFCmpOGT || i.predicate == XTIRFCmpOGE;
+            return fn ? [NSString stringWithFormat:@"%@(%@, %@)", fn, swap ? b : a, swap ? a : b] : nil;
+            }
         return [NSString stringWithFormat:@"(%@ %@ %@)", a, fops[i.predicate], b];
         }
     static NSString* iops[] = { @"==", @"!=", @"<", @">", @"<=", @">=", @"<", @">", @"<=", @">=" };
@@ -1294,6 +1372,11 @@ static NSString* intrinsicFor(NSString* callee)
         case XTIROpFSqrt:
             {
             NSString* a = [self expr:i.operands[0] type:rt];
+            if (a && gParKeepSubnormals && rt.kind == XTIRTypeKindF32)
+                {
+                NSString* fn = [self softFloat:@"xcFsqrtRn"];
+                return fn ? [NSString stringWithFormat:@"%@ = %@(%@);", r, fn, a] : nil;
+                }
             return a ? [NSString stringWithFormat:@"%@ = %@::sqrt(%@);", r, self.fast ? @"fast" : @"precise", a] : nil;
             }
         case XTIROpICmp:
@@ -1394,6 +1477,39 @@ static NSString* intrinsicFor(NSString* callee)
             // The static-init machinery: the host has run it.
             if ([callee isEqualToString:@"_xtc_sinit_run"] || [callee hasSuffix:@"$init"])
                 return @"";
+            // A float's bits and back (FloatPack.xc, ParSoftFloat.xc): Metal's bit cast.
+            BOOL toBits = [callee isEqualToString:@"_xt_fpk_bits"] || [callee isEqualToString:@"xcF32Bits"];
+            if ((toBits || [callee isEqualToString:@"_xt_fpk_float"] || [callee isEqualToString:@"xcF32FromBits"])
+                && i.operands.count >= 2)
+                {
+                XTIROperand* o = i.operands[1];
+                NSString* e = [self expr:o type:(o.kind == XTIROperandKindUse ? [self typeOf:o.valueId] : rt)];
+                if (!e)
+                    return nil;
+                return [NSString stringWithFormat:@"%@ = as_type<%@>(%@);", r, toBits ? @"uint" : @"float", e];
+                }
+            // f16 to and from float in Metal's own half, which is IEEE binary16
+            // and converts every value exactly both ways (checked for every
+            // pattern): the FloatPack call with (5, 10). Apple GPUs give the
+            // default NaN for any NaN, so a NaN takes FloatPack's bits instead:
+            // the payload as it is, signalling or quiet (widening), and its top
+            // ten bits made quiet (rounding).
+            BOOL unpack16 = [callee isEqualToString:@"_xt_fpk_unpack"];
+            if ((unpack16 || [callee isEqualToString:@"_xt_fpk_pack_f32"]) && i.operands.count >= 4
+                && [self packConst:i.operands[2]] == 5 && [self packConst:i.operands[3]] == 10)
+                {
+                XTIROperand* o = i.operands[1];
+                NSString* e = [self expr:o type:(o.kind == XTIROperandKindUse ? [self typeOf:o.valueId] : rt)];
+                if (!e)
+                    return nil;
+                if (unpack16)
+                    return [NSString stringWithFormat:@"%@ = (ushort(%@) & 0x7FFFu) > 0x7C00u ? as_type<float>(((uint(ushort(%@)) & 0x8000u) << 16) | "
+                                                      @"0x7F800000u | ((uint(ushort(%@)) & 0x3FFu) << 13)) : float(as_type<half>(ushort(%@)));",
+                                                      r, e, e, e, e];
+                return [NSString stringWithFormat:@"%@ = (as_type<uint>(%@) & 0x7FFFFFFFu) > 0x7F800000u ? ushort(((as_type<uint>(%@) >> 16) & 0x8000u) | "
+                                                  @"0x7E00u | ((as_type<uint>(%@) >> 13) & 0x3FFu)) : as_type<ushort>(half(%@));",
+                                                  r, e, e, e, e];
+                }
             NSString* fn = intrinsicFor(callee);
             // The speed goal: Metal's fast versions, in place of the precise ones.
             if (self.fast && [fn hasPrefix:@"precise::"])
@@ -1401,33 +1517,10 @@ static NSString* intrinsicFor(NSString* callee)
             BOOL isVoid = !rt || rt.kind == XTIRTypeKindMemory;
             if (!fn)
                 {
-                // A function of the program (the subset check has walked it):
-                // printed once, before the kernel.
-                XTIRFunction* target = nil;
-                for (XTIRFunction* g in self.module.functions)
-                    if ([g.name isEqualToString:callee])
-                        target = g;
-                if (!target)
+                // A function of the program: printed once, before the kernel.
+                fn = [self helperNamed:callee];
+                if (!fn)
                     return nil;
-                fn = [@"h_" stringByAppendingString:[callee stringByReplacingOccurrencesOfString:@"$" withString:@"_"]];
-                if (![self.helperNames containsObject:callee])
-                    {
-                    [self.helperNames addObject:callee];
-                    XTIRParMSL* h = [XTIRParMSL new];
-                    h.module = self.module;
-                    h.fn = target;
-                    h.helperMode = YES;
-                    h.fast = self.fast;
-                    h.helperText = self.helperText;
-                    h.helperNames = self.helperNames;
-                    NSString* text = [h printHelper:fn];
-                    if (!text)
-                        {
-                        [self because:[self callFailed:callee helper:h]];
-                        return nil;
-                        }
-                    [self.helperText addObject:text];
-                    }
                 }
             else if (isVoid)
                 return nil;

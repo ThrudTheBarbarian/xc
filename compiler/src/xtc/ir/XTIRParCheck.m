@@ -313,6 +313,124 @@ static BOOL XTParUsesFloatPack(XTIRModule* module, XTIRFunction* f, NSMutableSet
     return NO;
     }
 
+// Does the function, or one it calls, compute in a pack whose values reach
+// below float's normal range: a FloatPack call with 7 or more exponent bits
+// (bf16, f16:pack(e7m8))? Its products and quotients, and bf16's own values,
+// are subnormal floats there, which a GPU may flush to zero; such a block's
+// kernels keep them (XTIRParMSL setKeepSubnormals:).
+static BOOL XTParPackKeepsSubnormals(XTIRModule* module, XTIRFunction* f, NSMutableSet<NSString*>* seen)
+    {
+    if (!f || [seen containsObject:f.name])
+        return NO;
+    [seen addObject:f.name];
+    NSMutableDictionary<NSNumber*, XTIRInsn*>* def = [NSMutableDictionary dictionary];
+    for (XTIRBlock* b in f.blocks)
+        for (XTIRInsn* i in b.instructions)
+            if (i.result)
+                def[@(i.result.valueId)] = i;
+    for (XTIRBlock* b in f.blocks)
+        for (XTIRInsn* i in b.instructions)
+            {
+            if (i.opcode != XTIROpCall || i.operands.count < 4 || i.operands[0].kind != XTIROperandKindSym)
+                continue;
+            XTIRSymbol* sym = [module symbolForId:i.operands[0].symbolId];
+            if ([sym.name hasPrefix:@"_xt_fpk_"])
+                {
+                // [callee, value, e, m, ...]: the exponent bits, a constant.
+                XTIROperand* e = i.operands[2];
+                XTIRInsn* d = e.kind == XTIROperandKindUse ? def[@(e.valueId)] : nil;
+                int64_t v = e.kind == XTIROperandKindImmI ? e.intValue
+                          : (d && d.opcode == XTIROpConst && d.operands.count && d.operands[0].kind == XTIROperandKindImmI)
+                              ? d.operands[0].intValue : 0;
+                if (v >= 7)
+                    return YES;
+                continue;
+                }
+            if (sym.function && XTParPackKeepsSubnormals(module, sym.function, seen))
+                return YES;
+            }
+    return NO;
+    }
+
+// A pack's spelling from the (e, m) or (e, m, k) a FloatPack call takes, as
+// diagnostics write it: f16, bf16, f8, f4, or T:pack(eXmY[, kind]).
+static NSString* XTParPackName(int64_t e, int64_t m, int64_t k)
+    {
+    if (k & 4)
+        return @"f8:pack(ue8m0)";
+    int64_t kind = k & 3;
+    int64_t w = 1 + e + m;
+    if (kind == 0 && e == 5 && m == 10)
+        return @"f16";
+    if (kind == 0 && e == 8 && m == 7)
+        return @"bf16";
+    if (kind == 1 && e == 4 && m == 3)
+        return @"f8";
+    if (kind == 2 && e == 2 && m == 1)
+        return @"f4";
+    // The kind is written when it is not the split's default: finite for f8's
+    // e4m3, ieee for every other.
+    int64_t def = (w == 8 && e == 4 && m == 3) ? 1 : 0;
+    NSString* kn = kind == def ? @"" : kind == 0 ? @",ieee" : kind == 1 ? @",finite" : @",none";
+    return [NSString stringWithFormat:@"f%lld:pack(e%lldm%lld%@)", (long long)w, (long long)e, (long long)m, kn];
+    }
+
+// The packs a block computes in, first met first (the function, then each
+// one it calls where it calls it), into `names`.
+static void XTParPackNames(XTIRModule* module, XTIRFunction* f, NSMutableSet<NSString*>* seen,
+                           NSMutableArray<NSString*>* names)
+    {
+    if (!f || [seen containsObject:f.name])
+        return;
+    [seen addObject:f.name];
+    NSMutableDictionary<NSNumber*, XTIRInsn*>* def = [NSMutableDictionary dictionary];
+    for (XTIRBlock* b in f.blocks)
+        for (XTIRInsn* i in b.instructions)
+            if (i.result)
+                def[@(i.result.valueId)] = i;
+    int64_t (^num)(XTIROperand*) = ^int64_t(XTIROperand* o) {
+        if (o.kind == XTIROperandKindImmI)
+            return o.intValue;
+        XTIRInsn* d = o.kind == XTIROperandKindUse ? def[@(o.valueId)] : nil;
+        if (d && d.opcode == XTIROpConst && d.operands.count && d.operands[0].kind == XTIROperandKindImmI)
+            return d.operands[0].intValue;
+        return -1;
+    };
+    for (XTIRBlock* b in f.blocks)
+        for (XTIRInsn* i in b.instructions)
+            {
+            if (i.opcode != XTIROpCall || !i.operands.count || i.operands[0].kind != XTIROperandKindSym)
+                continue;
+            XTIRSymbol* sym = [module symbolForId:i.operands[0].symbolId];
+            NSString* nm = sym.name;
+            if ([nm hasPrefix:@"_xt_fpk_unpack"] || [nm hasPrefix:@"_xt_fpk_pack_"])
+                {
+                // [callee, value, e, m, (k,) ...]; k for the kinds' routines.
+                BOOL kinds = [nm hasSuffix:@"k"] && ![nm isEqualToString:@"_xt_fpk_unpack"];
+                if (i.operands.count < (kinds ? 5u : 4u))
+                    continue;
+                int64_t e = num(i.operands[2]), m = num(i.operands[3]), k = kinds ? num(i.operands[4]) : 0;
+                if (e < 0 || m < 0 || k < 0)
+                    continue;
+                NSString* n = XTParPackName(e, m, k);
+                if (![names containsObject:n])
+                    [names addObject:n];
+                continue;
+                }
+            if (sym.function)
+                XTParPackNames(module, sym.function, seen, names);
+            }
+    }
+
+// ` packs=<a>+<b>`, the packs a block's kernels compute in by converting in
+// the kernel (XC_PAR_REPORT says so when it runs on the GPU), or "".
+static NSString* XTParPackWords(XTIRModule* module, XTIRFunction* f)
+    {
+    NSMutableArray<NSString*>* names = [NSMutableArray array];
+    XTParPackNames(module, f, [NSMutableSet set], names);
+    return names.count ? [@" packs=" stringByAppendingString:[names componentsJoinedByString:@"+"]] : @"";
+    }
+
 // The f4 element addresses the lowering formed: each ElementAddr instruction
 // to the element index it came from.
 static NSMapTable<XTIRInsn*, XTIRValue*>* XTIRF4Elements(void)
@@ -372,7 +490,7 @@ static BOOL XTParTouchesF4(XTIRModule* module, XTIRFunction* f, NSMutableSet<NSS
 // thread, where the writes cannot be placed; -1 when no write constrains it.
 // Set by dependenceIn:, by block in checkModule:.
 static NSInteger gParF4Pair = -1;
-static NSString* const XTParSmallFloatWhy = @"it computes in f16, bf16, f8 or f4, which GPU kernels do not take yet";
+static NSString* const XTParSmallFloatWhy = @"it reads or writes f4 array elements, two to a byte, which GPU kernels do not take yet";
 static NSMutableDictionary<NSString*, NSNumber*>* gParPairs = nil;
 
 @implementation XTIROptGpuEscapeTrips
@@ -1496,6 +1614,13 @@ static BOOL gEmitsWGSL = NO;
                 lit = b;
             }
         BOOL fast = tag == fastTag;
+        // A block that computes in a pack rounds each operation to it, its
+        // goal speed or not (as on the CPU): its kernels take the precise
+        // forms of the float operations (correctly rounded division, no
+        // flushing), which that one rounding relies on.
+        if (fast && XTParUsesFloatPack(module, f, [NSMutableSet set]))
+            fast = NO;
+        [XTIRParMSL setKeepSubnormals:XTParPackKeepsSubnormals(module, f, [NSMutableSet set])];
         // The block's reductions, after the tag: `<field>=<op>;` each (bug 645).
         NSMutableDictionary<NSNumber*, NSString*>* redOps = nil;
         NSMutableIndexSet* constFields = [NSMutableIndexSet indexSet];
@@ -1559,6 +1684,7 @@ static BOOL gEmitsWGSL = NO;
                             stringByAppendingString:[fc costWordsIn:f]]
                             stringByAppendingString:[[fc guardWordsIn:f guards:gParGuards[fcls]]
                                                         stringByAppendingString:[fc mergeWordsIn:f redOps:redOps fast:fast]]];
+        meta = [meta stringByAppendingString:XTParPackWords(module, f)];
         [XTIRParMSL setExtraMeta:meta];
         NSString* (^ptxOf)(NSString* _Nullable* _Nullable) = ^NSString*(NSString* _Nullable* _Nullable w) {
             NSString* t = kf ? [XTIRParMSL ptxForKernel:kf module:kmod fast:fast redOps:redOps why:NULL] : nil;
@@ -1704,14 +1830,11 @@ static BOOL gEmitsWGSL = NO;
                 [(dwhy ?: @"(no reason)") writeToFile:[base stringByAppendingString:@".why"] atomically:NO
                                              encoding:NSUTF8StringEncoding error:nil];
             }
+        [XTIRParMSL setKeepSubnormals:NO];
         if (!kernel)
             {
             // On a target with a GPU, say why this block stays on the CPU.
             NSString* cls = [f.name substringToIndex:f.name.length - 4];
-            // A 16-bit float's operations are calls the kernels do not have:
-            // the block runs on the CPU, in the type's own precision.
-            if (XTParUsesFloatPack(module, f, [NSMutableSet set]))
-                why = XTParSmallFloatWhy;
             // A loop the compiler lifted by itself says so only under
             // -Wpar-auto: a plain program is not told about a block it never
             // wrote. Mirrored in the port.
@@ -2815,7 +2938,10 @@ static BOOL parIsComputeOp(XTIROpcode op)
                 {
                 XTIRSymbol* sym = [self.module symbolForId:i.operands[0].symbolId];
                 XTIRFunction* callee = sym.name ? self.fnByName[sym.name] : nil;
-                if (callee && ![visited containsObject:sym.name])
+                // A small float's conversion (FloatPack.xc) is a few
+                // instructions in a kernel, whatever its routine's loops: it
+                // counts as the call alone, as a maths function does.
+                if (callee && ![visited containsObject:sym.name] && ![sym.name hasPrefix:@"_xt_fpk_"])
                     [self costOf:callee visited:visited ops:ops loop:loop top:NO];
                 }
             }

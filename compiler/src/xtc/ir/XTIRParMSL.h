@@ -30,6 +30,12 @@ NS_ASSUME_NONNULL_BEGIN
 // placeholder's `a<field>=` words), for the next kernel printed.
 + (void)setArrayReductions:(nullable NSDictionary<NSNumber*, NSString*>*)words;
 + (NSString*)extraMeta;
+// Whether the next block's kernels keep subnormal floats: their float + - * /,
+// square roots and comparisons call ParSoftFloat.xc's routines in place of
+// the GPU's, which may flush subnormals to zero (a block computing in a pack
+// whose values reach below float's normal range, XTParPackKeepsSubnormals).
++ (void)setKeepSubnormals:(BOOL)keep;
++ (BOOL)keepSubnormals;
 
 // The kernel's MSL, or nil when this block cannot run on Metal: it uses f64
 // (§7), a global, a call other than the maths intrinsics, or IR the printer

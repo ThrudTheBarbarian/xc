@@ -823,6 +823,21 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
                 b = [self spvCanon:b type:as];
             }
         }
+    if (t.kind == XTIRTypeKindF32 && [XTIRParMSL keepSubnormals]
+        && (i.opcode == XTIROpFAdd || i.opcode == XTIROpFSub || i.opcode == XTIROpFMul || i.opcode == XTIROpFDiv))
+        {
+        // A block that keeps subnormals (setKeepSubnormals:): ParSoftFloat.xc's.
+        uint32_t fid = [self spvHelperId:i.opcode == XTIROpFAdd ? @"xcFaddRn" : i.opcode == XTIROpFSub ? @"xcFsubRn"
+                                       : i.opcode == XTIROpFMul ? @"xcFmulRn" : @"xcFdivRn"];
+        if (!fid)
+            {
+            [self because:@"it computes in bf16 or another pack whose values reach below float's normal range, and "
+                          @"its GPU version has no float arithmetic that keeps them"];
+            return NO;
+            }
+        [self setResult:i to:[self emit:SpvOpFunctionCall type:ty args:@[ @(fid), @(a), @(b) ]]];
+        return YES;
+        }
     uint32_t op;
     switch (i.opcode)
         {
@@ -922,6 +937,22 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
         if (i.predicate > XTIRFCmpOGE)
             return NO;
         op = fops[i.predicate];
+        if ([XTIRParMSL keepSubnormals] && t.kind == XTIRTypeKindF32)
+            {
+            // > and >= are < and <= the other way round.
+            static NSString* const sops[] = { @"xcFeqRn", @"xcFneRn", @"xcFltRn", @"xcFltRn", @"xcFleRn", @"xcFleRn" };
+            uint32_t fid = [self spvHelperId:sops[i.predicate]];
+            if (!fid)
+                {
+                [self because:@"it computes in bf16 or another pack whose values reach below float's normal range, "
+                              @"and its GPU version has no float comparison that keeps them"];
+                return NO;
+                }
+            BOOL swap = i.predicate == XTIRFCmpOGT || i.predicate == XTIRFCmpOGE;
+            [self setResult:i to:[self emit:SpvOpFunctionCall type:[self.spv typeBool]
+                                       args:@[ @(fid), @(swap ? b : a), @(swap ? a : b) ]]];
+            return YES;
+            }
         }
     else
         {
@@ -1121,7 +1152,9 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
         [argTypes addObject:at];
         }
     // A float's bits and back (ParSoftFloat.xc): a bit cast.
-    if (([callee isEqualToString:@"xcF32Bits"] || [callee isEqualToString:@"xcF32FromBits"]) && args.count == 1)
+    // FloatPack.xc's the same.
+    if (([callee isEqualToString:@"xcF32Bits"] || [callee isEqualToString:@"xcF32FromBits"]
+         || [callee isEqualToString:@"_xt_fpk_bits"] || [callee isEqualToString:@"_xt_fpk_float"]) && args.count == 1)
         {
         [self setResult:i to:[self emit:SpvOpBitcast type:[self spvType:rt] args:@[ args[0] ]]];
         return YES;
@@ -1503,6 +1536,9 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
             continue;
         if (phi.result.type.kind == XTIRTypeKindPtr)
             return NO;   // a phi of pointers: not in this cut
+        // A phi nothing reads has no variable (spvLocals): nothing to copy.
+        if (!self.sf.varOf[@(phi.result.valueId)])
+            continue;
         XTIROperand* in = nil;
         for (NSUInteger k = 0; k + 1 < phi.operands.count; k += 2)
             if (phi.operands[k].blockRef == from)

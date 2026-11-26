@@ -1030,6 +1030,11 @@ static NSString* ptxNarrowFix(XTIRType* t, NSString* r)
                 [args addObject:e];
                 [argTypes addObject:at];
                 }
+            // A float's bits and back (FloatPack.xc): a move.
+            if (([callee isEqualToString:@"_xt_fpk_bits"] || [callee isEqualToString:@"_xt_fpk_float"]
+                 || [callee isEqualToString:@"_xt_fpk_bits64"]) && args.count == 1)
+                return [NSString stringWithFormat:@"\tmov.b%@ %@, %@;\n",
+                                                  [callee isEqualToString:@"_xt_fpk_bits64"] ? @"64" : @"32", r, args[0]];
             // The precise maths PTX has as instructions. A function of the
             // program spelled like one is not (XTIRParIsMathCallee).
             NSString* m = XTIRParIsMathCallee(callee) ? callee : @"";

@@ -169,6 +169,18 @@
             wgSet(ip, e);
             return true;
             }
+        if (IRType.is(t, tyF32) && _mSubn && (o == opFAdd || o == opFSub || o == opFMul || o == opFDiv))
+            {
+            // A block that keeps subnormals: ParSoftFloat.xc's. As the reference.
+            String* h = wgHelperName(spvS(o == opFAdd ? "xcFaddRn" : o == opFSub ? "xcFsubRn" : o == opFMul ? "xcFmulRn" : "xcFdivRn"));
+            if (h == (String*)0)
+                {
+                self.parBecause(spvS("it computes in bf16 or another pack whose values reach below float's normal range, and its GPU version has no float arithmetic that keeps them"));
+                return false;
+                }
+            wgSet(ip, String.withFormat("%s(%s, %s)", h.cString(), a.cString(), b.cString()));
+            return true;
+            }
         if (IRType.is(t, tyF32))
             {
             string op = (string)0;
@@ -265,6 +277,20 @@
             else if (p.equals(self.spvS("OGE"))) op = ">=";
             if (op == (string)0 || !IRType.is(t, tyF32)) return false;
             e = String.withFormat("(%s %s %s)", a.cString(), op, b.cString());
+            if (_mSubn)
+                {
+                // > and >= are < and <= the other way round. As the reference.
+                bool swap = p.equals(self.spvS("OGT")) || p.equals(self.spvS("OGE"));
+                string sr = p.equals(self.spvS("OEQ")) ? "xcFeqRn" : p.equals(self.spvS("ONE")) ? "xcFneRn"
+                         : p.equals(self.spvS("OLT")) || p.equals(self.spvS("OGT")) ? "xcFltRn" : "xcFleRn";
+                String* h = wgHelperName(spvS(sr));
+                if (h == (String*)0)
+                    {
+                    self.parBecause(spvS("it computes in bf16 or another pack whose values reach below float's normal range, and its GPU version has no float comparison that keeps them"));
+                    return false;
+                    }
+                e = String.withFormat("%s(%s, %s)", h.cString(), swap ? b.cString() : a.cString(), swap ? a.cString() : b.cString());
+                }
             }
         else if (wgWide(t))
             {
@@ -470,9 +496,12 @@
             args.add((Object*)v);
             }
         // A float's bits and back (ParSoftFloat.xc): WGSL's bit cast.
-        if ((callee.equals(self.spvS("xcF32Bits")) || callee.equals(self.spvS("xcF32FromBits"))) && args.count() == (u32)1)
+        // FloatPack.xc's the same.
+        if ((callee.equals(self.spvS("xcF32Bits")) || callee.equals(self.spvS("xcF32FromBits"))
+             || callee.equals(self.spvS("_xt_fpk_bits")) || callee.equals(self.spvS("_xt_fpk_float"))) && args.count() == (u32)1)
             {
-            wgSet(ip, String.withFormat(callee.equals(self.spvS("xcF32Bits")) ? "bitcast<u32>(%s)" : "bitcast<f32>(%s)",
+            bool toBits = callee.equals(self.spvS("xcF32Bits")) || callee.equals(self.spvS("_xt_fpk_bits"));
+            wgSet(ip, String.withFormat(toBits ? "bitcast<u32>(%s)" : "bitcast<f32>(%s)",
                                         ((String*)args.get((u32)0)).cString()));
             return true;
             }

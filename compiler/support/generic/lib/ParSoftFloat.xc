@@ -201,3 +201,199 @@ float xcFsqrtRn(float a)
         }
     return xcF32FromBits(xcSfRound((u32)0, e / (i32)2, root, rem != (u32)0));
     }
+
+// The sum, difference and product of two floats, correctly rounded, with
+// subnormals in and out, and the ordered comparisons by the bits: what a
+// `par` block computing in a pack whose values reach below float's normal
+// range (bf16, f16:pack(e7m8)) uses in place of the hardware's on a GPU,
+// which may flush subnormal floats to zero (Apple's do). Its divisions and
+// square roots are the ones above, for the same reason.
+float xcFaddRn(float a, float b)
+    {
+    u32 x = xcF32Bits(a);
+    u32 y = xcF32Bits(b);
+    u32 ax = x & (u32)0x7FFFFFFF;
+    u32 ay = y & (u32)0x7FFFFFFF;
+    if (ax > (u32)0x7F800000)
+        return xcF32FromBits(x | (u32)0x400000);
+    if (ay > (u32)0x7F800000)
+        return xcF32FromBits(y | (u32)0x400000);
+    if (ax == (u32)0x7F800000)
+        {
+        if (ay == (u32)0x7F800000 && x != y)
+            return xcF32FromBits((u32)0x7FC00000);              // inf - inf
+        return a;
+        }
+    if (ay == (u32)0x7F800000)
+        return b;
+    if (ay == (u32)0)
+        {
+        if (ax == (u32)0)
+            return xcF32FromBits(x & y);                        // -0 only from -0 + -0
+        return a;
+        }
+    if (ax == (u32)0)
+        return b;
+    // The larger magnitude first.
+    if (ay > ax)
+        {
+        u32 tx = x; x = y; y = tx;
+        u32 ta = ax; ax = ay; ay = ta;
+        }
+    u32 sign = x & (u32)0x80000000;
+    u32 ex = ax >> (u32)23;
+    u32 ey = ay >> (u32)23;
+    // 24-bit significands; a subnormal has no leading one and the exponent
+    // of the smallest normal. Three more bits below, for the rounding.
+    u32 mx = ax & (u32)0x7FFFFF;
+    u32 my = ay & (u32)0x7FFFFF;
+    if (ex == (u32)0) ex = (u32)1; else mx = mx | (u32)0x800000;
+    if (ey == (u32)0) ey = (u32)1; else my = my | (u32)0x800000;
+    mx = mx << (u32)3;
+    my = my << (u32)3;
+    u32 d = ex - ey;
+    if (d > (u32)27)
+        my = (u32)1;                                            // all sticky
+    else if (d > (u32)0)
+        {
+        bool lost = (my & (((u32)1 << d) - (u32)1)) != (u32)0;
+        my = my >> d;
+        if (lost) my = my | (u32)1;
+        }
+    u32 m = ((x ^ y) & (u32)0x80000000) != (u32)0 ? mx - my : mx + my;
+    if (m == (u32)0)
+        return xcF32FromBits((u32)0);                           // x - x is +0
+    // value = m * 2^(ex - 127 - 26), so a leading one at bit 25 is
+    // 2^(ex - 128); move it there.
+    i32 e = (i32)ex - (i32)128;
+    u32 p = (u32)31 - xcSfClz(m);
+    bool sticky = false;
+    if (p > (u32)25)
+        {
+        u32 s = p - (u32)25;
+        sticky = (m & (((u32)1 << s) - (u32)1)) != (u32)0;
+        m = m >> s;
+        e = e + (i32)s;
+        }
+    else if (p < (u32)25)
+        {
+        u32 s = (u32)25 - p;
+        m = m << s;
+        e = e - (i32)s;
+        }
+    return xcF32FromBits(xcSfRound(sign, e, m, sticky));
+    }
+
+float xcFsubRn(float a, float b)
+    {
+    return xcFaddRn(a, xcF32FromBits(xcF32Bits(b) ^ (u32)0x80000000));
+    }
+
+float xcFmulRn(float a, float b)
+    {
+    u32 x = xcF32Bits(a);
+    u32 y = xcF32Bits(b);
+    u32 sign = (x ^ y) & (u32)0x80000000;
+    u32 ax = x & (u32)0x7FFFFFFF;
+    u32 ay = y & (u32)0x7FFFFFFF;
+    if (ax > (u32)0x7F800000)
+        return xcF32FromBits(x | (u32)0x400000);
+    if (ay > (u32)0x7F800000)
+        return xcF32FromBits(y | (u32)0x400000);
+    if (ax == (u32)0x7F800000 || ay == (u32)0x7F800000)
+        {
+        if (ax == (u32)0 || ay == (u32)0)
+            return xcF32FromBits((u32)0x7FC00000);              // inf * 0
+        return xcF32FromBits(sign | (u32)0x7F800000);
+        }
+    if (ax == (u32)0 || ay == (u32)0)
+        return xcF32FromBits(sign);
+    u32 ex = ax >> (u32)23;
+    u32 ey = ay >> (u32)23;
+    u32 mx = ax & (u32)0x7FFFFF;
+    u32 my = ay & (u32)0x7FFFFF;
+    i32 eA = (i32)ex - (i32)127;
+    i32 eB = (i32)ey - (i32)127;
+    if (ex == (u32)0)
+        {
+        u32 s = xcSfClz(mx) - (u32)8;
+        mx = mx << s;
+        eA = (i32)-126 - (i32)s;
+        }
+    else
+        mx = mx | (u32)0x800000;
+    if (ey == (u32)0)
+        {
+        u32 s = xcSfClz(my) - (u32)8;
+        my = my << s;
+        eB = (i32)-126 - (i32)s;
+        }
+    else
+        my = my | (u32)0x800000;
+    // The 48-bit product from 12-bit halves (no 64-bit integers on every
+    // GPU): hi holds bits 47..24, lo bits 23..0.
+    u32 ah = mx >> (u32)12;
+    u32 al = mx & (u32)0xFFF;
+    u32 bh = my >> (u32)12;
+    u32 bl = my & (u32)0xFFF;
+    u32 mid = ah * bl + al * bh;
+    u32 lo = al * bl + ((mid & (u32)0xFFF) << (u32)12);
+    u32 hi = ah * bh + (mid >> (u32)12) + (lo >> (u32)24);
+    lo = lo & (u32)0xFFFFFF;
+    i32 e = eA + eB;
+    u32 m = (u32)0;
+    bool sticky = false;
+    if ((hi & (u32)0x800000) != (u32)0)
+        {
+        m = (hi << (u32)2) | (lo >> (u32)22);
+        sticky = (lo & (u32)0x3FFFFF) != (u32)0;
+        e = e + (i32)1;
+        }
+    else
+        {
+        m = (hi << (u32)3) | (lo >> (u32)21);
+        sticky = (lo & (u32)0x1FFFFF) != (u32)0;
+        }
+    return xcF32FromBits(xcSfRound(sign, e, m, sticky));
+    }
+
+// -1 below, 0 equal, 1 above, 2 unordered (a NaN), from the bits: a sign and
+// magnitude made one signed integer orders like the values, -0 and +0 alike.
+i32 xcFcmpRn(float a, float b)
+    {
+    u32 x = xcF32Bits(a);
+    u32 y = xcF32Bits(b);
+    u32 ax = x & (u32)0x7FFFFFFF;
+    u32 ay = y & (u32)0x7FFFFFFF;
+    if (ax > (u32)0x7F800000 || ay > (u32)0x7F800000)
+        return (i32)2;
+    i32 kx = (x & (u32)0x80000000) != (u32)0 ? (i32)0 - (i32)ax : (i32)ax;
+    i32 ky = (y & (u32)0x80000000) != (u32)0 ? (i32)0 - (i32)ay : (i32)ay;
+    if (kx < ky)
+        return (i32)-1;
+    if (kx > ky)
+        return (i32)1;
+    return (i32)0;
+    }
+
+bool xcFltRn(float a, float b)
+    {
+    return xcFcmpRn(a, b) == (i32)-1;
+    }
+
+bool xcFleRn(float a, float b)
+    {
+    i32 c = xcFcmpRn(a, b);
+    return c == (i32)-1 || c == (i32)0;
+    }
+
+bool xcFeqRn(float a, float b)
+    {
+    return xcFcmpRn(a, b) == (i32)0;
+    }
+
+// != as the CPU's: true for a NaN too.
+bool xcFneRn(float a, float b)
+    {
+    return xcFcmpRn(a, b) != (i32)0;
+    }

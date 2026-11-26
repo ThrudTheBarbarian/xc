@@ -281,6 +281,48 @@
         return out;
         }
 
+    // An operand's integer constant (an immediate, or a Use of a Const), or -1.
+    final i64 mslPackConst(IROperand* o)
+        {
+        if (o.kind() == (u8)OPK_IMMI)
+            return o.imm();
+        IRInsn* d = self.mslDefOf(o);
+        if (d != (IRInsn*)0 && d.isOp(opConst) && d.ops().count() > (u32)0
+            && ((IROperand*)d.ops().get((u32)0)).kind() == (u8)OPK_IMMI)
+            return ((IROperand*)d.ops().get((u32)0)).imm();
+        return (i64)-1;
+        }
+    // The name a function of the program prints under, printed once before
+    // the kernel (the subset check has walked it), or 0 with the reason. As
+    // the reference's helperNamed:.
+    final String* mslHelperNamed(String* callee)
+        {
+        IRFunc* target = (IRFunc*)0;
+        for (u32 q = (u32)0; q < _m.funcs().count(); q = q + (u32)1)
+            if (((IRFunc*)_m.funcs().get(q)).name().equals(callee))
+                target = (IRFunc*)_m.funcs().get(q);
+        if (target == (IRFunc*)0) return (String*)0;
+        String* fn = String.withCString("h_");
+        for (u32 q = (u32)0; q < callee.byteLength(); q = q + (u32)1)
+            fn.appendByte(callee.byteAt(q) == (u8)'$' ? (u8)'_' : callee.byteAt(q));
+        if (_mHelperNames.get((Hashable*)callee) == (Object*)0)
+            {
+            _mHelperNames.set((Hashable*)callee, (Object*)callee);
+            String* text = mslHelper(target, fn);
+            if (text == (String*)0) { self.parBecause(parCallFailed(callee, _mHelperWhy)); return (String*)0; }
+            _mHelperText.add((Object*)text);
+            }
+        return fn;
+        }
+    // A float operation of a block that keeps subnormals (_mSubn): its
+    // ParSoftFloat.xc routine, or 0 with the reason. As the reference.
+    final String* mslSoftFloat(string routine)
+        {
+        String* fn = mslHelperNamed(String.withCString(routine));
+        if (fn == (String*)0)
+            self.parBecause(String.withCString("it computes in bf16 or another pack whose values reach below float's normal range, and its GPU version has no float arithmetic that keeps them"));
+        return fn;
+        }
     final String* mslCat3(String* a, string op, String* b)
         {
         String* s = String.withString(a); s.appendCString(op); s.append(b); return s;
@@ -293,6 +335,13 @@
         if (a == (String*)0 || b == (String*)0) return (String*)0;
         String* n = self.mslScalar(t);
         u16 oc = ip.opc();
+        if (_mSubn && IRType.is(t, tyF32) && (oc == opFAdd || oc == opFSub || oc == opFMul || oc == opFDiv))
+            {
+            String* fn = mslSoftFloat(oc == opFAdd ? "xcFaddRn" : oc == opFSub ? "xcFsubRn" : oc == opFMul ? "xcFmulRn" : "xcFdivRn");
+            if (fn == (String*)0) return (String*)0;
+            String* e = String.withString(fn); e.appendCString("("); e.append(a); e.appendCString(", "); e.append(b); e.appendCString(")");
+            return e;
+            }
         String* sym = (String*)0;
         String* ca = (String*)0;   // the cast both operands take, if any
         bool castLeftOnly = false;
@@ -361,6 +410,17 @@
             else if (p.equals(String.withCString("UGE"))) { sym = String.withCString(" >= "); cast = mslUnsigned(t); }
             }
         if (sym == (String*)0) return (String*)0;
+        if (ip.isOp(opFCmp) && _mSubn && IRType.is(t, tyF32))
+            {
+            // > and >= are < and <= the other way round. As the reference.
+            bool swap = p.equals(String.withCString("OGT")) || p.equals(String.withCString("OGE"));
+            string sr = p.equals(String.withCString("OEQ")) ? "xcFeqRn" : p.equals(String.withCString("ONE")) ? "xcFneRn"
+                     : p.equals(String.withCString("OLT")) || p.equals(String.withCString("OGT")) ? "xcFltRn" : "xcFleRn";
+            String* fn = mslSoftFloat(sr);
+            if (fn == (String*)0) return (String*)0;
+            String* e = String.withString(fn); e.appendCString("("); e.append(swap ? b : a); e.appendCString(", "); e.append(swap ? a : b); e.appendCString(")");
+            return e;
+            }
         String* s = String.withCString("(");
         if (cast != (String*)0 && !IRType.is(t, tyBool))
             {
@@ -485,6 +545,13 @@
             {
             String* a = mslExpr(o0, rt);
             if (a == (String*)0) return (String*)0;
+            if (_mSubn && IRType.is(rt, tyF32))
+                {
+                String* fn = mslSoftFloat("xcFsqrtRn");
+                if (fn == (String*)0) return (String*)0;
+                String* q = String.withString(fn); q.appendCString("("); q.append(a); q.appendCString(")");
+                return mslAssign(r, q);
+                }
             String* e = String.withCString(_mFast ? "fast::sqrt(" : "precise::sqrt("); e.append(a); e.appendCString(")");
             return mslAssign(r, e);
             }
@@ -571,6 +638,36 @@
             // The static-init machinery: the host has run it.
             if (callee.equals(String.withCString("_xtc_sinit_run")) || callee.hasSuffix(String.withCString("$init")))
                 return String.withCString("");
+            // A float's bits and back (FloatPack.xc, ParSoftFloat.xc): Metal's
+            // bit cast. As the reference.
+            bool toBits = callee.equals(String.withCString("_xt_fpk_bits")) || callee.equals(String.withCString("xcF32Bits"));
+            if ((toBits || callee.equals(String.withCString("_xt_fpk_float")) || callee.equals(String.withCString("xcF32FromBits")))
+                && ip.ops().count() >= (u32)2)
+                {
+                IROperand* bo = (IROperand*)ip.ops().get((u32)1);
+                String* bt = self.mslTypeOf(bo);
+                String* be = mslExpr(bo, bt != (String*)0 ? bt : rt);
+                if (be == (String*)0) return (String*)0;
+                String* e = String.withCString(toBits ? "as_type<uint>(" : "as_type<float>(");
+                e.append(be); e.appendCString(")");
+                return mslAssign(r, e);
+                }
+            // f16 to and from float in Metal's own half (the reference explains).
+            bool unpack16 = callee.equals(String.withCString("_xt_fpk_unpack"));
+            if ((unpack16 || callee.equals(String.withCString("_xt_fpk_pack_f32"))) && ip.ops().count() >= (u32)4
+                && mslPackConst((IROperand*)ip.ops().get((u32)2)) == (i64)5 && mslPackConst((IROperand*)ip.ops().get((u32)3)) == (i64)10)
+                {
+                IROperand* ho = (IROperand*)ip.ops().get((u32)1);
+                String* ht = self.mslTypeOf(ho);
+                String* he = mslExpr(ho, ht != (String*)0 ? ht : rt);
+                if (he == (String*)0) return (String*)0;
+                string hc = he.cString();
+                if (unpack16)
+                    return mslAssign(r, String.withFormat("(ushort(%s) & 0x7FFFu) > 0x7C00u ? as_type<float>(((uint(ushort(%s)) & 0x8000u) << 16) | 0x7F800000u | ((uint(ushort(%s)) & 0x3FFu) << 13)) : float(as_type<half>(ushort(%s)))",
+                                                          hc, hc, hc, hc));
+                return mslAssign(r, String.withFormat("(as_type<uint>(%s) & 0x7FFFFFFFu) > 0x7F800000u ? ushort(((as_type<uint>(%s) >> 16) & 0x8000u) | 0x7E00u | ((as_type<uint>(%s) >> 13) & 0x3FFu)) : as_type<ushort>(half(%s))",
+                                                      hc, hc, hc, hc));
+                }
             String* fn = mslIntrinsic(callee);
             // The speed goal: Metal's fast versions, in place of the precise ones.
             if (_mFast && fn != (String*)0 && fn.hasPrefix(String.withCString("precise::")))
@@ -578,23 +675,9 @@
             bool isVoid = rt == (String*)0 || IRType.is(rt, tyMem);
             if (fn == (String*)0)
                 {
-                // A function of the program (the subset check has walked it):
-                // printed once, before the kernel.
-                IRFunc* target = (IRFunc*)0;
-                for (u32 q = (u32)0; q < _m.funcs().count(); q = q + (u32)1)
-                    if (((IRFunc*)_m.funcs().get(q)).name().equals(callee))
-                        target = (IRFunc*)_m.funcs().get(q);
-                if (target == (IRFunc*)0) return (String*)0;
-                fn = String.withCString("h_");
-                for (u32 q = (u32)0; q < callee.byteLength(); q = q + (u32)1)
-                    fn.appendByte(callee.byteAt(q) == (u8)'$' ? (u8)'_' : callee.byteAt(q));
-                if (_mHelperNames.get((Hashable*)callee) == (Object*)0)
-                    {
-                    _mHelperNames.set((Hashable*)callee, (Object*)callee);
-                    String* text = mslHelper(target, fn);
-                    if (text == (String*)0) { self.parBecause(parCallFailed(callee, _mHelperWhy)); return (String*)0; }
-                    _mHelperText.add((Object*)text);
-                    }
+                // A function of the program: printed once, before the kernel.
+                fn = mslHelperNamed(callee);
+                if (fn == (String*)0) return (String*)0;
                 }
             else if (isVoid)
                 return (String*)0;

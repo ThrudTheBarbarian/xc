@@ -410,6 +410,177 @@
         return false;
         }
 
+    // Does the function, or one it calls, compute in a pack whose values reach
+    // below float's normal range: a FloatPack call with 7 or more exponent
+    // bits (bf16, f16:pack(e7m8))? Such a block's kernels keep subnormal
+    // floats (_mSubn). As the reference's XTParPackKeepsSubnormals.
+    final bool parPackKeepsSubnormals(IRFunc* f, Map* seen)
+        {
+        if (f == 0 || seen.get((Hashable*)f.name()) != 0)
+            return false;
+        seen.set((Hashable*)f.name(), (Object*)f.name());
+        Map* defOf = new Map();
+        for (u32 b = 0; b < f.blocks().count(); b++)
+            {
+            Array* ins = ((IRBlock*)f.blocks().get(b)).insns();
+            for (u32 i = 0; i < ins.count(); i++)
+                {
+                IRInsn* di = (IRInsn*)ins.get(i);
+                if (di.res() != (IRValue*)0)
+                    defOf.set((Hashable*)di.res(), (Object*)di);
+                }
+            }
+        for (u32 b = 0; b < f.blocks().count(); b++)
+            {
+            Array* ins = ((IRBlock*)f.blocks().get(b)).insns();
+            for (u32 i = 0; i < ins.count(); i++)
+                {
+                IRInsn* ci = (IRInsn*)ins.get(i);
+                if (!isName(ci.op(), "Call") || ci.ops().count() < 4)
+                    continue;
+                IROperand* o = (IROperand*)ci.ops().get(0);
+                if (o.kind() != (u8)OPK_SYM || o.name() == 0)
+                    continue;
+                if (o.name().hasPrefix(String.withCString("_xt_fpk_")))
+                    {
+                    // [callee, value, e, m, ...]: the exponent bits, a constant.
+                    IROperand* e = (IROperand*)ci.ops().get(2);
+                    i64 v = 0;
+                    if (e.kind() == (u8)OPK_IMMI)
+                        v = e.imm();
+                    else if (e.kind() == (u8)OPK_USE)
+                        {
+                        IRInsn* d = (IRInsn*)defOf.get((Hashable*)e.val());
+                        if (d != (IRInsn*)0 && d.isOp(opConst) && d.ops().count() > 0
+                            && ((IROperand*)d.ops().get(0)).kind() == (u8)OPK_IMMI)
+                            v = ((IROperand*)d.ops().get(0)).imm();
+                        }
+                    if (v >= 7)
+                        return true;
+                    continue;
+                    }
+                for (u32 k = 0; k < _m.funcs().count(); k++)
+                    {
+                    IRFunc* g = (IRFunc*)_m.funcs().get(k);
+                    if (g.name().equals(o.name()) && parPackKeepsSubnormals(g, seen))
+                        return true;
+                    }
+                }
+            }
+        return false;
+        }
+
+    // A pack's spelling from the (e, m) or (e, m, k) a FloatPack call takes,
+    // as diagnostics write it. As the reference's XTParPackName.
+    final String* parPackName(i64 e, i64 m, i64 k)
+        {
+        if ((k & 4) != 0)
+            return String.withCString("f8:pack(ue8m0)");
+        i64 kind = k & 3;
+        i64 w = 1 + e + m;
+        if (kind == 0 && e == 5 && m == 10)
+            return String.withCString("f16");
+        if (kind == 0 && e == 8 && m == 7)
+            return String.withCString("bf16");
+        if (kind == 1 && e == 4 && m == 3)
+            return String.withCString("f8");
+        if (kind == 2 && e == 2 && m == 1)
+            return String.withCString("f4");
+        // The kind is written when it is not the split's default: finite
+        // for f8's e4m3, ieee for every other.
+        i64 def = (w == 8 && e == 4 && m == 3) ? 1 : 0;
+        string kn = kind == def ? "" : kind == 0 ? ",ieee" : kind == 1 ? ",finite" : ",none";
+        return String.withFormat("f%ld:pack(e%ldm%ld%s)", w, e, m, kn);
+        }
+
+    final i64 parPackNum(IROperand* o, Map* defOf)
+        {
+        if (o.kind() == (u8)OPK_IMMI)
+            return o.imm();
+        if (o.kind() != (u8)OPK_USE)
+            return -1;
+        IRInsn* d = (IRInsn*)defOf.get((Hashable*)o.val());
+        if (d != (IRInsn*)0 && d.isOp(opConst) && d.ops().count() > 0
+            && ((IROperand*)d.ops().get(0)).kind() == (u8)OPK_IMMI)
+            return ((IROperand*)d.ops().get(0)).imm();
+        return -1;
+        }
+
+    // The packs a block computes in, first met first, into names. As the
+    // reference's XTParPackNames.
+    final void parPackNames(IRFunc* f, Map* seen, Array* names)
+        {
+        if (f == 0 || seen.get((Hashable*)f.name()) != 0)
+            return;
+        seen.set((Hashable*)f.name(), (Object*)f.name());
+        Map* defOf = new Map();
+        for (u32 b = 0; b < f.blocks().count(); b++)
+            {
+            Array* ins = ((IRBlock*)f.blocks().get(b)).insns();
+            for (u32 i = 0; i < ins.count(); i++)
+                {
+                IRInsn* di = (IRInsn*)ins.get(i);
+                if (di.res() != (IRValue*)0)
+                    defOf.set((Hashable*)di.res(), (Object*)di);
+                }
+            }
+        for (u32 b = 0; b < f.blocks().count(); b++)
+            {
+            Array* ins = ((IRBlock*)f.blocks().get(b)).insns();
+            for (u32 i = 0; i < ins.count(); i++)
+                {
+                IRInsn* ci = (IRInsn*)ins.get(i);
+                if (!isName(ci.op(), "Call") || ci.ops().count() == 0)
+                    continue;
+                IROperand* o = (IROperand*)ci.ops().get(0);
+                if (o.kind() != (u8)OPK_SYM || o.name() == 0)
+                    continue;
+                String* nm = o.name();
+                if (nm.hasPrefix(String.withCString("_xt_fpk_unpack")) || nm.hasPrefix(String.withCString("_xt_fpk_pack_")))
+                    {
+                    // [callee, value, e, m, (k,) ...]; k for the kinds' routines.
+                    bool kinds = nm.hasSuffix(String.withCString("k")) && !nm.equals(String.withCString("_xt_fpk_unpack"));
+                    if (ci.ops().count() < (kinds ? (u32)5 : (u32)4))
+                        continue;
+                    i64 e = parPackNum((IROperand*)ci.ops().get(2), defOf);
+                    i64 m = parPackNum((IROperand*)ci.ops().get(3), defOf);
+                    i64 k = kinds ? parPackNum((IROperand*)ci.ops().get(4), defOf) : 0;
+                    if (e < 0 || m < 0 || k < 0)
+                        continue;
+                    String* n = parPackName(e, m, k);
+                    bool have = false;
+                    for (u32 q = 0; q < names.count(); q++)
+                        if (((String*)names.get(q)).equals(n))
+                            have = true;
+                    if (!have)
+                        names.add((Object*)n);
+                    continue;
+                    }
+                for (u32 k = 0; k < _m.funcs().count(); k++)
+                    {
+                    IRFunc* g = (IRFunc*)_m.funcs().get(k);
+                    if (g.name().equals(nm))
+                        parPackNames(g, seen, names);
+                    }
+                }
+            }
+        }
+
+    // ` packs=<a>+<b>`, the packs a block's kernels compute in by converting
+    // in the kernel, or "". As the reference.
+    final String* parPackWords(IRFunc* f)
+        {
+        Array* names = new Array();
+        parPackNames(f, new Map(), names);
+        String* w = String.withCString("");
+        for (u32 q = 0; q < names.count(); q++)
+            {
+            w.appendCString(q == 0 ? " packs=" : "+");
+            w.append((String*)names.get(q));
+            }
+        return w;
+        }
+
     final bool parIsScanBlock(String* n)
         {
         String* plain = String.withCString("__XC_PAR_MSL_");
@@ -1883,7 +2054,10 @@
                     for (u32 q = (u32)0; q < _m.funcs().count(); q = q + (u32)1)
                         if (((IRFunc*)_m.funcs().get(q)).name().equals(callee))
                             target = (IRFunc*)_m.funcs().get(q);
-                    if (target != (IRFunc*)0 && visited.get((Hashable*)callee) == (Object*)0)
+                    // A small float's conversion counts as the call alone (the
+                    // reference explains).
+                    if (target != (IRFunc*)0 && visited.get((Hashable*)callee) == (Object*)0
+                        && !callee.hasPrefix(String.withCString("_xt_fpk_")))
                         parCostOf(target, visited, ops, loop, false);
                     }
                 }
@@ -3537,6 +3711,13 @@
             if (parSymHasPrefix((IRSymbol*)_m.syms().get(j), fastTag))
                 _mFast = true;
         if (_mFast) tag = fastTag;
+        // A block that computes in a pack rounds each operation to it, its
+        // goal speed or not (as on the CPU): its kernels take the precise
+        // forms of the float operations (correctly rounded division, no
+        // flushing), which that one rounding relies on. As the reference.
+        if (_mFast && parUsesFloatPack(f, new Map()))
+            _mFast = false;
+        _mSubn = parPackKeepsSubnormals(f, new Map());
         // The block's reductions, after the tag: `<field>=<op>;` each (bug 645).
         _mRedOps = (Map*)0;
         _mConst = new Map();
@@ -3592,6 +3773,7 @@
         _parExtraMeta.append(parCostWords(f));
         _parExtraMeta.append(parGuardWords(f, (Array*)_parGuards.get((Hashable*)f.name().substringBytes((u32)0, f.name().byteLength() - (u32)4))));
         _parExtraMeta.append(parMergeWords(f));
+        _parExtraMeta.append(parPackWords(f));
         String* msl = (String*)0;
         // A SPIR-V module is bytes (it holds NULs): it goes in as they are.
         Array* kernelBytes = (Array*)0;
@@ -3636,7 +3818,7 @@
         // A block that reads or writes f4 array elements has no form: a
         // kernel would rewrite a byte two work items share.
         if (!serialBlock && lost == (String*)0 && !arrRed && !scanPass && parTouchesF4(f, new Map()))
-            lostWhy = String.withCString("it computes in f16, bf16, f8 or f4, which GPU kernels do not take yet");
+            lostWhy = String.withCString("it reads or writes f4 array elements, two to a byte, which GPU kernels do not take yet");
         bool noForms = serialBlock || lostWhy != (String*)0;
         _mWhy = lostWhy;
         String* mslText = _parMetal && !noForms ? parMslK(f, kfUse, kmod) : (String*)0;
@@ -3679,6 +3861,7 @@
             _mWhy = keepWhy;
             _parExtraMeta = meta;
             }
+        _mSubn = false;
         Array* all = new Array();
         if (serialBlock)
             {
@@ -3748,11 +3931,7 @@
             bool lifted = parIsAutoBlock(cls.substringBytes((u32)8, cls.byteLength() - (u32)8));
             String* w = String.withCString(lifted ? "this loop runs on the CPU only (--par-style), because "
                                                   : "this 'par' block runs on the CPU only, because ");
-            // A 16-bit float's operations are calls the kernels do not have:
-            // the block runs on the CPU, in the type's own precision.
             String* why = _mWhy;
-            if (parUsesFloatPack(f, new Map()))
-                why = String.withCString("it computes in f16, bf16, f8 or f4, which GPU kernels do not take yet");
             w.append(why != (String*)0 ? why : String.withCString("its GPU version cannot express something it uses yet"));
             // A :scan's passes are the compiler's, not written blocks: they
             // say nothing (#144).

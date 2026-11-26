@@ -414,6 +414,11 @@
             args.add((Object*)e);
             argTypes.add((Object*)at);
             }
+        // A float's bits and back (FloatPack.xc): a move. As the reference.
+        if ((callee.equals(self.ptxS("_xt_fpk_bits")) || callee.equals(self.ptxS("_xt_fpk_float"))
+             || callee.equals(self.ptxS("_xt_fpk_bits64"))) && args.count() == (u32)1)
+            return String.withFormat("\tmov.b%s %s, %s;\n", callee.equals(self.ptxS("_xt_fpk_bits64")) ? "64" : "32",
+                                     r.cString(), ((String*)args.get((u32)0)).cString());
         // The precise maths PTX has as instructions.
         String* m = self.ptxMathName(callee);
         bool fl = ptxFloat(rt);

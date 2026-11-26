@@ -397,6 +397,18 @@
                     b = spvCanon(b, as);
                 }
             }
+        if (IRType.is(t, tyF32) && _mSubn && (o == opFAdd || o == opFSub || o == opFMul || o == opFDiv))
+            {
+            // A block that keeps subnormals: ParSoftFloat.xc's. As the reference.
+            u32 sid = spvHelperId(spvS(o == opFAdd ? "xcFaddRn" : o == opFSub ? "xcFsubRn" : o == opFMul ? "xcFmulRn" : "xcFdivRn"));
+            if (sid == (u32)0)
+                {
+                self.parBecause(spvS("it computes in bf16 or another pack whose values reach below float's normal range, and its GPU version has no float arithmetic that keeps them"));
+                return false;
+                }
+            spvSetResult(ip, spvEmitR((u32)SPV_FUNCTIONCALL, ty, spvA3(sid, a, b)));
+            return true;
+            }
         bool isBool = IRType.is(t, tyBool);
         u32 op = (u32)0;
         if (o == opAdd) op = SPV_IADD;
@@ -483,6 +495,21 @@
             else if (p.equals(spvS("OLE"))) op = (u32)SPV_FORDLESSTHANEQUAL;
             else if (p.equals(spvS("OGE"))) op = (u32)SPV_FORDGREATERTHANEQUAL;
             else return false;
+            if (_mSubn && IRType.is(t, tyF32))
+                {
+                // > and >= are < and <= the other way round. As the reference.
+                bool swap = p.equals(spvS("OGT")) || p.equals(spvS("OGE"));
+                string sr = p.equals(spvS("OEQ")) ? "xcFeqRn" : p.equals(spvS("ONE")) ? "xcFneRn"
+                          : p.equals(spvS("OLT")) || p.equals(spvS("OGT")) ? "xcFltRn" : "xcFleRn";
+                u32 sid = spvHelperId(spvS(sr));
+                if (sid == (u32)0)
+                    {
+                    self.parBecause(spvS("it computes in bf16 or another pack whose values reach below float's normal range, and its GPU version has no float comparison that keeps them"));
+                    return false;
+                    }
+                spvSetResult(ip, spvEmitR((u32)SPV_FUNCTIONCALL, _sMod.typeBool(), spvA3(sid, swap ? b : a, swap ? a : b)));
+                return true;
+                }
             }
         else
             {
@@ -672,7 +699,9 @@
             args.add((Object*)Number.withU32(v));
             }
         // A float's bits and back (ParSoftFloat.xc): a bit cast.
-        if ((callee.equals(spvS("xcF32Bits")) || callee.equals(spvS("xcF32FromBits"))) && args.count() == (u32)1)
+        // FloatPack.xc's the same.
+        if ((callee.equals(spvS("xcF32Bits")) || callee.equals(spvS("xcF32FromBits"))
+             || callee.equals(spvS("_xt_fpk_bits")) || callee.equals(spvS("_xt_fpk_float"))) && args.count() == (u32)1)
             {
             spvSetResult(ip, spvEmitR((u32)SPV_BITCAST, spvType(rt), spvA1(((Number*)args.get((u32)0)).asU32())));
             return true;
@@ -1017,6 +1046,8 @@
             IRInsn* ph = (IRInsn*)target.phis().get(i);
             if (ph.res() == (IRValue*)0 || IRType.is(ph.res().ty(), tyMem)) continue;
             if (mslIsPtr(ph.res().ty())) return false;
+            // A phi nothing reads has no variable (spvLocals): nothing to copy.
+            if (_spvFn.varOf.get((Hashable*)self.mslKey(ph.res())) == (Object*)0) continue;
             IROperand* inc = (IROperand*)0;
             for (u32 k = (u32)0; k + (u32)1 < ph.ops().count(); k = k + (u32)2)
                 if (((IROperand*)ph.ops().get(k)).blk() == from)

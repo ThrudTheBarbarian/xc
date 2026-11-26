@@ -147,7 +147,7 @@ u16 _xt_fpk_zerok(u32 sign, u32 e, u32 m, u32 k)
 
 u16 _xt_fpk_pack_f32k(f32 f, u32 e, u32 m, u32 k)
 {
-    u32 x = *(u32*)&f;
+    u32 x = _xt_fpk_bits(f);
     u32 sign = x >> 31;
     u32 ex = (x >> 23) & (u32)0xFF;
     u32 mant = x & (u32)0x7FFFFF;
@@ -164,7 +164,7 @@ u16 _xt_fpk_pack_f32k(f32 f, u32 e, u32 m, u32 k)
 
 u16 _xt_fpk_pack_f64k(f64 d, u32 e, u32 m, u32 k)
 {
-    u64 x = *(u64*)&d;
+    u64 x = _xt_fpk_bits64(d);
     u32 hi = (u32)(x >> 32);
     u32 lo = (u32)x;
     u32 sign = hi >> 31;
@@ -261,7 +261,7 @@ f32 _xt_fpk_unpackk(u16 h, u32 e, u32 m, u32 k)
             bits = (u32)0x00400000;                  // 2^-127, an f32 subnormal
         else
             bits = ue << 23;
-        return *(f32*)&bits;
+        return _xt_fpk_float(bits);
         }
     u32 sign = (x >> (e + m)) & one;
     u32 emax = (one << e) - one;
@@ -291,5 +291,5 @@ f32 _xt_fpk_unpackk(u16 h, u32 e, u32 m, u32 k)
     else
         bits = ((u32)((i32)ex - bias + 127) << 23) | (mant << sh);
     bits = bits | (sign << 31);
-    return *(f32*)&bits;
+    return _xt_fpk_float(bits);
 }

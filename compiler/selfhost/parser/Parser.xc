@@ -9283,6 +9283,11 @@ class Parser
             || Parser._same(e, "i32") || Parser._same(e, "u32") || Parser._same(e, "i64") || Parser._same(e, "u64")
             || Parser._same(e, "float") || Parser._same(e, "double") || Parser._same(e, "bool"))
             return e;
+        // A small float other than f4 (half a byte, which no sizeof
+        // measures). As the reference.
+        if (Parser._same(e, "f16") || Parser._same(e, "bf16") || Parser._same(e, "f8")
+            || e.hasPrefix(String.withCString("f16$")) || e.hasPrefix(String.withCString("f8$")))
+            return e;
         return (String*)0;
     }
     // The struct when t is a pointer to one (#113): a heap array of structs

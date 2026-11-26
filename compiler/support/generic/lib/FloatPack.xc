@@ -14,6 +14,24 @@
 // result too large for the pack is an infinity of its sign. A NaN keeps its
 // sign and the top bits of its payload, and is made quiet.
 
+// A float's bits and back. A GPU kernel prints these as its own bit casts
+// (the par kernel printers recognise the names); on the CPU they inline to
+// the same loads.
+u32 _xt_fpk_bits(f32 f)
+{
+    return *(u32*)&f;
+}
+
+f32 _xt_fpk_float(u32 u)
+{
+    return *(f32*)&u;
+}
+
+u64 _xt_fpk_bits64(f64 d)
+{
+    return *(u64*)&d;
+}
+
 // A value given as its sign (0 or 1), the unbiased exponent of bit 31 of sig,
 // and sig, rounded to the pack. sig need not have bit 31 set: a value from
 // below the normal range of its source passes its bits as they stand. Bit 0
@@ -68,7 +86,7 @@ u16 _xt_fpk_special(u32 sign, u32 top, u32 e, u32 m)
 
 u16 _xt_fpk_pack_f32(f32 f, u32 e, u32 m)
 {
-    u32 x = *(u32*)&f;
+    u32 x = _xt_fpk_bits(f);
     u32 sign = x >> 31;
     u32 ex = (x >> 23) & (u32)0xFF;
     u32 mant = x & (u32)0x7FFFFF;
@@ -85,7 +103,7 @@ u16 _xt_fpk_pack_f32(f32 f, u32 e, u32 m)
 
 u16 _xt_fpk_pack_f64(f64 d, u32 e, u32 m)
 {
-    u64 x = *(u64*)&d;
+    u64 x = _xt_fpk_bits64(d);
     u32 hi = (u32)(x >> 32);
     u32 lo = (u32)x;
     u32 sign = hi >> 31;
@@ -198,13 +216,13 @@ f32 _xt_fpk_unpack(u16 h, u32 e, u32 m)
     else
         bits = ((u32)((i32)ex - bias + 127) << 23) | (mant << sh);
     bits = bits | (sign << 31);
-    return *(f32*)&bits;
+    return _xt_fpk_float(bits);
 }
 
 // NaN by its bits: a software float's comparison need not see one.
 bool _xt_fpk_nan(f32 x)
 {
-    u32 b = *(u32*)&x;
+    u32 b = _xt_fpk_bits(x);
     return (b & (u32)0x7FFFFFFF) > (u32)0x7F800000;
 }
 

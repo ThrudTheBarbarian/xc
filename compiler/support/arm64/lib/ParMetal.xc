@@ -20,6 +20,7 @@
 #import "ParDevice.xc"
 #define PAR_MTL_DEPTH 3
 #import "ParWorker.xc"
+#import "ParSoftFloat.xc"   // float arithmetic that keeps subnormals, for bf16 blocks
 #import <Metal>
 #import <Foundation>
 

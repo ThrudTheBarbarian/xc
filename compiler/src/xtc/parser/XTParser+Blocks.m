@@ -75,10 +75,11 @@ static int64_t parFoldConstant(XTASTNode* e, BOOL* ok)
     return 0;
     }
 
-// The element type when t is a pointer to numbers (an integer, float, double
-// or bool; not an enum, which the port knows by name only), else nil. Such a
-// capture, `simd:` or plain, is a GPU buffer sized at run time by the block it
-// points into (par-blocks.md §3). Mirrored in the port (parPrimPointee).
+// The element type when t is a pointer to numbers (an integer, float, double,
+// bool or small float other than f4; not an enum, which the port knows by name
+// only), else nil. Such a capture, `simd:` or plain, is a GPU buffer sized at
+// run time by the block it points into (par-blocks.md §3). An f4 element is
+// half a byte, which no sizeof measures. Mirrored in the port (parPrimPointee).
 static XTType* _Nullable parPrimPointee(XTType* t)
     {
     if (![t isKindOfClass:[XTPointerType class]])
@@ -86,6 +87,8 @@ static XTType* _Nullable parPrimPointee(XTType* t)
     XTType* e = ((XTPointerType*)t).pointeeType;
     if (!e || e.kind == XTTypeKindEnum)
         return nil;
+    if (e.isFloatPack)
+        return e == [XTType f4Type] ? nil : e;
     return (e.isInteger || e.isFloating || e.kind == XTTypeKindBool) ? e : nil;
     }
 

@@ -2507,6 +2507,35 @@ class ParDevice
         else
             Log.info("par: %s: %ld items on the GPU, %ld threads, %ld us in all", gParBlock[bi], l.n, l.threads,
                      took);
+        // A block in the small floats (`packs=` on its header line): the
+        // kernel converts each value to float and rounds each result back, in
+        // integer operations every GPU has.
+        String* packs = packsOf(proto.gpuSource());
+        if (packs != (String*)0)
+            Log.info("par: %s: computes in %s on the GPU, converting in the kernel", gParBlock[bi], packs.cString());
+        }
+
+    // The `packs=` word of a kernel's header line, with `+` read as `, `, or
+    // 0 for a block that has none.
+    static String* packsOf(u8* src)
+        {
+        if (src == (u8*)0)
+            return (String*)0;
+        for (u32 i = (u32)0; src[i] != (u8)0 && src[i] != (u8)10; i = i + (u32)1)
+            if (src[i] == (u8)' ' && src[i + (u32)1] == (u8)'p' && src[i + (u32)2] == (u8)'a' && src[i + (u32)3] == (u8)'c'
+                && src[i + (u32)4] == (u8)'k' && src[i + (u32)5] == (u8)'s' && src[i + (u32)6] == (u8)'=')
+                {
+                String* w = new String();
+                for (u32 j = i + (u32)7; src[j] != (u8)0 && src[j] != (u8)10 && src[j] != (u8)' '; j = j + (u32)1)
+                    {
+                    if (src[j] == (u8)'+')
+                        w.appendCString(", ");
+                    else
+                        w.appendByte(src[j]);
+                    }
+                return w;
+                }
+        return (String*)0;
         }
 
     // XC_PAR_REPORT=1: why a block stays on the CPU. False, for `return`.

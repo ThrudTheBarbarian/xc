@@ -730,6 +730,7 @@ class ClassInfo
     // its caller saves and restores it (the reference uses a new printer).
     bool _mHelper;
     bool _mFast;            // the block's goal is speed: fast maths, approximate sin, cos, exp, ln and pow
+    bool _mSubn;            // the block's kernels keep subnormal floats (ParSoftFloat.xc's arithmetic)
     u32 _mVecW;             // per-thread lane width while emitting a vectorised body (0/1 scalar, 2 uint2); widens mslScalar
     // laneDetect's result: the canonical vectorisable reduce loop, shared by
     // every backend's lane emitter (MSL, WGSL, SPIR-V, PTX).

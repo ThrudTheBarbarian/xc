@@ -418,6 +418,21 @@ static char kWf, kWgHelpers, kWgHelperText, kWgWordBufs, kWgBufName;
         [self wgSet:i to:e];
         return YES;
         }
+    if (t.kind == XTIRTypeKindF32 && [XTIRParMSL keepSubnormals]
+        && (i.opcode == XTIROpFAdd || i.opcode == XTIROpFSub || i.opcode == XTIROpFMul || i.opcode == XTIROpFDiv))
+        {
+        // A block that keeps subnormals (setKeepSubnormals:): ParSoftFloat.xc's.
+        NSString* h = [self wgHelperName:i.opcode == XTIROpFAdd ? @"xcFaddRn" : i.opcode == XTIROpFSub ? @"xcFsubRn"
+                                       : i.opcode == XTIROpFMul ? @"xcFmulRn" : @"xcFdivRn"];
+        if (!h)
+            {
+            [self because:@"it computes in bf16 or another pack whose values reach below float's normal range, and "
+                          @"its GPU version has no float arithmetic that keeps them"];
+            return NO;
+            }
+        [self wgSet:i to:[NSString stringWithFormat:@"%@(%@, %@)", h, a, b]];
+        return YES;
+        }
     if (t.kind == XTIRTypeKindF32)
         {
         NSString* op = nil;
@@ -514,6 +529,20 @@ static char kWf, kWgHelpers, kWgHelperText, kWgWordBufs, kWgBufName;
         if (i.predicate > XTIRFCmpOGE || t.kind != XTIRTypeKindF32)
             return NO;
         e = [NSString stringWithFormat:@"(%@ %@ %@)", a, fops[i.predicate], b];
+        if ([XTIRParMSL keepSubnormals])
+            {
+            // > and >= are < and <= the other way round.
+            static NSString* const sops[] = { @"xcFeqRn", @"xcFneRn", @"xcFltRn", @"xcFltRn", @"xcFleRn", @"xcFleRn" };
+            NSString* h = [self wgHelperName:sops[i.predicate]];
+            if (!h)
+                {
+                [self because:@"it computes in bf16 or another pack whose values reach below float's normal range, "
+                              @"and its GPU version has no float comparison that keeps them"];
+                return NO;
+                }
+            BOOL swap = i.predicate == XTIRFCmpOGT || i.predicate == XTIRFCmpOGE;
+            e = [NSString stringWithFormat:@"%@(%@, %@)", h, swap ? b : a, swap ? a : b];
+            }
         }
     else if (wgWide(t))
         {
@@ -753,11 +782,12 @@ static char kWf, kWgHelpers, kWgHelperText, kWgWordBufs, kWgBufName;
         [args addObject:v];
         }
     // A float's bits and back (ParSoftFloat.xc): WGSL's bit cast.
-    if (([callee isEqualToString:@"xcF32Bits"] || [callee isEqualToString:@"xcF32FromBits"]) && args.count == 1)
+    // FloatPack.xc's the same.
+    if (([callee isEqualToString:@"xcF32Bits"] || [callee isEqualToString:@"xcF32FromBits"]
+         || [callee isEqualToString:@"_xt_fpk_bits"] || [callee isEqualToString:@"_xt_fpk_float"]) && args.count == 1)
         {
-        [self wgSet:i to:[NSString stringWithFormat:[callee isEqualToString:@"xcF32Bits"] ? @"bitcast<u32>(%@)"
-                                                                                           : @"bitcast<f32>(%@)",
-                                                    args[0]]];
+        BOOL toBits = [callee isEqualToString:@"xcF32Bits"] || [callee isEqualToString:@"_xt_fpk_bits"];
+        [self wgSet:i to:[NSString stringWithFormat:toBits ? @"bitcast<u32>(%@)" : @"bitcast<f32>(%@)", args[0]]];
         return YES;
         }
     if ([self wgIsMaths:callee])
