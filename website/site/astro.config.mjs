@@ -165,6 +165,7 @@ const SIDEBAR = [
 						{ label: 'Performance: CPU', slug: 'compiler/performance' },
 						{ label: 'Performance: GPU', slug: 'compiler/benchmarks/gpu' },
 						{ label: 'Performance: C', slug: 'compiler/benchmarks/c' },
+						{ label: 'Performance: C++', slug: 'compiler/benchmarks/cpp' },
 						{ label: 'Performance: networked', slug: 'compiler/benchmarks/network' },
 						{ label: 'Sources', slug: 'compiler/benchmark-sources' },
 						{ label: 'How to DIY', slug: 'compiler/benchmarks/how-to-diy' },

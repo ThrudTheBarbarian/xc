@@ -23,36 +23,36 @@ the remote GPU. Every mode's checksum must agree.
 
 ## From an Apple M4 Max
 
-Apple M4 Max (Metal), using the remote RTX 5080 (ms; best of eight runs; measured with 1.0)
+Apple M4 Max (Metal), using the remote RTX 5080 (ms; best of eight runs; measured with 1.0.3)
 
 | benchmark | this machine | the remote GPU | every GPU | `auto`, first run | `auto`, once learned |
 |---|---|---|---|---|---|
-| [`mandel_deep`](/compiler/benchmark-sources/#mandel_deep) | 35.0 | 225 | 116 | 34.5 | 34.7 |
-| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 1.9 | 2.0 | 1.2 | 1.8 | 1.5 |
-| [`md5`](/compiler/benchmark-sources/#md5) | 6.4 | 22.4 | 16.6 | 7.8 | 4.4 |
-| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 491 µs | 245 | 38.6 | 871 µs | 507 µs |
+| [`mandel_deep`](/compiler/benchmark-sources/#mandel_deep) | 34.7 | 223 | 117 | 34.6 | 35.1 |
+| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 1.8 | 1.1 | 1.4 | 1.3 | 1.8 |
+| [`md5`](/compiler/benchmark-sources/#md5) | 6.4 | 22.1 | 15.8 | 7.6 | 4.4 |
+| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 521 µs | 242 | 39.5 | 720 µs | 501 µs |
 
 ## From an AMD Ryzen 9 9955HX
 
-AMD Ryzen 9 9955HX with its integrated Radeon (Vulkan), using the remote RTX 5080 (ms; best of eight runs; measured with 1.0)
+AMD Ryzen 9 9955HX with its integrated Radeon (Vulkan), using the remote RTX 5080 (ms; best of eight runs; measured with 1.0.3)
 
 | benchmark | this machine | the remote GPU | every GPU | `auto`, first run | `auto`, once learned |
 |---|---|---|---|---|---|
-| [`mandel_deep`](/compiler/benchmark-sources/#mandel_deep) | 348 | 294 | 227 | 229 | 205 |
-| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 2.8 | 908 µs | 1.0 | 972 µs | 1.0 |
-| [`md5`](/compiler/benchmark-sources/#md5) | 9.3 | 7.6 | 7.5 | 8.9 | 7.5 |
-| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 2.4 | 342 | 56.8 | 3.5 | 2.2 |
+| [`mandel_deep`](/compiler/benchmark-sources/#mandel_deep) | 346 | 295 | 228 | 228 | 207 |
+| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 2.7 | 849 µs | 2.5 | 1.0 | 967 µs |
+| [`md5`](/compiler/benchmark-sources/#md5) | 9.3 | 4.0 | 4.0 | 4.9 | 4.9 |
+| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 2.5 | 342 | 44.9 | 3.5 | 2.3 |
 
 ## From a Raspberry Pi 5
 
-Raspberry Pi 5 with its V3D GPU (Vulkan), using the remote RTX 5080 (ms; best of eight runs; measured with 1.0)
+Raspberry Pi 5 with its V3D GPU (Vulkan), using the remote RTX 5080 (ms; best of eight runs; measured with 1.0.3)
 
 | benchmark | this machine | the remote GPU | every GPU | `auto`, first run | `auto`, once learned |
 |---|---|---|---|---|---|
-| [`mandel_deep`](/compiler/benchmark-sources/#mandel_deep) | 5729 | 636 | 574 | 576 | 575 |
-| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 64.9 | 1.0 | 1.8 | 1.8 | 1.7 |
-| [`md5`](/compiler/benchmark-sources/#md5) | 611 | 130 | 123 | 124 | 121 |
-| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 25.3 | 897 | 422 | 33.7 | 26.5 |
+| [`mandel_deep`](/compiler/benchmark-sources/#mandel_deep) | 5721 | 634 | 574 | 575 | 601 |
+| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 69.3 | 910 µs | 1.8 | 1.7 | 1.5 |
+| [`md5`](/compiler/benchmark-sources/#md5) | 611 | 123 | 117 | 118 | 117 |
+| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 28.3 | 909 | 428 | 37.3 | 28.6 |
 
 
 ## What the tables show
