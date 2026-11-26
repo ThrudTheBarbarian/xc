@@ -444,7 +444,8 @@ if [ -x "$W/pol.ref" ]; then
     # An algorithm xcc reads but makes no block of (its body reads a heap
     # array away from [i] while storing at [i]) calls clang's own version,
     # `<name>_xclib`, with libc++'s parallel backend: never slower than
-    # clang++. With nothing lifted (--par-style=cpu) every such one does.
+    # clang++. With nothing lifted (--par-style=cpu) every such one does. A
+    # function whose clang version calls nothing more than xcc's has no copy.
     cat > "$W/fb.cpp" <<'C'
 #include <algorithm>
 #include <cstdio>
@@ -483,6 +484,9 @@ C
             || { echo "FAIL cppath: fb.cpp ($ps) does not build"; grep -v 'ld: warning' "$W/fb.$ps.b" | head -3; fail=1; continue; }
         [ "$("$W/fb.$ps")" = "$("$W/fb.ref")" ] || { echo "FAIL cppath: fb.cpp ($ps) gives $("$W/fb.$ps"), clang++'s $("$W/fb.ref")"; fail=1; }
         nm "$W/fb.$ps" | grep -q '_Z6spread.*_xclib' || { echo "FAIL cppath: fb.cpp ($ps) has no clang version of spread to fall back on"; fail=1; }
+        # main calls what clang's main calls: one function, no clang copy
+        # (xcc's code is built for the target CPU, clang's half is not; #705).
+        nm "$W/fb.$ps" | grep -q 'main_xclib' && { echo "FAIL cppath: fb.cpp ($ps) keeps a clang copy of main, which uses no parallel algorithm"; fail=1; }
     done
 fi
 XC_PAR=gpu XC_PAR_REPORT=1 "$W/glob.par" 2>&1 | grep -q 'items on the GPU' || { echo "FAIL cppath: no C++ loop ran on the GPU"; fail=1; }

@@ -1944,6 +1944,7 @@ class Languages
         Map* rfuncs = new Map();
         Map* rglobs = new Map();
         Languages.symbolsOf(readText, rfuncs, rglobs);
+        Map* ccalls = (Map*)0;
         Array* lines = readText.splitOnByte((u8)10);
         String* out = new String();
         u32 i = 0;
@@ -1975,8 +1976,18 @@ class Languages
                     out.appendCString("\n");
                     }
                 // clang's own version, which xcc's calls if it makes no block
-                // of it (libFallback): `<name>_xclib`.
-                String* d = Languages.declarationOf(l);
+                // of it (libFallback): `<name>_xclib`. Only where clang's
+                // version calls what this one does not (libc++'s parallel
+                // backend, where the read build has the serial loop inlined):
+                // elsewhere the two are one function, and xcc's code is
+                // built for the target CPU where clang's half is not (#705).
+                if (ccalls == (Map*)0)
+                    ccalls = Languages.callsByFunction(clangText);
+                Map* mine = new Map();
+                for (u32 k = i + 1; k < end; k = k + 1)
+                    Languages.addCalls((String*)lines.get(k), mine);
+                bool differs = Languages.callsMore(n, mine, ccalls, new Map());
+                String* d = differs ? Languages.declarationOf(l) : (String*)0;
                 if (d != (String*)0)
                     {
                     out.append(d.replacing(n.appending(String.withCString("(")), n.appending(String.withCString("_xclib("))));
@@ -2114,6 +2125,85 @@ class Languages
                 if (sp != String.notFound())
                     globs.set((Hashable*)l.substringBytes(0, sp), (Object*)l);
                 }
+            }
+        }
+
+    // Each function the text defines -> the functions its body calls (a
+    // Map of their `@name`s, intrinsics left out).
+    static Map* callsByFunction(String* text)
+        {
+        Map* all = new Map();
+        Array* lines = text.splitOnByte((u8)10);
+        u32 i = 0;
+        while (i < lines.count())
+            {
+            String* l = (String*)lines.get(i);
+            String* n = l.hasPrefix(String.withCString("define ")) ? Languages.calleeOf(l, 0) : (String*)0;
+            i = i + 1;
+            if (n == (String*)0)
+                continue;
+            Map* calls = new Map();
+            while (i < lines.count() && !((String*)lines.get(i)).equals(String.withCString("}")))
+                {
+                Languages.addCalls((String*)lines.get(i), calls);
+                i = i + 1;
+                }
+            all.set((Hashable*)n, (Object*)calls);
+            }
+        return all;
+        }
+
+    // Whether clang's fn (calls, callsByFunction) calls a function that
+    // mine does not. A loop clang's build has moved out (`<f>$xclN`,
+    // extractLoops), which the read build keeps in place, counts as the
+    // calls it makes.
+    static bool callsMore(String* fn, Map* mine, Map* calls, Map* seen)
+        {
+        Map* theirs = (Map*)calls.get((Hashable*)fn);
+        if (theirs == (Map*)0 || seen.get((Hashable*)fn) != (Object*)0)
+            return false;
+        seen.set((Hashable*)fn, (Object*)fn);
+        Array* tk = theirs.allKeys();
+        for (u32 k = 0; k < tk.count(); k = k + 1)
+            {
+            String* c = (String*)tk.get(k);
+            if (mine.get((Hashable*)c) != (Object*)0)
+                continue;
+            if (c.contains(String.withCString("$xcl")) && calls.get((Hashable*)c) != (Object*)0)
+                {
+                if (Languages.callsMore(c, mine, calls, seen))
+                    return true;
+                continue;
+                }
+            return true;
+            }
+        return false;
+        }
+
+    // Each `@name(` the body line l calls into calls, but an intrinsic.
+    static void addCalls(String* l, Map* calls)
+        {
+        u32 p = Languages.byteFrom(l, (u8)'@', 0);
+        while (p != String.notFound())
+            {
+            u32 e = p + 1;
+            if (e < l.byteLength() && l.byteAt(e) == (u8)'"')
+                {
+                e = e + 1;
+                while (e < l.byteLength() && l.byteAt(e) != (u8)'"')
+                    e = e + 1;
+                e = e + 1;
+                }
+            else
+                while (e < l.byteLength() && LlvmName.isNameByte(l.byteAt(e)))
+                    e = e + 1;
+            if (e < l.byteLength() && l.byteAt(e) == (u8)'(')
+                {
+                String* n = l.substringBytes(p, e - p);
+                if (!n.hasPrefix(String.withCString("@llvm.")))
+                    calls.set((Hashable*)n, (Object*)n);
+                }
+            p = e < l.byteLength() ? Languages.byteFrom(l, (u8)'@', e) : String.notFound();
             }
         }
 
