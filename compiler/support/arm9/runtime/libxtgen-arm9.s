@@ -680,9 +680,10 @@ _xt_thread_self_id:
 @ 0 "" 2
 	.arm
 	.syntax unified
-	cmp	r0, #1
+	cmp	r0, #0
 	ldr	r7, [sp], #4
-	movlt	r0, #1
+	addgt	r0, r0, #1
+	movle	r0, #1
 	bx	lr
 	.size	_xt_thread_self_id, .-_xt_thread_self_id
 	.align	2
@@ -706,15 +707,15 @@ _xt_rt_lock:
 	@ args = 0, pretend = 0, frame = 0
 	@ frame_needed = 0, uses_anonymous_args = 0
 	@ link register save eliminated.
-	ldr	r0, .L108
+	ldr	r0, .L110
 	ldr	r3, [r0, #12]
 	cmp	r3, #0
 	bxeq	lr
 	add	r0, r0, #16
 	b	xt_lock
-.L109:
+.L111:
 	.align	2
-.L108:
+.L110:
 	.word	.LANCHOR0
 	.size	_xt_rt_lock, .-_xt_rt_lock
 	.align	2
@@ -726,7 +727,7 @@ _xt_rt_unlock:
 	@ args = 0, pretend = 0, frame = 0
 	@ frame_needed = 0, uses_anonymous_args = 0
 	@ link register save eliminated.
-	ldr	r3, .L120
+	ldr	r3, .L122
 	ldr	r2, [r3, #12]
 	cmp	r2, #0
 	bxeq	lr
@@ -738,7 +739,7 @@ _xt_rt_unlock:
 	.syntax unified
 	mov	r0, #0
 	add	r3, r3, #16
-.L113:
+.L115:
 	.syntax divided
 @ 131 "support/arm9/runtime/xt-threads-xtos.c" 1
 	ldrex r1, [r3]
@@ -749,7 +750,7 @@ _xt_rt_unlock:
 	.arm
 	.syntax unified
 	cmp	r2, #0
-	bne	.L113
+	bne	.L115
 	.syntax divided
 @ 104 "support/arm9/runtime/xt-threads-xtos.c" 1
 	dmb ish
@@ -760,7 +761,7 @@ _xt_rt_unlock:
 	bxne	lr
 	str	r7, [sp, #-4]!
 	mov	r1, #1
-	ldr	r0, .L120+4
+	ldr	r0, .L122+4
 	movw	r7, #277
 	.syntax divided
 @ 87 "support/arm9/runtime/xt-threads-xtos.c" 1
@@ -770,9 +771,9 @@ _xt_rt_unlock:
 	.syntax unified
 	ldr	r7, [sp], #4
 	bx	lr
-.L121:
+.L123:
 	.align	2
-.L120:
+.L122:
 	.word	.LANCHOR0
 	.word	.LANCHOR0+16
 	.size	_xt_rt_unlock, .-_xt_rt_unlock
@@ -834,7 +835,7 @@ _xt_mutex_unlock:
 	.arm
 	.syntax unified
 	mov	r1, #0
-.L134:
+.L136:
 	.syntax divided
 @ 131 "support/arm9/runtime/xt-threads-xtos.c" 1
 	ldrex r3, [r0]
@@ -845,7 +846,7 @@ _xt_mutex_unlock:
 	.arm
 	.syntax unified
 	cmp	r2, #0
-	bne	.L134
+	bne	.L136
 	.syntax divided
 @ 104 "support/arm9/runtime/xt-threads-xtos.c" 1
 	dmb ish
@@ -878,8 +879,8 @@ _xt_mutex_trylock:
 	cmp	r0, #0
 	bxeq	lr
 	mov	r2, #1
-	b	.L145
-.L143:
+	b	.L147
+.L145:
 	.syntax divided
 @ 118 "support/arm9/runtime/xt-threads-xtos.c" 1
 	strex r3, r2, [r0]
@@ -887,8 +888,8 @@ _xt_mutex_trylock:
 	.arm
 	.syntax unified
 	cmp	r3, #0
-	beq	.L148
-.L145:
+	beq	.L150
+.L147:
 	.syntax divided
 @ 112 "support/arm9/runtime/xt-threads-xtos.c" 1
 	ldrex r3, [r0]
@@ -896,7 +897,7 @@ _xt_mutex_trylock:
 	.arm
 	.syntax unified
 	cmp	r3, #0
-	beq	.L143
+	beq	.L145
 	.syntax divided
 @ 115 "support/arm9/runtime/xt-threads-xtos.c" 1
 	clrex
@@ -905,7 +906,7 @@ _xt_mutex_trylock:
 	.syntax unified
 	mov	r0, #0
 	bx	lr
-.L148:
+.L150:
 	.syntax divided
 @ 104 "support/arm9/runtime/xt-threads-xtos.c" 1
 	dmb ish
@@ -965,7 +966,7 @@ _xt_cond_wait:
 @ 0 "" 2
 	.arm
 	.syntax unified
-.L158:
+.L160:
 	.syntax divided
 @ 131 "support/arm9/runtime/xt-threads-xtos.c" 1
 	ldrex r1, [r3]
@@ -976,7 +977,7 @@ _xt_cond_wait:
 	.arm
 	.syntax unified
 	cmp	r2, #0
-	bne	.L158
+	bne	.L160
 	.syntax divided
 @ 104 "support/arm9/runtime/xt-threads-xtos.c" 1
 	dmb ish
@@ -984,7 +985,7 @@ _xt_cond_wait:
 	.arm
 	.syntax unified
 	cmp	r1, #2
-	bne	.L159
+	bne	.L161
 	movw	r7, #277
 	mov	r0, r3
 	mov	r1, #1
@@ -994,7 +995,7 @@ _xt_cond_wait:
 @ 0 "" 2
 	.arm
 	.syntax unified
-.L159:
+.L161:
 	mov	r7, #276
 	mov	r0, ip
 	mov	r1, r4
@@ -1021,7 +1022,7 @@ _xt_cond_signal:
 	cmp	r0, #0
 	bxeq	lr
 	str	r7, [sp, #-4]!
-.L164:
+.L166:
 	.syntax divided
 @ 144 "support/arm9/runtime/xt-threads-xtos.c" 1
 	ldrex r3, [r0]
@@ -1036,7 +1037,7 @@ _xt_cond_signal:
 	.arm
 	.syntax unified
 	cmp	r2, #0
-	bne	.L164
+	bne	.L166
 	.syntax divided
 @ 104 "support/arm9/runtime/xt-threads-xtos.c" 1
 	dmb ish
@@ -1066,7 +1067,7 @@ _xt_cond_broadcast:
 	cmp	r0, #0
 	bxeq	lr
 	str	r7, [sp, #-4]!
-.L174:
+.L176:
 	.syntax divided
 @ 144 "support/arm9/runtime/xt-threads-xtos.c" 1
 	ldrex r3, [r0]
@@ -1081,7 +1082,7 @@ _xt_cond_broadcast:
 	.arm
 	.syntax unified
 	cmp	r2, #0
-	bne	.L174
+	bne	.L176
 	.syntax divided
 @ 104 "support/arm9/runtime/xt-threads-xtos.c" 1
 	dmb ish
@@ -1140,11 +1141,11 @@ _xt_sem_wait:
 	bxeq	lr
 	ldr	r1, [r3]
 	cmp	r1, #0
-	ble	.L208
-.L210:
+	ble	.L210
+.L212:
 	sub	r0, r1, #1
-	b	.L204
-.L206:
+	b	.L206
+.L208:
 	.syntax divided
 @ 118 "support/arm9/runtime/xt-threads-xtos.c" 1
 	strex r2, r0, [r3]
@@ -1152,8 +1153,8 @@ _xt_sem_wait:
 	.arm
 	.syntax unified
 	cmp	r2, #0
-	beq	.L209
-.L204:
+	beq	.L211
+.L206:
 	.syntax divided
 @ 112 "support/arm9/runtime/xt-threads-xtos.c" 1
 	ldrex r2, [r3]
@@ -1161,7 +1162,7 @@ _xt_sem_wait:
 	.arm
 	.syntax unified
 	cmp	r1, r2
-	beq	.L206
+	beq	.L208
 	.syntax divided
 @ 115 "support/arm9/runtime/xt-threads-xtos.c" 1
 	clrex
@@ -1170,10 +1171,10 @@ _xt_sem_wait:
 	.syntax unified
 	ldr	r1, [r3]
 	cmp	r1, #0
-	bgt	.L210
-.L208:
+	bgt	.L212
+.L210:
 	str	r7, [sp, #-4]!
-.L192:
+.L194:
 	mov	r7, #276
 	mov	r0, r3
 	mov	r1, #0
@@ -1184,13 +1185,13 @@ _xt_sem_wait:
 @ 0 "" 2
 	.arm
 	.syntax unified
-.L191:
+.L193:
 	ldr	r1, [r3]
 	cmp	r1, #0
-	ble	.L192
+	ble	.L194
 	sub	r0, r1, #1
-	b	.L195
-.L193:
+	b	.L197
+.L195:
 	.syntax divided
 @ 118 "support/arm9/runtime/xt-threads-xtos.c" 1
 	strex r2, r0, [r3]
@@ -1198,8 +1199,8 @@ _xt_sem_wait:
 	.arm
 	.syntax unified
 	cmp	r2, #0
-	beq	.L211
-.L195:
+	beq	.L213
+.L197:
 	.syntax divided
 @ 112 "support/arm9/runtime/xt-threads-xtos.c" 1
 	ldrex r2, [r3]
@@ -1207,15 +1208,15 @@ _xt_sem_wait:
 	.arm
 	.syntax unified
 	cmp	r1, r2
-	beq	.L193
+	beq	.L195
 	.syntax divided
 @ 115 "support/arm9/runtime/xt-threads-xtos.c" 1
 	clrex
 @ 0 "" 2
 	.arm
 	.syntax unified
-	b	.L191
-.L209:
+	b	.L193
+.L211:
 	.syntax divided
 @ 104 "support/arm9/runtime/xt-threads-xtos.c" 1
 	dmb ish
@@ -1223,7 +1224,7 @@ _xt_sem_wait:
 	.arm
 	.syntax unified
 	bx	lr
-.L211:
+.L213:
 	.syntax divided
 @ 104 "support/arm9/runtime/xt-threads-xtos.c" 1
 	dmb ish
@@ -1243,14 +1244,14 @@ _xt_sem_trywait:
 	@ frame_needed = 0, uses_anonymous_args = 0
 	@ link register save eliminated.
 	subs	r3, r0, #0
-	beq	.L215
+	beq	.L217
 	ldr	r1, [r3]
 	cmp	r1, #0
-	ble	.L215
-.L217:
+	ble	.L217
+.L219:
 	sub	r0, r1, #1
-	b	.L218
-.L216:
+	b	.L220
+.L218:
 	.syntax divided
 @ 118 "support/arm9/runtime/xt-threads-xtos.c" 1
 	strex r2, r0, [r3]
@@ -1258,8 +1259,8 @@ _xt_sem_trywait:
 	.arm
 	.syntax unified
 	cmp	r2, #0
-	beq	.L221
-.L218:
+	beq	.L223
+.L220:
 	.syntax divided
 @ 112 "support/arm9/runtime/xt-threads-xtos.c" 1
 	ldrex r2, [r3]
@@ -1267,7 +1268,7 @@ _xt_sem_trywait:
 	.arm
 	.syntax unified
 	cmp	r1, r2
-	beq	.L216
+	beq	.L218
 	.syntax divided
 @ 115 "support/arm9/runtime/xt-threads-xtos.c" 1
 	clrex
@@ -1276,11 +1277,11 @@ _xt_sem_trywait:
 	.syntax unified
 	ldr	r1, [r3]
 	cmp	r1, #0
-	bgt	.L217
-.L215:
+	bgt	.L219
+.L217:
 	mov	r0, #0
 	bx	lr
-.L221:
+.L223:
 	.syntax divided
 @ 104 "support/arm9/runtime/xt-threads-xtos.c" 1
 	dmb ish
@@ -1302,7 +1303,7 @@ _xt_sem_post:
 	cmp	r0, #0
 	bxeq	lr
 	str	r7, [sp, #-4]!
-.L224:
+.L226:
 	.syntax divided
 @ 144 "support/arm9/runtime/xt-threads-xtos.c" 1
 	ldrex r3, [r0]
@@ -1317,7 +1318,7 @@ _xt_sem_post:
 	.arm
 	.syntax unified
 	cmp	r2, #0
-	bne	.L224
+	bne	.L226
 	.syntax divided
 @ 104 "support/arm9/runtime/xt-threads-xtos.c" 1
 	dmb ish
@@ -1344,8 +1345,8 @@ _xt_tls_new:
 	@ args = 0, pretend = 0, frame = 0
 	@ frame_needed = 0, uses_anonymous_args = 0
 	@ link register save eliminated.
-	ldr	r3, .L237
-.L233:
+	ldr	r3, .L239
+.L235:
 	.syntax divided
 @ 144 "support/arm9/runtime/xt-threads-xtos.c" 1
 	ldrex r0, [r3]
@@ -1360,7 +1361,7 @@ _xt_tls_new:
 	.arm
 	.syntax unified
 	cmp	r2, #0
-	bne	.L233
+	bne	.L235
 	.syntax divided
 @ 104 "support/arm9/runtime/xt-threads-xtos.c" 1
 	dmb ish
@@ -1370,9 +1371,9 @@ _xt_tls_new:
 	cmp	r0, #31
 	mvngt	r0, #0
 	bx	lr
-.L238:
+.L240:
 	.align	2
-.L237:
+.L239:
 	.word	.LANCHOR0+20
 	.size	_xt_tls_new, .-_xt_tls_new
 	.align	2
@@ -1389,17 +1390,17 @@ _xt_tls_set:
 	mov	r4, r0
 	mov	r5, r1
 	.syntax divided
-@ 450 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 452 "support/arm9/runtime/xt-threads-xtos.c" 1
 	mrc p15,0,r3,c13,c0,2
 @ 0 "" 2
 	.arm
 	.syntax unified
 	cmp	r3, #0
 	mov	r6, r3
-	beq	.L250
+	beq	.L252
 	str	r5, [r3, r4, lsl #2]
 	pop	{r4, r5, r6, r7, r8, pc}
-.L250:
+.L252:
 	mov	r1, #4
 	mov	r0, #32
 	bl	calloc
@@ -1426,26 +1427,26 @@ _xt_tls_get:
 	@ args = 0, pretend = 0, frame = 0
 	@ frame_needed = 0, uses_anonymous_args = 0
 	cmp	r0, #31
-	bhi	.L259
+	bhi	.L261
 	push	{r4, r5, r7, lr}
 	mov	r4, r0
 	.syntax divided
-@ 450 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 452 "support/arm9/runtime/xt-threads-xtos.c" 1
 	mrc p15,0,r3,c13,c0,2
 @ 0 "" 2
 	.arm
 	.syntax unified
 	cmp	r3, #0
 	mov	r5, r3
-	beq	.L262
+	beq	.L264
 	ldr	r0, [r3, r4, lsl #2]
 	pop	{r4, r5, r7, pc}
-.L262:
+.L264:
 	mov	r1, #4
 	mov	r0, #32
 	bl	calloc
 	subs	r3, r0, #0
-	beq	.L252
+	beq	.L254
 	movw	r7, #275
 	mov	r1, r5
 	mov	r2, r5
@@ -1457,10 +1458,10 @@ _xt_tls_get:
 	.syntax unified
 	ldr	r0, [r3, r4, lsl #2]
 	pop	{r4, r5, r7, pc}
-.L252:
+.L254:
 	mov	r0, #0
 	pop	{r4, r5, r7, pc}
-.L259:
+.L261:
 	mov	r0, #0
 	bx	lr
 	.size	_xt_tls_get, .-_xt_tls_get
@@ -1520,8 +1521,8 @@ _xt_atomic_add_i32:
 	@ frame_needed = 0, uses_anonymous_args = 0
 	@ link register save eliminated.
 	subs	r3, r0, #0
-	beq	.L274
-.L273:
+	beq	.L276
+.L275:
 	.syntax divided
 @ 144 "support/arm9/runtime/xt-threads-xtos.c" 1
 	ldrex r0, [r3]
@@ -1536,7 +1537,7 @@ _xt_atomic_add_i32:
 	.arm
 	.syntax unified
 	cmp	r2, #0
-	bne	.L273
+	bne	.L275
 	.syntax divided
 @ 104 "support/arm9/runtime/xt-threads-xtos.c" 1
 	dmb ish
@@ -1544,7 +1545,7 @@ _xt_atomic_add_i32:
 	.arm
 	.syntax unified
 	bx	lr
-.L274:
+.L276:
 	mov	r0, r3
 	bx	lr
 	.size	_xt_atomic_add_i32, .-_xt_atomic_add_i32
@@ -1559,7 +1560,7 @@ _xt_atomic_xchg_i32:
 	@ link register save eliminated.
 	cmp	r0, #0
 	bxeq	lr
-.L278:
+.L280:
 	.syntax divided
 @ 131 "support/arm9/runtime/xt-threads-xtos.c" 1
 	ldrex r2, [r0]
@@ -1570,7 +1571,7 @@ _xt_atomic_xchg_i32:
 	.arm
 	.syntax unified
 	cmp	r3, #0
-	bne	.L278
+	bne	.L280
 	.syntax divided
 @ 104 "support/arm9/runtime/xt-threads-xtos.c" 1
 	dmb ish
@@ -1590,9 +1591,9 @@ _xt_atomic_cas_i32:
 	@ frame_needed = 0, uses_anonymous_args = 0
 	@ link register save eliminated.
 	cmp	r0, #0
-	bne	.L285
+	bne	.L287
 	bx	lr
-.L283:
+.L285:
 	.syntax divided
 @ 118 "support/arm9/runtime/xt-threads-xtos.c" 1
 	strex ip, r2, [r0]
@@ -1600,8 +1601,8 @@ _xt_atomic_cas_i32:
 	.arm
 	.syntax unified
 	cmp	ip, #0
-	beq	.L288
-.L285:
+	beq	.L290
+.L287:
 	.syntax divided
 @ 112 "support/arm9/runtime/xt-threads-xtos.c" 1
 	ldrex r3, [r0]
@@ -1609,26 +1610,26 @@ _xt_atomic_cas_i32:
 	.arm
 	.syntax unified
 	cmp	r1, r3
-	beq	.L283
+	beq	.L285
 	.syntax divided
 @ 115 "support/arm9/runtime/xt-threads-xtos.c" 1
 	clrex
 @ 0 "" 2
 	.arm
 	.syntax unified
-.L284:
+.L286:
 	sub	r0, r1, r3
 	clz	r0, r0
 	lsr	r0, r0, #5
 	bx	lr
-.L288:
+.L290:
 	.syntax divided
 @ 104 "support/arm9/runtime/xt-threads-xtos.c" 1
 	dmb ish
 @ 0 "" 2
 	.arm
 	.syntax unified
-	b	.L284
+	b	.L286
 	.size	_xt_atomic_cas_i32, .-_xt_atomic_cas_i32
 	.align	2
 	.global	_xt_atomic_load_ptr
@@ -1686,9 +1687,9 @@ _xt_atomic_cas_ptr:
 	@ frame_needed = 0, uses_anonymous_args = 0
 	@ link register save eliminated.
 	cmp	r0, #0
-	bne	.L301
+	bne	.L303
 	bx	lr
-.L299:
+.L301:
 	.syntax divided
 @ 118 "support/arm9/runtime/xt-threads-xtos.c" 1
 	strex ip, r2, [r0]
@@ -1696,8 +1697,8 @@ _xt_atomic_cas_ptr:
 	.arm
 	.syntax unified
 	cmp	ip, #0
-	beq	.L304
-.L301:
+	beq	.L306
+.L303:
 	.syntax divided
 @ 112 "support/arm9/runtime/xt-threads-xtos.c" 1
 	ldrex r3, [r0]
@@ -1705,26 +1706,26 @@ _xt_atomic_cas_ptr:
 	.arm
 	.syntax unified
 	cmp	r1, r3
-	beq	.L299
+	beq	.L301
 	.syntax divided
 @ 115 "support/arm9/runtime/xt-threads-xtos.c" 1
 	clrex
 @ 0 "" 2
 	.arm
 	.syntax unified
-.L300:
+.L302:
 	sub	r0, r1, r3
 	clz	r0, r0
 	lsr	r0, r0, #5
 	bx	lr
-.L304:
+.L306:
 	.syntax divided
 @ 104 "support/arm9/runtime/xt-threads-xtos.c" 1
 	dmb ish
 @ 0 "" 2
 	.arm
 	.syntax unified
-	b	.L300
+	b	.L302
 	.size	_xt_atomic_cas_ptr, .-_xt_atomic_cas_ptr
 	.align	2
 	.global	_xtc_sinit_run
@@ -1739,19 +1740,19 @@ _xtc_sinit_run:
 	popeq	{r4, r5, r6, r7, r8, r9, r10, pc}
 	mov	r8, r1
 	mov	r9, r2
-	ldr	r10, .L343
+	ldr	r10, .L351
 	ldr	r3, [r10, #12]
 	add	r5, r10, #16
 	add	r6, r10, #156
 	cmp	r3, #0
-	bne	.L340
-.L308:
+	bne	.L347
+.L310:
 	ldrb	r0, [r4]	@ zero_extendqisi2
 	cmp	r0, #2
-	beq	.L322
-.L309:
+	beq	.L326
+.L311:
 	cmp	r0, #0
-	beq	.L341
+	beq	.L348
 	mov	r0, #0
 	movw	r7, #274
 	mov	r1, r0
@@ -1762,29 +1763,31 @@ _xtc_sinit_run:
 @ 0 "" 2
 	.arm
 	.syntax unified
-	ldr	ip, [r10, #24]
-	cmp	r0, #1
-	movlt	r0, #1
-	cmp	ip, r1
-	ble	.L314
-	ldr	r3, .L343+4
-	b	.L317
-.L315:
-	add	r2, r2, #1
+	ldr	r1, [r10, #24]
+	cmp	r0, #0
+	addgt	ip, r0, #1
+	movle	ip, #1
+	cmp	r1, #0
+	ble	.L318
+	ldr	r0, .L351+4
+	mov	r3, #0
+	b	.L321
+.L319:
+	add	r3, r3, #1
+	cmp	r3, r1
+	beq	.L318
+.L321:
+	ldr	r2, [r0], #4
+	cmp	r2, r4
+	bne	.L319
+	ldr	r2, [r6, r3, lsl #2]
 	cmp	r2, ip
-	beq	.L314
-.L317:
-	ldr	r1, [r3], #4
-	cmp	r1, r4
-	bne	.L315
-	ldr	r1, [r6, r2, lsl #2]
-	cmp	r1, r0
-	bne	.L315
+	bne	.L319
 	ldr	r3, [r10, #12]
 	cmp	r3, #0
 	popeq	{r4, r5, r6, r7, r8, r9, r10, pc}
 	mov	ip, #1
-.L325:
+.L329:
 	.syntax divided
 @ 104 "support/arm9/runtime/xt-threads-xtos.c" 1
 	dmb ish
@@ -1792,7 +1795,7 @@ _xtc_sinit_run:
 	.arm
 	.syntax unified
 	mov	r1, #0
-.L318:
+.L322:
 	.syntax divided
 @ 131 "support/arm9/runtime/xt-threads-xtos.c" 1
 	ldrex r3, [r5]
@@ -1803,7 +1806,7 @@ _xtc_sinit_run:
 	.arm
 	.syntax unified
 	cmp	r2, #0
-	bne	.L318
+	bne	.L322
 	.syntax divided
 @ 104 "support/arm9/runtime/xt-threads-xtos.c" 1
 	dmb ish
@@ -1811,7 +1814,7 @@ _xtc_sinit_run:
 	.arm
 	.syntax unified
 	cmp	r3, #2
-	bne	.L319
+	bne	.L323
 	movw	r7, #277
 	mov	r0, r5
 	mov	r1, #1
@@ -1821,10 +1824,10 @@ _xtc_sinit_run:
 @ 0 "" 2
 	.arm
 	.syntax unified
-.L319:
+.L323:
 	cmp	ip, #0
 	popne	{r4, r5, r6, r7, r8, r9, r10, pc}
-.L326:
+.L330:
 	mov	r0, #0
 	movw	r7, #1026
 	mov	r1, r0
@@ -1837,72 +1840,55 @@ _xtc_sinit_run:
 	.syntax unified
 	ldr	r3, [r10, #12]
 	cmp	r3, #0
-	beq	.L308
-.L340:
+	beq	.L310
+.L347:
 	mov	r0, r5
 	bl	xt_lock
 	ldrb	r0, [r4]	@ zero_extendqisi2
 	cmp	r0, #2
-	bne	.L309
-.L322:
+	bne	.L311
+.L326:
 	pop	{r4, r5, r6, r7, r8, r9, r10, lr}
 	b	_xt_rt_unlock
-.L314:
+.L318:
 	ldr	r3, [r10, #12]
 	cmp	r3, #0
-	beq	.L326
+	beq	.L330
 	mov	ip, #0
-	b	.L325
-.L341:
-	ldr	r3, [r10, #24]
-	mov	r2, #1
-	strb	r2, [r4]
-	cmp	r3, #31
-	bgt	.L311
-	add	r3, r10, r3, lsl #2
-	movw	r7, #274
-	mov	r1, r0
-	str	r4, [r3, #28]
-	mov	r2, r0
-	.syntax divided
-@ 87 "support/arm9/runtime/xt-threads-xtos.c" 1
-	svc #1
-@ 0 "" 2
-	.arm
-	.syntax unified
-	cmp	r0, #1
-	movlt	r0, #1
-	str	r0, [r3, #156]
-	ldr	r3, [r10, #24]
-	add	r3, r3, #1
-	str	r3, [r10, #24]
-.L311:
+	b	.L329
+.L348:
+	ldr	r2, [r10, #24]
+	mov	r3, #1
+	strb	r3, [r4]
+	cmp	r2, #31
+	ble	.L349
+.L313:
 	bl	_xt_rt_unlock
 	cmp	r8, #0
-	beq	.L313
+	beq	.L316
 	mov	r0, r9
 	blx	r8
-.L313:
+.L316:
 	ldr	r3, [r10, #12]
 	cmp	r3, #0
-	bne	.L342
-.L321:
+	bne	.L350
+.L325:
 	ldr	r0, [r10, #24]
 	mov	r3, #2
 	strb	r3, [r4]
 	cmp	r0, #0
-	ble	.L322
-	ldr	r2, .L343+4
+	ble	.L326
+	ldr	r2, .L351+4
 	mov	r3, #0
-	b	.L324
-.L323:
+	b	.L328
+.L327:
 	add	r3, r3, #1
-	cmp	r3, r0
-	beq	.L322
-.L324:
+	cmp	r0, r3
+	beq	.L326
+.L328:
 	ldr	r1, [r2], #4
 	cmp	r1, r4
-	bne	.L323
+	bne	.L327
 	sub	r0, r0, #1
 	add	r3, r10, r3, lsl #2
 	add	r2, r10, r0, lsl #2
@@ -1913,13 +1899,34 @@ _xtc_sinit_run:
 	str	r1, [r3, #28]
 	str	r2, [r3, #156]
 	b	_xt_rt_unlock
-.L342:
-	ldr	r0, .L343+8
+.L349:
+	lsl	ip, r2, #2
+	movw	r7, #274
+	mov	r1, r0
+	add	lr, r10, ip
+	mov	r2, r0
+	str	r4, [lr, #28]
+	.syntax divided
+@ 87 "support/arm9/runtime/xt-threads-xtos.c" 1
+	svc #1
+@ 0 "" 2
+	.arm
+	.syntax unified
+	cmp	r0, #0
+	add	r2, r10, ip
+	addgt	r3, r0, r3
+	str	r3, [r2, #156]
+	ldr	r3, [r10, #24]
+	add	r3, r3, #1
+	str	r3, [r10, #24]
+	b	.L313
+.L350:
+	ldr	r0, .L351+8
 	bl	xt_lock
-	b	.L321
-.L344:
+	b	.L325
+.L352:
 	.align	2
-.L343:
+.L351:
 	.word	.LANCHOR0
 	.word	.LANCHOR0+28
 	.word	.LANCHOR0+16

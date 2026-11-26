@@ -252,7 +252,9 @@ void _xt_thread_sleep_ms(uint32_t ms)
 //     0 is this runtime's "no thread" value everywhere else — `isValid()` reads
 //     a 0 handle as "never started", and the create path above notes that tids
 //     start at 1 so its encoding "never produces 0". A caller cannot tell a
-//     valid main-thread id from an absent one, so map it to a fixed non-zero.
+//     valid main-thread id from an absent one, so every id is the tid plus
+//     one: the main thread is 1, and the first spawned thread (tid 1) is 2.
+//     Mapping the main thread alone to 1 gave it the first worker's id.
 //
 //   * A syscall FAILS by returning a negative errno, and casting that straight
 //     to uint32_t turns -ENOSYS into 4294967258 — a plausible-looking id that
@@ -271,7 +273,7 @@ uint32_t _xt_thread_self_id(void)
     long tid = xt_tsc(XT_SYS_THREAD_SELF, 0, 0, 0);
     if (tid <= 0)
         return XT_MAIN_THREAD_ID;
-    return (uint32_t)tid;
+    return (uint32_t)tid + 1u;
     }
 
 // One A9 core is available to a process today: XTOS's FreeRTOS runs CPU0, and
