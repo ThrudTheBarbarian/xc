@@ -501,6 +501,8 @@ i64 gParDevGenNext(void)
 // one hook the header carries calls them all.
 typedef void parFreeHook_t(pointer payload);
 #define PAR_DEV_FREE_HOOKS 4
+// A capture's length meaning "checked at the call site" (bufferOverlap).
+#define PAR_LEN_CHECKED_AT_CALL (0 - 2)
 parFreeHook_t* gParDevFreeHook[PAR_DEV_FREE_HOOKS];
 void parDeviceBlockFreed(pointer payload)
 {
@@ -3060,6 +3062,13 @@ class ParDevice
         return false;
         }
 
+    // PAR_LEN_CHECKED_AT_CALL (-2), from an outlined block's generated
+    // gpuLength for a capture: the block only reads through it, its heap
+    // block's size is unknown, and the block's call site has compared the
+    // bytes the loop reads through it, by range over the call's [lo, hi),
+    // with every array the loop stores to (OptOutline's ppOverlapGuard), and
+    // runs the loop as written where they meet. bufferOverlap takes it as
+    // apart; to everything else it is no length (a device needs one).
     // Whether two of the block's arrays overlap over [lo, hi), one of them
     // written. An array's bytes are the elements its footprint
     // (fp=<array>:<k>:<lo>:<hi>: k * i + [lo, hi)) reaches over [lo, hi), else
@@ -3165,6 +3174,10 @@ class ParDevice
                 if (ptr[i] == (pointer)0 || ptr[j] == (pointer)0)
                     continue;
                 if (ro[i] && ro[j])
+                    continue;
+                // An array the block's call site has already compared by
+                // range with every stored one: apart (PAR_LEN_CHECKED_AT_CALL).
+                if (len[i] == (i64)PAR_LEN_CHECKED_AT_CALL || len[j] == (i64)PAR_LEN_CHECKED_AT_CALL)
                     continue;
                 // One array, each item touching its own element in both.
                 if (ptr[i] == ptr[j] && wid[i] == wid[j] && fpOf[i] >= (i64)0 && fpOf[j] >= (i64)0)

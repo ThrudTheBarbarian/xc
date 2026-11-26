@@ -2097,6 +2097,7 @@ class BeFact : Object
     Array* _ppGOffHi;
     Array* _ppGStored;
     Array* _ppRO;        // per live-in of the block being made: 1 when the loop only reads through it (#156)
+    Array* _ppChk;       // per live-in: 1 when the call site's range check covers it (ppGpuLength says so)
     Array* _ppInvLoads;    // IRInsn@: loads from addresses the loop does not move (a std::vector's fields), guarded
     Map* _ppInvSame;       // a later one of _ppInvLoads reading the address an earlier one reads -> the earlier one's result
     IRValue* _ppRematMem;  // ppRematMem's memory token as it threads the loads it makes
@@ -2114,18 +2115,21 @@ class BeFact : Object
     Array* _ppHistKey;
     Array* _ppHistCode;
     // A read away from [i] whose index is bounded (#219): an inner loop's
-    // counter from a constant up to the iteration (i + c) or a constant.
-    // Each bound is (relative to i?, c); per array, merged over its accesses.
+    // counter from a constant up to the iteration (i + c), a constant, or a
+    // value from outside the loop (+ c). Each bound is a term (kind, c, value):
+    // PP_BND_CONST, PP_BND_IV (i + c), PP_BND_VALZ / PP_BND_VALS (the value,
+    // zero- or sign-extended, + c). Per array, a list of low terms and one of
+    // high terms over its accesses; the call site takes their min and max.
     bool _ppBndOk;
     bool _ppBndLoIv;
     i64 _ppBndLoC;
     bool _ppBndHiIv;
     i64 _ppBndHiC;
+    IRValue* _ppBndHiV;    // the high bound's value (PP_BND_VALZ/VALS), else 0
+    bool _ppBndHiSx;       // …sign-extended
     Array* _ppGBnd;        // Number@ per array: 1 while every access is bounded
-    Array* _ppGLoIv;       // Number@ 1 when the lower bound is i-relative
-    Array* _ppGLoC;        // Number@ (I64)
-    Array* _ppGHiIv;
-    Array* _ppGHiC;
+    Array* _ppGLoT;        // Array@ per array: its low terms (Array@ [kind, c, value])
+    Array* _ppGHiT;        // …its high terms
     Array* _ppBodyBlocks;  // IRBlock@: the loop being judged's
     Array* _ppScanSt;      // IRInsn@: a running total's stores (#272), or 0
     Array* _ppScanAt;      // Number@: their arrays' capture positions
