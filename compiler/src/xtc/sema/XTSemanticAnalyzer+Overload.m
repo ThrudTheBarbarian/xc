@@ -4853,7 +4853,11 @@ static NSInteger XTFmtWrapperIndex(BOOL isVarArgs, NSArray<XTParamNode*>* params
 - (void)visitLiteralInt:(XTLiteralIntNode*)node
     {
     int64_t v = node.intValue;
-    if (v >= 0)
+    // A literal at or above 2^63 is a u64, not the negative int64_t its bits
+    // spell: (f64)$FFFFFFFFFFFFFFFF is 1.8e19, not -1 (#709).
+    if (node.srcFacts & XTSrcU64)
+        node.resolvedType = [XTType u64Type];
+    else if (v >= 0)
         {
         if (v <= 255)
             node.resolvedType = [XTType u8Type];

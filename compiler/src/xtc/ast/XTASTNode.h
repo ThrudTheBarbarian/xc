@@ -83,6 +83,8 @@ typedef NS_OPTIONS(NSUInteger, XTSrcFact) {
     XTSrcAnnot = 1 << 12,      // a loop with an annotation the parser does not know (it warns and drops it);
                                // it stays: auto keeps an outer loop holding such an inner loop serial, and
                                // dropping it would lift that loop, a widening of auto deferred to #523
+    XTSrcU64 = 1 << 13,        // an integer literal written at or above 2^63: held as an int64_t it reads
+                               // as negative, and it is a u64 (#709)
 };
 
 @interface XTASTNode : NSObject

@@ -12036,6 +12036,9 @@ class Parser
                 n.setPos(tok.fileId(), tok.line(), tok.col());
             n.setNum(tok.intValue());
             if (Parser.parPlainDecimal(tok.value())) n.addSrc(SRC_PLAIN);
+            // No sign is part of the token, so a negative value is one at or
+            // above 2^63 (#709).
+            if (tok.intValue() < (i64)0) n.addSrc(SRC_U64);
             return n;
         }
         if (t == (u16)tokCharLiteral) {

@@ -94,3 +94,6 @@
 // lifted, which is a widening of auto, deferred until its safety fixes settle
 // (#523).
 #define SRC_ANNOT $1000
+// An integer literal written at or above 2^63 (`$FFFFFFFFFFFFFFFF`): its
+// value is held as an i64, so it reads as negative, and it is a u64 (#709).
+#define SRC_U64 $2000

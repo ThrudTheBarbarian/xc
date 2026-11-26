@@ -706,6 +706,10 @@ static BOOL parPlainDecimal(NSString* t)
         XTLiteralIntNode* lit = [[XTLiteralIntNode alloc] initWithValue:cur.intValue location:loc];
         if (parPlainDecimal(cur.value))
             lit.srcFacts |= XTSrcPlain;
+        // No sign is part of the token, so a negative value is one at or
+        // above 2^63 (#709).
+        if (cur.intValue < 0)
+            lit.srcFacts |= XTSrcU64;
         return lit;
         }
     case XTTokenFloatLiteral:

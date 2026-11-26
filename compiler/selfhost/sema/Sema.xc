@@ -3962,7 +3962,9 @@ class Sema
 
         if (k == (u16)nkInt)
             {
-            n.setTy(Types.forIntLiteral(n.num()));
+            // A literal at or above 2^63 is a u64, not the negative i64 its
+            // bits spell: (f64)$FFFFFFFFFFFFFFFF is 1.8e19, not -1 (#709).
+            n.setTy(n.hasSrc(SRC_U64) ? String.withCString("u64") : Types.forIntLiteral(n.num()));
             return;
             }
         if (k == (u16)nkChar)
