@@ -1790,6 +1790,26 @@ class LlvmReader
         return r;
         }
 
+    // v's value when the current block made it a non-negative integer
+    // literal (operand's Const), else -1.
+    i64 constImm(IRValue* v)
+        {
+        Array* ins = _blk.insns();
+        u32 i = ins.count();
+        while (i > (u32)0)
+            {
+            i = i - (u32)1;
+            IRInsn* n = (IRInsn*)ins.get(i);
+            if (n.res() != v)
+                continue;
+            if (!n.isOp(opConst) || n.ops().count() != (u32)1)
+                return (i64)-1;
+            IROperand* o = (IROperand*)n.ops().get((u32)0);
+            return o.kind() == (u8)OPK_IMMI && o.imm() >= (i64)0 ? o.imm() : (i64)-1;
+            }
+        return (i64)-1;
+        }
+
     // An operand of IR type t at the cursor: a value, a global's address, or a
     // constant (made a Const). 0, with the function failed, when not read.
     IRValue* operand(String* t)
@@ -3730,6 +3750,35 @@ class LlvmReader
             IRValue* a = (IRValue*)args.get(0);
             IRValue* b = (IRValue*)args.get(1);
             IRValue* sv = (IRValue*)args.get(2);
+            // A constant shift (a rotate by a literal, clang's form of
+            // (x << 7) | (x >> 25)): the two shifts by immediates and no
+            // select, the form the back ends make a rotate of and a par
+            // block's lanes take.
+            i64 k = constImm(sv);
+            if (k >= (i64)0)
+                {
+                k = k & (w - (i64)1);
+                if (k == (i64)0)
+                    {
+                    define(res, String.withCString("Bitcast"), rt, IROperand.useVal(fshl ? a : b), (IROperand*)0, (IROperand*)0, (String*)0);
+                    return;
+                    }
+                if (w < (i64)32)
+                    {
+                    a = emit(String.withCString("And"), ct, IROperand.useVal(emit(String.withCString("ZExt"), ct, IROperand.useVal(a), (IROperand*)0, (IROperand*)0)), IROperand.immI(wmask, ct), (IROperand*)0);
+                    b = emit(String.withCString("And"), ct, IROperand.useVal(emit(String.withCString("ZExt"), ct, IROperand.useVal(b), (IROperand*)0, (IROperand*)0)), IROperand.immI(wmask, ct), (IROperand*)0);
+                    }
+                IRValue* hk = emit(String.withCString("Shl"), ct, IROperand.useVal(a), IROperand.immI(fshl ? k : w - k, ct), (IROperand*)0);
+                IRValue* lk = emit(String.withCString("LShr"), ct, IROperand.useVal(b), IROperand.immI(fshl ? w - k : k, ct), (IROperand*)0);
+                if (w < (i64)32)
+                    {
+                    IRValue* wide = emit(String.withCString("Or"), ct, IROperand.useVal(hk), IROperand.useVal(lk), (IROperand*)0);
+                    define(res, String.withCString("Trunc"), rt, IROperand.useVal(wide), (IROperand*)0, (IROperand*)0, (String*)0);
+                    }
+                else
+                    define(res, String.withCString("Or"), rt, IROperand.useVal(hk), IROperand.useVal(lk), (IROperand*)0, (String*)0);
+                return;
+                }
             if (w < (i64)32)
                 {
                 a = emit(String.withCString("And"), ct, IROperand.useVal(emit(String.withCString("ZExt"), ct, IROperand.useVal(a), (IROperand*)0, (IROperand*)0)), IROperand.immI(wmask, ct), (IROperand*)0);

@@ -24,6 +24,21 @@ static uint64_t swaps(const uint32_t* a, int n)
     return s;
     }
 
+// Rotates of every width by a constant and by a variable amount, and a
+// funnel shift of two values (clang's llvm.fshl/fshr).
+static uint64_t rots(const uint32_t* a, int n)
+    {
+    uint64_t s = 0;
+    for (int i = 0; i < n; i++)
+        {
+        uint32_t v = a[i];
+        uint64_t w = (uint64_t)v * 0x9e3779b97f4a7c15ull;
+        s += std::rotl((uint8_t)v, 3) + std::rotr((uint16_t)v, 5) + std::rotl(w, 17)
+           + std::rotl(v, i & 31) + std::rotr(w, i & 63) + ((v << 7) | (a[(i + 1) & (n - 1)] >> 25));
+        }
+    return s;
+    }
+
 static long ints(const int* a, int n)
     {
     long s = 0;
@@ -68,6 +83,6 @@ int main()
         x[i] = (i % 97) * 0.375 - 17.875;
         f[i] = (float)((i % 53) * 0.25 - 5.25);
         }
-    std::printf("%u %llu %ld %.6f %.4f\n", bits(u, n), (unsigned long long)swaps(u, n), ints(a, n), floats(x, n), (double)floatsF(f, n));
+    std::printf("%u %llu %llu %ld %.6f %.4f\n", bits(u, n), (unsigned long long)swaps(u, n), (unsigned long long)rots(u, n), ints(a, n), floats(x, n), (double)floatsF(f, n));
     return 0;
     }
