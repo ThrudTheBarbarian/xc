@@ -3788,14 +3788,17 @@ static NSString *arm9ClassAllocStubs(NSString *prog) {
         NSString *t = [prog substringWithRange:[m rangeAtIndex:1]];
         if ([seen containsObject:t]) continue;
         [seen addObject:t];
-        // `_xtc_new_<T>(count)` — one argument, so the stride argument has to be
-        // supplied here. Eight is the widest element the A32 target has.
+        // A primitive element's `_xtc_new_<T>(count)` has one argument, so the
+        // stride is supplied here: eight, the widest element the A32 target
+        // has. An aggregate's `_xtc_new_<T>(count, stride)` passes its own,
+        // which has to be kept: eight for every one under-allocated a struct
+        // wider than that, so the next allocation overlapped its tail (#722).
         [out appendFormat:
             @"\t.text\n\t.globl\t_xtc_new_%@\n\t.type\t_xtc_new_%@, %%function\n"
             @"_xtc_new_%@:\n"
-            @"\tmov\tr1, #8\n"
+            @"%@"
             @"\tmov\tr2, #0\n"
-            @"\tb\t_xtc_alloc\n", t, t, t];
+            @"\tb\t_xtc_alloc\n", t, t, t, XTIRIsPrimitiveElemName(t) ? @"\tmov\tr1, #8\n" : @""];
     }
     return out;
 }
