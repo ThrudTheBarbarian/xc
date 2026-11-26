@@ -516,17 +516,39 @@ class PeLink
     // which crt-win64.s walks) rebuilt at the end of data: its own entries,
     // then every merged object's .CRT$XCU words, in link order. Nothing to do
     // when no object brought any.
-    void placeInit(SectionBytes* mdata, Map* msyms, Array* mfix)
+    void placeInit(SectionBytes* mdata, Map* msyms, Array* mdataSyms, Array* mfix)
         {
-        if (_init.length() == (u32)0)
-            return;
         Object* so = msyms.get((Hashable*)String.withCString("__xt_ctors_start"));
         Object* eo = msyms.get((Hashable*)String.withCString("__xt_ctors_end"));
         if (so == (Object*)0 || eo == (Object*)0)
             {
-            fail(String.withCString("objects carry constructors (.CRT$XCU) and the program has no constructor table"));
+            // A program whose main is not xc's (C or C++) has no table of
+            // its own: when the start code walks one, it is the objects'
+            // words alone, possibly none.
+            bool walked = PeLink.named(mfix, String.withCString("__xt_ctors_start")) || PeLink.named(mfix, String.withCString("__xt_ctors_end"));
+            if (!walked && _init.length() == (u32)0)
+                return;
+            if (!walked)
+                {
+                fail(String.withCString("objects carry constructors (.CRT$XCU) and the program has no constructor table"));
+                return;
+                }
+            PeLink.padArray(mdata, (u32)7);
+            u32 tb = mdata.length();
+            mdata.append(_init);
+            for (u32 k = (u32)0; k < _initFix.count(); k = k + (u32)1)
+                {
+                X86Fixup* f = (X86Fixup*)_initFix.get(k);
+                mfix.add((Object*)X86Fixup.make(tb + f.offset(), f.kind(), f.symbol(), f.addend()));
+                }
+            msyms.set((Hashable*)String.withCString("__xt_ctors_start"), (Object*)Number.withU32(tb));
+            msyms.set((Hashable*)String.withCString("__xt_ctors_end"), (Object*)Number.withU32(mdata.length()));
+            mdataSyms.add((Object*)String.withCString("__xt_ctors_start"));
+            mdataSyms.add((Object*)String.withCString("__xt_ctors_end"));
             return;
             }
+        if (_init.length() == (u32)0)
+            return;
         u32 s0 = ((Number*)so).asU32();
         u32 s1 = ((Number*)eo).asU32();
         PeLink.padArray(mdata, (u32)7);
@@ -821,7 +843,7 @@ class PeLink
         if (_rc != (u32)0)
             return;
         PeLink.placeDsoHandle(mdata, msyms, mdataSyms, mfix);
-        self.placeInit(mdata, msyms, mfix);
+        self.placeInit(mdata, msyms, mdataSyms, mfix);
         self.placeTls(mdata, msyms, mdataSyms, mfix);
         self.placeCtors(mtext, mdata, msyms, mdataSyms, mfix);
         self.placePdata(mdata, msyms, mdataSyms, mfix);

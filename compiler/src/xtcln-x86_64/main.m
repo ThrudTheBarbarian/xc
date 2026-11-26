@@ -368,19 +368,53 @@ static BOOL mergeElfObject(NSDictionary* obj, NSString* label, NSUInteger tag,
 // every merged object's .init_array words, in link order. Nothing to do when
 // no object brought any.
 static BOOL placeCtors(NSMutableData* mdata, NSMutableDictionary<NSString*, NSNumber*>* msyms,
+                       NSMutableSet<NSString*>* mdataSyms,
                        NSMutableArray<XAX86_64Fixup*>* mfix, NSData* minit,
                        NSArray<XAX86_64Fixup*>* minitFix)
     {
-    if (!minit.length)
-        return YES;
     NSNumber* so = msyms[@"__xt_ctors_start"];
     NSNumber* eo = msyms[@"__xt_ctors_end"];
     if (!so || !eo)
         {
-        fprintf(stderr, "xcc-ln-x86_64: error: objects carry constructors (.init_array) and the "
-                        "program has no constructor table\n");
-        return NO;
+        // A program whose main is not xc's (C or C++) has no table of its
+        // own: when the start code walks one, it is the objects' words alone,
+        // possibly none.
+        BOOL walked = NO;
+        for (XAX86_64Fixup* f in mfix)
+            if ([f.symbol isEqualToString:@"__xt_ctors_start"] || [f.symbol isEqualToString:@"__xt_ctors_end"])
+                walked = YES;
+        if (!walked && !minit.length)
+            return YES;
+        if (!walked)
+            {
+            fprintf(stderr, "xcc-ln-x86_64: error: objects carry constructors (.init_array) and the "
+                            "program has no constructor table\n");
+            return NO;
+            }
+        while (mdata.length % 8)
+            {
+            uint8_t z = 0;
+            [mdata appendBytes:&z length:1];
+            }
+        uint64_t tb = mdata.length;
+        [mdata appendData:minit];
+        for (XAX86_64Fixup* f in minitFix)
+            {
+            XAX86_64Fixup* g = [XAX86_64Fixup new];
+            g.offset = tb + f.offset;
+            g.kind = f.kind;
+            g.symbol = f.symbol;
+            g.addend = f.addend;
+            [mfix addObject:g];
+            }
+        msyms[@"__xt_ctors_start"] = @(tb);
+        msyms[@"__xt_ctors_end"] = @(mdata.length);
+        [mdataSyms addObject:@"__xt_ctors_start"];
+        [mdataSyms addObject:@"__xt_ctors_end"];
+        return YES;
         }
+    if (!minit.length)
+        return YES;
     uint64_t s0 = so.unsignedLongLongValue, s1 = eo.unsignedLongLongValue;
     while (mdata.length % 8)
         {
@@ -890,7 +924,7 @@ int main(int argc, const char* argv[])
         // The objects' constructors join the program's table, after its own.
         // A library hands only its own table to the program (libinit).
         if ((objInputs.count || archives.count) && !shared
-            && !placeCtors(mdata, msyms, mfix, minit, minitFix))
+            && !placeCtors(mdata, msyms, mdataSyms, mfix, minit, minitFix))
             return 1;
         if ((objInputs.count || archives.count) && !shared && !pie)
             {

@@ -1771,18 +1771,40 @@ class MergedImage
     // The program's constructor table (__xt_ctors_start .. __xt_ctors_end,
     // which the start code walks) rebuilt at the end of data: its own
     // entries, then every merged object's .init_array words. Nothing to do
-    // when no object brought any.
+    // when no object brought any. A program whose main is not xc's (a C or
+    // C++ main) has no table of its own: when the start code walks one, the
+    // table is the objects' words alone, possibly none.
     static void placeCtors(MergedImage* im)
         {
-        if (im.initWords().length() == (u32)0)
-            return;
         Object* so = im.syms().get((Hashable*)String.withCString("__xt_ctors_start"));
         Object* eo = im.syms().get((Hashable*)String.withCString("__xt_ctors_end"));
         if (so == (Object*)0 || eo == (Object*)0)
             {
-            im.fail(String.withCString("objects carry constructors (.init_array) and the program has no constructor table"));
+            bool walked = ElfMerge.namesCtors(im.fixups());
+            if (!walked && im.initWords().length() == (u32)0)
+                return;
+            if (!walked)
+                {
+                im.fail(String.withCString("objects carry constructors (.init_array) and the program has no constructor table"));
+                return;
+                }
+            im.data().padTo((u32)8);
+            u32 tb = im.data().length();
+            for (u32 b = (u32)0; b < im.initWords().length(); b = b + (u32)1)
+                im.data().appendByte(im.initWords().byteAt(b));
+            for (u32 i = (u32)0; i < im.initFixups().count(); i = i + (u32)1)
+                {
+                X86Fixup* f = (X86Fixup*)im.initFixups().get(i);
+                im.fixups().add((Object*)X86Fixup.make(tb + f.offset(), f.kind(), f.symbol(), f.addend()));
+                }
+            im.syms().set((Hashable*)String.withCString("__xt_ctors_start"), (Object*)Number.withU32(tb));
+            im.syms().set((Hashable*)String.withCString("__xt_ctors_end"), (Object*)Number.withU32(im.data().length()));
+            im.dataSyms().add((Object*)String.withCString("__xt_ctors_start"));
+            im.dataSyms().add((Object*)String.withCString("__xt_ctors_end"));
             return;
             }
+        if (im.initWords().length() == (u32)0)
+            return;
         u32 s0 = ((Number*)so).asU32();
         u32 s1 = ((Number*)eo).asU32();
         im.data().padTo((u32)8);
@@ -1812,6 +1834,19 @@ class MergedImage
             }
         im.syms().set((Hashable*)String.withCString("__xt_ctors_start"), (Object*)Number.withU32(nb));
         im.syms().set((Hashable*)String.withCString("__xt_ctors_end"), (Object*)Number.withU32(im.data().length()));
+        }
+
+    // Whether a fixup names the constructor table's bounds: the start code
+    // that walks it is on the link.
+    static bool namesCtors(Array* fx)
+        {
+        for (u32 i = (u32)0; i < fx.count(); i = i + (u32)1)
+            {
+            String* s = ((X86Fixup*)fx.get(i)).symbol();
+            if (s != (String*)0 && (s.equals(String.withCString("__xt_ctors_start")) || s.equals(String.withCString("__xt_ctors_end"))))
+                return true;
+            }
+        return false;
         }
 
     // The objects' frame tables (gathered, elfSetEhGather), end to end after
