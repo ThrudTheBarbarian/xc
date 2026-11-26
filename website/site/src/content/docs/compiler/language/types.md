@@ -194,9 +194,21 @@ f8 w = 448.0;
 f8 x = w * 2;                    // 448: E4M3 saturates
 ```
 
-The arithmetic is done in software on every target. A `par` block that
-computes in `f16`, `bf16`, `f8` or `f4` runs on the CPU; the compiler says so
-when the block could otherwise use the GPU.
+Where a target has instructions for a type, the compiler uses them, and the
+results are the same bits the software routines give, NaN payloads included:
+
+| Target | Native | Software |
+|---|---|---|
+| arm64 macOS and iOS | `f16` conversions to and from `f32` and `f64`, from integers, `+ - * /`, the square root and comparisons (half-precision instructions); `bf16` conversions to and from `f32` (integer instructions) | `bf16` from `f64` and integers, every other pack, conversions to integers |
+| arm64 Linux and Android | `f16` conversions to and from `f32` and `f64` and from integers; `bf16` as above | `f16` arithmetic is done in `f32` with the native conversions; the rest as above |
+| x86-64, win64 with `-mavx2`, `-mavx512` or `-mnative` | `f16` conversions to and from `f32` and from integers (F16C); `bf16` as above | `f16` from `f64`; arithmetic in `f32` |
+| x86-64, win64 otherwise | `bf16` as above | `f16` (the default build must run on any x86-64, and F16C needs AVX) |
+| arm9, m68k, wasm32, xt6502 | none | everything |
+
+arm64 Linux and Android rows target ARMv8.0, which has the half-precision
+conversions but not the arithmetic. A `par` block that computes in `f16`,
+`bf16`, `f8` or `f4` runs on the CPU; the compiler says so when the block could
+otherwise use the GPU.
 
 #### Calling C
 
