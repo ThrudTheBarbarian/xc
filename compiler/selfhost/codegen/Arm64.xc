@@ -5742,6 +5742,21 @@ class Arm64
     // the call is variadic and how many arguments are fixed (bug 572: a
     // variadic method called virtually had its tail left in registers, where
     // its va_start never looks). Mirrors the original.
+    // `CallConv::Va<N>` on an instruction: where its variadic tail starts,
+    // the receiver counted; $FFFFFFFF when it has no such convention.
+    u32 vaFromConv(IRInsn* n)
+    {
+        String* c = n.cc();
+        if (c == (String*)0 || !c.hasPrefix(String.withCString("CallConv::Va"))) return (u32)$FFFFFFFF;
+        u32 v = (u32)0;
+        for (u32 i = (u32)12; i < c.byteLength(); i = i + (u32)1) {
+            u8 b = c.byteAt(i);
+            if (b < (u8)'0' || b > (u8)'9') break;
+            v = v * (u32)10 + (u32)(b - (u8)'0');
+        }
+        return v;
+    }
+
     IRSymbol* virtualCallee(IRInsn* n)
     {
         if (!n.isOp(opVTblDispatch) || n.ops().count() < 2) return (IRSymbol*)0;
@@ -5957,7 +5972,15 @@ class Arm64
         // opcode reaches offsetsForTypes through HERE, the frame sizing and
         // the marshalling cannot disagree. Mirrors the original.
         i32 vfrom = (i32)-1;
-        if (n.isOp(opVTblDispatch) && first == 2) {
+        // A dispatch to a variadic method says where its tail starts in its
+        // calling convention (`CallConv::Va<N>`, N counting the receiver). A
+        // protocol dispatch has no static class to ask, so without it its tail
+        // stayed in registers, where the callee's va_start never looks (#664).
+        if (n.isOp(opVTblDispatch) || n.isOp(opProtoDispatch)) {
+            u32 va = vaFromConv(n);
+            if (va != (u32)$FFFFFFFF && va > (u32)0) vfrom = (i32)va - (i32)1;
+        }
+        if (vfrom < (i32)0 && n.isOp(opVTblDispatch) && first == 2) {
             // An xc method: its tail goes on the stack, like any xc variadic.
             // The index counts the args AFTER the receiver, so self is not one.
             IRSymbol* m = virtualCallee(n);

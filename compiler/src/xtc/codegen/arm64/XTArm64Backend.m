@@ -1291,6 +1291,12 @@ static BOOL arm64IsDirectCallOpcode(XTIROpcode op) {
 // declaration or a DWARF C import); the fixed count is the declared parameter
 // list, whose IR signature carries a trailing Mem.
 + (NSInteger)arm64CVariadicFromForInsn:(XTIRInsn *)insn ctx:(XTArm64FnCtx *)ctx {
+    // A dispatch to a variadic method says where its tail starts in its
+    // calling convention (`CallConv::Va<N>`, N counting the receiver). A
+    // protocol dispatch has no static class to ask, so without it its tail
+    // stayed in registers, where the callee's va_start never looks (#664).
+    if ((insn.opcode == XTIROpVTblDispatch || insn.opcode == XTIROpProtoDispatch) && insn.callConv.vaStart > 0)
+        return (NSInteger)insn.callConv.vaStart - 1;
     if (insn.opcode == XTIROpVTblDispatch) {
         // An xc method: its tail goes on the stack, like any xc variadic. The
         // index is into the args AFTER the receiver, so self is not counted.
