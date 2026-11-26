@@ -147,6 +147,21 @@ uint8_t fp8E5M2Sat(double x);    /* round to E5M2, saturating */
 float fp8E4M3Value(uint8_t v);   /* an E4M3 pattern's value */
 ```
 
+## 4-bit floats
+
+C has no 4-bit float type either. An xc [`f4`](/compiler/language/types/#f4-and-f4-arrays)
+is, to C, a `uint8_t` holding its pattern in the low nibble, and an f4 array
+is its bytes: two elements to each byte, element 0 in the low nibble. An xc
+`f4[]` passes to a C `uint8_t*` parameter as it is, and an `extern` xc
+function declared with an `f4[]` parameter takes a `uint8_t*` from C. C reads
+and writes element `i` in byte `i >> 1`, at bit `(i & 1) * 4`. `Fp4.xc`'s
+conversions are `extern`:
+
+```c
+uint8_t fp4E2M1(double x);       /* round to f4, saturating at 6 */
+float fp4E2M1Value(uint8_t v);   /* an f4 pattern's value */
+```
+
 ## C++
 
 C++ takes the same path: see [C++ programs](/compiler/usage/cpp-programs/).

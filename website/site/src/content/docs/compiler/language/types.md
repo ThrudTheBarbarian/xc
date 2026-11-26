@@ -88,6 +88,7 @@ declarations, fields, parameters, returns, casts, `Array<…>`, typedefs,
 | `f8:pack(e5m2)` | OCP FP8 E5M2 |
 | `f8:pack(e2m5)` … `f8:pack(e6m1)` | other 8-bit packs |
 | `f8:pack(ue8m0)` | the unsigned scale |
+| `f4:pack(e2m1)` | `f4` (its only pack) |
 | `f32:pack(e8m23)` | `f32` (its only pack) |
 | `f64:pack(e11m52)` | `f64` (its only pack) |
 
@@ -98,7 +99,7 @@ after the split, as in `f8:pack(e3m4, finite)`:
 |------|---------|-------------|
 | `ieee` | the all-ones exponent is infinity (mantissa 0) or NaN | every pack but E4M3 |
 | `finite` | no infinity; only the all-ones pattern is NaN | `f8` (E4M3) |
-| `none` | no infinity and no NaN | — |
+| `none` | no infinity and no NaN | `f4` (e2m1) |
 
 A `finite` or `none` pack has at most 7 exponent bits. `ue8m0` takes no kind.
 Every pack is a distinct type, and every pack with its kind: `f8:pack(e5m2)`
@@ -112,6 +113,7 @@ and NaNs included, converts exactly:
 
 | From | Converts implicitly to |
 |------|------------------------|
+| `f4` | `f8`, `f8:pack(e5m2)`, `f16`, `bf16`, `f32`, `f64` |
 | `f8` (E4M3) | `f16`, `bf16`, `f32`, `f64` |
 | `f8:pack(e5m2)` | `f16`, `bf16`, `f32`, `f64` |
 | `f8:pack(ue8m0)` | `bf16`, `f32`, `f64` |
@@ -193,8 +195,8 @@ f8 x = w * 2;                    // 448: E4M3 saturates
 ```
 
 The arithmetic is done in software on every target. A `par` block that
-computes in `f16`, `bf16` or `f8` runs on the CPU; the compiler says so when
-the block could otherwise use the GPU.
+computes in `f16`, `bf16`, `f8` or `f4` runs on the CPU; the compiler says so
+when the block could otherwise use the GPU.
 
 #### Calling C
 
@@ -227,6 +229,107 @@ that C calls or defines takes and returns them as C does:
 `wasm32`, `m68k` and `xt6502` have no C with these types, so a C library
 function or bodyless variadic that takes or returns one is an error there; give
 it a `float`. An `extern` function keeps xc's convention on those targets.
+
+### `f4` and f4 arrays
+
+`f4` is the OCP MX FP4 element type, e2m1: one sign bit, 2 exponent bits and
+1 mantissa bit, with no infinity and no NaN. Its 16 values are ±0, ±0.5, ±1,
+±1.5, ±2, ±3, ±4 and ±6. It is a built-in type name, its one pack is `e2m1`
+(`f4:pack(e2m1)` is `f4`), and it follows the rules of the other small floats
+above: conversions round to nearest, ties to even, a value beyond 6 and an
+infinity saturate to ±6, a NaN gives +0, a literal beyond the range is an
+error (`f4 w = 7.0;` is refused, since 7 rounds past 6), and arithmetic works
+in `f32` and rounds once. It converts implicitly to `f8`, `f8:pack(e5m2)`,
+`f16`, `bf16`, `f32` and `f64`, which hold every `f4` value.
+
+An `f4` scalar (a local, global, field, parameter or return) is one byte,
+aligned to 1, with the value in the low nibble and the high nibble zero.
+
+An f4 array packs two elements to a byte, element 0 in the low nibble, as the
+OCP MX specification and PyTorch's `float4_e2m1fn_x2` pack them. `f4 a[n]` takes
+⌈n / 2⌉ bytes, and `sizeof` says so; `.length` and the bounds checks count
+elements. This holds for globals, locals, arrays in structs and classes, and
+`new f4[n]`.
+
+```c
+f4 w[5];                      // 3 bytes; sizeof(w) is 3, w.length is 5
+w[0] = 1.5;                   // the low nibble of byte 0
+w[1] = -6.0;                  // the high nibble of byte 0
+w[4] = w[0] + w[1];           // -4.5 rounds to -4; the low nibble of byte 2
+w[2] += 0.5;
+for (f4 v in w) Stdio.printf("%f\n", v);
+```
+
+Reading `a[i]` loads byte `i >> 1` and takes nibble `i & 1`. Writing `a[i] = v`
+rounds `v` to `f4`, loads the byte, replaces the nibble and stores the byte: a
+read-modify-write. Compound assignment and `++`/`--` on an element do the same.
+
+An element has no byte address, so there is no pointer to `f4`:
+
+- `&a[i]` is an error, and so is passing an element to an out-parameter. `&a[0]`
+  is the array itself.
+- `f4*` is an error. An f4 array is passed and held as `f4[]`, which refers to
+  the array's first byte: a function parameter (a fixed array passes to it), a
+  variable, a field, a return, and the result of `new f4[n]`. An `f4[]` is
+  indexed and compared, and it does not step or dereference: `p + 1`, `p++` and
+  `*p` are errors.
+- An `f4` scalar is a whole byte, so `&x` is allowed: it is an `f4[]` of one
+  element.
+
+```c
+f32 total(f4[] a, u32 n)
+{
+    f32 s = 0.0;
+    for (u32 i = 0; i < n; i++)
+        s = s + a[i];
+    return s;
+}
+
+f4[] h = new f4[9];           // 5 bytes
+h[8] = 3.0;
+f32 t = total(h, 9) + total(w, 5);
+```
+
+On `arm64`, `x86_64` and `win64` a heap array's header records its count of
+elements, so `.length` and `for (v in h)` work on an `f4[]` from `new f4[n]`.
+On the other targets the header counts bytes, and the length of an `f4[]` is
+known only where `new f4[n]` gives it a constant; elsewhere it is an error, and
+the count has to be kept beside the array.
+
+An f4 array takes no initialiser list; a global one starts at zero, and its
+elements are assigned one by one. `Array<f4>` holds each value boxed, as for the
+other small floats.
+
+#### Threads
+
+Because a write rewrites the whole byte, two threads writing the two elements
+of one byte at the same time can lose one of the writes, as two threads
+writing neighbouring C bitfields can. A `par` block never does this: it splits
+its range so that no two threads write one byte (see
+[par](/compiler/language/par/#f4-arrays)). Hand-written `Thread` code that
+writes neighbouring elements from several threads should store with
+`f4StoreAtomic` from `Fp4.xc`, which swaps the element's nibble into its
+32-bit word in one atomic step:
+
+```c
+#import "Fp4.xc"
+
+f4StoreAtomic(a, i, v);       // as a[i] = v, safe against another thread
+                              // writing a[i ^ 1]
+```
+
+It is not available on `xt6502` and `m68k`, which have no threads.
+
+#### f4 and C
+
+C has no 4-bit float type. An `f4` scalar crosses to and from C as the
+`uint8_t` holding its pattern in the low nibble, as an `f8` does. An f4 array
+crosses as its bytes: C sees a `uint8_t*`, two elements to each byte, element 0
+in the low nibble, and an `f4[]` passes to a `uint8_t*` parameter of a C
+function with no cast. An `extern` xc function with an `f4[]` parameter takes
+that pointer. `Fp4.xc` has the conversions by name, callable from C:
+`uint8_t fp4E2M1(double x)` rounds as a cast does, and
+`float fp4E2M1Value(uint8_t v)` gives the value.
 
 ### `i64` / `u64` on every target
 

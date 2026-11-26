@@ -218,6 +218,24 @@ The calling thread keeps the CPU it runs on when its first block starts, and
 the other threads take the CPUs after it, so programs running blocks at the
 same time spread over the machine. `XC_PAR_PIN=0` leaves the threads unpinned.
 
+### f4 arrays
+
+An f4 array packs two elements to a byte, and writing an element rewrites its
+byte (see [f4 arrays](/compiler/language/types/#f4-and-f4-arrays)), so two
+threads must never write the two elements of one byte. A block that writes an
+f4 array at the item's own element, `a[k * i + c]`, has its range split so
+that every chunk but the first starts where `k * i + c` is even: each chunk is
+a whole number of bytes, and a chunk can be one item longer or shorter than an
+equal split. With an even `k` the items never share a byte, and the split is
+the usual one.
+
+A block whose f4 writes cannot be kept apart this way is refused: one that
+writes an f4 array at an index computed from data (`a[idx[i]]`), or one
+element from every item (`a[0]`), and one that writes at offsets of both
+parities (`a[i]` and `b[i + 1]`). A loop `--par-style=auto` would lift stays a
+loop instead. Such a block runs on the CPU's threads, never on a GPU, and the
+compiler says so where the GPU could otherwise be used.
+
 ## Blocks next to each other run as one
 
 Two blocks with nothing between them run as one block when the second needs only what the first wrote at the same index:
