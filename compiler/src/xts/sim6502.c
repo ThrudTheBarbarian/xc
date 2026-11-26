@@ -14,6 +14,14 @@
 #include <ctype.h>
 #include <math.h>
 
+/* Debugging probes left from bug hunts (memory watches, the heap walker,
+   the first instructions of main, progress every 500K instructions). They
+   print only when XTS_PROBES is set, as the other tracing is gated by its
+   own XTS_* variable: unconditional, they buried a program's own output
+   under kilobytes of stderr on every run (#713). */
+static int opt_probes = 0;
+#define PROBE_LOG(...) do { if (opt_probes) fprintf(stderr, __VA_ARGS__); } while (0)
+
 #ifndef XTC_VERSION
 #define XTC_VERSION "0.0"
 #endif
@@ -1048,7 +1056,7 @@ static uint8_t mem_read(uint16_t addr)
         {
         static int cnt_r_cnt = 0;
         if (cnt_r_cnt++ < 40)
-            fprintf(stderr, "ASSERT_READ count[%s] addr=$%04X val=$%02X PC=$%04X\n",
+            PROBE_LOG( "ASSERT_READ count[%s] addr=$%04X val=$%02X PC=$%04X\n",
                     (addr & 1) ? "hi" : "lo", addr, mem[addr], reg_pc);
         }
     /* PROBE: track reads from canPrint field */
@@ -1056,7 +1064,7 @@ static uint8_t mem_read(uint16_t addr)
         {
         static int d8a9_r_cnt = 0;
         if (d8a9_r_cnt++ < 50)
-            fprintf(stderr, "CANPRINT_READ addr=$D8A9 val=$%02X PC=$%04X A=$%02X X=$%02X Y=$%02X $82=$%02X $83=$%02X\n",
+            PROBE_LOG( "CANPRINT_READ addr=$D8A9 val=$%02X PC=$%04X A=$%02X X=$%02X Y=$%02X $82=$%02X $83=$%02X\n",
                     mem[addr], reg_pc, reg_a, reg_x, reg_y, mem[0x82], mem[0x83]);
         }
     return mem[addr];
@@ -1136,13 +1144,13 @@ static void mem_write(uint16_t addr, uint8_t val)
             if (off + 1 < 16384)
                 b1 = bank[bi][off + 1];
             }
-        fprintf(stderr, "SAVMSC_WRITE addr=$%04X val=$%02X PC=$%04X \$82=$%02X \$83=$%02X A=$%02X X=$%02X Y=$%02X [opcodes=%02X %02X]\n",
+        PROBE_LOG( "SAVMSC_WRITE addr=$%04X val=$%02X PC=$%04X $82=$%02X $83=$%02X A=$%02X X=$%02X Y=$%02X [opcodes=%02X %02X]\n",
                 addr, val, reg_pc, mem[0x82], mem[0x83], reg_a, reg_x, reg_y, b0, b1);
         }
     /* Watch $19-$1C (the 4-byte pointer that ends up pointing to $58) */
     if (addr >= 0x19 && addr <= 0x1C)
         {
-        fprintf(stderr, "ZP19_WRITE addr=$%04X val=$%02X PC=$%04X \$82=$%02X A=$%02X X=$%02X Y=$%02X\n",
+        PROBE_LOG( "ZP19_WRITE addr=$%04X val=$%02X PC=$%04X $82=$%02X A=$%02X X=$%02X Y=$%02X\n",
                 addr, val, reg_pc, mem[0x82], reg_a, reg_x, reg_y);
         }
     /* Watch $83 bank-register writes for debugging. With 3-byte uniform
@@ -1151,12 +1159,12 @@ static void mem_write(uint16_t addr, uint8_t val)
         {
         static int wp_cnt = 0;
         if (wp_cnt++ < 2000)
-            fprintf(stderr, "[bank_write $83] ← $%02X at PC=$%04X (A=$%02X X=$%02X Y=$%02X $82=$%02X $84=$%02X)\n",
+            PROBE_LOG( "[bank_write $83] ← $%02X at PC=$%04X (A=$%02X X=$%02X Y=$%02X $82=$%02X $84=$%02X)\n",
                     val, reg_pc, reg_a, reg_x, reg_y, mem[0x82], mem[0x84]);
         /* Also log every transition of $83 from non-zero to zero — that's
            the bug we're hunting (heap walker with $83=0). No rate limit. */
         if (val == 0 && mem[0x83] != 0)
-            fprintf(stderr, "[bank_write $83→0] ← $00 at PC=$%04X (A=$%02X X=$%02X Y=$%02X) [PREV $83=$%02X]\n",
+            PROBE_LOG( "[bank_write $83→0] ← $00 at PC=$%04X (A=$%02X X=$%02X Y=$%02X) [PREV $83=$%02X]\n",
                     reg_pc, reg_a, reg_x, reg_y, mem[0x83]);
         }
     /* Watch writes to $89 — only used for u32 returns now (3-byte
@@ -1165,7 +1173,7 @@ static void mem_write(uint16_t addr, uint8_t val)
         {
         static int wp89_cnt = 0;
         if (wp89_cnt++ < 200)
-            fprintf(stderr, "[bank_write $89] ← $%02X at PC=$%04X $82=$%02X (A=$%02X X=$%02X Y=$%02X)\n",
+            PROBE_LOG( "[bank_write $89] ← $%02X at PC=$%04X $82=$%02X (A=$%02X X=$%02X Y=$%02X)\n",
                     val, reg_pc, mem[code_reg_addr], reg_a, reg_x, reg_y);
         }
     /* Hardware ZP banking: a write to $82 swaps the three 16-byte
@@ -1230,7 +1238,7 @@ static void mem_write(uint16_t addr, uint8_t val)
                 field = "count";
             if (addr == 0xDF19 || addr == 0xDF1A)
                 field = "fails";
-            fprintf(stderr, "ASSERT_WRITE %s[%s] addr=$%04X val=$%02X PC=$%04X A=$%02X\n",
+            PROBE_LOG( "ASSERT_WRITE %s[%s] addr=$%04X val=$%02X PC=$%04X A=$%02X\n",
                     field, (addr & 1) ? "hi" : "lo", addr, val, reg_pc, reg_a);
             }
         }
@@ -1238,7 +1246,7 @@ static void mem_write(uint16_t addr, uint8_t val)
         {
         static int d8a9_w_cnt = 0;
         if (d8a9_w_cnt++ < 20)
-            fprintf(stderr, "CANPRINT_WRITE addr=$D8A9 val=$%02X PC=$%04X A=$%02X X=$%02X Y=$%02X $82=$%02X $83=$%02X\n",
+            PROBE_LOG( "CANPRINT_WRITE addr=$D8A9 val=$%02X PC=$%04X A=$%02X X=$%02X Y=$%02X $82=$%02X $83=$%02X\n",
                     val, reg_pc, reg_a, reg_x, reg_y, mem[0x82], mem[0x83]);
         }
     /* PROBE: track writes to any __sdata_Stdio field */
@@ -1246,7 +1254,7 @@ static void mem_write(uint16_t addr, uint8_t val)
         {
         static int sd_w_cnt = 0;
         if (sd_w_cnt++ < 40)
-            fprintf(stderr, "SDATA_WRITE addr=$%04X val=$%02X PC=$%04X A=$%02X X=$%02X Y=$%02X $82=$%02X $83=$%02X\n",
+            PROBE_LOG( "SDATA_WRITE addr=$%04X val=$%02X PC=$%04X A=$%02X X=$%02X Y=$%02X $82=$%02X $83=$%02X\n",
                     addr, val, reg_pc, reg_a, reg_x, reg_y, mem[0x82], mem[0x83]);
         }
     mem[addr] = val;
@@ -1302,7 +1310,7 @@ static inline void hidden_stack_write(uint16_t sp_addr, uint8_t v)
         {
         static int hw_cnt = 0;
         if (hw_cnt++ < 20)
-            fprintf(stderr, "HSTACK_WRITE sp_addr=$%03X val=$%02X PC=$%04X A=$%02X\n",
+            PROBE_LOG( "HSTACK_WRITE sp_addr=$%03X val=$%02X PC=$%04X A=$%02X\n",
                     sp_addr, v, reg_pc, reg_a);
         }
     }
@@ -2205,7 +2213,7 @@ static int step(void)
         {
         static int probe_cnt = 0;
         if (probe_cnt++ < 5)
-            fprintf(stderr, "MAIN_PROBE PC=$%04X insns=%llu\n", reg_pc, (unsigned long long)insn_count);
+            PROBE_LOG( "MAIN_PROBE PC=$%04X insns=%llu\n", reg_pc, (unsigned long long)insn_count);
         }
     /* PROBE: watch for store-zero code in bank 2 at $7411-$7460 */
     if (!loading && banked_mode && bank_mode == BANK_XT &&
@@ -2214,7 +2222,7 @@ static int step(void)
         static int probe_b2 = 0;
         if (probe_b2++ < 20)
             {
-            fprintf(stderr, "B2_PROBE PC=$%04X A=$%02X X=$%02X Y=$%02X SP=%03X\n",
+            PROBE_LOG( "B2_PROBE PC=$%04X A=$%02X X=$%02X Y=$%02X SP=%03X\n",
                     reg_pc, reg_a, reg_x, reg_y, reg_sp);
             }
         }
@@ -2224,7 +2232,7 @@ static int step(void)
         static int probe_al = 0;
         if (probe_al++ < 10)
             {
-            fprintf(stderr, "ALLOC_PROBE PC=$%04X A=$%02X X=$%02X Y=$%02X (size+4 raw) SP=%03X\n",
+            PROBE_LOG( "ALLOC_PROBE PC=$%04X A=$%02X X=$%02X Y=$%02X (size+4 raw) SP=%03X\n",
                     reg_pc, reg_a, reg_x, reg_y, reg_sp);
             }
         }
@@ -2234,7 +2242,7 @@ static int step(void)
         static int probe_af = 0;
         if (probe_af++ < 5)
             {
-            fprintf(stderr, "ALLOC_FAIL PC=$%04X A=$%02X X=$%02X Y=$%02X (OOM return) mem[3713]=%02X%02X\n",
+            PROBE_LOG( "ALLOC_FAIL PC=$%04X A=$%02X X=$%02X Y=$%02X (OOM return) mem[3713]=%02X%02X\n",
                     reg_pc, reg_a, reg_x, reg_y,
                     mem[0x3714], mem[0x3713]);
             }
@@ -2246,29 +2254,29 @@ static int step(void)
         if (probe_8f++ < 10)
             {
             uint8_t* bk = bank[mem[0x82]];
-            fprintf(stderr, "PC8F49_PROBE PC=$%04X A=$%02X X=$%02X Y=$%02X "
+            PROBE_LOG( "PC8F49_PROBE PC=$%04X A=$%02X X=$%02X Y=$%02X "
                             "SP=%03X $82=%02X $83=%02X insn_count=%llu\n",
                     reg_pc, reg_a, reg_x, reg_y, reg_sp,
                     mem[0x82], mem[0x83],
                     (unsigned long long)insn_count);
             /* Dump 32 bytes of code leading up to (and including) PC */
             int offset = reg_pc - 0x6000;
-            fprintf(stderr, "  CODE[%d:]:", offset);
+            PROBE_LOG( "  CODE[%d:]:", offset);
             for (int i = -32; i < 16; i++)
                 {
                 int o = offset + i;
                 if (o >= 0 && o < 0x4000)
-                    fprintf(stderr, " %02X", bk[o]);
+                    PROBE_LOG( " %02X", bk[o]);
                 else
-                    fprintf(stderr, " ??");
+                    PROBE_LOG( " ??");
                 if (i == -1)
-                    fprintf(stderr, " <<<");
+                    PROBE_LOG( " <<<");
                 }
-            fprintf(stderr, "\n");
+            PROBE_LOG( "\n");
             /* Dump SP-relative frame around the current stack top */
             for (int d = 0; d < 32; d += 4)
                 {
-                fprintf(stderr, "  SP+%02X=%02X SP+%02X=%02X SP+%02X=%02X SP+%02X=%02X\n",
+                PROBE_LOG( "  SP+%02X=%02X SP+%02X=%02X SP+%02X=%02X SP+%02X=%02X\n",
                         d, hidden_stack_read((reg_sp + d) & 0xFFF),
                         d + 1, hidden_stack_read((reg_sp + d + 1) & 0xFFF),
                         d + 2, hidden_stack_read((reg_sp + d + 2) & 0xFFF),
@@ -2296,7 +2304,7 @@ static int step(void)
             itrace_active = 0;
         else
             {
-            fprintf(stderr,
+            PROBE_LOG(
                     "%8llu PC=$%04X $82=%02X $83=%02X SP=%03X A=%02X X=%02X Y=%02X %s %-3s %s\n",
                     (unsigned long long)insn_count, reg_pc, mem[0x82], mem[0x83],
                     reg_sp, reg_a, reg_x, reg_y, fb, mn_names[opc], ops);
@@ -2805,31 +2813,31 @@ static int step(void)
             {
             static int sta_spy_cnt = 0;
             if (sta_spy_cnt++ < 30)
-                fprintf(stderr, "STA_SPY PC=$%04X d=%d loA=$%03X hiA=$%03X lo=%02X hi=%02X ptr=$%04X Y=$%02X target=$%04X A=$%02X $83=$%02X SP=$%03X\n",
+                PROBE_LOG( "STA_SPY PC=$%04X d=%d loA=$%03X hiA=$%03X lo=%02X hi=%02X ptr=$%04X Y=$%02X target=$%04X A=$%02X $83=$%02X SP=$%03X\n",
                         reg_pc, d, loA, hiA, hidden_stack_read(loA), hidden_stack_read(hiA), ptr, reg_y, target, reg_a, mem[0x83], reg_sp);
             }
         /* PROBE: log writes to ZP below $82 — that's reserved space */
         if (target < 0x82 && !loading)
             {
-            fprintf(stderr, "ZP_WRITE target=$%04X ptr=$%04X Y=$%02X A=$%02X PC=$%04X d=$%02X SP=%03X\n",
+            PROBE_LOG( "ZP_WRITE target=$%04X ptr=$%04X Y=$%02X A=$%02X PC=$%04X d=$%02X SP=%03X\n",
                     target, ptr, reg_y, reg_a, reg_pc, d, reg_sp);
             /* Dump the stack frame around the pointer to understand */
-            fprintf(stderr, "  SP+0D=%02X SP+0E=%02X SP+0F=%02X SP+10=%02X\n",
+            PROBE_LOG( "  SP+0D=%02X SP+0E=%02X SP+0F=%02X SP+10=%02X\n",
                     hidden_stack_read((reg_sp + 0x0D) & 0xFFF),
                     hidden_stack_read((reg_sp + 0x0E) & 0xFFF),
                     hidden_stack_read((reg_sp + 0x0F) & 0xFFF),
                     hidden_stack_read((reg_sp + 0x10) & 0xFFF));
-            fprintf(stderr, "  SP+13=%02X SP+14=%02X SP+15=%02X SP+16=%02X\n",
+            PROBE_LOG( "  SP+13=%02X SP+14=%02X SP+15=%02X SP+16=%02X\n",
                     hidden_stack_read((reg_sp + 0x13) & 0xFFF),
                     hidden_stack_read((reg_sp + 0x14) & 0xFFF),
                     hidden_stack_read((reg_sp + 0x15) & 0xFFF),
                     hidden_stack_read((reg_sp + 0x16) & 0xFFF));
-            fprintf(stderr, "  SP+17=%02X SP+18=%02X SP+19=%02X SP+1A=%02X\n",
+            PROBE_LOG( "  SP+17=%02X SP+18=%02X SP+19=%02X SP+1A=%02X\n",
                     hidden_stack_read((reg_sp + 0x17) & 0xFFF),
                     hidden_stack_read((reg_sp + 0x18) & 0xFFF),
                     hidden_stack_read((reg_sp + 0x19) & 0xFFF),
                     hidden_stack_read((reg_sp + 0x1A) & 0xFFF));
-            fprintf(stderr, "  mem[82]=%02X mem[83]=%02X mem[84]=%02X\n",
+            PROBE_LOG( "  mem[82]=%02X mem[83]=%02X mem[84]=%02X\n",
                     mem[0x82], mem[0x83], mem[0x84]);
             }
         mem_write(target, reg_a);
@@ -3517,6 +3525,7 @@ int main(int argc, char* argv[])
     {
     install_xt_opcode_modes();
     /* Targeted instruction trace (task #122) — env-gated, see globals. */
+    opt_probes = getenv("XTS_PROBES") != NULL;
     if (getenv("XTS_ITRACE"))
         itrace_enabled = 1;
     if (getenv("XTS_ITRACE_TRIGGER"))
@@ -3830,7 +3839,7 @@ int main(int argc, char* argv[])
             if ((insn_count - last_report) >= 500000)
                 {
                 last_report = insn_count;
-                fprintf(stderr, "[sim6502] %llu insns, PC=$%04X\n",
+                PROBE_LOG( "[sim6502] %llu insns, PC=$%04X\n",
                         (unsigned long long)insn_count, reg_pc);
                 }
             // Heap walker debug: when in _hf_walk ($3510-$3554), dump state
@@ -3844,7 +3853,7 @@ int main(int argc, char* argv[])
                     uint8_t hdr_hi = mem_read(0xA001);
                     uint8_t end_lo = mem_read(0x3710);
                     uint8_t end_hi = mem_read(0x3711);
-                    fprintf(stderr, "[HFWALK] insns=%llu PC=$%04X A=$%02X X=$%02X Y=$%02X "
+                    PROBE_LOG( "[HFWALK] insns=%llu PC=$%04X A=$%02X X=$%02X Y=$%02X "
                                     "$96=$%02X%02X $98=$%02X%02X "
                                     "hdr@A000=$%02X%02X end=$%02X%02X "
                                     "$83=$%02X $84=$%02X $82=$%02X\n",
