@@ -126,6 +126,15 @@ def main():
                    check=True)
     subprocess.run(["scp", "-q"] + [os.path.join(work, f) for f in os.listdir(work) if f.split(".")[0] in benches]
                    + ["%s:%s/" % (host, rdir)], check=True)
+    # A program xcc links finds its shared runtime beside itself ($ORIGIN):
+    # libRuntime, and libRuntimeSupport for C and C++ (1.0.3), from the
+    # measured xcc's install, as a user copying the program would.
+    built = [os.path.join(work, f) for f in sorted(os.listdir(work)) if f.split(".")[0] in benches]
+    lib = next((common.runtime_lib_for(f) for f in built if common.runtime_lib_for(f)), None)
+    if lib is not None:
+        libs = [os.path.join(os.path.dirname(lib), f) for f in sorted(os.listdir(os.path.dirname(lib)))
+                if f.startswith("libRuntime") and f.endswith(".so")]
+        subprocess.run(["scp", "-q"] + libs + ["%s:%s/" % (host, rdir)], check=True)
     # clang's OpenMP needs libomp, which a distribution's clang may not have.
     probe = "echo 'int main(void){return 0;}' > %s/omp%s && %s -fopenmp -o %s/omp %s/omp%s" % (
         rdir, L["ext"], L["clang"], rdir, rdir, L["ext"])

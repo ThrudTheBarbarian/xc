@@ -346,7 +346,7 @@ def runtime_lib_for(binary):
             body = head + f.read()
     except OSError:
         return None
-    if head[:4] != b"\x7fELF" or b"libRuntime.so" not in body:
+    if head[:4] != b"\x7fELF" or (b"libRuntime.so" not in body and b"libRuntimeSupport.so" not in body):
         return None
     row = {0x3e: "x86_64-linux", 0xb7: "arm64-linux"}.get(head[18] | (head[19] << 8))
     if row is None:
