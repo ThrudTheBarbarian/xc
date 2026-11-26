@@ -2741,11 +2741,21 @@ class Xt6502
         mechStore((IROperand*)n.ops().get((u32)1), w, (u32)1, w, false);
         mechOpWord((u32)0, ((mcType & (u32)3) << (u32)6) | (u32)$0A, (u32)0, (u32)1, (u32)2);
         mechRun((u32)1);
-        _out.appendCString("    LDA $4050\n");     // S2 low byte
+        String* p = n.pred();
+        // MECH CMP gives 0 for an UNORDERED pair as well as an equal one, so
+        // a NaN compared equal to itself (#695). Where a 0 makes the answer
+        // true — OEQ, OLE, OGE — or false — ONE — the runtime's
+        // __xtc_fpcmp4/8 looks at the two slots still mapped and returns $02
+        // for a NaN instead. OLT and OGT are false on a 0 already.
+        bool unord = p.equals(String.withCString("OEQ")) || p.equals(String.withCString("ONE"))
+                  || p.equals(String.withCString("OLE")) || p.equals(String.withCString("OGE"));
+        if (unord)
+            _out.appendFormat("    JSR __xtc_fpcmp%lu\n", w == (u32)8 ? (u32)8 : (u32)4);
+        else
+            _out.appendCString("    LDA $4050\n");     // S2 low byte
         _out.appendCString("    STA $B0\n");       // stash across the unmap
         mechUnmap();
         _out.appendCString("    LDA $B0\n");
-        String* p = n.pred();
         u32 cmpK = (u32)$00;
         bool wantEq = true;
         if (p.equals(String.withCString("OEQ")))      { cmpK = (u32)$00; wantEq = true; }
@@ -2755,6 +2765,20 @@ class Xt6502
         else if (p.equals(String.withCString("OLE"))) { cmpK = (u32)$01; wantEq = false; }
         else if (p.equals(String.withCString("OGE"))) { cmpK = (u32)$FF; wantEq = false; }
         u32 l = _labelCounter; _labelCounter = _labelCounter + (u32)1;
+        if (p.equals(String.withCString("OLE")) || p.equals(String.withCString("OGE")))
+            {
+            // OLE / OGE: true unless the other order — or unordered ($02).
+            // (ONE takes the plain path: $02 is not 0, so it is true.)
+            _out.appendFormat("    CMP #$%s\n", hex2(cmpK).cString());
+            _out.appendFormat("    BEQ .Lfcmp%lu_f\n", l);
+            _out.appendCString("    CMP #$02\n");
+            _out.appendFormat("    BEQ .Lfcmp%lu_f\n", l);
+            _out.appendCString("    LDA #1\n");
+            _out.appendFormat("    JMP .Lfcmp%lu_d\n", l);
+            _out.appendFormat(".Lfcmp%lu_f:\n    LDA #0\n.Lfcmp%lu_d:\n", l, l);
+            storeAToValue(n.res(), (u32)0);
+            return;
+            }
         _out.appendFormat("    CMP #$%s\n", hex2(cmpK).cString());
         _out.appendFormat("    %s .Lfcmp%lu_t\n", wantEq ? "BEQ" : "BNE", l);
         _out.appendCString("    LDA #0\n");

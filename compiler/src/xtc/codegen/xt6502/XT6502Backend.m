@@ -3743,7 +3743,18 @@ static NSString *padLeft(NSString *s, NSUInteger width) {
                 [self mechStore:insn.operands[1] width:w slot:1 slotBytes:w signExtend:NO ctx:ctx];
                 [self mechOpWord:0 b0:((mcType & 3) << 6) | 0x0A s1:0 s2:1 dst:2 ctx:ctx];
                 [self mechRun:1 ctx:ctx];
-                [ctx.out appendString:@"    LDA $4050\n"];   // S2 low byte -> A
+                // MECH CMP gives 0 for an UNORDERED pair as well as an equal
+                // one, so a NaN compared equal to itself (#695). Where a 0 makes
+                // the answer true — OEQ, OLE, OGE — or false — ONE — the
+                // runtime's __xtc_fpcmp4/8 looks at the two slots still mapped
+                // and returns $02 for a NaN instead. OLT and OGT are false on a
+                // 0 already. The port's emitFCmp.
+                BOOL unord = insn.predicate == XTIRFCmpOEQ || insn.predicate == XTIRFCmpONE
+                          || insn.predicate == XTIRFCmpOLE || insn.predicate == XTIRFCmpOGE;
+                if (unord)
+                    [ctx.out appendFormat:@"    JSR __xtc_fpcmp%u\n", (unsigned)(w == 8 ? 8 : 4)];
+                else
+                    [ctx.out appendString:@"    LDA $4050\n"];   // S2 low byte -> A
                 [ctx.out appendString:@"    STA $B0\n"];      // stash across unmap
                 [self mechUnmap:ctx];
                 [ctx.out appendString:@"    LDA $B0\n"];
@@ -3758,6 +3769,20 @@ static NSString *padLeft(NSString *s, NSUInteger width) {
                     default: cmpK = 0x00; wantEq = YES; break;
                 }
                 NSUInteger l = ctx.labelCounter++;
+                if (insn.predicate == XTIRFCmpOLE || insn.predicate == XTIRFCmpOGE) {
+                    // OLE / OGE: true unless the other order — or unordered ($02).
+                    // (ONE takes the plain path: $02 is not 0, so it is true.)
+                    [ctx.out appendFormat:@"    CMP #$%02X\n", cmpK];
+                    [ctx.out appendFormat:@"    BEQ .Lfcmp%lu_f\n", (unsigned long)l];
+                    [ctx.out appendString:@"    CMP #$02\n"];
+                    [ctx.out appendFormat:@"    BEQ .Lfcmp%lu_f\n", (unsigned long)l];
+                    [ctx.out appendString:@"    LDA #1\n"];
+                    [ctx.out appendFormat:@"    JMP .Lfcmp%lu_d\n", (unsigned long)l];
+                    [ctx.out appendFormat:@".Lfcmp%lu_f:\n    LDA #0\n.Lfcmp%lu_d:\n",
+                     (unsigned long)l, (unsigned long)l];
+                    [self storeAToValueId:insn.result.valueId byteIndex:0 ctx:ctx];
+                    break;
+                }
                 [ctx.out appendFormat:@"    CMP #$%02X\n", cmpK];
                 [ctx.out appendFormat:@"    %@ .Lfcmp%lu_t\n",
                  wantEq ? @"BEQ" : @"BNE", (unsigned long)l];

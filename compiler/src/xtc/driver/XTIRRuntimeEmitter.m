@@ -452,6 +452,96 @@ static BOOL sQuitLoop = NO;
         [out appendString:@"\n"];
         }
 
+        // ── NaN-aware float compare, linked only when referenced ─────────
+        // MECH CMP gives 0 for an unordered pair as well as an equal one. Called with
+        // the math page still mapped (operands in S0 at $4040 and S1 at $4048, the
+        // result's low byte at $4050), these return that result, or $02 when it is 0
+        // and either operand is a NaN — an all-ones exponent with a nonzero mantissa
+        // (#695). Linked only when the code calls them.
+        // The port's Runtime6502, byte for byte.
+        if (refs(@"JSR __xtc_fpcmp4"))
+            [out appendString:
+            @"__xtc_fpcmp4:\n"
+            @"    LDA $4050\n"
+            @"    BNE __xtc_fpcmp4_r\n"
+            @"    LDA $4043\n"
+            @"    AND #$7F\n"
+            @"    CMP #$7F\n"
+            @"    BNE __xtc_fpcmp4_b\n"
+            @"    LDA $4042\n"
+            @"    BPL __xtc_fpcmp4_b\n"
+            @"    AND #$7F\n"
+            @"    ORA $4041\n"
+            @"    ORA $4040\n"
+            @"    BNE __xtc_fpcmp4_n\n"
+            @"__xtc_fpcmp4_b:\n"
+            @"    LDA $404B\n"
+            @"    AND #$7F\n"
+            @"    CMP #$7F\n"
+            @"    BNE __xtc_fpcmp4_e\n"
+            @"    LDA $404A\n"
+            @"    BPL __xtc_fpcmp4_e\n"
+            @"    AND #$7F\n"
+            @"    ORA $4049\n"
+            @"    ORA $4048\n"
+            @"    BNE __xtc_fpcmp4_n\n"
+            @"__xtc_fpcmp4_e:\n"
+            @"    LDA #$00\n"
+            @"    RTS\n"
+            @"__xtc_fpcmp4_n:\n"
+            @"    LDA #$02\n"
+            @"__xtc_fpcmp4_r:\n"
+            @"    RTS\n"
+            ];
+        if (refs(@"JSR __xtc_fpcmp8"))
+            [out appendString:
+            @"__xtc_fpcmp8:\n"
+            @"    LDA $4050\n"
+            @"    BNE __xtc_fpcmp8_r\n"
+            @"    LDA $4047\n"
+            @"    AND #$7F\n"
+            @"    CMP #$7F\n"
+            @"    BNE __xtc_fpcmp8_b\n"
+            @"    LDA $4046\n"
+            @"    AND #$F0\n"
+            @"    CMP #$F0\n"
+            @"    BNE __xtc_fpcmp8_b\n"
+            @"    LDA $4046\n"
+            @"    AND #$0F\n"
+            @"    ORA $4045\n"
+            @"    ORA $4044\n"
+            @"    ORA $4043\n"
+            @"    ORA $4042\n"
+            @"    ORA $4041\n"
+            @"    ORA $4040\n"
+            @"    BNE __xtc_fpcmp8_n\n"
+            @"__xtc_fpcmp8_b:\n"
+            @"    LDA $404F\n"
+            @"    AND #$7F\n"
+            @"    CMP #$7F\n"
+            @"    BNE __xtc_fpcmp8_e\n"
+            @"    LDA $404E\n"
+            @"    AND #$F0\n"
+            @"    CMP #$F0\n"
+            @"    BNE __xtc_fpcmp8_e\n"
+            @"    LDA $404E\n"
+            @"    AND #$0F\n"
+            @"    ORA $404D\n"
+            @"    ORA $404C\n"
+            @"    ORA $404B\n"
+            @"    ORA $404A\n"
+            @"    ORA $4049\n"
+            @"    ORA $4048\n"
+            @"    BNE __xtc_fpcmp8_n\n"
+            @"__xtc_fpcmp8_e:\n"
+            @"    LDA #$00\n"
+            @"    RTS\n"
+            @"__xtc_fpcmp8_n:\n"
+            @"    LDA #$02\n"
+            @"__xtc_fpcmp8_r:\n"
+            @"    RTS\n"
+            ];
+
         // ── 64-bit integer pack, linked ONLY when referenced ──────────────
         // The i8/i16/i32 mul/div/mod pack above is included unconditionally: it is
         // small and nearly every program touches some of it. The 64-bit routines
