@@ -33,6 +33,15 @@ if clang++ --version >/dev/null 2>&1; then
     [ -x "$W/px" ] && { [ "$("$W/px")" = "$("$W/pref")" ] || { echo "FAIL c-reads: pair.cpp gives '$("$W/px")', clang++'s '$("$W/pref")'"; fail=1; }; }
     grep -q 'left to clang' "$W/pb" && { echo "FAIL c-reads: pair.cpp left to clang:"; grep 'because of' "$W/pb" | head -2; fail=1; }
 fi
+# aggarg.cpp: a std::span and a string_view passed by value (arm64's
+# [2 x i64] arguments, as their two words), plainly and in a try.
+A=tests/par/c-reads/aggarg.cpp
+if clang++ --version >/dev/null 2>&1; then
+    clang++ -std=c++20 -O2 -o "$W/aref" "$A" || { echo "FAIL c-reads: clang++ does not build aggarg.cpp"; exit 1; }
+    XC_C_TRACE=1 "$XC" -q -O2 -std=c++20 -H . -o "$W/ax" "$A" > "$W/ab" 2>&1 || { echo "FAIL c-reads: aggarg.cpp does not build"; grep -v warning "$W/ab" | head -3; fail=1; }
+    [ -x "$W/ax" ] && { [ "$("$W/ax")" = "$("$W/aref")" ] || { echo "FAIL c-reads: aggarg.cpp gives '$("$W/ax")', clang++'s '$("$W/aref")'"; fail=1; }; }
+    grep -q 'left to clang' "$W/ab" && { echo "FAIL c-reads: aggarg.cpp left to clang:"; grep 'because of' "$W/ab" | head -2; fail=1; }
+fi
 clang -O2 -o "$W/ref" "$F" || { echo "FAIL c-reads: clang does not build it"; exit 1; }
 want=$("$W/ref")
 for O in -O0 -O2; do

@@ -883,6 +883,28 @@ class LlvmReader
         return at;
         }
 
+    // At `[`: a constant array's elements (`[i64 ptrtoint (ptr @d to i64),
+    // i64 poison]`), each made as an operand; 0 (failed) when one is not read.
+    Array* constArrayParts(void)
+        {
+        eat("[");
+        Array* parts = new Array();
+        while (more() && peek() != (u8)']')
+            {
+            IRValue* ev = typedOperand();
+            if (ev == (IRValue*)0)
+                return (Array*)0;
+            parts.add((Object*)ev);
+            eat(",");
+            }
+        if (!eat("]"))
+            {
+            fail("a constant array not read");
+            return (Array*)0;
+            }
+        return parts;
+        }
+
     // The parts' IR types of a pair type pairTy made.
     Array* pairParts(String* aggT)
         {
@@ -3049,17 +3071,36 @@ class LlvmReader
                 lp.add(IROperand.immI((i64)2, String.withCString("I32")));
             return;
             }
-        if (op.equals(String.withCString("insertvalue")) && (_readHandlers || _retPair != (Array*)0))
+        if (op.equals(String.withCString("insertvalue")))
             {
             // insertvalue { ptr, i32 } <agg | poison | undef>, <ty> <v>, <k>
-            // (a landing pad's, or the pair a function returns).
-            aggType();
+            // (a landing pad's, a pair a function returns, or `[N x iK]`
+            // passed by value): the parts, as an aggregate parameter's.
             ws();
-            String* base = word();
-            Array* was = (Array*)_aggParams.get((Hashable*)base);
+            u32 at0 = _p;
+            String* aggT = llType();
+            if (aggT == (String*)0)
+                aggT = litStruct();
+            Array* arrEl = aggT != (String*)0 ? LlvmReader.intArrayElems(aggT) : (Array*)0;
+            if (!_readHandlers && arrEl == (Array*)0 && pairTy(aggT) == (String*)0)
+                {
+                _p = at0;
+                fail("an insertvalue not read");
+                return;
+                }
+            u32 nParts = arrEl != (Array*)0 ? arrEl.count() : (u32)2;
+            ws();
+            bool constBase = peek() == (u8)'[';
+            Array* was = constBase ? constArrayParts() : (Array*)0;
+            if (constBase && was == (Array*)0)
+                return;
+            String* base = constBase ? (String*)0 : word();
+            if (base != (String*)0)
+                was = (Array*)_aggParams.get((Hashable*)base);
             Array* pair = new Array();
-            pair.add(was != (Array*)0 && was.count() > (u32)0 ? was.get((u32)0) : (Object*)0);
-            pair.add(was != (Array*)0 && was.count() > (u32)1 ? was.get((u32)1) : (Object*)0);
+            u32 have = was != (Array*)0 ? was.count() : (u32)0;
+            for (u32 q = (u32)0; q < nParts; q = q + (u32)1)
+                pair.add(q < have ? was.get(q) : (Object*)0);
             eat(",");
             IRValue* v = typedOperand();
             eat(",");
@@ -3068,7 +3109,7 @@ class LlvmReader
             while (_p < _s.byteLength() && _s.byteAt(_p) >= (u8)'0' && _s.byteAt(_p) <= (u8)'9')
                 _p = _p + (u32)1;
             u32 k = _p > k0 ? (u32)LlvmReader.decimal(_s.substringBytes(k0, _p - k0)) : (u32)$FFFFFFFF;
-            if (v == (IRValue*)0 || k > (u32)1)
+            if (v == (IRValue*)0 || k >= nParts)
                 {
                 fail("an insertvalue not read");
                 return;
@@ -3882,12 +3923,60 @@ class LlvmReader
         Array* zxArg = new Array();
         Array* argLl = new Array();     // each argument's LLVM type
         bool sretCall = false;
+        bool aggArgs = false;           // an `[N x iK]` passed as its parts
         if (eat("("))
             {
             while (more() && peek() != (u8)')')
                 {
                 String* alt = llType();
                 String* at = irOf(alt);
+                // `[2 x i64] %s`: a small struct passed by value (a std::span,
+                // a string_view), its words in consecutive integer registers,
+                // as such a parameter is read: its parts, one argument each.
+                Array* elems = at == (String*)0 && alt != (String*)0 ? LlvmReader.intArrayElems(alt) : (Array*)0;
+                if (elems != (Array*)0)
+                    {
+                    skipAttrs();
+                    ws();
+                    Array* parts = (Array*)0;
+                    if (peek() == (u8)'[')
+                        {
+                        parts = constArrayParts();
+                        if (parts == (Array*)0)
+                            return;
+                        }
+                    else
+                        {
+                        String* an = word();
+                        if (an.equals(String.withCString("zeroinitializer")) || an.equals(String.withCString("poison"))
+                            || an.equals(String.withCString("undef")))
+                            {
+                            parts = new Array();
+                            for (u32 q = (u32)0; q < elems.count(); q = q + (u32)1)
+                                parts.add((Object*)0);
+                            }
+                        else
+                            parts = (Array*)_aggParams.get((Hashable*)an);
+                        }
+                    if (parts == (Array*)0 || parts.count() != elems.count())
+                        {
+                        fail("an aggregate operand not read");
+                        return;
+                        }
+                    for (u32 q = (u32)0; q < elems.count(); q = q + (u32)1)
+                        {
+                        String* et = irOf((String*)elems.get(q));
+                        IRValue* pv = (IRValue*)parts.get(q);
+                        if (pv == (IRValue*)0)
+                            pv = emit(String.withCString("Const"), et, IROperand.immI((i64)0, et), (IROperand*)0, (IROperand*)0);
+                        args.add((Object*)pv);
+                        zxArg.add((Object*)Number.with((u32)0));
+                        argLl.add(elems.get(q));
+                        }
+                    aggArgs = true;
+                    eat(",");
+                    continue;
+                    }
                 if (at == (String*)0)
                     {
                     fail("an operand of a type not read");
@@ -3913,6 +4002,20 @@ class LlvmReader
                 zxArg.add((Object*)Number.with(z ? (u32)1 : (u32)0));
                 argLl.add((Object*)alt);
                 eat(",");
+                }
+            }
+        // Its parts are its registers only while every integer-class
+        // argument is in one (x86-64 has 6; arm64 8): past that, clang's.
+        if (aggArgs)
+            {
+            u32 gprs = (u32)0;
+            for (u32 i = (u32)0; i < args.count(); i = i + (u32)1)
+                if (!((IRValue*)args.get(i)).ty().hasPrefix(String.withCString("F")))
+                    gprs = gprs + (u32)1;
+            if (gprs > (u32)6 || fnTy)
+                {
+                fail("an aggregate operand past the integer registers");
+                return;
                 }
             }
         bool anyHalf = LlvmReader.isHalfTy(rlt);
