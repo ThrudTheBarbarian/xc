@@ -1,7 +1,9 @@
 // tensor_par.xc — a par block over a 2-D tensor on the CPU: each work item
-// writes its own row, reading another tensor's elements anywhere, and the
-// result is the same however the rows are split. The block has no GPU form
-// yet, and says so.
+// writes its own row of dst and reads src at another row. src and dst are of
+// one element type, but each is made by its own `new` and never set again, so
+// they are two storages and the block still runs in parallel (an explicit
+// block the rules refused would not compile). The result is the same however
+// the rows are split. The block has no GPU form yet, and says so.
 //xtc-na: xt6502, m68k, arm9 — par has no threads there
 //xtc-warn: it reads or writes tensor elements
 #import "Stdio.xc"
