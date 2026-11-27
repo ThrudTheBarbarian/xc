@@ -122,6 +122,11 @@
 // Module-level state, populated during pre-scan.
 @property(nonatomic) NSMutableDictionary<NSString*, XTIRClassInfo*>* classesByName;
 @property(nonatomic) NSMutableDictionary<NSString*, XTClassDeclNode*>* classDeclsByName;
+// Functions by mangled name and by name, and returnsByValue:'s callees being
+// decided (#758): the port's _funcsBySym / _funcs / _rbvStack.
+@property(nonatomic) NSMutableDictionary<NSString*, XTFunctionDeclNode*>* rbvFuncsBySym;
+@property(nonatomic) NSMutableDictionary<NSString*, XTFunctionDeclNode*>* rbvFuncsByName;
+@property(nonatomic) NSMutableArray<XTASTNode*>* rbvStack;
 // Classes whose preScanClass: is currently on the stack. A class-pointer
 // type mapped BEFORE its class's pre-scan (a cyclic #import puts the user
 // of a class ahead of the class itself in the merged unit) pre-scans it on
@@ -8963,6 +8968,66 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
         [self rbvDeclsIn:k class:cls into:out];
     }
 
+// Does this call reach a function, or a static method, that returns the class
+// by value? A cycle of such returns counts as not. The port's rbvCallByValue.
+- (BOOL)rbvCallByValue:(XTASTNode*)e
+    {
+    XTASTNode* decl = nil;
+    NSArray<XTType*>* rets = nil;
+    XTASTNode* body = nil;
+    if (e.nodeKind == XTASTNodeKindCallExpr)
+        {
+        XTCallExprNode* c = (XTCallExprNode*)e;
+        XTFunctionDeclNode* fd = c.resolvedMangledName ? self.rbvFuncsBySym[c.resolvedMangledName] : nil;
+        if (!fd)
+            {
+            fd = self.rbvFuncsByName[c.calleeName];
+            if (fd && c.resolvedMangledName && fd.mangledName.length && ![fd.mangledName isEqualToString:c.resolvedMangledName])
+                fd = nil;
+            }
+        decl = fd;
+        rets = fd.returnTypes;
+        body = fd.body;
+        }
+    else if (e.nodeKind == XTASTNodeKindMethodCallExpr)
+        {
+        XTMethodCallExprNode* c = (XTMethodCallExprNode*)e;
+        if ([c.receiver isKindOfClass:[XTIdentifierNode class]] && self.classesByName[((XTIdentifierNode*)c.receiver).identName])
+            {
+            XTMethodDeclNode* md = nil;
+            NSString* mangled = c.resolvedMangledName;
+            for (int pass = 0; pass < 2 && !md; pass++)
+                for (XTClassDeclNode* cd = self.classDeclsByName[((XTIdentifierNode*)c.receiver).identName]; cd && !md;
+                     cd = cd.parentName ? self.classDeclsByName[cd.parentName] : nil)
+                    for (XTMethodDeclNode* m in cd.methods)
+                        {
+                        if (![m.methodName isEqualToString:c.methodName])
+                            continue;
+                        NSString* ms = m.mangledName.length ? m.mangledName : m.methodName;
+                        if (pass == 1 || !mangled || [ms isEqualToString:mangled])
+                            {
+                            md = m;
+                            break;
+                            }
+                        }
+            if (md && md.isStatic)
+                {
+                decl = md;
+                rets = md.returnTypes;
+                body = md.body;
+                }
+            }
+        }
+    if (!decl || !body)
+        return NO;
+    if ([self.rbvStack indexOfObjectIdenticalTo:decl] != NSNotFound)
+        return NO;
+    [self.rbvStack addObject:decl];
+    BOOL r = [self returnsByValue:rets body:body];
+    [self.rbvStack removeLastObject];
+    return r;
+    }
+
 - (BOOL)rbvReturnsIn:(nullable XTASTNode*)n instances:(NSSet<NSString*>*)inst
     {
     if (!n)
@@ -8971,7 +9036,13 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
         {
         XTReturnNode* r = (XTReturnNode*)n;
         XTASTNode* v = r.values.firstObject;
-        return v && [v isKindOfClass:[XTIdentifierNode class]] && [inst containsObject:((XTIdentifierNode*)v).identName];
+        if (v && [v isKindOfClass:[XTIdentifierNode class]] && [inst containsObject:((XTIdentifierNode*)v).identName])
+            return YES;
+        // `return makeV();`: a call to a function or static method that itself
+        // returns the class by value hands back an instance, which leaves by
+        // value too (#758).
+        return v && (v.nodeKind == XTASTNodeKindCallExpr || v.nodeKind == XTASTNodeKindMethodCallExpr)
+               && [self valueClassForASTType:v.resolvedType] && [self rbvCallByValue:v];
         }
     for (XTASTNode* k in [self rbvKidsOf:n])
         if ([self rbvReturnsIn:k instances:inst])
@@ -22602,6 +22673,9 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
     // see -[XTCompilerDriver injectClassNames:…]); each goes in its class's
     // itable, where Object.className() looks for it.
     L.classNameFunctions = [NSMutableSet set];
+    L.rbvFuncsBySym = [NSMutableDictionary dictionary];
+    L.rbvFuncsByName = [NSMutableDictionary dictionary];
+    L.rbvStack = [NSMutableArray array];
     for (XTASTNode* decl in program.declarations)
         {
         if (decl.nodeKind != XTASTNodeKindFunctionDecl)
@@ -22609,6 +22683,12 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
         XTFunctionDeclNode* fn = (XTFunctionDeclNode*)decl;
         if (fn.body && [fn.funcName hasPrefix:@"_xtc_cname_"])
             [L.classNameFunctions addObject:[fn.funcName substringFromIndex:11]];
+        // The last declaration of a name answers, as the port's maps keep it
+        // (a definition after its prototype).
+        if (fn.mangledName.length)
+            L.rbvFuncsBySym[fn.mangledName] = fn;
+        if (fn.funcName.length)
+            L.rbvFuncsByName[fn.funcName] = fn;
         }
 
     // Index every class decl by name so the pre-scan can walk parent

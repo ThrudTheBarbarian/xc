@@ -552,6 +552,7 @@ class ClassInfo
     Map* _staticIvarTy;       // …and its declared type
     Vtable* _vt;              // the analyser's slot assignment, for protocol fills
     Map* _valueClass;         // local name -> the class whose INSTANCE it is
+    Array* _rbvStack;         // returnsByValue's callees being decided (a cycle counts as not)
     Node* _objectDecl;        // the implicit root every parentless class gets
     ClassInfo* _curClass;     // the class whose method is being lowered
     String* _curMethodName;   // …and its NAME, for the self-wrapper carve-out
@@ -14550,14 +14551,67 @@ class ClassInfo
             return false;
         u16 k = n.kind();
         if (k == (u16)nkReturn)
-            return n.kidCount() > (u32)0 && n.kid((u32)0).kind() == (u16)nkIdent && n.kid((u32)0).name() != 0
-                   && inst.get((Hashable*)n.kid((u32)0).name()) != 0;
+            {
+            if (n.kidCount() == (u32)0)
+                return false;
+            Node* e = n.kid((u32)0);
+            if (e.kind() == (u16)nkIdent && e.name() != 0 && inst.get((Hashable*)e.name()) != 0)
+                return true;
+            // `return makeV();`: a call to a function or static method that
+            // itself returns the class by value hands back an instance, which
+            // leaves by value too (#758).
+            return (e.kind() == (u16)nkCall || e.kind() == (u16)nkMethodCall) && valueClassOf(e.ty()) != 0
+                   && rbvCallByValue(e);
+            }
         if (!rbvWalks(k))
             return false;
         for (u32 i = (u32)0; i < n.kidCount(); i = i + (u32)1)
             if (rbvReturns(n.kid(i), inst))
                 return true;
         return false;
+        }
+
+    // Does this call reach a function, or a static method, that returns the
+    // class by value? A cycle of such returns (f returns g(), g returns f())
+    // counts as not.
+    bool rbvCallByValue(Node* e)
+        {
+        Node* decl = (Node*)0;
+        Node* body = (Node*)0;
+        if (e.kind() == (u16)nkCall)
+            {
+            Object* d = e.sym() == 0 ? (Object*)0 : _funcsBySym.get((Hashable*)e.sym());
+            if (d == 0)
+                {
+                d = _funcs.get((Hashable*)e.name());
+                if (d != 0 && e.sym() != 0 && ((Node*)d).sym() != 0 && !((Node*)d).sym().equals(e.sym()))
+                    d = (Object*)0;
+                }
+            decl = (Node*)d;
+            body = fnBodyOf(decl);
+            }
+        else if (e.kind() == (u16)nkMethodCall && e.kidCount() > (u32)0)
+            {
+            Node* rv = e.kid((u32)0);
+            ClassInfo* ci = rv.kind() == (u16)nkIdent && rv.name() != 0 ? classFor(rv.name()) : (ClassInfo*)0;
+            if (ci != 0)
+                {
+                decl = methodDeclFor(ci, e);
+                if (decl != 0 && decl.hasFlag((u32)NF_STATIC))
+                    body = methodBody(decl);
+                }
+            }
+        if (decl == 0 || body == 0)
+            return false;
+        if (_rbvStack == (Array*)0)
+            _rbvStack = new Array();
+        for (u32 i = (u32)0; i < _rbvStack.count(); i = i + (u32)1)
+            if ((Node*)_rbvStack.get(i) == decl)
+                return false;
+        _rbvStack.add((Object*)decl);
+        bool r = returnsByValue(decl, body);
+        _rbvStack.removeLast();
+        return r;
         }
 
     // A function declaration's body block, or 0 for a prototype.
