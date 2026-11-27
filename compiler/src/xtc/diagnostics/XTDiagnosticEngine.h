@@ -242,6 +242,8 @@ NSArray<NSString*>* XTWarningCategoryAllNames(void);
 |* diagnostics of its body.
 \****************************************************************************/
 - (void)moveDiagnosticsFrom:(NSUInteger)from to:(NSUInteger)to;
+// The warnings from `mark` on ahead of the errors and notes, each in order.
+- (void)warningsFirstFrom:(NSUInteger)mark;
 
 @end
 

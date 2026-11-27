@@ -632,6 +632,23 @@ static NSString* XTPackSpelling(NSString* text0)
     _fatalFlag = fatal;
     }
 
+// The warnings from `mark` on, in their order, ahead of the errors and
+// notes, in theirs: a phase's warnings print before the errors that stop it,
+// as the port prints them.
+- (void)warningsFirstFrom:(NSUInteger)mark
+    {
+    if (mark >= _mutableDiagnostics.count)
+        return;
+    NSRange tail = NSMakeRange(mark, _mutableDiagnostics.count - mark);
+    NSArray<XTDiagnostic*>* part = [_mutableDiagnostics subarrayWithRange:tail];
+    NSMutableArray<XTDiagnostic*>* warn = [NSMutableArray array];
+    NSMutableArray<XTDiagnostic*>* rest = [NSMutableArray array];
+    for (XTDiagnostic* d in part)
+        [(d.level == XTDiagnosticLevelWarning ? warn : rest) addObject:d];
+    [warn addObjectsFromArray:rest];
+    [_mutableDiagnostics replaceObjectsInRange:tail withObjectsFromArray:warn];
+    }
+
 - (void)moveDiagnosticsFrom:(NSUInteger)from to:(NSUInteger)to
     {
     if (from >= _mutableDiagnostics.count || to >= from)

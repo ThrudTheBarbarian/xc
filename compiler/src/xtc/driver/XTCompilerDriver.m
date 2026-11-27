@@ -1528,7 +1528,10 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     if (!expanded || _diagnostics.hasFatalError)
         {
         [_diagnostics printAll];
-        fprintf(stderr, "xcc: preprocess failed\n");
+        // Only when nothing said why: an error reported is the whole story,
+        // as the port tells it.
+        if (_diagnostics.errorCount == 0)
+            fprintf(stderr, "xcc: preprocess failed\n");
         return nil;
         }
     if (_options.preprocessedOutputPath)
@@ -2370,6 +2373,9 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
         }
     if (_diagnostics.hasFatalError)
         {
+        // The warnings first, then the errors that stop the build, as the
+        // port prints them.
+        [_diagnostics warningsFirstFrom:diagMark];
         [_diagnostics printAll];
         return nil;
         }
