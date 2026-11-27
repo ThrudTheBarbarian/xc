@@ -1,0 +1,8 @@
+copy 1
+after scope 1
+member copy 3
+after member scope 3
+dealloc 1
+end
+dealloc 3
+dealloc 2

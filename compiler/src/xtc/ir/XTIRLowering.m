@@ -16736,6 +16736,17 @@ typedef NS_ENUM(NSInteger, XTStructARCMode) {
             && [self astTypeIsAnyClassPointer:node.initialiser.resolvedType])
             [self emitRetain:initVal];
         [self emitStore:addr value:initVal];
+        // `S c = a;` of a struct that owns class references gives c a second
+        // reference to each, as `c = a` does: retained here, since c's scope
+        // exit releases them (#757). A struct a call made arrives owned.
+        XTStructType* copySt = node.initialiser && !byteListInit ? self.strongStructLocals[node.varName] : nil;
+        if (copySt && [self arcRhsIsBorrowed:node.initialiser]
+            && (node.initialiser.nodeKind == XTASTNodeKindIdentifier || node.initialiser.nodeKind == XTASTNodeKindMemberAccess))
+            {
+            XTIRValue* srcAddr = [self addressOfStructLValue:node.initialiser];
+            if (srcAddr)
+                [self emitStructStrongFieldRetainAt:srcAddr structType:copySt];
+            }
         if (!byteListInit)
             [self enrolStrongPinNamed:node.varName astType:node.declaredType];
         // `S b = a;` copied a whole struct, link words and all, without linking

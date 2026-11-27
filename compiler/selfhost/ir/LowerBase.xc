@@ -10805,6 +10805,17 @@ class ClassInfo
              && rhsIsBorrowed(ini) && isAnyClassPointer(ini.ty()))
                 refOp(String.withCString("Retain"), pv);
             storeThrough(a, pv);
+            // `S c = a;` of a struct that owns class references gives c a
+            // second reference to each, as `c = a` does: retained here, since
+            // c's scope exit releases them (#757). A struct a call made
+            // arrives owned.
+            if (structDeclFor(n.op()) != (Node*)0 && _strongStruct.get((Hashable*)n.name()) != 0 && isStructCopySource(ini))
+                {
+                IRValue* sa = aggregateAddr(ini);
+                if (_failed)
+                    return;
+                structFieldsAt(sa, n.op(), false, true);
+                }
             if (ini.kind() != (u16)nkBlock)
                 enrolStrongPin(n.name(), n.op());
             // `S b = a;` copied a whole struct, link words and all, without
