@@ -2599,24 +2599,36 @@ class Languages
             u32 bodyAt = bodyLabel != (String*)0 ? Languages.labelLine(lines, from, end, bodyLabel) : String.notFound();
             if (bodyAt == String.notFound())
                 continue;
-            // The exit block: a pointer used there is its value at the end.
-            String* exitLabel = Languages.branchTarget((String*)lines.get(brAt), c, eq ? 0 : 1);
-            u32 exitAt = exitLabel != (String*)0 ? Languages.labelLine(lines, from, end, exitLabel) : String.notFound();
-            if (exitAt != String.notFound())
+            // Past the loop (a block the body does not reach without the
+            // header: the exit and every block after it), a pointer is its
+            // value at the end. In the loop, and on a way out of the body
+            // (a break), it is element [i], made in the body. Only the exit
+            // block was renamed before, so a use further on (std::vector's
+            // range constructor from reverse iterators handing its end on
+            // to std::reverse) read the last element's address: one short.
+            String* hdrLine = blockStart > from ? (String*)lines.get(blockStart - 1) : (String*)0;
+            u32 hc = hdrLine != (String*)0 ? Languages.byteFrom(hdrLine, (u8)':', 0) : String.notFound();
+            if (hc == String.notFound())
+                continue;
+            Map* inLoop = Languages.loopBlocks(lines, from, end, hdrLine.substringBytes(0, hc), bodyLabel);
+            Map* fin = new Map();
+            for (u32 k = 0; k < allQ.count(); k = k + 1)
                 {
-                Map* fin = new Map();
-                for (u32 k = 0; k < allQ.count(); k = k + 1)
+                PtrIv* q = (PtrIv*)allQ.get(k);
+                fin.set((Hashable*)q.name(), (Object*)String.withFormat("%s.f%u", tag.cString(), k));
+                }
+            bool past = false;
+            for (u32 k = from; k < end; k = k + 1)
+                {
+                String* m = (String*)lines.get(k);
+                if (m.byteLength() > 0 && m.byteAt(0) != (u8)' ' && m.byteAt(0) != (u8)';')
                     {
-                    PtrIv* q = (PtrIv*)allQ.get(k);
-                    fin.set((Hashable*)q.name(), (Object*)String.withFormat("%s.f%u", tag.cString(), k));
+                    u32 lc = Languages.byteFrom(m, (u8)':', 0);
+                    past = lc != String.notFound() && inLoop.get((Hashable*)m.substringBytes(0, lc)) == (Object*)0;
+                    continue;
                     }
-                for (u32 k = exitAt + 1; k < end; k = k + 1)
-                    {
-                    String* m = (String*)lines.get(k);
-                    if (m.byteLength() > 0 && m.byteAt(0) != (u8)' ' && m.byteAt(0) != (u8)';')
-                        break;
+                if (past)
                     lines.set(k, (Object*)Languages.renamed(m, fin));
-                    }
                 }
             Array* all = new Array();
             all.add((Object*)iv);
@@ -3589,6 +3601,49 @@ class Languages
         if (!t.hasPrefix(String.withCString("label %")))
             return (String*)0;
         return t.substringFromByte(7);
+        }
+
+    // The blocks of a loop in [from, end): its header and every block the
+    // body (label `body`) reaches without passing through the header, as a
+    // set of labels (without `%`). Successors are a terminator's `label %x`
+    // words (br, switch, an invoke's `to label`).
+    static Map* loopBlocks(Array* lines, u32 from, u32 end, String* header, String* body)
+        {
+        Map* seen = new Map();
+        seen.set((Hashable*)header, (Object*)Number.with(1));
+        Array* work = new Array();
+        work.add((Object*)body);
+        while (work.count() > 0)
+            {
+            String* b = (String*)work.last();
+            work.removeLast();
+            if (seen.get((Hashable*)b) != (Object*)0)
+                continue;
+            seen.set((Hashable*)b, (Object*)Number.with(1));
+            u32 at = Languages.labelLine(lines, from, end, b);
+            if (at == String.notFound())
+                continue;
+            for (u32 k = at + 1; k < end; k = k + 1)
+                {
+                String* m = (String*)lines.get(k);
+                if (m.byteLength() > 0 && m.byteAt(0) != (u8)' ' && m.byteAt(0) != (u8)';')
+                    break;
+                u32 q = 0;
+                while (true)
+                    {
+                    u32 lp = m.byteIndexOf(String.withCString("label %"), q);
+                    if (lp == String.notFound())
+                        break;
+                    u32 s0 = lp + 7;
+                    u32 e = s0;
+                    while (e < m.byteLength() && LlvmName.isNameByte(m.byteAt(e)))
+                        e = e + 1;
+                    work.add((Object*)m.substringBytes(s0, e - s0));
+                    q = e;
+                    }
+                }
+            }
+        return seen;
         }
 
     // The line of the label `name:` in [from, end), or notFound.
