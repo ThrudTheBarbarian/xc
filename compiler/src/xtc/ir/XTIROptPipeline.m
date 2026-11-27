@@ -449,6 +449,9 @@
             exit(2);
             }
         }
+    // The loop unroller's note on a loop it leaves alone is informational:
+    // -q (no trace) silences it.
+    [XTIROptLoopUnroll setNotes:_traceToStderr];
     for (id<XTIROptPass> pass in _passes)
         {
         if (pass.minOptLevel > _level)

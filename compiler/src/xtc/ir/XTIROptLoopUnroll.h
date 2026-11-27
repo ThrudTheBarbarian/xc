@@ -33,6 +33,8 @@ NS_ASSUME_NONNULL_BEGIN
 // With the conservative (default) profile the behaviour is exactly the
 // single-iv / no-calls form described above.
 @interface XTIROptLoopUnroll : NSObject <XTIROptPass>
+/// Print the note on a loop left alone (the pipeline turns it off under -q).
++ (void)setNotes:(BOOL)on;
 @property(nonatomic, strong, nullable) XTIROptTargetProfile* profile;
 @end
 

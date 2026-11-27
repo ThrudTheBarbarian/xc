@@ -40,6 +40,15 @@
 
 @implementation XTIROptLoopUnroll
 
+// Whether the note on a loop left alone is printed (the pipeline's trace,
+// off under -q).
+static BOOL gUnrollNotes = YES;
+
++ (void)setNotes:(BOOL)on
+    {
+    gUnrollNotes = on;
+    }
+
 - (NSString*)passName
     {
     return @"loop-unroll";
@@ -551,7 +560,8 @@ static BOOL bodyHasCall(XTIRBlock* B)
             }
         if (!chosen)
             {
-            fprintf(stderr,
+            if (gUnrollNotes)
+                fprintf(stderr,
                     "xcc: loop-unroll: not unrolling a %lu-trip loop in '%s' "
                     "(would risk code size); left as a loop\n",
                     (unsigned long)cands.firstObject.trip, fn.name.UTF8String);
