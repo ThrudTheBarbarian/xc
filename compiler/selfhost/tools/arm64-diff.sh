@@ -48,6 +48,11 @@ echo "building xtcga64 (xtc → native arm64)…"
 RUN_INCS=(-I selfhost/lexer -I selfhost/asm -I selfhost/link -I selfhost/driver -I selfhost/defs -I selfhost/preproc -I selfhost/parser
           -I selfhost/sema -I selfhost/defs -I selfhost/ir -I selfhost/codegen)
 
+# ARM64_CG_FLAGS: extra code-generator flags for the reference side, e.g.
+# "--simd=auto" to compare float dispatch's clones, stubs and table (the port
+# reads them from the post-opt IR).
+CGF=()
+[ -n "${ARM64_CG_FLAGS:-}" ] && read -r -a CGF <<< "$ARM64_CG_FLAGS"
 pass=0; fail=0; unsup=0; oracle=0
 declare -a FAILED
 
@@ -66,7 +71,7 @@ for f in $FILES; do
          >/dev/null 2>&1 || [ ! -s "$WORK/a.ir" ]; then
         oracle=$((oracle+1)); continue
     fi
-    if ! "$BIN/xcc-cg-arm64" "-O$LEVEL" -q -o "$WORK/a.s" "$WORK/a.ir" >/dev/null 2>&1; then
+    if ! "$BIN/xcc-cg-arm64" "-O$LEVEL" ${CGF[@]+"${CGF[@]}"} -q -o "$WORK/a.s" "$WORK/a.ir" >/dev/null 2>&1; then
         oracle=$((oracle+1)); continue
     fi
     # xtcga64 runs no opt pipeline of its own, so at a non-zero level it is
@@ -82,7 +87,7 @@ for f in $FILES; do
     # dead ids happened to cost the same number of slots as the port's
     # still-live ones. That coincidence is what made -O0 look verified while
     # -O3 diverged on every file.
-    "$BIN/xcc-cg-arm64" "-O$LEVEL" --dump-opt-ir -q "$WORK/a.ir" > "$WORK/opt.ir" 2>/dev/null \
+    "$BIN/xcc-cg-arm64" "-O$LEVEL" ${CGF[@]+"${CGF[@]}"} --dump-opt-ir -q "$WORK/a.ir" > "$WORK/opt.ir" 2>/dev/null \
         || { oracle=$((oracle+1)); continue; }
     "$WORK/xtcga64" "$WORK/opt.ir" -o "$WORK/b.s" >/dev/null 2>&1
     rc=$?

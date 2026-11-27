@@ -687,10 +687,12 @@ same "-mavx2 (-A x86_64)"           -q -A x86_64 -mavx2 -o @OUT@ ret.xc
 same "-msimd=base (-A x86_64)"      -q -A x86_64 -msimd=base -o @OUT@ ret.xc
 same "-msimd=avx2 (-A win64)"       -q -A win64 -msimd=avx2 -o @OUT@ ret.xc
 same "-msimd=<bad> refused"        -q -A x86_64 -msimd=sse9 -o @OUT@ ret.xc
-xcconly "  ...naming the choices"   1 "expects 'base', 'avx2', 'avx512' or 'auto'" -q -A x86_64 -msimd=sse9 -o @OUT@ ret.xc
+xcconly "  ...naming the choices"   1 "expects 'base', 'avx2', 'avx512', 'fp16' or 'auto'" -q -A x86_64 -msimd=sse9 -o @OUT@ ret.xc
 same "-msimd=auto (-A x86_64)"      -q -A x86_64 -msimd=auto -o @OUT@ ret.xc
 same "-mavx2 (-A arm64) refused"    -q -A arm64 -mavx2 -o @OUT@ ret.xc
-xcconly "  ...naming the targets"   1 "applies to -A x86_64 and -A win64 only" -q -A arm64 -mavx2 -o @OUT@ ret.xc
+xcconly "  ...naming the target"    1 "names an x86-64 level, but the target is arm64-macos" -q -A arm64 -mavx2 -o @OUT@ ret.xc
+same "-mavx2 (-A wasm32) refused"   -q -A wasm32 -mavx2 -o @OUT@ ret.xc
+xcconly "  ...naming the families"  1 "applies to x86-64 and arm64 targets only" -q -A wasm32 -mavx2 -o @OUT@ ret.xc
 # AVX-512 (step 1b): the same three spellings, and the same refusal off x86.
 same "-mavx512 (-A x86_64)"         -q -A x86_64 -mavx512 -o @OUT@ ret.xc
 same "-mavx512f (-A x86_64)"        -q -A x86_64 -mavx512f -o @OUT@ ret.xc
@@ -699,7 +701,25 @@ same "-mavx512 (-A arm64) refused"  -q -A arm64 -mavx512 -o @OUT@ ret.xc
 # -mnative reads THIS machine: on x86-64 it picks a level and builds, elsewhere
 # both refuse; either way the two must agree.
 same "-mnative (-A x86_64)"         -q -A x86_64 -mnative -o @OUT@ ret.xc
-cover -mavx2 -msimd= -mnative -mavx512 -mavx512f
+# Float dispatch (#153): the arm64 levels, -march= on both families, and
+# -mnative on arm64; a level of the other family is refused the same way.
+same "-msimd=fp16 (-A arm64)"       -q -A arm64 -msimd=fp16 -o @OUT@ ret.xc
+same "-msimd=base (-A arm64-linux)" -q -A arm64-linux -msimd=base -o @OUT@ ret.xc
+same "-msimd=auto (-A android)"     -q -A android -msimd=auto -o @OUT@ ret.xc
+same "-march=pi5 (-A arm64-linux)"  -q -A arm64-linux -march=pi5 -o @OUT@ ret.xc
+same "-march=pi4 (-A arm64)"        -q -A arm64 -march=pi4 -o @OUT@ ret.xc
+same "-march=armv8.2-a+fp16+dotprod+bf16" -q -A arm64-linux -march=armv8.2-a+fp16+dotprod+bf16 -o @OUT@ ret.xc
+same "-march=x86-64-v3 (-A x86_64)" -q -A x86_64 -march=x86-64-v3 -o @OUT@ ret.xc
+same "-march=x86-64-v4 (-A win64)"  -q -A win64 -march=x86-64-v4 -o @OUT@ ret.xc
+same "-march=x86-64-v2 (-A x86_64)" -q -A x86_64 -march=x86-64-v2 -o @OUT@ ret.xc
+same "-march=pi5 (-A x86_64) refused" -q -A x86_64 -march=pi5 -o @OUT@ ret.xc
+xcconly "  ...naming the target"    1 "names an arm64 level, but the target is x86_64-linux" -q -A x86_64 -march=pi5 -o @OUT@ ret.xc
+same "-march=armv8-a+sve refused"   -q -A arm64 -march=armv8-a+sve -o @OUT@ ret.xc
+xcconly "  ...naming the extensions" 1 "the extensions are +fp16, +dotprod and +bf16" -q -A arm64 -march=armv8-a+sve -o @OUT@ ret.xc
+same "-march=<bad> refused"         -q -A arm64 -march=cortex-x9 -o @OUT@ ret.xc
+same "-msimd=fp16 (-A x86_64) refused" -q -A x86_64 -msimd=fp16 -o @OUT@ ret.xc
+same "-mnative (-A arm64)"          -q -A arm64 -mnative -o @OUT@ ret.xc
+cover -mavx2 -msimd= -mnative -mavx512 -mavx512f -march=
 # SME matrix kernels (arm64 macOS, -O2+): on by default, -fno-matmul turns them
 # off. Both builds, both ways.
 same "SME matmul (-A arm64 -O3)"              -q -A arm64 -O3 -o @OUT@ $ROOT/tests/fixtures/sme_matmul_exact.xc
