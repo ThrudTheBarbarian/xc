@@ -645,7 +645,13 @@ class IfaceWrite
     // "Stdio.xc"` — a once-only no-op — does not make Stdio ours to export.
     static bool ambient(Node* d, Set* prelude)
     {
-        if (prelude == (Set*)0 || d == (Node*)0) return false;
+        if (d == (Node*)0) return false;
+        // The tensor classes the compiler writes (`<tensor>`): every module
+        // writes its own, from the tensor types it names, so they are not this
+        // module's to export.
+        String* tf = d.file();
+        if (tf != (String*)0 && tf.equals(String.withCString("<tensor>"))) return true;
+        if (prelude == (Set*)0) return false;
         String* f = d.file();
         // No position at all means the COMPILER made it — a `Blk$…` callback
         // shim, a runtime helper declaration. A module's public surface is

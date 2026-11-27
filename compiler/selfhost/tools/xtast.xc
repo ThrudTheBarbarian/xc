@@ -143,10 +143,12 @@ void main(void)
     parser.setLibraryFiles(pp.libraryFiles());
     parser.setParAuto(parAuto);
     Node* program = parser.parse();
+    bool withPar = false;
     // A loop to lift in a file without the par runtime: read it again with
     // Par.xc imported, as the front end does.
     if (parAuto && !raw && parser.parAutoWantsRuntime())
         {
+        withPar = true;
         Preprocessor* pp2 = new Preprocessor();
         for (u32 k = 0; k < incArgs.count(); k++)
             pp2.addIncludePath((String*)incArgs.get(k));
@@ -163,6 +165,32 @@ void main(void)
             parser.setGoalDefault(pp2.goal());
             parser.setLibraryFiles(pp2.libraryFiles());
             parser.setParAuto(true);
+            program = parser.parse();
+            }
+        }
+    // A tensor type: read again with TensorStorage.xc imported, as the front
+    // end does.
+    if (!raw && parser.tensorNames().count() > (u32)0)
+        {
+        Preprocessor* pp3 = new Preprocessor();
+        for (u32 k = 0; k < incArgs.count(); k++)
+            pp3.addIncludePath((String*)incArgs.get(k));
+        for (u32 k = 0; k < defArgs.count(); k++)
+            defineArg(pp3, (String*)defArgs.get(k));
+        if (prelude)
+            pp3.setPrelude(String.withCString("Platform.xc"));
+        if (withPar)
+            pp3.setAutoImport(String.withCString("Par.xc"));
+        pp3.addAutoImport(String.withCString("TensorStorage.xc"));
+        String* source3 = pp3.preprocessFile(input);
+        if (source3 != (String*)0)
+            {
+            Lexer* lex3 = Lexer.with(source3, input);
+            parser = Parser.with(lex3.tokenise());
+            parser.setGoalDefault(pp3.goal());
+            parser.setLibraryFiles(pp3.libraryFiles());
+            parser.setParAuto(parAuto);
+            parser.setTensorReady(true);
             program = parser.parse();
             }
         }

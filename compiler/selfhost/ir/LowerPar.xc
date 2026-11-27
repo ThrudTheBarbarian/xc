@@ -381,6 +381,39 @@
         return false;
         }
 
+    // Does the function, or one it calls, use a tensor (a call of one of the
+    // tensor classes' methods, `__tensor_<T>_<R>$…`)? GPU kernels take no
+    // tensor yet, so such a block runs on the CPU. As the reference's
+    // XTParTouchesTensor.
+    final bool parTouchesTensor(IRFunc* f, Map* seen)
+        {
+        if (f == 0 || seen.get((Hashable*)f.name()) != 0)
+            return false;
+        seen.set((Hashable*)f.name(), (Object*)f.name());
+        for (u32 b = 0; b < f.blocks().count(); b++)
+            {
+            Array* ins = ((IRBlock*)f.blocks().get(b)).insns();
+            for (u32 i = 0; i < ins.count(); i++)
+                {
+                IRInsn* ci = (IRInsn*)ins.get(i);
+                if (!isName(ci.op(), "Call") || ci.ops().count() == 0)
+                    continue;
+                IROperand* o = (IROperand*)ci.ops().get(0);
+                if (o.kind() != (u8)OPK_SYM || o.name() == 0)
+                    continue;
+                if (o.name().hasPrefix(String.withCString("__tensor_")))
+                    return true;
+                for (u32 k = 0; k < _m.funcs().count(); k++)
+                    {
+                    IRFunc* g = (IRFunc*)_m.funcs().get(k);
+                    if (g.name().equals(o.name()) && parTouchesTensor(g, seen))
+                        return true;
+                    }
+                }
+            }
+        return false;
+        }
+
     final bool parUsesFloatPack(IRFunc* f, Map* seen)
         {
         if (f == 0 || seen.get((Hashable*)f.name()) != 0)
@@ -989,6 +1022,81 @@
     // The buffer an address indexes into, by name, or 0 when it is not one: a
     // captured array is a pointer ivar of the block's object, a global array
     // its symbol.
+    // The captured tensor whose address `base` is (the block object's field
+    // k, or a pointer loaded from it): its name, or 0. As the reference's
+    // tensorOf.
+    final String* parTensorOf(IROperand* base, Array* ivars, Map* def)
+        {
+        if (base.kind() != (u8)OPK_USE)
+            return (String*)0;
+        IRInsn* d = (IRInsn*)def.get((Hashable*)String.withU32(base.val().seq()));
+        if (d != (IRInsn*)0 && d.isOp(opLoad) && d.ops().count() > (u32)0
+            && ((IROperand*)d.ops().get((u32)0)).kind() == (u8)OPK_USE)
+            d = (IRInsn*)def.get((Hashable*)String.withU32(((IROperand*)d.ops().get((u32)0)).val().seq()));
+        if (d == (IRInsn*)0 || !d.isOp(opFieldAddr) || d.ops().count() < 2)
+            return (String*)0;
+        IROperand* f0 = (IROperand*)d.ops().get((u32)0);
+        IROperand* f1 = (IROperand*)d.ops().get((u32)1);
+        if (f0.kind() != (u8)OPK_USE || f0.val() == (IRValue*)0 || def.get((Hashable*)String.withU32(f0.val().seq())) != (Object*)0 || f1.kind() != (u8)OPK_IMMI)
+            return (String*)0;
+        i64 k = f1.imm();
+        if (k < (i64)1 || k > (i64)ivars.count())
+            return (String*)0;
+        return (String*)ivars.get((u32)(k - (i64)1));
+        }
+
+    // Tensor elements in a block: `t[i, j]` is a call of the tensor class's
+    // _get or _set, the tensor's address first and its first index next. Two
+    // tensor values may share one storage, so a block writes through one
+    // tensor only, and each work item keeps to its own first index: every
+    // write's, and every read's of the written tensor, is the one k * i + c
+    // with k != 0. The dependence, or 0. As the reference's tensorDependenceIn.
+    final String* parTensorDependence(IRFunc* f, IRValue* iv, Array* ivars, Map* def)
+        {
+        String* wbuf = (String*)0;
+        i64 wk = 0;
+        i64 wc = 0;
+        for (u32 pass = (u32)0; pass < (u32)2; pass = pass + (u32)1)
+            for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
+                {
+                IRBlock* bb = (IRBlock*)f.blocks().get(b);
+                for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                    {
+                    IRInsn* ip = (IRInsn*)bb.insns().get(i);
+                    if (!isName(ip.op(), "Call") || ip.ops().count() < (u32)3)
+                        continue;
+                    IROperand* o = (IROperand*)ip.ops().get((u32)0);
+                    if (o.kind() != (u8)OPK_SYM || o.name() == 0 || !o.name().hasPrefix(String.withCString("__tensor_")))
+                        continue;
+                    if (!o.name().hasSuffix(String.withCString(pass == (u32)0 ? "$_set" : "$_get")))
+                        continue;
+                    String* buf = parTensorOf((IROperand*)ip.ops().get((u32)1), ivars, def);
+                    ParIdx* x = parIndex((IROperand*)ip.ops().get((u32)2), iv, def, (u32)0);
+                    if (pass == (u32)0)
+                        {
+                        if (buf == (String*)0)
+                            return String.withCString("writes a tensor it cannot name, which may share a storage with another, so two work items could write one element");
+                        if (wbuf != (String*)0 && !buf.equals(wbuf))
+                            return String.withFormat("writes the tensors '%s' and '%s', which may share one storage, so two work items could write one element; write one tensor in a block",
+                                                     self.parShown(wbuf).cString(), self.parShown(buf).cString());
+                        if (!x.affine || x.k == (i64)0)
+                            return String.withFormat("writes the tensor '%s' at a first index that is not k * i + c, so two work items could write one element",
+                                                     self.parShown(buf).cString());
+                        if (wbuf != (String*)0 && (x.k != wk || x.c != wc))
+                            return String.withFormat("writes the tensor '%s' at two first indices, so two work items could write one element",
+                                                     self.parShown(buf).cString());
+                        wbuf = buf;
+                        wk = x.k;
+                        wc = x.c;
+                        }
+                    else if (wbuf != (String*)0 && (buf == (String*)0 || buf.equals(wbuf)) && !(x.affine && x.k == wk && x.c == wc))
+                        return String.withFormat("reads the tensor '%s' at a first index other than the one it writes, so a work item could read an element another one writes",
+                                                 self.parShown(wbuf).cString());
+                    }
+                }
+        return (String*)0;
+        }
+
     final String* parBufferOf(IROperand* base, IRValue* selfVal, Array* ivars, Map* def)
         {
         if (base.kind() != (u8)OPK_USE)
@@ -2186,6 +2294,9 @@
         // the guard comes first in block order); its phi operand is the iv.
         iv = parInductionVariable(f, def, iv);
         IRValue* selfVal = (IRValue*)f.params().get((u32)0);
+        String* tensorWhy = parTensorDependence(f, iv, ivars, def);
+        if (tensorWhy != (String*)0)
+            return tensorWhy;
         // An array reduction's array: each chunk updates its own copy, so its
         // accesses meet no other item's (parReadGridWords read the fields).
         Set* arrBufs = new Set();
@@ -3819,6 +3930,10 @@
         // kernel would rewrite a byte two work items share.
         if (!serialBlock && lost == (String*)0 && !arrRed && !scanPass && parTouchesF4(f, new Map()))
             lostWhy = String.withCString("it reads or writes f4 array elements, two to a byte, which GPU kernels do not take yet");
+        // A block that uses a tensor has no form: GPU kernels take none yet.
+        // As the reference.
+        else if (!serialBlock && lost == (String*)0 && !arrRed && !scanPass && parTouchesTensor(f, new Map()))
+            lostWhy = String.withCString("it reads or writes tensor elements, which GPU kernels do not take yet");
         bool noForms = serialBlock || lostWhy != (String*)0;
         _mWhy = lostWhy;
         String* mslText = _parMetal && !noForms ? parMslK(f, kfUse, kmod) : (String*)0;

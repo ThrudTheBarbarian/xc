@@ -126,7 +126,9 @@ void main(void)
     String* source = (String*)0;
     Node* program = (Node*)0;
     Sema* sema = (Sema*)0;
-    for (u32 pass = (u32)0; pass < (u32)3; pass = pass + (u32)1)
+    // A tensor type: TensorStorage.xc imported and read again, as the driver does.
+    bool withTensor = false;
+    for (u32 pass = (u32)0; pass < (u32)4; pass = pass + (u32)1)
         {
         if (pass > (u32)0)
             {
@@ -142,6 +144,8 @@ void main(void)
                       String.withCString(hasAt ? "1" : "0"));
         if (!raw && packR != (u32)0)
             pp.setTailImport(Preprocessor.packTailImport(packR));
+        if (!raw && withTensor)
+            pp.setAutoImport(String.withCString("TensorStorage.xc"));
 
         // The implicit platform prelude, gated exactly as the oracle's driver
         // gates it — a Platform.xc anywhere on the search path (task #36).
@@ -172,7 +176,13 @@ void main(void)
         Parser* parser = Parser.with(tokens);
         parser.setGoalDefault(pp.goal());   // a #goal in the file, as the front end honours it
         parser.setLibraryFiles(pp.libraryFiles());
+        parser.setTensorReady(withTensor);
         program = parser.parse();
+        if (!raw && !withTensor && parser.tensorNames().count() > (u32)0)
+            {
+            withTensor = true;
+            continue;
+            }
         // uxkit/026: the oracle for this harness is `xcc-fe`, and xcc-fe
         // synthesises the designable bodies before sema. Without the same call
         // here the two sides lower DIFFERENT programs and the differential is

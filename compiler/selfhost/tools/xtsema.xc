@@ -105,7 +105,10 @@ void main(void)
     u32 packR = (u32)0;
     Sema* sema = (Sema*)0;
     Node* program = (Node*)0;
-    for (u32 pass = (u32)0; pass < (u32)2; pass = pass + (u32)1)
+    // A tensor type: read again with TensorStorage.xc imported, as the
+    // oracle reads it.
+    bool withTensor = false;
+    for (u32 pass = (u32)0; pass < (u32)4; pass = pass + (u32)1)
         {
         if (pass > (u32)0)
             {
@@ -115,6 +118,8 @@ void main(void)
             for (u32 di = (u32)0; di < defs.count(); di = di + (u32)1)
                 defineArg(pp2, (String*)defs.get(di));
             pp2.setTailImport(Preprocessor.packTailImport(packR));
+            if (withTensor)
+                pp2.setAutoImport(String.withCString("TensorStorage.xc"));
             pp = pp2;
             }
         // The implicit platform prelude, gated exactly as the oracle gates it —
@@ -156,7 +161,13 @@ void main(void)
         Parser* parser = Parser.with(tokens);
         parser.setGoalDefault(pp.goal());   // a #goal in the file, as the front end honours it
         parser.setLibraryFiles(pp.libraryFiles());
+        parser.setTensorReady(withTensor);
         program = parser.parse();
+        if (!raw && !withTensor && parser.tensorNames().count() > (u32)0)
+            {
+            withTensor = true;
+            continue;
+            }
 
         sema = Sema.make();
         // This tool dumps the tree for COMPARISON against xcc-fe --dump-sema, and

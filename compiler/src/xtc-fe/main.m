@@ -348,6 +348,7 @@ static int XTDumpAST(int argc, const char* argv[])
         }
 
     BOOL withPar = NO;
+    BOOL withTensor = NO;
 again:;
     XTDiagnosticEngine* diag = [[XTDiagnosticEngine alloc] init];
     NSString* source = nil;
@@ -366,6 +367,8 @@ again:;
         XTDumpApplyPrelude(pp, includes);
         if (withPar)
             pp.autoImport = @"Par.xc";
+        if (withTensor)
+            pp.autoImport = pp.autoImport.length ? [pp.autoImport stringByAppendingString:@";TensorStorage.xc"] : @"TensorStorage.xc";
         for (NSString* d in defines)
             {
             NSRange eq = [d rangeOfString:@"="];
@@ -400,10 +403,17 @@ again:;
     parser.goalDefault = dumpGoal;
     parser.libraryFiles = dumpLibFiles;
     parser.parAuto = parAuto;
+    parser.tensorReady = withTensor;
     XTProgramNode* program = [parser parse];
     if (parAuto && !raw && !withPar && parser.parAutoWantsRuntime)
         {
         withPar = YES;
+        goto again;
+        }
+    // A tensor type: TensorStorage.xc imported and read again, as a compile does.
+    if (!raw && !withTensor && parser.tensorNames.count)
+        {
+        withTensor = YES;
         goto again;
         }
     if (!program)
@@ -479,6 +489,7 @@ static int XTDumpSema(int argc, const char* argv[])
     // A program with a small float is read again with its routines imported
     // at the end, as a compile reads it (sema's packRoutines).
     NSUInteger packRoutines = 0;
+    BOOL withTensor = NO;
 again:;
     XTDiagnosticEngine* diag = [[XTDiagnosticEngine alloc] init];
     XTPreprocessor* pp = [[XTPreprocessor alloc] initWithDiagnostics:diag];
@@ -486,6 +497,8 @@ again:;
     XTDumpApplyPrelude(pp, includes);
     if (packRoutines)
         pp.tailImport = [XTPreprocessor packTailImport:packRoutines];
+    if (withTensor)
+        pp.autoImport = @"TensorStorage.xc";
     for (NSString* d in defines)
         {
         NSRange eq = [d rangeOfString:@"="];
@@ -511,7 +524,14 @@ again:;
                                             diagnostics:diag];
     parser.goalDefault = pp.goalDirective;     // a #goal in the file, as a compile honours it
     parser.libraryFiles = pp.libraryFiles;
+    parser.tensorReady = withTensor;
     XTProgramNode* program = [parser parse];
+    // A tensor type: TensorStorage.xc imported and read again, as a compile does.
+    if (program && !withTensor && parser.tensorNames.count)
+        {
+        withTensor = YES;
+        goto again;
+        }
     if (!program)
         {
         [diag printAll];

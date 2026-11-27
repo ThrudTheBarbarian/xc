@@ -54,6 +54,14 @@ NS_ASSUME_NONNULL_BEGIN
 // prelude's, as the preprocessor names them (XTPreprocessor.libraryFiles).
 // The runtime's own loops wrapped in blocks re-entered it.
 @property(nonatomic, nullable) NSSet<NSString*>* libraryFiles;
+// Tensor types: `tensor<T, R>` becomes the class name `__tensor_<T>_<R>`
+// (fuseTensorTypes). The names the unit uses, in order of first use.
+@property(nonatomic, readonly) NSArray<NSString*>* tensorNames;
+// Set by the driver once TensorStorage.xc is imported: the parse adds the
+// tensor classes to the program. Until then the names are class markers.
+@property(nonatomic) BOOL tensorReady;
+// The tensor class names the imported interfaces use.
+@property(nonatomic, nullable) NSArray<NSString*>* importedTensorNames;
 
 /****************************************************************************\
 |* Initialise the parser with a token stream, a type table for resolving
@@ -88,6 +96,15 @@ NS_ASSUME_NONNULL_BEGIN
 \****************************************************************************/
 - (void)addImportedOperatorShapes:(NSArray<XTASTNode*>*)decls;
 
+@end
+
+// Tensor types (XTParser+Tensors.m).
+@interface XTParser (Tensors)
+// `tensor<T, R>` becomes the class name `__tensor_<T>_<R>`; the classes join
+// the unit once tensorReady is set.
+- (void)fuseTensorTypes;
+// The class source of a tensor class name, or nil for a name that is not one.
++ (nullable NSString*)tensorClassSource:(NSString*)name;
 @end
 
 NS_ASSUME_NONNULL_END

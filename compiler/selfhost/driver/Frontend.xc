@@ -76,6 +76,7 @@ class FeOptions
     bool _parAuto;       // --par-style auto|threads|gpu (the default auto): a plain range loop becomes a par block where its shape allows
     u32 _parDeviceDefault; // --par-style's device for a block with no :device: 1 the CPU, 2 the GPU, 0 the run's choice
     bool _parAutoImport; // --par-style=auto wraps a loop in a program without Par.xc: import it
+    bool _tensorImport;  // the unit uses a tensor type: TensorStorage.xc is imported
     // Sema found a call to Object.className() or Object.newInstanceOfClass():
     // the class-name table is on (injectClassNames, and the restart in lower).
     bool _classNames;
@@ -160,6 +161,7 @@ class FeOptions
         _parAuto = true;
         _parDeviceDefault = (u32)0;
         _parAutoImport = false;
+        _tensorImport = false;
         _classNames = false;
         _atFormat = false;
         _packRoutines = (u32)0;
@@ -520,6 +522,14 @@ class FeOptions
         {
         _parAutoImport = b;
         }
+    bool tensorImport(void)
+        {
+        return _tensorImport;
+        }
+    void setTensorImport(bool b)
+        {
+        _tensorImport = b;
+        }
     bool classNames(void)
         {
         return _classNames;
@@ -591,6 +601,38 @@ class FeOptions
         if (got == (u8*)0)
             return String.withCString("");
         return String.withCString(buf);
+        }
+
+    // The tensor class names (`__tensor_<T>_<R>`) a text holds: an imported
+    // interface's, in order of first appearance. As the reference's
+    // tensorNamesInText.
+    static Array* tensorNamesInText(String* text)
+        {
+        Array* out = new Array();
+        String* key = String.withCString("__tensor_");
+        u32 n = text.byteLength();
+        u32 at = text.byteIndexOf(key, (u32)0);
+        while (at != String.notFound())
+            {
+            u32 e = at + (u32)9;
+            while (e < n)
+                {
+                u8 c = text.byteAt(e);
+                if (!((c >= (u8)'a' && c <= (u8)'z') || (c >= (u8)'A' && c <= (u8)'Z') || (c >= (u8)'0' && c <= (u8)'9') || c == (u8)'_'))
+                    break;
+                e = e + (u32)1;
+                }
+            String* nm = text.substringBytes(at, e - at);
+            if (Parser.tensorClassSource(nm) != (String*)0)
+                {
+                bool have = false;
+                for (u32 q = (u32)0; q < out.count(); q = q + (u32)1)
+                    if (((String*)out.get(q)).equals(nm)) have = true;
+                if (!have) out.add((Object*)nm);
+                }
+            at = text.byteIndexOf(key, e);
+            }
+        return out;
         }
 
     static IRModule* lower(FeOptions* o)
@@ -736,6 +778,11 @@ class FeOptions
         // A C library read from DWARF does not count: nothing in it dispatches.
         u32 xtcImports = (u32)0;
         Array* xtcLibs = new Array();   // their paths, in import order (shareStdState)
+        // The tensor classes an imported interface names: each module writes
+        // its own (a library's interface does not carry them), so the client
+        // writes them too, and they are types before the parse. As the
+        // reference.
+        Array* ifaceTensors = new Array();
             {
             Array* metas = importsWithStateOwners(pp.metadataImports());
             // Handed to the DRIVER: a wasm app's loader lists the modules it
@@ -888,10 +935,24 @@ class FeOptions
                         parser.addStructName(d.name());
                         }
                     }
+                if (im.text() != (String*)0)
+                    {
+                    Array* tn = Frontend.tensorNamesInText(im.text());
+                    for (u32 j = (u32)0; j < tn.count(); j = j + (u32)1)
+                        {
+                        String* nm = (String*)tn.get(j);
+                        bool have = false;
+                        for (u32 q = (u32)0; q < ifaceTensors.count(); q = q + (u32)1)
+                            if (((String*)ifaceTensors.get(q)).equals(nm)) have = true;
+                        if (!have) ifaceTensors.add((Object*)nm);
+                        }
+                    }
                 importedIfaces.add((Object*)im);
                 adoptedSlots.add((Object*)im);
                 }
             }
+        parser.setTensorReady(o.tensorImport());
+        parser.setImportedTensorNames(ifaceTensors);
 
         Node* program = parser.parse();
         // --par-style=auto found a loop to make a block of in a program that did not
@@ -901,6 +962,14 @@ class FeOptions
         if (parser.parAutoWantsRuntime() && !o.parAutoImport() && parRuntimeAvailable(o))
             {
             o.setParAutoImport(true);
+            return Frontend.lowerUnit(o);
+            }
+        // A tensor type: its classes stand on TensorStorage.xc. Import it, and
+        // start again, so a unit without one is unchanged. As the reference.
+        if (parser.tensorNames().count() > (u32)0 && !o.tensorImport() && program != (Node*)0
+            && parser.errors().count() == (u32)0)
+            {
+            o.setTensorImport(true);
             return Frontend.lowerUnit(o);
             }
         if (parser.parAutoTrace() != (Array*)0)
@@ -1973,6 +2042,11 @@ bool injectClassNames(Node* program, FeOptions* o, Array* ifaces, u32 xtcImports
             continue;
         if (d.name().indexOfByte((u8)'$') != String.notFound())
             continue;
+        // Nor the tensor classes (`__tensor_<T>_<R>`): values made by `new
+        // tensor<T, R>(…)` alone, which every module writes for itself. As the
+        // reference.
+        if (d.name().hasPrefix(String.withCString("__tensor_")))
+            continue;
         if (byName.get((Hashable*)d.name()) == (Object*)0)
             names.add((Object*)d.name());
         byName.set((Hashable*)d.name(), (Object*)d);
@@ -2697,6 +2771,10 @@ Preprocessor* buildPP(FeOptions* o)
     predefine(pp, o);
     if (o.parAutoImport())
         pp.setAutoImport(String.withCString("Par.xc"));
+    // Tensor types are views of a TensorStorage: imported once the parse finds
+    // one (see after the parse).
+    if (o.tensorImport())
+        pp.addAutoImport(String.withCString("TensorStorage.xc"));
     if (o.packRoutines() != (u32)0)
         pp.setTailImport(Preprocessor.packTailImport(o.packRoutines()));
     // Checked subscripts take their checks from Checked.xc: everywhere under

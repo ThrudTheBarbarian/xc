@@ -77,6 +77,12 @@ class Parser
     Array*  _parAutoFuseSaid; // what -Wpar-auto says of them: [message, token]…, said once the block is built
     Map*    _parAutoLabels;  // a lifted loop's file:line -> how many had it
     bool    _parAutoWantsRuntime; // --par-style=auto found a loop to wrap, but Par.xc was not imported
+    // Tensor types (fuseTensorTypes): the class names the unit uses, in order;
+    // whether TensorStorage.xc is imported (the classes then join the unit);
+    // the names the imported interfaces use.
+    Array*  _tensorNames;
+    bool    _tensorReady;
+    Array*  _importedTensors;
     u32     _loopDepth;     // loops open in the code being parsed (an auto par wraps an outermost one)
     u32     _parAutoDepthReads; // decisions made on _loopDepth so far (parAutoFor)
     u32     _parAutoNest;   // parAutoFor calls open
@@ -1512,6 +1518,7 @@ class Parser
     Node* parse(void)
     {
         fusePackSuffixes();
+        fuseTensorTypes();
         rewriteProtocolStaticReceivers();
         // The operators of their own shape the unit's classes define, before
         // any expression is read ("Operators a class defines").
@@ -1613,6 +1620,335 @@ class Parser
             _tokens.replaceAt(j + 1, (Object*)st);
             n = _tokens.count();
         }
+    }
+
+    // ── Tensor types ─────────────────────────────────────────────
+    // `tensor<T, R>` is a value type: a view of an ARC-managed TensorStorage
+    // (an element offset, R shapes and R strides, counted in elements), with
+    // the element type T in the static type. Each (T, R) the unit uses becomes
+    // a class the compiler writes, `__tensor_<T>_<R>`, held by value, so
+    // copies, parameters, returns, fields and scope exits retain and release
+    // the storage as for any stack instance. As the reference's
+    // XTParser+Tensors.m, text for text.
+    Array* tensorNames(void) { return _tensorNames != (Array*)0 ? _tensorNames : new Array(); }
+    void setTensorReady(bool b) { _tensorReady = b; }
+    void setImportedTensorNames(Array* a) { _importedTensors = a; }
+
+    // The canonical element name of a tensor's element token, or 0 when the
+    // token names no type at all.
+    String* tensorElemName(Token* e)
+    {
+        if (isTypeKeywordToken(e.type())) {
+            if (Parser._same(e.value(), "float")) return String.withCString("f32");
+            if (Parser._same(e.value(), "double")) return String.withCString("f64");
+            return e.value();
+        }
+        if (e.type() == (u16)tokIdentifier) return e.value();
+        return (String*)0;
+    }
+
+    // The size of one element in bits, or 0 for a type a tensor does not hold.
+    static u32 tensorElemBits(String* e)
+    {
+        if (e == (String*)0) return 0;
+        if (e.hasPrefix(String.withCString("f8$"))) return 8;
+        if (e.hasPrefix(String.withCString("f16$"))) return 16;
+        if (Parser._same(e, "i8") || Parser._same(e, "u8") || Parser._same(e, "bool") || Parser._same(e, "f8")) return 8;
+        if (Parser._same(e, "i16") || Parser._same(e, "u16") || Parser._same(e, "f16") || Parser._same(e, "bf16")) return 16;
+        if (Parser._same(e, "i32") || Parser._same(e, "u32") || Parser._same(e, "f32")) return 32;
+        if (Parser._same(e, "i64") || Parser._same(e, "u64") || Parser._same(e, "f64")) return 64;
+        if (Parser._same(e, "f4")) return 4;
+        return 0;
+    }
+
+    // An element type as the source writes it: `f8$e5m2` is `f8:pack(e5m2)`,
+    // `f8$e4m3$ieee` is `f8:pack(e4m3, ieee)`.
+    static String* tensorElemSource(String* e)
+    {
+        Array* parts = e.splitOnByte((u8)'$');
+        if (parts.count() < (u32)2) return e;
+        if (parts.count() == (u32)2)
+            return String.withFormat("%s:pack(%s)", ((String*)parts.get(0)).cString(), ((String*)parts.get(1)).cString());
+        return String.withFormat("%s:pack(%s, %s)", ((String*)parts.get(0)).cString(), ((String*)parts.get(1)).cString(),
+                                 ((String*)parts.get(2)).cString());
+    }
+
+    // A string with every `from` byte written `to`.
+    static String* tensorSwap(String* s, u8 from, u8 to)
+    {
+        String* out = new String();
+        for (u32 i = (u32)0; i < s.byteLength(); i = i + (u32)1) {
+            u8 c = s.byteAt(i);
+            out.appendByte(c == from ? to : c);
+        }
+        return out;
+    }
+
+    // `tensor<T, R>` as the source writes it, from the class name.
+    static String* tensorSpelling(String* name)
+    {
+        String* body = name.substringFromByte((u32)9);
+        u32 us = body.lastIndexOfByte((u8)'_');
+        if (us == String.notFound()) return name;
+        String* elem = Parser.tensorSwap(body.substringBytes((u32)0, us), (u8)'_', (u8)'$');
+        return String.withFormat("tensor<%s, %s>", Parser.tensorElemSource(elem).cString(),
+                                 body.substringFromByte(us + (u32)1).cString());
+    }
+
+    // `tensor < T , R >` becomes the one identifier `__tensor_<T>_<R>` (a
+    // pack's `$` written `_`), so every place that reads a type reads a class
+    // name; tensorClassSource writes the class. `new tensor<T, R>(d0, …)`
+    // becomes `__tensor_<T>_<R>_make(d0, …)`, which must have R dimensions.
+    // Once the driver has imported TensorStorage.xc the classes' tokens join
+    // the end of the unit; before that each name is a type name.
+    void fuseTensorTypes(void)
+    {
+        Array* names = new Array();
+        u32 n = _tokens.count();
+        u32 i = (u32)0;
+        while (i + (u32)2 < n) {
+            Token* tk = (Token*)_tokens.get(i);
+            if (tk.type() != (u16)tokIdentifier || !Parser._same(tk.value(), "tensor")
+                || ((Token*)_tokens.get(i + (u32)1)).type() != (u16)tokLess) {
+                i = i + (u32)1;
+                continue;
+            }
+            Token* e = (Token*)_tokens.get(i + (u32)2);
+            String* en = tensorElemName(e);
+            bool meant = (i + (u32)3 < n && ((Token*)_tokens.get(i + (u32)3)).type() == (u16)tokComma)
+                      || isTypeKeywordToken(e.type()) || (en != (String*)0 && Parser.tensorElemBits(en) > (u32)0);
+            if (!meant) {
+                i = i + (u32)1;
+                continue;
+            }
+            if (!(i + (u32)5 < n && ((Token*)_tokens.get(i + (u32)3)).type() == (u16)tokComma
+                  && ((Token*)_tokens.get(i + (u32)4)).type() == (u16)tokIntLiteral
+                  && ((Token*)_tokens.get(i + (u32)5)).type() == (u16)tokGreater)) {
+                _errorAtTok(String.withCString("a tensor type is written tensor<T, R>: an element type T and a rank R from 1 to 8, as in tensor<f32, 2>"), tk);
+                i = i + (u32)1;
+                continue;
+            }
+            u32 bits = Parser.tensorElemBits(en);
+            if (bits == (u32)0) {
+                _errorAtTok(String.withFormat("a tensor's elements are integers, bool, f64, f32, f16, bf16, f8, f4 or a pack of these, not '%s'; hold class or struct values in an array",
+                                              e.value().cString()), e);
+                en = String.withCString("u8");
+            }
+            Token* rt = (Token*)_tokens.get(i + (u32)4);
+            String* rv = rt.value();
+            bool digits = rv.byteLength() > (u32)0;
+            for (u32 k = (u32)0; k < rv.byteLength(); k = k + (u32)1)
+                if (rv.byteAt(k) < (u8)'0' || rv.byteAt(k) > (u8)'9') digits = false;
+            u32 rank = 0;
+            if (digits && rv.byteLength() < (u32)4) {
+                for (u32 k = (u32)0; k < rv.byteLength(); k = k + (u32)1)
+                    rank = rank * 10 + (u32)(rv.byteAt(k) - (u8)'0');
+            }
+            if (rank < (u32)1 || rank > (u32)8) {
+                _errorAtTok(String.withFormat("a tensor's rank is an integer from 1 to 8, not '%s'", rv.cString()), rt);
+                rank = 1;
+            }
+            String* name = String.withCString("__tensor_");
+            name.append(Parser.tensorSwap(en, (u8)'$', (u8)'_'));
+            name.appendByte((u8)'_');
+            name.append(String.withU32(rank));
+            bool have = false;
+            for (u32 k = (u32)0; k < names.count(); k = k + (u32)1)
+                if (((String*)names.get(k)).equals(name)) have = true;
+            if (!have) names.add((Object*)name);
+            Token* fused = Token.with((u16)tokIdentifier, name, tk.line(), tk.col());
+            fused.setFileId(tk.fileId());
+            for (u32 k = (u32)0; k < (u32)5; k = k + (u32)1) _tokens.removeAt(i + (u32)1);
+            _tokens.replaceAt(i, (Object*)fused);
+            n = _tokens.count();
+            i = i + (u32)1;
+        }
+        // `new tensor<T, R>(d0, …)`: the class's _make function, with R dimensions.
+        i = (u32)0;
+        while (i + (u32)2 < n) {
+            Token* nw = (Token*)_tokens.get(i);
+            Token* ct = (Token*)_tokens.get(i + (u32)1);
+            if (nw.type() != (u16)tokNew || ct.type() != (u16)tokIdentifier
+                || !ct.value().hasPrefix(String.withCString("__tensor_"))
+                || ((Token*)_tokens.get(i + (u32)2)).type() != (u16)tokLParen) {
+                i = i + (u32)1;
+                continue;
+            }
+            String* name = ct.value();
+            u32 rank = (u32)(name.byteAt(name.byteLength() - (u32)1) - (u8)'0');
+            i32 depth = 0;
+            u32 commas = 0;
+            bool any = false;
+            for (u32 j = i + (u32)2; j < n; j = j + (u32)1) {
+                u16 ty = ((Token*)_tokens.get(j)).type();
+                if (ty == (u16)tokLParen || ty == (u16)tokLBracket || ty == (u16)tokLBrace) depth = depth + 1;
+                else if (ty == (u16)tokRParen || ty == (u16)tokRBracket || ty == (u16)tokRBrace) depth = depth - 1;
+                if (depth == 0) break;
+                if (j > i + (u32)2) any = true;
+                if (depth == 1 && ty == (u16)tokComma) commas = commas + (u32)1;
+            }
+            u32 given = 0;
+            if (any) given = commas + (u32)1;
+            if (given != rank) {
+                String* dims = new String();
+                for (u32 k = (u32)0; k < rank; k = k + (u32)1) {
+                    if (k > (u32)0) dims.appendCString(", ");
+                    dims.appendFormat("d%lu", k);
+                }
+                String* sp = Parser.tensorSpelling(name);
+                String* plural = String.withCString("s");
+                if (rank == (u32)1) plural = String.withCString("");
+                _errorAtTok(String.withFormat("new %s takes %lu dimension%s, one for each index, as in new %s(%s)",
+                                              sp.cString(), rank, plural.cString(), sp.cString(), dims.cString()), nw);
+            }
+            String* mkName = String.withString(name);
+            mkName.appendCString("_make");
+            Token* a = Token.with((u16)tokIdentifier, mkName, nw.line(), nw.col());
+            a.setFileId(nw.fileId());
+            _tokens.replaceAt(i, (Object*)a);
+            _tokens.removeAt(i + (u32)1);
+            n = _tokens.count();
+            i = i + (u32)1;
+        }
+        // A struct copies its bytes and counts no references, so it cannot
+        // hold a tensor value (a pointer to one is a plain pointer).
+        for (u32 si = (u32)0; si + (u32)1 < n; si = si + (u32)1) {
+            if (((Token*)_tokens.get(si)).type() != (u16)tokStruct) continue;
+            u32 j = si + (u32)1;
+            while (j < n) {
+                u16 ty = ((Token*)_tokens.get(j)).type();
+                if (ty == (u16)tokLBrace || ty == (u16)tokSemicolon || ty == (u16)tokLParen || ty == (u16)tokRBrace) break;
+                j = j + (u32)1;
+            }
+            if (j >= n || ((Token*)_tokens.get(j)).type() != (u16)tokLBrace) continue;
+            i32 depth = 0;
+            while (j < n) {
+                Token* tj = (Token*)_tokens.get(j);
+                if (tj.type() == (u16)tokLBrace) depth = depth + 1;
+                else if (tj.type() == (u16)tokRBrace) {
+                    depth = depth - 1;
+                    if (depth == 0) break;
+                } else if (depth == 1 && tj.type() == (u16)tokIdentifier && tj.value().hasPrefix(String.withCString("__tensor_"))
+                           && !(j + (u32)1 < n && ((Token*)_tokens.get(j + (u32)1)).type() == (u16)tokStar)) {
+                    _errorAtTok(String.withFormat("a struct cannot hold a %s: a struct's copy counts no references to the tensor's storage; hold it in a class",
+                                                  Parser.tensorSpelling(tj.value()).cString()), tj);
+                }
+                j = j + (u32)1;
+            }
+        }
+        if (_importedTensors != (Array*)0) {
+            for (u32 k = (u32)0; k < _importedTensors.count(); k = k + (u32)1) {
+                String* nm = (String*)_importedTensors.get(k);
+                bool have = false;
+                for (u32 q = (u32)0; q < names.count(); q = q + (u32)1)
+                    if (((String*)names.get(q)).equals(nm)) have = true;
+                if (!have) names.add((Object*)nm);
+            }
+        }
+        _tensorNames = names;
+        for (u32 k = (u32)0; k < names.count(); k = k + (u32)1)
+            addTypeName((String*)names.get(k));
+        if (names.count() > (u32)0 && _tensorReady) {
+            String* src = new String();
+            for (u32 k = (u32)0; k < names.count(); k = k + (u32)1) {
+                String* c = Parser.tensorClassSource((String*)names.get(k));
+                if (c != (String*)0) src.append(c);
+            }
+            Lexer* lx = Lexer.with(src, String.withCString("<tensor>"));
+            Array* toks = lx.tokenise();
+            if (toks.count() > (u32)0 && ((Token*)toks.get(toks.count() - (u32)1)).type() == (u16)tokEOF)
+                toks.removeAt(toks.count() - (u32)1);
+            u32 at = _tokens.count();
+            if (at > (u32)0 && ((Token*)_tokens.get(at - (u32)1)).type() == (u16)tokEOF) at = at - (u32)1;
+            _tokens.insertAll(at, toks);
+            // The classes spell their element types as the source does.
+            fusePackSuffixes();
+        }
+    }
+
+    // The class a tensor type is: the storage, the element offset, the shapes
+    // and the strides, the index operator's get and set, and the members; then
+    // `<name>_make` (zero-filled, contiguous, row major). 0 for a name that is not
+    // a tensor class. The reference writes the same text.
+    static String* tensorClassSource(String* name)
+    {
+        if (!name.hasPrefix(String.withCString("__tensor_"))) return (String*)0;
+        String* body = name.substringFromByte((u32)9);
+        u32 us = body.lastIndexOfByte((u8)'_');
+        if (us == String.notFound()) return (String*)0;
+        String* elem = Parser.tensorSwap(body.substringBytes((u32)0, us), (u8)'_', (u8)'$');
+        String* rs = body.substringFromByte(us + (u32)1);
+        if (rs.byteLength() != (u32)1) return (String*)0;
+        u32 rank = (u32)(rs.byteAt(0) - (u8)'0');
+        u32 bits = Parser.tensorElemBits(elem);
+        if (bits == (u32)0 || rank < (u32)1 || rank > (u32)8) return (String*)0;
+        String* Es = Parser.tensorElemSource(elem);
+        string E = Es.cString();
+        string N = name.cString();
+        bool f4 = Parser._same(elem, "f4");
+        String* dims = new String();
+        String* idx = new String();
+        String* idxParams = new String();
+        String* flat = String.withCString("_offset");
+        String* count = new String();
+        String* dprod = new String();
+        for (u32 k = (u32)0; k < rank; k = k + (u32)1) {
+            if (k > (u32)0) {
+                dims.appendCString(", ");
+                idx.appendCString(", ");
+                idxParams.appendCString(", ");
+                count.appendCString(" * ");
+                dprod.appendCString(" * ");
+            }
+            dims.appendFormat("u64 d%lu", k);
+            idx.appendFormat("i%lu", k);
+            idxParams.appendFormat("u64 i%lu", k);
+            flat.appendFormat(" + i%lu * _stride[%lu]", k, k);
+            count.appendFormat("_shape[%lu]", k);
+            dprod.appendFormat("d%lu", k);
+        }
+        String* data = String.withFormat("%s* p = (%s*)_storage.data;", E, E);
+        if (f4) data = String.withCString("f4[] p = (f4[])_storage.data;");
+        String* s = new String();
+        s.appendFormat("class %s\n{\nTensorStorage* _storage;\nu64 _offset;\nu64 _shape[%lu];\nu64 _stride[%lu];\n", N, rank, rank);
+        // `new tensor<T, R>(…)`: a free function beside the class, as the
+        // result of a static method adopted and then returned is released one
+        // time too many.
+        String* mk = new String();
+        mk.appendFormat("%s %s_make(%s)\n{\n%s t;\n", N, N, dims.cString(), N);
+        for (u32 k = (u32)0; k < rank; k = k + (u32)1)
+            mk.appendFormat("t._shape[%lu] = d%lu;\n", k, k);
+        mk.appendFormat("t._stride[%lu] = 1;\n", rank - (u32)1);
+        u32 kk = rank - (u32)1;
+        while (kk > (u32)0) {
+            u32 k = kk - (u32)1;
+            mk.appendFormat("t._stride[%lu] = t._stride[%lu] * d%lu;\n", k, k + (u32)1, k + (u32)1);
+            kk = k;
+        }
+        mk.appendFormat("t._storage = TensorStorage.alloc(%s, %lu);\nreturn t;\n}\n", dprod.cString(), bits);
+        s.appendFormat("%s _get(%s) :operator(self[%s])\n{\n%s\nreturn p[%s];\n}\n", E, idxParams.cString(), idx.cString(),
+                       data.cString(), flat.cString());
+        s.appendFormat("void _set(%s, %s v) :operator(self[%s] = v)\n{\n%s\np[%s] = v;\n}\n", idxParams.cString(), E,
+                       idx.cString(), data.cString(), flat.cString());
+        s.appendCString("u64 shape(u64 k)\n{\nreturn _shape[k];\n}\n");
+        s.appendCString("u64 stride(u64 k)\n{\nreturn _stride[k];\n}\n");
+        s.appendFormat("u64 rank(void)\n{\nreturn %lu;\n}\n", rank);
+        s.appendFormat("u64 count(void)\n{\nreturn %s;\n}\n", count.cString());
+        s.appendCString("bool isContiguous(void)\n{\nu64 want = 1;\n");
+        kk = rank;
+        while (kk > (u32)0) {
+            u32 k = kk - (u32)1;
+            s.appendFormat("if (_shape[%lu] != 1 && _stride[%lu] != want)\nreturn false;\nwant = want * _shape[%lu];\n", k, k, k);
+            kk = k;
+        }
+        s.appendCString("return true;\n}\n");
+        if (f4)
+            s.appendCString("u8* bytes(void)\n{\nreturn _storage.data + (_offset >> 1);\n}\n");
+        else
+            s.appendFormat("%s* data(void)\n{\nreturn (%s*)_storage.data + _offset;\n}\n", E, E);
+        s.appendCString("}\n");
+        s.append(mk);
+        return s;
     }
 
     // Static members of a protocol (bundles-and-plugins.md §3): `P.f(args)`

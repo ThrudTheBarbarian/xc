@@ -484,6 +484,29 @@ static BOOL XTParTouchesF4(XTIRModule* module, XTIRFunction* f, NSMutableSet<NSS
     return NO;
     }
 
+// Does the function, or one it calls, use a tensor (a call of one of the
+// tensor classes' methods, `__tensor_<T>_<R>$…`, XTParser+Tensors.m)? GPU
+// kernels take no tensor yet, so such a block runs on the CPU. Mirrored in
+// the port (parTouchesTensor).
+static BOOL XTParTouchesTensor(XTIRModule* module, XTIRFunction* f, NSMutableSet<NSString*>* seen)
+    {
+    if (!f || [seen containsObject:f.name])
+        return NO;
+    [seen addObject:f.name];
+    for (XTIRBlock* b in f.blocks)
+        for (XTIRInsn* i in b.instructions)
+            {
+            if (i.opcode != XTIROpCall || !i.operands.count || i.operands[0].kind != XTIROperandKindSym)
+                continue;
+            XTIRSymbol* sym = [module symbolForId:i.operands[0].symbolId];
+            if ([sym.name hasPrefix:@"__tensor_"])
+                return YES;
+            if (sym.function && XTParTouchesTensor(module, sym.function, seen))
+                return YES;
+            }
+    return NO;
+    }
+
 // The parity each chunk of a block writing f4 arrays starts on, so that no
 // two threads share a byte (`pairs=<p>` on its header line, Par.cut): 0 for
 // the work items k * i + c, k odd and c even, 1 for c odd; 2 to run on one
@@ -1736,7 +1759,12 @@ static BOOL gEmitsWGSL = NO;
         BOOL f4Pass = !serialBlock && !lost && !arrRed && !scanPass && XTParTouchesF4(module, f, [NSMutableSet set]);
         if (f4Pass)
             mslWhy = ptxWhy = wgslWhy = spvWhy = XTParSmallFloatWhy;
-        BOOL noForms = serialBlock || lost || scanPass || f4Pass;
+        // A block that uses a tensor has no form: GPU kernels take none yet.
+        BOOL tensorPass = !serialBlock && !lost && !arrRed && !scanPass && !f4Pass &&
+                          XTParTouchesTensor(module, f, [NSMutableSet set]);
+        if (tensorPass)
+            mslWhy = ptxWhy = wgslWhy = spvWhy = @"it reads or writes tensor elements, which GPU kernels do not take yet";
+        BOOL noForms = serialBlock || lost || scanPass || f4Pass || tensorPass;
         NSString* msl = gEmitsMetal && !noForms ? metalOf(&mslWhy) : nil;
         NSString* ptx = gEmitsPTX && !noForms && !arrRed ? ptxOf(&ptxWhy) : nil;
         NSString* wgsl = gEmitsWGSL && !noForms && !arrRed ? wgslOf(&wgslWhy) : nil;
@@ -2711,6 +2739,79 @@ static NSString* shownIndex(XTParIndex x)
     return (k >= 1 && (NSUInteger)k <= ivars.count) ? ivars[(NSUInteger)k - 1] : nil;
     }
 
+// The captured tensor whose address `base` is (the block object's field k,
+// or a pointer loaded from it): its name, or nil. Mirrored in the port.
+- (nullable NSString*)tensorOf:(XTIROperand*)base self:(XTIRValueId)selfId ivars:(NSArray<NSString*>*)ivars
+                          defs:(NSDictionary<NSNumber*, XTIRInsn*>*)def
+    {
+    if (base.kind != XTIROperandKindUse)
+        return nil;
+    XTIRInsn* d = def[@(base.valueId)];
+    if (d.opcode == XTIROpLoad && d.operands.count && d.operands[0].kind == XTIROperandKindUse)
+        d = def[@(d.operands[0].valueId)];
+    if (d.opcode != XTIROpFieldAddr || d.operands.count < 2 || d.operands[0].kind != XTIROperandKindUse ||
+        d.operands[0].valueId != selfId || d.operands[1].kind != XTIROperandKindImmI)
+        return nil;
+    int64_t k = d.operands[1].intValue;
+    return (k >= 1 && (NSUInteger)k <= ivars.count) ? ivars[(NSUInteger)k - 1] : nil;
+    }
+
+/****************************************************************************\
+|* Tensor elements in a block (XTParser+Tensors.m): `t[i, j]` is a call of the
+|* tensor class's _get or _set, the tensor's address first and its first
+|* index next. Two tensor values may share one storage, so a block writes
+|* through one tensor only, and each work item keeps to its own first index:
+|* every write's, and every read's of the written tensor, is the one
+|* k * i + c with k != 0. The dependence, or nil. Mirrored in the port.
+\****************************************************************************/
+- (nullable NSString*)tensorDependenceIn:(XTIRFunction*)f
+                                      iv:(XTIRValueId)iv
+                                    self:(XTIRValueId)selfId
+                                   ivars:(NSArray<NSString*>*)ivars
+                                    defs:(NSDictionary<NSNumber*, XTIRInsn*>*)def
+    {
+    NSString* wbuf = nil;
+    int64_t wk = 0, wc = 0;
+    for (int pass = 0; pass < 2; pass++)
+        for (XTIRBlock* b in f.blocks)
+            for (XTIRInsn* i in b.instructions)
+                {
+                if (i.opcode != XTIROpCall || i.operands.count < 3 || i.operands[0].kind != XTIROperandKindSym)
+                    continue;
+                NSString* sn = [self.module symbolForId:i.operands[0].symbolId].name;
+                if (![sn hasPrefix:@"__tensor_"] || ![sn hasSuffix:(pass == 0 ? @"$_set" : @"$_get")])
+                    continue;
+                NSString* buf = [self tensorOf:i.operands[1] self:selfId ivars:ivars defs:def];
+                XTParIndex x = [self indexOf:i.operands[2] iv:iv defs:def depth:0];
+                if (pass == 0)
+                    {
+                    if (!buf)
+                        return @"writes a tensor it cannot name, which may share a storage with another, so two work items "
+                               @"could write one element";
+                    if (wbuf && ![buf isEqualToString:wbuf])
+                        return [NSString stringWithFormat:@"writes the tensors '%@' and '%@', which may share one storage, "
+                                                          @"so two work items could write one element; write one tensor in a block",
+                                                          shownName(wbuf), shownName(buf)];
+                    if (!x.affine || x.k == 0)
+                        return [NSString stringWithFormat:@"writes the tensor '%@' at a first index that is not k * i + c, "
+                                                          @"so two work items could write one element",
+                                                          shownName(buf)];
+                    if (wbuf && (x.k != wk || x.c != wc))
+                        return [NSString stringWithFormat:@"writes the tensor '%@' at two first indices, so two work items "
+                                                          @"could write one element",
+                                                          shownName(buf)];
+                    wbuf = buf;
+                    wk = x.k;
+                    wc = x.c;
+                    }
+                else if (wbuf && (!buf || [buf isEqualToString:wbuf]) && !(x.affine && x.k == wk && x.c == wc))
+                    return [NSString stringWithFormat:@"reads the tensor '%@' at a first index other than the one it writes, "
+                                                      @"so a work item could read an element another one writes",
+                                                      shownName(wbuf)];
+                }
+    return nil;
+    }
+
 // The work item's index: the phi the loop's guard compares (not simply the
 // first phi, which may be a reduction's accumulator). Mirrored in the port.
 - (XTIRValueId)inductionVariableOf:(XTIRFunction*)f defs:(NSDictionary<NSNumber*, XTIRInsn*>*)def first:(XTIRValueId)firstPhi
@@ -3068,6 +3169,9 @@ static BOOL parIsComputeOp(XTIROpcode op)
     // in block order); its phi operand is the iv. Mirrored in the port.
     XTIRValueId iv = [self inductionVariableOf:f defs:def first:firstPhi];
     XTIRValueId selfId = (XTIRValueId)0; // parameter n is value n; self is the first
+    NSString* tensorWhy = [self tensorDependenceIn:f iv:iv self:selfId ivars:ivars defs:def];
+    if (tensorWhy)
+        return tensorWhy;
     // An array reduction's array: each chunk updates its own copy, so its
     // accesses meet no other item's (readGridWords: read the fields).
     NSMutableSet<NSString*>* arrBufs = [NSMutableSet set];

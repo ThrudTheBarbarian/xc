@@ -1949,6 +1949,27 @@ class Sema
             for (u32 bi = (u32)0; bi < decl.kidCount(); bi = bi + (u32)1)
                 if (decl.kid(bi).kind() == (u16)nkBlock)
                     cbHasBody = true;
+            // C has no tensor: a function C calls or defines takes the
+            // elements' pointer instead. As the reference.
+            if (decl.hasFlag((u32)NF_CABI) || decl.hasFlag((u32)NF_EXTERN) || (decl.hasFlag((u32)NF_VARARGS) && !cbHasBody))
+                {
+                for (u32 pi = (u32)0; pi < decl.kidCount(); pi = pi + (u32)1)
+                    {
+                    Node* tp = decl.kid(pi);
+                    if (tp.kind() == (u16)nkParam && tp.op() != 0 && Sema.tensorRank(tp.op()) > (u32)0)
+                        _errorAt(String.withFormat("C has no tensor type, so '%s' cannot take '%s' as '%s': pass t.data() and the shape",
+                                                   decl.name().cString(), tp.name().cString(), tp.op().cString()), tp);
+                    }
+                String* trest = decl.op();
+                while (trest != 0)
+                    {
+                    String* one = firstReturn(trest);
+                    if (Sema.tensorRank(one.trimmed()) > (u32)0)
+                        _errorAt(String.withFormat("C has no tensor type, so '%s' cannot return '%s'", decl.name().cString(),
+                                                   one.trimmed().cString()), decl);
+                    trest = one.byteLength() < trest.byteLength() ? trest.substringFromByte(one.byteLength() + 1) : (String*)0;
+                    }
+                }
             if (decl.hasFlag((u32)NF_CABI) || (decl.hasFlag((u32)NF_VARARGS) && !cbHasBody))
                 {
                 // A target whose C has no _Float16 or __bf16 (wasm32, m68k,
@@ -5063,7 +5084,14 @@ class Sema
             {
             Node* call = opCallOf((Node*)cands.get(i), (Node*)owners.get(i), ops, at);
             calls.add((Object*)call);
-            u32 sc = scoreCandidate((Node*)cands.get(i), call, 1);
+            // A tensor's get and set are its only index operators, and take
+            // what a call of them takes: an integer of any width for an index
+            // (tensorIndexOK), and for the element what converts to it (a
+            // literal takes the element's type). The call reports a value
+            // that does not convert. As the reference.
+            u32 sc = (u32)0;
+            if (Sema.tensorRank(((Node*)owners.get(i)).name()) == (u32)0)
+                sc = scoreCandidate((Node*)cands.get(i), call, 1);
             if (sc == Overload.noMatch())
                 continue;
             if (sc < best)
@@ -5495,6 +5523,60 @@ class Sema
         return (Node*)0;
         }
 
+    // A tensor class's rank (the parser's fuseTensorTypes names it
+    // `__tensor_<T>_<R>`), or 0 for any other class.
+    static u32 tensorRank(String* name)
+        {
+        if (name == 0 || !name.hasPrefix(String.withCString("__tensor_")) || name.byteLength() < (u32)12)
+            return 0;
+        return (u32)(name.byteAt(name.byteLength() - (u32)1) - (u8)'0');
+        }
+
+    // A tensor's index: exactly R indices, each an integer of any width. false
+    // after reporting what to write; true for any other class. As the
+    // reference's tensorIndexOK.
+    bool tensorIndexOK(Node* cls, Array* idx, String* range, Node* at)
+        {
+        u32 rank = Sema.tensorRank(cls.name());
+        if (rank == (u32)0)
+            return true;
+        if (range != 0)
+            {
+            _errorAt(String.withFormat("'%s' takes no range index; index one element at a time", cls.name().cString()), at);
+            return false;
+            }
+        if (idx.count() != rank)
+            {
+            String* ex = new String();
+            String* names = String.withCString("ijklmnop");
+            for (u32 k = (u32)0; k < rank; k = k + (u32)1)
+                {
+                if (k > (u32)0)
+                    ex.appendCString(", ");
+                ex.appendByte(names.byteAt(k));
+                }
+            String* noun = String.withCString("ices");
+            if (rank == (u32)1)
+                noun = String.withCString("ex");
+            _errorAt(String.withFormat("'%s' takes %lu ind%s, one for each dimension, as in t[%s]", cls.name().cString(),
+                                       rank, noun.cString(), ex.cString()), at);
+            return false;
+            }
+        for (u32 k = (u32)0; k < idx.count(); k = k + (u32)1)
+            {
+            Node* x = (Node*)idx.get(k);
+            String* xt = x.ty();
+            if (xt != 0 && !Types.isInteger(xt) && !Types.isEnumName(xt))
+                {
+                Array* one = new Array();
+                one.add((Object*)x);
+                _errorAt(String.withFormat("a tensor index is an integer, not '%s'", opTypes(one, 0).cString()), at);
+                return false;
+                }
+            }
+        return true;
+        }
+
     // The get call of an index node on a class with an index operator, or 0
     // after reporting why there is none.
     Node* indexGetCallOf(Node* n, Node* cls)
@@ -5506,6 +5588,8 @@ class Sema
             _errorAt(String.withFormat("a range index on '%s' needs both bounds", cls.name().cString()), n);
             return (Node*)0;
             }
+        if (!tensorIndexOK(cls, idx, range, n))
+            return (Node*)0;
         String* shape = Sema.indexShape(idx.count(), range, false);
         String* op = Sema.indexSpelling(range, false);
         if (!opClassDefines(cls, shape) && opClassDefines(cls, Sema.indexShape(idx.count(), range, true)))
@@ -5784,6 +5868,24 @@ class Sema
                 _errorAt(String.withFormat("a range index on '%s' needs both bounds", icls.name().cString()), lhs);
                 return true;
                 }
+            if (!tensorIndexOK(icls, idx, range, lhs))
+                return true;
+            // A literal stored into a tensor of small floats takes the
+            // element's type, as it does stored into a variable (`h[i] = 0.5`).
+            // As the reference.
+            if (bop == 0 && Sema.tensorRank(icls.name()) > (u32)0)
+                for (u32 mi = (u32)0; mi < icls.kidCount(); mi = mi + (u32)1)
+                    {
+                    Node* m = icls.kid(mi);
+                    if (m.kind() != (u16)nkMethodDecl || m.name() == 0 || !m.name().equals(String.withCString("_set")))
+                        continue;
+                    Node* lastP = (Node*)0;
+                    for (u32 pi = (u32)0; pi < m.kidCount(); pi = pi + (u32)1)
+                        if (m.kid(pi).kind() == (u16)nkParam)
+                            lastP = m.kid(pi);
+                    if (lastP != (Node*)0 && lastP.op() != 0 && Types.isPack(lastP.op()))
+                        packAdoptLiteral(n.kid(1), lastP.op());
+                    }
             String* setShape = Sema.indexShape(idx.count(), range, true);
             String* setOp = Sema.indexSpelling(range, true);
             Node* value = n.kid(1);
@@ -5921,6 +6023,25 @@ class Sema
         // below, which would otherwise fold `nil + 1` to a number. The literal
         // is the 0 the lowering has always seen, so a comparison's IR is
         // unchanged. The messages are the reference's, word for word.
+        // Tensor values have no equality: two views may share a storage or hold
+        // equal elements, and neither is what `==` would say. As the reference.
+        if (_isOp(n.op(), "==") || _isOp(n.op(), "!="))
+            {
+            String* tl = n.kid((u32)0).ty();
+            String* tr = n.kid((u32)1).ty();
+            String* tt = (String*)0;
+            if (tl != 0 && Sema.tensorRank(tl) > (u32)0)
+                tt = tl;
+            else if (tr != 0 && Sema.tensorRank(tr) > (u32)0)
+                tt = tr;
+            if (tt != (String*)0)
+                {
+                _errorAt(String.withFormat("'%s' has no '%s': compare the elements, or the shapes and the data() pointers",
+                                           tt.cString(), n.op().cString()), n);
+                n.setTy(String.withCString("bool"));
+                return;
+                }
+            }
         bool leftNil = n.kid((u32)0).kind() == (u16)nkInt && n.kid((u32)0).nilLit();
         bool rightNil = n.kid((u32)1).kind() == (u16)nkInt && n.kid((u32)1).nilLit();
         if (leftNil || rightNil)
@@ -6483,6 +6604,21 @@ class Sema
     // left for the dispatch pass rather than guessed at.
     void typeCall(Node* n)
         {
+        // `new tensor<T, R>(d0, …)` (the parser's fuseTensorTypes): the
+        // dimensions are integers. As the reference.
+        if (n.name() != 0 && n.name().hasPrefix(String.withCString("__tensor_")) && n.name().hasSuffix(String.withCString("_make")))
+            for (u32 ai = (u32)0; ai < n.kidCount(); ai = ai + (u32)1)
+                {
+                String* at = n.kid(ai).ty();
+                if (at != 0 && !Types.isInteger(at) && !Types.isEnumName(at))
+                    {
+                    Array* one = new Array();
+                    one.add((Object*)n.kid(ai));
+                    _errorAt(String.withFormat("a tensor's dimensions are integers, not '%s'", opTypes(one, 0).cString()), n);
+                    n.setTy(String.withCString("u8"));
+                    return;
+                    }
+                }
         if (typeIntrinsic(n))
             return;
         // A bare call inside a class body reaches that class's own methods
@@ -7442,6 +7578,17 @@ class Sema
             {
             n.setTy(String.withString(owner));
             return;
+            }
+        // A tensor's members: an f4 element has no byte address, so an f4
+        // tensor has bytes() and no data(). As the reference.
+        if (Sema.tensorRank(owner) > (u32)0)
+            {
+            if (owner.hasPrefix(String.withCString("__tensor_f4_")) && owner.byteLength() == (u32)13 && _isOp(n.name(), "data"))
+                {
+                _errorAt(String.withCString("an f4 element has no byte address, so an f4 tensor has no data(); t.bytes() gives its bytes, two elements to each, the first in the low nibble"), n);
+                n.setTy(String.withCString("u8"));
+                return;
+                }
             }
         // Found on the receiver's own class, or inherited — and if inherited,
         // the call records WHICH class it came from.

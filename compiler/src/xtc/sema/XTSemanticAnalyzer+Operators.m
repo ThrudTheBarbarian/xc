@@ -706,7 +706,13 @@ static NSString* XTPatternTextFor(XTMethodDeclNode* req, XTMethodDeclNode* m)
         NSMutableArray<XTType*>* pt = [NSMutableArray array];
         for (XTParamNode* p in cands[i].parameters)
             [pt addObject:p.paramType];
-        NSInteger sc = [self scoreCandidateParamTypes:pt isVarArgs:NO arguments:call.arguments];
+        // A tensor's get and set are its only index operators, and take what a
+        // call of them takes: an integer of any width for an index
+        // (tensorIndexOK), and for the element what converts to it (a literal
+        // takes the element's type). The call reports a value that does not
+        // convert. As the port.
+        NSInteger sc = XTTensorRank(owners[i]) > 0 ? 0
+                                                   : [self scoreCandidateParamTypes:pt isVarArgs:NO arguments:call.arguments];
         if (sc == NSIntegerMax)
             continue;
         if (sc < best)
@@ -1109,6 +1115,53 @@ static void XTIndexParts(XTASTNode* node, XTASTNode* _Nullable* _Nonnull base,
     }
 
 /****************************************************************************\
+|* A tensor's index (XTParser+Tensors.m): exactly R indices, each an integer
+|* of any width. NO after reporting what to write; YES for any other class.
+|* As the port's tensorIndexOK.
+\****************************************************************************/
+static NSInteger XTTensorRank(XTASTNode* cls)
+    {
+    NSString* n = XTOwnerName(cls);
+    if (![n hasPrefix:@"__tensor_"] || n.length < 12)
+        return 0;
+    return [n substringFromIndex:n.length - 1].integerValue;
+    }
+
+- (BOOL)tensorIndexOK:(XTASTNode*)cls indices:(NSArray<XTASTNode*>*)idx range:(nullable NSString*)range at:(XTSourceLocation*)loc
+    {
+    NSInteger rank = XTTensorRank(cls);
+    if (rank == 0)
+        return YES;
+    NSString* n = XTOwnerName(cls);
+    if (range)
+        {
+        [self.diagnostics emitError:[NSString stringWithFormat:@"'%@' takes no range index; index one element at a time", n]
+                                 at:loc];
+        return NO;
+        }
+    if ((NSInteger)idx.count != rank)
+        {
+        NSMutableString* ex = [NSMutableString string];
+        NSArray<NSString*>* names = @[ @"i", @"j", @"k", @"l", @"m", @"n", @"o", @"p" ];
+        for (NSInteger k = 0; k < rank; k++)
+            [ex appendFormat:@"%@%@", k ? @", " : @"", names[k]];
+        [self.diagnostics emitError:[NSString stringWithFormat:@"'%@' takes %ld ind%@, one for each dimension, as in t[%@]",
+                                                               n, (long)rank, rank == 1 ? @"ex" : @"ices", ex]
+                                 at:loc];
+        return NO;
+        }
+    for (XTASTNode* x in idx)
+        if (x.resolvedType && !x.resolvedType.isInteger)
+            {
+            [self.diagnostics emitError:[NSString stringWithFormat:@"a tensor index is an integer, not '%@'",
+                                                                   [self describeArgTypes:@[ x ]]]
+                                     at:loc];
+            return NO;
+            }
+    return YES;
+    }
+
+/****************************************************************************\
 |* The get call of an index node on a class with an index operator, or nil
 |* after reporting why there is none.
 \****************************************************************************/
@@ -1124,6 +1177,8 @@ static void XTIndexParts(XTASTNode* node, XTASTNode* _Nullable* _Nonnull base,
                                  at:node.location];
         return nil;
         }
+    if (![self tensorIndexOK:cls indices:idx range:range at:node.location])
+        return nil;
     NSString* shape = XTIndexShape(idx.count, range, NO);
     NSString* op = XTIndexSpelling(range, NO);
     if (![self operatorClass:cls defines:shape] && [self operatorClass:cls defines:XTIndexShape(idx.count, range, YES)])
@@ -1345,6 +1400,14 @@ static void XTSharedLvalue(XTASTNode* lv, NSMutableArray<XTASTNode*>* out)
                                      at:lhs.location];
             return YES;
             }
+        if (![self tensorIndexOK:icls indices:idx range:range at:lhs.location])
+            return YES;
+        // A literal stored into a tensor of small floats takes the element's
+        // type, as it does stored into a variable (`h[i] = 0.5`). As the port.
+        if (!bop && XTTensorRank(icls) > 0)
+            for (XTMethodDeclNode* m in XTOwnerMethods(icls))
+                if ([m.methodName isEqualToString:@"_set"] && m.parameters.count && m.parameters.lastObject.paramType.isFloatPack)
+                    [self packAdoptLiteral:node.rhs to:m.parameters.lastObject.paramType];
         NSString* setShape = XTIndexShape(idx.count, range, YES);
         NSString* setOp = XTIndexSpelling(range, YES);
         XTASTNode* value = node.rhs;

@@ -2211,6 +2211,18 @@ static NSInteger xtIntWidth(XTType* t)
         [self checkVarargForwardAt:node.location];
     for (NSUInteger i = 0; i < node.arguments.count; i++)
         [self analyzeArgument:node.arguments[i] withHint:[self parameterHintForBareCall:node argument:i]];
+    // `new tensor<T, R>(d0, …)` (XTParser+Tensors.m): the dimensions are
+    // integers. As the port.
+    if ([node.calleeName hasPrefix:@"__tensor_"] && [node.calleeName hasSuffix:@"_make"])
+        for (XTASTNode* a in node.arguments)
+            if (a.resolvedType && !a.resolvedType.isInteger)
+                {
+                [self.diagnostics emitError:[NSString stringWithFormat:@"a tensor's dimensions are integers, not '%@'",
+                                                                       [self describeArgTypes:@[ a ]]]
+                                         at:node.location];
+                node.resolvedType = [XTType u8Type];
+                return;
+                }
     // Intercept varargs intrinsics (va_start / va_end / va_arg_*) before
     // the normal function-lookup path. The intrinsics share no
     // declaration with user code — they're recognised by name and
@@ -3963,6 +3975,19 @@ static NSInteger XTFmtWrapperIndex(BOOL isVarArgs, NSArray<XTParamNode*>* params
         // normal method-resolution path so their version is called.
         }
 
+    if (className && [className hasPrefix:@"__tensor_"])
+        {
+        // A tensor's members (XTParser+Tensors.m): an f4 element has no byte
+        // address, so an f4 tensor has bytes() and no data(). As the port.
+        if ([className hasPrefix:@"__tensor_f4_"] && className.length == 13 && [node.methodName isEqualToString:@"data"])
+            {
+            [self.diagnostics emitError:@"an f4 element has no byte address, so an f4 tensor has no data(); t.bytes() gives "
+                                        @"its bytes, two elements to each, the first in the low nibble"
+                                     at:node.location];
+            node.resolvedType = [XTType u8Type];
+            return;
+            }
+        }
     if (className)
         {
         XTClassDeclNode* cls = self.classesByName[className];

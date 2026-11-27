@@ -45,6 +45,7 @@
     NSUInteger _goalDirective;   // the unit's #goal, read after preprocessing
     NSSet<NSString*>* _libraryFiles;   // the library's files, which --par-style=auto leaves alone
     BOOL _parAutoImport;               // --par-style=auto wraps a loop in a program without Par.xc: import it
+    BOOL _tensorImport;                // the unit uses a tensor type: TensorStorage.xc is imported
     NSArray<NSString*>* _stdlibDirs;   // the preprocessor's standard-library directories
     NSMutableSet<NSString*>* _noDebugInfoWarned;   // libraries already warned about, once across a --par-style=auto restart
     BOOL _classNamesUsed;              // sema found a call to Object.className()/newInstanceOfClass(): the class-name table is on
@@ -993,7 +994,9 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
         XTClassDeclNode* c = (XTClassDeclNode*)d;
         // `$` cannot occur in a name anybody wrote: those are the compiler's
         // own classes (block shapes), which no one can name.
-        if (c.isExternal || c.isCategory || [c.className containsString:@"$"])
+        // Nor the tensor classes (`__tensor_<T>_<R>`): values made by `new
+        // tensor<T, R>(…)` alone, which every module writes for itself.
+        if (c.isExternal || c.isCategory || [c.className containsString:@"$"] || [c.className hasPrefix:@"__tensor_"])
             continue;
         byName[c.className] = c;
         }
@@ -1320,11 +1323,39 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
 // verified IR module on success or nil on any frontend error. Both
 // compileFile: (in-process backend) and xtc-fe (writes IR text and exits)
 // call this — the split keeps the frontend in one canonical place.
+/****************************************************************************\
+|* The tensor class names (`__tensor_<T>_<R>`) a text holds: an imported
+|* interface's, in order of first appearance. Mirrored in the port.
+\****************************************************************************/
++ (NSArray<NSString*>*)tensorNamesInText:(NSString*)text
+    {
+    NSMutableArray<NSString*>* out = [NSMutableArray array];
+    NSUInteger n = text.length;
+    NSRange r = [text rangeOfString:@"__tensor_"];
+    while (r.location != NSNotFound)
+        {
+        NSUInteger e = r.location + r.length;
+        while (e < n)
+            {
+            unichar c = [text characterAtIndex:e];
+            if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_'))
+                break;
+            e++;
+            }
+        NSString* nm = [text substringWithRange:NSMakeRange(r.location, e - r.location)];
+        if ([XTParser tensorClassSource:nm] && ![out containsObject:nm])
+            [out addObject:nm];
+        r = [text rangeOfString:@"__tensor_" options:0 range:NSMakeRange(e, n - e)];
+        }
+    return out;
+    }
+
 - (nullable XTIRModule*)compileFrontendForFile:(NSString*)inputFile
     {
     _classNamesUsed = NO;
     _atFmtUsed = NO;
     _packRoutines = 0;
+    _tensorImport = NO;
     return [self frontendPassForFile:inputFile];
     }
 
@@ -1439,6 +1470,10 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
         pp.platformPrelude = @"Platform.xc";
     if (_parAutoImport)
         pp.autoImport = @"Par.xc";
+    // Tensor types are views of a TensorStorage: imported once the parse
+    // finds one (see after the parse).
+    if (_tensorImport)
+        pp.autoImport = pp.autoImport.length ? [pp.autoImport stringByAppendingString:@";TensorStorage.xc"] : @"TensorStorage.xc";
     if (_packRoutines)
         pp.tailImport = [XTPreprocessor packTailImport:_packRoutines];
     // Checked subscripts take their checks from Checked.xc: everywhere under
@@ -1733,6 +1768,17 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     // Reconstruct each imported xtc module's declarations (classes/protocols/
     // enums) into the type table; collect the decl nodes to prepend after parse.
     NSMutableArray<XTASTNode*>* importedXtcDecls = [NSMutableArray array];
+    // The tensor classes an imported interface names: each module writes its
+    // own (a library's interface does not carry them), so the client writes
+    // them too, and they are classes before the interface is read.
+    NSMutableArray<NSString*>* ifaceTensors = [NSMutableArray array];
+    for (NSString* json in xtcLibJsons)
+        for (NSString* nm in [XTCompilerDriver tensorNamesInText:json])
+            if (![ifaceTensors containsObject:nm])
+                [ifaceTensors addObject:nm];
+    for (NSString* nm in ifaceTensors)
+        if (![tt typeForName:nm])
+            [tt registerType:[[XTType alloc] initWithKind:XTTypeKindClass displayName:nm] forName:nm];
     NSMutableDictionary* impProtoSlots = [NSMutableDictionary dictionary];
     NSMutableDictionary* impMethodSlots = [NSMutableDictionary dictionary];
     for (NSUInteger li = 0; li < xtcLibJsons.count; li++)
@@ -1810,6 +1856,8 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     // classes and protocols define, so the parse reads them as it reads the
     // unit's own.
     [parser addImportedOperatorShapes:importedXtcDecls];
+    parser.tensorReady = _tensorImport;
+    parser.importedTensorNames = ifaceTensors;
     // Loops become blocks only where a block has threads to run on: the
     // arm64, x86-64, win64 and wasm32 back ends. On xt6502, the Atari and
     // arm9 a block runs serially, and the lifting only moves the loop's code.
@@ -1844,6 +1892,14 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
         [self parRuntimeAvailable])
         {
         _parAutoImport = YES;
+        [_diagnostics truncateToCount:diagMark];
+        return [self frontendPassForFile:inputFile];
+        }
+    // A tensor type: its classes stand on TensorStorage.xc. Import it, and
+    // start again, so a unit without one is unchanged.
+    if (parser.tensorNames.count && !_tensorImport && ast && !_diagnostics.hasFatalError)
+        {
+        _tensorImport = YES;
         [_diagnostics truncateToCount:diagMark];
         return [self frontendPassForFile:inputFile];
         }

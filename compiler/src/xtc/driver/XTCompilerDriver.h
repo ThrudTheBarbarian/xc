@@ -97,6 +97,8 @@ NS_ASSUME_NONNULL_BEGIN
 |* on any frontend error (errors are printed via the diagnostic engine).
 \****************************************************************************/
 - (nullable XTIRModule *)compileFrontendForFile:(NSString *)inputFile;
+/// The tensor class names (`__tensor_<T>_<R>`) a text holds, in order.
++ (NSArray<NSString *> *)tensorNamesInText:(NSString *)text;
 
 /****************************************************************************\
 |* Print the C interface this target auto-imports (the libc the driver finds

@@ -242,8 +242,52 @@ class Types
     // diagnostic's text passes through here (Frontend.printDiagnostic). An
     // f4 array reference, spelled `f4*` inside, is written `f4[]`. As the
     // reference's XTPackSpelling.
-    static String* packSpelling(String* text)
+    // A tensor class name, `__tensor_<T>_<R>` (the parser's fuseTensorTypes,
+    // a pack's `$` written `_`), as the source writes it: `tensor<T, R>`, the
+    // element's pack then spelled by packSpelling. As the reference's
+    // XTTensorSpelling.
+    static String* tensorSpelling(String* text)
         {
+        if (text == 0 || text.byteIndexOf(String.withCString("__tensor_")) == String.notFound())
+            return text;
+        u32 n = text.byteLength();
+        String* out = String.withCString("");
+        u32 i = 0;
+        while (i < n)
+            {
+            if (i + 9 < n && text.byteAt(i) == (u8)'_' && text.byteAt(i + 1) == (u8)'_'
+                && text.substringBytes(i, (u32)9).equals(String.withCString("__tensor_"))
+                && (i == 0 || !Types.isIdentByte(text.byteAt(i - 1))))
+                {
+                u32 e = i + 9;
+                while (e < n && Types.isIdentByte(text.byteAt(e)))
+                    e = e + 1;
+                // [elem]_[rank], the rank one digit 1..8.
+                if (e - i >= 12 && text.byteAt(e - 2) == (u8)'_' && text.byteAt(e - 1) >= (u8)'1'
+                    && text.byteAt(e - 1) <= (u8)'8')
+                    {
+                    out.appendCString("tensor<");
+                    for (u32 k = i + 9; k < e - 2; k = k + 1)
+                        {
+                        u8 c = text.byteAt(k);
+                        out.appendByte(c == (u8)'_' ? (u8)'$' : c);
+                        }
+                    out.appendCString(", ");
+                    out.appendByte(text.byteAt(e - 1));
+                    out.appendCString(">");
+                    i = e;
+                    continue;
+                    }
+                }
+            out.appendByte(text.byteAt(i));
+            i = i + 1;
+            }
+        return out;
+        }
+
+    static String* packSpelling(String* text0)
+        {
+        String* text = Types.tensorSpelling(text0);
         if (text == 0 || (text.byteIndexOf(String.withCString("$")) == String.notFound()
                           && text.byteIndexOf(String.withCString("f4*")) == String.notFound()))
             return text;

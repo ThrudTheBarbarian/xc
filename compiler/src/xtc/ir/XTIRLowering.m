@@ -4585,6 +4585,50 @@ static NSString* XTDescribeNodeKind(XTASTNodeKind k)
         resultType:nil];
     }
 
+// A checked build's tensor index (XTParser+Tensors.m): `t[i, j]` is a call of
+// the class's _get or _set, and before it each index is checked against its
+// dimension's shape (the instance's `_shape[k]`) as a fixed array's subscript
+// is, with the dimension in the site: `_xt_check_bounds_n(&_shape[k], i_k,
+// _shape[k], "file:line:col, dimension k")`. As the port.
+- (void)emitTensorBoundsChecks:(XTIRValue*)recv
+                           cls:(XTIRClassInfo*)ci
+                          name:(NSString*)name
+                          args:(NSArray<XTIRValue*>*)args
+                            at:(XTSourceLocation*)loc
+    {
+    if (XTIRRuntimeIsRuntime(self.currentFunction.name))
+        return;
+    NSUInteger rank = [name substringFromIndex:name.length - 1].integerValue;
+    NSNumber* slot = ci.ivarFieldIndex[@"_shape"];
+    if (!slot)
+        return;
+    XTIRType* u64 = [XTIRType u64Type];
+    XTIRType* elemPtrIR = [XTIRType ptrToType:u64 window:XTIRWindowUnbanked];
+    for (NSUInteger k = 0; k < rank && k < args.count; k++)
+        {
+        XTIRValue* base = [self emitFieldAddr:recv fieldIndex:slot.unsignedIntegerValue resultType:elemPtrIR];
+        XTIRValue* kv = [self emitInsnOpcode:XTIROpConst
+                                      result:[XTIRType u16Type]
+                                    operands:@[ [XTIROperand immIWithType:[XTIRType u16Type] value:(int64_t)k] ]];
+        XTIRValue* ea = [self emitInsnOpcode:XTIROpElementAddr
+                                      result:elemPtrIR
+                                    operands:@[ [XTIROperand useWithValueId:base.valueId],
+                                                [XTIROperand useWithValueId:kv.valueId] ]];
+        XTIRValue* shape = [self emitLoadRaw:ea pointeeType:u64];
+        NSString* site = [NSString stringWithFormat:@"%@:%lu:%lu, dimension %lu",
+                                                    loc.filename.lastPathComponent ?: @"?",
+                                                    (unsigned long)loc.line, (unsigned long)loc.column, (unsigned long)k];
+        XTIRValue* siteVal = [self internCString:site];
+        if (!siteVal)
+            return;
+        XTIRValue* idx = [self checkIndexU64:args[k]];
+        [self emitCall:[self runtimeHelperSymbolNamed:@"_xt_check_bounds_n"]
+              callConv:[XTIRCallConv standard]
+             argValues:@[ ea, idx, shape, siteVal ]
+            resultType:nil];
+        }
+    }
+
 - (void)emitBoundsCheckPtr:(XTIRValue*)ptr
                      index:(XTIRValue*)idx
                         at:(XTSourceLocation*)loc
@@ -8849,6 +8893,12 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
 // `V v(args)`). Blocks, ifs and loops are walked; the port walks the same ones.
 - (BOOL)returnsByValue:(NSArray<XTType*>*)rets body:(nullable XTASTNode*)body
     {
+    // A tensor (XTParser+Tensors.m) is a value, never a reference: returned by
+    // value whatever the body returns, and with no body at all (a library's
+    // function, from its interface). As the port.
+    if (rets.count == 1 && [rets.firstObject.displayName hasPrefix:@"__tensor_"] &&
+        [self valueClassForASTType:rets.firstObject])
+        return YES;
     if (!body || rets.count != 1 || ![self valueClassForASTType:rets.firstObject])
         return NO;
     NSMutableSet<NSString*>* inst = [NSMutableSet set];
@@ -9919,6 +9969,11 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
     // (the overrides share the base's signature).
     if (resultIR && resultIR.kind == XTIRTypeKindPtr && sym.function && sym.function.returnType.kind == XTIRTypeKindAgg)
         resultIR = sym.function.returnType;
+    // A checked build's tensor index: each index against its dimension's
+    // shape, at the call's site (emitTensorBoundsChecks).
+    if (self.boundsCheck && !isStaticCall && recvVal && [pointeeAST.displayName hasPrefix:@"__tensor_"] &&
+        ([node.methodName isEqualToString:@"_get"] || [node.methodName isEqualToString:@"_set"]))
+        [self emitTensorBoundsChecks:recvVal cls:recvCi name:pointeeAST.displayName args:args at:node.location];
     if (cslot && !isStaticCall && recvCi.needsVtable && recvCi.catChainAnchor.length)
         {
         self.vtblSiteLoc = node.location;

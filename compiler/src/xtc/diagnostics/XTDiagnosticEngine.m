@@ -154,8 +154,45 @@ static BOOL XTPackIdentChar(unichar c)
     return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_';
     }
 
-static NSString* XTPackSpelling(NSString* text)
+// A tensor class name, `__tensor_<T>_<R>` (XTParser fuseTensorTypes, a
+// pack's `$` written `_`), as the source writes it: `tensor<T, R>`, the
+// element's pack then spelled below. Mirrored in the port (Types.tensorSpelling).
+static NSString* XTTensorSpelling(NSString* text)
     {
+    if ([text rangeOfString:@"__tensor_"].location == NSNotFound)
+        return text;
+    NSUInteger n = text.length;
+    NSMutableString* out = [NSMutableString string];
+    NSUInteger i = 0;
+    while (i < n)
+        {
+        if (i + 9 < n && [[text substringWithRange:NSMakeRange(i, 9)] isEqualToString:@"__tensor_"] &&
+            (i == 0 || !XTPackIdentChar([text characterAtIndex:i - 1])))
+            {
+            NSUInteger e = i + 9;
+            while (e < n && XTPackIdentChar([text characterAtIndex:e]))
+                e++;
+            // [elem]_[rank], the rank one digit 1..8.
+            if (e - i >= 12 && [text characterAtIndex:e - 2] == '_' && [text characterAtIndex:e - 1] >= '1' &&
+                [text characterAtIndex:e - 1] <= '8')
+                {
+                NSString* elem = [[text substringWithRange:NSMakeRange(i + 9, e - 2 - (i + 9))]
+                    stringByReplacingOccurrencesOfString:@"_"
+                                              withString:@"$"];
+                [out appendFormat:@"tensor<%@, %C>", elem, [text characterAtIndex:e - 1]];
+                i = e;
+                continue;
+                }
+            }
+        [out appendFormat:@"%C", [text characterAtIndex:i]];
+        i++;
+        }
+    return out;
+    }
+
+static NSString* XTPackSpelling(NSString* text0)
+    {
+    NSString* text = XTTensorSpelling(text0);
     if ([text rangeOfString:@"$"].location == NSNotFound && [text rangeOfString:@"f4*"].location == NSNotFound)
         return text;
     NSUInteger n = text.length;

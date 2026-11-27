@@ -2220,6 +2220,20 @@ static void XTCheckF4Unary(XTDiagnosticEngine* diags, XTUnaryExprNode* node)
 
     XTType* lt = node.left.resolvedType;
     XTType* rt = node.right.resolvedType;
+    // Tensor values have no equality (XTParser+Tensors.m): two views may
+    // share a storage or hold equal elements, and neither is what `==` would
+    // say. As the port.
+    if ((node.op == XTBinaryOpEq || node.op == XTBinaryOpNeq) &&
+        ((lt.kind == XTTypeKindClass && [lt.displayName hasPrefix:@"__tensor_"]) ||
+         (rt.kind == XTTypeKindClass && [rt.displayName hasPrefix:@"__tensor_"])))
+        {
+        [self.diagnostics emitError:[NSString stringWithFormat:@"'%@' has no '%@': compare the elements, or the shapes and the data() pointers",
+                                                               (lt.kind == XTTypeKindClass && [lt.displayName hasPrefix:@"__tensor_"]) ? lt.displayName : rt.displayName,
+                                                               node.op == XTBinaryOpEq ? @"==" : @"!="]
+                                 at:node.location];
+        node.resolvedType = [XTType boolType];
+        return;
+        }
     // `nil` is a pointer: it takes part in `==` and `!=` against a pointer
     // (or another nil), and in nothing else — `nil + 1`, `nil < p` and
     // `n == nil` with an integer `n` are refused. The literal is the 0 the

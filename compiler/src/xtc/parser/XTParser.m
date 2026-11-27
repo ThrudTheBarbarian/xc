@@ -320,6 +320,12 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
     [self addShapesOfImports:decls];
     }
 
+// The tensor class names (fuseTensorTypes, XTParser+Tensors.m).
+- (NSArray<NSString*>*)tensorNames
+    {
+    return self.blkState[@"tensorNames"] ?: @[];
+    }
+
 #pragma mark - Top-Level Parse
 
 - (nullable XTProgramNode*)parse
@@ -338,6 +344,7 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
     // captured the placeholder picks up the real layout once the
     // body has been parsed.
     [self fusePackSuffixes];
+    [self fuseTensorTypes];
     [self rewriteProtocolStaticReceivers];
     [self prescanForwardTypeDeclarations];
     // The operators of their own shape the unit's classes define, before any

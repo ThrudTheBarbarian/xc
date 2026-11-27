@@ -231,6 +231,10 @@ static void appendCanonicalJSON(NSMutableString *out, id v) {
         // (a runtime helper declaration), not this module's public surface.
         // Mirrors the shipped compiler's first `ambient()` test.
         if (!d.location.filename.length) continue;
+        // The tensor classes the compiler writes (`<tensor>`): every module
+        // writes its own, from the tensor types it names, so they are not
+        // this module's to export.
+        if ([d.location.filename isEqualToString:@"<tensor>"]) continue;
         if (excludeFiles.count && d.location.filename.length) {
             NSString *df = d.location.filename;
             NSString *abs = df.isAbsolutePath ? df

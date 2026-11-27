@@ -566,6 +566,22 @@ static int xtVersionGT(NSString* a, NSString* b)
         sym.storageClass = XTStorageClassStack;
         [self defineSymbol:sym];
         }
+    // C has no tensor: a function C calls or defines (`extern`, a C import, a
+    // bodyless variadic) takes the elements' pointer instead. As the port.
+    if (node.isCImport || node.isExtern || (node.isVarArgs && node.body == nil))
+        {
+        for (XTParamNode* tp in node.parameters)
+            if (tp.paramType.kind == XTTypeKindClass && [tp.paramType.displayName hasPrefix:@"__tensor_"])
+                [self.diagnostics emitError:[NSString stringWithFormat:@"C has no tensor type, so '%@' cannot take '%@' as "
+                                                                       @"'%@': pass t.data() and the shape",
+                                                                       node.funcName, tp.paramName, tp.paramType.displayName]
+                                         at:tp.location ?: node.location];
+        for (XTType* tr in node.returnTypes)
+            if (tr.kind == XTTypeKindClass && [tr.displayName hasPrefix:@"__tensor_"])
+                [self.diagnostics emitError:[NSString stringWithFormat:@"C has no tensor type, so '%@' cannot return '%@'",
+                                                                       node.funcName, tr.displayName]
+                                         at:node.location];
+        }
     // A C-ABI callee (a C import, or a bodyless variadic — the two forms
     // XTFnIsCABI recognises) cannot take a `callback`. A callback is a two-word
     // {recv, code} pair with no C representation — a bound method is not a C

@@ -146,6 +146,10 @@ NS_ASSUME_NONNULL_BEGIN
 @end
 
 // Operators a class defines with a shape of its own (XTParser+Shapes.m).
+@interface XTParser (Packs)
+- (void)fusePackSuffixes;
+@end
+
 @interface XTParser (Shapes)
 - (void)prescanOperatorShapes;
 - (void)addShapesOfImports:(NSArray<XTASTNode*>*)decls;

@@ -4693,6 +4693,58 @@ class ClassInfo
         _mem = nm;
         }
 
+    // A checked build's tensor index (the parser's fuseTensorTypes): `t[i, j]`
+    // is a call of the class's _get or _set, and before it each index is
+    // checked against its dimension's shape (the instance's `_shape[k]`) as a
+    // fixed array's subscript is, with the dimension in the site. As the
+    // reference's emitTensorBoundsChecks.
+    void emitTensorBoundsChecks(IRValue* recv, ClassInfo* ci, Array* args, Node* at)
+        {
+        if (inChecker())
+            return;
+        String* name = ci.name();
+        u32 rank = (u32)(name.byteAt(name.byteLength() - (u32)1) - (u8)'0');
+        Object* so = ci.ivarIndex().get((Hashable*)String.withCString("_shape"));
+        if (so == 0)
+            return;
+        u32 slot = ((Number*)so).asU32();
+        String* pty = ptrTo(String.withCString("U64"));
+        for (u32 k = (u32)0; k < rank && k < args.count(); k = k + (u32)1)
+            {
+            IRValue* base = fieldAddr(recv, slot, pty);
+            Array* ko = new Array();
+            ko.add((Object*)IROperand.immI((i32)k, String.withCString("U16")));
+            IRValue* kv = emit(String.withCString("Const"), String.withCString("U16"), ko);
+            Array* eo = new Array();
+            eo.add((Object*)IROperand.useVal(base));
+            eo.add((Object*)IROperand.useVal(kv));
+            IRValue* ea = emit(String.withCString("ElementAddr"), pty, eo);
+            IRValue* shape = loadThroughIr(ea, String.withCString("U64"));
+            String* site = boundsSite(at);
+            site.appendCString(", dimension ");
+            site.append(String.withU32(k));
+            IRValue* sv = stringAddr(site);
+            if (sv == 0)
+                return;
+            IRValue* idx = checkIndexU64((IRValue*)args.get(k));
+            Array* cops = new Array();
+            cops.add((Object*)IROperand.sym(runtimeHelper(String.withCString("_xt_check_bounds_n"))));
+            cops.add((Object*)IROperand.useVal(ea));
+            cops.add((Object*)IROperand.useVal(idx));
+            cops.add((Object*)IROperand.useVal(shape));
+            cops.add((Object*)IROperand.useVal(sv));
+            cops.add((Object*)IROperand.useVal(_mem));
+            IRInsn* c = IRInsn.with(String.withCString("Call"));
+            for (u32 i = (u32)0; i < cops.count(); i = i + (u32)1)
+                c.add((IROperand*)cops.get(i));
+            IRValue* nm = new IRValue(String.withCString("Mem"));
+            c.setMemRes(nm);
+            c.setCc(String.withCString("CallConv::Standard"));
+            _blk.add(c);
+            _mem = nm;
+            }
+        }
+
     // The checks take the index as a u64. Passed narrower, a CALL was harmless,
     // but an inlined check compares the u64 parameter, which is then the
     // caller's narrower value: reloaded from a 4-byte slot with an 8-byte load,
@@ -13653,6 +13705,11 @@ class ClassInfo
             if (IRType.isAgg(bvr))
                 _tupleIrRet = bvr;
             }
+        // A checked build's tensor index: each index against its dimension's
+        // shape, at the call's site (emitTensorBoundsChecks).
+        if (_boundsCheck && !isStatic && recvVal != 0 && ci.name().hasPrefix(String.withCString("__tensor_"))
+            && (n.name().equals(String.withCString("_get")) || n.name().equals(String.withCString("_set"))))
+            emitTensorBoundsChecks(recvVal, ci, args, n);
         IRValue* res = (IRValue*)0;
         i32 vs = (i32)-1;
         if (!isStatic && catSlotFor(ci, n) < (i32)0)
@@ -14390,6 +14447,16 @@ class ClassInfo
     // reference walks the same ones.
     bool returnsByValue(Node* d, Node* body)
         {
+        // A tensor (the parser's fuseTensorTypes) is a value, never a
+        // reference: returned by value whatever the body returns, and with no
+        // body at all (a library's function, from its interface). As the
+        // reference.
+        if (d != 0 && d.op() != 0 && !isMultiReturn(d.op()))
+            {
+            String* trt = firstReturn(d.op());
+            if (stripQual(trt).hasPrefix(String.withCString("__tensor_")) && valueClassOf(trt) != 0)
+                return true;
+            }
         if (d == 0 || body == 0 || isMultiReturn(d.op()))
             return false;
         String* rt = firstReturn(d.op());

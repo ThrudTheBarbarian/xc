@@ -446,9 +446,13 @@ class JsonVal
     // copy would be a second variable): a client's own `extern` of one of them
     // resolves in the module's package (#648).
     Set* _globals;
+    // The interface's text, for the tensor class names it uses (the front
+    // end's tensorNamesInText).
+    String* _text;
 
     void init(void)
         {
+        _text = (String*)0;
         _decls = new Array();
         _methodSlots = new Map();
         _ambientSlots = new Map();
@@ -474,6 +478,10 @@ class JsonVal
     Array* decls(void)
         {
         return _decls;
+        }
+    String* text(void)
+        {
+        return _text;
         }
     Set* globals(void)
         {
@@ -989,6 +997,7 @@ class JsonVal
             return (IfaceImport*)0;
             }
         IfaceImport* im = new IfaceImport();
+        im._text = text;
         // Types first: a class field, a method signature or a function may name
         // an imported struct, enum or alias, and every one of them must exist
         // before anything that uses it.
