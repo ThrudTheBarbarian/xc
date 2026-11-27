@@ -236,6 +236,14 @@ static NSString* XTStripTypeQualifiers(NSString* disp)
     toks = [lexer tokenise];
     XTParser* parser = [[XTParser alloc] initWithTokens:toks typeTable:tt diagnostics:_diagnostics];
     parser.defaultPointerPlacement = arm64 ? XTPointerPlacementMain : XTPointerPlacementHeap;
+    // The program's protocols, so an outlet typed by one (`weak : outlet P*`)
+    // reads as the protocol and its `(P* ?)value` keeps the conformance check,
+    // as the port's synthesis does.
+    NSMutableArray<NSString*>* protos = [NSMutableArray array];
+    for (XTASTNode* d in ast.declarations)
+        if ([d isKindOfClass:[XTProtocolDeclNode class]])
+            [protos addObject:((XTProtocolDeclNode*)d).protocolName];
+    [parser addKnownProtocolNames:protos];
     XTProgramNode* synth = nil;
     synth = [parser parse];
     if (!synth || _diagnostics.errorCount > 0)

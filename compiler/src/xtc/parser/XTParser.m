@@ -315,6 +315,11 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
     return NO;
     }
 
+- (void)addKnownProtocolNames:(NSArray<NSString*>*)names
+    {
+    [_protocolNames addObjectsFromArray:names];
+    }
+
 - (void)addImportedOperatorShapes:(NSArray<XTASTNode*>*)decls
     {
     [self addShapesOfImports:decls];

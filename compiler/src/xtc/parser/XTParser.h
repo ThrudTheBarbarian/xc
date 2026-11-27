@@ -96,6 +96,14 @@ NS_ASSUME_NONNULL_BEGIN
 \****************************************************************************/
 - (void)addImportedOperatorShapes:(NSArray<XTASTNode*>*)decls;
 
+/****************************************************************************\
+|* Protocol names declared outside the tokens this parser reads, so a bare
+|* use stamps the protocol constraint as in the unit that declared them. The
+|* designable synthesis parses its generated methods with them: without them
+|* an outlet's `(P* ?)value` read P as a class and lost its conformance check.
+\****************************************************************************/
+- (void)addKnownProtocolNames:(NSArray<NSString*>*)names;
+
 @end
 
 // Tensor types (XTParser+Tensors.m).
