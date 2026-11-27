@@ -93,11 +93,12 @@ String* gCSplitOut;
 // relocatable form): -c of a C/C++ file writes its two objects, xcc's at the
 // output and clang's beside it (<name>.rest.o), for the one link to take both.
 bool gCSplitPair;
-// --shared-runtime-object (internal: an xc file of a several-source build
-// that has C or C++ files too): -c of the xc file takes the target's
-// libRuntime as a C/C++ file's xcc half does (the canary guard through the
-// GOT, the object asking for -lRuntime), so the program has one runtime,
-// shared with the C/C++ objects.
+// --shared-runtime: -c of an xc file takes the target's libRuntime as a
+// C/C++ file's xcc half does (the canary guard through the GOT, the object
+// asking for -lRuntime), so a program linked from it and C or C++ objects
+// has one runtime, shared with them. A several-source build that has C or
+// C++ files gives it to each of its xc files; by hand, `xcc -c
+// --shared-runtime x.xc` (2026-11-27).
 bool gXcSharedRuntime;
 bool gHalfXcArgs;       // the C path: xcc's half has a par block (--xc-* options, #148)
 // -c of a C file: cSplitLink makes one relocatable object, not a program.
@@ -1248,6 +1249,7 @@ void checkPageImports(MachO* m)
         Stdio.printf("xcc: error: %s\n", ((String*)le.get(i)).cString());
     Array* bad = m.unreachableImports();
     if (bad.count() == (u32)0 && le.count() == (u32)0) return;
+    bool hintShared = false;
     for (u32 i = (u32)0; i < bad.count(); i = i + (u32)1) {
         Array* pair = (Array*)bad.get(i);
         String* s = (String*)pair.get((u32)0);
@@ -1262,7 +1264,16 @@ void checkPageImports(MachO* m)
         Stdio.printf("xcc: error: '%s' is loaded or stored directly%s (an @PAGE/@PAGEOFF pair), but a "
                      "library defines it, and such a reference cannot reach another image: it has to "
                      "go through the GOT\n", shown.cString(), where.cString());
+        // The runtime's own data (its canary guard, __xt_*): an xc object
+        // compiled by plain -c, linked with C or C++ objects that share
+        // libRuntime.
+        if (shown.hasPrefix(String.withCString("__xt_")))
+            hintShared = true;
     }
+    if (hintShared)
+        Stdio.printf("xcc: note: an xc object compiled by plain `xcc -c` reads the runtime in its own image; to link "
+                     "it with C or C++ objects, compile it with `xcc -c --shared-runtime`, or build every "
+                     "source in one xcc command\n");
     driverExit((i32)1);
 }
 
@@ -4901,7 +4912,7 @@ Array* objectLinkerOptions(DriverOptions* d)
 {
     Array* out = new Array();
     // C/C++ objects only, and an xc object of a several-source C/C++ build
-    // (--shared-runtime-object): any other xc object stays byte for byte as
+    // (--shared-runtime): any other xc object stays byte for byte as
     // it was.
     if (gCSplitOut == (String*)0 && !gXcSharedRuntime) return out;
     Map* seen = new Map();
@@ -5687,7 +5698,7 @@ i32 multiSourceBuild(DriverOptions* d)
     String* self = Process.argument((u32)0);
     Array* objs = new Array();
     // A line with C or C++ files: its xc files take the shared runtime too
-    // (--shared-runtime-object), so the program has one runtime.
+    // (--shared-runtime), so the program has one runtime.
     bool anyC = false;
     for (u32 k = (u32)0; k < srcs.count(); k = k + (u32)1)
         if (Languages.forFile((String*)srcs.get(k)) != (LanguageRow*)0) anyC = true;
@@ -5719,7 +5730,7 @@ i32 multiSourceBuild(DriverOptions* d)
         }
         argv.add((Object*)String.withCString("-c"));
         if (anyC && lr == (LanguageRow*)0)
-            argv.add((Object*)String.withCString("--shared-runtime-object"));
+            argv.add((Object*)String.withCString("--shared-runtime"));
         // win64 has no relocatable COFF link: a C/C++ file's two objects.
         if (!cOnly && isWin64(d))
             argv.add((Object*)String.withCString("--c-pair"));
@@ -7344,6 +7355,9 @@ void usage(void)
     Stdio.printf("                             programs link\n");
     Stdio.printf("  --no-runtime-lib           Compile the runtime in as source, not linking the\n");
     Stdio.printf("                             target's prebuilt libRuntime\n");
+    Stdio.printf("  --shared-runtime           With -c of an xc file: an object for a program\n");
+    Stdio.printf("                             linked with C or C++ objects, sharing their\n");
+    Stdio.printf("                             libRuntime\n");
     Stdio.printf("  -dynamic                   (-A x86_64) Link against glibc and the -l\n");
     Stdio.printf("                             libraries (GTK 4, libGL, ...) instead of\n");
     Stdio.printf("                             statically over musl\n");
@@ -8542,7 +8556,7 @@ Array* driverOptions(void)
     driverOption((u32)doptDumpPlacement, (u32)doptkExact, "-dp --dump-placement", (u32)0);
     driverOption((u32)doptDumpUsage, (u32)doptkExact, "-du --dump-usage", (u32)0);
     driverOption((u32)doptCPair, (u32)doptkExact, "--c-pair", (u32)0);
-    driverOption((u32)doptSharedRuntimeObject, (u32)doptkExact, "--shared-runtime-object", (u32)0);
+    driverOption((u32)doptSharedRuntimeObject, (u32)doptkExact, "--shared-runtime", (u32)0);
     return gDriverOptions;
 }
 

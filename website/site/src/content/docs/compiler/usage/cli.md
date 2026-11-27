@@ -155,6 +155,7 @@ compiler next to it**, or build it with `--no-runtime-lib`.
 | Flag | Effect |
 |------|--------|
 | `--no-runtime-lib` | Compile the runtime into the program instead: one file that runs without `libRuntime`, larger, and slower to build when it uses `par`. `XCC_NO_RUNTIME_LIB=1` does the same. A `-static` link, and a link that brings object files or archives (`-Wl,x.o`), always do. |
+| `--shared-runtime` | With `-c` of an xc file: an object for a program linked with C or C++ objects, which shares their `libRuntime`. See [C++ programs](/compiler/usage/cpp-programs/#several-files). |
 | `--emit-runtime` | Build a target's `libRuntime` from its root file, `support/generic/lib/Par.xc`, as `make runtime-libs` does. |
 | `--emit-runtime-support` | Build a target's `libRuntimeSupport` from the same root file, as `make runtime-libs` does. |
 

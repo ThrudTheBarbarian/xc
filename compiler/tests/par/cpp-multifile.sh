@@ -40,11 +40,21 @@ got=$("$W/one" 2>&1)
 # one command: the xc file takes the shared runtime the C/C++ objects take,
 # so the program has one. Where this tree has no runtime libraries (make
 # runtime-libs) there is no shared runtime to take, and the case is skipped.
+# Then as objects, the xc one compiled with --shared-runtime.
 if ls support/runtime-lib/*/libRuntime.* >/dev/null 2>&1; then
     M=tests/par/c-multi-xc
     "$XC" -q -O2 -H . -o "$W/mx" $M/main.cpp $M/add.c $M/twice.xc > "$W/bmx" 2>&1 \
         || { echo "FAIL cpp-multifile: main.cpp, add.c and twice.xc do not build in one command"; grep -v warning "$W/bmx" | head -3; fail=1; }
     [ -x "$W/mx" ] && { got=$("$W/mx"); [ "$got" = 36840 ] || { echo "FAIL cpp-multifile: the program with an xc file gives '$got', not 36840"; fail=1; }; }
+    # The same as each `xcc -c` (the xc file with --shared-runtime), the
+    # objects linked by xcc with nothing named.
+    rm -f "$W/m.o" "$W/a.o" "$W/t.o" "$W/mxo"
+    "$XC" -q -O2 -H . -c -o "$W/m.o" $M/main.cpp > "$W/bmo" 2>&1 \
+        && "$XC" -q -O2 -H . -c -o "$W/a.o" $M/add.c >> "$W/bmo" 2>&1 \
+        && "$XC" -q -O2 -H . -c --shared-runtime -o "$W/t.o" $M/twice.xc >> "$W/bmo" 2>&1 \
+        && "$XC" -q -H . -o "$W/mxo" "$W/m.o" "$W/a.o" "$W/t.o" >> "$W/bmo" 2>&1 \
+        || { echo "FAIL cpp-multifile: main.cpp, add.c and twice.xc (--shared-runtime) do not build as objects"; grep -v warning "$W/bmo" | head -3; fail=1; }
+    [ -x "$W/mxo" ] && { got=$("$W/mxo"); [ "$got" = 36840 ] || { echo "FAIL cpp-multifile: the objects with an xc one give '$got', not 36840"; fail=1; }; }
 else
     echo "cpp-multifile: no runtime libraries in this tree; the case with an xc file is skipped"
 fi

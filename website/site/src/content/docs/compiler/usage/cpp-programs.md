@@ -61,6 +61,27 @@ RTTI, virtual calls and the constructors of global objects work as they do in
 a program `clang++` links. Set `XC_C_TRACE=1` to list each function with a loop
 left to `clang++` and why.
 
+## Several files
+
+A program of C++, C and xc files builds in one command, and its files can
+call each other's `extern "C"` functions:
+
+```bash
+xcc -o prog main.cpp add.c twice.xc
+```
+
+Each file can also be compiled on its own and the objects linked by `xcc`,
+with no library or framework named: each object records what it needs. An
+xc file compiled for such a program takes `--shared-runtime`, so that it and
+the C and C++ objects share one `libRuntime`:
+
+```bash
+xcc -c main.cpp
+xcc -c add.c
+xcc -c --shared-runtime twice.xc
+xcc -o prog main.o add.o twice.o
+```
+
 ## Options
 
 `-I <dir>`, `-D<name>[=<value>]` and `-std=<standard>` (such as `-std=c++17`
