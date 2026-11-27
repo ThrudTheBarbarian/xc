@@ -200,14 +200,17 @@ results are the same bits the software routines give, NaN payloads included:
 | Target | Native | Software |
 |---|---|---|
 | arm64 macOS and iOS | `f16` conversions to and from `f32` and `f64`, from integers, `+ - * /`, the square root and comparisons (half-precision instructions); `bf16` conversions to and from `f32` (integer instructions) | `bf16` from `f64` and integers, every other pack, conversions to integers |
-| arm64 Linux and Android | `f16` conversions to and from `f32` and `f64` and from integers; `bf16` as above | `f16` arithmetic is done in `f32` with the native conversions; the rest as above |
-| x86-64, win64 with `-mavx2`, `-mavx512` or `-mnative` | `f16` conversions to and from `f32` and from integers (F16C); `bf16` as above | `f16` from `f64`; arithmetic in `f32` |
-| x86-64, win64 otherwise | `bf16` as above | `f16` (the default build must run on any x86-64, and F16C needs AVX) |
+| arm64 Linux and Android | `f16` conversions to and from `f32` and `f64` and from integers; on CPUs with FP16 (ARMv8.2, such as the Raspberry Pi 5) `f16` arithmetic and comparisons as on macOS; `bf16` as above | `f16` arithmetic on ARMv8.0 CPUs (such as the Raspberry Pi 4) is done in `f32` with the native conversions; the rest as above |
+| x86-64, win64 | `f16` conversions to and from `f32` and from integers on CPUs with AVX2 (F16C); `bf16` as above | `f16` on CPUs without AVX2; `f16` from `f64`; arithmetic in `f32` |
 | arm9, m68k, wasm32, xt6502 | none | everything |
 
-arm64 Linux and Android rows target ARMv8.0, which has the half-precision
-conversions but not the arithmetic. A `par` block that computes in `f16`,
-`bf16`, `f8` or another 16- or 8-bit pack runs on the GPU too, with the CPU's
+Where the instructions depend on the CPU, a program has one version of each
+function that uses them and one without, and picks per function when it loads
+([`-msimd=auto`](/compiler/usage/cli/), the default at `-O2`); `-march=` and
+`-msimd=` build one level instead. Every Apple silicon Mac has FP16.
+
+A `par` block that computes in `f16`, `bf16`, `f8` or another 16- or 8-bit
+pack runs on the GPU too, with the CPU's
 results: Metal converts `f16` in its own `half` type, and every other type and
 interface converts in the kernel ([Small floats on the
 GPU](/compiler/language/par/#small-floats-on-the-gpu)). A block that reads or

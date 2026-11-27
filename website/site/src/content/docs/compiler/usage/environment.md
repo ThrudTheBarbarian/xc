@@ -244,7 +244,7 @@ plugins read the variables only.
 
 | Variable | Values | Default | Effect |
 |---|---|---|---|
-| `XC_SIMD` | `base`, `avx2`, `avx512` | the best the CPU supports | x86-64 only: which version of each [`-msimd=auto`](/compiler/usage/cli/) function runs; asking for more than the CPU has falls back, with a note on stderr |
+| `XC_SIMD` | `base`, `avx2`, `avx512` (x86-64); `base`, `fp16` (arm64) | the best the CPU supports | which version of each [`-msimd=auto`](/compiler/usage/cli/) function runs; asking for more than the CPU has falls back, with a note on stderr |
 | `XCC_SETTINGS_DIR` | a directory | unset | every settings store becomes `<dir>/<name>.conf` ([above](#where-a-programs-settings-live)) |
 | `XDG_CONFIG_HOME` | a directory | `~/.config` | where the text stores are kept on Linux and Android |
 | `XCC_BUNDLE_ROOT` | a directory | the program's own directory | the root [Bundle](/compiler/api/bundle/) resources are found from |
