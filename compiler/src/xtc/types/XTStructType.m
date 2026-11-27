@@ -40,6 +40,10 @@ static NSUInteger XTAlignOfType(XTType* t)
     {
     if (!t)
         return 1;
+    // A class held by value is the instance inline, which begins with its
+    // header pointer and aligns as one (#756).
+    if (t.kind == XTTypeKindClass && ![t isKindOfClass:[XTPointerType class]])
+        return [XTPointerType heapPointerWidth];
     if ([t isKindOfClass:[XTStructType class]])
         return XTStructAlignment((XTStructType*)t);
     if ([t isKindOfClass:[XTArrayType class]])
@@ -58,12 +62,23 @@ static NSUInteger sFieldAlignCap = 1;
 // rounding (cap 8) — its historical ABI — while m68k caps both at 2 (its C
 // ABI). Default 8 = today's uncapped pow2 rule for every unconfigured path.
 static NSUInteger sTailAlignCap = 8;
+// Every struct type made, for relayoutAll (#756).
+static NSHashTable<XTStructType*>* sAllStructs;
 
 // Lay `fields` out in declaration order: hidden weak/bound link words first,
 // then the payload at the next offset aligned to the field's (capped) natural
 // alignment — so the links stay immediately before the payload, and any pad
 // falls before the links. `packed` forces alignment 1 everywhere. Returns the
 // tight end of the last field (NOT tail-rounded; byteWidth does the rounding).
+// A field's width in a struct: a class held by value is the whole instance
+// (#756), anything else its type's width.
+static NSUInteger XTFieldByteWidth(XTType* t)
+    {
+    if (t && t.kind == XTTypeKindClass && ![t isKindOfClass:[XTPointerType class]])
+        return [XTType instanceByteWidthForClassNamed:t.displayName];
+    return t.byteWidth;
+    }
+
 static NSUInteger XTLayoutStructFields(NSArray<XTStructField*>* fields, BOOL packed)
     {
     NSUInteger offset = 0;
@@ -73,7 +88,7 @@ static NSUInteger XTLayoutStructFields(NSArray<XTStructField*>* fields, BOOL pac
         NSUInteger a = packed ? 1 : [XTStructType fieldAlignmentForType:f.fieldType];
         offset = ((offset + link) + a - 1) & ~(a - 1); // payload position
         f.byteOffset = offset;
-        offset += f.fieldType.byteWidth;
+        offset += XTFieldByteWidth(f.fieldType);
         }
     return offset;
     }
@@ -140,8 +155,45 @@ static NSUInteger XTWeakLinkBytesFor(XTType* ty)
         {
         _structName = [name copy];
         _fields = [fields copy];
+        static dispatch_once_t once;
+        dispatch_once(&once, ^{ sAllStructs = [NSHashTable weakObjectsHashTable]; });
+        [sAllStructs addObject:self];
         }
     return self;
+    }
+
+/****************************************************************************\
+|* Lay out again every struct that exists, until nothing moves: a class held
+|* by value has its size once lowering has laid the class out (#756), and a
+|* struct holding one (or holding a struct that does) moves with it.
+\****************************************************************************/
++ (NSUInteger)fieldByteWidthOf:(XTType*)t
+    {
+    return XTFieldByteWidth(t);
+    }
+
++ (void)relayoutAll
+    {
+    for (int pass = 0; pass < 8; pass++)
+        {
+        BOOL moved = NO;
+        for (XTStructType* s in sAllStructs.allObjects)
+            {
+            NSUInteger before = s.byteWidth;
+            NSMutableArray<NSNumber*>* offs = [NSMutableArray array];
+            for (XTStructField* f in s->_fields)
+                [offs addObject:@(f.byteOffset)];
+            XTLayoutStructFields(s->_fields, s->_packed);
+            NSUInteger i = 0;
+            for (XTStructField* f in s->_fields)
+                if (f.byteOffset != offs[i++].unsignedIntegerValue)
+                    moved = YES;
+            if (s.byteWidth != before)
+                moved = YES;
+            }
+        if (!moved)
+            break;
+        }
     }
 
 /****************************************************************************\
@@ -238,7 +290,7 @@ static NSUInteger XTWeakLinkBytesFor(XTType* ty)
     NSUInteger total = 0;
     for (XTStructField* f in _fields)
         {
-        NSUInteger end = f.byteOffset + f.fieldType.byteWidth;
+        NSUInteger end = f.byteOffset + XTFieldByteWidth(f.fieldType);
         if (end > total)
             total = end;
         }

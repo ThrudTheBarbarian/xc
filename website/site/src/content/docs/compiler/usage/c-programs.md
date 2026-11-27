@@ -72,6 +72,14 @@ xcc: C path: left to clang: @log_line
 xcc: C path:   because of a parameter of a type not read (in log_line: ...)
 ```
 
+## Structs shared with C
+
+An xc struct whose fields are C types has the layout C gives it, so C code can
+take and return it. A field whose type is an xc class is the class's instance
+inline, its header included (see
+[structs](/compiler/language/types/#structs)), and C has no declaration for it.
+In a struct shared with C, declare such a field as a pointer, `Counter* c;`.
+
 ## Heap arrays
 
 A loop over two pointers runs as a block only when the runtime can tell the

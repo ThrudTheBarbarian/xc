@@ -803,6 +803,21 @@ static BOOL sFloatIsIEEE = NO;
 |* Width of this type in bytes. Returns 0 for void/auto.
 |* @return The byte width of the type.
 \****************************************************************************/
+static NSMutableDictionary<NSString*, NSNumber*>* sInstanceByteWidths;
+
++ (void)setInstanceByteWidth:(NSUInteger)width forClassNamed:(NSString*)name
+    {
+    if (!sInstanceByteWidths)
+        sInstanceByteWidths = [NSMutableDictionary dictionary];
+    if (name)
+        sInstanceByteWidths[name] = @(width);
+    }
+
++ (NSUInteger)instanceByteWidthForClassNamed:(NSString*)name
+    {
+    return name ? sInstanceByteWidths[name].unsignedIntegerValue : 0;
+    }
+
 - (NSUInteger)byteWidth
     {
     switch (_kind)

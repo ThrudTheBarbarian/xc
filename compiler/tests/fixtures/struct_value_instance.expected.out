@@ -1,0 +1,12 @@
+init n 1, b 0, twice 2
+copy 4 5, orig 9, same box 1
+box 5 freed
+scope 1 done
+nested 6 2
+box 6 freed
+scope 2 done
+box 8 freed
+array 7 9 3
+box 7 freed
+box 9 freed
+scope 3 done

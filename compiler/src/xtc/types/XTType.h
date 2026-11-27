@@ -59,6 +59,11 @@ typedef NS_ENUM(NSInteger, XTTypeKind) {
 |* Width in bytes. 0 for void/auto.
 \****************************************************************************/
 @property(nonatomic, readonly) NSUInteger byteWidth;
+/// A class held by value — a struct field `V v;` — is the instance inline
+/// (#756): once lowering has laid the class out it records the instance's
+/// size here, for struct layout. A class type's own byteWidth is unchanged.
++ (void)setInstanceByteWidth:(NSUInteger)width forClassNamed:(NSString*)name;
++ (NSUInteger)instanceByteWidthForClassNamed:(NSString*)name;
 
 /****************************************************************************\
 |* YES for i8/i16/i32.

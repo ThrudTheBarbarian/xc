@@ -410,6 +410,25 @@ A struct local with no initialiser is zero-filled as well, as a stack class
 instance is: every member of `CursorPos p;` starts at zero, and nothing is left
 as whatever the stack held.
 
+A field whose type is a class holds an instance of that class inline, as an
+ivar does: `V v;` is the instance itself, header included, and `V* v;` is a
+reference to one. An instance in a struct behaves as a stack instance does. It
+is set up with the struct (its fields zero, its vtable set, its parameterless
+`init()` run). A copy of the struct copies the instance and retains the objects
+it refers to. When the struct goes out of scope, the instance is torn down and
+its `dealloc()` runs. The same holds for a struct inside another struct and for
+an array of structs.
+
+```c
+class Counter { Box* box; u32 n; }
+
+struct Slot { u8 id; Counter c; }   // c is a whole Counter, inside the Slot
+
+Slot a;
+a.c.box = new Box();
+Slot b = a;                         // b.c is a copy; the Box has two owners
+```
+
 A struct can be returned by value:
 
 ```c

@@ -1717,7 +1717,7 @@ class ClassInfo
                     total = ((total + _ptrW + _ptrW) + fa - (u32)1) & ~(fa - (u32)1);
                 else
                     total = (total + fa - (u32)1) & ~(fa - (u32)1);
-                total = total + sizeOf(ft);
+                total = total + structFieldSize(ft);
                 }
             u32 a = alignOf(t);
             return (total + a - (u32)1) & ~(a - (u32)1);
@@ -1729,8 +1729,21 @@ class ClassInfo
     // natural alignment capped at the target's field cap. One rule, shared by
     // struct layout, class instance layout and the tuple-return layout — the
     // mirror of the original's XTStructType.fieldAlignmentForType:.
+    // A struct field of a class type held by value is the instance inline, as
+    // an ivar held by value is (#579): its size is the instance's, and it
+    // aligns as the pointer its header begins with (#756).
+    u32 structFieldSize(String* ft)
+        {
+        ClassInfo* vc = valueIvarClass(ft);
+        if (vc != 0)
+            return layoutSizeOf(vc.agg());
+        return sizeOf(ft);
+        }
+
     u32 fieldAlignFor(String* t)
         {
+        if (valueIvarClass(t) != 0)
+            return _ptrW > _fieldCap ? _fieldCap : _ptrW;
         u32 a = alignOf(t);
         if (a > _fieldCap)
             a = _fieldCap;
@@ -1743,6 +1756,10 @@ class ClassInfo
         {
         if (isArrayLike(t))
             return alignOf(elementOf(t));
+        // A class held by value is the instance inline, which begins with its
+        // header pointer and aligns as one (#756).
+        if (valueIvarClass(t) != 0 && _ptrW != (u32)0)
+            return _ptrW;
         // A `^` is a PAIR of pointers, and aligns as one pointer — as the
         // reference lays it out. Its two-word width is a power of two, so the
         // rule below gave it double alignment: on arm9 and wasm32 a `^` field
@@ -1872,8 +1889,9 @@ class ClassInfo
                     off = (off + fa - (u32)1) & ~(fa - (u32)1);
                     }
                 offs.add((Object*)Number.with(off));
-                tys.add((Object*)irType(ft));
-                off = off + sizeOf(ft);
+                ClassInfo* fvc = valueIvarClass(ft);
+                tys.add((Object*)(fvc != 0 ? fvc.agg() : irType(ft)));
+                off = off + structFieldSize(ft);
                 }
             // The declared size when nothing is auto-zeroing — which rounds
             // to the struct's alignment — and the summed one when something is,
@@ -4542,6 +4560,10 @@ class ClassInfo
             baseAddr = aggregateAddr(base);
         if (_failed)
             return (IRValue*)0;
+        // An instance held by value is addressed as the instance (#756).
+        ClassInfo* fvc = valueIvarClass(fieldTy);
+        if (fvc != 0)
+            return fieldAddr(baseAddr, (u32)idx, fvc.selfPtr());
         return fieldAddr(baseAddr, (u32)idx, ptrTo(irType(fieldTy)));
         }
 
@@ -5357,8 +5379,10 @@ class ClassInfo
             IRValue* fa = memberAddr(n);
             if (_failed)
                 return (IRValue*)0;
-            // An instance held by value is its address, as a stack instance is.
-            if (valueIvarClass(ft) != 0 && classFor(pointeeOf(n.kid((u32)0).ty())) != 0)
+            // An instance held by value is its address, as a stack instance is
+            // — in a class or, since #756, in a struct.
+            if (valueIvarClass(ft) != 0 && (classFor(pointeeOf(n.kid((u32)0).ty())) != 0
+                                            || structDeclFor(pointeeOf(n.kid((u32)0).ty())) != 0))
                 return fa;
             return loadThrough(fa, ft);
             }
@@ -6279,6 +6303,25 @@ class ClassInfo
                 if (_failed)
                     return (IRValue*)0;
                 valueIvarAssign(vrecv, ((Number*)ci.ivarIndex().get((Hashable*)lhs.name())).asU32(), mvc, n.kid((u32)1));
+                return (IRValue*)0;
+                }
+            // `s.v = w` of an instance held by value in a struct: a copy into
+            // its bytes, as for an ivar (#756).
+            ClassInfo* svc = ci == 0 && structDeclFor(pointeeOf(bt)) != 0 ? valueIvarClass(ft) : (ClassInfo*)0;
+            if (svc != 0)
+                {
+                IRValue* dst = memberAddr(lhs);
+                if (_failed)
+                    return (IRValue*)0;
+                IRValue* src = lowerExpr(n.kid((u32)1));
+                if (_failed)
+                    return (IRValue*)0;
+                if (src == 0 || !isPtrIr(src.ty()))
+                    {
+                    giveUpAt(String.withCString("an instance held by value takes an instance"), n.kid((u32)1));
+                    return (IRValue*)0;
+                    }
+                valueCopyInto(src, dst, (IRPinned*)0, svc, true);
                 return (IRValue*)0;
                 }
             i32 fidx = (i32)0;
@@ -8177,6 +8220,10 @@ class ClassInfo
         for (u32 i = n; i < st.kidCount(); i = i + (u32)1)
             {
             String* ft = st.kid(i).op();
+            // An instance held by value is set up as a whole, ivars zeroed
+            // and vtable seeded, by the struct's own setup (#756).
+            if (valueIvarClass(ft) != 0)
+                continue;
             String* fir = irType(ft);
             IRValue* fa = fieldAddr(base, i, ptrTo(fir));
             if (isArrayLike(ft) || structDeclFor(ft) != (Node*)0)
@@ -11507,6 +11554,11 @@ class ClassInfo
             // zeroing skips it and only its link words are written.
             if (isWeakClassPtr(ft))
                 return true;
+            // An instance held by value is set up, or torn down when it owns
+            // something (#756).
+            ClassInfo* fvc = valueIvarClass(ft);
+            if (fvc != 0 && (zero || stackDeallocSym(fvc) != (String*)0))
+                return true;
             if (structDeclFor(ft) != 0 && structFieldsWouldEmit(ft, zero))
                 return true;
             }
@@ -11624,6 +11676,10 @@ class ClassInfo
             String* ft = st.kid(i).op();
             if (isClassPointer(ft))
                 return true;
+            // An instance held by value that owns references (#756).
+            ClassInfo* fvc = valueIvarClass(ft);
+            if (fvc != 0 && stackDeallocSym(fvc) != (String*)0)
+                return true;
             if (structDeclFor(ft) != 0 && structHasStrongPointer(ft))
                 return true;
             }
@@ -11671,6 +11727,10 @@ class ClassInfo
             String* ft = st.kid(i).op();
             if (isWeakSlot(ft))
                 return true;
+            // Any instance held by value: it is set up at the declaration,
+            // its vtable seeded, whether or not it owns anything (#756).
+            if (valueIvarClass(ft) != 0)
+                return true;
             if (structDeclFor(ft) != 0 && structHasTrackedField(ft))
                 return true;
             }
@@ -11699,6 +11759,22 @@ class ClassInfo
                 idx = idx + (u32)2;
             u32 here = idx;
             idx = idx + (u32)1;
+            // A class instance held by value is a stack instance inside the
+            // struct (#756): set up when the struct is (ivars zeroed, vtable
+            // seeded, members, init), its references retained when the struct
+            // is copied, and torn down (its dealloc) when the struct goes.
+            ClassInfo* fvc = valueIvarClass(ft);
+            if (fvc != 0)
+                {
+                IRValue* ia = fieldAddr(base, here, fvc.selfPtr());
+                if (zero)
+                    setUpInstance(ia, fvc, true);
+                else if (claim)
+                    stackClaim(ia, fvc);
+                else
+                    stackTeardown(ia, fvc);
+                continue;
+                }
             // A NESTED struct is walked in turn: the outer one owns it, and it
             // owns whatever pointers it holds. Skipped when it holds none.
             if (structDeclFor(ft) != 0)

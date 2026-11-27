@@ -21,6 +21,10 @@ NS_ASSUME_NONNULL_BEGIN
 @interface XTStructType : XTType
 
 @property(nonatomic, readonly) NSString* structName;
+/// Lay out every struct type again, until nothing moves (#756).
++ (void)relayoutAll;
+/// A field's width in a struct: a class held by value is the instance (#756).
++ (NSUInteger)fieldByteWidthOf:(XTType*)t;
 @property(nonatomic, readonly) NSArray<XTStructField*>* fields;
 // `:packed` — no padding anywhere: field offsets are the raw sum of the
 // widths before them, and the total size is that sum with NO tail rounding

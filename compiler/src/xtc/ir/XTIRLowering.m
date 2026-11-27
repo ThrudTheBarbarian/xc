@@ -1148,7 +1148,9 @@ static NSString* XTDescribeNodeKind(XTASTNodeKind k)
     uint32_t size = 0;
     for (XTStructField* f in st.fields)
         {
-        XTIRType* fIR = [self irTypeForASTTypeQuiet:f.fieldType];
+        // A class held by value is the instance inline (#756).
+        XTIRClassInfo* fvc = [self valueIvarClassFor:f.fieldType];
+        XTIRType* fIR = fvc ? [XTIRType aggWithLayout:fvc.instanceLayout] : [self irTypeForASTTypeQuiet:f.fieldType];
         if (!fIR)
             {
             // Genuinely unsupported field — drop the placeholder so a later
@@ -1178,7 +1180,7 @@ static NSString* XTDescribeNodeKind(XTASTNodeKind k)
         [fields addObject:[[XTIRLayoutField alloc]
                               initWithOffset:(uint32_t)f.byteOffset
                                         type:fIR]];
-        uint32_t fend = (uint32_t)(f.byteOffset + f.fieldType.byteWidth);
+        uint32_t fend = (uint32_t)(f.byteOffset + [XTStructType fieldByteWidthOf:f.fieldType]);
         if (fend > size)
             size = fend;
         }
@@ -7204,6 +7206,23 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
             }
         if (!baseAddr)
             return nil;
+        // `s.v = w` of an instance held by value: a copy into its bytes, as
+        // for an ivar (#756).
+        XTIRClassInfo* svc = [self valueIvarClassFor:fieldAST];
+        if (svc)
+            {
+            XTIRValue* dst = [self emitFieldAddr:baseAddr fieldIndex:fieldIndex resultType:svc.selfPtrType];
+            XTIRValue* src = [self lowerExpression:rhsNode];
+            if (!src)
+                return nil;
+            if (![self irValueIsPointer:src])
+                {
+                [self softFailLoweringAt:rhsNode.location withMessage:@"an instance held by value takes an instance"];
+                return nil;
+                }
+            [self valueCopyFrom:src into:dst pinned:nil class:svc assign:YES];
+            return nil;
+            }
         if (lhs == self.compoundLhs)
             self.compoundLhsAddr = baseAddr;
         XTIRValue* rhsVal = [self lowerExpression:rhsNode];
@@ -8606,6 +8625,10 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
             }
         if (!baseAddr)
             return nil;
+        // An instance held by value is its address, as in a class (#756).
+        XTIRClassInfo* fvc = [self valueIvarClassFor:fieldAST];
+        if (fvc)
+            return [self emitFieldAddr:baseAddr fieldIndex:fieldIndex resultType:fvc.selfPtrType];
         XTIRType* fieldIRType = [self irTypeForASTType:fieldAST at:node.location];
         if (!fieldIRType)
             return nil;
@@ -10762,6 +10785,9 @@ static NSString* _Nullable primElemNameForType(XTType* t)
         XTType* bt = m.base.resolvedType;
         if (bt && [bt isKindOfClass:[XTPointerType class]])
             bt = ((XTPointerType*)bt).pointeeType;
+        // `s.v` where v is a struct field holding an instance by value (#756).
+        if (bt && [bt isKindOfClass:[XTStructType class]])
+            return YES;
         if (!bt || bt.kind != XTTypeKindClass)
             return NO;
         return [self valueIvarNamed:m.memberName inClass:self.classesByName[bt.displayName] slot:NULL] != nil;
@@ -15325,6 +15351,45 @@ static const NSUInteger kVarargSlotBytes = 8;
 
 // YES if a struct type embeds ≥1 owned (strong/weak) class pointer, RECURSIVELY
 // through nested struct fields and arrays of structs/class-pointers.
+// Does this type hold a class instance by value, directly or in a struct or an
+// array? Such a struct is tracked whether or not it owns anything: the
+// instance is set up (its vtable seeded) with it (#756). The port's
+// structHasTrackedField counts the same.
+- (BOOL)astTypeHoldsInstance:(XTType*)ty
+    {
+    if ([self valueIvarClassFor:ty])
+        return YES;
+    if ([ty isKindOfClass:[XTStructType class]])
+        {
+        for (XTStructField* f in ((XTStructType*)ty).fields)
+            if ([self astTypeHoldsInstance:f.fieldType])
+                return YES;
+        return NO;
+        }
+    if ([ty isKindOfClass:[XTArrayType class]])
+        return [self astTypeHoldsInstance:((XTArrayType*)ty).elementType];
+    return NO;
+    }
+
+// Does a walk of this struct emit anything? Zeroing touches owned pointers and
+// sets up instances held by value; a teardown also unregisters the weak ones
+// and tears down instances that own something. The port's structFieldsWouldEmit.
+- (BOOL)structWalkWouldEmit:(XTStructType*)st zero:(BOOL)zero
+    {
+    for (XTStructField* f in st.fields)
+        {
+        XTType* ft = f.fieldType;
+        if ([self astTypeIsClassPointer:ft] || [self astTypeIsWeakClassPointer:ft])
+            return YES;
+        XTIRClassInfo* vc = [self valueIvarClassFor:ft];
+        if (vc && (zero || [self stackDeallocSymbolFor:vc]))
+            return YES;
+        if ([ft isKindOfClass:[XTStructType class]] && [self structWalkWouldEmit:(XTStructType*)ft zero:zero])
+            return YES;
+        }
+    return NO;
+    }
+
 - (BOOL)structHasOwnedClassPointer:(XTStructType*)st
     {
     for (XTStructField* f in st.fields)
@@ -15336,6 +15401,11 @@ static const NSUInteger kVarargSlotBytes = 8;
     {
     if ([self astTypeIsClassPointer:ty] || [self astTypeIsWeakClassPointer:ty])
         return YES;
+    // An instance held by value that owns references (#756), as the port's
+    // structHasStrongPointer counts one.
+    XTIRClassInfo* vc = [self valueIvarClassFor:ty];
+    if (vc)
+        return [self stackDeallocSymbolFor:vc] != nil;
     if ([ty isKindOfClass:[XTStructType class]])
         return [self structHasOwnedClassPointer:(XTStructType*)ty];
     if ([ty isKindOfClass:[XTArrayType class]])
@@ -15387,7 +15457,7 @@ typedef NS_ENUM(NSInteger, XTStructARCMode) {
 - (void)emitArrayARCAt:(XTIRValue*)arrAddr arrayType:(XTArrayType*)at mode:(XTStructARCMode)mode
     {
     XTType* et = at.elementType;
-    if (![self astTypeOwnsClassPointer:et])
+    if (![self astTypeOwnsClassPointer:et] && ![self astTypeHoldsInstance:et])
         return;
     XTIRType* elemIR = [self irTypeForASTTypeQuiet:et];
     if (!elemIR)
@@ -15423,7 +15493,24 @@ typedef NS_ENUM(NSInteger, XTStructARCMode) {
         if ([self astTypeIsWeakSlot:f.fieldType])
             idx += 2;
         XTType* ft = f.fieldType;
-        if ([self astTypeOwnsClassPointer:ft])
+        // A class instance held by value is a stack instance inside the struct
+        // (#756): set up when the struct is (ivars zeroed, vtable seeded,
+        // members, init), its references retained when the struct is copied,
+        // and torn down (its dealloc) when the struct goes.
+        XTIRClassInfo* fvc = [self valueIvarClassFor:ft];
+        if (fvc)
+            {
+            XTIRValue* ia = [self emitFieldAddr:addr fieldIndex:idx resultType:fvc.selfPtrType];
+            if (mode == XTStructARCZeroInit)
+                [self setUpInstanceAt:ia class:fvc zero:YES];
+            else if (mode == XTStructARCRetain)
+                [self stackClaimAt:ia class:fvc];
+            else
+                [self stackTeardownAt:ia class:fvc];
+            idx++;
+            continue;
+            }
+        if ([self astTypeOwnsClassPointer:ft] || ([ft isKindOfClass:[XTStructType class]] && [self astTypeHoldsInstance:ft]))
             {
             XTIRType* fieldIR = [self irTypeForASTTypeQuiet:ft];
             if (fieldIR)
@@ -15459,6 +15546,8 @@ typedef NS_ENUM(NSInteger, XTStructARCMode) {
 - (void)emitStructStrongFieldReleaseForLocalNamed:(NSString*)name
     {
     XTStructType* st = self.strongStructLocals[name];
+    if (!st || ![self structWalkWouldEmit:st zero:NO])
+        return;
     XTIRValue* addr = [self addrOfPinnedStructLocalNamed:name];
     if (st && addr)
         [self emitStructARCWalkAt:addr type:st mode:XTStructARCRelease];
@@ -15470,6 +15559,8 @@ typedef NS_ENUM(NSInteger, XTStructARCMode) {
 - (void)emitStructStrongFieldZeroInitForLocalNamed:(NSString*)name
     {
     XTStructType* st = self.strongStructLocals[name];
+    if (!st || ![self structWalkWouldEmit:st zero:YES])
+        return;
     XTIRValue* addr = [self addrOfPinnedStructLocalNamed:name];
     if (st && addr)
         [self emitStructARCWalkAt:addr type:st mode:XTStructARCZeroInit];
@@ -16286,6 +16377,10 @@ typedef NS_ENUM(NSInteger, XTStructARCMode) {
         for (NSUInteger i = entries.count; i < st.fields.count; i++)
             {
             XTStructField* f = st.fields[i];
+            // An instance held by value is set up as a whole, ivars zeroed and
+            // vtable seeded, by the struct's own setup (#756).
+            if ([self valueIvarClassFor:f.fieldType])
+                continue;
             XTIRType* fIR = [self irTypeForASTType:f.fieldType at:loc];
             if (!fIR)
                 return NO;
@@ -16545,7 +16640,8 @@ typedef NS_ENUM(NSInteger, XTStructARCMode) {
         }
     // Struct local embedding strong/weak class pointers: register for scope-exit
     // teardown (release strong fields, unregister weak ones).
-    if (node.declaredType && [node.declaredType isKindOfClass:[XTStructType class]] && [self structHasOwnedClassPointer:(XTStructType*)node.declaredType])
+    if (node.declaredType && [node.declaredType isKindOfClass:[XTStructType class]]
+        && ([self structHasOwnedClassPointer:(XTStructType*)node.declaredType] || [self astTypeHoldsInstance:node.declaredType]))
         {
         if (!self.strongStructLocals)
             self.strongStructLocals = [NSMutableDictionary dictionary];
@@ -16580,7 +16676,9 @@ typedef NS_ENUM(NSInteger, XTStructARCMode) {
         }
     // Local ARRAY of structs that embed owned class pointers (`Holder harr[N]`):
     // register for per-element recursive zero-init + scope-exit teardown.
-    if (node.declaredType && [node.declaredType isKindOfClass:[XTArrayType class]] && [((XTArrayType*)node.declaredType).elementType isKindOfClass:[XTStructType class]] && [self structHasOwnedClassPointer:(XTStructType*)((XTArrayType*)node.declaredType).elementType])
+    if (node.declaredType && [node.declaredType isKindOfClass:[XTArrayType class]] && [((XTArrayType*)node.declaredType).elementType isKindOfClass:[XTStructType class]]
+        && ([self structHasOwnedClassPointer:(XTStructType*)((XTArrayType*)node.declaredType).elementType]
+            || [self astTypeHoldsInstance:((XTArrayType*)node.declaredType).elementType]))
         {
         if (!self.strongStructArrayLocals)
             self.strongStructArrayLocals = [NSMutableDictionary dictionary];
@@ -21508,6 +21606,11 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
     // there is no layout to hand out.
     self.classesByName[cls.className] = info;
     [self.preScanInProgress removeObject:cls.className];
+    // A struct field holding this class by value is the instance inline
+    // (#756): its size is known now, and every struct holding one is laid out
+    // again, so a class met later sees the right widths.
+    [XTType setInstanceByteWidth:info.instanceLayout.size forClassNamed:cls.className];
+    [XTStructType relayoutAll];
     // A static ivar of the class's own pointer type was registered before the
     // class had a selfPtrType, and typed Ptr(Void) for want of it (a static
     // of any class registered earlier got its Agg). Typed again now, so the
