@@ -1015,6 +1015,524 @@ class LlvmReader
         return made;
         }
 
+    // ── small vectors, one value a lane ─────────────────────────────────
+    //
+    // `<N x T>` (2 <= N <= 16, T an integer, float, double or ptr) inside a
+    // function: clang's SROA keeps a struct of two floats as `<2 x float>`
+    // (x86-64's C ABI for one), its vectorisers write `<4 x float>`. Read as
+    // N values, the value's parts (as an aggregate's): a load or store is
+    // one a lane, extractelement and insertelement at a constant index pick
+    // or replace a lane, a phi is one a lane, an elementwise arithmetic
+    // instruction one a lane, and a shufflevector with a constant mask picks
+    // lanes. A vector a call passes or returns (one register in the ABI) is
+    // not read, nor a compare, select or cast of one: such a function is
+    // clang's, as before.
+
+    // At `<N x T>`: true (nothing read).
+    bool vecAt(void)
+        {
+        ws();
+        return _p + (u32)1 < _s.byteLength() && _s.byteAt(_p) == (u8)'<'
+            && _s.byteAt(_p + (u32)1) >= (u8)'0' && _s.byteAt(_p + (u32)1) <= (u8)'9';
+        }
+
+    // `<N x T>` read: the lanes' IR types (N of them), or 0 for a vector of
+    // anything else (nothing is then promised about the position).
+    Array* vecType(void)
+        {
+        ws();
+        u32 b = _p;
+        while (_p < _s.byteLength() && _s.byteAt(_p) != (u8)'>')
+            _p = _p + (u32)1;
+        _p = _p + (u32)1;
+        String* t = _s.substringBytes(b, _p - b);
+        if (!t.hasPrefix(String.withCString("<")) || !t.hasSuffix(String.withCString(">")))
+            return (Array*)0;
+        String* body = t.substringBytes((u32)1, t.byteLength() - (u32)2);
+        u32 x = body.byteIndexOf(String.withCString(" x "));
+        if (x == String.notFound())
+            return (Array*)0;
+        i64 n = LlvmReader.decimal(body.substringBytes((u32)0, x));
+        String* el = body.substringFromByte(x + (u32)3);
+        if (n < (i64)2 || n > (i64)16)
+            return (Array*)0;
+        bool ok = el.equals(String.withCString("i8")) || el.equals(String.withCString("i16")) || el.equals(String.withCString("i32"))
+            || el.equals(String.withCString("i64")) || el.equals(String.withCString("float")) || el.equals(String.withCString("double"))
+            || el.equals(String.withCString("ptr"));
+        String* it = ok ? irOf(el) : (String*)0;
+        if (it == (String*)0)
+            return (Array*)0;
+        Array* out = new Array();
+        for (i64 k = (i64)0; k < n; k = k + (i64)1)
+            out.add((Object*)it);
+        return out;
+        }
+
+    // A vector operand of lanes `el`: a name whose lanes are known, a
+    // constant (`<float 1.0, float 2.0>` or `splat (float 1.0)`), or
+    // zeroinitializer / poison / undef (zeros). 0, failed, otherwise.
+    Array* vecOperand(Array* el)
+        {
+        ws();
+        Array* parts = (Array*)0;
+        if (peek() == (u8)'<')
+            {
+            eat("<");
+            parts = new Array();
+            while (more() && peek() != (u8)'>')
+                {
+                IRValue* ev = typedOperand();
+                if (ev == (IRValue*)0)
+                    return (Array*)0;
+                parts.add((Object*)ev);
+                eat(",");
+                }
+            eat(">");
+            }
+        else
+            {
+            String* n = word();
+            if (n.equals(String.withCString("zeroinitializer")) || n.equals(String.withCString("poison")) || n.equals(String.withCString("undef")))
+                {
+                parts = new Array();
+                for (u32 k = (u32)0; k < el.count(); k = k + (u32)1)
+                    {
+                    String* et = (String*)el.get(k);
+                    parts.add((Object*)(et.hasPrefix(String.withCString("F"))
+                        ? emit(String.withCString("Const"), et, IROperand.immF(String.withCString("0000000000000000"), et), (IROperand*)0, (IROperand*)0)
+                        : et.hasPrefix(String.withCString("Ptr("))
+                            ? emit(String.withCString("IntToPtr"), et, IROperand.useVal(emit(String.withCString("Const"), String.withCString("I64"),
+                                   IROperand.immI((i64)0, String.withCString("I64")), (IROperand*)0, (IROperand*)0)), (IROperand*)0, (IROperand*)0)
+                            : emit(String.withCString("Const"), et, IROperand.immI((i64)0, et), (IROperand*)0, (IROperand*)0)));
+                    }
+                }
+            else if (n.equals(String.withCString("splat")))
+                {
+                // `splat (i32 2)`: every lane the same constant (newer
+                // clangs print a uniform vector constant this way).
+                ws();
+                eat("(");
+                IRValue* sv = typedOperand();
+                ws();
+                eat(")");
+                if (sv != (IRValue*)0)
+                    {
+                    parts = new Array();
+                    for (u32 k = (u32)0; k < el.count(); k = k + (u32)1)
+                        parts.add((Object*)sv);
+                    }
+                }
+            else
+                parts = (Array*)_aggParams.get((Hashable*)n);
+            }
+        if (parts == (Array*)0 || parts.count() != el.count())
+            {
+            fail("a vector operand not read");
+            return (Array*)0;
+            }
+        for (u32 k = (u32)0; k < parts.count(); k = k + (u32)1)
+            if (parts.get(k) == (Object*)0)
+                {
+                fail("a vector operand not read (a lane not made)");
+                return (Array*)0;
+                }
+        return parts;
+        }
+
+    // A constant lane index (`i64 1`, `i32 0`): the number, or -1.
+    i64 laneIndex(void)
+        {
+        llType();
+        ws();
+        u32 b = _p;
+        while (_p < _s.byteLength() && _s.byteAt(_p) >= (u8)'0' && _s.byteAt(_p) <= (u8)'9')
+            _p = _p + (u32)1;
+        if (_p == b)
+            return (i64)-1;
+        return LlvmReader.decimal(_s.substringBytes(b, _p - b));
+        }
+
+    // res as the value v (an extracted lane): v itself, or a copy of it
+    // when a phi has named res already.
+    void defineAs(String* res, IRValue* v)
+        {
+        if (res == (String*)0)
+            return;
+        if (_vals.get((Hashable*)res) != (Object*)0)
+            {
+            define(res, String.withCString("Bitcast"), v.ty(), IROperand.useVal(v), (IROperand*)0, (IROperand*)0, (String*)0);
+            return;
+            }
+        _vals.set((Hashable*)res, (Object*)v);
+        }
+
+    // Lane k's address of a vector at addr whose lanes are of type et.
+    IRValue* laneAddr(IRValue* addr, String* et, u32 k)
+        {
+        IRValue* b = asPtrTo(addr, et);
+        if (k == (u32)0)
+            return b;
+        IRValue* ix = emit(String.withCString("Const"), String.withCString("I64"), IROperand.immI((i64)k, String.withCString("I64")), (IROperand*)0, (IROperand*)0);
+        return emit(String.withCString("ElementAddr"), ptrTo(et), IROperand.useVal(b), IROperand.useVal(ix), (IROperand*)0);
+        }
+
+    // An instruction of a small vector, read a lane at a time: true when it
+    // was one (read, or failed); false, with nothing read, otherwise.
+    bool readVecInsn(String* res, String* op)
+        {
+        u32 save = _p;
+        if (op.equals(String.withCString("load")))
+            {
+            if (!vecAt())
+                {
+                _p = save;
+                return false;
+                }
+            Array* el = vecType();
+            eat(",");
+            IRValue* addr = el != (Array*)0 ? typedOperand() : (IRValue*)0;
+            if (el == (Array*)0 || addr == (IRValue*)0)
+                {
+                fail("a vector load not read");
+                return true;
+                }
+            Array* parts = new Array();
+            for (u32 k = (u32)0; k < el.count(); k = k + (u32)1)
+                {
+                String* et = (String*)el.get(k);
+                IRInsn* ld = IRInsn.with(String.withCString("Load"));
+                IRValue* r = new IRValue(et);
+                IRValue* mo = new IRValue(String.withCString("Mem"));
+                ld.setRes(r);
+                ld.setMemRes(mo);
+                ld.add(IROperand.useVal(laneAddr(addr, et, k)));
+                ld.add(IROperand.useVal(_mem));
+                _blk.add(ld);
+                _mem = mo;
+                parts.add((Object*)r);
+                }
+            aggDefined(res, parts);
+            return true;
+            }
+        if (op.equals(String.withCString("store")))
+            {
+            if (!vecAt())
+                {
+                _p = save;
+                return false;
+                }
+            Array* el = vecType();
+            Array* parts = el != (Array*)0 ? vecOperand(el) : (Array*)0;
+            if (parts == (Array*)0)
+                {
+                fail("a vector store not read");
+                return true;
+                }
+            eat(",");
+            IRValue* addr = typedOperand();
+            if (addr == (IRValue*)0)
+                return true;
+            for (u32 k = (u32)0; k < el.count(); k = k + (u32)1)
+                {
+                IRInsn* st = IRInsn.with(String.withCString("Store"));
+                IRValue* mo = new IRValue(String.withCString("Mem"));
+                st.add(IROperand.useVal(laneAddr(addr, (String*)el.get(k), k)));
+                st.add(IROperand.useVal((IRValue*)parts.get(k)));
+                st.add(IROperand.useVal(_mem));
+                st.setMemRes(mo);
+                _blk.add(st);
+                _mem = mo;
+                }
+            return true;
+            }
+        if (op.equals(String.withCString("extractelement")))
+            {
+            Array* el = vecAt() ? vecType() : (Array*)0;
+            Array* parts = el != (Array*)0 ? vecOperand(el) : (Array*)0;
+            if (parts == (Array*)0)
+                {
+                fail("an extractelement not read");
+                return true;
+                }
+            eat(",");
+            i64 k = laneIndex();
+            if (k < (i64)0 || k >= (i64)parts.count())
+                {
+                fail("an extractelement not read (a lane not constant)");
+                return true;
+                }
+            defineAs(res, (IRValue*)parts.get((u32)k));
+            return true;
+            }
+        if (op.equals(String.withCString("insertelement")))
+            {
+            Array* el = vecAt() ? vecType() : (Array*)0;
+            Array* was = el != (Array*)0 ? vecOperand(el) : (Array*)0;
+            if (was == (Array*)0)
+                {
+                fail("an insertelement not read");
+                return true;
+                }
+            eat(",");
+            IRValue* v = typedOperand();
+            eat(",");
+            i64 k = laneIndex();
+            if (v == (IRValue*)0 || k < (i64)0 || k >= (i64)was.count())
+                {
+                fail("an insertelement not read (a lane not constant)");
+                return true;
+                }
+            Array* parts = new Array();
+            parts.addAll(was);
+            parts.set((u32)k, (Object*)v);
+            aggDefined(res, parts);
+            return true;
+            }
+        if (op.equals(String.withCString("shufflevector")))
+            {
+            Array* el = vecAt() ? vecType() : (Array*)0;
+            Array* a = el != (Array*)0 ? vecOperand(el) : (Array*)0;
+            eat(",");
+            Array* el2 = a != (Array*)0 && vecAt() ? vecType() : (Array*)0;
+            Array* b = el2 != (Array*)0 ? vecOperand(el2) : (Array*)0;
+            eat(",");
+            Array* mt = b != (Array*)0 && vecAt() ? vecType() : (Array*)0;
+            if (mt == (Array*)0)
+                {
+                fail("a shufflevector not read");
+                return true;
+                }
+            Array* both = new Array();
+            both.addAll(a);
+            both.addAll(b);
+            Array* parts = new Array();
+            ws();
+            if (eat("zeroinitializer"))
+                {
+                for (u32 k = (u32)0; k < mt.count(); k = k + (u32)1)
+                    parts.add(both.get((u32)0));
+                }
+            else if (eat("<"))
+                {
+                while (more() && peek() != (u8)'>')
+                    {
+                    llType();
+                    ws();
+                    String* w = word();
+                    eat(",");
+                    if (w.equals(String.withCString("poison")) || w.equals(String.withCString("undef")))
+                        {
+                        parts.add(both.get((u32)0));
+                        continue;
+                        }
+                    i64 k = LlvmReader.decimal(w);
+                    if (k < (i64)0 || k >= (i64)both.count())
+                        {
+                        fail("a shufflevector not read (a lane past both)");
+                        return true;
+                        }
+                    parts.add(both.get((u32)k));
+                    }
+                eat(">");
+                }
+            if (parts.count() != mt.count())
+                {
+                fail("a shufflevector not read (its mask)");
+                return true;
+                }
+            aggDefined(res, parts);
+            return true;
+            }
+        if (op.equals(String.withCString("phi")))
+            {
+            eatFastMath();
+            if (!vecAt())
+                {
+                _p = save;
+                return false;
+                }
+            Array* el = vecType();
+            if (el == (Array*)0 || res == (String*)0)
+                {
+                fail("a vector phi not read");
+                return true;
+                }
+            Array* phis = new Array();
+            Array* rs = new Array();
+            for (u32 k = (u32)0; k < el.count(); k = k + (u32)1)
+                {
+                IRInsn* ph = IRInsn.with(String.withCString("Phi"));
+                IRValue* r = new IRValue((String*)el.get(k));
+                ph.setRes(r);
+                phis.add((Object*)ph);
+                rs.add((Object*)r);
+                }
+            while (eat("["))
+                {
+                ws();
+                u32 vs = _p;
+                bool named = peek() == (u8)'%';
+                String* vn = (String*)0;
+                if (named)
+                    vn = word();
+                else
+                    {
+                    // A constant, ending at the comma before its block.
+                    i32 depth = (i32)0;
+                    while (_p < _s.byteLength() && (depth > (i32)0 || _s.byteAt(_p) != (u8)','))
+                        {
+                        u8 c = _s.byteAt(_p);
+                        if (c == (u8)'(' || c == (u8)'[' || c == (u8)'{' || c == (u8)'<')
+                            depth = depth + (i32)1;
+                        else if (c == (u8)')' || c == (u8)']' || c == (u8)'}' || c == (u8)'>')
+                            depth = depth - (i32)1;
+                        _p = _p + (u32)1;
+                        }
+                    }
+                u32 ve = _p;
+                eat(",");
+                String* bn = word().substringFromByte((u32)1);
+                eat("]");
+                eat(",");
+                IRBlock* pb = blockNamed(bn);
+                Array* have = named ? (Array*)_aggParams.get((Hashable*)vn) : (Array*)0;
+                if (!named)
+                    {
+                    // Made in the predecessor, where it flows from.
+                    u32 resume = _p;
+                    String* line = _s;
+                    IRBlock* here = _blk;
+                    _blk = pb;
+                    at(line.substringBytes(vs, ve - vs));
+                    have = vecOperand(el);
+                    at(line);
+                    _p = resume;
+                    _blk = here;
+                    if (have == (Array*)0)
+                        return true;
+                    }
+                for (u32 k = (u32)0; k < el.count(); k = k + (u32)1)
+                    {
+                    IRInsn* ph = (IRInsn*)phis.get(k);
+                    ph.add(IROperand.block(pb));
+                    if (have != (Array*)0 && have.count() == el.count() && have.get(k) != (Object*)0)
+                        {
+                        ph.add(IROperand.useVal((IRValue*)have.get(k)));
+                        continue;
+                        }
+                    // Made later (a loop's next value): filled in once the
+                    // function is read (fixPairPhis).
+                    ph.add(IROperand.useVal(new IRValue((String*)el.get(k))));
+                    _pairFixups.add((Object*)ph);
+                    _pairFixups.add((Object*)Number.with(ph.ops().count() - (u32)1));
+                    _pairFixups.add((Object*)vn);
+                    _pairFixups.add((Object*)Number.with(k));
+                    }
+                }
+            for (u32 k = (u32)0; k < el.count(); k = k + (u32)1)
+                _blk.addPhi((IRInsn*)phis.get(k));
+            aggDefined(res, rs);
+            return true;
+            }
+        // `call <N x T> @llvm.fmuladd.vNfK(a, b, c)`: a multiply and an add a
+        // lane, the add marked `contract` where C fuses (as the scalar one).
+        if ((op.equals(String.withCString("call")) || op.equals(String.withCString("tail"))) && res != (String*)0)
+            {
+            if (op.equals(String.withCString("tail")))
+                eat("call");
+            eatFastMath();
+            skipAttrs();
+            if (!vecAt())
+                {
+                _p = save;
+                return false;
+                }
+            Array* el = vecType();
+            ws();
+            String* callee = word();
+            if (el == (Array*)0 || !callee.hasPrefix(String.withCString("@llvm.fmuladd.v")) || !eat("("))
+                {
+                fail("a call of a vector not read");
+                return true;
+                }
+            Array* ops = new Array();
+            for (u32 q = (u32)0; q < (u32)3; q = q + (u32)1)
+                {
+                if (!vecAt())
+                    {
+                    fail("a call of a vector not read");
+                    return true;
+                    }
+                vecType();
+                skipAttrs();
+                Array* o = vecOperand(el);
+                if (o == (Array*)0)
+                    return true;
+                ops.add((Object*)o);
+                eat(",");
+                }
+            String* fpred = _fuseMulAdd ? String.withCString("contract") : (String*)0;
+            Array* parts = new Array();
+            for (u32 k = (u32)0; k < el.count(); k = k + (u32)1)
+                {
+                String* et = (String*)el.get(k);
+                IRValue* m = emit(String.withCString("FMul"), et, IROperand.useVal((IRValue*)((Array*)ops.get((u32)0)).get(k)),
+                                  IROperand.useVal((IRValue*)((Array*)ops.get((u32)1)).get(k)), (IROperand*)0);
+                IRInsn* ad = IRInsn.with(String.withCString("FAdd"));
+                IRValue* r = new IRValue(et);
+                ad.setRes(r);
+                if (fpred != (String*)0)
+                    ad.setPred(fpred);
+                ad.add(IROperand.useVal(m));
+                ad.add(IROperand.useVal((IRValue*)((Array*)ops.get((u32)2)).get(k)));
+                _blk.add(ad);
+                parts.add((Object*)r);
+                }
+            aggDefined(res, parts);
+            return true;
+            }
+        // Elementwise arithmetic: `fadd fast <4 x float> %a, %b`, `fneg`.
+        String* bop = LlvmReader.binOp(op);
+        bool neg = op.equals(String.withCString("fneg"));
+        if (bop != (String*)0 || neg)
+            {
+            eatFastMath();
+            while (eat("nuw") || eat("nsw") || eat("exact") || eat("disjoint"))
+                {
+                }
+            if (!vecAt())
+                {
+                _p = save;
+                return false;
+                }
+            Array* el = vecType();
+            Array* a = el != (Array*)0 ? vecOperand(el) : (Array*)0;
+            Array* b = (Array*)0;
+            if (a != (Array*)0 && !neg)
+                {
+                eat(",");
+                b = vecOperand(el);
+                }
+            if (a == (Array*)0 || (!neg && b == (Array*)0))
+                {
+                fail("a vector arithmetic instruction not read");
+                return true;
+                }
+            Array* parts = new Array();
+            for (u32 k = (u32)0; k < el.count(); k = k + (u32)1)
+                {
+                String* et = (String*)el.get(k);
+                parts.add((Object*)(neg
+                    ? emit(String.withCString("FNeg"), et, IROperand.useVal((IRValue*)a.get(k)), (IROperand*)0, (IROperand*)0)
+                    : emit(bop, et, IROperand.useVal((IRValue*)a.get(k)), IROperand.useVal((IRValue*)b.get(k)), (IROperand*)0)));
+                }
+            aggDefined(res, parts);
+            return true;
+            }
+        _p = save;
+        return false;
+        }
+
     // At `[`: a constant array's elements (`[i64 ptrtoint (ptr @d to i64),
     // i64 poison]`), each made as an operand; 0 (failed) when one is not read.
     Array* constArrayParts(void)
@@ -2308,7 +2826,7 @@ class LlvmReader
             }
         u32 cb = _p;
         while (_p < _s.byteLength() && _s.byteAt(_p) != (u8)',' && _s.byteAt(_p) != (u8)')'
-               && _s.byteAt(_p) != (u8)' ' && _s.byteAt(_p) != (u8)']')
+               && _s.byteAt(_p) != (u8)' ' && _s.byteAt(_p) != (u8)']' && _s.byteAt(_p) != (u8)'>')
             _p = _p + (u32)1;
         String* w = _s.substringBytes(cb, _p - cb);
         if (w.equals(String.withCString("true")) || w.equals(String.withCString("false")))
@@ -2606,16 +3124,32 @@ class LlvmReader
                 }
             }
         String* op = word();
+        if (readVecInsn(res, op))
+            return;
         if (op.equals(String.withCString("alloca")))
             {
             String* lt = llType();
             String* t = lt != (String*)0 ? irOf(lt) : (String*)0;
-            // A literal struct (`alloca { double, double }`, C's _Complex).
+            // A literal struct (`alloca { double, double }`, C's _Complex),
+            // or a small vector (`alloca <4 x float>`): a slot of its lanes,
+            // which its loads and stores read a lane at a time.
             if (lt == (String*)0)
                 {
-                String* lit = litStruct();
-                if (lit != (String*)0)
-                    t = literalStructTy(lit);
+                if (vecAt())
+                    {
+                    Array* el = vecType();
+                    if (el != (Array*)0)
+                        {
+                        String* et = (String*)el.get((u32)0);
+                        t = String.withFormat("Agg(%u)", _m.addLayout(IRLayout.array(et, el.count(), widthOf(et), alignOf(et))));
+                        }
+                    }
+                else
+                    {
+                    String* lit = litStruct();
+                    if (lit != (String*)0)
+                        t = literalStructTy(lit);
+                    }
                 }
             // A local array (`alloca [256 x double]`, of arrays maybe): a
             // slot of all its innermost elements, which GEPs into it index.

@@ -42,6 +42,15 @@ if clang++ --version >/dev/null 2>&1; then
     [ -x "$W/ax" ] && { [ "$("$W/ax")" = "$("$W/aref")" ] || { echo "FAIL c-reads: aggarg.cpp gives '$("$W/ax")', clang++'s '$("$W/aref")'"; fail=1; }; }
     grep -q 'left to clang' "$W/ab" && { echo "FAIL c-reads: aggarg.cpp left to clang:"; grep 'because of' "$W/ab" | head -2; fail=1; }
 fi
+# vec.c: small vectors in a function, one value a lane (loads, stores,
+# lane reads and writes, arithmetic, a shuffle, a phi, fmuladd).
+Y=tests/par/c-reads/vec.c
+clang -O2 -o "$W/yref" "$Y" || { echo "FAIL c-reads: clang does not build vec.c"; exit 1; }
+for O in -O0 -O2; do
+    XC_C_TRACE=1 "$XC" -q $O -H . -o "$W/yx" "$Y" > "$W/yb" 2>&1 || { echo "FAIL c-reads: vec.c $O does not build"; grep -v warning "$W/yb" | head -3; fail=1; continue; }
+    [ "$("$W/yx")" = "$("$W/yref")" ] || { echo "FAIL c-reads: vec.c $O gives '$("$W/yx")', clang's '$("$W/yref")'"; fail=1; }
+    grep -q 'left to clang' "$W/yb" && { echo "FAIL c-reads: vec.c $O left to clang:"; grep 'because of' "$W/yb" | head -2; fail=1; }
+done
 # cplx.c: a literal struct as a struct's field and as a local (_Complex).
 X=tests/par/c-reads/cplx.c
 clang -O2 -o "$W/xref" "$X" || { echo "FAIL c-reads: clang does not build cplx.c"; exit 1; }
