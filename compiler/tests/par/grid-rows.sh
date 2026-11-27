@@ -5,7 +5,8 @@
 # work item (n is the grid's width) and a[par.y * kk + k] is whole rows, so
 # each array's extent is known and the block runs as a block. Its output is
 # the same on the CPU and the GPU as the loops run serially; the compiler no
-# longer warns that c is written at an index computed from data; and where
+# longer warns that c is written at an index computed from data; on a GPU
+# each array's size is known (its rows, walked whole by every item); and where
 # both compilers are built, their code is the same.
 #
 #   bash tests/par/grid-rows.sh
@@ -31,6 +32,9 @@ for C in xcc-xc xcc; do
     rep=$(XC_PAR=cpu XC_PAR_REPORT=1 "$W/g.$C" 2>&1)
     echo "$rep" | grep -q "arrays overlap" && { echo "FAIL grid-rows ($C): the runtime took the arrays for overlapping"; fail=1; }
     echo "$rep" | grep -qE "par: mv: [0-9]+ items on the CPU" || { echo "FAIL grid-rows ($C): the block did not run as a block: $(echo "$rep" | grep -m1 'par: mv')"; fail=1; }
+    # On a GPU the small arrays have a size (their whole rows, whole=).
+    grep_gpu=$(XC_PAR=gpu XC_PAR_REPORT=1 "$W/g.$C" 2>&1)
+    echo "$grep_gpu" | grep -q "size is not known" && { echo "FAIL grid-rows ($C): on a GPU an array's size is not known"; fail=1; }
     "$XC" -q -O2 -H . -S -o "$W/$C.s" "$F" > /dev/null 2>&1
     built="$built $C"
 done

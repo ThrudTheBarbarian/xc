@@ -691,6 +691,8 @@ class ClassInfo
     // header's pairs= word (Par.pairsOf).
     i32 _parF4Pair;
     Map* _parPairs;
+    IRBlock* _parRowHead;    // the inner loop parRowField's counter heads (#776), or 0
+    i64 _parRowStep;         // and its step
 
     // Each buffer's footprint, for the runtime's header line:
     // `fp=<captured-array>:<k>:<lo>:<hi>` (item i touches elements
