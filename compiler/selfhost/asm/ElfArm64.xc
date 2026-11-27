@@ -773,13 +773,21 @@ class ElfArm64
         // zero-filled storage of every common; left there it would make all of
         // those zeros file bytes, since only TRAILING zeros are left to the
         // loader. It moves to the head instead, padded to 16 bytes, and the
-        // data symbols and the pointer words after it move up by that much.
-        // As the reference.
+        // data symbols, the fixups in the data and the thread-local template
+        // after it move up by that much. As the reference, which has no
+        // relative data words or thread-locals. A template aligned wider than
+        // 16 bytes widens the padding to its alignment.
+        Array* tlsP = ElfTlsPending.pending();
+        ElfTlsPending.setPending((Array*)0);
+        u32 headAlign = (u32)16;
+        if (tlsP != (Array*)0 && ((Number*)tlsP.get((u32)2)).asU32() > headAlign)
+            headAlign = ((Number*)tlsP.get((u32)2)).asU32();
         bool miAtHead = false;
+        u32 miHead = (u32)0;
         if (modInitLength > (u32)0 && modInitLength < dataIn.length())
             {
             u32 tail = dataIn.length() - modInitLength;
-            u32 head = (modInitLength + (u32)15) & ~(u32)15;
+            u32 head = (modInitLength + headAlign - (u32)1) & ~(headAlign - (u32)1);
             SectionBytes* moved = dataIn.subrange(tail, modInitLength);
             moved.appendZeros(head - modInitLength);
             moved.append(dataIn.subrange((u32)0, tail));
@@ -800,7 +808,10 @@ class ElfArm64
             for (u32 i = (u32)0; i < fixups.count(); i = i + (u32)1)
                 {
                 Arm64Fixup* f = (Arm64Fixup*)fixups.get(i);
-                if (f.kind() != (u32)FIXUP_POINTER64)
+                // Every fixup whose offset is in the data: the pointer words
+                // and C++'s relative words (PREL32, PREL64) alike.
+                if (f.kind() != (u32)FIXUP_POINTER64 && f.kind() != (u32)FIXUP_PREL32
+                    && f.kind() != (u32)FIXUP_PREL64)
                     {
                     fx2.add((Object*)f);
                     continue;
@@ -812,14 +823,25 @@ class ElfArm64
                 }
             fixups = fx2;
             miAtHead = true;
+            miHead = head;
             }
         // The name lists as sets (#335): each was scanned once per symbol or
         // fixup below.
         NameSet* dataSet = NameSet.of(dataSyms);
         bool isExec = entry != (String*)0 && entry.byteLength() > (u32)0;
         bool hasIface = iface != (Array*)0 && iface.count() > (u32)0;
-        Array* tlsP = ElfTlsPending.pending();
-        ElfTlsPending.setPending((Array*)0);
+        // The thread-local template is a data offset too, ahead of the
+        // constructor array: it moves up with the rest of the data, else the
+        // PT_TLS would start in the array and every thread would copy a
+        // template shifted by its length.
+        if (tlsP != (Array*)0 && miHead > (u32)0)
+            {
+            Array* t2 = new Array();
+            t2.add((Object*)Number.withU32(((Number*)tlsP.get((u32)0)).asU32() + miHead));
+            t2.add(tlsP.get((u32)1));
+            t2.add(tlsP.get((u32)2));
+            tlsP = t2;
+            }
         if (isExec && (symbols.get((Hashable*)entry) == (Object*)0 || dataSet.has(entry)))
             {
             failWith(String.withCString("entry symbol is not defined in .text:"), entry);

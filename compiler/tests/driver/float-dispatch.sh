@@ -93,6 +93,49 @@ case "$CPU-$(uname -s)" in
 esac
 [ -z "$run" ] || [ "$("$run")" = "44e0 1.000000" ] || bad "big global: $(basename "$run") does not run"
 
+# The thread-local template moves with the data when the init array goes to
+# its head: PT_TLS must start at the initialised thread-local (1 2 3 4) and
+# span it and the zero one after it (40 bytes), on its alignment. The program
+# runs where it can, and with a REF that builds C, both build the same bytes.
+# Thread-locals come only from C and C++, which do not build for Android.
+cat > "$W/tl.c" <<'C'
+_Thread_local long tv[4] = {1, 2, 3, 4};
+_Thread_local long tz;
+int printf(const char*, ...);
+int main(int argc, char** argv) { tz += argc; tv[1] += argc; printf("%ld %ld %ld %ld %ld\n", tv[0], tv[1], tv[2], tv[3], tz); return 0; }
+C
+tlscheck() { # the image: PT_TLS's memory image is tv then tz, memsz 40, aligned
+    python3 - "$1" <<'PY'
+import struct, sys
+b = open(sys.argv[1], "rb").read()
+phoff, = struct.unpack_from("<Q", b, 32); phn, = struct.unpack_from("<H", b, 56)
+ph = [struct.unpack_from("<IIQQQQQQ", b, phoff + 56 * i) for i in range(phn)]
+tls = [p for p in ph if p[0] == 7]
+if len(tls) != 1: sys.exit("no single PT_TLS")
+_, _, off, va, _, fsz, msz, al = tls[0]
+def mem(a, n):  # what the loader maps at [a, a+n): file bytes, then zeros
+    for p in ph:
+        if p[0] == 1 and p[3] <= a and a + n <= p[3] + p[6]:
+            o = a - p[3]
+            return bytes((b[p[2] + o + i] if o + i < p[5] else 0) for i in range(n))
+    sys.exit("PT_TLS outside every PT_LOAD")
+want = struct.pack("<5q", 1, 2, 3, 4, 0)
+if msz != 40 or fsz > msz or va % al or al < 8 or mem(va, fsz) + bytes(msz - fsz) != want:
+    sys.exit("PT_TLS at %#x filesz %d memsz %d align %d holds %s" % (va, fsz, msz, al, mem(va, msz).hex()))
+PY
+}
+for row in arm64-linux; do
+    "$XC" -q -O2 -A $row -o "$W/tl.$row" "$W/tl.c" || { bad "thread-locals: -A $row does not build"; continue; }
+    why=$(tlscheck "$W/tl.$row" 2>&1) || bad "thread-locals: -A $row: $why"
+    if [ -n "${REF:-}" ] && "$REF" -q -O2 -A $row -o "$W/tl.ref" "$W/tl.c" 2>/dev/null; then
+        cmp -s "$W/tl.ref" "$W/tl.$row" || bad "thread-locals: -A $row differs between $XC and $REF"
+    fi
+done
+if [ "$CPU-$(uname -s)" = arm64-Linux ]; then
+    got=$("$W/tl.arm64-linux")
+    [ "$got" = "1 3 3 4 1" ] || bad "thread-locals: tl.arm64-linux gives '$got'"
+fi
+
 # Every fixture, every level.
 for f in tests/fixtures/f16_*.xc tests/fixtures/f8_*.xc tests/fixtures/f4_*.xc \
          tests/fixtures/par_f16.xc tests/fixtures/par_pack_gpu.xc tests/fixtures/par_f4_cut.xc; do
