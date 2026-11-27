@@ -2898,11 +2898,28 @@ static NSString* XTDescribeNodeKind(XTASTNodeKind k)
         if ([self valueIvarClassFor:ivarAST])
             continue;
         XTIRType* fieldIRType = [self irTypeForASTTypeQuiet:ivarAST];
-        // Only scalar / pointer ivars get a single-Store zero. Aggregate
-        // ivars (nested struct/array) are left untouched — none of the
-        // current stack-class fixtures use them, and a partial zero would
-        // be worse than none. (A future task can recurse if needed.)
-        if (!fieldIRType || fieldIRType.kind == XTIRTypeKindAgg || fieldIRType.kind == XTIRTypeKindVoid)
+        // An array or struct ivar starts at zero too, as a struct local
+        // does: the same stores as an empty `= {}` (#755). An array of
+        // auto-zeroing slots keeps its own link handling.
+        if (fieldIRType && fieldIRType.kind == XTIRTypeKindAgg)
+            {
+            BOOL isArr = ivarAST.kind == XTTypeKindArray && [ivarAST isKindOfClass:[XTArrayType class]];
+            BOOL weakArr = isArr && [self astTypeIsWeakSlot:((XTArrayType*)ivarAST).elementType];
+            BOOL isStruct = ivarAST.kind == XTTypeKindStruct;
+            if (!weakArr && ![self astTypeIsWeakSlot:ivarAST] && (isArr || isStruct))
+                {
+                XTIRValue* afa = [self emitFieldAddr:instance
+                                          fieldIndex:idx.unsignedIntegerValue
+                                          resultType:[XTIRType ptrToType:fieldIRType window:XTIRWindowUnbanked]];
+                if (afa)
+                    [self lowerAggregateByteListInitAt:afa
+                                              declType:ivarAST
+                                                  list:[[XTBlockNode alloc] initWithStatements:@[] location:nil]
+                                              location:nil];
+                }
+            continue;
+            }
+        if (!fieldIRType || fieldIRType.kind == XTIRTypeKindVoid)
             continue;
         XTIRType* fieldPtrType = [XTIRType ptrToType:fieldIRType window:XTIRWindowUnbanked];
         XTIRValue* fa = [self emitFieldAddr:instance

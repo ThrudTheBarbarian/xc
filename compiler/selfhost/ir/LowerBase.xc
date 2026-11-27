@@ -12242,8 +12242,20 @@ class ClassInfo
                 if (valueIvarClass(ty) != 0)
                     continue;
                 String* ir = irType(ty);
+                // An array or struct ivar starts at zero too, as a struct
+                // local does: the same stores as an empty `= {}` (#755). An
+                // array of auto-zeroing slots keeps its own link handling.
                 if (IRType.isAgg(ir))
+                    {
+                    bool weakArr = isArrayLike(ty) && isWeakSlot(elementOf(ty));
+                    if (!weakArr && !isWeakSlot(ty) && (isArrayLike(ty) || structDeclFor(ty) != (Node*)0))
+                        {
+                        lowerAggregateByteList(fieldAddr(addr, slot, ptrTo(ir)), ty, Node.with((u16)nkBlock));
+                        if (_failed)
+                            return;
+                        }
                     continue;
+                    }
                 IRValue* fa = fieldAddr(addr, slot, ptrTo(ir));
                 IRValue* z = (IRValue*)0;
                 if (isPtrIr(ir))
