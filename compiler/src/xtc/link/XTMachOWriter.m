@@ -1884,6 +1884,24 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
             if (xtmLo12Aligned(symAddr(f.symbol) + (uint64_t)f.addend, (uint32_t)f.scale, f.symbol))
                 wrw(f.offset, (rdw(f.offset) & ~(0xFFFu << 10)) | (imm12 << 10));
             }
+        // A GOT pair naming a symbol this image defines is relaxed to the
+        // symbol itself, as ld64 does: the adrp takes its page and the load
+        // becomes an add. It was left as assembled, so the load read a word of
+        // the code page as the address. As the port's writer.
+        else if (f.kind == XAArm64FixupGotPage21 && symbols[f.symbol])
+            {
+            uint64_t s = symAddr(f.symbol) + (uint64_t)f.addend;
+            int64_t d = (int64_t)((s & ~0xFFFull) - ((textAddr + f.offset) & ~0xFFFull));
+            int64_t imm = d >> 12;
+            uint32_t w = rdw(f.offset) & ~((3u << 29) | (0x7FFFFu << 5));
+            wrw(f.offset, w | ((uint32_t)(imm & 3) << 29) | ((uint32_t)((imm >> 2) & 0x7FFFF) << 5));
+            }
+        // `ldr Xt, [Xn, #off]` becomes `add Xt, Xn, #pageoff(sym)`.
+        else if (f.kind == XAArm64FixupGotPageOff12 && symbols[f.symbol])
+            {
+            uint64_t s = symAddr(f.symbol) + (uint64_t)f.addend;
+            wrw(f.offset, 0x91000000u | ((uint32_t)(s & 0xFFF) << 10) | (rdw(f.offset) & 0x3FFu));
+            }
         // adrp <sym>@GOTPAGE
         else if (f.kind == XAArm64FixupGotPage21 && !symbols[f.symbol])
             {
@@ -2682,6 +2700,24 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
             uint32_t imm12 = (uint32_t)(((symAddr(f.symbol) + (uint64_t)f.addend) & 0xFFF) >> f.scale);
             if (xtmLo12Aligned(symAddr(f.symbol) + (uint64_t)f.addend, (uint32_t)f.scale, f.symbol))
                 wrw(f.offset, (rdw(f.offset) & ~(0xFFFu << 10)) | (imm12 << 10));
+            }
+        // A GOT pair naming a symbol this image defines is relaxed to the
+        // symbol itself, as ld64 does: the adrp takes its page and the load
+        // becomes an add. It was left as assembled, so the load read a word of
+        // the code page as the address. As the port's writer.
+        else if (f.kind == XAArm64FixupGotPage21 && symbols[f.symbol])
+            {
+            uint64_t s = symAddr(f.symbol) + (uint64_t)f.addend;
+            int64_t d = (int64_t)((s & ~0xFFFull) - ((textAddr + f.offset) & ~0xFFFull));
+            int64_t imm = d >> 12;
+            uint32_t w = rdw(f.offset) & ~((3u << 29) | (0x7FFFFu << 5));
+            wrw(f.offset, w | ((uint32_t)(imm & 3) << 29) | ((uint32_t)((imm >> 2) & 0x7FFFF) << 5));
+            }
+        // `ldr Xt, [Xn, #off]` becomes `add Xt, Xn, #pageoff(sym)`.
+        else if (f.kind == XAArm64FixupGotPageOff12 && symbols[f.symbol])
+            {
+            uint64_t s = symAddr(f.symbol) + (uint64_t)f.addend;
+            wrw(f.offset, 0x91000000u | ((uint32_t)(s & 0xFFF) << 10) | (rdw(f.offset) & 0x3FFu));
             }
         // adrp <sym>@GOTPAGE
         else if (f.kind == XAArm64FixupGotPage21 && !symbols[f.symbol])

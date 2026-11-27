@@ -564,6 +564,18 @@ static BOOL patchLo12(uint8_t* p, uint64_t off, uint64_t target, uint32_t scale,
             break;
         case XAArm64FixupGotPageOff12:
             // A GOT slot is always an 8-byte ldr, whatever the referent's size.
+            // A symbol this image defines has no slot: the pair is relaxed to
+            // the symbol itself, the ldr becoming `add Xt, Xn, #pageoff(sym)`
+            // (the adrp above already took the symbol's page). As the port.
+            if (off)
+                {
+                uint32_t w = (uint32_t)tp[f.offset] | ((uint32_t)tp[f.offset + 1] << 8)
+                             | ((uint32_t)tp[f.offset + 2] << 16) | ((uint32_t)tp[f.offset + 3] << 24);
+                uint32_t add = 0x91000000u | ((uint32_t)(target & 0xFFF) << 10) | (w & 0x3FFu);
+                for (int i = 0; i < 4; i++)
+                    tp[f.offset + i] = (uint8_t)(add >> (8 * i));
+                break;
+                }
             ok = patchLo12(tp, f.offset, target, 3, error, f.symbol);
             break;
         default:

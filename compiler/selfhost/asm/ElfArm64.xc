@@ -1113,6 +1113,12 @@ class ElfArm64
                 patchAdrp(text, f.offset(), target, site, f.symbol());
             else if (f.kind() == (u32)FIXUP_PAGEOFF12)
                 patchLo12(text, f.offset(), target, f.scale(), f.symbol());
+            else if (f.kind() == (u32)FIXUP_GOTPAGEOFF12 && off != (Object*)0)
+                // A symbol this image defines has no slot: the pair is relaxed
+                // to the symbol itself, the ldr becoming `add Xt, Xn,
+                // #pageoff(sym)` (the adrp above already took the symbol's
+                // page). As the reference.
+                wrw(text, f.offset(), (u32)$91000000 | ((target & (u32)$FFF) << (u32)10) | (rdw(text, f.offset()) & (u32)$3FF));
             else if (f.kind() == (u32)FIXUP_GOTPAGEOFF12)
                 // A GOT slot is always an 8-byte ldr, whatever the referent's size.
                 patchLo12(text, f.offset(), target, (u32)3, f.symbol());
