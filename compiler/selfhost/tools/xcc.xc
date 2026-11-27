@@ -7998,6 +7998,11 @@ void applyOptFlags(DriverOptions* d, OptProfile* p)
         p.setMatMulFastSuffix(String.withCString("_fast"));
         p.setMatMulInts(true);
     }
+    // arm64 without SME (arm64 Linux, the Pi 5): the NEON kernel, float only.
+    if (matMul && mmKind != (String*)0 && mmKind.equals(String.withCString("neon"))) {
+        p.setMatMul(String.withCString("__xt_neon_gemm_"), String.withCString(""));
+        p.setMatMulFastSuffix(String.withCString("_fast"));
+    }
     // The vector level only ever reaches an x86-64 profile (checkCapabilities
     // refuses it elsewhere): avx2 gives the vectoriser 32-byte vectors, which
     // the back end emits as ymm.

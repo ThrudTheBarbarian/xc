@@ -24,7 +24,10 @@
         bool kernel = _profile.matMulPrefix() != (String*)0;
         if (!kernel && !_profile.matMulContract())
             return;
-        bool sme = kernel && _profile.matMulPrefix().hasPrefix(String.withCString("__xt_sme_"));
+        // An arm64 kernel (SME, or NEON without it) fuses as the nest does, so
+        // `:goal(accuracy)`, strict ISO, keeps the loops.
+        bool sme = kernel && (_profile.matMulPrefix().hasPrefix(String.withCString("__xt_sme_"))
+                              || _profile.matMulPrefix().hasPrefix(String.withCString("__xt_neon_")));
         for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
             {
             IRFunc* fn = (IRFunc*)m.funcs().get(f);
@@ -773,7 +776,8 @@
     final void applyMatMul(IRModule* m, IRFunc* fn)
         {
         // The nest fuses as the kernel does (the reference explains).
-        if (_mxAcc != (IRInsn*)0 && _profile.matMulPrefix().hasPrefix(String.withCString("__xt_sme_")))
+        if (_mxAcc != (IRInsn*)0 && (_profile.matMulPrefix().hasPrefix(String.withCString("__xt_sme_"))
+                                     || _profile.matMulPrefix().hasPrefix(String.withCString("__xt_neon_"))))
             _mxAcc.setPred(String.withCString("contract"));
         String* name = new String();
         name.append(_profile.matMulPrefix());

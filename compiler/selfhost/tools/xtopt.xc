@@ -28,6 +28,7 @@ void main(void)
     u32 simdBytes = (u32)16;
     bool simdDispatch = false; // --simd=auto: runtime SIMD dispatch clones
     bool matMul = false;       // --matmul: idiom-matmul's kernel for the target
+    bool matMulNeon = false;   // --matmul-neon: the NEON kernel (arm64 without SME)
     bool inlineChecks = false; // --inline-checks: -fbounds-check=light's checks inline
     bool lse = true;           // --no-lse-atomics: an ARMv8.0 row (no FEAT_FP16 arithmetic either)
     String* simdName = String.withCString("base");
@@ -86,6 +87,13 @@ void main(void)
         if (a.equals(String.withCString("--matmul")))
             {
             matMul = true;
+            i = i + (u32)1;
+            continue;
+            }
+        // --matmul-neon: arm64 without SME calls the NEON kernel.
+        if (a.equals(String.withCString("--matmul-neon")))
+            {
+            matMulNeon = true;
             i = i + (u32)1;
             continue;
             }
@@ -170,6 +178,11 @@ void main(void)
         prof.setMatMul(String.withCString("__xt_sme_gemm_"), String.withCString(""));
         prof.setMatMulFastSuffix(String.withCString("_fast"));
         prof.setMatMulInts(true);
+        }
+    else if (matMulNeon && target.equals(String.withCString("arm64")))
+        {
+        prof.setMatMul(String.withCString("__xt_neon_gemm_"), String.withCString(""));
+        prof.setMatMulFastSuffix(String.withCString("_fast"));
         }
     else if (matMul && target.equals(String.withCString("x86_64")))
         {

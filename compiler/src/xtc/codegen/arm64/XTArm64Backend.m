@@ -325,7 +325,8 @@ static NSString *xtArm64SmeGemmKernel(BOOL f64, BOOL check) {
                      "    mov w9, #2\n    mov w10, #1\n    csel w9, w10, w9, ne\n"
                      "    adrp x8, ___xt_sme_state@PAGE\n"
                      "    strb w9, [x8, ___xt_sme_state@PAGEOFF]\n"];
-    [o appendFormat:@"%@known:\n    mov w0, #0\n    cmp w9, #1\n    b.ne %@ret\n", L, L];
+    // no SME (M1-M3): the NEON kernel, with the same arguments
+    [o appendFormat:@"%@known:\n    mov w0, #0\n    cmp w9, #1\n    b.ne %@neon\n", L, L];
     // nothing to compute
     [o appendFormat:@"    cbz x22, %@done\n    cbz x23, %@done\n", L, L];
     // rows of C must not overlap: ldc >= N
@@ -436,6 +437,156 @@ static NSString *xtArm64SmeGemmKernel(BOOL f64, BOOL check) {
                      "    ldp x27, x28, [sp, #80]\n    ldp x25, x26, [sp, #64]\n"
                      "    ldp x23, x24, [sp, #48]\n    ldp x21, x22, [sp, #32]\n"
                      "    ldp x19, x20, [sp, #16]\n    ldp x29, x30, [sp], #160\n    ret\n"];
+    // No SME (M1-M3): the NEON kernel computes it instead, with the same
+    // arguments, once this frame is gone.
+    [o appendFormat:@"%@neon:\n    mov x0, x19\n    mov x1, x20\n    mov x2, x21\n    orr x3, x22, x23, lsl #32\n"
+                     "    mov w4, w24\n    mov w5, w25\n    mov w6, w26\n    mov w7, w27\n", L];
+    [o appendString:@"    ldp d14, d15, [sp, #144]\n    ldp d12, d13, [sp, #128]\n"
+                     "    ldp d10, d11, [sp, #112]\n    ldp d8, d9, [sp, #96]\n"
+                     "    ldp x27, x28, [sp, #80]\n    ldp x25, x26, [sp, #64]\n"
+                     "    ldp x23, x24, [sp, #48]\n    ldp x21, x22, [sp, #32]\n"
+                     "    ldp x19, x20, [sp, #16]\n    ldp x29, x30, [sp], #160\n"];
+    [o appendFormat:@"    b ___xt_neon_gemm_%@%@\n", f64 ? @"f64" : @"f32", fast];
+    return o;
+}
+
+// The NEON matrix kernel (arm64 without SME: M1-M3 Macs, arm64 Linux, the
+// Pi 5): the SME kernel's contract, the same arguments, checks and return,
+// and C's elements the loops' bit for bit. Each element is fused with k in
+// order from +0.0, as the nest fuses on every arm64 row (#569); fmla (by
+// element) and scalar fmadd round once. For each block of columns (8
+// floats, 4 doubles) B's K x 32-byte panel is packed once into a buffer
+// (malloc; none, and the loop runs), then read by blocks of C 8 rows tall
+// held in v16-v31 (per k: the panel's two vectors, eight of A's column,
+// sixteen fmla by element); the columns past the last block, for those rows,
+// an element at a time with fmadd. The rows left over (all of them when M <
+// 8) start from +0.0 in C and are updated in place per k, B's rows read as
+// they lie. Every path keeps each element's k order. A NaN in C
+// hands back to the loop (`check`), which keeps an input NaN's payload as
+// written; the `_fast` kernel (`:goal(speed)`) leaves the scan out. Never
+// called under `:goal(accuracy)`: that nest stays the loops, unfused.
+// private:docs/Design/neon-matmul.md.
+static NSString *xtArm64NeonGemmKernel(BOOL f64, BOOL check) {
+    NSString *S = f64 ? @"d" : @"s";              // scalar register
+    NSString *V = f64 ? @"2d" : @"4s";            // vector arrangement
+    int sh = f64 ? 3 : 2;       // log2 element bytes
+    int cols = f64 ? 4 : 8;     // columns per block
+    NSString *L = f64 ? (check ? @"Lneon64_" : @"Lneon64f_") : (check ? @"Lneon32_" : @"Lneon32f_");
+    NSString *name = f64 ? (check ? @"f64" : @"f64_fast") : (check ? @"f32" : @"f32_fast");
+    NSMutableString *o = [NSMutableString string];
+    [o appendFormat:@"\n// NEON matrix kernel (%@)\n    .p2align 2\n", name];
+    [o appendFormat:@"___xt_neon_gemm_%@:\n", name];
+    [o appendString:@"    stp x29, x30, [sp, #-160]!\n    mov x29, sp\n"
+                     @"    stp x19, x20, [sp, #16]\n    stp x21, x22, [sp, #32]\n"
+                     @"    stp x23, x24, [sp, #48]\n    stp x25, x26, [sp, #64]\n"
+                     @"    stp x27, x28, [sp, #80]\n    stp d8, d9, [sp, #96]\n"
+                     @"    stp d10, d11, [sp, #112]\n    stp d12, d13, [sp, #128]\n"
+                     @"    stp d14, d15, [sp, #144]\n"];
+    [o appendString:@"    mov x19, x0\n    mov x20, x1\n    mov x21, x2\n"
+                     @"    mov w22, w3\n    lsr x23, x3, #32\n    mov w24, w4\n"
+                     @"    mov w25, w5\n    mov w26, w6\n    mov w27, w7\n    mov w0, #0\n"];
+    // the SME kernel's checks
+    [o appendFormat:@"    cbz x22, %@done\n    cbz x23, %@done\n", L, L];
+    [o appendFormat:@"    cmp x27, x23\n    b.lo %@ret\n", L];
+    [o appendString:@"    sub x9, x22, #1\n    madd x10, x9, x27, x23\n"];
+    [o appendFormat:@"    sub x11, x10, #1\n    lsr x11, x11, #32\n    cbnz x11, %@ret\n", L];
+    [o appendFormat:@"    add x10, x21, x10, lsl #%d\n", sh];
+    [o appendFormat:@"    cbz x24, %@go\n", L];
+    [o appendString:@"    madd x11, x9, x25, x24\n    sub x12, x11, #1\n    lsr x12, x12, #32\n"];
+    [o appendFormat:@"    cbnz x12, %@ret\n", L];
+    [o appendFormat:@"    add x11, x19, x11, lsl #%d\n", sh];
+    [o appendFormat:@"    cmp x21, x11\n    ccmp x19, x10, #2, lo\n    b.lo %@ret\n", L];
+    [o appendString:@"    sub x12, x24, #1\n    madd x11, x12, x26, x23\n    sub x12, x11, #1\n    lsr x12, x12, #32\n"];
+    [o appendFormat:@"    cbnz x12, %@ret\n", L];
+    [o appendFormat:@"    add x11, x20, x11, lsl #%d\n", sh];
+    [o appendFormat:@"    cmp x21, x11\n    ccmp x20, x10, #2, lo\n    b.lo %@ret\n", L];
+    // strides in bytes; M rounded down to the 8-row blocks, N to the columns'
+    [o appendFormat:@"%@go:\n    lsl x27, x27, #%d\n    mov x28, #0\n", L, sh];
+    // B's panel for one column block, K rows of 32 bytes, packed once and
+    // read by every 8-row block (none to read: no panel; no allocation:
+    // the loop runs)
+    [o appendFormat:@"    cbz x24, %@go2\n    cmp x22, #8\n    b.lo %@go2\n    lsl x0, x24, #5\n    bl _malloc\n    cbz x0, %@bail\n    mov x28, x0\n", L, L, L];
+    [o appendFormat:@"%@go2:\n    lsl x13, x25, #%d\n    lsl x14, x26, #%d\n    and x17, x22, #0xfffffffffffffff8\n", L, sh, sh];
+    [o appendFormat:@"    and x9, x23, #%@\n    mov x11, #0\n    cbz x17, %@ir\n", f64 ? @"0xfffffffffffffffc" : @"0xfffffffffffffff8", L];
+    [o appendFormat:@"%@j8:\n    cmp x11, x9\n    b.hs %@jr\n", L, L];
+    [o appendFormat:@"    add x16, x20, x11, lsl #%d\n    mov x15, x28\n    mov x12, #0\n    cbz x24, %@p8\n", sh, L];
+    [o appendFormat:@"%@pk:\n    ldp q0, q1, [x16]\n    add x16, x16, x14\n    stp q0, q1, [x15], #32\n", L];
+    [o appendFormat:@"    add x12, x12, #1\n    cmp x12, x24\n    b.lo %@pk\n", L];
+    [o appendFormat:@"%@p8:\n    mov x10, #0\n%@i8:\n    cmp x10, x17\n    b.hs %@jn\n", L, L, L];
+    for (int v = 16; v < 32; v++)
+        [o appendFormat:@"    eor v%d.16b, v%d.16b, v%d.16b\n", v, v, v];
+    // x0-x7: the block's eight rows of A; x16: the panel
+    [o appendString:@"    madd x0, x10, x13, x19\n"];
+    for (int r = 1; r < 8; r++)
+        [o appendFormat:@"    add x%d, x%d, x13\n", r, r - 1];
+    [o appendFormat:@"    mov x16, x28\n    mov x12, #0\n    cbz x24, %@st\n", L];
+    [o appendFormat:@"%@k:\n    ldp q0, q1, [x16], #32\n", L];
+    for (int r = 0; r < 8; r++)
+        [o appendFormat:@"    ldr %@%d, [x%d, x12, lsl #%d]\n", S, 8 + r, r, sh];
+    for (int r = 0; r < 8; r++) {
+        [o appendFormat:@"    fmla v%d.%@, v0.%@, v%d.%@[0]\n", 16 + r * 2, V, V, 8 + r, S];
+        [o appendFormat:@"    fmla v%d.%@, v1.%@, v%d.%@[0]\n", 17 + r * 2, V, V, 8 + r, S];
+    }
+    [o appendFormat:@"    add x12, x12, #1\n    cmp x12, x24\n    b.lo %@k\n", L];
+    [o appendFormat:@"%@st:\n    madd x15, x10, x27, x21\n    add x15, x15, x11, lsl #%d\n", L, sh];
+    for (int r = 0; r < 8; r++) {
+        [o appendFormat:@"    stp q%d, q%d, [x15]\n", 16 + r * 2, 17 + r * 2];
+        if (r < 7)
+            [o appendString:@"    add x15, x15, x27\n"];
+    }
+    [o appendFormat:@"    add x10, x10, #8\n    b %@i8\n", L];
+    [o appendFormat:@"%@jn:\n    add x11, x11, #%d\n    b %@j8\n", L, cols, L];
+    // the columns past the last block, every row, an element at a time
+    // the columns past the last block, for the 8-row blocks' rows, an
+    // element at a time
+    [o appendFormat:@"%@jr:\n    mov x3, x9\n%@jc:\n    cmp x3, x23\n    b.hs %@ir\n    mov x2, #0\n", L, L, L];
+    [o appendFormat:@"%@jrr:\n    bl %@el\n    add x2, x2, #1\n    cmp x2, x17\n    b.lo %@jrr\n", L, L, L];
+    [o appendFormat:@"    add x3, x3, #1\n    b %@jc\n", L];
+    // The rows past the last 8-row block, every column: C's row from
+    // +0.0, then per k in order C[i][j] = fma(A[i][k], B[k][j], C[i][j]),
+    // B's row read as it lies.
+    [o appendFormat:@"%@ir:\n    mov x10, x17\n%@irr:\n    cmp x10, x22\n    b.hs %@fin\n", L, L, L];
+    [o appendFormat:@"    madd x15, x10, x27, x21\n    mov x6, #0\n%@iz:\n    str %@, [x15, x6, lsl #%d]\n", L, f64 ? @"xzr" : @"wzr", sh];
+    [o appendFormat:@"    add x6, x6, #1\n    cmp x6, x23\n    b.lo %@iz\n", L];
+    [o appendFormat:@"    madd x0, x10, x13, x19\n    mov x16, x20\n    mov x12, #0\n    cbz x24, %@irn\n", L];
+    [o appendFormat:@"%@ik:\n    ldr %@8, [x0, x12, lsl #%d]\n    mov x4, x16\n    mov x5, x15\n    mov x6, #0\n    cbz x9, %@it\n", L, S, sh, L];
+    [o appendFormat:@"%@iv:\n    ldp q0, q1, [x4], #32\n    ldp q2, q3, [x5]\n", L];
+    [o appendFormat:@"    fmla v2.%@, v0.%@, v8.%@[0]\n    fmla v3.%@, v1.%@, v8.%@[0]\n", V, V, S, V, V, S];
+    [o appendFormat:@"    stp q2, q3, [x5], #32\n    add x6, x6, #%d\n    cmp x6, x9\n    b.lo %@iv\n", cols, L];
+    [o appendFormat:@"%@it:\n    cmp x6, x23\n    b.hs %@in\n    ldr %@1, [x16, x6, lsl #%d]\n    ldr %@2, [x15, x6, lsl #%d]\n", L, L, S, sh, S, sh];
+    [o appendFormat:@"    fmadd %@2, %@8, %@1, %@2\n    str %@2, [x15, x6, lsl #%d]\n    add x6, x6, #1\n    b %@it\n", S, S, S, S, S, sh, L];
+    [o appendFormat:@"%@in:\n    add x16, x16, x14\n    add x12, x12, #1\n    cmp x12, x24\n    b.lo %@ik\n", L, L];
+    [o appendFormat:@"%@irn:\n    add x10, x10, #1\n    b %@irr\n", L, L];
+    // A NaN in C: back to the loop. The elements' bits, sign cleared,
+    // above infinity's.
+    [o appendFormat:@"%@fin:\n", L];
+    if (check) {
+        [o appendFormat:@"    cbz x24, %@ok\n", L];
+        [o appendString:f64 ? @"    movz x7, #0x7ff0, lsl #48\n" : @"    movz w7, #0x7f80, lsl #16\n"];
+        [o appendFormat:@"    mov x2, #0\n%@ncr:\n    madd x15, x2, x27, x21\n    mov x3, #0\n", L];
+        if (f64)
+            [o appendFormat:@"%@ncc:\n    ldr x5, [x15, x3, lsl #3]\n    and x5, x5, #0x7fffffffffffffff\n    cmp x5, x7\n    b.hi %@bail\n", L, L];
+        else
+            [o appendFormat:@"%@ncc:\n    ldr w5, [x15, x3, lsl #2]\n    and w5, w5, #0x7fffffff\n    cmp w5, w7\n    b.hi %@bail\n", L, L];
+        [o appendFormat:@"    add x3, x3, #1\n    cmp x3, x23\n    b.lo %@ncc\n    add x2, x2, #1\n    cmp x2, x22\n    b.lo %@ncr\n", L, L];
+    }
+    // the panel freed, then 1 (computed) or 0 (the loop runs)
+    [o appendFormat:@"%@ok:\n    mov w22, #1\n    b %@free\n%@bail:\n    mov w22, #0\n", L, L, L];
+    [o appendFormat:@"%@free:\n    cbz x28, %@freed\n    mov x0, x28\n    bl _free\n", L, L];
+    [o appendFormat:@"%@freed:\n    mov w0, w22\n    b %@ret\n", L, L];
+    [o appendFormat:@"%@done:\n    mov w0, #1\n%@ret:\n", L, L];
+    [o appendString:@"    ldp d14, d15, [sp, #144]\n    ldp d12, d13, [sp, #128]\n"
+                     @"    ldp d10, d11, [sp, #112]\n    ldp d8, d9, [sp, #96]\n"
+                     @"    ldp x27, x28, [sp, #80]\n    ldp x25, x26, [sp, #64]\n"
+                     @"    ldp x23, x24, [sp, #48]\n    ldp x21, x22, [sp, #32]\n"
+                     @"    ldp x19, x20, [sp, #16]\n    ldp x29, x30, [sp], #160\n    ret\n"];
+    // One element, C[x2][x3]: the k loop's fused chain from +0.0.
+    [o appendFormat:@"%@el:\n    madd x4, x2, x13, x19\n    add x5, x20, x3, lsl #%d\n    fmov %@0, %@\n    mov x6, #0\n    cbz x24, %@elst\n",
+                               L, sh, S, f64 ? @"xzr" : @"wzr", L];
+    [o appendFormat:@"%@elk:\n    ldr %@1, [x4, x6, lsl #%d]\n    ldr %@2, [x5]\n    add x5, x5, x14\n    fmadd %@0, %@1, %@2, %@0\n",
+                               L, S, sh, S, S, S, S, S];
+    [o appendFormat:@"    add x6, x6, #1\n    cmp x6, x24\n    b.lo %@elk\n", L];
+    [o appendFormat:@"%@elst:\n    madd x7, x2, x27, x21\n    str %@0, [x7, x3, lsl #%d]\n    ret\n", L, S, sh];
     return o;
 }
 
@@ -10537,6 +10688,12 @@ static BOOL sArm64LseAtomics = YES;  // Apple Silicon is ARMv8.5; Android's floo
     if (smeF64) [out appendString:xtArm64SmeGemmKernel(YES, YES)];
     if (smeF32f) [out appendString:xtArm64SmeGemmKernel(NO, NO)];
     if (smeF64f) [out appendString:xtArm64SmeGemmKernel(YES, NO)];
+    // The NEON kernels: the SME float kernels fall back to them without SME,
+    // and an arm64 row without SME calls them itself.
+    if (smeF32 || [mod referencesSymbolNamed:@"__xt_neon_gemm_f32"]) [out appendString:xtArm64NeonGemmKernel(NO, YES)];
+    if (smeF64 || [mod referencesSymbolNamed:@"__xt_neon_gemm_f64"]) [out appendString:xtArm64NeonGemmKernel(YES, YES)];
+    if (smeF32f || [mod referencesSymbolNamed:@"__xt_neon_gemm_f32_fast"]) [out appendString:xtArm64NeonGemmKernel(NO, NO)];
+    if (smeF64f || [mod referencesSymbolNamed:@"__xt_neon_gemm_f64_fast"]) [out appendString:xtArm64NeonGemmKernel(YES, NO)];
     // The integer kernels probe SME2 as well, for their 16-bit form.
     BOOL smeU32 = [mod referencesSymbolNamed:@"__xt_sme_gemm_u32"];
     BOOL smeI32 = [mod referencesSymbolNamed:@"__xt_sme_gemm_i32"];

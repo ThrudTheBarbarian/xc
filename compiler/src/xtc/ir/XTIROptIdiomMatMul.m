@@ -86,7 +86,10 @@
     BOOL kernel = self.profile && self.profile.matMulPrefix;
     if (!self.profile || (!kernel && !self.profile.matMulContract))
         return YES;
-    BOOL sme = kernel && [self.profile.matMulPrefix hasPrefix:@"__xt_sme_"];
+    // An arm64 kernel (SME, or NEON without it) fuses as the nest does, so
+    // `:goal(accuracy)`, strict ISO, keeps the loops.
+    BOOL sme = kernel && ([self.profile.matMulPrefix hasPrefix:@"__xt_sme_"]
+                          || [self.profile.matMulPrefix hasPrefix:@"__xt_neon_"]);
     for (XTIRFunction* fn in mod.functions)
         {
         // Each rewrite leaves the nest in place behind the call, so a nest
@@ -824,7 +827,8 @@ static BOOL onlyConstsBesides(XTIRBlock* b, NSArray<XTIRInsn*>* allowed, XTMatMu
     // too, so the two give one answer. Under an explicit :goal(accuracy) the
     // kernel is not called at all (runOnModule, #569).
     // arm64's kernels only: x86-64's multiplies then adds, as its loop does.
-    if (c.acc && [self.profile.matMulPrefix hasPrefix:@"__xt_sme_"])
+    if (c.acc && ([self.profile.matMulPrefix hasPrefix:@"__xt_sme_"]
+                  || [self.profile.matMulPrefix hasPrefix:@"__xt_neon_"]))
         c.acc.predicate = XTIRFpContract;
     XTIRType* u64 = [XTIRType u64Type];
     NSString* name = [NSString stringWithFormat:@"%@%@%@", self.profile.matMulPrefix, c.elem,

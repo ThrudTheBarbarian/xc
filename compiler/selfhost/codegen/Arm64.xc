@@ -340,6 +340,12 @@ class Arm64
         if (smeF64) _out.append(smeGemmKernel(true, true));
         if (smeF32f) _out.append(smeGemmKernel(false, false));
         if (smeF64f) _out.append(smeGemmKernel(true, false));
+        // The NEON kernels: the SME float kernels fall back to them without
+        // SME, and an arm64 row without SME calls them itself.
+        if (smeF32 || CgCommon.referencesSymbol(m, String.withCString("__xt_neon_gemm_f32"))) _out.append(neonGemmKernel(false, true));
+        if (smeF64 || CgCommon.referencesSymbol(m, String.withCString("__xt_neon_gemm_f64"))) _out.append(neonGemmKernel(true, true));
+        if (smeF32f || CgCommon.referencesSymbol(m, String.withCString("__xt_neon_gemm_f32_fast"))) _out.append(neonGemmKernel(false, false));
+        if (smeF64f || CgCommon.referencesSymbol(m, String.withCString("__xt_neon_gemm_f64_fast"))) _out.append(neonGemmKernel(true, false));
         // The integer kernels probe SME2 as well, for their 16-bit form.
         bool smeU32 = CgCommon.referencesSymbol(m, String.withCString("__xt_sme_gemm_u32"));
         bool smeI32 = CgCommon.referencesSymbol(m, String.withCString("__xt_sme_gemm_i32"));
@@ -384,7 +390,9 @@ class Arm64
     // header, the frame (fp/lr, x19-x28, d8-d15), the arguments into x19 A,
     // x20 B, x21 C, x22 M, x23 N, x24 K, x25 lda, x26 ldb, x27 ldc, and the
     // probe for SME itself, once; without it the kernel returns 0.
-    String* smeGemmEntry(u8* name, u8* L)
+    // `neon`: a float kernel, which without SME hands its arguments to the
+    // NEON kernel; an integer one returns 0 and the loop runs.
+    String* smeGemmEntry(u8* name, u8* L, bool neon)
     {
         String* o = new String();
         o.append(String.withFormat("\n// SME matrix kernel (%s)\n    .p2align 2\n", name));
@@ -402,7 +410,7 @@ class Arm64
                          "    ldrb w9, [x8, ___xt_sme_state@PAGEOFF]\n");
         o.append(String.withFormat("    cbnz w9, %sknown\n", L));
         o.append(smeProbe("sme"));
-        o.append(String.withFormat("%sknown:\n    mov w0, #0\n    cmp w9, #1\n    b.ne %sret\n", L, L));
+        o.append(String.withFormat("%sknown:\n    mov w0, #0\n    cmp w9, #1\n    b.ne %s%s\n", L, L, neon ? "neon" : "ret"));
         return o;
     }
 
@@ -461,7 +469,7 @@ class Arm64
         u8* CNT = f64 ? "cntd" : "cntw";
         i32 sh = f64 ? (i32)3 : (i32)2;                     // log2 element bytes
         u8* L = f64 ? (check ? "Lsme64_" : "Lsme64f_") : (check ? "Lsme32_" : "Lsme32f_");
-        String* o = smeGemmEntry(f64 ? (check ? "f64" : "f64_fast") : (check ? "f32" : "f32_fast"), L);
+        String* o = smeGemmEntry(f64 ? (check ? "f64" : "f64_fast") : (check ? "f32" : "f32_fast"), L, true);
         o.append(smeGemmBounds(L, sh));
         // The panel of A for each block of rows is transposed once into a scratch
         // buffer (K rows of 2 vectors), so the inner loop reads A's columns with
@@ -539,6 +547,140 @@ class Arm64
         o.append(String.withFormat("    cmphi p3.%s, p5/z, z4.%s, z5.%s\n    ptest p5, p3.b\n    b.ne %snan\n", T, T, T, L));
         }
         o.append(smeGemmExit(L, "nan"));
+        // No SME (M1-M3): the NEON kernel computes it instead, with the same
+        // arguments, once this frame is gone.
+        o.append(String.withFormat("%sneon:\n    mov x0, x19\n    mov x1, x20\n    mov x2, x21\n    orr x3, x22, x23, lsl #32\n"
+                                   "    mov w4, w24\n    mov w5, w25\n    mov w6, w26\n    mov w7, w27\n", L));
+        o.appendCString("    ldp d14, d15, [sp, #144]\n    ldp d12, d13, [sp, #128]\n"
+                         "    ldp d10, d11, [sp, #112]\n    ldp d8, d9, [sp, #96]\n"
+                         "    ldp x27, x28, [sp, #80]\n    ldp x25, x26, [sp, #64]\n"
+                         "    ldp x23, x24, [sp, #48]\n    ldp x21, x22, [sp, #32]\n"
+                         "    ldp x19, x20, [sp, #16]\n    ldp x29, x30, [sp], #160\n");
+        o.append(String.withFormat("    b ___xt_neon_gemm_%s\n", f64 ? (check ? "f64" : "f64_fast") : (check ? "f32" : "f32_fast")));
+        return o;
+    }
+
+    // The NEON matrix kernel (arm64 without SME: M1-M3 Macs, arm64 Linux, the
+    // Pi 5). The SME kernel's contract: the same arguments, checks and return,
+    // and C's elements the loops' bit for bit, each one fused with k in order
+    // from +0.0 (the nest fuses on every arm64 row, #569). Per block of
+    // columns (8 floats, 4 doubles), B's panel is packed once, then read by
+    // blocks of C 8 rows tall in v16-v31; the last columns of those rows go an
+    // element at a time with scalar fmadd; the rows left over are updated in
+    // place per k, in the same order. A NaN in C hands back to the loop (`check`), which keeps an input
+    // NaN's payload as written. Text identical to the reference's
+    // xtArm64NeonGemmKernel. private:docs/Design/neon-matmul.md.
+    String* neonGemmKernel(bool f64, bool check)
+    {
+        u8* S = f64 ? "d" : "s";              // scalar register
+        u8* V = f64 ? "2d" : "4s";            // vector arrangement
+        i32 sh = f64 ? (i32)3 : (i32)2;       // log2 element bytes
+        i32 cols = f64 ? (i32)4 : (i32)8;     // columns per block
+        u8* L = f64 ? (check ? "Lneon64_" : "Lneon64f_") : (check ? "Lneon32_" : "Lneon32f_");
+        u8* name = f64 ? (check ? "f64" : "f64_fast") : (check ? "f32" : "f32_fast");
+        String* o = new String();
+        o.append(String.withFormat("\n// NEON matrix kernel (%s)\n    .p2align 2\n", name));
+        o.append(String.withFormat("___xt_neon_gemm_%s:\n", name));
+        o.appendCString("    stp x29, x30, [sp, #-160]!\n    mov x29, sp\n"
+                         "    stp x19, x20, [sp, #16]\n    stp x21, x22, [sp, #32]\n"
+                         "    stp x23, x24, [sp, #48]\n    stp x25, x26, [sp, #64]\n"
+                         "    stp x27, x28, [sp, #80]\n    stp d8, d9, [sp, #96]\n"
+                         "    stp d10, d11, [sp, #112]\n    stp d12, d13, [sp, #128]\n"
+                         "    stp d14, d15, [sp, #144]\n");
+        o.appendCString("    mov x19, x0\n    mov x20, x1\n    mov x21, x2\n"
+                         "    mov w22, w3\n    lsr x23, x3, #32\n    mov w24, w4\n"
+                         "    mov w25, w5\n    mov w26, w6\n    mov w27, w7\n    mov w0, #0\n");
+        o.append(smeGemmBounds(L, sh));
+        // strides in bytes; M rounded down to the 8-row blocks, N to the columns'
+        o.append(String.withFormat("%sgo:\n    lsl x27, x27, #%d\n    mov x28, #0\n", L, sh));
+        // B's panel for one column block, K rows of 32 bytes, packed once and
+        // read by every 8-row block (none to read: no panel; no allocation:
+        // the loop runs)
+        o.append(String.withFormat("    cbz x24, %sgo2\n    cmp x22, #8\n    b.lo %sgo2\n    lsl x0, x24, #5\n    bl _malloc\n    cbz x0, %sbail\n    mov x28, x0\n", L, L, L));
+        o.append(String.withFormat("%sgo2:\n    lsl x13, x25, #%d\n    lsl x14, x26, #%d\n    and x17, x22, #0xfffffffffffffff8\n", L, sh, sh));
+        o.append(String.withFormat("    and x9, x23, #%s\n    mov x11, #0\n    cbz x17, %sir\n", f64 ? "0xfffffffffffffffc" : "0xfffffffffffffff8", L));
+        o.append(String.withFormat("%sj8:\n    cmp x11, x9\n    b.hs %sjr\n", L, L));
+        o.append(String.withFormat("    add x16, x20, x11, lsl #%d\n    mov x15, x28\n    mov x12, #0\n    cbz x24, %sp8\n", sh, L));
+        o.append(String.withFormat("%spk:\n    ldp q0, q1, [x16]\n    add x16, x16, x14\n    stp q0, q1, [x15], #32\n", L));
+        o.append(String.withFormat("    add x12, x12, #1\n    cmp x12, x24\n    b.lo %spk\n", L));
+        o.append(String.withFormat("%sp8:\n    mov x10, #0\n%si8:\n    cmp x10, x17\n    b.hs %sjn\n", L, L, L));
+        for (u32 v = (u32)16; v < (u32)32; v = v + (u32)1)
+            o.append(String.withFormat("    eor v%d.16b, v%d.16b, v%d.16b\n", (i32)v, (i32)v, (i32)v));
+        // x0-x7: the block's eight rows of A; x16: the panel
+        o.appendCString("    madd x0, x10, x13, x19\n");
+        for (u32 r = (u32)1; r < (u32)8; r = r + (u32)1)
+            o.append(String.withFormat("    add x%d, x%d, x13\n", (i32)r, (i32)(r - (u32)1)));
+        o.append(String.withFormat("    mov x16, x28\n    mov x12, #0\n    cbz x24, %sst\n", L));
+        o.append(String.withFormat("%sk:\n    ldp q0, q1, [x16], #32\n", L));
+        for (u32 r = (u32)0; r < (u32)8; r = r + (u32)1)
+            o.append(String.withFormat("    ldr %s%d, [x%d, x12, lsl #%d]\n", S, (i32)((u32)8 + r), (i32)r, sh));
+        for (u32 r = (u32)0; r < (u32)8; r = r + (u32)1)
+            {
+            o.append(String.withFormat("    fmla v%d.%s, v0.%s, v%d.%s[0]\n", (i32)((u32)16 + r * (u32)2), V, V, (i32)((u32)8 + r), S));
+            o.append(String.withFormat("    fmla v%d.%s, v1.%s, v%d.%s[0]\n", (i32)((u32)17 + r * (u32)2), V, V, (i32)((u32)8 + r), S));
+            }
+        o.append(String.withFormat("    add x12, x12, #1\n    cmp x12, x24\n    b.lo %sk\n", L));
+        o.append(String.withFormat("%sst:\n    madd x15, x10, x27, x21\n    add x15, x15, x11, lsl #%d\n", L, sh));
+        for (u32 r = (u32)0; r < (u32)8; r = r + (u32)1)
+            {
+            o.append(String.withFormat("    stp q%d, q%d, [x15]\n", (i32)((u32)16 + r * (u32)2), (i32)((u32)17 + r * (u32)2)));
+            if (r < (u32)7)
+                o.appendCString("    add x15, x15, x27\n");
+            }
+        o.append(String.withFormat("    add x10, x10, #8\n    b %si8\n", L));
+        o.append(String.withFormat("%sjn:\n    add x11, x11, #%d\n    b %sj8\n", L, cols, L));
+        // the columns past the last block, every row, an element at a time
+        // the columns past the last block, for the 8-row blocks' rows, an
+        // element at a time
+        o.append(String.withFormat("%sjr:\n    mov x3, x9\n%sjc:\n    cmp x3, x23\n    b.hs %sir\n    mov x2, #0\n", L, L, L));
+        o.append(String.withFormat("%sjrr:\n    bl %sel\n    add x2, x2, #1\n    cmp x2, x17\n    b.lo %sjrr\n", L, L, L));
+        o.append(String.withFormat("    add x3, x3, #1\n    b %sjc\n", L));
+        // The rows past the last 8-row block, every column: C's row from
+        // +0.0, then per k in order C[i][j] = fma(A[i][k], B[k][j], C[i][j]),
+        // B's row read as it lies.
+        o.append(String.withFormat("%sir:\n    mov x10, x17\n%sirr:\n    cmp x10, x22\n    b.hs %sfin\n", L, L, L));
+        o.append(String.withFormat("    madd x15, x10, x27, x21\n    mov x6, #0\n%siz:\n    str %s, [x15, x6, lsl #%d]\n", L, f64 ? "xzr" : "wzr", sh));
+        o.append(String.withFormat("    add x6, x6, #1\n    cmp x6, x23\n    b.lo %siz\n", L));
+        o.append(String.withFormat("    madd x0, x10, x13, x19\n    mov x16, x20\n    mov x12, #0\n    cbz x24, %sirn\n", L));
+        o.append(String.withFormat("%sik:\n    ldr %s8, [x0, x12, lsl #%d]\n    mov x4, x16\n    mov x5, x15\n    mov x6, #0\n    cbz x9, %sit\n", L, S, sh, L));
+        o.append(String.withFormat("%siv:\n    ldp q0, q1, [x4], #32\n    ldp q2, q3, [x5]\n", L));
+        o.append(String.withFormat("    fmla v2.%s, v0.%s, v8.%s[0]\n    fmla v3.%s, v1.%s, v8.%s[0]\n", V, V, S, V, V, S));
+        o.append(String.withFormat("    stp q2, q3, [x5], #32\n    add x6, x6, #%d\n    cmp x6, x9\n    b.lo %siv\n", cols, L));
+        o.append(String.withFormat("%sit:\n    cmp x6, x23\n    b.hs %sin\n    ldr %s1, [x16, x6, lsl #%d]\n    ldr %s2, [x15, x6, lsl #%d]\n", L, L, S, sh, S, sh));
+        o.append(String.withFormat("    fmadd %s2, %s8, %s1, %s2\n    str %s2, [x15, x6, lsl #%d]\n    add x6, x6, #1\n    b %sit\n", S, S, S, S, S, sh, L));
+        o.append(String.withFormat("%sin:\n    add x16, x16, x14\n    add x12, x12, #1\n    cmp x12, x24\n    b.lo %sik\n", L, L));
+        o.append(String.withFormat("%sirn:\n    add x10, x10, #1\n    b %sirr\n", L, L));
+        // A NaN in C: back to the loop. The elements' bits, sign cleared,
+        // above infinity's.
+        o.append(String.withFormat("%sfin:\n", L));
+        if (check)
+            {
+            o.append(String.withFormat("    cbz x24, %sok\n", L));
+            o.appendCString(f64 ? "    movz x7, #0x7ff0, lsl #48\n" : "    movz w7, #0x7f80, lsl #16\n");
+            o.append(String.withFormat("    mov x2, #0\n%sncr:\n    madd x15, x2, x27, x21\n    mov x3, #0\n", L));
+            if (f64)
+                o.append(String.withFormat("%sncc:\n    ldr x5, [x15, x3, lsl #3]\n    and x5, x5, #0x7fffffffffffffff\n    cmp x5, x7\n    b.hi %sbail\n", L, L));
+            else
+                o.append(String.withFormat("%sncc:\n    ldr w5, [x15, x3, lsl #2]\n    and w5, w5, #0x7fffffff\n    cmp w5, w7\n    b.hi %sbail\n", L, L));
+            o.append(String.withFormat("    add x3, x3, #1\n    cmp x3, x23\n    b.lo %sncc\n    add x2, x2, #1\n    cmp x2, x22\n    b.lo %sncr\n", L, L));
+            }
+        // the panel freed, then 1 (computed) or 0 (the loop runs)
+        o.append(String.withFormat("%sok:\n    mov w22, #1\n    b %sfree\n%sbail:\n    mov w22, #0\n", L, L, L));
+        o.append(String.withFormat("%sfree:\n    cbz x28, %sfreed\n    mov x0, x28\n    bl _free\n", L, L));
+        o.append(String.withFormat("%sfreed:\n    mov w0, w22\n    b %sret\n", L, L));
+        o.append(String.withFormat("%sdone:\n    mov w0, #1\n%sret:\n", L, L));
+        o.appendCString("    ldp d14, d15, [sp, #144]\n    ldp d12, d13, [sp, #128]\n"
+                         "    ldp d10, d11, [sp, #112]\n    ldp d8, d9, [sp, #96]\n"
+                         "    ldp x27, x28, [sp, #80]\n    ldp x25, x26, [sp, #64]\n"
+                         "    ldp x23, x24, [sp, #48]\n    ldp x21, x22, [sp, #32]\n"
+                         "    ldp x19, x20, [sp, #16]\n    ldp x29, x30, [sp], #160\n    ret\n");
+        // One element, C[x2][x3]: the k loop's fused chain from +0.0.
+        o.append(String.withFormat("%sel:\n    madd x4, x2, x13, x19\n    add x5, x20, x3, lsl #%d\n    fmov %s0, %s\n    mov x6, #0\n    cbz x24, %selst\n",
+                                   L, sh, S, f64 ? "xzr" : "wzr", L));
+        o.append(String.withFormat("%selk:\n    ldr %s1, [x4, x6, lsl #%d]\n    ldr %s2, [x5]\n    add x5, x5, x14\n    fmadd %s0, %s1, %s2, %s0\n",
+                                   L, S, sh, S, S, S, S, S));
+        o.append(String.withFormat("    add x6, x6, #1\n    cmp x6, x24\n    b.lo %selk\n", L));
+        o.append(String.withFormat("%selst:\n    madd x7, x2, x27, x21\n    str %s0, [x7, x3, lsl #%d]\n    ret\n", L, S, sh));
         return o;
     }
 
@@ -680,7 +822,7 @@ class Arm64
         u8* T = signedK ? "i32" : "u32";
         u8* L = signedK ? "Lsmei32_" : "Lsmeu32_";
         u8* MOPA = signedK ? "smopa" : "umopa";
-        String* o = smeGemmEntry(T, L);
+        String* o = smeGemmEntry(T, L, false);
         // SME2 (the 16-bit form) too, before streaming mode: sysctlbyname cannot
         // be called from inside it
         o.appendCString("    adrp x8, ___xt_sme2_state@PAGE\n    ldrb w9, [x8, ___xt_sme2_state@PAGEOFF]\n");
@@ -842,7 +984,7 @@ class Arm64
         u8* T = signedK ? "i64" : "u64";
         u8* L = signedK ? "Lsmei64_" : "Lsmeu64_";
         u8* MOPA = signedK ? "smopa" : "umopa";
-        String* o = smeGemmEntry(T, L);
+        String* o = smeGemmEntry(T, L, false);
         // FEAT_SME_I16I64 too, before streaming mode
         o.appendCString("    adrp x8, ___xt_smei64_state@PAGE\n    ldrb w9, [x8, ___xt_smei64_state@PAGEOFF]\n");
         o.append(String.withFormat("    cbnz w9, %sknown2\n", L));

@@ -47,8 +47,10 @@ static void usage(void)
             "  --simd=<level>        f16 code: base (ARMv8.0), fp16 (FEAT_FP16) or auto\n"
             "                        (both, picked at load; -O2+). Default: the row's.\n"
             "  --matmul              Put the SME matrix kernel in front of recognised\n"
-            "                        matrix-multiply loops (macOS; the loop stays as\n"
-            "                        the fallback on CPUs without SME).\n"
+            "                        matrix-multiply loops (macOS; the NEON kernel\n"
+            "                        runs on CPUs without SME).\n"
+            "  --matmul-neon         Put the NEON matrix kernel in front of them (arm64\n"
+            "                        Linux).\n"
             "  --thread-safe-arc     Force atomic ARC retain/release.\n"
             "  --no-thread-safe-arc  Force plain (non-atomic) ARC retain/release.\n"
             "                        Default: atomic iff the module spawns a thread.\n"
@@ -72,6 +74,7 @@ int main(int argc, const char* argv[])
         int threadSafeARC = -1;
         BOOL aapcs64Abi = NO;
         BOOL matMul = NO;
+        BOOL matMulNeon = NO;
         BOOL inlineChecks = NO;         // --inline-checks: -fbounds-check=light
         BOOL lseAtomics = YES;
         NSUInteger loopAlign = 0;       // --loop-align <n>: loop heads on 2^n bytes
@@ -158,6 +161,10 @@ int main(int argc, const char* argv[])
                 {
                 simd = [arg substringFromIndex:7];
                 }
+            else if ([arg isEqualToString:@"--matmul-neon"])
+                {
+                matMulNeon = YES;
+                }
             else if ([arg isEqualToString:@"--inline-checks"])
                 {
                 inlineChecks = YES;
@@ -237,8 +244,10 @@ int main(int argc, const char* argv[])
             // (bug 014). The per-pass minOptLevel filter keeps the real
             // optimisations off at -O0.
             XTIRArm64TargetProfile* armProfile = [XTIRArm64TargetProfile new];
-            armProfile.matMulPrefix = matMul ? @"__xt_sme_gemm_" : nil;
-            armProfile.matMulFastSuffix = matMul ? @"_fast" : nil;
+            // --matmul-neon: arm64 without SME (arm64 Linux, the Pi 5) calls the
+            // NEON kernel, float only.
+            armProfile.matMulPrefix = matMul ? @"__xt_sme_gemm_" : (matMulNeon ? @"__xt_neon_gemm_" : nil);
+            armProfile.matMulFastSuffix = (matMul || matMulNeon) ? @"_fast" : nil;
             armProfile.matMulInts = matMul;
             armProfile.inlineChecks = inlineChecks;
             armProfile.rotateChains = rotateChains;

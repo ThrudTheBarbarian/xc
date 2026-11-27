@@ -5285,9 +5285,10 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
     // checks for SME at run time and leaves the loop to run when it is absent,
     // so a binary built here still runs on M1-M3) and x86-64 Linux (a kernel per
     // vector tier).
+    // arm64 without SME (arm64 Linux, the Pi 5): the NEON kernel.
     if (opts.effectiveTarget.matmul
         && !opts.noMatmul && opts.optimisationLevel >= 2)
-        [cgArgs addObject:@"--matmul"];
+        [cgArgs addObject:[opts.effectiveTarget.matmul isEqualToString:@"neon"] ? @"--matmul-neon" : @"--matmul"];
     // -fbounds-check=light: the subscript checks bounds-elide leaves inline in
     // loops (-O2+, the arm64, x86-64 and win64 code generators: every arm64
     // row, android and arm64 Linux among them); the debug build keeps them calls.
