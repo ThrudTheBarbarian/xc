@@ -1,0 +1,9 @@
+[0, 1001): encode 0 up 0 decode 0 rewrite 0 reduce 0
+[1, 1001): encode 0 up 0 decode 0 rewrite 0 reduce 0
+[0, 4097): encode 0 up 0 decode 0 rewrite 0 reduce 0
+[3, 4097): encode 0 up 0 decode 0 rewrite 0 reduce 0
+[1, 4097): encode 0 up 0 decode 0 rewrite 0 reduce 0
+[0, 4096): encode 0 up 0 decode 0 rewrite 0 reduce 0
+one item: 0 0 0 0
+two items: 0 0
+heap 0 0
