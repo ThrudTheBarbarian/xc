@@ -4971,6 +4971,12 @@ static NSInteger XTFmtWrapperIndex(BOOL isVarArgs, NSArray<XTParamNode*>* params
         node.resolvedType = [XTType pointerType];
         return;
         }
+    // `new Bar()` where Bar is a typedef of a class builds that class: its
+    // init, its vtable, its name from here on, as everywhere else a typedef
+    // is written. Under the alias it was allocated as raw memory (#730).
+    if (elemType.kind == XTTypeKindClass && self.classesByName[elemType.displayName]
+        && ![elemType.displayName isEqualToString:node.className])
+        node.className = elemType.displayName;
 
     // Args are only legal when the element type is a class (the
     // args become the init() parameters). For primitives, structs,

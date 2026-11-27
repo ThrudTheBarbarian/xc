@@ -4154,6 +4154,13 @@ class Sema
             }
         if (k == (u16)nkNew)
             {
+            // `new Bar()` where Bar is a typedef of a class builds that class:
+            // its init, its vtable, its name from here on, as everywhere else
+            // a typedef is written. Under the alias it was allocated as raw
+            // memory (#730).
+            String* tn = newTargetType(n.name());
+            if (!tn.equals(n.name()) && _classes.get((Hashable*)tn) != 0)
+                n.setName(String.withString(tn));
             String* t = String.withString(newTargetType(n.name()));
             t.appendByte((u8)'*');
             n.setTy(t);

@@ -700,7 +700,8 @@ typedef NS_ENUM(NSInteger, XTAssignOp) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 @interface XTNewExprNode : XTASTNode
-@property(nonatomic, readonly) NSString* className;
+/// Sema replaces a typedef of a class with the class's own name (#730).
+@property(nonatomic, copy) NSString* className;
 @property(nonatomic, readonly) NSArray<XTASTNode*>* arguments;
 /****************************************************************************\
 |* Optional array count: `new T[N]` stores N here. nil for scalar
