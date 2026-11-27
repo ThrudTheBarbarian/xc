@@ -567,6 +567,10 @@ class FeOptions
     // xc (#15).
     static bool onlyRuntimeLibs(FeOptions* o)
         {
+        // arm9's libc is auto-imported, not `#import`ed: a module naming any
+        // of its functions calls C, as the reference counts it.
+        if (o.libcReferenced())
+            return false;
         Array* nl = o.neededLibs();
         for (u32 i = (u32)0; nl != (Array*)0 && i < nl.count(); i = i + (u32)1)
             {
