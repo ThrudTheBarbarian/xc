@@ -10,7 +10,8 @@
 # builds and runs it again at each fixed level (-march=); every run must print
 # the fixture's expected output. It also checks that the dispatch is there: an
 # f16 multiply-add is cloned, the table names the clone, and a fixed level
-# builds one version.
+# builds one version; and that f16 loops are vectorised at the levels that
+# convert natively (f16_vectorize.xc checks their bits against scalar loops).
 #
 # Runs on the machine it is on (arm64 macOS or Linux, x86-64 Linux).
 #   [XC=<xcc>] [REF=<the other compiler>] bash tests/driver/float-dispatch.sh
@@ -59,6 +60,34 @@ for row in x86_64 win64; do
     "$XC" -q -O2 -A $row -march=x86-64 -S -o "$W/m.s" "$W/mad.xc"
     ! grep -qE 'simd_table|vcvtps2ph' "$W/m.s" || bad "-A $row -march=x86-64 is not one SSE2 version"
 done
+
+# A loop over f16 arrays is vectorised where the conversions are native: four
+# lanes converted with fcvtl/fcvtn in the ARMv8.0 version and eight half lanes
+# in the FP16 one on arm64, eight lanes through F16C in the avx2 version on
+# x86-64, and scalar in the SSE2 one.
+cat > "$W/vec.xc" <<'XC'
+#import "Stdio.xc"
+void fma16(f16* d, f16* a, f16* b, f16* c, u32 n) { for (u32 i = 0; i < n; i++) d[i] = a[i] * b[i] + c[i]; }
+void from16(f16* h, f32* f, u32 n) { for (u32 i = 0; i < n; i++) h[i] = (f16)f[i]; }
+f16 A[64]; f16 B[64]; f16 C[64]; f16 D[64]; f32 F[64];
+i32 main(i32 argc, u8** argv)
+{
+    fma16(&D[0], &A[0], &B[0], &C[0], (u32)argc * 40);
+    from16(&D[0], &F[0], (u32)argc * 40);
+    Stdio.printf("%x\n", (u32)*(u16*)&D[3]);
+    return 0;
+}
+XC
+if [ $CPU = arm64 ]; then
+    "$XC" -q -O2 --par-style=cpu -S -o "$W/v.s" "$W/vec.xc" || bad "vec.xc does not build"
+    grep -qE 'fcvtl[[:space:]]+v[0-9]+\.4s' "$W/v.s" && grep -qE 'fcvtn[[:space:]]+v[0-9]+\.4h' "$W/v.s" \
+        && grep -qE 'fmul[[:space:]]+v[0-9]+\.8h' "$W/v.s" || bad "arm64: f16 loops are not vectorised"
+fi
+"$XC" -q -O2 --par-style=cpu -A x86_64 -S -o "$W/v.s" "$W/vec.xc" || bad "vec.xc -A x86_64 does not build"
+grep -qE 'vcvtph2ps[[:space:]]+ymm' "$W/v.s" && grep -qE 'vcvtps2ph[[:space:]]+xmm[0-9]+, ymm' "$W/v.s" \
+    || bad "x86_64: f16 loops are not vectorised in the avx2 version"
+"$XC" -q -O2 --par-style=cpu -A x86_64 -march=x86-64 -S -o "$W/v.s" "$W/vec.xc"
+! grep -q vcvtph2ps "$W/v.s" || bad "x86_64 -march=x86-64 uses F16C"
 
 # A 40 MB zero-initialised global beside the dispatch constructor stays out of
 # the file: the init array must not follow the zeros in the data image. The
