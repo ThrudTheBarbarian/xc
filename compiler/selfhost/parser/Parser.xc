@@ -10551,12 +10551,34 @@ class Parser
             || Parser._same(e, "i32") || Parser._same(e, "u32") || Parser._same(e, "i64") || Parser._same(e, "u64")
             || Parser._same(e, "float") || Parser._same(e, "double") || Parser._same(e, "bool"))
             return e;
-        // A small float other than f4 (half a byte, which no sizeof
-        // measures). As the reference.
-        if (Parser._same(e, "f16") || Parser._same(e, "bf16") || Parser._same(e, "f8")
+        // A small float. An f4[] is sized in bytes: sizeof(f4) is 1, and
+        // the runtime measures the bytes to the block's end. As the reference.
+        if (Parser._same(e, "f16") || Parser._same(e, "bf16") || Parser._same(e, "f8") || Parser._same(e, "f4")
             || e.hasPrefix(String.withCString("f16$")) || e.hasPrefix(String.withCString("f8$")))
             return e;
         return (String*)0;
+    }
+    // Whether the type t names an f4 array or f4[]: its elements are
+    // nibbles, so gpuWritesAll / gpuWritesAllOwn, which the runtime checks by
+    // items against bytes, do not claim it. As the reference.
+    static bool parF4Elements(String* t)
+    {
+        if (t == (String*)0)
+            return false;
+        u32 lb = t.indexOfByte((u8)'[');
+        if (lb != (u32)$FFFFFFFF)
+            return Parser._same(t.substringBytes((u32)0, lb), "f4");
+        String* e = Parser.parPrimPointee(t);
+        return e != (String*)0 && Parser._same(e, "f4");
+    }
+    // The count a fixed array's bytes are reckoned from (count *
+    // sizeof(element)): its elements, or for a one-dimensional f4 array, two
+    // to a byte, its bytes. As the reference.
+    static i64 parByteCount(String* t, u32 lb, i64 count)
+    {
+        if (Parser._same(t.substringBytes((u32)0, lb), "f4") && t.indexOfByte((u8)']') == t.byteLength() - (u32)1)
+            return (count + (i64)1) / (i64)2;
+        return count;
     }
     // The struct when t is a pointer to one (#113): a heap array of structs
     // (`new P[n]`), sized at run time like a pointer to numbers once its block
@@ -11590,7 +11612,7 @@ class Parser
                         continue;
                     Node* sz = mk((u16)nkSizeof);
                     sz.setName(elem);
-                    bytes = parBin("*", parCast(String.withCString("i64"), parInt(count)),
+                    bytes = parBin("*", parCast(String.withCString("i64"), parInt(Parser.parByteCount(t, lb, count))),
                                    parCast(String.withCString("i64"), sz));
                 } else if (Parser.parPrimPointee(t) != (String*)0) {
                     // A pointer to numbers, `simd:` or plain: its length is
@@ -11697,7 +11719,7 @@ class Parser
                 bool woBlock = woBody != (Node*)0 && woBody.kind() == (u16)nkBlock;
                 u32 woCount = woBody == (Node*)0 ? (u32)0 : (woBlock ? woBody.kidCount() : (u32)1);
                 if (mayWallOwn && t != (String*)0
-                    && (t.indexOfByte((u8)'[') != (u32)$FFFFFFFF || Parser.parPrimPointee(t) != (String*)0) && cr != (Number*)0
+                    && (t.indexOfByte((u8)'[') != (u32)$FFFFFFFF || Parser.parPrimPointee(t) != (String*)0) && !Parser.parF4Elements(t) && cr != (Number*)0
                     && cr.asU32() == (u32)1)
                     for (u32 si = (u32)0; si < woCount; si = si + (u32)1) {
                         Node* st = woBlock ? woBody.kid(si) : woBody;
@@ -11786,7 +11808,7 @@ class Parser
                 // array in its range (the reference explains; bug 645).
                 Number* gr = refs != (Map*)0 ? (Number*)refs.get((Hashable*)g) : (Number*)0;
                 bool wall = false;
-                if (mayWall && gt.indexOfByte((u8)'[') != (u32)$FFFFFFFF && gr != (Number*)0 && gr.asU32() == (u32)1
+                if (mayWall && gt.indexOfByte((u8)'[') != (u32)$FFFFFFFF && !Parser.parF4Elements(gt) && gr != (Number*)0 && gr.asU32() == (u32)1
                     && loopBody != (Node*)0 && loopBody.kind() == (u16)nkBlock)
                     for (u32 si = (u32)0; si < loopBody.kidCount(); si = si + (u32)1) {
                         Node* st = loopBody.kid(si);
@@ -11857,7 +11879,7 @@ class Parser
                     if (count > (i64)0) {
                         Node* esz = mk((u16)nkSizeof);
                         esz.setName(gt.substringBytes((u32)0, lb));
-                        bytes = parBin("*", parCast(String.withCString("i64"), parInt(count)),
+                        bytes = parBin("*", parCast(String.withCString("i64"), parInt(Parser.parByteCount(gt, lb, count))),
                                        parCast(String.withCString("i64"), esz));
                     }
                 }

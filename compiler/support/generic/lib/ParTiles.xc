@@ -859,6 +859,12 @@ class ParTiles
             if (kneeMax > (i64)0 && tile < kneeMax && kneeMax * (i64)2 * (i64)ws.count() <= n)
                 tile = kneeMax;
             }
+        // A block writing f4 elements (pairs): even tiles, so that from a
+        // range starting on the block's parity (Par._runOwned) every tile
+        // starts on it too.
+        bool even = l != (ParLayout*)0 && l.pairs != (i64)0;
+        if (even && (tile & (i64)1) != (i64)0)
+            tile = tile + (i64)1;
         if (tile > n)
             tile = n;
         // The tile list: full tiles, then a tail that shrinks towards the
@@ -872,6 +878,8 @@ class ParTiles
         i64 tailFrom = (i64)totalDepth * tile;
         i64 half = ((tile / (i64)2) + (i64)1023) & ~(i64)1023;
         if (half < floor) half = floor;
+        if (even && (half & (i64)1) != (i64)0)
+            half = half + (i64)1;
         while (at < hi)
             {
             i64 left = hi - at;

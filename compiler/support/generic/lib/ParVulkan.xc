@@ -1156,7 +1156,9 @@ class ParVulkan
         span[2] = l.per;
         span[3] = (i64)0;
         bool split = l.devred != (i64)0 && l.goff != (i64)0 && l.per == (i64)1;
-        bool plain = plainFull && gParVkFull[slot] != (u64)0 && l.devred == (i64)0 && l.nred == (u32)0 && l.devlast == (i64)0;
+        // Not for f4 writes (pairs): the full form runs one item a thread.
+        bool plain = plainFull && gParVkFull[slot] != (u64)0 && l.devred == (i64)0 && l.nred == (u32)0 && l.devlast == (i64)0
+                     && l.pairs == (i64)0;
         _bindPipeline(cb, (u32)1, gParVkPipe[slot]);
         _bindSets(cb, (u32)1, gParVkLayout[slot], (u32)0, (u32)1, set, (u32)0, (pointer)0);
         if (split || plain)

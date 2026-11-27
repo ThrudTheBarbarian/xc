@@ -350,38 +350,6 @@
         return (IRValue*)0;
         }
 
-    // Does the function, or one it calls, read or write an f4 array element?
-    // A GPU kernel would rewrite a byte two work items share, so such a block
-    // has no form. As the reference's XTParTouchesF4.
-    final bool parTouchesF4(IRFunc* f, Map* seen)
-        {
-        if (f == 0 || seen.get((Hashable*)f.name()) != 0)
-            return false;
-        seen.set((Hashable*)f.name(), (Object*)f.name());
-        for (u32 b = 0; b < f.blocks().count(); b++)
-            {
-            Array* ins = ((IRBlock*)f.blocks().get(b)).insns();
-            for (u32 i = 0; i < ins.count(); i++)
-                {
-                IRInsn* ci = (IRInsn*)ins.get(i);
-                if (ci.isOp(opElementAddr) && f4IndexOf(ci.res()) != (IRValue*)0)
-                    return true;
-                if (!isName(ci.op(), "Call") || ci.ops().count() == 0)
-                    continue;
-                IROperand* o = (IROperand*)ci.ops().get(0);
-                if (o.kind() != (u8)OPK_SYM || o.name() == 0)
-                    continue;
-                for (u32 k = 0; k < _m.funcs().count(); k++)
-                    {
-                    IRFunc* g = (IRFunc*)_m.funcs().get(k);
-                    if (g.name().equals(o.name()) && parTouchesF4(g, seen))
-                        return true;
-                    }
-                }
-            }
-        return false;
-        }
-
     // Does the function, or one it calls, use a tensor (a call of one of the
     // tensor classes' methods, `__tensor_<T>_<R>$…`)? GPU kernels take no
     // tensor yet, so such a block runs on the CPU. As the reference's
@@ -4162,6 +4130,14 @@
         _parExtraMeta.append(parGuardWords(f, (Array*)_parGuards.get((Hashable*)f.name().substringBytes((u32)0, f.name().byteLength() - (u32)4))));
         _parExtraMeta.append(parMergeWords(f));
         _parExtraMeta.append(parPackWords(f));
+        // A block writing f4 arrays: the parity its threads' first items
+        // take. As the reference.
+        Object* mp = _parPairs != (Map*)0 ? _parPairs.get((Hashable*)f.name().substringBytes((u32)0, f.name().byteLength() - (u32)4)) : (Object*)0;
+        if (mp != (Object*)0 && ((Number*)mp).asU32() < (u32)2)
+            {
+            _parExtraMeta.appendCString(" pairs=");
+            _parExtraMeta.append(String.withU32(((Number*)mp).asU32()));
+            }
         String* msl = (String*)0;
         // A SPIR-V module is bytes (it holds NULs): it goes in as they are.
         Array* kernelBytes = (Array*)0;
@@ -4203,13 +4179,16 @@
         bool scanPass = !serialBlock && lost == (String*)0 && !arrRed && parIsScanBlock(fcls.substringBytes((u32)8, fcls.byteLength() - (u32)8));
         if (scanPass)
             lostWhy = String.withCString("it is a pass of a :scan block, which has no GPU version yet");
-        // A block that reads or writes f4 array elements has no form: a
-        // kernel would rewrite a byte two work items share.
-        if (!serialBlock && lost == (String*)0 && !arrRed && !scanPass && parTouchesF4(f, new Map()))
-            lostWhy = String.withCString("it reads or writes f4 array elements, two to a byte, which GPU kernels do not take yet");
+        // A block writing f4 array elements whose writes could not be placed
+        // (`pairs=2`, it runs on one thread) has no form: a kernel's threads
+        // would rewrite bytes they share. Any other f4 block has: its threads
+        // own whole bytes. As the reference.
+        Object* fp4 = _parPairs != (Map*)0 ? _parPairs.get((Hashable*)fcls) : (Object*)0;
+        if (!serialBlock && lost == (String*)0 && !arrRed && !scanPass && fp4 != (Object*)0 && ((Number*)fp4).asU32() == (u32)2)
+            lostWhy = String.withCString("it writes f4 array elements, two to a byte, at places its work items cannot keep to whole bytes");
         // A block that uses a tensor has no form: GPU kernels take none yet.
         // As the reference.
-        else if (!serialBlock && lost == (String*)0 && !arrRed && !scanPass && parTouchesTensor(f, new Map()))
+        if (lostWhy == (String*)0 && !serialBlock && lost == (String*)0 && !arrRed && !scanPass && parTouchesTensor(f, new Map()))
             lostWhy = String.withCString("it reads or writes tensor elements, which GPU kernels do not take yet");
         bool noForms = serialBlock || lostWhy != (String*)0;
         _mWhy = lostWhy;

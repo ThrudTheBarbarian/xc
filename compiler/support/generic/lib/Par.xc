@@ -634,9 +634,16 @@ class Par
             ParDevice.ranAdd(proto, String.withCString("serial"));
             return;
             }
-        // A block writing f4 arrays (`pairs=` on its header line) runs on the
-        // CPU's threads, its chunks cut on the parity that keeps each byte to
-        // one thread: it has no GPU form, and the tile queue cuts without it.
+        // A block writing f4 arrays, two elements to a byte (`pairs=` on its
+        // header line): every piece of its range a thread takes starts on the
+        // parity that keeps each byte to one thread, the CPU's chunks
+        // (Par.cut), a GPU's threads (an even number of items each,
+        // ParLayout.plan) and the tiles (even sizes, ParTiles). So the range
+        // must start on it: when it does not, its first item runs here, on
+        // this thread, before the rest, on a copy of the block whose
+        // reductions are folded in after the rest's, and the rest starts on
+        // the parity. (A GPU starts each thread's partials from the block's
+        // own values, so the first item's cannot be in the block yet.)
         // `pairs=2`: its writes could not be placed, so it runs on one thread.
         i32 pairs = Par.pairsOf(proto.gpuSource());
         if (pairs == (i32)2)
@@ -647,10 +654,17 @@ class Par
             ParDevice.ranAdd(proto, String.withCString("serial"));
             return;
             }
-        if (pairs >= (i32)0)
+        if (pairs >= (i32)0 && ((lo ^ (i64)pairs) & (i64)1) != (i64)0)
             {
-            Par.runCpu(proto, lo, hi);
-            ParDevice.ranAdd(proto, String.withCString("cpu"));
+            ParChunk* first = proto.copyChunk();
+            first.lo = lo;
+            first.hi = lo + (i64)1;
+            first.run();
+            if (lo + (i64)1 < hi)
+                Par._runOwned(proto, lo + (i64)1, hi);
+            else
+                ParDevice.ranAdd(proto, String.withCString("cpu"));
+            proto.merge(first);
             return;
             }
 #if (ARCH_arm64 && !OS_ios) || ARCH_x86_64 || ARCH_wasm32

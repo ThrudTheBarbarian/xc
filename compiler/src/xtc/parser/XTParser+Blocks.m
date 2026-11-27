@@ -76,10 +76,11 @@ static int64_t parFoldConstant(XTASTNode* e, BOOL* ok)
     }
 
 // The element type when t is a pointer to numbers (an integer, float, double,
-// bool or small float other than f4; not an enum, which the port knows by name
-// only), else nil. Such a capture, `simd:` or plain, is a GPU buffer sized at
-// run time by the block it points into (par-blocks.md §3). An f4 element is
-// half a byte, which no sizeof measures. Mirrored in the port (parPrimPointee).
+// bool or small float; not an enum, which the port knows by name only), else
+// nil. Such a capture, `simd:` or plain, is a GPU buffer sized at run time by
+// the block it points into (par-blocks.md §3). An f4[] is sized in bytes:
+// sizeof(f4) is 1, and the runtime measures the bytes to the block's end.
+// Mirrored in the port (parPrimPointee).
 static XTType* _Nullable parPrimPointee(XTType* t)
     {
     if (![t isKindOfClass:[XTPointerType class]])
@@ -88,8 +89,31 @@ static XTType* _Nullable parPrimPointee(XTType* t)
     if (!e || e.kind == XTTypeKindEnum)
         return nil;
     if (e.isFloatPack)
-        return e == [XTType f4Type] ? nil : e;
+        return e;
     return (e.isInteger || e.isFloating || e.kind == XTTypeKindBool) ? e : nil;
+    }
+
+// Whether t is an f4 array or f4[]: its elements are nibbles, so a write of
+// a[i] for each i in a range covers its bytes only when the range is whole
+// pairs, and gpuWritesAll / gpuWritesAllOwn, which the runtime checks by
+// items against bytes, do not claim it. Mirrored in the port (parF4Elements).
+static BOOL parF4Elements(XTType* t)
+    {
+    if ([t isKindOfClass:[XTArrayType class]])
+        return ((XTArrayType*)t).elementType == [XTType f4Type];
+    if ([t isKindOfClass:[XTPointerType class]])
+        return ((XTPointerType*)t).pointeeType == [XTType f4Type];
+    return NO;
+    }
+
+// The count a fixed array's bytes are reckoned from (count * sizeof(element)):
+// its elements, or for an f4 array, two to a byte, its bytes. Mirrored in the
+// port (parByteCount).
+static int64_t parByteCount(XTArrayType* at)
+    {
+    if (at.elementType == [XTType f4Type])
+        return ((int64_t)at.elementCount + 1) / 2;
+    return (int64_t)at.elementCount;
     }
 
 // An array reduction's code for ParFnChunk.arrMerge: the array's bytes << 8,
@@ -2132,7 +2156,7 @@ static void parGridSizeAlias(XTBlockNode* body, XTASTNode* size, NSString* sizeV
                 XTArrayType* at = (XTArrayType*)t;
                 bytes = [[XTBinaryExprNode alloc]
                     initWithOp:XTBinaryOpMul
-                          left:cast(i64T, [[XTLiteralIntNode alloc] initWithValue:(int64_t)at.elementCount location:loc])
+                          left:cast(i64T, [[XTLiteralIntNode alloc] initWithValue:parByteCount(at) location:loc])
                          right:cast(i64T, [[XTSizeofExprNode alloc] initWithOperand:at.elementType location:loc])
                       location:loc];
                 }
@@ -2245,7 +2269,8 @@ static void parGridSizeAlias(XTBlockNode* body, XTASTNode* size, NSString* sizeV
         for (NSString* cn in caps)
             {
             BOOL wall = NO;
-            if (([frameTypes[cn] isKindOfClass:[XTArrayType class]] || parPrimPointee(frameTypes[cn])) && gridDecls.count == 0 &&
+            if (([frameTypes[cn] isKindOfClass:[XTArrayType class]] || parPrimPointee(frameTypes[cn])) && !parF4Elements(frameTypes[cn])
+                && gridDecls.count == 0 &&
                 ![frame[@"exits"] boolValue] && ![written containsObject:iv.varName] &&
                 [frame[@"refs"][cn] unsignedIntegerValue] == 1)
                 for (XTASTNode* st in woStmts)
@@ -2339,7 +2364,7 @@ static void parGridSizeAlias(XTBlockNode* body, XTASTNode* size, NSString* sizeV
             if ([topVars[g] isKindOfClass:[XTArrayType class]] && ((XTArrayType*)topVars[g]).elementCount > 0)
                 bytes = [[XTBinaryExprNode alloc]
                     initWithOp:XTBinaryOpMul
-                          left:cast(i64T, [[XTLiteralIntNode alloc] initWithValue:(int64_t)((XTArrayType*)topVars[g]).elementCount
+                          left:cast(i64T, [[XTLiteralIntNode alloc] initWithValue:parByteCount((XTArrayType*)topVars[g])
                                                                          location:loc])
                          right:cast(i64T, [[XTSizeofExprNode alloc] initWithOperand:((XTArrayType*)topVars[g]).elementType
                                                                            location:loc])
@@ -2356,7 +2381,7 @@ static void parGridSizeAlias(XTBlockNode* body, XTASTNode* size, NSString* sizeV
             // range covers the whole array.
             BOOL wall = NO;
             if (gridDecls.count == 0 && ![frame[@"exits"] boolValue] && ![written containsObject:iv.varName]
-                && [topVars[g] isKindOfClass:[XTArrayType class]]
+                && [topVars[g] isKindOfClass:[XTArrayType class]] && !parF4Elements(topVars[g])
                 && [frame[@"refs"][g] unsignedIntegerValue] == 1)
                 for (XTASTNode* st in loopBody.statements)
                     {

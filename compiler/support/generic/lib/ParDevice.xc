@@ -313,6 +313,10 @@ class ParLayout : Object
     i64 arrLen[16];
     i64 arrTg;
     u32 narr;
+    // 1: the kernel writes f4 elements, two to a byte (header word `pairs=`):
+    // each thread takes an even number of items, so a run that starts on the
+    // block's parity (Par._runOwned) gives every thread whole bytes.
+    i64 pairs;
 
     void plan(i64 lo, i64 hi)
         {
@@ -352,6 +356,10 @@ class ParLayout : Object
             if (maxThreads > (i64)0 && (n + per - (i64)1) / per > maxThreads)
                 per = (n + maxThreads - (i64)1) / maxThreads;
             }
+        // f4 writes: an even number of items a thread, each thread's first
+        // on the run's parity; the last thread ends where the run ends.
+        if (pairs != (i64)0 && (per & (i64)1) != (i64)0)
+            per = per + (i64)1;
         threads = (n + per - (i64)1) / per;
         nparts = devred != (i64)0 ? (threads + (i64)255) / (i64)256 : threads;
         nback = devlast != (i64)0 ? (i64)1 : nparts;
@@ -2515,6 +2523,10 @@ class ParDevice
         String* packs = packsOf(proto.gpuSource());
         if (packs != (String*)0)
             Log.info("par: %s: computes in %s on the GPU, converting in the kernel", gParBlock[bi], packs.cString());
+        // A block writing f4 elements: its threads' layout.
+        if (l.pairs != (i64)0)
+            Log.info("par: %s: f4 pairs per thread: %ld items a thread, each thread's first on the block's parity, so no two threads write one byte",
+                     gParBlock[bi], l.per);
         }
 
     // The `packs=` word of a kernel's header line, with `+` read as `, `, or
@@ -3517,6 +3529,14 @@ class ParDevice
                 if (num(src, &at) != (i64)0)
                     l.arrTg = (i64)1;
                 l.narr = k + (u32)1;
+                continue;
+                }
+            // pairs=<p>: the kernel writes f4 elements, two to a byte.
+            if (src[at] == (u8)' ' && src[at + (u32)1] == (u8)'p' && src[at + (u32)2] == (u8)'a' && src[at + (u32)3] == (u8)'i'
+                && src[at + (u32)4] == (u8)'r' && src[at + (u32)5] == (u8)'s' && src[at + (u32)6] == (u8)'=')
+                {
+                l.pairs = (i64)1;
+                at = at + (u32)7;
                 continue;
                 }
             // ops=<n>: the per-item compute-op count (cost model).

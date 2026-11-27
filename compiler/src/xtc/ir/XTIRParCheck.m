@@ -465,28 +465,6 @@ void XTIRF4NoteElement(XTIRInsn* ea, XTIRValue* idx)
         }
     }
 
-// Does the function, or one it calls, read or write an f4 array element (an
-// ElementAddr the lowering formed for one, XTIRF4ElementIndex)? A GPU kernel
-// would rewrite a byte two work items share, so such a block has no form.
-static BOOL XTParTouchesF4(XTIRModule* module, XTIRFunction* f, NSMutableSet<NSString*>* seen)
-    {
-    if (!f || [seen containsObject:f.name])
-        return NO;
-    [seen addObject:f.name];
-    for (XTIRBlock* b in f.blocks)
-        for (XTIRInsn* i in b.instructions)
-            {
-            if (i.opcode == XTIROpElementAddr && XTIRF4ElementIndex(i))
-                return YES;
-            if (i.opcode != XTIROpCall || !i.operands.count || i.operands[0].kind != XTIROperandKindSym)
-                continue;
-            XTIRSymbol* sym = [module symbolForId:i.operands[0].symbolId];
-            if (sym.function && XTParTouchesF4(module, sym.function, seen))
-                return YES;
-            }
-    return NO;
-    }
-
 // Does the function, or one it calls, use a tensor (a call of one of the
 // tensor classes' methods, `__tensor_<T>_<R>$…`, XTParser+Tensors.m)? GPU
 // kernels take no tensor yet, so such a block runs on the CPU. Mirrored in
@@ -516,7 +494,7 @@ static BOOL XTParTouchesTensor(XTIRModule* module, XTIRFunction* f, NSMutableSet
 // thread, where the writes cannot be placed; -1 when no write constrains it.
 // Set by dependenceIn:, by block in checkModule:.
 static NSInteger gParF4Pair = -1;
-static NSString* const XTParSmallFloatWhy = @"it reads or writes f4 array elements, two to a byte, which GPU kernels do not take yet";
+static NSString* const XTParSmallFloatWhy = @"it writes f4 array elements, two to a byte, at places its work items cannot keep to whole bytes";
 static NSMutableDictionary<NSString*, NSNumber*>* gParPairs = nil;
 
 @implementation XTIROptGpuEscapeTrips
@@ -1711,6 +1689,9 @@ static BOOL gEmitsWGSL = NO;
                             stringByAppendingString:[[fc guardWordsIn:f guards:gParGuards[fcls]]
                                                         stringByAppendingString:[fc mergeWordsIn:f redOps:redOps fast:fast]]];
         meta = [meta stringByAppendingString:XTParPackWords(module, f)];
+        // A block writing f4 arrays: the parity its threads' first items take.
+        if (gParPairs[fcls] && gParPairs[fcls].integerValue < 2)
+            meta = [meta stringByAppendingFormat:@" pairs=%ld", (long)gParPairs[fcls].integerValue];
         [XTIRParMSL setExtraMeta:meta];
         NSString* (^ptxOf)(NSString* _Nullable* _Nullable) = ^NSString*(NSString* _Nullable* _Nullable w) {
             NSString* t = kf ? [XTIRParMSL ptxForKernel:kf module:kmod fast:fast redOps:redOps why:NULL] : nil;
@@ -1757,9 +1738,12 @@ static BOOL gEmitsWGSL = NO;
         BOOL scanPass = !serialBlock && !lost && !arrRed && [self isScanBlock:module number:[fcls substringFromIndex:8]];
         if (scanPass)
             mslWhy = ptxWhy = wgslWhy = spvWhy = @"it is a pass of a :scan block, which has no GPU version yet";
-        // A block that reads or writes f4 array elements has no form: a
-        // kernel would rewrite a byte two work items share.
-        BOOL f4Pass = !serialBlock && !lost && !arrRed && !scanPass && XTParTouchesF4(module, f, [NSMutableSet set]);
+        // A block writing f4 array elements whose writes could not be placed
+        // (`pairs=2`, it runs on one thread) has no form: a kernel's threads
+        // would rewrite bytes they share. Any other f4 block has: its threads
+        // own whole bytes (the runtime gives each an even number of items,
+        // the first on the block's parity: `pairs=<p>`).
+        BOOL f4Pass = !serialBlock && !lost && !arrRed && !scanPass && gParPairs[fcls].integerValue == 2;
         if (f4Pass)
             mslWhy = ptxWhy = wgslWhy = spvWhy = XTParSmallFloatWhy;
         // A block that uses a tensor has no form: GPU kernels take none yet.
