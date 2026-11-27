@@ -8157,8 +8157,12 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
     NSUInteger srcW = srcIsBool ? 1 : srcType.byteWidth;
     BOOL srcSigned = srcIsBool ? NO : srcType.isSigned;
     // No-op casts (same width and signedness, or operand already
-    // matches dst kind).
-    if (!srcIsBool && srcW == dstType.byteWidth && srcSigned == dstType.isSigned)
+    // matches dst kind). A source the AST itself calls bool is one too
+    // (`(u8)flag`): its byte is 0 or 1 already, as the port's coerce sees
+    // it, and the Bitcast cost a uxtb on arm64 (#775). A comparison typed by
+    // its operands (`(u8)(x > y)`) still names the crossing, as the port's
+    // does.
+    if ((!srcIsBool || srcType.kind == XTTypeKindBool) && srcW == dstType.byteWidth && srcSigned == dstType.isSigned)
         {
         return src;
         }
