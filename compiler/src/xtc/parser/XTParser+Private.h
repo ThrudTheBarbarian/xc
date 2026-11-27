@@ -201,6 +201,7 @@ NSString* XTPrecedenceSpecOf(NSArray<XTToken*>* t);
 // a parse in the block's frame gives its loops.
 XTASTNode* XTASTDeepCopy(XTASTNode* n);
 void XTASTRename(XTASTNode* n, NSString* from, NSString* to);
+void XTASTEachChild(id obj, void (^f)(id child));
 // Adjacent par blocks fused (#147; XTParser+ParFrame.m).
 NSMutableDictionary* XTParFuseScan(XTASTNode* body, NSString* iv);
 BOOL XTParFuseSame(XTASTNode* _Nullable a, XTASTNode* _Nullable b);

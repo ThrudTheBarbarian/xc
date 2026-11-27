@@ -2974,6 +2974,154 @@ static NSString* XTTensorElemOf(NSString* sym)
     return words;
     }
 
+// The instruction behind op, through width changes; nil for none. As the
+// port's parStripExt.
+static XTIRInsn* parStripExt(XTIROperand* op, NSDictionary<NSNumber*, XTIRInsn*>* def)
+    {
+    XTIROperand* at = op;
+    for (int g = 0; g < 4; g++)
+        {
+        if (at.kind != XTIROperandKindUse)
+            return nil;
+        XTIRInsn* d = def[@(at.valueId)];
+        if (!d)
+            return nil;
+        if ((d.opcode != XTIROpZExt && d.opcode != XTIROpSExt) || d.operands.count == 0)
+            return d;
+        at = d.operands[0];
+        }
+    return nil;
+    }
+
+// The field of a polynomial that is one captured integer, else -1.
+static long long parCapAtom(NSDictionary<NSString*, NSNumber*>* p)
+    {
+    if (p.count != 1)
+        return -1;
+    NSString* k = p.allKeys[0];
+    if (![k hasPrefix:@"#"] || [p[k] longLongValue] != 1)
+        return -1;
+    long long v = 0;
+    for (NSUInteger j = 1; j < k.length; j++)
+        v = v * 10 + ([k characterAtIndex:j] - '0');
+    return v;
+    }
+
+// fpr=<k>:<woff>:<koff> for captured array buf when its rows are its
+// footprint (field the field of K, else -1). As the port's parRowWord.
+- (NSString*)rowWordIn:(XTIRFunction*)f buffer:(NSString*)buf ivars:(NSArray<NSString*>*)ivars field:(long long)field
+    {
+    if (field < 0 || f.paramTypes.count == 0)
+        return @"";
+    NSUInteger at = [ivars indexOfObject:buf];
+    NSUInteger wAt = [ivars indexOfObject:@"par$w"];
+    if (at == NSNotFound || at < 2 || wAt == NSNotFound)
+        return @"";
+    XTIRType* selfT = f.paramTypes[0];
+    NSArray<XTIRLayoutField*>* fl = selfT.kind == XTIRTypeKindPtr ? selfT.pointeeType.layout.fields : nil;
+    if (!fl || (NSUInteger)field >= fl.count || wAt + 1 >= fl.count)
+        return @"";
+    return [NSString stringWithFormat:@" fpr=%lu:%u:%u", (unsigned long)(at - 2), fl[wAt + 1].byteOffset, fl[(NSUInteger)field].byteOffset];
+    }
+
+// The field of K when op is y * K + k in a 2-D grid, else -1. As the port's
+// parRowField.
+- (long long)rowFieldOf:(XTIROperand*)op iv:(XTIRValueId)iv self:(XTIRValueId)selfId ivars:(NSArray<NSString*>*)ivars
+                   defs:(NSDictionary<NSNumber*, XTIRInsn*>*)def phiBlocks:(NSDictionary<NSNumber*, XTIRBlock*>*)phiBlk
+    {
+    if (![ivars containsObject:@"par$w"] || [ivars containsObject:@"par$d"])
+        return -1;
+    XTIRInsn* d = parStripExt(op, def);
+    if (!d || d.opcode != XTIROpAdd || d.operands.count != 2)
+        return -1;
+    for (NSUInteger s = 0; s < 2; s++)
+        {
+        XTIRInsn* m = parStripExt(d.operands[s], def);
+        if (!m || m.opcode != XTIROpMul || m.operands.count != 2)
+            continue;
+        for (NSUInteger t = 0; t < 2; t++)
+            {
+            NSDictionary<NSString*, NSNumber*>* py = [self gridPoly:m.operands[t] iv:iv self:selfId ivars:ivars defs:def depth:0];
+            NSDictionary<NSString*, NSNumber*>* pk = [self gridPoly:m.operands[1 - t] iv:iv self:selfId ivars:ivars defs:def depth:0];
+            BOOL isY = py && py.count == 1 && ([py[@"y"] longLongValue] == 1 || [py[@"q"] longLongValue] == 1);
+            if (!isY || !pk)
+                continue;
+            long long fld = parCapAtom(pk);
+            if (fld < 0)
+                continue;
+            if ([self counterBelow:d.operands[1 - s] field:fld iv:iv self:selfId ivars:ivars defs:def phiBlocks:phiBlk])
+                return fld;
+            }
+        }
+    return -1;
+    }
+
+// Whether op is an inner loop's counter from 0, stepped by a positive
+// constant, its header's test `op < K` (K captured field fld). As the port's
+// parCounterBelow.
+- (BOOL)counterBelow:(XTIROperand*)op field:(long long)fld iv:(XTIRValueId)iv self:(XTIRValueId)selfId
+               ivars:(NSArray<NSString*>*)ivars defs:(NSDictionary<NSNumber*, XTIRInsn*>*)def
+           phiBlocks:(NSDictionary<NSNumber*, XTIRBlock*>*)phiBlk
+    {
+    XTIRInsn* ph = parStripExt(op, def);
+    if (!ph || ph.opcode != XTIROpPhi || ph.operands.count != 4 || !ph.result || ph.result.valueId == iv)
+        return NO;
+    XTIRValueId pv = ph.result.valueId;
+    XTIRBlock* H = phiBlk[@(pv)];
+    if (!H)
+        return NO;
+    BOOL zero = NO;
+    BOOL stepped = NO;
+    for (NSUInteger e = 0; e < 2; e++)
+        {
+        XTIROperand* ev = ph.operands[e * 2 + 1];
+        if (ev.kind == XTIROperandKindImmI)
+            {
+            zero = zero || ev.intValue == 0;
+            continue;
+            }
+        XTIRInsn* ed = parStripExt(ev, def);
+        if (!ed)
+            return NO;
+        if (ed.opcode == XTIROpConst && ed.operands.count && ed.operands[0].kind == XTIROperandKindImmI)
+            {
+            zero = zero || ed.operands[0].intValue == 0;
+            continue;
+            }
+        XTIROperand* a0 = ed.operands.count == 2 ? ed.operands[0] : nil;
+        XTIROperand* a1 = ed.operands.count == 2 ? ed.operands[1] : nil;
+        long long st = 0;
+        if (a1.kind == XTIROperandKindImmI)
+            st = a1.intValue;
+        else if (a1.kind == XTIROperandKindUse)
+            {
+            XTIRInsn* sd = parStripExt(a1, def);
+            if (sd.opcode == XTIROpConst && sd.operands.count && sd.operands[0].kind == XTIROperandKindImmI)
+                st = sd.operands[0].intValue;
+            }
+        if (ed.opcode == XTIROpAdd && a0 && a0.kind == XTIROperandKindUse && a0.valueId == pv && st > 0)
+            {
+            stepped = YES;
+            continue;
+            }
+        return NO;
+        }
+    if (!zero || !stepped)
+        return NO;
+    XTIRInsn* t = H.terminator;
+    if (!t || t.opcode != XTIROpCondBranch || t.operands.count < 3 || t.operands[0].kind != XTIROperandKindUse)
+        return NO;
+    XTIRInsn* g = def[@(t.operands[0].valueId)];
+    if (!g || g.opcode != XTIROpICmp || g.operands.count < 2)
+        return NO;
+    if (g.predicate != XTIRICmpULT && g.predicate != XTIRICmpSLT)
+        return NO;
+    if (g.operands[0].kind != XTIROperandKindUse || g.operands[0].valueId != pv)
+        return NO;
+    NSDictionary<NSString*, NSNumber*>* pb = [self gridPoly:g.operands[1] iv:iv self:selfId ivars:ivars defs:def depth:0];
+    return pb && parCapAtom(pb) == fld;
+    }
+
 - (NSString*)footprintWordsIn:(XTIRFunction*)f ivarNames:(NSArray<NSString*>*)ivars
     {
     NSMutableDictionary<NSNumber*, XTIRInsn*>* def = [NSMutableDictionary dictionary];
@@ -3004,6 +3152,14 @@ static NSString* XTTensorElemOf(NSString* sym)
     // was affine with that k.
     NSMutableArray<NSString*>* order = [NSMutableArray array];
     NSMutableDictionary<NSString*, NSMutableArray<NSNumber*>*>* fp = [NSMutableDictionary dictionary];
+    // A grid's rows (#776): per buffer, the field of K when every access is
+    // y * K + k (k counting over [0, K)), else -1. As the port.
+    NSMutableDictionary<NSString*, NSNumber*>* rowFld = [NSMutableDictionary dictionary];
+    NSMutableDictionary<NSNumber*, XTIRBlock*>* phiBlk = [NSMutableDictionary dictionary];
+    for (XTIRBlock* b in f.blocks)
+        for (XTIRInsn* i in b.phiNodes)
+            if (i.result)
+                phiBlk[@(i.result.valueId)] = b;
     for (XTIRBlock* b in f.blocks)
         {
         for (XTIRInsn* i in b.instructions)
@@ -3021,6 +3177,17 @@ static NSString* XTTensorElemOf(NSString* sym)
             XTParIndex x = [self indexOf:ea.operands[1] iv:iv defs:def depth:0];
             if (!x.affine)
                 x = [self gridIndexOf:ea.operands[1] iv:iv self:selfId ivars:ivars defs:def];
+            // One element address (the port's terms), not one nested in another.
+            XTIRInsn* inner = ea.operands[0].kind == XTIROperandKindUse ? def[@(ea.operands[0].valueId)] : nil;
+            BOOL nested = inner.opcode == XTIROpElementAddr && inner.operands.count >= 2 && inner.result && ea.result
+                          && [inner.result.type isEqual:ea.result.type];
+            long long rowF = -1;
+            if (!nested && !x.affine)
+                rowF = [self rowFieldOf:ea.operands[1] iv:iv self:selfId ivars:ivars defs:def phiBlocks:phiBlk];
+            if (!rowFld[buf])
+                rowFld[buf] = @(rowF);
+            else if (rowFld[buf].longLongValue != rowF)
+                rowFld[buf] = @(-1);
             NSMutableArray<NSNumber*>* e = fp[buf];
             if (!e)
                 {
@@ -3045,7 +3212,10 @@ static NSString* XTTensorElemOf(NSString* sym)
         {
         NSArray<NSNumber*>* e = fp[buf];
         if (!e[3].boolValue)
+            {
+            [words appendString:[self rowWordIn:f buffer:buf ivars:ivars field:rowFld[buf].longLongValue]];
             continue;
+            }
         NSUInteger at = [ivars indexOfObject:buf];
         // A captured array is ivar 2 + <index> (after lo and hi); a global
         // is named as the glob= word names it.

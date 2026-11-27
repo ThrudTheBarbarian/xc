@@ -10749,6 +10749,60 @@ class Parser
     // evaluated once, before the block, into locals the body captures: their
     // declarations are returned for the site, and the new body is left in the
     // frame as "gridBody". As the reference's parGridLoopFor.
+    // A grid size written as a captured u32 the body only reads (no
+    // assignment, increment, address or local of that name): the body's
+    // uses of the name become the grid's own size, which holds the same
+    // value (the size is that name, cast to u32). An index such as
+    // par.y * n + par.x is then the work item itself, which the footprint
+    // and the dependence check both read (#776).
+    void parGridSizeAlias(Node* body, Node* size, String* sizeVar, Map* types)
+    {
+        if (size == (Node*)0 || size.kind() != (u16)nkIdent || size.name() == (String*)0 || types == (Map*)0)
+            return;
+        String* n = size.name();
+        String* t = (String*)types.get((Hashable*)n);
+        if (t == (String*)0 || !Parser._same(t, "u32") || Parser.parGridNameWritten(body, n))
+            return;
+        Parser.parGridRename(body, n, sizeVar);
+    }
+
+    static bool parGridNameWritten(Node* x, String* n)
+    {
+        if (x == (Node*)0)
+            return false;
+        u16 k = x.kind();
+        if ((k == (u16)nkVariableDecl || k == (u16)nkParam) && x.name() != (String*)0 && x.name().equals(n))
+            return true;
+        // A tuple assignment's targets (all its kids but the value).
+        if (k == (u16)nkTupleAssign && x.kidCount() > (u32)0)
+            for (u32 i = (u32)0; i + (u32)1 < x.kidCount(); i = i + (u32)1) {
+                Node* t = x.kid(i);
+                if (t != (Node*)0 && t.kind() == (u16)nkIdent && t.name() != (String*)0 && t.name().equals(n))
+                    return true;
+            }
+        if ((k == (u16)nkAssign || k == (u16)nkPostfix || k == (u16)nkUnary) && x.kidCount() > (u32)0) {
+            Node* t = x.kid((u32)0);
+            bool writes = k == (u16)nkAssign || k == (u16)nkPostfix
+                          || (x.op() != (String*)0 && (Parser._same(x.op(), "++") || Parser._same(x.op(), "--") || Parser._same(x.op(), "&")));
+            if (writes && t != (Node*)0 && t.kind() == (u16)nkIdent && t.name() != (String*)0 && t.name().equals(n))
+                return true;
+        }
+        for (u32 i = (u32)0; i < x.kidCount(); i = i + (u32)1)
+            if (Parser.parGridNameWritten(x.kid(i), n))
+                return true;
+        return false;
+    }
+
+    static void parGridRename(Node* x, String* n, String* to)
+    {
+        if (x == (Node*)0)
+            return;
+        if (x.kind() == (u16)nkIdent && x.name() != (String*)0 && x.name().equals(n))
+            x.setName(String.withString(to));
+        for (u32 i = (u32)0; i < x.kidCount(); i = i + (u32)1)
+            Parser.parGridRename(x.kid(i), n, to);
+    }
+
     Array* parGridLoop(Node* body, Map* frame)
     {
         Array* decls = new Array();
@@ -10771,6 +10825,10 @@ class Parser
         }
         Array* names = (Array*)frame.get((Hashable*)String.withCString("names"));
         Map* types = (Map*)frame.get((Hashable*)String.withCString("types"));
+        // A size the body only reads under its own name reads the grid's
+        // size instead (#776), so par.y * n + par.x is the item it is.
+        parGridSizeAlias(body, (Node*)grid.get((u32)0), String.withCString("par$w"), types);
+        parGridSizeAlias(body, (Node*)grid.get((u32)1), String.withCString("par$h"), types);
         for (u32 i = (u32)0; i < sizes.count(); i = i + (u32)1) {
             String* n = (String*)sizes.get(i);
             bool have = false;

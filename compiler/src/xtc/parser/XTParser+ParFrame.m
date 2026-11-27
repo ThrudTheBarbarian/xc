@@ -139,6 +139,20 @@ void XTASTRename(XTASTNode* n, NSString* from, NSString* to)
     pfwRename(n, [from copy], [to copy]);
     }
 
+// Each node directly under obj (an ivar's node, or a node in an ivar's array).
+void XTASTEachChild(id obj, void (^f)(id child))
+    {
+    pfwEachIvar(obj, ^(Ivar iv, id val) {
+      (void)iv;
+      if (pfwTreeObject(val))
+          f(val);
+      else
+          for (id e in (NSArray*)val)
+              if (pfwTreeObject(e))
+                  f(e);
+    });
+    }
+
 /****************************************************************************\
 |* Adjacent par blocks fused (#147): what one body touches, read from its
 |* tree, as the port's parFuseScan. "acc" name -> bits (1 read, 2 written, 4

@@ -3095,6 +3095,13 @@ class ParDevice
         i64 fpLo[16];
         i64 fpHi[16];
         u32 nfp = (u32)0;
+        // fpr=<k>:<woff>:<koff>: captured array k's footprint is whole rows of
+        // a grid (#776), K elements each, row = item / W, with W and K read
+        // from the block's object at those offsets.
+        i64 frId[16];
+        i64 frW[16];
+        i64 frK[16];
+        u32 nfr = (u32)0;
         u32 at = (u32)0;
         while (src[at] != (u8)0 && src[at] != (u8)10)
             {
@@ -3116,6 +3123,20 @@ class ParDevice
                 ivr[nbuf] = ivar;
                 wid[nbuf] = w;
                 nbuf = nbuf + (u32)1;
+                continue;
+                }
+            if (src[at] == (u8)'f' && src[at + (u32)1] == (u8)'p' && src[at + (u32)2] == (u8)'r' && src[at + (u32)3] == (u8)'='
+                && at > (u32)0 && src[at - (u32)1] == (u8)' ' && nfr < (u32)16)
+                {
+                at = at + (u32)4;
+                frId[nfr] = num(src, &at);
+                at = at + (u32)1;
+                i64 wo = num(src, &at);
+                at = at + (u32)1;
+                i64 ko = num(src, &at);
+                frW[nfr] = (i64)*(u32*)((pointer)((u64)obj + (u64)wo));
+                frK[nfr] = (i64)*(u32*)((pointer)((u64)obj + (u64)ko));
+                nfr = nfr + (u32)1;
                 continue;
                 }
             // fp=, not gfp= (a global's): the word starts after a space.
@@ -3166,7 +3187,19 @@ class ParDevice
                 a1s[i] = (u64)ptr[i] + (u64)len[i];
                 }
             else
+                {
                 bounded[i] = false;
+                // Whole rows of a grid: rows lo / W to (hi - 1) / W.
+                for (u32 q = (u32)0; q < nfr && hi > lo; q = q + (u32)1)
+                    if (frId[q] == ivr[i] && frW[q] > (i64)0)
+                        {
+                        i64 r0 = lo / frW[q];
+                        i64 r1 = (hi - (i64)1) / frW[q];
+                        a0s[i] = (u64)((i64)(u64)ptr[i] + r0 * frK[q] * wid[i]);
+                        a1s[i] = (u64)((i64)(u64)ptr[i] + (r1 + (i64)1) * frK[q] * wid[i]);
+                        bounded[i] = true;
+                        }
+                }
             }
         for (u32 i = (u32)0; i < nbuf; i = i + (u32)1)
             for (u32 j = i + (u32)1; j < nbuf; j = j + (u32)1)

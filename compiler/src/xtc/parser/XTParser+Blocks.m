@@ -1478,6 +1478,55 @@ NSString* _Nullable parRootName(XTASTNode* _Nullable n)
 |* declare first. A block without :grid is left alone (and gets no
 |* declarations).
 \****************************************************************************/
+// Whether the tree under obj writes the name n: an assignment, a tuple
+// assignment's target, an increment or decrement, its address taken, or a
+// local or parameter of that name. As the port's parGridNameWritten.
+static BOOL parGridWrites(id obj, NSString* n)
+    {
+    if (!obj)
+        return NO;
+    BOOL (^isN)(id) = ^BOOL(id t) {
+      return [t isKindOfClass:[XTIdentifierNode class]] && [((XTIdentifierNode*)t).identName isEqualToString:n];
+    };
+    if ([obj isKindOfClass:[XTVariableDeclNode class]] && [((XTVariableDeclNode*)obj).varName isEqualToString:n])
+        return YES;
+    if ([obj isKindOfClass:[XTParamNode class]] && [((XTParamNode*)obj).paramName isEqualToString:n])
+        return YES;
+    if ([obj isKindOfClass:[XTAssignExprNode class]] && isN(((XTAssignExprNode*)obj).lhs))
+        return YES;
+    if ([obj isKindOfClass:[XTPostfixExprNode class]] && isN(((XTPostfixExprNode*)obj).operand))
+        return YES;
+    if ([obj isKindOfClass:[XTUnaryExprNode class]])
+        {
+        XTUnaryExprNode* u = (XTUnaryExprNode*)obj;
+        if ((u.op == XTUnaryOpPreInc || u.op == XTUnaryOpPreDec || u.op == XTUnaryOpAddrOf) && isN(u.operand))
+            return YES;
+        }
+    if ([obj isKindOfClass:[XTTupleAssignNode class]])
+        for (XTASTNode* t in ((XTTupleAssignNode*)obj).targets)
+            if (isN(t))
+                return YES;
+    __block BOOL found = NO;
+    XTASTEachChild(obj, ^(id c) {
+      if (!found && parGridWrites(c, n))
+          found = YES;
+    });
+    return found;
+    }
+
+// A grid size written as a captured u32 the body only reads: the body's uses
+// of the name become the grid's own size (#776). As the port.
+static void parGridSizeAlias(XTBlockNode* body, XTASTNode* size, NSString* sizeVar, NSDictionary* types)
+    {
+    if (![size isKindOfClass:[XTIdentifierNode class]] || !types)
+        return;
+    NSString* n = ((XTIdentifierNode*)size).identName;
+    XTType* t = types[n];
+    if (!t || ![t.displayName isEqualToString:@"u32"] || parGridWrites(body, n))
+        return;
+    XTASTRename(body, n, sizeVar);
+    }
+
 - (NSArray<XTASTNode*>*)parGridLoopFor:(XTBlockNode* _Nonnull* _Nonnull)bodyRef
                                  frame:(NSDictionary*)frame
                                     at:(XTSourceLocation*)loc
@@ -1516,6 +1565,10 @@ NSString* _Nullable parRootName(XTASTNode* _Nullable n)
         }
     NSMutableArray* names = frame[@"names"];
     NSMutableDictionary* types = frame[@"types"];
+    // A size the body only reads under its own name reads the grid's size
+    // instead (#776), so par.y * n + par.x is the item it is. As the port.
+    parGridSizeAlias(*bodyRef, grid[0], @"par$w", types);
+    parGridSizeAlias(*bodyRef, grid[1], @"par$h", types);
     for (NSString* n in sizes)
         {
         if (![names containsObject:n])
