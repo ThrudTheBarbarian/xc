@@ -204,6 +204,21 @@ results are the same bits the software routines give, NaN payloads included:
 | x86-64, win64 | `f16` conversions to and from `f32` and from integers on CPUs with AVX2 (F16C); `bf16` as above | `f16` on CPUs without AVX2; `f16` from `f64`; arithmetic in `f32` |
 | arm9, m68k, wasm32, xt6502 | none | everything |
 
+At `-O2` a loop over `f16` or `bf16` arrays (loads, conversions, `+ - * /`,
+square roots and stores, with `f32` arrays mixed in) is vectorised where the
+conversions are native, with the same bits as the scalar loop:
+
+| Target | Vectorised |
+|---|---|
+| arm64, FP16 (Apple silicon, Raspberry Pi 5) | eight `f16` lanes in the half-precision instructions when the whole loop is in `f16`, else four lanes converted with `fcvtl` and `fcvtn` |
+| arm64, ARMv8.0 (Raspberry Pi 4) | four lanes, converted with `fcvtl` and `fcvtn` and computed in `f32`, rounded to the type after each operation |
+| x86-64 and win64 with AVX2 | eight lanes, converted with F16C's `vcvtph2ps` and `vcvtps2ph` and computed in `f32`, rounded after each operation |
+| x86-64 without AVX2, and the AVX-512 version of a function | not vectorised |
+
+`bf16` widens by a shift and narrows by rounding the bits to nearest even in
+integer lanes, on every row above. A sum over `f16` or `bf16` elements stays
+scalar, so it adds in the order the loop is written.
+
 Where the instructions depend on the CPU, a program has one version of each
 function that uses them and one without, and picks per function when it loads
 ([`-msimd=auto`](/compiler/usage/cli/), the default at `-O2`); `-march=` and
