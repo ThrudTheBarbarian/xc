@@ -10956,8 +10956,8 @@ class ClassInfo
             // second reference to each, as `c = a` does: retained here, since
             // c's scope exit releases them (#757). A struct a call made
             // arrives owned.
-            if (structDeclFor(n.op()) != (Node*)0 && _strongStruct.get((Hashable*)n.name()) != 0 && structOwnsClassPointer(n.op())
-                && isStructCopySource(ini))
+            if (structDeclFor(n.op()) != (Node*)0 && _strongStruct.get((Hashable*)n.name()) != 0
+                && (structOwnsClassPointer(n.op()) || typeHoldsInstance(n.op())) && isStructCopySource(ini))
                 {
                 IRValue* sa = aggregateAddr(ini);
                 if (_failed)
@@ -11697,6 +11697,25 @@ class ClassInfo
         for (u32 i = (u32)0; i < st.kidCount(); i = i + (u32)1)
             if (typeOwnsClassPointer(st.kid(i).op()))
                 return true;
+        return false;
+        }
+
+    // A class instance held by value, in the type, its structs or its arrays:
+    // the reference's astTypeHoldsInstance (#756).
+    bool typeHoldsInstance(String* t)
+        {
+        if (valueIvarClass(t) != 0)
+            return true;
+        Node* st = structDeclFor(t);
+        if (st != 0)
+            {
+            for (u32 i = (u32)0; i < st.kidCount(); i = i + (u32)1)
+                if (typeHoldsInstance(st.kid(i).op()))
+                    return true;
+            return false;
+            }
+        if (isArrayLike(t))
+            return typeHoldsInstance(elementOf(t));
         return false;
         }
 
