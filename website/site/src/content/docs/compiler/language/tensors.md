@@ -1,6 +1,6 @@
 ---
 title: Tensors
-description: The tensor<T, R> value type — creating, indexing, members, value semantics, bounds checks, par and C.
+description: The tensor<T, R> value type — creating, indexing, views (slices, transpose, broadcast, view and reshape), value semantics, bounds checks, par and C.
 ---
 
 A `tensor<T, R>` is an R-dimensional array of elements of type T, held as a
@@ -76,6 +76,7 @@ as with C bitfields.
 | `t.rank` | R, a `u64` |
 | `t.shape(k)` | the size of dimension k |
 | `t.stride(k)` | the stride of dimension k, in elements |
+| `t.offset()` | the element offset of `t[0, 0, …]` in the storage |
 | `t.count` | the number of elements, the product of the shapes |
 | `t.isContiguous` | `true` when the elements are packed row major with no gaps |
 | `t.data()` | a `T*` to the first element, for C |
@@ -84,6 +85,107 @@ as with C bitfields.
 k may be a run-time value. An `f4` element has no byte address, so a
 `tensor<f4, R>` has no `data()`; `bytes()` gives its bytes, two elements to
 each.
+
+## Views
+
+A slice, a transpose, a permutation, a broadcast and a `view` are views: each
+is a new tensor value over the same storage, with its own offset, shapes and
+strides. No element is copied, and a write through a view is a write to the
+storage, seen through every other value of it.
+
+Each view is made from the header of the tensor it is taken from, so a view
+of a view is one header like any other: the offsets add and the strides are
+carried over. Strides count elements, not bytes, so a view of an `f4` tensor
+may start at an odd element.
+
+### Slicing
+
+`t[…]` with a range among its positions is a slice. It takes R positions, one
+for each dimension, and each is one of:
+
+| Position | Keeps |
+|---|---|
+| `a..b` | elements a to b − 1 of the dimension |
+| `a...b` | elements a to b |
+| `a..` | elements a to the end |
+| `..b`, `...b` | elements 0 to b − 1, or to b |
+| `..` | the whole dimension |
+| `i` | element i only, and drops the dimension |
+
+Ranges and indices mix freely. The result is a `tensor<T, R'>`, where R' is R
+less the number of indices; a subscript with no range at all is an element.
+
+```c
+tensor<f32, 3> c = new tensor<f32, 3>(2, 3, 4);
+tensor<f32, 2> p = c[1, .., 1..3];       // shape 3 × 2, strides 4, 1
+tensor<f32, 1> row = c[0, 2, ..];        // shape 4
+tensor<f32, 2> q = p[1.., ..1];          // shape 2 × 1, offset 17
+p[0, 0] = 5.0;                           // c[1, 0, 1] is 5.0 too
+```
+
+A slice starting at `start` in dimension k adds `start × stride_k` to the
+offset, and a kept dimension's shape is its range's length, with the stride
+unchanged. Bounds are integers of any width. A slice is a view, so it cannot
+be assigned to: `t[0..2, ..] = x` is an error; assign to its elements.
+
+A class's own [range index operator](/compiler/language/operators/#index-operators)
+still takes a range alone in its brackets, with both bounds. Mixing ranges
+with indices, and leaving a bound out, are for tensors.
+
+### Transpose and permute
+
+`t.transpose()`, on a rank-2 tensor, swaps the two dimensions: their shapes
+and their strides. `t.permute(p0, …)` takes R integer literals, a permutation
+of 0 to R − 1, and gives dimension k of the result the shape and stride of
+dimension p_k of `t`. The permutation is checked as the program compiles.
+
+```c
+tensor<f32, 2> mt = m.transpose();       // mt[j, i] is m[i, j]
+tensor<f32, 3> cp = c.permute(2, 0, 1);  // cp[k, i, j] is c[i, j, k]
+```
+
+### Broadcast
+
+`t.broadcast(d0, …)` gives a view of rank R' ≥ R with the shapes `d0, …`. The
+shapes line up from the last dimension. Each dimension of `t` either has the
+target size, or has size 1 and repeats; each new leading dimension repeats
+too. A repeated dimension has stride 0. Any other shape stops the program
+with a report.
+
+```c
+tensor<f32, 1> bias = new tensor<f32, 1>(4);
+tensor<f32, 2> b = bias.broadcast(3, 4); // b[i, j] is bias[j]
+```
+
+A broadcast view repeats elements, so a write through it would change every
+element it repeats. Such a write is an error where the compiler sees it: on a
+`broadcast(…)` result directly, or through a local set once from one. A write
+through a broadcast view passed elsewhere writes the one storage element
+behind all the positions it repeats.
+
+### view and reshape
+
+`t.view(d0, …)` gives a view of any rank over the same elements, in row-major
+order, with the shapes `d0, …`. Their product must be `t.count`. The strides
+must be able to give the new shape: a contiguous tensor can always be viewed,
+and so can one whose dimensions are contiguous where the new shape merges or
+splits them. A tensor that cannot be viewed stops the program with a report;
+`m.transpose().view(12)` is one.
+
+`t.reshape(d0, …)` gives the same result as `view` when the strides allow,
+and otherwise copies the elements, in row-major order, into a new contiguous
+storage. The element count must match.
+
+Where the compiler knows every shape, it checks both as the program
+compiles: a local made by `new tensor<…>(…)` with literal dimensions and
+never assigned again, viewed or reshaped with literal shapes, perhaps after a
+`transpose()` or a `permute(…)`. Otherwise the checks run with the program.
+
+### copy
+
+`t.copy()` gives a tensor with the same shapes and elements in a new
+contiguous storage of its own. `t.isContiguous` says whether a tensor is
+contiguous already.
 
 ## Value semantics
 
@@ -124,7 +226,19 @@ shape, and stops the program with status 134:
   array: index 3, but it holds 3 elements
 ```
 
+A slice is checked before it is taken: each range must keep
+`0 ≤ start ≤ end ≤ shape`, and each index in it must be below its
+dimension's shape. A failure reports the slice's site, the dimension and the
+bounds:
+
+```
+=== xcc: out-of-bounds slice ===
+  at grid.xc:12:25, dimension 1
+  slice 1..5, but the dimension holds 3 elements
+```
+
 `t.shape(k)` and `t.stride(k)` check k. Without the flag there are no checks.
+The checks of `view`, `reshape` and `broadcast` run in every build.
 
 ## In a par block
 
@@ -137,16 +251,31 @@ Two tensor values may share one storage, so the block's work items must be
 independent in a form the compiler can check:
 
 - The block writes through one tensor value only. Writes through two values
-  are refused, even if they are different storages.
-- Every write to that tensor has the same first index, `k × i + c` with k not
-  0, in the block's index i. Each work item then writes its own rows.
-- A read of the written tensor has that first index too, and so does a read of
+  are refused, even if they are different storages. The exception is two
+  slices of one tensor that split its first dimension at the same place,
+  `a = t[lo..h, …]` and `b = t[h.., …]`, with a, b and t each assigned only
+  where they are declared (or parameters never assigned) and h the same
+  expression in both, made of literals and such names. They share no element,
+  so the block may write both.
+- Every write to a tensor has one first index, `k × i + c` with k not 0, in
+  the block's index i. Each work item then writes its own rows.
+- A read of a written tensor has its first index too, and so does a read of
   any other tensor of the same element type, since it may share the written
-  tensor's storage (a copy, a parameter, a field). The exception is two local
-  tensors that are each made by their own `new tensor<…>(…)` and never assigned
-  again or have their address taken: they are different storages, and the
-  other one may be read anywhere. Tensors of another element type may be read
-  anywhere.
+  tensor's storage (a copy, a view, a parameter, a field). The exception is two
+  tensors known to be different storages: locals that are each made by their
+  own `new tensor<…>(…)` and never assigned again or have their address
+  taken, or views of two such locals taken by slicing, `transpose()`,
+  `permute(…)` or `view(…)`. The other one may be read anywhere. Tensors of
+  another element type may be read anywhere.
+
+A view's first index is not the storage's: a slice that starts at row 1, read
+at the written row, reaches the next row of the storage. So when a block
+writes a tensor that may share a storage with another tensor of its element
+type that it reads, it checks as it starts whether the two are views of one
+storage with different offsets or strides, and whether the written one
+repeats elements (a broadcast). If either holds, the block runs on the
+calling thread, one work item after another, as its source reads. A view
+never counts as made by `new` for these rules.
 
 A block that breaks a rule is refused, and the message says what to do:
 "writes the tensor 't' and reads the tensor 'u' at a different row; they may
@@ -176,7 +305,8 @@ scale(m.data(), m.count, 2.0);
 
 Tensor types appear in a library's interface like any other type: a library
 function `tensor<f32, 2> make(u64 r, u64 c)` can be called from a client that
-has only the interface.
+has only the interface. So can one that returns a view, such as
+`tensor<f32, 1> column(tensor<f32, 2> t, u64 j)` returning `t[.., j]`.
 
 ## Worked example
 
