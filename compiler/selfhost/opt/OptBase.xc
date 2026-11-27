@@ -214,6 +214,7 @@ class OptProfile
     // factor key off it (SIMD step 1, S2); set from the driver's vector level.
     u32 _vectorLaneBytes;
     bool _simdDispatch;
+    bool _simdF16Clone;    // float dispatch on arm64: `$fp16` clones of the f16 functions
     // Matrix kernels (--matmul): idiom-matmul puts a call to the back end's
     // kernel, prefix + "f32"/"f64" + suffix, in front of a matrix-multiply nest:
     // arm64 `__xt_sme_gemm_`, x86-64 `__xt_x86_gemm_` + `_<tier>`. 0: off.
@@ -240,6 +241,7 @@ class OptProfile
         _intBytes = (u32)4;
         _vectorLaneBytes = (u32)16;
         _simdDispatch = false;
+        _simdF16Clone = false;
         _matMulPrefix = (String*)0;
         _matMulSuffix = String.withCString("");
         _matMulFastSuffix = (String*)0;
@@ -301,6 +303,8 @@ class OptProfile
     // `<name>$avx2` clones at 32 that the runtime picks between at load.
     bool simdDispatch(void) { return _simdDispatch; }
     void setSimdDispatch(bool d) { _simdDispatch = d; }
+    bool simdF16Clone(void) { return _simdF16Clone; }
+    void setSimdF16Clone(bool b) { _simdF16Clone = b; }
     String* matMulPrefix(void) { return _matMulPrefix; }
     String* matMulSuffix(void) { return _matMulSuffix; }
     void setMatMul(String* prefix, String* suffix) { _matMulPrefix = prefix; _matMulSuffix = suffix; }

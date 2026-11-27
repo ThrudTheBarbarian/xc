@@ -784,6 +784,8 @@ class IrParser
         u32 body = _li + (u32)1;
         u32 end = bodyEnd(body);
         nextLine();
+        simdLine();
+        simdLine();
         frameLine();
         unrollLine();
         speedLine();
@@ -942,6 +944,48 @@ class IrParser
                 break;
             }
         expectChar((u8)']');
+        nextLine();
+        }
+
+    // `simd: <level> of <base>` / `simd: dispatch` — a dispatch clone and a
+    // dispatched base, read back so that post-opt IR handed to a back end still
+    // builds the stubs and the selection table. As the reference.
+    void simdLine(void)
+        {
+        u32 save = _ci;
+        if (!expectWord("simd"))
+            {
+            _ci = save;
+            return;
+            }
+        if (!expectChar((u8)':'))
+            {
+            _ci = save;
+            return;
+            }
+        String* what = word();
+        if (what == (String*)0)
+            {
+            _ci = save;
+            return;
+            }
+        if (what.equals(String.withCString("dispatch")))
+            {
+            _fn.setSimdDispatch(true);
+            nextLine();
+            return;
+            }
+        String* of = word();
+        String* base = word();
+        if (of == (String*)0 || !of.equals(String.withCString("of")) || base == (String*)0)
+            {
+            _ci = save;
+            return;
+            }
+        _fn.setSimdLevel(what);
+        _fn.setSimdBaseName(base);
+        _fn.setSimdLaneBytes(what.equals(String.withCString("avx512")) ? (u32)64
+                             : what.equals(String.withCString("avx2")) ? (u32)32 : (u32)0);
         nextLine();
         }
 

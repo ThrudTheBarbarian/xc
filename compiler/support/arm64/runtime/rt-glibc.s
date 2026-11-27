@@ -71,8 +71,8 @@ _xtc_alloc:                             // @_xtc_alloc
 	b	.Lrt_BB0_6
 .Lrt_BB0_5:
 	adrp	x8, :got:stderr
-	adrp	x1, .Lrt_.str.7
-	add	x1, x1, :lo12:.Lrt_.str.7
+	adrp	x1, .Lrt_.str.11
+	add	x1, x1, :lo12:.Lrt_.str.11
 .Lrt_BB0_6:
 	ldr	x8, [x8, :got_lo12:stderr]
 	ldr	x0, [x8]
@@ -106,8 +106,8 @@ _xtc_alloc_object:                      // @_xtc_alloc_object
 	ret
 .Lrt_BB1_3:
 	adrp	x8, :got:stderr
-	adrp	x1, .Lrt_.str.7
-	add	x1, x1, :lo12:.Lrt_.str.7
+	adrp	x1, .Lrt_.str.11
+	add	x1, x1, :lo12:.Lrt_.str.11
 	ldr	x8, [x8, :got_lo12:stderr]
 	mov	w2, #1                          // =0x1
 	mov	x3, x19
@@ -344,8 +344,8 @@ _xtc_alloc_aligned:                     // @_xtc_alloc_aligned
 	b	.Lrt_BB3_29
 .Lrt_BB3_28:
 	adrp	x8, :got:stderr
-	adrp	x1, .Lrt_.str.7
-	add	x1, x1, :lo12:.Lrt_.str.7
+	adrp	x1, .Lrt_.str.11
+	add	x1, x1, :lo12:.Lrt_.str.11
 .Lrt_BB3_29:
 	ldr	x8, [x8, :got_lo12:stderr]
 	ldr	x0, [x8]
@@ -397,8 +397,8 @@ _xtc_alloc_line:                        // @_xtc_alloc_line
 	b	.Lrt_BB4_6
 .Lrt_BB4_5:
 	adrp	x8, :got:stderr
-	adrp	x1, .Lrt_.str.7
-	add	x1, x1, :lo12:.Lrt_.str.7
+	adrp	x1, .Lrt_.str.11
+	add	x1, x1, :lo12:.Lrt_.str.11
 .Lrt_BB4_6:
 	ldr	x8, [x8, :got_lo12:stderr]
 	ldr	x0, [x8]
@@ -2268,8 +2268,8 @@ _xtc_weak_register:                     // @_xtc_weak_register
 	b	.Lrt_BB47_25
 .Lrt_BB47_32:
 	adrp	x8, :got:stderr
-	adrp	x0, .Lrt_.str.8
-	add	x0, x0, :lo12:.Lrt_.str.8
+	adrp	x0, .Lrt_.str.12
+	add	x0, x0, :lo12:.Lrt_.str.12
 	ldr	x8, [x8, :got_lo12:stderr]
 	mov	w1, #37                         // =0x25
 	mov	w2, #1                          // =0x1
@@ -2376,8 +2376,8 @@ _xtc_pfp:                               // @_xtc_pfp
 	b.eq	.Lrt_BB52_7
 // %bb.1:
 	and	w8, w0, #0xff
-	adrp	x2, .Lrt_.str.9
-	add	x2, x2, :lo12:.Lrt_.str.9
+	adrp	x2, .Lrt_.str.13
+	add	x2, x2, :lo12:.Lrt_.str.13
 	mov	x0, sp
 	add	w3, w8, #1
 	mov	w1, #64                         // =0x40
@@ -2437,8 +2437,8 @@ _xtc_pdp:                               // @_xtc_pdp
 	b.eq	.Lrt_BB53_7
 // %bb.1:
 	and	w8, w0, #0xff
-	adrp	x2, .Lrt_.str.9
-	add	x2, x2, :lo12:.Lrt_.str.9
+	adrp	x2, .Lrt_.str.13
+	add	x2, x2, :lo12:.Lrt_.str.13
 	mov	x0, sp
 	add	w3, w8, #1
 	mov	w1, #64                         // =0x40
@@ -4189,6 +4189,80 @@ _xt_thread_exiting:                     // @_xt_thread_exiting
 .Lrt_func_end130:
 	.size	_xt_thread_exiting, .Lrt_func_end130-_xt_thread_exiting
                                         // -- End function
+	.globl	_xt_simd_select                 // -- Begin function _xt_simd_select
+	.p2align	2
+	.type	_xt_simd_select,@function
+_xt_simd_select:                        // @_xt_simd_select
+// %bb.0:
+	stp	x30, x23, [sp, #-48]!           // 16-byte Folded Spill
+	stp	x20, x19, [sp, #32]             // 16-byte Folded Spill
+	mov	x19, x0
+	mov	w0, #16                         // =0x10
+	stp	x22, x21, [sp, #16]             // 16-byte Folded Spill
+	mov	w20, w1
+	bl	getauxval
+	and	x23, x0, #0x600
+	adrp	x0, .Lrt_.str.7
+	add	x0, x0, :lo12:.Lrt_.str.7
+	cmp	x23, #1536
+	cset	w22, eq
+	bl	getenv
+	cbz	x0, .Lrt_BB131_6
+// %bb.1:
+	adrp	x1, .Lrt_.str.8
+	add	x1, x1, :lo12:.Lrt_.str.8
+	mov	x21, x0
+	bl	strcmp
+	cmp	w0, #0
+	csel	w8, wzr, w22, eq
+	cbz	w0, .Lrt_BB131_5
+// %bb.2:
+	adrp	x1, .Lrt_.str.9
+	add	x1, x1, :lo12:.Lrt_.str.9
+	mov	x0, x21
+	bl	strcmp
+	cbnz	w0, .Lrt_BB131_6
+// %bb.3:
+	cmp	x23, #1536
+	b.eq	.Lrt_BB131_6
+// %bb.4:
+	adrp	x8, :got:stderr
+	adrp	x0, .Lrt_.str.10
+	add	x0, x0, :lo12:.Lrt_.str.10
+	ldr	x8, [x8, :got_lo12:stderr]
+	mov	w1, #70                         // =0x46
+	mov	w2, #1                          // =0x1
+	ldr	x3, [x8]
+	bl	fwrite
+	mov	w22, wzr
+	b	.Lrt_BB131_6
+.Lrt_BB131_5:
+	mov	w22, w8
+.Lrt_BB131_6:
+	adrp	x8, _xt_simd_level
+	str	w22, [x8, :lo12:_xt_simd_level]
+	cbz	w20, .Lrt_BB131_9
+// %bb.7:
+	mov	w9, w20
+	mov	x8, xzr
+	add	w10, w22, #1
+	add	x9, x9, w20, uxtw #1
+.Lrt_BB131_8:                              // =>This Inner Loop Header: Depth=1
+	ldr	x11, [x19, w10, uxtw #3]
+	ldr	x12, [x19, w8, uxtw #3]
+	add	x8, x8, #3
+	cmp	x9, x8
+	add	w10, w10, #3
+	str	x11, [x12]
+	b.ne	.Lrt_BB131_8
+.Lrt_BB131_9:
+	ldp	x20, x19, [sp, #32]             // 16-byte Folded Reload
+	ldp	x22, x21, [sp, #16]             // 16-byte Folded Reload
+	ldp	x30, x23, [sp], #48             // 16-byte Folded Reload
+	ret
+.Lrt_func_end131:
+	.size	_xt_simd_select, .Lrt_func_end131-_xt_simd_select
+                                        // -- End function
 	.p2align	2                               // -- Begin function xt_simd_fault
 	.type	xt_simd_fault,@function
 xt_simd_fault:                          // @xt_simd_fault
@@ -4200,20 +4274,20 @@ xt_simd_fault:                          // @xt_simd_fault
 	ldr	w8, [x21, :lo12:_xt_threads_active]
 	ldr	x20, [x1, #16]
 	mov	w19, w0
-	cbz	w8, .Lrt_BB131_2
+	cbz	w8, .Lrt_BB132_2
 // %bb.1:
 	adrp	x0, xt_rt_mtx
 	add	x0, x0, :lo12:xt_rt_mtx
 	bl	pthread_mutex_lock
-.Lrt_BB131_2:
+.Lrt_BB132_2:
 	adrp	x8, xt_simd_n
 	ldr	x9, [x8, :lo12:xt_simd_n]
 	adrp	x8, xt_simd_tab
-	cbz	x9, .Lrt_BB131_6
+	cbz	x9, .Lrt_BB132_6
 // %bb.3:
 	ldr	x11, [x8, :lo12:xt_simd_tab]
 	mov	x10, xzr
-.Lrt_BB131_4:                              // =>This Inner Loop Header: Depth=1
+.Lrt_BB132_4:                              // =>This Inner Loop Header: Depth=1
 	add	x12, x9, x10
 	and	x13, x12, #0x1ffffffffffffffe
 	lsr	x12, x12, #1
@@ -4222,28 +4296,28 @@ xt_simd_fault:                          // @xt_simd_fault
 	csel	x9, x12, x9, hi
 	csinc	x10, x10, x12, hi
 	cmp	x10, x9
-	b.lo	.Lrt_BB131_4
+	b.lo	.Lrt_BB132_4
 // %bb.5:
-	cbnz	x10, .Lrt_BB131_7
-	b	.Lrt_BB131_12
-.Lrt_BB131_6:
+	cbnz	x10, .Lrt_BB132_7
+	b	.Lrt_BB132_12
+.Lrt_BB132_6:
 	mov	x10, xzr
-	cbz	x10, .Lrt_BB131_12
-.Lrt_BB131_7:
+	cbz	x10, .Lrt_BB132_12
+.Lrt_BB132_7:
 	ldr	x8, [x8, :lo12:xt_simd_tab]
 	sub	x9, x10, #1
 	add	x10, x8, x9, lsl #4
 	ldr	x10, [x10, #8]
 	cmp	x20, x10
-	b.hs	.Lrt_BB131_12
+	b.hs	.Lrt_BB132_12
 // %bb.8:
 	adrp	x11, xt_simd_flag
 	ldr	x12, [x11, :lo12:xt_simd_flag]
 	lsl	x11, x9, #1
 	ldrb	w13, [x12, x9]
-	tbnz	w13, #1, .Lrt_BB131_21
+	tbnz	w13, #1, .Lrt_BB132_21
 // %bb.9:
-	tbz	w13, #0, .Lrt_BB131_11
+	tbz	w13, #0, .Lrt_BB132_11
 // %bb.10:
 	and	w13, w13, #0xfc
 	strb	w13, [x12, x9]
@@ -4254,41 +4328,41 @@ xt_simd_fault:                          // @xt_simd_fault
 	add	x8, x8, x9
 	and	x1, x8, #0xffffffffffffc000
 	bl	mprotect
-.Lrt_BB131_11:
+.Lrt_BB132_11:
 	mov	x20, xzr
-	b	.Lrt_BB131_22
-.Lrt_BB131_12:
+	b	.Lrt_BB132_22
+.Lrt_BB132_12:
 	mov	x20, xzr
 	mov	w22, wzr
 	ldr	w8, [x21, :lo12:_xt_threads_active]
-	cbz	w8, .Lrt_BB131_14
-.Lrt_BB131_13:
+	cbz	w8, .Lrt_BB132_14
+.Lrt_BB132_13:
 	adrp	x0, xt_rt_mtx
 	add	x0, x0, :lo12:xt_rt_mtx
 	bl	pthread_mutex_unlock
-.Lrt_BB131_14:
-	cbz	x20, .Lrt_BB131_18
+.Lrt_BB132_14:
+	cbz	x20, .Lrt_BB132_18
 // %bb.15:
 	adrp	x8, xt_simd_hook_code
 	ldr	x8, [x8, :lo12:xt_simd_hook_code]
-	cbz	x8, .Lrt_BB131_17
+	cbz	x8, .Lrt_BB132_17
 // %bb.16:
 	adrp	x9, xt_simd_hook_recv
 	mov	x1, x20
 	mov	w2, wzr
 	ldr	x0, [x9, :lo12:xt_simd_hook_recv]
 	blr	x8
-	cbnz	w0, .Lrt_BB131_18
-.Lrt_BB131_17:
+	cbnz	w0, .Lrt_BB132_18
+.Lrt_BB132_17:
 	mov	w22, wzr
-.Lrt_BB131_18:
-	cbz	w22, .Lrt_BB131_20
+.Lrt_BB132_18:
+	cbz	w22, .Lrt_BB132_20
 // %bb.19:
 	ldp	x20, x19, [sp, #32]             // 16-byte Folded Reload
 	ldp	x22, x21, [sp, #16]             // 16-byte Folded Reload
 	ldr	x30, [sp], #48                  // 8-byte Folded Reload
 	ret
-.Lrt_BB131_20:
+.Lrt_BB132_20:
 	cmp	w19, #11
 	mov	w0, w19
 	mov	w9, #152                        // =0x98
@@ -4301,15 +4375,15 @@ xt_simd_fault:                          // @xt_simd_fault
 	mov	x2, xzr
 	ldr	x30, [sp], #48                  // 8-byte Folded Reload
 	b	sigaction
-.Lrt_BB131_21:
+.Lrt_BB132_21:
 	ldr	x20, [x8, x11, lsl #3]
-.Lrt_BB131_22:
+.Lrt_BB132_22:
 	mov	w22, #1                         // =0x1
 	ldr	w8, [x21, :lo12:_xt_threads_active]
-	cbnz	w8, .Lrt_BB131_13
-	b	.Lrt_BB131_14
-.Lrt_func_end131:
-	.size	xt_simd_fault, .Lrt_func_end131-xt_simd_fault
+	cbnz	w8, .Lrt_BB132_13
+	b	.Lrt_BB132_14
+.Lrt_func_end132:
+	.size	xt_simd_fault, .Lrt_func_end132-xt_simd_fault
                                         // -- End function
 	.p2align	2                               // -- Begin function xt_wtab_put
 	.type	xt_wtab_put,@function
@@ -4331,7 +4405,7 @@ xt_wtab_put:                            // @xt_wtab_put
 	adrp	x23, xt_wtab_n
 	add	x8, x8, #2
 	cmp	x8, x26
-	b.ls	.Lrt_BB132_10
+	b.ls	.Lrt_BB133_10
 // %bb.1:
 	ldr	x8, [x23, :lo12:xt_wtab_n]
 	lsl	x9, x26, #1
@@ -4340,40 +4414,40 @@ xt_wtab_put:                            // @xt_wtab_put
 	mov	w10, #64                        // =0x40
 	lsl	x8, x8, #1
 	csel	x9, x10, x9, eq
-.Lrt_BB132_2:                              // =>This Inner Loop Header: Depth=1
+.Lrt_BB133_2:                              // =>This Inner Loop Header: Depth=1
 	mov	x0, x9
 	lsl	x9, x9, #1
 	cmp	x8, x0
-	b.hs	.Lrt_BB132_2
+	b.hs	.Lrt_BB133_2
 // %bb.3:
 	mov	w1, #16                         // =0x10
 	str	x0, [x24, :lo12:xt_wtab_cap]
 	bl	calloc
 	str	x0, [x25, :lo12:xt_wtab]
-	cbz	x0, .Lrt_BB132_15
+	cbz	x0, .Lrt_BB133_15
 // %bb.4:
 	str	xzr, [x23, :lo12:xt_wtab_n]
 	str	xzr, [x22, :lo12:xt_wtab_used]
-	cbz	x26, .Lrt_BB132_9
+	cbz	x26, .Lrt_BB133_9
 // %bb.5:
 	add	x27, x21, #8
-	b	.Lrt_BB132_7
-.Lrt_BB132_6:                              //   in Loop: Header=BB132_7 Depth=1
+	b	.Lrt_BB133_7
+.Lrt_BB133_6:                              //   in Loop: Header=BB133_7 Depth=1
 	subs	x26, x26, #1
 	add	x27, x27, #16
-	b.eq	.Lrt_BB132_9
-.Lrt_BB132_7:                              // =>This Inner Loop Header: Depth=1
+	b.eq	.Lrt_BB133_9
+.Lrt_BB133_7:                              // =>This Inner Loop Header: Depth=1
 	ldur	x0, [x27, #-8]
 	cmp	x0, #2
-	b.lo	.Lrt_BB132_6
-// %bb.8:                               //   in Loop: Header=BB132_7 Depth=1
+	b.lo	.Lrt_BB133_6
+// %bb.8:                               //   in Loop: Header=BB133_7 Depth=1
 	ldr	x1, [x27]
 	bl	xt_wtab_put
-	b	.Lrt_BB132_6
-.Lrt_BB132_9:
+	b	.Lrt_BB133_6
+.Lrt_BB133_9:
 	mov	x0, x21
 	bl	free
-.Lrt_BB132_10:
+.Lrt_BB133_10:
 	lsr	x8, x20, #3
 	mov	w9, #54459                      // =0xd4bb
 	movk	w9, #60762, lsl #16
@@ -4383,20 +4457,20 @@ xt_wtab_put:                            // @xt_wtab_put
 	sub	x10, x9, #1
 	eor	x11, x8, x8, lsr #11
 	ldr	x8, [x25, :lo12:xt_wtab]
-.Lrt_BB132_11:                             // =>This Inner Loop Header: Depth=1
+.Lrt_BB133_11:                             // =>This Inner Loop Header: Depth=1
 	and	x9, x11, x10
 	lsl	x11, x9, #4
 	ldr	x12, [x8, x11]
 	add	x11, x9, #1
 	cmp	x12, #1
-	b.hi	.Lrt_BB132_11
+	b.hi	.Lrt_BB133_11
 // %bb.12:
-	cbnz	x12, .Lrt_BB132_14
+	cbnz	x12, .Lrt_BB133_14
 // %bb.13:
 	ldr	x10, [x22, :lo12:xt_wtab_used]
 	add	x10, x10, #1
 	str	x10, [x22, :lo12:xt_wtab_used]
-.Lrt_BB132_14:
+.Lrt_BB133_14:
 	add	x8, x8, x9, lsl #4
 	ldr	x9, [x23, :lo12:xt_wtab_n]
 	ldp	x22, x21, [sp, #48]             // 16-byte Folded Reload
@@ -4408,18 +4482,18 @@ xt_wtab_put:                            // @xt_wtab_put
 	ldp	x26, x25, [sp, #16]             // 16-byte Folded Reload
 	ldp	x30, x27, [sp], #80             // 16-byte Folded Reload
 	ret
-.Lrt_BB132_15:
+.Lrt_BB133_15:
 	adrp	x8, :got:stderr
-	adrp	x0, .Lrt_.str.8
-	add	x0, x0, :lo12:.Lrt_.str.8
+	adrp	x0, .Lrt_.str.12
+	add	x0, x0, :lo12:.Lrt_.str.12
 	ldr	x8, [x8, :got_lo12:stderr]
 	mov	w1, #37                         // =0x25
 	mov	w2, #1                          // =0x1
 	ldr	x3, [x8]
 	bl	fwrite
 	bl	abort
-.Lrt_func_end132:
-	.size	xt_wtab_put, .Lrt_func_end132-xt_wtab_put
+.Lrt_func_end133:
+	.size	xt_wtab_put, .Lrt_func_end133-xt_wtab_put
                                         // -- End function
 	.type	.Lrt_.str,@object                  // @.str
 	.section	.rodata.str1.1,"aMS",@progbits,1
@@ -4523,11 +4597,39 @@ _xt_threads_active:
 	.type	xt_sinit_owner,@object          // @xt_sinit_owner
 	.local	xt_sinit_owner
 	.comm	xt_sinit_owner,128,4
+	.type	_xt_simd_level,@object          // @_xt_simd_level
+	.data
+	.globl	_xt_simd_level
+	.p2align	2, 0x0
+_xt_simd_level:
+	.word	4294967295                      // 0xffffffff
+	.size	_xt_simd_level, 4
+
 	.type	.Lrt_.str.7,@object                // @.str.7
 	.section	.rodata.str1.1,"aMS",@progbits,1
 .Lrt_.str.7:
+	.asciz	"XC_SIMD"
+	.size	.Lrt_.str.7, 8
+
+	.type	.Lrt_.str.8,@object                // @.str.8
+.Lrt_.str.8:
+	.asciz	"base"
+	.size	.Lrt_.str.8, 5
+
+	.type	.Lrt_.str.9,@object                // @.str.9
+.Lrt_.str.9:
+	.asciz	"fp16"
+	.size	.Lrt_.str.9, 5
+
+	.type	.Lrt_.str.10,@object               // @.str.10
+.Lrt_.str.10:
+	.asciz	"xc: XC_SIMD=fp16, but this machine has no FP16 arithmetic; using base\n"
+	.size	.Lrt_.str.10, 71
+
+	.type	.Lrt_.str.11,@object               // @.str.11
+.Lrt_.str.11:
 	.asciz	"xcc: an allocation of %lu x %lu bytes overflows\n"
-	.size	.Lrt_.str.7, 49
+	.size	.Lrt_.str.11, 49
 
 	.type	xt_simd_n,@object               // @xt_simd_n
 	.local	xt_simd_n
@@ -4544,10 +4646,10 @@ _xt_threads_active:
 	.type	xt_wcell_free,@object           // @xt_wcell_free
 	.local	xt_wcell_free
 	.comm	xt_wcell_free,8,8
-	.type	.Lrt_.str.8,@object                // @.str.8
-.Lrt_.str.8:
+	.type	.Lrt_.str.12,@object               // @.str.12
+.Lrt_.str.12:
 	.asciz	"xcc: out of memory (weak references)\n"
-	.size	.Lrt_.str.8, 38
+	.size	.Lrt_.str.12, 38
 
 	.type	xt_wtab_used,@object            // @xt_wtab_used
 	.local	xt_wtab_used
@@ -4558,10 +4660,10 @@ _xt_threads_active:
 	.type	xt_wtab,@object                 // @xt_wtab
 	.local	xt_wtab
 	.comm	xt_wtab,8,8
-	.type	.Lrt_.str.9,@object                // @.str.9
-.Lrt_.str.9:
+	.type	.Lrt_.str.13,@object               // @.str.13
+.Lrt_.str.13:
 	.asciz	"%.*f"
-	.size	.Lrt_.str.9, 5
+	.size	.Lrt_.str.13, 5
 
 	.ident	"Debian clang version 19.1.7 (3+b1)"
 	.section	".note.GNU-stack","",@progbits

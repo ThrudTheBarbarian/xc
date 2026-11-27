@@ -4,6 +4,8 @@
 NS_ASSUME_NONNULL_BEGIN
 
 @class XTIROptTargetProfile;
+@class XTIRFunction;
+@class XTIRModule;
 
 // The 16-bit floats' conversions in the target's own instructions, where it
 // has them (float sizes, step F5a).
@@ -33,8 +35,17 @@ NS_ASSUME_NONNULL_BEGIN
 //
 // Other packs, the kinds' routines and the integer conversions from a pack
 // keep their calls.
+//
+// Float dispatch: a clone simd-clone made for a higher level takes that
+// level's forms. An `avx2` or `avx512` clone has F16C (packF16Hardware), an
+// `fp16` clone FEAT_FP16 arithmetic (packF16Arith). An `fp16` clone that ends
+// with no half operation is the base's code again, and goes; the base of one
+// that stays is marked dispatched.
 @interface XTIROptPackNative : NSObject <XTIROptPass>
 @property(nonatomic, strong, nullable) XTIROptTargetProfile* profile;
+// Does fn call one of FloatPack's f16 conversions that a level with F16C or
+// FEAT_FP16 would rewrite: any but the one from f64? simd-clone asks.
++ (BOOL)functionHasHalfCall:(XTIRFunction*)fn module:(XTIRModule*)mod;
 @end
 
 NS_ASSUME_NONNULL_END

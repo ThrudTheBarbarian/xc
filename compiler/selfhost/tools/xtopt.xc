@@ -31,6 +31,7 @@ void main(void)
     bool inlineChecks = false; // --inline-checks: -fbounds-check=light's checks inline
     bool lse = true;           // --no-lse-atomics: an ARMv8.0 row (no FEAT_FP16 arithmetic either)
     String* simdName = String.withCString("base");
+    String* simdArg = (String*)0; // --simd=<level> as given
     u32 argc = Process.argumentCount();
     u32 i = (u32)1;
     while (i < argc)
@@ -110,6 +111,7 @@ void main(void)
             String* lv = a.substringFromByte((u32)7);
             simdName = (lv.equals(String.withCString("avx512")) || lv.equals(String.withCString("avx2"))
                         || lv.equals(String.withCString("auto"))) ? lv : String.withCString("base");
+            simdArg = lv;
             i = i + (u32)1;
             continue;
             }
@@ -147,8 +149,19 @@ void main(void)
     prof.setInlineChecks(inlineChecks);
     // pack-native, as xcc-cg-arm64 and xcc-cg-x86_64 set it: FEAT_FP16
     // arithmetic on a row with LSE, F16C under a fixed AVX2/AVX-512 level.
+    // On arm64 --simd names the float level as xcc-cg-arm64 reads it: `auto`
+    // clones at -O2+ (and is the row's level below), fp16 and base are fixed.
     if (target.equals(String.withCString("arm64")))
-        prof.setPackF16Arith(lse);
+        {
+        bool fAuto = simdArg != (String*)0 && simdArg.equals(String.withCString("auto"));
+        bool f16Dispatch = fAuto && level >= (u32)2;
+        if (simdArg == (String*)0 || (fAuto && !f16Dispatch))
+            prof.setPackF16Arith(lse);
+        else
+            prof.setPackF16Arith(simdArg.equals(String.withCString("fp16")));
+        prof.setSimdF16Clone(f16Dispatch);
+        prof.setSimdDispatch(false);
+        }
     if ((target.equals(String.withCString("x86_64")) || target.equals(String.withCString("win64")))
         && simdBytes >= 32 && !simdDispatch)
         prof.setPackF16Hw(true);

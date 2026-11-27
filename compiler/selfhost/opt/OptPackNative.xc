@@ -23,12 +23,85 @@
     // target has FEAT_FP16, an f32 operation of two widened halves rounded
     // back to f16 as the operation on the halves. The last pass, at every
     // level; it adds no block. The reference says the rest.
+    // Float dispatch: an `avx2`/`avx512` clone takes F16C, an `fp16` clone
+    // FEAT_FP16 arithmetic; an fp16 clone with no half operation is its base's
+    // code, and goes, and the base of one that stays is dispatched.
     final void packNative(IRModule* m)
         {
         if (!_profile.packF16Hw() && !_profile.packBf16())
             return;
-        for (u32 f = 0; f < m.funcs().count(); f = f + 1)
-            pnFunc((IRFunc*)m.funcs().get(f));
+        Array* keep = new Array();
+        bool dropped = false;
+        u32 nf = m.funcs().count();
+        for (u32 f = 0; f < nf; f = f + 1)
+            {
+            IRFunc* fn = (IRFunc*)m.funcs().get(f);
+            pnFunc(fn);
+            keep.add((Object*)fn);
+            if (fn.simdLevel() == (String*)0 || !fn.simdLevel().equals(String.withCString("fp16")))
+                continue;
+            IRFunc* base = (IRFunc*)0;
+            for (u32 g = 0; g < nf; g = g + 1)
+                if (((IRFunc*)m.funcs().get(g)).name().equals(fn.simdBaseName()))
+                    base = (IRFunc*)m.funcs().get(g);
+            // Asked of the result, not of this run, so that IR this pass
+            // already rewrote keeps its clones. As the reference.
+            if (base != (IRFunc*)0 && pnHasHalfOp(fn))
+                base.setSimdDispatch(true);
+            else
+                {
+                keep.removeAt(keep.count() - 1);
+                dropped = true;
+                }
+            }
+        if (!dropped)
+            return;
+        while (m.funcs().count() > (u32)0)
+            m.funcs().removeAt(m.funcs().count() - (u32)1);
+        for (u32 f = 0; f < keep.count(); f = f + 1)
+            m.funcs().add(keep.get(f));
+        }
+
+    // A half-precision operation or comparison: what FEAT_FP16 adds.
+    final bool pnHasHalfOp(IRFunc* fn)
+        {
+        for (u32 b = 0; b < fn.blocks().count(); b = b + 1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            for (u32 i = 0; i < bb.insns().count(); i = i + 1)
+                {
+                IRInsn* x = (IRInsn*)bb.insns().get(i);
+                if ((x.isOp(opFAdd) || x.isOp(opFSub) || x.isOp(opFMul) || x.isOp(opFDiv) || x.isOp(opFSqrt))
+                    && x.res() != (IRValue*)0 && IRType.is(x.res().ty(), tyU16))
+                    return true;
+                if (x.isOp(opFCmp) && x.ops().count() > 0)
+                    {
+                    IROperand* o = (IROperand*)x.ops().get(0);
+                    if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0 && IRType.is(o.val().ty(), tyU16))
+                        return true;
+                    }
+                }
+            }
+        return false;
+        }
+
+    // Does fn call one of FloatPack's f16 conversions that a level with F16C
+    // or FEAT_FP16 would rewrite: any but the one from f64? simd-clone asks.
+    // As the reference's functionHasHalfCall.
+    final bool pnHasHalfCall(IRFunc* fn)
+        {
+        Map* defOf = self.defMap(fn);
+        for (u32 b = 0; b < fn.blocks().count(); b = b + 1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            for (u32 i = 0; i < bb.insns().count(); i = i + 1)
+                {
+                u32 code = pnKind((IRInsn*)bb.insns().get(i), defOf);
+                if (code % 4 == 1 && code / 4 != 3)
+                    return true;
+                }
+            }
+        return false;
         }
 
     // An operand's integer constant (an immediate, or a Use of a Const), or -1.
@@ -110,6 +183,10 @@
     final void pnFunc(IRFunc* fn)
         {
         Map* defOf = self.defMap(fn);
+        String* lvl = fn.simdLevel();
+        bool hw = _profile.packF16Hw()
+                  || (lvl != (String*)0 && (lvl.equals(String.withCString("avx2")) || lvl.equals(String.withCString("avx512"))));
+        bool arith = _profile.packF16Arith() || (lvl != (String*)0 && lvl.equals(String.withCString("fp16")));
         bool any = false;
         for (u32 b = 0; b < fn.blocks().count(); b = b + 1)
             {
@@ -135,7 +212,7 @@
                 if (code == 0)
                     continue;
                 found = true;
-                if (code == 5 && _profile.packF16Hw())
+                if (code == 5 && hw)
                     unpackSrc.set((Hashable*)n.res(), n.ops().get(1));
                 }
             }
@@ -159,11 +236,11 @@
                 u32 k = code / 4;
                 u32 pk = code % 4;
                 bool rewrite = (pk == 2 && _profile.packBf16() && (k == 1 || k == 2))
-                            || (pk == 1 && _profile.packF16Hw() && (k != 3 || _profile.packF16From64()));
+                            || (pk == 1 && hw && (k != 3 || _profile.packF16From64()));
                 if (!rewrite)
                     {
                     // A comparison of two widened halves compares the halves.
-                    if (_profile.packF16Arith() && n.isOp(opFCmp) && n.ops().count() == 2
+                    if (arith && n.isOp(opFCmp) && n.ops().count() == 2
                         && ((IROperand*)n.ops().get(0)).kind() == (u8)OPK_USE
                         && ((IROperand*)n.ops().get(1)).kind() == (u8)OPK_USE)
                         {
@@ -258,7 +335,7 @@
                     // halves (or one, for sqrt), read by this rounding alone.
                     IRInsn* d = (IRInsn*)defOf.get((Hashable*)src.val());
                     bool fused = false;
-                    if (_profile.packF16Arith() && d != (IRInsn*)0 && self.countOf(uses, src.val()) == 1)
+                    if (arith && d != (IRInsn*)0 && self.countOf(uses, src.val()) == 1)
                         {
                         bool bin = d.isOp(opFAdd) || d.isOp(opFSub) || d.isOp(opFMul) || d.isOp(opFDiv);
                         u32 arity = 0;

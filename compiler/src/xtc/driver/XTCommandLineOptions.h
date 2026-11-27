@@ -174,10 +174,10 @@ NS_ASSUME_NONNULL_BEGIN
 \****************************************************************************/
 @property(nonatomic, readonly) NSString* hostMalloc;
 /****************************************************************************\
-|* The x86-64 vector level (`-mavx2`, `-msimd=base|avx2`, `-mnative`): nil for
-|* the default (SSE2, the x86-64 baseline), else "base" or "avx2". Only x86_64
-|* and win64 take it. `-mavx512f` is reserved and refused until the encoder
-|* exists. SIMD step 1 (private: docs/Design/simd-step1-plan.md, slice S1).
+|* The vector level (`-mavx2`, `-mavx512`, `-msimd=`, `-march=`, `-mnative`):
+|* nil for the default (dispatch where it applies, else the row's level), else
+|* "base", "avx2", "avx512" or "auto" on x86_64 and win64, "base", "fp16" or
+|* "auto" on the arm64 rows. `-mnative` resolves once the target is known.
 \****************************************************************************/
 @property(nonatomic, readonly, nullable) NSString* simdLevel;
 /****************************************************************************\

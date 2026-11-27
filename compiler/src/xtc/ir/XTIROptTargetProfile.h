@@ -298,6 +298,11 @@ NS_ASSUME_NONNULL_BEGIN
 // twice, at 16 bytes and as `<name>$avx2` clones at 32, and the runtime picks
 // one per function at load. vectorLaneBytes stays 16 for the base code.
 @property(nonatomic) BOOL simdDispatch;
+// Float dispatch on arm64 (`--simd=auto`): each function whose f16 code would
+// differ with FEAT_FP16 arithmetic is built twice, the base at ARMv8.0 and a
+// `<name>$fp16` clone, and the runtime picks one at load. pack-native keeps a
+// clone only where a half operation results.
+@property(nonatomic) BOOL simdF16Clone;
 // Matrix kernels: idiom-matmul puts a call to the back end's kernel in front of
 // a recognised matrix-multiply nest, which stays as the fallback. The kernel is
 // matMulPrefix + "f32"/"f64" + matMulSuffix: arm64 `__xt_sme_gemm_` (SME),

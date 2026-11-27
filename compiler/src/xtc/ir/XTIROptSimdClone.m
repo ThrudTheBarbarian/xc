@@ -11,6 +11,7 @@
 #import "XTIRValue.h"
 #import "XTIRPrinter.h"
 #import "XTIRParser.h"
+#import "XTIROptPackNative.h"
 
 @implementation XTIROptSimdClone
 
@@ -103,6 +104,8 @@ static BOOL hasContractPair(XTIRFunction* fn)
              errors:(NSMutableArray<NSString*>* _Nullable* _Nullable)outErrors
     {
     (void)outErrors;
+    if (self.profile.simdF16Clone)
+        return self.prune ? YES : [self cloneHalves:mod];
     if (!self.profile.simdDispatch || !self.profile.vectorizesLoops)
         return YES;
     if (self.prune)
@@ -120,9 +123,12 @@ static BOOL hasContractPair(XTIRFunction* fn)
             // not vectorise: its float code takes the three-operand VEX forms,
             // which save the copy every destructive SSE op needs (perlin,
             // 2026-10-25). So does one with a multiply-add to fuse: only a copy
-            // with FMA fuses (owner, 2026-11-09). As the port.
+            // with FMA fuses (owner, 2026-11-09). So does one with an f16
+            // conversion, which F16C does (float dispatch). As the port.
             if (base && (hasWideVector(fn, (uint32_t)fn.simdLaneBytes)
-                         || ([fn.simdLevel isEqualToString:@"avx2"] && (hasFloatLoop(fn) || hasContractPair(fn)))))
+                         || ([fn.simdLevel isEqualToString:@"avx2"]
+                             && (hasFloatLoop(fn) || hasContractPair(fn)
+                                 || [XTIROptPackNative functionHasHalfCall:fn module:mod]))))
                 base.simdDispatch = YES;
             else
                 [drop addObject:fn];
@@ -137,7 +143,7 @@ static BOOL hasContractPair(XTIRFunction* fn)
     // tables in the same order.
     NSMutableArray<NSString*>* names = [NSMutableArray array];
     for (XTIRFunction* fn in mod.functions)
-        if (!fn.simdLevel && hasPhi(fn))
+        if (!fn.simdLevel && (hasPhi(fn) || [XTIROptPackNative functionHasHalfCall:fn module:mod]))
             [names addObject:fn.name];
     if (!names.count)
         return YES;
@@ -177,6 +183,38 @@ static BOOL hasContractPair(XTIRFunction* fn)
             c.parKernel = XTIRParKernelNone;
             [mod addFunction:c];
             }
+        }
+    return YES;
+    }
+
+// Float dispatch on arm64: each function with an f16 conversion is copied as
+// `<name>$fp16`, from a printed and re-parsed module as above. pack-native
+// gives the copy FEAT_FP16 arithmetic, and drops it where no half operation results.
+- (BOOL)cloneHalves:(XTIRModule*)mod
+    {
+    NSMutableArray<NSString*>* names = [NSMutableArray array];
+    for (XTIRFunction* fn in mod.functions)
+        if (!fn.simdLevel && [XTIROptPackNative functionHasHalfCall:fn module:mod])
+            [names addObject:fn.name];
+    if (!names.count)
+        return YES;
+    NSString* printed = [XTIRPrinter stringFromModule:mod];
+    XTIRModule* copy = [XTIRParser moduleFromString:printed sharingLayoutsOf:mod error:NULL];
+    if (!copy || ![[XTIRPrinter stringFromModule:copy] isEqualToString:printed])
+        return YES;
+    NSMutableDictionary<NSString*, XTIRFunction*>* byName = [NSMutableDictionary dictionary];
+    for (XTIRFunction* fn in copy.functions)
+        byName[fn.name] = fn;
+    for (NSString* n in names)
+        {
+        XTIRFunction* c = byName[n];
+        if (!c)
+            continue;
+        [c renameTo:[n stringByAppendingString:@"$fp16"]];
+        c.simdLevel = @"fp16";
+        c.simdBaseName = n;
+        c.parKernel = XTIRParKernelNone;
+        [mod addFunction:c];
         }
     return YES;
     }

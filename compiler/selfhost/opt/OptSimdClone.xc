@@ -10,6 +10,7 @@
 #import "OptDefs.xc"
 #import <OptBase>
 #import <OptVectorizeRewrite>
+#import <OptPackNative>
 
     class Opt (SimdClone)
     {
@@ -135,13 +136,18 @@
 
     final void simdClone(IRModule* m)
         {
+        if (_profile.simdF16Clone())
+            {
+            simdCloneHalves(m);
+            return;
+            }
         if (!_profile.simdDispatch() || !_profile.vectorize())
             return;
         Array* names = new Array();
         for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
             {
             IRFunc* fn = (IRFunc*)m.funcs().get(f);
-            if (fn.simdLevel() == (String*)0 && simdHasPhi(fn))
+            if (fn.simdLevel() == (String*)0 && (simdHasPhi(fn) || self.pnHasHalfCall(fn)))
                 names.add((Object*)fn.name());
             }
         if (names.count() == (u32)0)
@@ -157,6 +163,28 @@
             return;
         simdAddClones(m, copy2, names, String.withCString("avx2"), (u32)32);
         simdAddClones(m, copy5, names, String.withCString("avx512"), (u32)64);
+        }
+
+    // Float dispatch on arm64: each function with an f16 conversion is copied
+    // as `<name>$fp16` (lane width the profile's), from a printed and
+    // re-parsed module. pack-native gives the copy FEAT_FP16 arithmetic and
+    // drops it where no half operation results. As the reference's cloneHalves.
+    final void simdCloneHalves(IRModule* m)
+        {
+        Array* names = new Array();
+        for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
+            {
+            IRFunc* fn = (IRFunc*)m.funcs().get(f);
+            if (fn.simdLevel() == (String*)0 && self.pnHasHalfCall(fn))
+                names.add((Object*)fn.name());
+            }
+        if (names.count() == (u32)0)
+            return;
+        String* printed = m.text();
+        IRModule* copy = IrParser.parseText(printed, new IrParser());
+        if (copy == (IRModule*)0 || !copy.text().equals(printed))
+            return;
+        simdAddClones(m, copy, names, String.withCString("fp16"), (u32)0);
         }
 
     final void simdAddClones(IRModule* m, IRModule* copy, Array* names, String* level, u32 bytes)
@@ -187,7 +215,7 @@
 
     final void simdPrune(IRModule* m)
         {
-        if (!_profile.simdDispatch() || !_profile.vectorize())
+        if (_profile.simdF16Clone() || !_profile.simdDispatch() || !_profile.vectorize())
             return;
         Array* keep = new Array();
         for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
@@ -210,7 +238,8 @@
             // reference.
             if (base != (IRFunc*)0 && (simdHasWide(fn, fn.simdLaneBytes())
                                        || (fn.simdLevel().equals(String.withCString("avx2"))
-                                           && (simdFloatLoop(fn) || simdContractPair(fn)))))
+                                           && (simdFloatLoop(fn) || simdContractPair(fn)
+                                               || self.pnHasHalfCall(fn)))))
                 {
                 base.setSimdDispatch(true);
                 keep.add((Object*)fn);

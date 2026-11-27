@@ -34,6 +34,10 @@ typedef NS_ENUM(NSInteger, XTPackNativeType) {
 @property(nonatomic, strong) XTIRFunction* fn;
 @property(nonatomic, strong) XTIRModule* mod;
 @property(nonatomic, strong) NSMutableDictionary<NSNumber*, XTIRInsn*>* defOf;
+// The forms the function being rewritten may take: the profile's, or a
+// dispatch clone's level's (F16C, FEAT_FP16 arithmetic).
+@property(nonatomic) BOOL hw;
+@property(nonatomic) BOOL arith;
 @end
 
 @implementation XTIROptPackNative
@@ -58,9 +62,67 @@ typedef NS_ENUM(NSInteger, XTPackNativeType) {
     if (!prof.packF16Hardware && !prof.packBF16Inline)
         return YES;
     self.mod = mod;
-    for (XTIRFunction* fn in mod.functions)
+    NSArray<XTIRFunction*>* fns = [mod.functions copy];
+    NSMutableDictionary<NSString*, XTIRFunction*>* byName = [NSMutableDictionary dictionary];
+    for (XTIRFunction* fn in fns)
+        byName[fn.name] = fn;
+    NSMutableArray<XTIRFunction*>* drop = [NSMutableArray array];
+    for (XTIRFunction* fn in fns)
+        {
         [self runOnFunction:fn profile:prof];
+        // An fp16 clone with no half operation is its base's code: it goes,
+        // and the base keeps its one version. Asked of the result, not of
+        // this run, so that IR this pass already rewrote (post-opt IR handed
+        // back to the pipeline) keeps its clones.
+        if ([fn.simdLevel isEqualToString:@"fp16"])
+            {
+            XTIRFunction* base = byName[fn.simdBaseName];
+            if (base && hasHalfOp(fn))
+                base.simdDispatch = YES;
+            else
+                [drop addObject:fn];
+            }
+        }
+    [mod.functions removeObjectsInArray:drop];
     return YES;
+    }
+
+// A half-precision operation or comparison: what FEAT_FP16 adds.
+static BOOL hasHalfOp(XTIRFunction* fn)
+    {
+    for (XTIRBlock* bb in fn.blocks)
+        for (XTIRInsn* x in bb.instructions)
+            {
+            XTIROpcode op = x.opcode;
+            if ((op == XTIROpFAdd || op == XTIROpFSub || op == XTIROpFMul || op == XTIROpFDiv || op == XTIROpFSqrt)
+                && x.result && x.result.type.kind == XTIRTypeKindU16)
+                return YES;
+            if (op == XTIROpFCmp && x.operands.count && x.operands[0].kind == XTIROperandKindUse
+                && fn.values[@(x.operands[0].valueId)].type.kind == XTIRTypeKindU16)
+                return YES;
+            }
+    return NO;
+    }
+
++ (BOOL)functionHasHalfCall:(XTIRFunction*)fn module:(XTIRModule*)mod
+    {
+    XTIROptPackNative* p = [[XTIROptPackNative alloc] init];
+    p.mod = mod;
+    p.fn = fn;
+    p.defOf = [NSMutableDictionary dictionary];
+    for (XTIRBlock* bb in fn.blocks)
+        for (XTIRInsn* i in bb.instructions)
+            if (i.result)
+                p.defOf[@(i.result.valueId)] = i;
+    for (XTIRBlock* bb in fn.blocks)
+        for (XTIRInsn* n in bb.instructions)
+            {
+            XTPackNativeType pk;
+            XTPackCallKind k = [p kindOf:n pack:&pk];
+            if (pk == XTPackNativeF16 && k != XTPackCallNone && k != XTPackCallFromF64)
+                return YES;
+            }
+    return NO;
     }
 
 #pragma mark - Recognising the calls
@@ -177,6 +239,9 @@ static XTIROperand* use(XTIRValue* v)
     {
     self.fn = fn;
     self.defOf = [NSMutableDictionary dictionary];
+    NSString* lvl = fn.simdLevel;
+    self.hw = prof.packF16Hardware || [lvl isEqualToString:@"avx2"] || [lvl isEqualToString:@"avx512"];
+    self.arith = prof.packF16Arith || [lvl isEqualToString:@"fp16"];
     BOOL any = NO;
     for (XTIRBlock* bb in fn.blocks)
         {
@@ -206,7 +271,7 @@ static XTIROperand* use(XTIRValue* v)
             if (k == XTPackCallNone)
                 continue;
             found = YES;
-            if (k == XTPackCallUnpack && pk == XTPackNativeF16 && prof.packF16Hardware)
+            if (k == XTPackCallUnpack && pk == XTPackNativeF16 && self.hw)
                 unpackSrc[@(n.result.valueId)] = n.operands[1];
             }
     if (!found)
@@ -230,12 +295,12 @@ static XTIROperand* use(XTIRValue* v)
             XTPackCallKind k = [self kindOf:n pack:&pk];
             BOOL rewrite = (pk == XTPackNativeBF16 && prof.packBF16Inline
                             && (k == XTPackCallUnpack || k == XTPackCallFromF32))
-                        || (pk == XTPackNativeF16 && prof.packF16Hardware
+                        || (pk == XTPackNativeF16 && self.hw
                             && (k != XTPackCallFromF64 || prof.packF16FromF64));
             if (!rewrite)
                 {
                 // A comparison of two widened halves compares the halves.
-                if (prof.packF16Arith && n.opcode == XTIROpFCmp && n.operands.count == 2
+                if (self.arith && n.opcode == XTIROpFCmp && n.operands.count == 2
                     && n.operands[0].kind == XTIROperandKindUse && n.operands[1].kind == XTIROperandKindUse)
                     {
                     XTIROperand* a = unpackSrc[@(n.operands[0].valueId)];
@@ -319,7 +384,7 @@ static XTIROperand* use(XTIRValue* v)
                 // (or one, for sqrt), read by this rounding alone.
                 XTIRInsn* d = self.defOf[@(src.valueId)];
                 BOOL fused = NO;
-                if (prof.packF16Arith && d && [uses countForObject:@(src.valueId)] == 1)
+                if (self.arith && d && [uses countForObject:@(src.valueId)] == 1)
                     {
                     XTIROpcode op = d.opcode;
                     BOOL bin = op == XTIROpFAdd || op == XTIROpFSub || op == XTIROpFMul || op == XTIROpFDiv;

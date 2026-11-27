@@ -2186,6 +2186,28 @@ static NSUInteger gPendingVa;
                 }
             return YES;
             }
+        // simd: <level> of <base> / simd: dispatch — a dispatch clone and a
+        // dispatched base, read back so that post-opt IR handed to a back end
+        // still builds the stubs and the selection table.
+        if ([kw isEqualToString:@"simd"] && [self tok:tokens at:1].kind == XTIRTokColon
+            && [self tok:tokens at:2].kind == XTIRTokWord)
+            {
+            NSString* what = [self tok:tokens at:2].text;
+            XTIRFunction* fn = state.currentFunction;
+            if ([what isEqualToString:@"dispatch"])
+                {
+                fn.simdDispatch = YES;
+                return YES;
+                }
+            if ([self tok:tokens at:3].kind == XTIRTokWord && [[self tok:tokens at:3].text isEqualToString:@"of"]
+                && [self tok:tokens at:4].kind == XTIRTokWord)
+                {
+                fn.simdLevel = what;
+                fn.simdBaseName = [self tok:tokens at:4].text;
+                fn.simdLaneBytes = [what isEqualToString:@"avx512"] ? 64 : [what isEqualToString:@"avx2"] ? 32 : 0;
+                return YES;
+                }
+            }
         // par: kernel / par: outlined — a par block's kernel, read back so
         // the kernel passes on the far side of the process boundary and the
         // kernel module's copy know it.

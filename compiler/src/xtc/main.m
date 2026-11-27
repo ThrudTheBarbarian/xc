@@ -5325,6 +5325,15 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
         if (lvl)
             [cgArgs addObject:[@"--simd=" stringByAppendingString:lvl]];
         }
+    // The arm64 float level, the same way: `auto` (float dispatch, ARMv8.0 code
+    // plus FEAT_FP16 clones picked at load) for an executable built in one
+    // invocation, else the row's level unless a flag names one.
+    if ([cgRow.cpu isEqualToString:@"arm64"])
+        {
+        NSString* lvl = opts.simdLevel ?: ((opts.compileOnly || opts.emitLib) ? nil : @"auto");
+        if (lvl)
+            [cgArgs addObject:[@"--simd=" stringByAppendingString:lvl]];
+        }
     if (opts.threadSafeARC == 1)      [cgArgs addObject:@"--thread-safe-arc"];
     else if (opts.threadSafeARC == 0) [cgArgs addObject:@"--no-thread-safe-arc"];
     // Every arm9 output is position-independent, so `-S` shows the PIC asm the

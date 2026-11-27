@@ -139,8 +139,9 @@ class CapOptions
     String* _withDex;      // --with-dex <path>
     bool    _noSelfHost;   // --no-self-host
     bool    _threadFlag;   // -f[no-]thread-safe-arc was given
-    String* _simd;         // the x86-64 vector level: 0 (default), "base", "avx2"
+    String* _simd;         // the vector level: 0 (default), "base", "avx2", "fp16", ...
     String* _simdFlag;     // the flag that chose it, for the target check
+    String* _simdCpu;      // the family it names: "x86-64", "arm64", or 0 for either
     bool _dynamic;         // an x86-64 executable linked against glibc: the default
     bool _dynamicExplicit; // -dynamic given
     bool _staticLink;      // -static: the static musl link instead
@@ -165,6 +166,7 @@ class CapOptions
         _threadFlag = false;
         _simd = (String*)0;
         _simdFlag = (String*)0;
+        _simdCpu = (String*)0;
         _dynamic = false;
         _dynamicExplicit = false;
         _staticLink = false;
@@ -188,6 +190,7 @@ class CapOptions
     bool threadFlag(void)   { return _threadFlag; }
     String* simd(void)      { return _simd; }
     String* simdFlag(void)  { return _simdFlag; }
+    String* simdCpu(void)   { return _simdCpu; }
     bool dynamic(void)      { return _dynamic; }
     void setDynamic(void)   { _dynamicExplicit = true; }
     bool dynamicExplicit(void) { return _dynamicExplicit; }
@@ -211,7 +214,9 @@ class CapOptions
     void setWithDex(String* p)   { _withDex = p; }
     void setNoSelfHost(bool b)   { _noSelfHost = b; }
     void setThreadFlag(bool b)   { _threadFlag = b; }
-    void setSimd(String* level, String* flag) { _simd = level; _simdFlag = flag; }
+    void setSimd(String* level, String* flag) { _simd = level; _simdFlag = flag; _simdCpu = (String*)0; }
+    void setSimdCpu(String* cpu) { _simdCpu = cpu; }
+    void setSimdLevel(String* level) { _simd = level; }
 }
 
 // ── options ──────────────────────────────────────────────────────────────
@@ -6465,8 +6470,21 @@ void emitModule(DriverOptions* d, IRModule* mod)
     OptProfile* prof = OptProfile.forTarget(backendTargetOf(d));
     if (d.targetRow().rotateChain()) prof.setLoopRotateChain(true);
     // FEAT_FP16 arithmetic on a row with LSE (the ARMv8.1+ cores: Apple's), as
-    // xcc-cg-arm64 decides from --no-lse-atomics.
-    prof.setPackF16Arith(d.targetRow().lseAtomics());
+    // xcc-cg-arm64 decides from --no-lse-atomics, unless a level is named.
+    // With none, an executable built in one invocation is `auto`: float
+    // dispatch, ARMv8.0 code plus `$fp16` clones picked at load (-O2+; below
+    // it nothing is cloned and the row's level holds). As the reference's
+    // driver forwards it and xcc-cg-arm64 reads it.
+    String* fsimd = d.caps().simd();
+    if (fsimd == (String*)0 && (!d.compileOnly() || gCSplitOut != (String*)0) && !d.emitLib())
+        fsimd = String.withCString("auto");
+    bool fAuto = fsimd != (String*)0 && fsimd.equals(String.withCString("auto"));
+    bool f16Dispatch = fAuto && d.opt() >= (u32)2;
+    if (fsimd == (String*)0 || (fAuto && !f16Dispatch))
+        prof.setPackF16Arith(d.targetRow().lseAtomics());
+    else
+        prof.setPackF16Arith(fsimd.equals(String.withCString("fp16")));
+    prof.setSimdF16Clone(f16Dispatch);
     Opt.setUnrollOverride(prof, d.unroll());
     applyOptFlags(d, prof);
     Opt* opt = Opt.atLevel(d.opt(), prof);
@@ -7615,11 +7633,16 @@ void capabilityUsage(void)
     Stdio.printf("                             binary then needs an AVX2 CPU)\n");
     Stdio.printf("  -mavx512, -msimd=avx512    x86-64/win64: 512-bit AVX-512 vectors (F, DQ,\n");
     Stdio.printf("                             BW and VL; the binary then needs such a CPU)\n");
-    Stdio.printf("  -msimd=base                x86-64/win64: SSE2 only, one version\n");
-    Stdio.printf("  -msimd=auto                x86-64/win64: SSE2 and AVX2 versions of each\n");
-    Stdio.printf("                             vectorised function, picked at load (the\n");
-    Stdio.printf("                             default; XC_SIMD=base|avx2 overrides it)\n");
-    Stdio.printf("  -mnative                   x86-64/win64: the level of this machine\n");
+    Stdio.printf("  -msimd=base                x86-64/win64: SSE2 only; arm64: ARMv8.0\n");
+    Stdio.printf("  -msimd=fp16, -march=pi5    arm64: FEAT_FP16 half arithmetic (the binary\n");
+    Stdio.printf("                             then needs an ARMv8.2 CPU with FP16)\n");
+    Stdio.printf("  -msimd=auto                Both versions of each function that gains,\n");
+    Stdio.printf("                             picked at load (the default for a program;\n");
+    Stdio.printf("                             XC_SIMD=base|avx2|avx512|fp16 overrides it)\n");
+    Stdio.printf("  -march=<arch>              pi4, pi5, armv8-a, armv8.2-a[+fp16][+dotprod]\n");
+    Stdio.printf("                             [+bf16], x86-64, x86-64-v2, -v3 (= -mavx2) or\n");
+    Stdio.printf("                             -v4 (= -mavx512): one version, that level\n");
+    Stdio.printf("  -mnative                   The level of this machine (x86-64, arm64)\n");
     Stdio.printf("  -fno-matmul                Leave recognised matrix multiplies as loops\n");
     Stdio.printf("                             (arm64 macOS: no SME kernel; x86-64: no\n");
     Stdio.printf("                             vector kernel)\n");
@@ -8055,6 +8078,83 @@ String* hostSimdLevel(void)
 #endif
 }
 
+#if ARCH_arm64 && OS_linux
+u64 getauxval(u64 type);
+#elif ARCH_arm64
+i32 sysctlbyname(u8* name, pointer oldp, u64* oldlenp, pointer newp, u64 newlen);
+#endif
+
+// The float level of the arm64 machine running the compiler, for -mnative:
+// "fp16" when it has FEAT_FP16 half arithmetic (scalar and vector), else
+// "base"; 0 when this compiler is not running on arm64. macOS says through
+// hw.optional.arm.FEAT_FP16, Linux through AT_HWCAP's FPHP and ASIMDHP bits.
+// Matches the reference's hostArmLevel.
+String* hostArmLevel(void)
+{
+#if ARCH_arm64 && OS_linux
+    u64 h = getauxval((u64)16);
+    return ((h & (u64)512) != (u64)0 && (h & (u64)1024) != (u64)0) ? String.withCString("fp16")
+                                                                     : String.withCString("base");
+#elif ARCH_arm64
+    i32 v = (i32)0;
+    u64 n = (u64)4;
+    if (sysctlbyname("hw.optional.arm.FEAT_FP16", (pointer)&v, &n, (pointer)0, (u64)0) == (i32)0 && v != (i32)0)
+        return String.withCString("fp16");
+    return String.withCString("base");
+#else
+    return (String*)0;
+#endif
+}
+
+// -march=<name>: sets the level it names and its CPU family, or prints why not
+// and returns false. pi4 is the Cortex-A72 (ARMv8.0), pi5 the Cortex-A76
+// (ARMv8.2 with FP16 and the dot product); armv8-a and armv8.2-a take +fp16,
+// +dotprod and +bf16, and only +fp16 changes the code. The x86-64 levels are
+// the psABI's: v3 is AVX2 (with F16C and FMA), v4 AVX-512. As the reference's
+// marchLevel.
+bool marchLevel(CapOptions* c, String* v, String* flag)
+{
+    String* lvl = (String*)0;
+    String* cpu = String.withCString("arm64");
+    if (v.equals(String.withCString("pi4")))
+        lvl = String.withCString("base");
+    else if (v.equals(String.withCString("pi5")))
+        lvl = String.withCString("fp16");
+    else if (v.equals(String.withCString("x86-64")) || v.equals(String.withCString("x86-64-v2"))) {
+        lvl = String.withCString("base");
+        cpu = String.withCString("x86-64");
+    } else if (v.equals(String.withCString("x86-64-v3"))) {
+        lvl = String.withCString("avx2");
+        cpu = String.withCString("x86-64");
+    } else if (v.equals(String.withCString("x86-64-v4"))) {
+        lvl = String.withCString("avx512");
+        cpu = String.withCString("x86-64");
+    }
+    if (lvl == (String*)0) {
+        Array* parts = v.splitOnByte((u8)'+');
+        String* head = parts.count() > (u32)0 ? (String*)parts.get((u32)0) : v;
+        if (!head.equals(String.withCString("armv8-a")) && !head.equals(String.withCString("armv8.2-a"))) {
+            Stdio.printf("xcc: -march= expects pi4, pi5, armv8-a, armv8.2-a, x86-64, "
+                         "x86-64-v2, x86-64-v3 or x86-64-v4, got '%s'\n", v.cString());
+            return false;
+        }
+        lvl = String.withCString("base");
+        for (u32 k = (u32)1; k < parts.count(); k = k + (u32)1) {
+            String* x = (String*)parts.get(k);
+            if (x.equals(String.withCString("fp16")))
+                lvl = String.withCString("fp16");
+            else if (!x.equals(String.withCString("dotprod")) && !x.equals(String.withCString("bf16"))) {
+                Stdio.printf("xcc: -march=%s: unknown extension '+%s'; the extensions are "
+                             "+fp16, +dotprod and +bf16\n", v.cString(), x.cString());
+                return false;
+            }
+        }
+    }
+    c.setSimd(lvl, flag);
+    c.setSimdCpu(cpu);
+    return true;
+}
+
 // One capability flag at argv[*i], or false when it is not one. Advances *i
 // past the flag and its value. The target may not be known yet (-A can come
 // later on the line), so anything that depends on it waits for
@@ -8105,31 +8205,40 @@ bool parseCapabilityFlag(DriverOptions* d, u32* ip, u32 argc)
     }
     if (a.equals(String.withCString("-mavx2"))) {
         c.setSimd(String.withCString("avx2"), a);
+        c.setSimdCpu(String.withCString("x86-64"));
         *ip = i + (u32)1; return true;
     }
     // AVX-512 F + DQ + BW + VL, the level xcc's 512-bit code needs.
     if (a.equals(String.withCString("-mavx512")) || a.equals(String.withCString("-mavx512f"))) {
         c.setSimd(String.withCString("avx512"), a);
+        c.setSimdCpu(String.withCString("x86-64"));
         *ip = i + (u32)1; return true;
     }
     if (a.hasPrefix(String.withCString("-msimd="))) {
         String* v = a.substringFromByte((u32)7);
         if (!v.equals(String.withCString("base")) && !v.equals(String.withCString("avx2"))
-            && !v.equals(String.withCString("avx512")) && !v.equals(String.withCString("auto"))) {
-            Stdio.printf("xcc: -msimd= expects 'base', 'avx2', 'avx512' or 'auto', got '%s'\n", v.cString());
+            && !v.equals(String.withCString("avx512")) && !v.equals(String.withCString("fp16"))
+            && !v.equals(String.withCString("auto"))) {
+            Stdio.printf("xcc: -msimd= expects 'base', 'avx2', 'avx512', 'fp16' or 'auto', got '%s'\n",
+                         v.cString());
             driverExit((i32)1); return true;
         }
         c.setSimd(v, a);
+        if (v.equals(String.withCString("fp16")))
+            c.setSimdCpu(String.withCString("arm64"));
+        else if (v.equals(String.withCString("avx2")) || v.equals(String.withCString("avx512")))
+            c.setSimdCpu(String.withCString("x86-64"));
         *ip = i + (u32)1; return true;
     }
-    if (a.equals(String.withCString("-mnative"))) {
-        String* lvl = hostSimdLevel();
-        if (lvl == (String*)0) {
-            Stdio.printf("xcc: -mnative: this machine is not x86-64, so it has no vector "
-                         "level to read; name one (-mavx2, -msimd=base)\n");
+    if (a.hasPrefix(String.withCString("-march="))) {
+        if (!marchLevel(c, a.substringFromByte((u32)7), a)) {
             driverExit((i32)1); return true;
         }
-        c.setSimd(lvl, a);
+        *ip = i + (u32)1; return true;
+    }
+    // The host's level, read once the target is known (checkCapabilities).
+    if (a.equals(String.withCString("-mnative"))) {
+        c.setSimd(String.withCString("native"), a);
         *ip = i + (u32)1; return true;
     }
     if (a.equals(String.withCString("-fthread-safe-arc"))) {
@@ -8231,10 +8340,36 @@ void checkCapabilities(DriverOptions* d)
 {
     CapOptions* c = d.caps();
     String* arch = d.arch();
-    if (c.simdFlag() != (String*)0 && !isX86_64(d) && !isWin64(d)) {
-        Stdio.printf("xcc: %s: the vector level applies to -A x86_64 and -A win64 only\n",
-                     c.simdFlag().cString());
-        driverExit((i32)1); return;
+    // The vector level belongs to the x86-64 and arm64 back ends; a level of
+    // the other family is refused, and -mnative reads the host only when the
+    // host is of the target's family. As the reference.
+    if (c.simdFlag() != (String*)0) {
+        String* fam = (String*)0;
+        if (isX86_64(d) || isWin64(d))
+            fam = String.withCString("x86-64");
+        else if (d.targetRow() != (TargetRow*)0 && d.targetRow().cpu().equals(String.withCString("arm64")))
+            fam = String.withCString("arm64");
+        if (fam == (String*)0) {
+            Stdio.printf("xcc: %s: the vector level applies to x86-64 and arm64 targets only\n",
+                         c.simdFlag().cString());
+            driverExit((i32)1); return;
+        }
+        bool x86 = fam.equals(String.withCString("x86-64"));
+        if (c.simd().equals(String.withCString("native"))) {
+            String* lvl = x86 ? hostSimdLevel() : hostArmLevel();
+            if (lvl == (String*)0) {
+                Stdio.printf("xcc: -mnative: this machine is not %s, so it has no %s level to read; "
+                             "name one (%s)\n", fam.cString(), fam.cString(),
+                             x86 ? "-mavx2, -msimd=base" : "-march=pi5, -msimd=base");
+                driverExit((i32)1); return;
+            }
+            c.setSimdLevel(lvl);
+        }
+        if (c.simdCpu() != (String*)0 && !c.simdCpu().equals(fam)) {
+            Stdio.printf("xcc: %s: names an %s level, but the target is %s\n", c.simdFlag().cString(),
+                         c.simdCpu().cString(), d.targetRow().name().cString());
+            driverExit((i32)1); return;
+        }
     }
     // From 0.72 an x86-64 executable links dynamically
     // against glibc unless -static asks for the static musl link, as a C

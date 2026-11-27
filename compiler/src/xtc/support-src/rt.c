@@ -523,3 +523,36 @@ int32_t _xt_file_exists_exact(const char *path){
 // The bodies are shared verbatim with the clang-path runtime; see the header of
 // the included file for why the include path differs between the two.
 #include "../../../support/generic/runtime/xt-threads.c"
+
+// ── Float dispatch (--simd=auto) ──
+// The level the dispatched functions run at, picked once at load: 0 base
+// (ARMv8.0), 1 fp16 (FEAT_FP16 half arithmetic); -1 until a dispatched
+// program's constructor has run. XC_SIMD=base|fp16 forces a level for one run;
+// asking for fp16 on a machine without it falls back to base, with a line on
+// stderr, and never faults. macOS answers through hw.optional.arm.FEAT_FP16,
+// Linux and Android through AT_HWCAP's FPHP and ASIMDHP bits. The table holds
+// {slot, base, fp16} per function, as the code generator emits it.
+#ifdef __APPLE__
+#include <sys/sysctl.h>
+#else
+#include <sys/auxv.h>
+#endif
+int32_t _xt_simd_level = -1;
+static int xt_cpu_fp16(void){
+#ifdef __APPLE__
+    int v = 0; size_t n = sizeof v;
+    return sysctlbyname("hw.optional.arm.FEAT_FP16", &v, &n, 0, 0) == 0 && v;
+#else
+    unsigned long h = getauxval(16);                  /* AT_HWCAP */
+    return (h & (1UL << 9)) && (h & (1UL << 10));     /* HWCAP_FPHP, HWCAP_ASIMDHP */
+#endif
+}
+void _xt_simd_select(void **table, uint32_t n){
+    int has = xt_cpu_fp16(), lvl = has;
+    const char *want = getenv("XC_SIMD");
+    if (want && strcmp(want, "base") == 0) lvl = 0;
+    else if (want && strcmp(want, "fp16") == 0 && !has)
+        fputs("xc: XC_SIMD=fp16, but this machine has no FP16 arithmetic; using base\n", stderr);
+    _xt_simd_level = lvl;
+    for (uint32_t i = 0; i < n; i++) *(void **)table[3 * i] = table[3 * i + 1 + lvl];
+}

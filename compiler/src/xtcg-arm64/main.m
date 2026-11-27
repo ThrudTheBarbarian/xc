@@ -44,6 +44,8 @@ static void usage(void)
             "  --aapcs64-abi         Use plain AAPCS64 argument placement (Android)\n"
             "                        rather than Darwin's variadic-tail and packed\n"
             "                        stack-slot deviations.\n"
+            "  --simd=<level>        f16 code: base (ARMv8.0), fp16 (FEAT_FP16) or auto\n"
+            "                        (both, picked at load; -O2+). Default: the row's.\n"
             "  --matmul              Put the SME matrix kernel in front of recognised\n"
             "                        matrix-multiply loops (macOS; the loop stays as\n"
             "                        the fallback on CPUs without SME).\n"
@@ -74,6 +76,7 @@ int main(int argc, const char* argv[])
         BOOL lseAtomics = YES;
         NSUInteger loopAlign = 0;       // --loop-align <n>: loop heads on 2^n bytes
         BOOL rotateChains = NO;         // --rotate-chains: the row's rotateChain
+        NSString* simd = nil;           // --simd=base|fp16|auto; nil: the row's level
 
         for (int i = 1; i < argc; i++)
             {
@@ -150,6 +153,10 @@ int main(int argc, const char* argv[])
             else if ([arg isEqualToString:@"--matmul"])
                 {
                 matMul = YES;
+                }
+            else if ([arg hasPrefix:@"--simd="])
+                {
+                simd = [arg substringFromIndex:7];
                 }
             else if ([arg isEqualToString:@"--inline-checks"])
                 {
@@ -236,8 +243,14 @@ int main(int argc, const char* argv[])
             armProfile.inlineChecks = inlineChecks;
             armProfile.rotateChains = rotateChains;
             // FEAT_FP16 arithmetic on a row with LSE (the ARMv8.1+ cores: Apple's);
-            // the conversions are in every ARMv8 FP unit.
-            armProfile.packF16Arith = lseAtomics;
+            // the conversions are in every ARMv8 FP unit. A named level wins.
+            // `auto` is float dispatch: ARMv8.0 code plus `$fp16` clones, picked
+            // at load; below -O2, where nothing is cloned, it is the row's level.
+            BOOL f16Dispatch = [simd isEqualToString:@"auto"] && optLevel >= 2;
+            armProfile.packF16Arith = (!simd || ([simd isEqualToString:@"auto"] && !f16Dispatch))
+                                          ? lseAtomics
+                                          : [simd isEqualToString:@"fp16"];
+            armProfile.simdF16Clone = f16Dispatch;
             XTIROptPipeline* pipe =
                 [XTIROptPipeline standardPipelineAtLevel:optLevel
                                                  profile:armProfile];

@@ -1,6 +1,8 @@
 #import "XTCommandLineOptions.h"
 #if defined(__APPLE__)
 #include <sys/sysctl.h>
+#elif defined(__aarch64__)
+#include <sys/auxv.h>
 #endif
 #import "XTDiagnosticEngine.h"
 #import "XTLinkerScriptParser.h"
@@ -63,6 +65,9 @@
 @property(nonatomic, readwrite) NSString* hostMalloc;
 @property(nonatomic, readwrite, nullable) NSString* simdLevel;
 @property(nonatomic, readwrite, nullable) NSString* simdFlag;
+// The CPU family the level names ("x86-64", "arm64"), or nil for one both have
+// (base, auto) and for -mnative until the target is known.
+@property(nonatomic, readwrite, nullable) NSString* simdCpu;
 @property(nonatomic, readwrite) BOOL noMatmul;
 @property(nonatomic, readwrite) BOOL dynamicGlibc;
 @property(nonatomic, readwrite) BOOL dynamicExplicit;
@@ -147,6 +152,66 @@
 #else
     return nil;
 #endif
+    }
+
+// The float level of the arm64 machine running the compiler, for -mnative:
+// "fp16" when it has FEAT_FP16 half arithmetic (scalar and vector), else
+// "base"; nil when this machine is not arm64. macOS says through
+// hw.optional.arm.FEAT_FP16, Linux through AT_HWCAP's FPHP and ASIMDHP bits.
++ (nullable NSString*)hostArmLevel
+    {
+#if defined(__aarch64__) && defined(__APPLE__)
+    int v = 0;
+    size_t n = sizeof v;
+    return (sysctlbyname("hw.optional.arm.FEAT_FP16", &v, &n, NULL, 0) == 0 && v) ? @"fp16" : @"base";
+#elif defined(__aarch64__)
+    unsigned long h = getauxval(AT_HWCAP);
+    return ((h & (1UL << 9)) && (h & (1UL << 10))) ? @"fp16" : @"base";
+#else
+    return nil;
+#endif
+    }
+
+// -march=<name>: the level it names in *level and the CPU family in *cpu, or
+// NO with the message in *err. pi4 is the Cortex-A72 (ARMv8.0), pi5 the
+// Cortex-A76 (ARMv8.2 with FP16 and the dot product); armv8-a and armv8.2-a
+// take +fp16, +dotprod and +bf16, and only +fp16 changes the code. The x86-64
+// levels are the psABI's: v3 is AVX2 (with F16C and FMA), v4 AVX-512.
++ (BOOL)marchLevel:(NSString*)v level:(NSString**)level cpu:(NSString**)cpu error:(NSString**)err
+    {
+    NSDictionary<NSString*, NSArray<NSString*>*>* names = @{
+        @"pi4" : @[ @"base", @"arm64" ], @"pi5" : @[ @"fp16", @"arm64" ],
+        @"x86-64" : @[ @"base", @"x86-64" ], @"x86-64-v2" : @[ @"base", @"x86-64" ],
+        @"x86-64-v3" : @[ @"avx2", @"x86-64" ], @"x86-64-v4" : @[ @"avx512", @"x86-64" ]};
+    if (names[v])
+        {
+        *level = names[v][0];
+        *cpu = names[v][1];
+        return YES;
+        }
+    NSArray<NSString*>* parts = [v componentsSeparatedByString:@"+"];
+    if (![parts[0] isEqualToString:@"armv8-a"] && ![parts[0] isEqualToString:@"armv8.2-a"])
+        {
+        *err = [NSString stringWithFormat:@"xcc: -march= expects pi4, pi5, armv8-a, armv8.2-a, x86-64, "
+                                          @"x86-64-v2, x86-64-v3 or x86-64-v4, got '%@'", v];
+        return NO;
+        }
+    NSString* lvl = @"base";
+    for (NSUInteger i = 1; i < parts.count; i++)
+        {
+        NSString* x = parts[i];
+        if ([x isEqualToString:@"fp16"])
+            lvl = @"fp16";
+        else if (![x isEqualToString:@"dotprod"] && ![x isEqualToString:@"bf16"])
+            {
+            *err = [NSString stringWithFormat:@"xcc: -march=%@: unknown extension '+%@'; the extensions are "
+                                              @"+fp16, +dotprod and +bf16", v, x];
+            return NO;
+            }
+        }
+    *level = lvl;
+    *cpu = @"arm64";
+    return YES;
     }
 
 /****************************************************************************\
@@ -1155,36 +1220,49 @@ static NSString* sExecutablePath = nil;
             {
             opts.simdLevel = @"avx2";
             opts.simdFlag = arg;
+            opts.simdCpu = @"x86-64";
             }
         // AVX-512 F + DQ + BW + VL, the level xcc's 512-bit code needs.
         else if ([arg isEqualToString:@"-mavx512"] || [arg isEqualToString:@"-mavx512f"])
             {
             opts.simdLevel = @"avx512";
             opts.simdFlag = arg;
+            opts.simdCpu = @"x86-64";
             }
         else if ([arg hasPrefix:@"-msimd="])
             {
             NSString* val = [arg substringFromIndex:7];
             if (![val isEqualToString:@"base"] && ![val isEqualToString:@"avx2"]
-                && ![val isEqualToString:@"avx512"] && ![val isEqualToString:@"auto"])
+                && ![val isEqualToString:@"avx512"] && ![val isEqualToString:@"fp16"]
+                && ![val isEqualToString:@"auto"])
                 {
-                fprintf(stderr, "xcc: -msimd= expects 'base', 'avx2', 'avx512' or 'auto', got '%s'\n", val.UTF8String);
+                fprintf(stderr, "xcc: -msimd= expects 'base', 'avx2', 'avx512', 'fp16' or 'auto', got '%s'\n",
+                        val.UTF8String);
                 return nil;
                 }
             opts.simdLevel = val;
             opts.simdFlag = arg;
+            opts.simdCpu = [val isEqualToString:@"fp16"] ? @"arm64"
+                         : ([val isEqualToString:@"avx2"] || [val isEqualToString:@"avx512"]) ? @"x86-64" : nil;
             }
-        else if ([arg isEqualToString:@"-mnative"])
+        else if ([arg hasPrefix:@"-march="])
             {
-            NSString* lvl = [XTCommandLineOptions hostSimdLevel];
-            if (!lvl)
+            NSString *lvl = nil, *cpu = nil, *err = nil;
+            if (![XTCommandLineOptions marchLevel:[arg substringFromIndex:7] level:&lvl cpu:&cpu error:&err])
                 {
-                fprintf(stderr, "xcc: -mnative: this machine is not x86-64, so it has no vector "
-                                "level to read; name one (-mavx2, -msimd=base)\n");
+                fprintf(stderr, "%s\n", err.UTF8String);
                 return nil;
                 }
             opts.simdLevel = lvl;
             opts.simdFlag = arg;
+            opts.simdCpu = cpu;
+            }
+        // The host's level, read once the target is known (checked below).
+        else if ([arg isEqualToString:@"-mnative"])
+            {
+            opts.simdLevel = @"native";
+            opts.simdFlag = arg;
+            opts.simdCpu = nil;
             }
         else if ([arg isEqualToString:@"-fthread-safe-arc"])
             {
@@ -1500,14 +1578,6 @@ static NSString* sExecutablePath = nil;
         opts.loopUnrollMax = 5;
         }
 
-    // The vector level belongs to the x86-64 back ends; anywhere else it would
-    // be silently meaningless, so it is refused, naming the flag.
-    if (opts.simdFlag && !opts.useX86_64Backend && !opts.useWin64Backend)
-        {
-        fprintf(stderr, "xcc: %s: the vector level applies to -A x86_64 and -A win64 only\n",
-                opts.simdFlag.UTF8String);
-        return nil;
-        }
 
 
     // -fmalloc=mimalloc needs a linker that can consume a foreign OBJECT file.
@@ -1582,6 +1652,43 @@ static NSString* sExecutablePath = nil;
         opts.useX86_64Backend = YES;
         opts.targetName = @"x86_64";
 #endif
+        }
+
+    // The vector level belongs to the x86-64 and arm64 back ends; anywhere else
+    // it would be silently meaningless, so it is refused, naming the flag. A
+    // level of the other family is refused the same way, and -mnative reads
+    // the host only when the host is of the target's family.
+    if (opts.simdFlag)
+        {
+        XTTarget* row = opts.effectiveTarget;
+        NSString* fam = (opts.useX86_64Backend || opts.useWin64Backend) ? @"x86-64"
+                      : [row.cpu isEqualToString:@"arm64"] ? @"arm64" : nil;
+        if (!fam)
+            {
+            fprintf(stderr, "xcc: %s: the vector level applies to x86-64 and arm64 targets only\n",
+                    opts.simdFlag.UTF8String);
+            return nil;
+            }
+        if ([opts.simdLevel isEqualToString:@"native"])
+            {
+            NSString* lvl = [fam isEqualToString:@"x86-64"] ? [XTCommandLineOptions hostSimdLevel]
+                                                            : [XTCommandLineOptions hostArmLevel];
+            if (!lvl)
+                {
+                fprintf(stderr, "xcc: -mnative: this machine is not %s, so it has no %s level to read; "
+                                "name one (%s)\n",
+                        fam.UTF8String, fam.UTF8String,
+                        [fam isEqualToString:@"x86-64"] ? "-mavx2, -msimd=base" : "-march=pi5, -msimd=base");
+                return nil;
+                }
+            opts.simdLevel = lvl;
+            }
+        if (opts.simdCpu && ![opts.simdCpu isEqualToString:fam])
+            {
+            fprintf(stderr, "xcc: %s: names an %s level, but the target is %s\n", opts.simdFlag.UTF8String,
+                    opts.simdCpu.UTF8String, row.name.UTF8String);
+            return nil;
+            }
         }
 
     // --no-self-host hands the link to a vendor toolchain where one exists
@@ -1737,8 +1844,16 @@ static NSString* sExecutablePath = nil;
             "                             binary then needs an AVX2 CPU)\n"
             "  -mavx512, -msimd=avx512    x86-64/win64: 512-bit AVX-512 vectors (F, DQ,\n"
             "                             BW and VL; the binary then needs such a CPU)\n"
-            "  -msimd=base                x86-64/win64: SSE2 only (the default)\n"
-            "  -mnative                   x86-64/win64: the level of this machine\n"
+            "  -msimd=base                x86-64/win64: SSE2 only; arm64: ARMv8.0\n"
+            "  -msimd=fp16, -march=pi5    arm64: FEAT_FP16 half arithmetic (the binary\n"
+            "                             then needs an ARMv8.2 CPU with FP16)\n"
+            "  -msimd=auto                Both versions of each function that gains,\n"
+            "                             picked at load (the default for a program;\n"
+            "                             XC_SIMD=base|avx2|avx512|fp16 overrides it)\n"
+            "  -march=<arch>              pi4, pi5, armv8-a, armv8.2-a[+fp16][+dotprod]\n"
+            "                             [+bf16], x86-64, x86-64-v2, -v3 (= -mavx2) or\n"
+            "                             -v4 (= -mavx512): one version, that level\n"
+            "  -mnative                   The level of this machine (x86-64, arm64)\n"
             "  -fno-matmul                Leave recognised matrix multiplies as loops\n"
             "                             (arm64 macOS: no SME kernel; x86-64: no\n"
             "                             vector kernel)\n"
