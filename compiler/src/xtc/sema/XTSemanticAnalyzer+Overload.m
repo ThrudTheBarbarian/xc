@@ -3987,6 +3987,12 @@ static NSInteger XTFmtWrapperIndex(BOOL isVarArgs, NSArray<XTParamNode*>* params
             node.resolvedType = [XTType u8Type];
             return;
             }
+        // permute(…) takes a permutation of the dimensions, as constants.
+        if ([node.methodName isEqualToString:@"permute"] && ![self tensorPermuteOK:node cls:className])
+            {
+            node.resolvedType = [XTType u8Type];
+            return;
+            }
         }
     if (className)
         {
@@ -4379,9 +4385,25 @@ static NSInteger XTFmtWrapperIndex(BOOL isVarArgs, NSArray<XTParamNode*>* params
     {
     BOOL target = self.operatorIndexTarget == node;
     [self analyzeNode:node.base];
-    [self analyzeNode:node.index];
-    for (XTASTNode* x in node.extraIndices)
+    // A range among several positions (a tensor slice, `t[a..b, i]`) is not
+    // a value: its bounds are. As the port.
+    NSMutableArray<XTASTNode*>* positions = [NSMutableArray array];
+    if (node.index)
+        [positions addObject:node.index];
+    [positions addObjectsFromArray:node.extraIndices ?: @[]];
+    for (XTASTNode* x in positions)
+        {
+        if ([x isKindOfClass:[XTRangeExprNode class]])
+            {
+            XTRangeExprNode* r = (XTRangeExprNode*)x;
+            if (r.startExpr)
+                [self analyzeNode:r.startExpr];
+            if (r.endExpr)
+                [self analyzeNode:r.endExpr];
+            continue;
+            }
         [self analyzeNode:x];
+        }
     // A class with an index operator: `m[i]` is its get call.
     if ([self resolveIndexOperatorOf:node target:target])
         return;

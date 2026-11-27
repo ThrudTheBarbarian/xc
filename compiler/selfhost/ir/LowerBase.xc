@@ -4747,6 +4747,105 @@ class ClassInfo
             }
         }
 
+    // A call of a check routine, `name(args)`, threaded through memory.
+    void emitCheckCall(String* name, Array* args)
+        {
+        IRInsn* c = IRInsn.with(String.withCString("Call"));
+        c.add(IROperand.sym(runtimeHelper(name)));
+        for (u32 i = (u32)0; i < args.count(); i = i + (u32)1)
+            c.add(IROperand.useVal((IRValue*)args.get(i)));
+        c.add(IROperand.useVal(_mem));
+        IRValue* nm = new IRValue(String.withCString("Mem"));
+        c.setMemRes(nm);
+        c.setCc(String.withCString("CallConv::Standard"));
+        _blk.add(c);
+        _mem = nm;
+        }
+
+    // A checked build's tensor slice (the parser's fuseTensorTypes): `t[a..b,
+    // i]` is a call of the class's `__slice_<pattern>`, and before it each
+    // position is checked against its dimension's shape: an index as
+    // emitTensorBoundsChecks checks one, a range with
+    // `_xt_check_tensor_slice(lo, hi, inclusive, shape, "file:line:col,
+    // dimension k")` (TensorStorage.xc), a bound left out 0 or the shape. As
+    // the reference's emitTensorSliceChecks.
+    void emitTensorSliceChecks(IRValue* recv, ClassInfo* ci, String* pattern, Array* args, Node* at)
+        {
+        if (inChecker())
+            return;
+        Object* so = ci.ivarIndex().get((Hashable*)String.withCString("_shape"));
+        if (so == 0)
+            return;
+        u32 slot = ((Number*)so).asU32();
+        String* pty = ptrTo(String.withCString("U64"));
+        u32 a = (u32)0;
+        for (u32 k = (u32)0; k < pattern.byteLength(); k = k + (u32)1)
+            {
+            u8 c = pattern.byteAt(k);
+            IRValue* base = fieldAddr(recv, slot, pty);
+            Array* ko = new Array();
+            ko.add((Object*)IROperand.immI((i32)k, String.withCString("U16")));
+            IRValue* kv = emit(String.withCString("Const"), String.withCString("U16"), ko);
+            Array* eo = new Array();
+            eo.add((Object*)IROperand.useVal(base));
+            eo.add((Object*)IROperand.useVal(kv));
+            IRValue* ea = emit(String.withCString("ElementAddr"), pty, eo);
+            IRValue* shape = loadThroughIr(ea, String.withCString("U64"));
+            String* site = boundsSite(at);
+            site.appendCString(", dimension ");
+            site.append(String.withU32(k));
+            IRValue* sv = stringAddr(site);
+            if (sv == 0)
+                return;
+            Array* cargs = new Array();
+            if (c == (u8)'i')
+                {
+                if (a >= args.count())
+                    return;
+                IRValue* idx = checkIndexU64((IRValue*)args.get(a));
+                a = a + (u32)1;
+                cargs.add((Object*)ea);
+                cargs.add((Object*)idx);
+                cargs.add((Object*)shape);
+                cargs.add((Object*)sv);
+                emitCheckCall(String.withCString("_xt_check_bounds_n"), cargs);
+                continue;
+                }
+            bool lo = c == (u8)'r' || c == (u8)'R' || c == (u8)'f';
+            bool hi = c == (u8)'r' || c == (u8)'R' || c == (u8)'t' || c == (u8)'T';
+            bool incl = c == (u8)'R' || c == (u8)'T';
+            u32 need = a;
+            if (lo) need = need + (u32)1;
+            if (hi) need = need + (u32)1;
+            if (need > args.count())
+                return;
+            Array* zo = new Array();
+            zo.add((Object*)IROperand.immI((i32)0, String.withCString("U64")));
+            IRValue* zero = emit(String.withCString("Const"), String.withCString("U64"), zo);
+            IRValue* lov = zero;
+            if (lo)
+                {
+                lov = checkIndexU64((IRValue*)args.get(a));
+                a = a + (u32)1;
+                }
+            IRValue* hiv = shape;
+            if (hi)
+                {
+                hiv = checkIndexU64((IRValue*)args.get(a));
+                a = a + (u32)1;
+                }
+            Array* io = new Array();
+            io.add((Object*)IROperand.immI(incl ? (i32)1 : (i32)0, String.withCString("U64")));
+            IRValue* inv = emit(String.withCString("Const"), String.withCString("U64"), io);
+            cargs.add((Object*)lov);
+            cargs.add((Object*)hiv);
+            cargs.add((Object*)inv);
+            cargs.add((Object*)shape);
+            cargs.add((Object*)sv);
+            emitCheckCall(String.withCString("_xt_check_tensor_slice"), cargs);
+            }
+        }
+
     // The checks take the index as a u64. Passed narrower, a CALL was harmless,
     // but an inlined check compares the u64 parameter, which is then the
     // caller's narrower value: reloaded from a 4-byte slot with an 8-byte load,
@@ -13761,6 +13860,10 @@ class ClassInfo
         if (_boundsCheck && !isStatic && recvVal != 0 && ci.name().hasPrefix(String.withCString("__tensor_"))
             && (n.name().equals(String.withCString("_get")) || n.name().equals(String.withCString("_set"))))
             emitTensorBoundsChecks(recvVal, ci, args, n);
+        // …and a slice's positions (emitTensorSliceChecks).
+        if (_boundsCheck && !isStatic && recvVal != 0 && ci.name().hasPrefix(String.withCString("__tensor_"))
+            && n.name().hasPrefix(String.withCString("__slice_")))
+            emitTensorSliceChecks(recvVal, ci, n.name().substringFromByte((u32)8), args, n);
         IRValue* res = (IRValue*)0;
         i32 vs = (i32)-1;
         if (!isStatic && catSlotFor(ci, n) < (i32)0)

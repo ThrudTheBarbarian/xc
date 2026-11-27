@@ -2522,6 +2522,7 @@ NSString* _Nullable parRootName(XTASTNode* _Nullable n)
                                                          location:loc];
     // The block's class: its run is the kernel (the lowering marks it).
     impl.isParBlock = YES;
+    XTASTNode* tensorGuard = nil;
     // Its captured tensors that are each a storage of their own (the par
     // check's tensor rule).
         {
@@ -2533,7 +2534,28 @@ NSString* _Nullable parRootName(XTASTNode* _Nullable n)
             if (t.kind == XTTypeKindClass && [t.displayName hasPrefix:@"__tensor_"] && [self parTensorFresh:cn end:fnEnd])
                 [fresh addObject:fieldOf(cn)];
             }
+        // Two slices of one tensor split at the same place, `a&b` and `b&a`:
+        // the block may write both (parTensorDisjoint). Two views of
+        // different fresh locals, `a|b` and `b|a`: they share no storage
+        // (parTensorRoot).
+        for (NSString* a in caps)
+            for (NSString* b in caps)
+                {
+                XTType* ta = frameTypes[a];
+                XTType* tb = frameTypes[b];
+                if ([a isEqualToString:b] || ta.kind != XTTypeKindClass || ![ta.displayName hasPrefix:@"__tensor_"] ||
+                    tb.kind != XTTypeKindClass || ![tb.displayName hasPrefix:@"__tensor_"])
+                    continue;
+                if ([self parTensorDisjoint:a with:b end:fnEnd])
+                    [fresh addObject:[NSString stringWithFormat:@"%@&%@", fieldOf(a), fieldOf(b)]];
+                NSString* ra = [self parTensorRoot:a end:fnEnd];
+                NSString* rb = [self parTensorRoot:b end:fnEnd];
+                if (ra && rb && ![ra isEqualToString:rb] && !([ra isEqualToString:a] && [rb isEqualToString:b]))
+                    [fresh addObject:[NSString stringWithFormat:@"%@|%@", fieldOf(a), fieldOf(b)]];
+                }
         impl.parFreshTensors = fresh.count ? fresh : nil;
+        tensorGuard = [self parTensorGuardFor:caps types:frameTypes written:frame[@"memWritten"] fresh:fresh
+                                      fieldOf:fieldOf at:loc];
         }
     [[self blkClasses] addObject:impl];
 
@@ -2587,11 +2609,37 @@ NSString* _Nullable parRootName(XTASTNode* _Nullable n)
     if (cond.op == XTBinaryOpLe)
         hi = [[XTBinaryExprNode alloc] initWithOp:XTBinaryOpAdd left:cast(i64T, hi)
                                             right:[[XTLiteralIntNode alloc] initWithValue:1 location:loc] location:loc];
-    XTASTNode* run = [[XTMethodCallExprNode alloc] initWithReceiver:ident(@"Par")
-                                                         methodName:@"run"
-                                                          arguments:@[ ident(pv), cast(i64T, iv.initialiser), cast(i64T, hi) ]
-                                                           location:loc];
-    [site addObject:stmt(run)];
+    if (!tensorGuard)
+        {
+        XTASTNode* run = [[XTMethodCallExprNode alloc] initWithReceiver:ident(@"Par")
+                                                             methodName:@"run"
+                                                              arguments:@[ ident(pv), cast(i64T, iv.initialiser), cast(i64T, hi) ]
+                                                               location:loc];
+        [site addObject:stmt(run)];
+        }
+    else
+        {
+        // Tensors the block writes that may overlap another it reads at the
+        // same row (two views of one storage), or that repeat elements (a
+        // broadcast): run on this thread, as the source reads, when they do
+        // (parTensorGuardFor).
+        NSString* plo = [NSString stringWithFormat:@"$parlo%lu", (unsigned long)counter];
+        NSString* phi = [NSString stringWithFormat:@"$parhi%lu", (unsigned long)counter];
+        [site addObject:[[XTVariableDeclNode alloc] initWithName:plo type:i64T initialiser:cast(i64T, iv.initialiser) location:loc]];
+        [site addObject:[[XTVariableDeclNode alloc] initWithName:phi type:i64T initialiser:cast(i64T, hi) location:loc]];
+        // Through a ParChunk*, as Par.run calls it.
+        XTASTNode* one = [[XTMethodCallExprNode alloc] initWithReceiver:cast(chunkPtr, ident(pv)) methodName:@"run" arguments:@[]
+                                                               location:loc];
+        XTBlockNode* serial = [[XTBlockNode alloc] initWithStatements:@[ assign(member(pv, @"lo"), ident(plo)),
+                                                                         assign(member(pv, @"hi"), ident(phi)), stmt(one) ]
+                                                             location:loc];
+        XTASTNode* run = [[XTMethodCallExprNode alloc] initWithReceiver:ident(@"Par")
+                                                             methodName:@"run"
+                                                              arguments:@[ ident(pv), ident(plo), ident(phi) ]
+                                                               location:loc];
+        XTBlockNode* threads = [[XTBlockNode alloc] initWithStatements:@[ stmt(run) ] location:loc];
+        [site addObject:[[XTIfNode alloc] initWithCondition:tensorGuard thenBlock:serial elseBlock:threads location:loc]];
+        }
     for (NSArray<NSString*>* r in reductions)
         {
         if (r.count > 2)
@@ -2624,6 +2672,73 @@ NSString* _Nullable parRootName(XTASTNode* _Nullable n)
     XTBlockNode* blockSide = [[XTBlockNode alloc] initWithStatements:site location:loc];
     [outer addObject:[[XTIfNode alloc] initWithCondition:kept thenBlock:blockSide elseBlock:plain location:loc]];
     return [[XTBlockNode alloc] initWithStatements:outer location:loc];
+    }
+
+/****************************************************************************\
+|* The run-time test that sends a block with tensors to one thread, or nil
+|* when it needs none. The par check lets a block read another tensor of the
+|* written one's element type at the written row, and write through a view;
+|* both are sound when no two views of one storage differ in layout and no
+|* written view repeats an element. So for each captured tensor the block
+|* writes (memWritten) that is not fresh, `w.__repeats()` (a stride 0 over
+|* more than one element), and for each other captured tensor of its element
+|* type, unless both are fresh or the two are slices split at one place,
+|* `w._storage == u._storage && !w.__like(u)` (`w._storage == u._storage` for
+|* another rank). As the port's parTensorGuard.
+\****************************************************************************/
+- (nullable XTASTNode*)parTensorGuardFor:(NSArray<NSString*>*)caps
+                                   types:(NSDictionary<NSString*, XTType*>*)types
+                                 written:(nullable NSSet<NSString*>*)written
+                                   fresh:(NSSet<NSString*>*)fresh
+                                 fieldOf:(NSString* (^)(NSString*))fieldOf
+                                      at:(XTSourceLocation*)loc
+    {
+    XTASTNode* guard = nil;
+    XTASTNode* (^ident)(NSString*) = ^XTASTNode*(NSString* n) {
+      return [[XTIdentifierNode alloc] initWithName:n location:loc];
+    };
+    XTASTNode* (^call)(NSString*, NSString*, NSArray<XTASTNode*>*) =
+        ^XTASTNode*(NSString* r, NSString* m, NSArray<XTASTNode*>* args) {
+          return [[XTMethodCallExprNode alloc] initWithReceiver:ident(r) methodName:m arguments:args location:loc];
+        };
+    XTASTNode* (^storage)(NSString*) = ^XTASTNode*(NSString* n) {
+      return [[XTMemberAccessNode alloc] initWithBase:ident(n) memberName:@"_storage" isArrow:NO location:loc];
+    };
+    for (NSString* w in caps)
+        {
+        XTType* tw = types[w];
+        if (![written containsObject:w] || tw.kind != XTTypeKindClass || ![tw.displayName hasPrefix:@"__tensor_"])
+            continue;
+        BOOL wFresh = [fresh containsObject:fieldOf(w)];
+        NSMutableArray<XTASTNode*>* terms = [NSMutableArray array];
+        // A view of a fresh local repeats no element.
+        if (!wFresh && ![self parTensorRoot:w end:[self parFuseFnEnd]])
+            [terms addObject:call(w, @"__repeats", @[])];
+        NSString* we = [tw.displayName substringToIndex:tw.displayName.length - 1];
+        for (NSString* u in caps)
+            {
+            XTType* tu = types[u];
+            if ([u isEqualToString:w] || tu.kind != XTTypeKindClass || ![tu.displayName hasPrefix:@"__tensor_"])
+                continue;
+            if (![[tu.displayName substringToIndex:tu.displayName.length - 1] isEqualToString:we])
+                continue;
+            if ((wFresh && [fresh containsObject:fieldOf(u)]) ||
+                [fresh containsObject:[NSString stringWithFormat:@"%@&%@", fieldOf(w), fieldOf(u)]] ||
+                [fresh containsObject:[NSString stringWithFormat:@"%@|%@", fieldOf(w), fieldOf(u)]])
+                continue;
+            XTASTNode* same = [[XTBinaryExprNode alloc] initWithOp:XTBinaryOpEq left:storage(w) right:storage(u) location:loc];
+            if ([tu.displayName isEqualToString:tw.displayName])
+                same = [[XTBinaryExprNode alloc]
+                    initWithOp:XTBinaryOpLogAnd
+                          left:same
+                         right:[[XTUnaryExprNode alloc] initWithOp:XTUnaryOpLogNot operand:call(w, @"__like", @[ ident(u) ]) location:loc]
+                      location:loc];
+            [terms addObject:same];
+            }
+        for (XTASTNode* t in terms)
+            guard = guard ? [[XTBinaryExprNode alloc] initWithOp:XTBinaryOpLogOr left:guard right:t location:loc] : t;
+        }
+    return guard;
     }
 
 @end

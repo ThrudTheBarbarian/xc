@@ -53,6 +53,9 @@ NS_ASSUME_NONNULL_BEGIN
 |* when the base's class has no index operator, so the built-in index applies.
 \****************************************************************************/
 - (BOOL)resolveIndexOperatorOf:(XTASTNode*)node target:(BOOL)target;
+// `t.permute(p0, …)` on a tensor class `cls`: a permutation of its
+// dimensions, as integer literals. NO after reporting what is wrong.
+- (BOOL)tensorPermuteOK:(XTMethodCallExprNode*)node cls:(NSString*)cls;
 /****************************************************************************\
 |* An assignment through an operator: the index set (`m[i] = v`), get, op and
 |* set for `m[i] += v`, the compound operator (`a += b`), or `a = a + b` when

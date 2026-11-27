@@ -3959,6 +3959,15 @@ class Sema
         // the double. Only the float conversions hint.
         for (u32 i = (u32)0; i < n.kidCount(); i = i + (u32)1)
             {
+            // A range among several positions (a tensor slice, `t[a..b, i]`)
+            // is not a value: its bounds are. As the reference.
+            if (k == (u16)nkSubscript && i > (u32)0 && n.kid(i).kind() == (u16)nkRange)
+                {
+                Node* rg = n.kid(i);
+                for (u32 q = (u32)0; q < rg.kidCount(); q = q + (u32)1)
+                    typeExpr(rg.kid(q));
+                continue;
+                }
             String* hint = printfHint(n, i);
             if (hint == 0)
                 hint = paramHint(n, i);
@@ -5584,10 +5593,215 @@ class Sema
         return true;
         }
 
+    // A tensor slice (the parser's fuseTensorTypes): `t[a..b, .., i]`, or one
+    // range alone. Its positions' letters into `pattern` (`i` an index, `r`
+    // a..b, `R` a...b, `f` a.., `t` ..b, `T` ...b, `a` `..`), the shape of the
+    // operator that takes it into `shape` (`_[_.._,_]`), and its indices and
+    // bounds, in order, into `args`. false when the node has no range. As the
+    // reference's XTTensorSliceParts.
+    bool tensorSliceParts(Node* n, String* pattern, String* shape, Array* args)
+        {
+        Array* pos = new Array();
+        bool any = false;
+        if (n.kind() == (u16)nkSlice)
+            {
+            pos.add((Object*)n);
+            any = true;
+            }
+        else if (n.kind() == (u16)nkSubscript)
+            {
+            Array* idx = opIndexList(n);
+            for (u32 i = (u32)0; i < idx.count(); i = i + (u32)1)
+                {
+                Node* x = (Node*)idx.get(i);
+                pos.add((Object*)x);
+                if (x.kind() == (u16)nkRange)
+                    any = true;
+                }
+            }
+        if (!any)
+            return false;
+        shape.appendCString("_[");
+        for (u32 k = (u32)0; k < pos.count(); k = k + (u32)1)
+            {
+            Node* x = (Node*)pos.get(k);
+            if (k > (u32)0)
+                shape.appendCString(",");
+            if (x.kind() != (u16)nkRange && x.kind() != (u16)nkSlice)
+                {
+                pattern.appendCString("i");
+                shape.appendCString("_");
+                args.add((Object*)x);
+                continue;
+                }
+            // A slice's bounds follow its base; a range's are its kids.
+            Array* b = new Array();
+            if (x.kind() == (u16)nkSlice)
+                b = opIndexList(x);
+            else
+                for (u32 q = (u32)0; q < x.kidCount(); q = q + (u32)1)
+                    b.add((Object*)x.kid(q));
+            Node* lo = (Node*)0;
+            Node* hi = (Node*)0;
+            if (b.count() >= (u32)2)
+                {
+                lo = (Node*)b.get(0);
+                hi = (Node*)b.get(1);
+                }
+            else if (b.count() == (u32)1)
+                {
+                if (x.hasFlag((u32)NF_RANGE_HI))
+                    hi = (Node*)b.get(0);
+                else
+                    lo = (Node*)b.get(0);
+                }
+            bool incl = x.hasFlag((u32)NF_INCLUSIVE);
+            if (lo != 0 && hi != 0)
+                pattern.appendCString(incl ? "R" : "r");
+            else if (lo != 0)
+                pattern.appendCString("f");
+            else if (hi != 0)
+                pattern.appendCString(incl ? "T" : "t");
+            else
+                pattern.appendCString("a");
+            if (lo != 0)
+                shape.appendCString("_");
+            shape.appendCString(hi != 0 && incl ? "..." : "..");
+            if (hi != 0)
+                shape.appendCString("_");
+            if (lo != 0)
+                args.add((Object*)lo);
+            if (hi != 0)
+                args.add((Object*)hi);
+            }
+        shape.appendCString("]");
+        return true;
+        }
+
+    // Does a subscript hold a range among several positions?
+    bool subscriptHasRange(Node* n)
+        {
+        if (n.kind() != (u16)nkSubscript)
+            return false;
+        Array* idx = opIndexList(n);
+        for (u32 i = (u32)0; i < idx.count(); i = i + (u32)1)
+            if (((Node*)idx.get(i)).kind() == (u16)nkRange)
+                return true;
+        return false;
+        }
+
+    // The call a tensor slice is: the class's index operator of the slice's
+    // shape (`__slice_<pattern>`, written for each pattern the unit uses), with
+    // one position for each dimension and integer bounds; 0 after reporting
+    // what is wrong. As the reference's tensorSliceCallOf.
+    Node* tensorSliceCallOf(Node* n, Node* cls, String* pattern, String* shape, Array* args)
+        {
+        u32 rank = Sema.tensorRank(cls.name());
+        if (pattern.byteLength() != rank)
+            {
+            String* ex = String.withCString("a..b");
+            String* names = String.withCString("ijklmnop");
+            for (u32 k = (u32)1; k < rank; k = k + (u32)1)
+                {
+                ex.appendCString(", ");
+                ex.appendByte(names.byteAt(k));
+                }
+            String* pl = String.withCString("s");
+            if (rank == (u32)1)
+                pl = String.withCString("");
+            _errorAt(String.withFormat("'%s' takes %lu position%s in a slice, one for each dimension: an index, or a range a..b, a.., ..b or .., as in t[%s]",
+                                       cls.name().cString(), rank, pl.cString(), ex.cString()), n);
+            return (Node*)0;
+            }
+        for (u32 k = (u32)0; k < args.count(); k = k + (u32)1)
+            {
+            Node* x = (Node*)args.get(k);
+            String* xt = x.ty();
+            if (xt != 0 && !Types.isInteger(xt) && !Types.isEnumName(xt))
+                {
+                Array* one = new Array();
+                one.add((Object*)x);
+                _errorAt(String.withFormat("a tensor index or slice bound is an integer, not '%s'", opTypes(one, 0).cString()), n);
+                return (Node*)0;
+                }
+            }
+        Array* ops = new Array();
+        ops.add((Object*)n.kid(0));
+        for (u32 i = (u32)0; i < args.count(); i = i + (u32)1)
+            ops.add(args.get(i));
+        Node* call = opPick(shape, String.withCString("[..]"), ops, n, cls, (Node*)0);
+        if (call == 0 && !_opAmbig)
+            _errorAt(String.withFormat("'%s' has no slice '%s'", cls.name().cString(), pattern.cString()), n);
+        return call;
+        }
+
+    // `t.permute(p0, …)` on a tensor of rank R: R integer literals, each of 0
+    // to R - 1 once. false after reporting what is wrong. As the reference's
+    // tensorPermuteOK.
+    bool tensorPermuteOK(Node* n, String* cls)
+        {
+        u32 rank = Sema.tensorRank(cls);
+        String* ex = new String();
+        u32 kk = rank;
+        while (kk > (u32)0)
+            {
+            kk = kk - (u32)1;
+            if (kk != rank - (u32)1)
+                ex.appendCString(", ");
+            ex.appendFormat("%lu", kk);
+            }
+        u32 argc = n.kidCount() > (u32)0 ? (u32)n.num() : (u32)0;
+        if (argc != rank)
+            {
+            String* pl = String.withCString("s");
+            if (rank == (u32)1)
+                pl = String.withCString("");
+            _errorAt(String.withFormat("permute on '%s' takes %lu dimension%s, each of 0 to %lu once, as in t.permute(%s)",
+                                       cls.cString(), rank, pl.cString(), rank - (u32)1, ex.cString()), n);
+            return false;
+            }
+        u32 seen = (u32)0;
+        for (u32 i = (u32)0; i < argc; i = i + (u32)1)
+            {
+            Node* a = n.kid(i + (u32)1);
+            if (a.kind() != (u16)nkInt || a.nilLit())
+                {
+                _errorAt(String.withCString("permute takes its dimensions as integer literals, so the permutation is checked as it compiles"), a);
+                return false;
+                }
+            i64 v = a.num();
+            if (v < (i64)0 || v >= (i64)rank)
+                {
+                _errorAt(String.withFormat("permute's dimension %s is not one of '%s', whose dimensions are 0 to %lu",
+                                           String.withI64(v).cString(), cls.cString(), rank - (u32)1), a);
+                return false;
+                }
+            if ((seen & ((u32)1 << (u32)v)) != (u32)0)
+                {
+                _errorAt(String.withFormat("permute names dimension %s twice; it takes each of 0 to %lu once",
+                                           String.withI64(v).cString(), rank - (u32)1), a);
+                return false;
+                }
+            seen = seen | ((u32)1 << (u32)v);
+            }
+        return true;
+        }
+
     // The get call of an index node on a class with an index operator, or 0
     // after reporting why there is none.
     Node* indexGetCallOf(Node* n, Node* cls)
         {
+        String* pattern = new String();
+        String* sliceShape = new String();
+        Array* sliceArgs = new Array();
+        if (Sema.tensorRank(cls.name()) > (u32)0 && tensorSliceParts(n, pattern, sliceShape, sliceArgs))
+            return tensorSliceCallOf(n, cls, pattern, sliceShape, sliceArgs);
+        if (subscriptHasRange(n))
+            {
+            _errorAt(String.withFormat("'%s' takes a range index alone in the brackets, as in s[lo..hi]; only a tensor mixes ranges and indices",
+                                       cls.name().cString()), n);
+            return (Node*)0;
+            }
         Array* idx = opIndexList(n);
         String* range = opIndexRange(n);
         if (range != 0 && idx.count() != 2)
@@ -5870,6 +6084,19 @@ class Sema
             Array* idx = opIndexList(lhs);
             String* range = opIndexRange(lhs);
             n.setTy(String.withCString("void"));
+            // A slice is a view, not an element.
+            if (Sema.tensorRank(icls.name()) > (u32)0 && (range != 0 || subscriptHasRange(lhs)))
+                {
+                _errorAt(String.withFormat("a slice of '%s' is a view, not an element: assign to its elements one at a time",
+                                           icls.name().cString()), lhs);
+                return true;
+                }
+            if (subscriptHasRange(lhs))
+                {
+                _errorAt(String.withFormat("'%s' takes a range index alone in the brackets, as in s[lo..hi]; only a tensor mixes ranges and indices",
+                                           icls.name().cString()), lhs);
+                return true;
+                }
             if (range != 0 && idx.count() != 2)
                 {
                 _errorAt(String.withFormat("a range index on '%s' needs both bounds", icls.name().cString()), lhs);
@@ -7593,6 +7820,12 @@ class Sema
             if (owner.hasPrefix(String.withCString("__tensor_f4_")) && owner.byteLength() == (u32)13 && _isOp(n.name(), "data"))
                 {
                 _errorAt(String.withCString("an f4 element has no byte address, so an f4 tensor has no data(); t.bytes() gives its bytes, two elements to each, the first in the low nibble"), n);
+                n.setTy(String.withCString("u8"));
+                return;
+                }
+            // permute(…) takes a permutation of the dimensions, as constants.
+            if (_isOp(n.name(), "permute") && !tensorPermuteOK(n, owner))
+                {
                 n.setTy(String.withCString("u8"));
                 return;
                 }

@@ -150,6 +150,22 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)fusePackSuffixes;
 - (NSUInteger)parFuseFnEnd;
 - (BOOL)parTensorFresh:(NSString*)n end:(NSUInteger)end;
+// Tensor views (XTParser+Tensors.m): a view or reshape whose shapes are known
+// as it parses, a write through a broadcast view, and two slices of one
+// tensor split at the same place.
+- (void)tensorCheckConstantView:(XTMethodCallExprNode*)call;
+- (void)tensorReportDeferred;
+- (void)tensorCheckBroadcastWrite:(XTASTNode*)lhs at:(XTSourceLocation*)loc;
+- (BOOL)parTensorDisjoint:(NSString*)a with:(NSString*)b end:(NSUInteger)end;
+- (nullable NSString*)parTensorRoot:(NSString*)n end:(NSUInteger)end;
+// The run-time test that sends a par block with tensors to one thread, or nil
+// (XTParser+Blocks.m).
+- (nullable XTASTNode*)parTensorGuardFor:(NSArray<NSString*>*)caps
+                                   types:(NSDictionary<NSString*, XTType*>*)types
+                                 written:(nullable NSSet<NSString*>*)written
+                                   fresh:(NSSet<NSString*>*)fresh
+                                 fieldOf:(NSString* (^)(NSString*))fieldOf
+                                      at:(XTSourceLocation*)loc;
 @end
 
 @interface XTParser (Shapes)

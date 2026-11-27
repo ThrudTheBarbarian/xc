@@ -2787,6 +2787,19 @@ static NSString* XTTensorElemOf(NSString* sym)
     NSString* wbuf = nil;
     NSString* wsym = nil;
     int64_t wk = 0, wc = 0;
+    // A second written tensor: a slice of the same tensor as the first,
+    // split at the same place (`a&b` in freshTensors, parTensorDisjoint).
+    NSString* wbuf2 = nil;
+    int64_t wk2 = 0, wc2 = 0;
+    // Two tensors that cannot share a storage: both fresh locals, or views
+    // of two fresh locals (`a|b`).
+    BOOL (^distinct)(NSString*, NSString*) = ^BOOL(NSString* x, NSString* y) {
+      if (!x || !y)
+          return NO;
+      if ([self.freshTensors containsObject:x] && [self.freshTensors containsObject:y])
+          return YES;
+      return [self.freshTensors containsObject:[NSString stringWithFormat:@"%@|%@", x, y]];
+    };
     for (int pass = 0; pass < 2; pass++)
         for (XTIRBlock* b in f.blocks)
             for (XTIRInsn* i in b.instructions)
@@ -2804,9 +2817,27 @@ static NSString* XTTensorElemOf(NSString* sym)
                         return @"writes a tensor it cannot name, which may share a storage with another, so two work items "
                                @"could write one element";
                     if (wbuf && ![buf isEqualToString:wbuf])
-                        return [NSString stringWithFormat:@"writes the tensors '%@' and '%@', which may share one storage, "
-                                                          @"so two work items could write one element; write one tensor in a block",
-                                                          shownName(wbuf), shownName(buf)];
+                        {
+                        BOOL second = wbuf2 ? [buf isEqualToString:wbuf2]
+                                            : [self.freshTensors containsObject:[NSString stringWithFormat:@"%@&%@", wbuf, buf]];
+                        if (!second)
+                            return [NSString stringWithFormat:@"writes the tensors '%@' and '%@', which may share one storage, "
+                                                              @"so two work items could write one element; write one tensor in "
+                                                              @"a block",
+                                                              shownName(wbuf), shownName(buf)];
+                        if (!x.affine || x.k == 0)
+                            return [NSString stringWithFormat:@"writes the tensor '%@' at a first index that is not k * i + c, "
+                                                              @"so two work items could write one element",
+                                                              shownName(buf)];
+                        if (wbuf2 && (x.k != wk2 || x.c != wc2))
+                            return [NSString stringWithFormat:@"writes the tensor '%@' at two first indices, so two work items "
+                                                              @"could write one element",
+                                                              shownName(buf)];
+                        wbuf2 = buf;
+                        wk2 = x.k;
+                        wc2 = x.c;
+                        continue;
+                        }
                     if (!x.affine || x.k == 0)
                         return [NSString stringWithFormat:@"writes the tensor '%@' at a first index that is not k * i + c, "
                                                           @"so two work items could write one element",
@@ -2819,23 +2850,35 @@ static NSString* XTTensorElemOf(NSString* sym)
                     wk = x.k;
                     wc = x.c;
                     wsym = XTTensorElemOf(sn);
+                    continue;
                     }
-                else if (wbuf && !(x.affine && x.k == wk && x.c == wc))
+                if (!wbuf)
+                    continue;
+                BOOL at1 = x.affine && x.k == wk && x.c == wc;
+                BOOL at2 = wbuf2 && x.affine && x.k == wk2 && x.c == wc2;
+                if (buf && ([buf isEqualToString:wbuf] || (wbuf2 && [buf isEqualToString:wbuf2])))
                     {
-                    // A read elsewhere than the written row: of the written
-                    // tensor, or of any tensor that may share its storage (the
-                    // same element type, unless both are fresh locals).
-                    if (buf && [buf isEqualToString:wbuf])
+                    BOOL first = [buf isEqualToString:wbuf];
+                    if (first ? !at1 : !at2)
                         return [NSString stringWithFormat:@"reads the tensor '%@' at a first index other than the one it "
                                                           @"writes, so a work item could read an element another one writes",
-                                                          shownName(wbuf)];
-                    BOOL sameElem = [XTTensorElemOf(sn) isEqualToString:wsym];
-                    BOOL distinct = buf && [self.freshTensors containsObject:buf] && [self.freshTensors containsObject:wbuf];
-                    if (sameElem && !distinct)
-                        return [NSString stringWithFormat:@"writes the tensor '%@' and reads the tensor '%@' at a different "
-                                                          @"row; they may share storage: read '%@' at the same row, or copy "
-                                                          @"it first",
-                                                          shownName(wbuf), buf ? shownName(buf) : @"?", buf ? shownName(buf) : @"?"];
+                                                          shownName(buf)];
+                    continue;
+                    }
+                // A read of another tensor elsewhere than a written row: of
+                // any tensor that may share a written one's storage (the same
+                // element type, unless the two are distinct).
+                if (![XTTensorElemOf(sn) isEqualToString:wsym])
+                    continue;
+                for (int w = 0; w < 2; w++)
+                    {
+                    NSString* wb = w == 0 ? wbuf : wbuf2;
+                    if (!wb || (w == 0 ? at1 : at2) || distinct(buf, wb))
+                        continue;
+                    return [NSString stringWithFormat:@"writes the tensor '%@' and reads the tensor '%@' at a different "
+                                                      @"row; they may share storage: read '%@' at the same row, or copy "
+                                                      @"it first",
+                                                      shownName(wb), buf ? shownName(buf) : @"?", buf ? shownName(buf) : @"?"];
                     }
                 }
     return nil;

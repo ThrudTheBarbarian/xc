@@ -4651,6 +4651,75 @@ static NSString* XTDescribeNodeKind(XTASTNodeKind k)
         }
     }
 
+// A checked build's tensor slice (XTParser+Tensors.m): `t[a..b, i]` is a call
+// of the class's `__slice_<pattern>`, and before it each position is checked
+// against its dimension's shape: an index as emitTensorBoundsChecks checks
+// one, a range with `_xt_check_tensor_slice(lo, hi, inclusive, shape, "file:
+// line:col, dimension k")` (TensorStorage.xc), a bound left out 0 or the
+// shape. As the port.
+- (void)emitTensorSliceChecks:(XTIRValue*)recv
+                          cls:(XTIRClassInfo*)ci
+                      pattern:(NSString*)pattern
+                         args:(NSArray<XTIRValue*>*)args
+                           at:(XTSourceLocation*)loc
+    {
+    if (XTIRRuntimeIsRuntime(self.currentFunction.name))
+        return;
+    NSNumber* slot = ci.ivarFieldIndex[@"_shape"];
+    if (!slot)
+        return;
+    XTIRType* u64 = [XTIRType u64Type];
+    XTIRType* elemPtrIR = [XTIRType ptrToType:u64 window:XTIRWindowUnbanked];
+    NSUInteger a = 0;
+    for (NSUInteger k = 0; k < pattern.length; k++)
+        {
+        unichar c = [pattern characterAtIndex:k];
+        XTIRValue* base = [self emitFieldAddr:recv fieldIndex:slot.unsignedIntegerValue resultType:elemPtrIR];
+        XTIRValue* kv = [self emitInsnOpcode:XTIROpConst
+                                      result:[XTIRType u16Type]
+                                    operands:@[ [XTIROperand immIWithType:[XTIRType u16Type] value:(int64_t)k] ]];
+        XTIRValue* ea = [self emitInsnOpcode:XTIROpElementAddr
+                                      result:elemPtrIR
+                                    operands:@[ [XTIROperand useWithValueId:base.valueId],
+                                                [XTIROperand useWithValueId:kv.valueId] ]];
+        XTIRValue* shape = [self emitLoadRaw:ea pointeeType:u64];
+        NSString* site = [NSString stringWithFormat:@"%@:%lu:%lu, dimension %lu",
+                                                    loc.filename.lastPathComponent ?: @"?",
+                                                    (unsigned long)loc.line, (unsigned long)loc.column, (unsigned long)k];
+        XTIRValue* siteVal = [self internCString:site];
+        if (!siteVal)
+            return;
+        if (c == 'i')
+            {
+            if (a >= args.count)
+                return;
+            XTIRValue* idx = [self checkIndexU64:args[a++]];
+            [self emitCall:[self runtimeHelperSymbolNamed:@"_xt_check_bounds_n"]
+                  callConv:[XTIRCallConv standard]
+                 argValues:@[ ea, idx, shape, siteVal ]
+                resultType:nil];
+            continue;
+            }
+        BOOL lo = c == 'r' || c == 'R' || c == 'f';
+        BOOL hi = c == 'r' || c == 'R' || c == 't' || c == 'T';
+        BOOL incl = c == 'R' || c == 'T';
+        if (a + (lo ? 1 : 0) + (hi ? 1 : 0) > args.count)
+            return;
+        XTIRValue* zero = [self emitInsnOpcode:XTIROpConst
+                                        result:u64
+                                      operands:@[ [XTIROperand immIWithType:u64 value:0] ]];
+        XTIRValue* lov = lo ? [self checkIndexU64:args[a++]] : zero;
+        XTIRValue* hiv = hi ? [self checkIndexU64:args[a++]] : shape;
+        XTIRValue* inv = [self emitInsnOpcode:XTIROpConst
+                                       result:u64
+                                     operands:@[ [XTIROperand immIWithType:u64 value:incl ? 1 : 0] ]];
+        [self emitCall:[self runtimeHelperSymbolNamed:@"_xt_check_tensor_slice"]
+              callConv:[XTIRCallConv standard]
+             argValues:@[ lov, hiv, inv, shape, siteVal ]
+            resultType:nil];
+        }
+    }
+
 - (void)emitBoundsCheckPtr:(XTIRValue*)ptr
                      index:(XTIRValue*)idx
                         at:(XTSourceLocation*)loc
@@ -10070,6 +10139,11 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
     if (self.boundsCheck && !isStaticCall && recvVal && [pointeeAST.displayName hasPrefix:@"__tensor_"] &&
         ([node.methodName isEqualToString:@"_get"] || [node.methodName isEqualToString:@"_set"]))
         [self emitTensorBoundsChecks:recvVal cls:recvCi name:pointeeAST.displayName args:args at:node.location];
+    // …and a slice's positions (emitTensorSliceChecks).
+    if (self.boundsCheck && !isStaticCall && recvVal && [pointeeAST.displayName hasPrefix:@"__tensor_"] &&
+        [node.methodName hasPrefix:@"__slice_"])
+        [self emitTensorSliceChecks:recvVal cls:recvCi pattern:[node.methodName substringFromIndex:8] args:args
+                                 at:node.location];
     if (cslot && !isStaticCall && recvCi.needsVtable && recvCi.catChainAnchor.length)
         {
         self.vtblSiteLoc = node.location;

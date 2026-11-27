@@ -83,6 +83,14 @@ class Parser
     Array*  _tensorNames;
     bool    _tensorReady;
     Array*  _importedTensors;
+    // The views the unit takes (tensorViewUses): its slice patterns, and the
+    // ranks it views or reshapes to and broadcasts to, bit r for rank r.
+    Array*  _tensorPatterns;
+    u32     _tensorShapeRanks;
+    u32     _tensorBcastRanks;
+    u32     _tensorSetAt;    // parTensorSets: the token after the declaration's `=`
+    Array*  _tensorErrors;   // the tensor checks' errors, message then position token, reported after the parse
+    Node*   _parTensorGuard; // the par block being made: its tensors' run-time test (parTensorGuard), or 0
     u32     _loopDepth;     // loops open in the code being parsed (an auto par wraps an outermost one)
     u32     _parAutoDepthReads; // decisions made on _loopDepth so far (parAutoFor)
     u32     _parAutoNest;   // parAutoFor calls open
@@ -1538,6 +1546,8 @@ class Parser
             // token so a malformed file still terminates.
             if (_pos == before) advance();
         }
+        // The tensor checks' errors, now the parse is done.
+        tensorReportDeferred();
         blkAppendSynthesised(program);               // task #26
         protocolCompanions(program);                 // bundles step 2
         return program;
@@ -1845,13 +1855,24 @@ class Parser
                 if (!have) names.add((Object*)nm);
             }
         }
+        // The views the unit takes: its slice patterns, and the ranks it
+        // views, reshapes and broadcasts to. Each class gets the methods for
+        // them, and the classes of their results join the unit.
+        _tensorPatterns = new Array();
+        _tensorShapeRanks = 0;
+        _tensorBcastRanks = 0;
+        if (names.count() > (u32)0) {
+            tensorViewUses();
+            tensorCloseNames(names);
+        }
         _tensorNames = names;
         for (u32 k = (u32)0; k < names.count(); k = k + (u32)1)
             addTypeName((String*)names.get(k));
         if (names.count() > (u32)0 && _tensorReady) {
             String* src = new String();
             for (u32 k = (u32)0; k < names.count(); k = k + (u32)1) {
-                String* c = Parser.tensorClassSource((String*)names.get(k));
+                String* c = Parser.tensorClassSourceWith((String*)names.get(k), _tensorPatterns, _tensorShapeRanks,
+                                                         _tensorBcastRanks);
                 if (c != (String*)0) src.append(c);
             }
             Lexer* lx = Lexer.with(src, String.withCString("<tensor>"));
@@ -1866,11 +1887,317 @@ class Parser
         }
     }
 
+    // The views a unit takes, read from its tokens before the parse. A slice
+    // `t[a..b, .., i]` is a pattern of one letter for each position: `i` an
+    // index, `r` a..b, `R` a...b, `f` a.. (or a...), `t` ..b, `T` ...b and `a`
+    // `..` alone; a subscript with no range is not a slice. `x.view(…)`,
+    // `x.reshape(…)` and `x.broadcast(…)` give the ranks of their results, one
+    // for each argument. The reference reads the same.
+    void tensorViewUses(void)
+    {
+        u32 n = _tokens.count();
+        for (u32 i = (u32)0; i < n; i = i + (u32)1) {
+            u16 ty = ((Token*)_tokens.get(i)).type();
+            if (ty == (u16)tokDot && i + (u32)2 < n && ((Token*)_tokens.get(i + (u32)1)).type() == (u16)tokIdentifier
+                && ((Token*)_tokens.get(i + (u32)2)).type() == (u16)tokLParen) {
+                String* m = ((Token*)_tokens.get(i + (u32)1)).value();
+                bool shape = Parser._same(m, "view") || Parser._same(m, "reshape");
+                bool bcast = Parser._same(m, "broadcast");
+                if (!shape && !bcast) continue;
+                i32 depth = (i32)0;
+                u32 commas = (u32)0;
+                bool any = false;
+                for (u32 j = i + (u32)2; j < n; j = j + (u32)1) {
+                    u16 u = ((Token*)_tokens.get(j)).type();
+                    if (u == (u16)tokLParen || u == (u16)tokLBracket || u == (u16)tokLBrace) depth = depth + (i32)1;
+                    else if (u == (u16)tokRParen || u == (u16)tokRBracket || u == (u16)tokRBrace) depth = depth - (i32)1;
+                    if (depth == (i32)0) break;
+                    if (j > i + (u32)2) any = true;
+                    if (depth == (i32)1 && u == (u16)tokComma) commas = commas + (u32)1;
+                }
+                u32 args = any ? commas + (u32)1 : (u32)0;
+                if (args >= (u32)1 && args <= (u32)8) {
+                    if (shape) _tensorShapeRanks = _tensorShapeRanks | ((u32)1 << args);
+                    else _tensorBcastRanks = _tensorBcastRanks | ((u32)1 << args);
+                }
+                continue;
+            }
+            if (ty != (u16)tokLBracket) continue;
+            String* pat = new String();
+            bool range = false;
+            bool ok = true;
+            bool dots = false;
+            bool incl = false;
+            u32 before = (u32)0;
+            u32 after = (u32)0;
+            i32 depth = (i32)0;
+            for (u32 j = i + (u32)1; j < n && ok; j = j + (u32)1) {
+                u16 u = ((Token*)_tokens.get(j)).type();
+                if (depth == (i32)0 && (u == (u16)tokComma || u == (u16)tokRBracket)) {
+                    if (!dots && before == (u32)0) ok = false;
+                    else if (!dots) pat.appendByte((u8)'i');
+                    else {
+                        range = true;
+                        if (before > (u32)0 && after > (u32)0) pat.appendByte(incl ? (u8)'R' : (u8)'r');
+                        else if (before > (u32)0) pat.appendByte((u8)'f');
+                        else if (after > (u32)0) pat.appendByte(incl ? (u8)'T' : (u8)'t');
+                        else pat.appendByte((u8)'a');
+                    }
+                    dots = false;
+                    incl = false;
+                    before = (u32)0;
+                    after = (u32)0;
+                    if (u == (u16)tokRBracket) break;
+                    continue;
+                }
+                if (u == (u16)tokLParen || u == (u16)tokLBracket || u == (u16)tokLBrace) depth = depth + (i32)1;
+                else if (u == (u16)tokRParen || u == (u16)tokRBracket || u == (u16)tokRBrace) {
+                    depth = depth - (i32)1;
+                    if (depth < (i32)0) ok = false;
+                } else if (u == (u16)tokSemicolon || u == (u16)tokEOF) ok = false;
+                if (depth == (i32)0 && (u == (u16)tokDotDot || u == (u16)tokEllipsis) && !dots) {
+                    dots = true;
+                    incl = u == (u16)tokEllipsis;
+                    continue;
+                }
+                if (dots) after = after + (u32)1;
+                else before = before + (u32)1;
+            }
+            if (ok && range && pat.byteLength() <= (u32)8) {
+                bool have = false;
+                for (u32 q = (u32)0; q < _tensorPatterns.count(); q = q + (u32)1)
+                    if (((String*)_tensorPatterns.get(q)).equals(pat)) have = true;
+                if (!have) _tensorPatterns.add((Object*)pat);
+            }
+        }
+    }
+
+    // The kept dimensions of a slice pattern: its ranges.
+    static u32 tensorPatternRank(String* p)
+    {
+        u32 r = (u32)0;
+        for (u32 k = (u32)0; k < p.byteLength(); k = k + (u32)1)
+            if (p.byteAt(k) != (u8)'i') r = r + (u32)1;
+        return r;
+    }
+
+    // An array of names with `nm` added at the end when it is not there.
+    static void tensorAddName(Array* names, String* nm)
+    {
+        for (u32 q = (u32)0; q < names.count(); q = q + (u32)1)
+            if (((String*)names.get(q)).equals(nm)) return;
+        names.add((Object*)nm);
+    }
+
+    // The classes the views give: each element type's class of every rank the
+    // unit views, reshapes or broadcasts to, then each slice's result, until
+    // none is new. In order, so both compilers write the same classes.
+    void tensorCloseNames(Array* names)
+    {
+        u32 ranks = _tensorShapeRanks | _tensorBcastRanks;
+        Array* prefixes = new Array();
+        for (u32 q = (u32)0; q < names.count(); q = q + (u32)1) {
+            String* nm = (String*)names.get(q);
+            Parser.tensorAddName(prefixes, nm.substringBytes((u32)0, nm.byteLength() - (u32)1));
+        }
+        for (u32 q = (u32)0; q < prefixes.count(); q = q + (u32)1)
+            for (u32 r = (u32)1; r <= (u32)8; r = r + (u32)1)
+                if ((ranks & ((u32)1 << r)) != (u32)0)
+                    Parser.tensorAddName(names, String.withFormat("%s%lu", ((String*)prefixes.get(q)).cString(), r));
+        for (u32 q = (u32)0; q < names.count(); q = q + (u32)1) {
+            String* nm = (String*)names.get(q);
+            u32 rank = (u32)(nm.byteAt(nm.byteLength() - (u32)1) - (u8)'0');
+            for (u32 k = (u32)0; k < _tensorPatterns.count(); k = k + (u32)1) {
+                String* p = (String*)_tensorPatterns.get(k);
+                u32 r = Parser.tensorPatternRank(p);
+                if (p.byteLength() != rank || r == (u32)0) continue;
+                String* pre = nm.substringBytes((u32)0, nm.byteLength() - (u32)1);
+                Parser.tensorAddName(names, String.withFormat("%s%lu", pre.cString(), r));
+            }
+        }
+    }
+
+    // A tensor class's views, each a new header over the same storage, never a
+    // copy (but copy() and a reshape() the strides cannot express): a method
+    // for each slice pattern of the class's rank (an index operator, so `t[a..b,
+    // i]` is a call of it), transpose() for rank 2, permute(…), copy(), and
+    // view(…), reshape(…) and broadcast(…) for each rank the unit asks for.
+    // `elem` is the element type as an array of it is written (`f4[]` for f4);
+    // `count` the product of the shapes. The reference writes the same text.
+    static String* tensorViewSource(String* name, u32 rank, u32 bits, String* elem, String* count, Array* patterns,
+                                    u32 shapeRanks, u32 bcastRanks)
+    {
+        String* pre = name.substringBytes((u32)0, name.byteLength() - (u32)1);
+        string P = pre.cString();
+        string N = name.cString();
+        string E = elem.cString();
+        string C = count.cString();
+        bool f4 = Parser._same(elem, "f4[]");
+        String* s = new String();
+        for (u32 q = (u32)0; q < patterns.count(); q = q + (u32)1) {
+            String* p = (String*)patterns.get(q);
+            u32 r = Parser.tensorPatternRank(p);
+            if (p.byteLength() != rank || r == (u32)0) continue;
+            String* params = new String();
+            String* annot = new String();
+            String* off = String.withCString("_offset");
+            String* body = new String();
+            u32 j = (u32)0;
+            for (u32 k = (u32)0; k < p.byteLength(); k = k + (u32)1) {
+                u8 c = p.byteAt(k);
+                bool lo = c == (u8)'r' || c == (u8)'R' || c == (u8)'f';
+                bool hi = c == (u8)'r' || c == (u8)'R' || c == (u8)'t' || c == (u8)'T';
+                bool incl = c == (u8)'R' || c == (u8)'T';
+                if (k > (u32)0) annot.appendCString(", ");
+                if (c == (u8)'i') {
+                    if (params.byteLength() > (u32)0) params.appendCString(", ");
+                    params.appendFormat("u64 i%lu", k);
+                    annot.appendFormat("i%lu", k);
+                    off.appendFormat(" + i%lu * _stride[%lu]", k, k);
+                    continue;
+                }
+                if (lo) {
+                    if (params.byteLength() > (u32)0) params.appendCString(", ");
+                    params.appendFormat("u64 s%lu", k);
+                    off.appendFormat(" + s%lu * _stride[%lu]", k, k);
+                    annot.appendFormat("s%lu", k);
+                }
+                if (hi) {
+                    if (params.byteLength() > (u32)0) params.appendCString(", ");
+                    params.appendFormat("u64 e%lu", k);
+                }
+                annot.appendCString(incl ? "..." : "..");
+                if (hi) annot.appendFormat("e%lu", k);
+                String* end = String.withFormat("_shape[%lu]", k);
+                if (hi) end = String.withFormat("e%lu%s", k, incl ? " + 1" : "");
+                if (lo) body.appendFormat("v._shape[%lu] = %s - s%lu;\n", j, end.cString(), k);
+                else body.appendFormat("v._shape[%lu] = %s;\n", j, end.cString());
+                body.appendFormat("v._stride[%lu] = _stride[%lu];\n", j, k);
+                j = j + (u32)1;
+            }
+            String* res = String.withFormat("%s%lu", P, r);
+            if (params.byteLength() == (u32)0) params = String.withCString("void");
+            s.appendFormat("%s __slice_%s(%s) :operator(self[%s])\n{\n%s v;\nv._storage = _storage;\nv._offset = %s;\n",
+                           res.cString(), p.cString(), params.cString(), annot.cString(), res.cString(), off.cString());
+            s.append(body);
+            s.appendCString("return v;\n}\n");
+        }
+        if (rank == (u32)2) {
+            s.appendFormat("%s transpose(void)\n{\n%s v;\nv._storage = _storage;\nv._offset = _offset;\nv._shape[0] = _shape[1];\n", N, N);
+            s.appendCString("v._shape[1] = _shape[0];\nv._stride[0] = _stride[1];\nv._stride[1] = _stride[0];\nreturn v;\n}\n");
+        }
+        String* pp = new String();
+        String* pb = new String();
+        for (u32 k = (u32)0; k < rank; k = k + (u32)1) {
+            if (k > (u32)0) pp.appendCString(", ");
+            pp.appendFormat("u64 p%lu", k);
+            pb.appendFormat("v._shape[%lu] = _shape[p%lu];\nv._stride[%lu] = _stride[p%lu];\n", k, k, k, k);
+        }
+        s.appendFormat("%s permute(%s)\n{\n%s v;\nv._storage = _storage;\nv._offset = _offset;\n%sreturn v;\n}\n", N, pp.cString(),
+                       N, pb.cString());
+        // For a par block's guard (parTensorGuard): does the view repeat an
+        // element, and has another the same layout?
+        s.appendCString("bool __repeats(void)\n{\n");
+        String* like = String.withCString("u._offset == _offset");
+        for (u32 k = (u32)0; k < rank; k = k + (u32)1) {
+            s.appendFormat("if (_stride[%lu] == 0 && _shape[%lu] > 1)\nreturn true;\n", k, k);
+            like.appendFormat(" && u._stride[%lu] == _stride[%lu]", k, k);
+        }
+        s.appendFormat("return false;\n}\nbool __like(%s u)\n{\nreturn %s;\n}\n", N, like.cString());
+        // copy(): a contiguous storage of its own, element by element.
+        s.appendFormat("%s copy(void)\n{\n%s c;\nc._offset = 0;\n", N, N);
+        for (u32 k = (u32)0; k < rank; k = k + (u32)1)
+            s.appendFormat("c._shape[%lu] = _shape[%lu];\n", k, k);
+        s.appendFormat("c._stride[%lu] = 1;\n", rank - (u32)1);
+        u32 kk = rank - (u32)1;
+        while (kk > (u32)0) {
+            u32 k = kk - (u32)1;
+            s.appendFormat("c._stride[%lu] = c._stride[%lu] * _shape[%lu];\n", k, k + (u32)1, k + (u32)1);
+            kk = k;
+        }
+        s.appendFormat("c._storage = TensorStorage.alloc(%s, %lu);\n", C, bits);
+        if (f4) s.appendCString("f4[] p = (f4[])_storage.data;\nf4[] q = (f4[])c._storage.data;\n");
+        else s.appendFormat("%s* p = (%s*)_storage.data;\n%s* q = (%s*)c._storage.data;\n", E, E, E, E);
+        s.appendCString("u64 at = 0;\n");
+        String* flat = String.withCString("_offset");
+        for (u32 k = (u32)0; k < rank; k = k + (u32)1) {
+            s.appendFormat("for (u64 i%lu = 0; i%lu < _shape[%lu]; i%lu++)\n", k, k, k, k);
+            flat.appendFormat(" + i%lu * _stride[%lu]", k, k);
+        }
+        s.appendFormat("{\nq[at] = p[%s];\nat++;\n}\nreturn c;\n}\n", flat.cString());
+        // broadcast(…): the shapes line up from the last; a dimension of size 1
+        // and each new leading one repeat with stride 0.
+        for (u32 m = rank; m <= (u32)8; m = m + (u32)1) {
+            if ((bcastRanks & ((u32)1 << m)) == (u32)0) continue;
+            String* res = String.withFormat("%s%lu", P, m);
+            String* ps = new String();
+            for (u32 j = (u32)0; j < m; j = j + (u32)1) {
+                if (j > (u32)0) ps.appendCString(", ");
+                ps.appendFormat("u64 d%lu", j);
+            }
+            s.appendFormat("%s broadcast(%s)\n{\n%s v;\nv._storage = _storage;\nv._offset = _offset;\n", res.cString(), ps.cString(),
+                           res.cString());
+            u32 lead = m - rank;
+            for (u32 j = (u32)0; j < m; j = j + (u32)1)
+                s.appendFormat("v._shape[%lu] = d%lu;\n", j, j);
+            for (u32 j = (u32)0; j < lead; j = j + (u32)1)
+                s.appendFormat("v._stride[%lu] = 0;\n", j);
+            for (u32 k = (u32)0; k < rank; k = k + (u32)1) {
+                u32 j = lead + k;
+                s.appendFormat("if (_shape[%lu] == d%lu)\nv._stride[%lu] = _stride[%lu];\nelse if (_shape[%lu] == 1)\n", k, j, j, k, k);
+                s.appendFormat("v._stride[%lu] = 0;\nelse\n_xt_tensor_fail_broadcast(%lu, _shape[%lu], d%lu);\n", j, k, k, j);
+            }
+            s.appendCString("return v;\n}\n");
+        }
+        // view(…) gives a new shape over the same elements when the strides can
+        // express it (_xt_tensor_strides), and stops the program otherwise;
+        // reshape(…) copies then.
+        for (u32 m = (u32)1; m <= (u32)8; m = m + (u32)1) {
+            if ((shapeRanks & ((u32)1 << m)) == (u32)0) continue;
+            String* res = String.withFormat("%s%lu", P, m);
+            String* ps = new String();
+            String* args = new String();
+            String* prod = new String();
+            String* fill = String.withFormat("u64 ns[%lu];\nu64 nt[%lu];\n", m, m);
+            for (u32 j = (u32)0; j < m; j = j + (u32)1) {
+                if (j > (u32)0) {
+                    ps.appendCString(", ");
+                    args.appendCString(", ");
+                    prod.appendCString(" * ");
+                }
+                ps.appendFormat("u64 d%lu", j);
+                args.appendFormat("d%lu", j);
+                prod.appendFormat("d%lu", j);
+                fill.appendFormat("ns[%lu] = d%lu;\n", j, j);
+            }
+            String* strides = String.withFormat("_xt_tensor_strides(&_shape[0], &_stride[0], %lu, &ns[0], &nt[0], %lu)", rank, m);
+            s.appendFormat("%s view(%s)\n{\n%sif (%s != %s)\n", res.cString(), ps.cString(), fill.cString(), prod.cString(), C);
+            s.appendFormat("_xt_tensor_fail_count(\"view\", %s, %s);\nif (!%s)\n_xt_tensor_fail_view();\n", C, prod.cString(),
+                           strides.cString());
+            s.appendFormat("%s v;\nv._storage = _storage;\nv._offset = _offset;\n", res.cString());
+            for (u32 j = (u32)0; j < m; j = j + (u32)1)
+                s.appendFormat("v._shape[%lu] = d%lu;\nv._stride[%lu] = nt[%lu];\n", j, j, j, j);
+            s.appendCString("return v;\n}\n");
+            s.appendFormat("%s reshape(%s)\n{\n%sif (%s != %s)\n", res.cString(), ps.cString(), fill.cString(), prod.cString(), C);
+            s.appendFormat("_xt_tensor_fail_count(\"reshape\", %s, %s);\nif (%s)\nreturn self.view(%s);\n", C, prod.cString(),
+                           strides.cString(), args.cString());
+            s.appendFormat("%s c = self.copy();\nreturn c.view(%s);\n}\n", N, args.cString());
+        }
+        return s;
+    }
+
     // The class a tensor type is: the storage, the element offset, the shapes
     // and the strides, the index operator's get and set, and the members; then
     // `<name>_make` (zero-filled, contiguous, row major). 0 for a name that is not
     // a tensor class. The reference writes the same text.
     static String* tensorClassSource(String* name)
+    {
+        return Parser.tensorClassSourceWith(name, new Array(), (u32)0, (u32)0);
+    }
+
+    // …with the views the unit takes: its slice patterns, and the ranks it
+    // views or reshapes to and broadcasts to (bit r for rank r).
+    static String* tensorClassSourceWith(String* name, Array* patterns, u32 shapeRanks, u32 bcastRanks)
     {
         if (!name.hasPrefix(String.withCString("__tensor_"))) return (String*)0;
         String* body = name.substringFromByte((u32)9);
@@ -1932,6 +2259,7 @@ class Parser
                        idx.cString(), data.cString(), flat.cString());
         s.appendCString("u64 shape(u64 k)\n{\nreturn _shape[k];\n}\n");
         s.appendCString("u64 stride(u64 k)\n{\nreturn _stride[k];\n}\n");
+        s.appendCString("u64 offset(void)\n{\nreturn _offset;\n}\n");
         s.appendFormat("u64 rank(void)\n{\nreturn %lu;\n}\n", rank);
         s.appendFormat("u64 count(void)\n{\nreturn %s;\n}\n", count.cString());
         s.appendCString("bool isContiguous(void)\n{\nu64 want = 1;\n");
@@ -1946,6 +2274,9 @@ class Parser
             s.appendCString("u8* bytes(void)\n{\nreturn _storage.data + (_offset >> 1);\n}\n");
         else
             s.appendFormat("%s* data(void)\n{\nreturn (%s*)_storage.data + _offset;\n}\n", E, E);
+        String* ae = Es;
+        if (f4) ae = String.withCString("f4[]");
+        s.append(Parser.tensorViewSource(name, rank, bits, ae, count, patterns, shapeRanks, bcastRanks));
         s.appendCString("}\n");
         s.append(mk);
         return s;
@@ -3242,7 +3573,48 @@ class Parser
             String* nm = String.withString(((Token*)t.get((u32)0)).value());
             u32 i = 2;
             bool ok = true;
-            if (i < n && ((Token*)t.get(i)).type() == (u16)tokRBracket) {
+            // A tensor's slice operators (fuseTensorTypes) mix ranges, open
+            // ones too, with indices.
+            bool slice = owner != 0 && owner.name() != 0 && owner.name().hasPrefix(String.withCString("__slice_"));
+            if (slice && i < n && ((Token*)t.get(i)).type() != (u16)tokRBracket) {
+                // Each position an index `i`, a range `lo..hi` or `lo...hi`,
+                // or an open one `lo..`, `..hi`, `...hi` or `..`.
+                while (ok) {
+                    bool lo = i < n && ((Token*)t.get(i)).type() == (u16)tokIdentifier;
+                    u32 d = lo ? i + (u32)1 : i;
+                    bool dots = d < n && (((Token*)t.get(d)).type() == (u16)tokDotDot
+                                          || ((Token*)t.get(d)).type() == (u16)tokEllipsis);
+                    bool hi = dots && d + (u32)1 < n && ((Token*)t.get(d + (u32)1)).type() == (u16)tokIdentifier;
+                    if (!lo && !dots) {
+                        ok = false;
+                        break;
+                    }
+                    if (lo) {
+                        nm.appendByte((u8)' ');
+                        nm.append(((Token*)t.get(i)).value());
+                    }
+                    if (!dots) {
+                        sh.appendCString("_");
+                        i = i + (u32)1;
+                    } else {
+                        if (lo) sh.appendCString("_");
+                        if (hi) sh.append(((Token*)t.get(d)).value());
+                        else sh.appendCString("..");
+                        if (hi) {
+                            sh.appendCString("_");
+                            nm.appendByte((u8)' ');
+                            nm.append(((Token*)t.get(d + (u32)1)).value());
+                        }
+                        i = hi ? d + (u32)2 : d + (u32)1;
+                    }
+                    if (i < n && ((Token*)t.get(i)).type() == (u16)tokComma) {
+                        sh.appendCString(",");
+                        i = i + (u32)1;
+                    } else {
+                        break;
+                    }
+                }
+            } else if (i < n && ((Token*)t.get(i)).type() == (u16)tokRBracket) {
                 noIndex = true;
             } else if (i + 2 < n && ((Token*)t.get(i)).type() == (u16)tokIdentifier
                        && (((Token*)t.get(i + 1)).type() == (u16)tokDotDot
@@ -9480,6 +9852,399 @@ class Parser
         return made == (u32)1;
     }
 
+    // How the function sets `n`: -1 when anything sets it but its declaration
+    // `T n = …` (another assignment, a tuple's target, an increment, its
+    // address or `.n`), else how many declarations set it (0 or 1), with the
+    // index of the token after the `=` in _tensorSetAt. As the reference's
+    // parTensorSets.
+    i32 parTensorSets(String* n, u32 end)
+    {
+        u32 count = _tokens.count();
+        i32 sets = (i32)0;
+        _tensorSetAt = (u32)$FFFFFFFF;
+        for (u32 i = _fnTok; i < end && i < count; i = i + (u32)1) {
+            Token* t = (Token*)_tokens.get(i);
+            if (t.type() != (u16)tokIdentifier || !t.value().equals(n)) continue;
+            u16 before = i > (u32)0 ? ((Token*)_tokens.get(i - (u32)1)).type() : (u16)0;
+            u16 after = i + (u32)1 < count ? ((Token*)_tokens.get(i + (u32)1)).type() : (u16)0;
+            if (before == (u16)tokAmpersand || before == (u16)tokPlusPlus || before == (u16)tokMinusMinus
+                || before == (u16)tokDot || before == (u16)tokArrow)
+                return (i32)-1;
+            if (after == (u16)tokPlusPlus || after == (u16)tokMinusMinus) return (i32)-1;
+            if (after >= (u16)tokAssign && after <= (u16)tokRorAssign) {
+                // A declaration names its type first: a class (a tensor's
+                // included) or a built-in type.
+                bool typed = before == (u16)tokIdentifier || (i > (u32)0 && isTypeKeywordToken(before));
+                if (after != (u16)tokAssign || !typed || sets > (i32)0) return (i32)-1;
+                sets = (i32)1;
+                _tensorSetAt = i + (u32)2;
+                continue;
+            }
+            if (after == (u16)tokComma || after == (u16)tokRParen) {
+                i32 depth = (i32)0;
+                for (u32 j = i + (u32)1; j < end && j < count; j = j + (u32)1) {
+                    u16 u = ((Token*)_tokens.get(j)).type();
+                    if (u == (u16)tokSemicolon || u == (u16)tokLBrace || u == (u16)tokRBrace) break;
+                    if (u == (u16)tokLParen) depth = depth + (i32)1;
+                    else if (u == (u16)tokRParen) {
+                        if (depth == (i32)0) {
+                            if (j + (u32)1 < count && ((Token*)_tokens.get(j + (u32)1)).type() == (u16)tokAssign) return (i32)-1;
+                            break;
+                        }
+                        depth = depth - (i32)1;
+                    }
+                }
+            }
+        }
+        return sets;
+    }
+
+    // `n` is set once, where the function declares it: the index of the token
+    // after its `=`, or $FFFFFFFF.
+    u32 parTensorSetOnce(String* n, u32 end)
+    {
+        if (parTensorSets(n, end) == (i32)1) return _tensorSetAt;
+        return (u32)$FFFFFFFF;
+    }
+
+    // The fresh local a captured tensor's storage is: itself when it is fresh
+    // (parTensorFresh), else, for a local set once from a view of another,
+    // `n = x[…]`, `x.transpose()`, `x.permute(…)` or `x.view(…)`, x's; 0 when
+    // there is none (a broadcast, a reshape, a parameter, anything else). As
+    // the reference's parTensorRoot.
+    String* parTensorRoot(String* n, u32 end)
+    {
+        u32 count = _tokens.count();
+        for (u32 depth = (u32)0; depth < (u32)8 && n != (String*)0; depth = depth + (u32)1) {
+            if (parTensorFresh(n, end)) return n;
+            u32 at = parTensorSetOnce(n, end);
+            if (at == (u32)$FFFFFFFF || at + (u32)2 >= count) return (String*)0;
+            Token* x = (Token*)_tokens.get(at);
+            if (x.type() != (u16)tokIdentifier) return (String*)0;
+            Token* t1 = (Token*)_tokens.get(at + (u32)1);
+            Token* t2 = (Token*)_tokens.get(at + (u32)2);
+            bool view = t1.type() == (u16)tokLBracket
+                        || (t1.type() == (u16)tokDot && t2.type() == (u16)tokIdentifier
+                            && (Parser._same(t2.value(), "transpose") || Parser._same(t2.value(), "permute")
+                                || Parser._same(t2.value(), "view")));
+            if (!view) return (String*)0;
+            n = x.value();
+        }
+        return (String*)0;
+    }
+
+    // `n` keeps one value through the function: a local set once where it is
+    // declared, or a parameter of the function never set.
+    bool parTensorUnset(String* n, u32 end)
+    {
+        i32 sets = parTensorSets(n, end);
+        if (sets == (i32)1) return true;
+        if (sets != (i32)0 || _fnTok == (u32)0) return false;
+        // A parameter: named between the parentheses before the body.
+        u32 i = _fnTok;
+        while (i > (u32)0 && ((Token*)_tokens.get(i - (u32)1)).type() != (u16)tokRParen) i = i - (u32)1;
+        i32 depth = (i32)0;
+        while (i > (u32)0) {
+            i = i - (u32)1;
+            Token* t = (Token*)_tokens.get(i);
+            u16 u = t.type();
+            if (u == (u16)tokRParen) depth = depth + (i32)1;
+            else if (u == (u16)tokLParen) {
+                depth = depth - (i32)1;
+                if (depth == (i32)0) return false;
+            } else if (u == (u16)tokIdentifier && depth == (i32)1 && t.value().equals(n)) return true;
+            else if (u == (u16)tokSemicolon || u == (u16)tokLBrace || u == (u16)tokRBrace) return false;
+        }
+        return false;
+    }
+
+    // Does a token spell a decimal integer of at most nine digits?
+    static bool tensorSmallDecimal(Token* t)
+    {
+        if (t.type() != (u16)tokIntLiteral) return false;
+        String* v = t.value();
+        if (v.byteLength() == (u32)0 || v.byteLength() > (u32)9) return false;
+        for (u32 k = (u32)0; k < v.byteLength(); k = k + (u32)1)
+            if (v.byteAt(k) < (u8)'0' || v.byteAt(k) > (u8)'9') return false;
+        return true;
+    }
+
+    static i64 tensorDecimal(String* v)
+    {
+        i64 x = (i64)0;
+        for (u32 k = (u32)0; k < v.byteLength(); k = k + (u32)1)
+            x = x * (i64)10 + (i64)(v.byteAt(k) - (u8)'0');
+        return x;
+    }
+
+    // The dimensions a fresh local was made with, `T n = new tensor<…>(4, 6)`,
+    // when each is a decimal literal (as Numbers); 0 otherwise.
+    Array* tensorLiteralDims(String* n)
+    {
+        u32 end = parFuseFnEnd();
+        u32 at = parTensorSetOnce(n, end);
+        u32 count = _tokens.count();
+        if (at == (u32)$FFFFFFFF || at + (u32)1 >= count) return (Array*)0;
+        Token* mt = (Token*)_tokens.get(at);
+        if (mt.type() != (u16)tokIdentifier || !mt.value().hasPrefix(String.withCString("__tensor_"))
+            || !mt.value().hasSuffix(String.withCString("_make"))
+            || ((Token*)_tokens.get(at + (u32)1)).type() != (u16)tokLParen)
+            return (Array*)0;
+        Array* dims = new Array();
+        for (u32 j = at + (u32)2; j + (u32)1 < count; j = j + (u32)2) {
+            Token* d = (Token*)_tokens.get(j);
+            if (!Parser.tensorSmallDecimal(d)) return (Array*)0;
+            dims.add((Object*)Number.withI64(Parser.tensorDecimal(d.value())));
+            u16 nt = ((Token*)_tokens.get(j + (u32)1)).type();
+            if (nt == (u16)tokRParen) return dims;
+            if (nt != (u16)tokComma) return (Array*)0;
+        }
+        return (Array*)0;
+    }
+
+    static i64 tensorAt(Array* a, u32 k)
+    {
+        return ((Number*)a.get(k)).asI64();
+    }
+
+    // Do strides exist that give the shapes `ns` over a view with shapes `os`
+    // and strides `ot` (the element counts equal)? The test view() makes as it
+    // runs (_xt_tensor_strides in TensorStorage.xc). As the reference.
+    static bool tensorStridesFit(Array* os, Array* ot, Array* ns)
+    {
+        i64 n = (i64)1;
+        for (u32 k = (u32)0; k < os.count(); k = k + (u32)1)
+            n = n * Parser.tensorAt(os, k);
+        if (n == (i64)0) return true;
+        i32 vd = (i32)ns.count() - (i32)1;
+        i64 base = Parser.tensorAt(ot, ot.count() - (u32)1);
+        i64 tn = (i64)1;
+        i64 vn = (i64)1;
+        i32 td = (i32)os.count();
+        while (td > (i32)0) {
+            td = td - (i32)1;
+            tn = tn * Parser.tensorAt(os, (u32)td);
+            if (td == (i32)0 || (Parser.tensorAt(os, (u32)(td - (i32)1)) != (i64)1
+                                 && Parser.tensorAt(ot, (u32)(td - (i32)1)) != tn * base)) {
+                while (vd >= (i32)0 && (vn < tn || Parser.tensorAt(ns, (u32)vd) == (i64)1)) {
+                    vn = vn * Parser.tensorAt(ns, (u32)vd);
+                    vd = vd - (i32)1;
+                }
+                if (vn != tn) return false;
+                if (td > (i32)0) {
+                    base = Parser.tensorAt(ot, (u32)(td - (i32)1));
+                    tn = (i64)1;
+                    vn = (i64)1;
+                }
+            }
+        }
+        return vd == (i32)-1;
+    }
+
+    static bool tensorLitArg(Node* a)
+    {
+        return a != (Node*)0 && a.kind() == (u16)nkInt && !a.nilLit();
+    }
+
+    // A view or reshape whose shapes are known as it parses: `n.view(…)` with
+    // literal shapes, n a local made once with literal dimensions and never set
+    // again, perhaps through transpose() and permute(…) with literals first.
+    // The element counts must be equal, and view() needs strides that keep the
+    // elements in place; the same tests stop the program at run time. As the
+    // reference's tensorCheckConstantView.
+    void tensorCheckConstantView(Node* call)
+    {
+        bool view = Parser._same(call.name(), "view");
+        if ((!view && !Parser._same(call.name(), "reshape")) || _tensorNames == (Array*)0 || _tensorNames.count() == (u32)0) return;
+        Array* want = new Array();
+        u32 argc = (u32)call.num();
+        for (u32 i = (u32)0; i < argc; i = i + (u32)1) {
+            Node* a = call.kid(i + (u32)1);
+            if (!Parser.tensorLitArg(a)) return;
+            want.add((Object*)Number.withI64(a.num()));
+        }
+        Array* chain = new Array();
+        Node* r = call.kid((u32)0);
+        while (r != (Node*)0 && r.kind() == (u16)nkMethodCall) {
+            bool ok = Parser._same(r.name(), "transpose") && r.num() == (i64)0;
+            if (Parser._same(r.name(), "permute")) {
+                ok = true;
+                for (u32 i = (u32)0; i < (u32)r.num(); i = i + (u32)1)
+                    if (!Parser.tensorLitArg(r.kid(i + (u32)1))) ok = false;
+            }
+            if (!ok) return;
+            chain.insert((u32)0, (Object*)r);
+            r = r.kid((u32)0);
+        }
+        if (r == (Node*)0 || r.kind() != (u16)nkIdent || want.count() == (u32)0) return;
+        String* n = r.name();
+        Array* dims = tensorLiteralDims(n);
+        if (dims == (Array*)0) return;
+        u32 rank = dims.count();
+        Array* shape = new Array();
+        Array* stride = new Array();
+        for (u32 k = (u32)0; k < rank; k = k + (u32)1) {
+            shape.add(dims.get(k));
+            stride.add((Object*)Number.withI64((i64)0));
+        }
+        i64 st = (i64)1;
+        u32 kk = rank;
+        while (kk > (u32)0) {
+            kk = kk - (u32)1;
+            stride.set(kk, (Object*)Number.withI64(st));
+            st = st * Parser.tensorAt(dims, kk);
+        }
+        for (u32 c = (u32)0; c < chain.count(); c = c + (u32)1) {
+            Node* m = (Node*)chain.get(c);
+            Array* ps = new Array();
+            if (Parser._same(m.name(), "transpose")) {
+                if (rank != (u32)2) return;
+                ps.add((Object*)Number.withI64((i64)1));
+                ps.add((Object*)Number.withI64((i64)0));
+            } else {
+                if ((u32)m.num() != rank) return;
+                u32 seen = (u32)0;
+                for (u32 i = (u32)0; i < rank; i = i + (u32)1) {
+                    i64 v = m.kid(i + (u32)1).num();
+                    if (v < (i64)0 || v >= (i64)rank || (seen & ((u32)1 << (u32)v)) != (u32)0) return;
+                    seen = seen | ((u32)1 << (u32)v);
+                    ps.add((Object*)Number.withI64(v));
+                }
+            }
+            Array* s0 = new Array();
+            Array* t0 = new Array();
+            for (u32 k = (u32)0; k < rank; k = k + (u32)1) {
+                s0.add(shape.get(k));
+                t0.add(stride.get(k));
+            }
+            for (u32 k = (u32)0; k < rank; k = k + (u32)1) {
+                u32 pk = (u32)Parser.tensorAt(ps, k);
+                shape.set(k, s0.get(pk));
+                stride.set(k, t0.get(pk));
+            }
+        }
+        i64 have = (i64)1;
+        i64 asked = (i64)1;
+        Token* at = Token.with((u16)tokIdentifier, call.name(), call.line(), call.col());
+        at.setFileId(call.fileId());
+        for (u32 k = (u32)0; k < shape.count(); k = k + (u32)1) have = have * Parser.tensorAt(shape, k);
+        for (u32 k = (u32)0; k < want.count(); k = k + (u32)1) asked = asked * Parser.tensorAt(want, k);
+        if (have != asked) {
+            String* pl = String.withCString("s");
+            if (have == (i64)1) pl = String.withCString("");
+            tensorDeferError(String.withFormat("%s() of '%s', which holds %s element%s, as %s: the counts must be equal",
+                                           call.name().cString(), n.cString(), String.withI64(have).cString(), pl.cString(),
+                                           String.withI64(asked).cString()), at);
+        } else if (view && !Parser.tensorStridesFit(shape, stride, want)) {
+            tensorDeferError(String.withFormat("view() cannot reshape this view of '%s' in place: its elements are not contiguous where the new shape merges dimensions; reshape() copies them, or copy() it first",
+                                           n.cString()), at);
+        }
+    }
+
+    // A write through a broadcast view, where it shows as it parses:
+    // `x.broadcast(…)[i, j] = v`, or through a local set once from
+    // `x.broadcast(…)` and never again. A broadcast repeats elements (stride
+    // 0), so one write would change every element it repeats. As the
+    // reference's tensorCheckBroadcastWrite.
+    void tensorCheckBroadcastWrite(Node* lhs, Token* at)
+    {
+        if (lhs == (Node*)0 || lhs.kind() != (u16)nkSubscript || lhs.kidCount() == (u32)0
+            || _tensorNames == (Array*)0 || _tensorNames.count() == (u32)0) return;
+        Node* b = lhs.kid((u32)0);
+        bool bc = b.kind() == (u16)nkMethodCall && Parser._same(b.name(), "broadcast");
+        if (!bc && b.kind() == (u16)nkIdent) {
+            u32 a = parTensorSetOnce(b.name(), parFuseFnEnd());
+            u32 count = _tokens.count();
+            bc = a != (u32)$FFFFFFFF && a >= (u32)2 && a + (u32)3 < count
+                 && ((Token*)_tokens.get(a - (u32)3)).value().hasPrefix(String.withCString("__tensor_"))
+                 && ((Token*)_tokens.get(a)).type() == (u16)tokIdentifier
+                 && ((Token*)_tokens.get(a + (u32)1)).type() == (u16)tokDot
+                 && Parser._same(((Token*)_tokens.get(a + (u32)2)).value(), "broadcast")
+                 && ((Token*)_tokens.get(a + (u32)3)).type() == (u16)tokLParen;
+        }
+        if (bc)
+            tensorDeferError(String.withCString("a write through a broadcast view would change every element it repeats; write to the tensor it was taken from, or copy() it first"), at);
+    }
+
+    // An error the tensor checks find as the unit parses: reported once the
+    // parse is done (tensorReportDeferred), since an error stops the parse. As
+    // the reference.
+    void tensorDeferError(String* msg, Token* at)
+    {
+        if (_tensorErrors == (Array*)0) _tensorErrors = new Array();
+        _tensorErrors.add((Object*)msg);
+        _tensorErrors.add((Object*)at);
+    }
+
+    void tensorReportDeferred(void)
+    {
+        if (_tensorErrors == (Array*)0) return;
+        for (u32 i = (u32)0; i + (u32)1 < _tensorErrors.count(); i = i + (u32)2)
+            _errorAtTok((String*)_tensorErrors.get(i), (Token*)_tensorErrors.get(i + (u32)1));
+        _tensorErrors = (Array*)0;
+    }
+
+    // Two captured tensors a block may write both: slices of one tensor that
+    // split its first dimension at the same place, `a = t[lo..h, …]` (or
+    // `..h`) and `b = t[h.., …]` (or `h..hi`). Each of a, b and t is set once
+    // where it is declared (or is a parameter never set), and h is the same
+    // tokens in both, each a decimal literal, an operator or a name likewise
+    // set once (or never). As the reference's parTensorDisjoint.
+    bool parTensorDisjoint(String* a, String* b, u32 end)
+    {
+        Array* split = new Array();
+        String* root = (String*)0;
+        for (u32 w = (u32)0; w < (u32)2; w = w + (u32)1) {
+            u32 i = parTensorSetOnce(w == (u32)0 ? a : b, end);
+            if (i == (u32)$FFFFFFFF || i + (u32)2 >= end) return false;
+            Token* rt = (Token*)_tokens.get(i);
+            if (rt.type() != (u16)tokIdentifier || ((Token*)_tokens.get(i + (u32)1)).type() != (u16)tokLBracket) return false;
+            if (root != (String*)0 && !root.equals(rt.value())) return false;
+            root = rt.value();
+            // The first position, up to its comma or the bracket, at depth 0.
+            u32 j = i + (u32)2;
+            u32 dots = (u32)$FFFFFFFF;
+            i32 depth = (i32)0;
+            for (; j < end; j = j + (u32)1) {
+                u16 u = ((Token*)_tokens.get(j)).type();
+                if (depth == (i32)0 && (u == (u16)tokComma || u == (u16)tokRBracket)) break;
+                if (u == (u16)tokLParen || u == (u16)tokLBracket) depth = depth + (i32)1;
+                else if (u == (u16)tokRParen || u == (u16)tokRBracket) depth = depth - (i32)1;
+                else if (depth == (i32)0 && u == (u16)tokEllipsis) return false;
+                else if (depth == (i32)0 && u == (u16)tokDotDot && dots == (u32)$FFFFFFFF) dots = j;
+            }
+            if (dots == (u32)$FFFFFFFF || j >= end) return false;
+            // a ends at h, b starts at h.
+            u32 from = w == (u32)0 ? dots + (u32)1 : i + (u32)2;
+            u32 to = w == (u32)0 ? j : dots;
+            if (to <= from) return false;
+            Array* h = new Array();
+            for (u32 q = from; q < to; q = q + (u32)1) h.add(_tokens.get(q));
+            split.add((Object*)h);
+        }
+        Array* h0 = (Array*)split.get((u32)0);
+        Array* h1 = (Array*)split.get((u32)1);
+        if (h0.count() != h1.count()) return false;
+        if (!parTensorUnset(root, end)) return false;
+        for (u32 k = (u32)0; k < h0.count(); k = k + (u32)1) {
+            Token* x = (Token*)h0.get(k);
+            Token* y = (Token*)h1.get(k);
+            if (x.type() != y.type() || !x.value().equals(y.value())) return false;
+            u16 xt = x.type();
+            if (xt == (u16)tokIdentifier) {
+                if (k + (u32)1 < h0.count()) {
+                    u16 nx = ((Token*)h0.get(k + (u32)1)).type();
+                    if (nx == (u16)tokLParen || nx == (u16)tokDot || nx == (u16)tokArrow || nx == (u16)tokLBracket) return false;
+                }
+                if (!parTensorUnset(x.value(), end)) return false;
+            } else if (!(xt == (u16)tokIntLiteral || xt == (u16)tokPlus || xt == (u16)tokMinus || xt == (u16)tokStar
+                         || xt == (u16)tokSlash || xt == (u16)tokLParen || xt == (u16)tokRParen)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     // n is a local the function sets once, `T* n = new …`, and never again
     // (no other assignment, increment or address taken): its block is its own.
     bool parFuseFresh(String* n, u32 end)
@@ -10144,6 +10909,75 @@ class Parser
     }
 
     // ── par → ParChunk subclass + run (the reference's parDesugarBody) ──
+    // A frame type that is a tensor value (not a pointer to one or an array).
+    static bool parIsTensorType(String* ft)
+    {
+        return ft != (String*)0 && ft.hasPrefix(String.withCString("__tensor_")) && ft.indexOfByte((u8)'*') == String.notFound()
+               && ft.indexOfByte((u8)'[') == String.notFound();
+    }
+
+    // The run-time test that sends a block with tensors to one thread, or 0
+    // when it needs none. The par check lets a block read another tensor of
+    // the written one's element type at the written row, and write through a
+    // view; both are sound when no two views of one storage differ in layout
+    // and no written view repeats an element. So for each captured tensor the
+    // block writes (memWritten) that is not fresh, `w.__repeats()` (a stride
+    // 0 over more than one element), and for each other captured tensor of its
+    // element type, unless both are fresh or the two are slices split at one
+    // place, `w._storage == u._storage && !w.__like(u)` (`w._storage ==
+    // u._storage` for another rank). As the reference's parTensorGuardFor.
+    Node* parTensorGuard(Array* caps, Map* types, Set* written, Set* fresh)
+    {
+        Node* guard = (Node*)0;
+        for (u32 i = (u32)0; i < caps.count(); i = i + (u32)1) {
+            String* w = (String*)caps.get(i);
+            String* tw = (String*)types.get((Hashable*)w);
+            if (written == (Set*)0 || !written.contains((Hashable*)w) || !Parser.parIsTensorType(tw)) continue;
+            bool wFresh = fresh.contains((Hashable*)Parser.parFieldOf(w));
+            Array* terms = new Array();
+            // A view of a fresh local repeats no element.
+            if (!wFresh && parTensorRoot(w, parFuseFnEnd()) == (String*)0) {
+                Node* rp = mkNamed((u16)nkMethodCall, String.withCString("__repeats"));
+                rp.add(parIdent(w));
+                rp.setNum((i64)0);
+                terms.add((Object*)rp);
+            }
+            String* we = tw.substringBytes((u32)0, tw.byteLength() - (u32)1);
+            for (u32 j = (u32)0; j < caps.count(); j = j + (u32)1) {
+                String* u = (String*)caps.get(j);
+                String* tu = (String*)types.get((Hashable*)u);
+                if (u.equals(w) || !Parser.parIsTensorType(tu)) continue;
+                if (!tu.substringBytes((u32)0, tu.byteLength() - (u32)1).equals(we)) continue;
+                String* pr = String.withString(Parser.parFieldOf(w));
+                pr.appendByte((u8)'&');
+                pr.append(Parser.parFieldOf(u));
+                String* pd = String.withString(Parser.parFieldOf(w));
+                pd.appendByte((u8)'|');
+                pd.append(Parser.parFieldOf(u));
+                if ((wFresh && fresh.contains((Hashable*)Parser.parFieldOf(u))) || fresh.contains((Hashable*)pr)
+                    || fresh.contains((Hashable*)pd)) continue;
+                Node* same = parBin("==", parMember(w, String.withCString("_storage")), parMember(u, String.withCString("_storage")));
+                if (tu.equals(tw)) {
+                    Node* lk = mkNamed((u16)nkMethodCall, String.withCString("__like"));
+                    lk.add(parIdent(w));
+                    lk.add(parIdent(u));
+                    lk.setNum((i64)1);
+                    Node* nt = mk((u16)nkUnary);
+                    nt.setOp(String.withCString("!"));
+                    nt.add(lk);
+                    same = parBin("&&", same, nt);
+                }
+                terms.add((Object*)same);
+            }
+            for (u32 k = (u32)0; k < terms.count(); k = k + (u32)1) {
+                Node* t = (Node*)terms.get(k);
+                if (guard == (Node*)0) guard = t;
+                else guard = parBin("||", guard, t);
+            }
+        }
+        return guard;
+    }
+
     Node* parIdent(String* n) { return mkNamed((u16)nkIdent, String.withString(n)); }
     Node* parMember(String* b, String* m)
     {
@@ -10510,7 +11344,34 @@ class Parser
                     && ft.indexOfByte((u8)'[') == String.notFound() && parTensorFresh(cn, fnEnd))
                     fresh.add((Hashable*)Parser.parFieldOf(cn));
             }
+            // Two slices of one tensor split at the same place, `a&b` and
+            // `b&a`: the block may write both (parTensorDisjoint). Two views
+            // of different fresh locals, `a|b` and `b|a`: they share no
+            // storage (parTensorRoot).
+            for (u32 i = (u32)0; i < caps.count(); i = i + (u32)1)
+                for (u32 j = (u32)0; j < caps.count(); j = j + (u32)1) {
+                    String* a = (String*)caps.get(i);
+                    String* b = (String*)caps.get(j);
+                    if (i == j || !Parser.parIsTensorType((String*)frameTypes.get((Hashable*)a))
+                        || !Parser.parIsTensorType((String*)frameTypes.get((Hashable*)b)))
+                        continue;
+                    if (parTensorDisjoint(a, b, fnEnd)) {
+                        String* pr = String.withString(Parser.parFieldOf(a));
+                        pr.appendByte((u8)'&');
+                        pr.append(Parser.parFieldOf(b));
+                        fresh.add((Hashable*)pr);
+                    }
+                    String* ra = parTensorRoot(a, fnEnd);
+                    String* rb = parTensorRoot(b, fnEnd);
+                    if (ra != (String*)0 && rb != (String*)0 && !ra.equals(rb) && !(ra.equals(a) && rb.equals(b))) {
+                        String* pr = String.withString(Parser.parFieldOf(a));
+                        pr.appendByte((u8)'|');
+                        pr.append(Parser.parFieldOf(b));
+                        fresh.add((Hashable*)pr);
+                    }
+                }
             Node.setParFresh(implName, fresh);
+            _parTensorGuard = parTensorGuard(caps, frameTypes, (Set*)frame.get((Hashable*)String.withCString("memWritten")), fresh);
         }
         for (u32 i = (u32)0; i < caps.count(); i = i + (u32)1) {
             String* cn = (String*)caps.get(i);
@@ -11217,13 +12078,54 @@ class Parser
         }
         Node* hi = cond.kid((u32)1);
         if (Parser._same(cond.op(), "<=")) hi = parBin("+", parCast(String.withCString("i64"), hi), parInt((i64)1));
-        Node* call = mkNamed((u16)nkMethodCall, String.withCString("run"));
-        call.add(parIdent(String.withCString("Par")));
-        call.add(parIdent(pv));
-        call.add(parCast(String.withCString("i64"), iv.kid((u32)0)));
-        call.add(parCast(String.withCString("i64"), hi));
-        call.setNum((i64)3);
-        site.add(parStmt(call));
+        if (_parTensorGuard == (Node*)0) {
+            Node* call = mkNamed((u16)nkMethodCall, String.withCString("run"));
+            call.add(parIdent(String.withCString("Par")));
+            call.add(parIdent(pv));
+            call.add(parCast(String.withCString("i64"), iv.kid((u32)0)));
+            call.add(parCast(String.withCString("i64"), hi));
+            call.setNum((i64)3);
+            site.add(parStmt(call));
+        } else {
+            // Tensors the block writes that may overlap another it reads at
+            // the same row (two views of one storage), or that repeat elements
+            // (a broadcast): run on this thread, as the source reads, when they
+            // do (parTensorGuard). As the reference.
+            String* plo = String.withCString("$parlo");
+            plo.append(String.withU32(counter));
+            String* phi = String.withCString("$parhi");
+            phi.append(String.withU32(counter));
+            Node* dlo = mkNamed((u16)nkVariableDecl, plo);
+            dlo.setOp(String.withCString("i64"));
+            dlo.add(parCast(String.withCString("i64"), iv.kid((u32)0)));
+            site.add(dlo);
+            Node* dhi = mkNamed((u16)nkVariableDecl, phi);
+            dhi.setOp(String.withCString("i64"));
+            dhi.add(parCast(String.withCString("i64"), hi));
+            site.add(dhi);
+            // Through a ParChunk*, as Par.run calls it.
+            Node* one = mkNamed((u16)nkMethodCall, String.withCString("run"));
+            one.add(parCast(String.withCString("ParChunk*"), parIdent(pv)));
+            one.setNum((i64)0);
+            Node* serial = mk((u16)nkBlock);
+            serial.add(parAssign(parMember(pv, String.withCString("lo")), parIdent(plo)));
+            serial.add(parAssign(parMember(pv, String.withCString("hi")), parIdent(phi)));
+            serial.add(parStmt(one));
+            Node* call = mkNamed((u16)nkMethodCall, String.withCString("run"));
+            call.add(parIdent(String.withCString("Par")));
+            call.add(parIdent(pv));
+            call.add(parIdent(plo));
+            call.add(parIdent(phi));
+            call.setNum((i64)3);
+            Node* threads = mk((u16)nkBlock);
+            threads.add(parStmt(call));
+            Node* pick = mk((u16)nkIf);
+            pick.add(_parTensorGuard);
+            pick.add(serial);
+            pick.add(threads);
+            site.add(pick);
+            _parTensorGuard = (Node*)0;
+        }
         for (u32 i = (u32)0; i < reds.count(); i = i + (u32)1) {
             Node* r = (Node*)reds.get(i);
             if (r.num() != (i64)0) continue;
@@ -12271,6 +13173,7 @@ class Parser
                     if (lhs.kind() == (u16)nkIdent) blkMarkHoldsWb(lhs.name(), rhs);
                     else _error(String.withCString("a block with `block:` captures cannot be stored beyond its frame — its write-back targets a local slot. Write results into an object instead"));
                 }
+                tensorCheckBroadcastWrite(lhs, opTok);
                 a.add(lhs); a.add(rhs);
                 lhs = a;
                 continue;
@@ -12381,33 +13284,53 @@ class Parser
                 node = n;
             } else if (t == (u16)tokLBracket) {
                 Token* lbTok = advance();
+                // `m[i, j]`: more indices, for a class with an index operator
+                // taking several (`:operator(self[i, j])`). A tensor's slice
+                // mixes them with ranges, `t[a..b, .., i]`: each range of
+                // several positions is an nkRange among the indices, a bound
+                // left out absent (NF_RANGE_HI when only the high one is
+                // there). One range alone is the slice node.
+                Array* positions = new Array();
                 Node* startE = (Node*)0;
                 Node* endE = (Node*)0;
                 bool isSlice = false;
                 bool inclusive = false;
-                Array* extra = (Array*)0;
-                if (check((u16)tokDotDot) || check((u16)tokEllipsis)) {
-                    inclusive = check((u16)tokEllipsis);
+                while (true) {
+                    Token* ptok = cur();
+                    Node* lo = (Node*)0;
+                    Node* hi = (Node*)0;
+                    bool dots = false;
+                    bool incl = false;
+                    if (!check((u16)tokDotDot) && !check((u16)tokEllipsis)) {
+                        lo = parseExpression();
+                        if (lo == 0) break;
+                    }
+                    if (check((u16)tokDotDot) || check((u16)tokEllipsis)) {
+                        dots = true;
+                        incl = check((u16)tokEllipsis);
+                        advance();
+                        if (!check((u16)tokRBracket) && !check((u16)tokComma)) hi = parseExpression();
+                    }
+                    if (dots) {
+                        if (positions.count() == (u32)0 && !check((u16)tokComma)) {
+                            isSlice = true;
+                            startE = lo;
+                            endE = hi;
+                            inclusive = incl;
+                            break;
+                        }
+                        Node* r = Node.with((u16)nkRange);
+                        if (ptok != 0) r.setPos(ptok.fileId(), ptok.line(), ptok.col());
+                        if (incl) r.addFlag((u32)NF_INCLUSIVE);
+                        if (lo == 0 && hi != 0) r.addFlag((u32)NF_RANGE_HI);
+                        r.add(lo);
+                        r.add(hi);
+                        positions.add((Object*)r);
+                    } else {
+                        positions.add((Object*)lo);
+                    }
+                    if (!check((u16)tokComma)) break;
                     advance();
-                    isSlice = true;
-                    if (!check((u16)tokRBracket)) endE = parseExpression();
-                } else {
-                    startE = parseExpression();
-                    // `m[i, j]`: more indices, for a class with an index
-                    // operator taking several (`:operator(self[i, j])`).
-                    while (check((u16)tokComma)) {
-                        advance();
-                        Node* more = parseExpression();
-                        if (more == 0) break;
-                        if (extra == 0) extra = new Array();
-                        extra.add((Object*)more);
-                    }
-                    if (extra == 0 && (check((u16)tokDotDot) || check((u16)tokEllipsis))) {
-                        inclusive = check((u16)tokEllipsis);
-                        advance();
-                        isSlice = true;
-                        if (!check((u16)tokRBracket)) endE = parseExpression();
-                    }
                 }
                 expect((u16)tokRBracket);
                 Node* n = mk(isSlice ? (u16)nkSlice : (u16)nkSubscript);
@@ -12423,11 +13346,13 @@ class Parser
                 // child is simply absent, so the open-LOW form says so itself.
                 if (isSlice && startE == 0) n.addFlag((u32)NF_RANGE_HI);
                 n.add(node);
-                n.add(startE);
-                n.add(endE);
-                if (extra != 0)
-                    for (u32 xi = 0; xi < extra.count(); xi++)
-                        n.add((Node*)extra.get(xi));
+                if (isSlice) {
+                    n.add(startE);
+                    n.add(endE);
+                } else {
+                    for (u32 xi = 0; xi < positions.count(); xi++)
+                        n.add((Node*)positions.get(xi));
+                }
                 node = n;
             } else if (t == (u16)tokDot || t == (u16)tokArrow) {
                 bool arrow = (t == (u16)tokArrow);
@@ -12505,6 +13430,7 @@ class Parser
                     n.add(node);
                 if (_sawVarargForward) { n.addFlag((u32)NF_VAFWD); _sawVarargForward = false; }
                 if (node.hasSrc(SRC_PAREN) && (node.kind() == nkIdent || node.kind() == nkMember)) n.addSrc(SRC_PARENCALLEE);
+                if (n.kind() == (u16)nkMethodCall && node.kind() == (u16)nkMember) tensorCheckConstantView(n);
                 node = n;
             } else {
                 break;

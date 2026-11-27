@@ -367,6 +367,8 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
             }
         }
 
+    // The tensor checks' errors (XTParser+Tensors.m), now the parse is done.
+    [self tensorReportDeferred];
     // Blocks (task #26): the per-signature base classes (sorted by name)
     // and the per-literal impl classes (in creation order) join the
     // program here, as ordinary class declarations.
@@ -2057,7 +2059,11 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
                 }
             else if ([annotName isEqualToString:@"operator"])
                 {
+                // A tensor's slice operators (XTParser+Tensors.m) mix ranges,
+                // open ones too, with indices.
+                self.blkState[@"sliceOperator"] = @([name hasPrefix:@"__slice_"]);
                 operatorFault = [self parseOperatorPatternShape:&operatorShape operands:&operatorOperands];
+                [self.blkState removeObjectForKey:@"sliceOperator"];
                 }
             else if ([annotName isEqualToString:@"precedence"])
                 {
@@ -2314,7 +2320,45 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
         NSMutableArray<NSString*>* nm = [NSMutableArray arrayWithObject:t[0].value];
         NSUInteger i = 2;
         BOOL ok = YES;
-        if (i < n && t[i].type == XTTokenRBracket)
+        if ([self.blkState[@"sliceOperator"] boolValue] && i < n && t[i].type != XTTokenRBracket)
+            {
+            // A tensor slice: each position an index `i`, a range `lo..hi`
+            // or `lo...hi`, or an open one `lo..`, `..hi`, `...hi` or `..`.
+            while (ok)
+                {
+                BOOL lo = i < n && t[i].type == XTTokenIdentifier;
+                NSUInteger d = lo ? i + 1 : i;
+                BOOL dots = d < n && (t[d].type == XTTokenDotDot || t[d].type == XTTokenEllipsis);
+                BOOL hi = dots && d + 1 < n && t[d + 1].type == XTTokenIdentifier;
+                if (!lo && !dots)
+                    {
+                    ok = NO;
+                    break;
+                    }
+                if (lo)
+                    [nm addObject:t[i].value];
+                if (!dots)
+                    {
+                    [sh appendString:@"_"];
+                    i++;
+                    }
+                else
+                    {
+                    [sh appendFormat:@"%@%@%@", lo ? @"_" : @"", hi ? t[d].value : @"..", hi ? @"_" : @""];
+                    if (hi)
+                        [nm addObject:t[d + 1].value];
+                    i = hi ? d + 2 : d + 1;
+                    }
+                if (i < n && t[i].type == XTTokenComma)
+                    {
+                    [sh appendString:@","];
+                    i++;
+                    }
+                else
+                    break;
+                }
+            }
+        else if (i < n && t[i].type == XTTokenRBracket)
             noIndex = YES;
         else if (i + 2 < n && t[i].type == XTTokenIdentifier
                  && (t[i + 1].type == XTTokenDotDot || t[i + 1].type == XTTokenEllipsis)

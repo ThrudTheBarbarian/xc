@@ -105,6 +105,12 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)fuseTensorTypes;
 // The class source of a tensor class name, or nil for a name that is not one.
 + (nullable NSString*)tensorClassSource:(NSString*)name;
+// …with the views the unit takes: its slice patterns, and the ranks it
+// views or reshapes to and broadcasts to.
++ (nullable NSString*)tensorClassSource:(NSString*)name
+                               patterns:(NSArray<NSString*>*)patterns
+                             shapeRanks:(NSIndexSet*)shapeRanks
+                             bcastRanks:(NSIndexSet*)bcastRanks;
 @end
 
 NS_ASSUME_NONNULL_END

@@ -1162,11 +1162,195 @@ static NSInteger XTTensorRank(XTASTNode* cls)
     }
 
 /****************************************************************************\
+|* A tensor slice (XTParser+Tensors.m): `t[a..b, .., i]`, or one range alone.
+|* Its positions' letters into `pattern` (`i` an index, `r` a..b, `R` a...b,
+|* `f` a.., `t` ..b, `T` ...b, `a` `..`), the shape of the operator that
+|* takes it into `shape` (`_[_.._,_]`), and its indices and bounds, in order,
+|* into `args`. NO when the node has no range. As the port's tensorSliceParts.
+\****************************************************************************/
+static BOOL XTTensorSliceParts(XTASTNode* node, NSMutableString* pattern, NSMutableString* shape,
+                               NSMutableArray<XTASTNode*>* args)
+    {
+    NSMutableArray<XTASTNode*>* pos = [NSMutableArray array];
+    if ([node isKindOfClass:[XTSliceExprNode class]])
+        {
+        XTSliceExprNode* sl = (XTSliceExprNode*)node;
+        [pos addObject:[[XTRangeExprNode alloc] initWithStart:sl.startExpr end:sl.endExpr inclusive:sl.inclusive
+                                                     location:sl.location]];
+        }
+    else if ([node isKindOfClass:[XTSubscriptExprNode class]])
+        {
+        XTSubscriptExprNode* sb = (XTSubscriptExprNode*)node;
+        if (sb.index)
+            [pos addObject:sb.index];
+        [pos addObjectsFromArray:sb.extraIndices ?: @[]];
+        }
+    BOOL any = NO;
+    for (XTASTNode* x in pos)
+        if ([x isKindOfClass:[XTRangeExprNode class]])
+            any = YES;
+    if (!any)
+        return NO;
+    [shape appendString:@"_["];
+    for (NSUInteger k = 0; k < pos.count; k++)
+        {
+        if (k)
+            [shape appendString:@","];
+        if (![pos[k] isKindOfClass:[XTRangeExprNode class]])
+            {
+            [pattern appendString:@"i"];
+            [shape appendString:@"_"];
+            [args addObject:pos[k]];
+            continue;
+            }
+        XTRangeExprNode* r = (XTRangeExprNode*)pos[k];
+        XTASTNode* lo = r.startExpr;
+        XTASTNode* hi = r.endExpr;
+        if (lo && hi)
+            [pattern appendString:r.inclusive ? @"R" : @"r"];
+        else if (lo)
+            [pattern appendString:@"f"];
+        else if (hi)
+            [pattern appendString:r.inclusive ? @"T" : @"t"];
+        else
+            [pattern appendString:@"a"];
+        [shape appendFormat:@"%@%@%@", lo ? @"_" : @"", hi && r.inclusive ? @"..." : @"..", hi ? @"_" : @""];
+        if (lo)
+            [args addObject:lo];
+        if (hi)
+            [args addObject:hi];
+        }
+    [shape appendString:@"]"];
+    return YES;
+    }
+
+// Does a subscript hold a range among several positions?
+static BOOL XTSubscriptHasRange(XTASTNode* node)
+    {
+    if (![node isKindOfClass:[XTSubscriptExprNode class]])
+        return NO;
+    for (XTASTNode* x in ((XTSubscriptExprNode*)node).extraIndices ?: @[])
+        if ([x isKindOfClass:[XTRangeExprNode class]])
+            return YES;
+    return [((XTSubscriptExprNode*)node).index isKindOfClass:[XTRangeExprNode class]];
+    }
+
+/****************************************************************************\
+|* The call a tensor slice is: the class's index operator of the slice's
+|* shape (`__slice_<pattern>`, written for each pattern the unit uses), with
+|* one position for each dimension and integer bounds; nil after reporting
+|* what is wrong. As the port's tensorSliceCallOf.
+\****************************************************************************/
+- (nullable XTMethodCallExprNode*)tensorSliceCallOf:(XTASTNode*)node
+                                                cls:(XTASTNode*)cls
+                                            pattern:(NSString*)pattern
+                                              shape:(NSString*)shape
+                                               args:(NSArray<XTASTNode*>*)args
+    {
+    NSInteger rank = XTTensorRank(cls);
+    NSString* n = XTOwnerName(cls);
+    if ((NSInteger)pattern.length != rank)
+        {
+        NSMutableString* ex = [NSMutableString stringWithString:@"a..b"];
+        NSArray<NSString*>* names = @[ @"i", @"j", @"k", @"l", @"m", @"n", @"o", @"p" ];
+        for (NSInteger k = 1; k < rank; k++)
+            [ex appendFormat:@", %@", names[k]];
+        [self.diagnostics emitError:[NSString stringWithFormat:@"'%@' takes %ld position%@ in a slice, one for each dimension: an "
+                                                               @"index, or a range a..b, a.., ..b or .., as in t[%@]",
+                                                               n, (long)rank, rank == 1 ? @"" : @"s", ex]
+                                 at:node.location];
+        return nil;
+        }
+    for (XTASTNode* x in args)
+        if (x.resolvedType && !x.resolvedType.isInteger)
+            {
+            [self.diagnostics emitError:[NSString stringWithFormat:@"a tensor index or slice bound is an integer, not '%@'",
+                                                                   [self describeArgTypes:@[ x ]]]
+                                     at:node.location];
+            return nil;
+            }
+    XTASTNode* base = [node isKindOfClass:[XTSliceExprNode class]] ? ((XTSliceExprNode*)node).base
+                                                                   : ((XTSubscriptExprNode*)node).base;
+    NSMutableArray<XTASTNode*>* ops = [NSMutableArray arrayWithObject:base];
+    [ops addObjectsFromArray:args];
+    BOOL ambiguous = NO;
+    XTMethodCallExprNode* call = [self operatorPickForShape:shape spelling:@"[..]" operands:ops at:node.location
+                                                       left:cls right:nil ambiguous:&ambiguous];
+    if (!call && !ambiguous)
+        [self.diagnostics emitError:[NSString stringWithFormat:@"'%@' has no slice '%@'", n, pattern] at:node.location];
+    return call;
+    }
+
+/****************************************************************************\
+|* `t.permute(p0, …)` on a tensor of rank R (XTParser+Tensors.m): R integer
+|* literals, each of 0 to R - 1 once. NO after reporting what is wrong. As
+|* the port's tensorPermuteOK.
+\****************************************************************************/
+- (BOOL)tensorPermuteOK:(XTMethodCallExprNode*)node cls:(NSString*)cls
+    {
+    NSInteger rank = [cls substringFromIndex:cls.length - 1].integerValue;
+    NSMutableString* ex = [NSMutableString string];
+    for (NSInteger k = rank - 1; k >= 0; k--)
+        [ex appendFormat:@"%@%ld", k == rank - 1 ? @"" : @", ", (long)k];
+    if ((NSInteger)node.arguments.count != rank)
+        {
+        [self.diagnostics emitError:[NSString stringWithFormat:@"permute on '%@' takes %ld dimension%@, each of 0 to %ld once, "
+                                                               @"as in t.permute(%@)",
+                                                               cls, (long)rank, rank == 1 ? @"" : @"s", (long)(rank - 1), ex]
+                                 at:node.location];
+        return NO;
+        }
+    NSMutableIndexSet* seen = [NSMutableIndexSet indexSet];
+    for (XTASTNode* a in node.arguments)
+        {
+        if (![a isKindOfClass:[XTLiteralIntNode class]] || ((XTLiteralIntNode*)a).isNil)
+            {
+            [self.diagnostics emitError:@"permute takes its dimensions as integer literals, so the permutation is checked as "
+                                        @"it compiles"
+                                     at:a.location ?: node.location];
+            return NO;
+            }
+        int64_t v = ((XTLiteralIntNode*)a).intValue;
+        if (v < 0 || v >= rank)
+            {
+            [self.diagnostics emitError:[NSString stringWithFormat:@"permute's dimension %lld is not one of '%@', whose "
+                                                                   @"dimensions are 0 to %ld",
+                                                                   (long long)v, cls, (long)(rank - 1)]
+                                     at:a.location ?: node.location];
+            return NO;
+            }
+        if ([seen containsIndex:(NSUInteger)v])
+            {
+            [self.diagnostics emitError:[NSString stringWithFormat:@"permute names dimension %lld twice; it takes each of 0 to "
+                                                                   @"%ld once",
+                                                                   (long long)v, (long)(rank - 1)]
+                                     at:a.location ?: node.location];
+            return NO;
+            }
+        [seen addIndex:(NSUInteger)v];
+        }
+    return YES;
+    }
+
+/****************************************************************************\
 |* The get call of an index node on a class with an index operator, or nil
 |* after reporting why there is none.
 \****************************************************************************/
 - (nullable XTMethodCallExprNode*)indexGetCallOf:(XTASTNode*)node cls:(XTASTNode*)cls
     {
+    NSMutableString* pattern = [NSMutableString string];
+    NSMutableString* sliceShape = [NSMutableString string];
+    NSMutableArray<XTASTNode*>* sliceArgs = [NSMutableArray array];
+    if (XTTensorRank(cls) > 0 && XTTensorSliceParts(node, pattern, sliceShape, sliceArgs))
+        return [self tensorSliceCallOf:node cls:cls pattern:pattern shape:sliceShape args:sliceArgs];
+    if (XTSubscriptHasRange(node))
+        {
+        [self.diagnostics emitError:[NSString stringWithFormat:@"'%@' takes a range index alone in the brackets, as in s[lo..hi]; "
+                                                               @"only a tensor mixes ranges and indices",
+                                                               XTOwnerName(cls)]
+                                 at:node.location];
+        return nil;
+        }
     XTASTNode* base = nil;
     NSString* range = nil;
     NSMutableArray<XTASTNode*>* idx = [NSMutableArray array];
@@ -1394,6 +1578,23 @@ static void XTSharedLvalue(XTASTNode* lv, NSMutableArray<XTASTNode*>* out)
         NSMutableArray<XTASTNode*>* idx = [NSMutableArray array];
         XTIndexParts(lhs, &base, idx, &range);
         node.resolvedType = [XTType voidType];
+        // A slice is a view, not an element.
+        if (XTTensorRank(icls) > 0 && (range || XTSubscriptHasRange(lhs)))
+            {
+            [self.diagnostics emitError:[NSString stringWithFormat:@"a slice of '%@' is a view, not an element: assign to its "
+                                                                   @"elements one at a time",
+                                                                   XTOwnerName(icls)]
+                                     at:lhs.location];
+            return YES;
+            }
+        if (XTSubscriptHasRange(lhs))
+            {
+            [self.diagnostics emitError:[NSString stringWithFormat:@"'%@' takes a range index alone in the brackets, as in "
+                                                                   @"s[lo..hi]; only a tensor mixes ranges and indices",
+                                                                   XTOwnerName(icls)]
+                                     at:lhs.location];
+            return YES;
+            }
         if (range && idx.count != 2)
             {
             [self.diagnostics emitError:[NSString stringWithFormat:@"a range index on '%@' needs both bounds", XTOwnerName(icls)]

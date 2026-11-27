@@ -212,6 +212,7 @@ static XTOpInfo operatorInfo(XTTokenType type)
                                              at:op.location];
                     }
                 }
+            [self tensorCheckBroadcastWrite:lhs at:op.location];
             lhs = [[XTAssignExprNode alloc] initWithOp:aop lhs:lhs rhs:rhs location:op.location];
             continue;
             }
@@ -520,46 +521,55 @@ static BOOL parPlainDecimal(NSString* t)
             // bounds either parse to expressions or stay nil for
             // the implicit-edge forms. Plain `arr[i]` keeps the
             // existing single-index XTSubscriptExprNode.
+            // `m[i, j]`: more indices, for a class with an index operator
+            // taking several (`:operator(self[i, j])`). A tensor's slice
+            // mixes them with ranges, `t[a..b, .., i]` (XTParser+Tensors.m):
+            // each range of several positions is an XTRangeExprNode among the
+            // indices, with a bound left out nil. One range alone is the slice
+            // node.
+            NSMutableArray<XTASTNode*>* positions = [NSMutableArray array];
             XTASTNode* startExpr = nil;
             XTASTNode* endExpr = nil;
-            BOOL isSlice = NO;
             BOOL inclusive = NO;
-            NSMutableArray<XTASTNode*>* extra = nil;
-            if ([self check:XTTokenDotDot] || [self check:XTTokenEllipsis])
+            BOOL isSlice = NO;
+            while (YES)
                 {
-                inclusive = [self check:XTTokenEllipsis];
-                [self advance];
-                isSlice = YES;
-                if (![self check:XTTokenRBracket])
+                XTSourceLocation* ploc = [self currentToken].location;
+                XTASTNode* lo = nil;
+                XTASTNode* hi = nil;
+                BOOL dots = NO;
+                BOOL incl = NO;
+                if (![self check:XTTokenDotDot] && ![self check:XTTokenEllipsis])
                     {
-                    endExpr = [self parseExpression];
-                    }
-                }
-            else
-                {
-                startExpr = [self parseExpression];
-                // `m[i, j]`: more indices, for a class with an index operator
-                // taking several (`:operator(self[i, j])`).
-                while ([self check:XTTokenComma])
-                    {
-                    [self advance];
-                    XTASTNode* more = [self parseExpression];
-                    if (!more)
+                    lo = [self parseExpression];
+                    if (!lo)
                         break;
-                    if (!extra)
-                        extra = [NSMutableArray array];
-                    [extra addObject:more];
                     }
-                if (!extra && ([self check:XTTokenDotDot] || [self check:XTTokenEllipsis]))
+                if ([self check:XTTokenDotDot] || [self check:XTTokenEllipsis])
                     {
-                    inclusive = [self check:XTTokenEllipsis];
+                    dots = YES;
+                    incl = [self check:XTTokenEllipsis];
                     [self advance];
-                    isSlice = YES;
-                    if (![self check:XTTokenRBracket])
-                        {
-                        endExpr = [self parseExpression];
-                        }
+                    if (![self check:XTTokenRBracket] && ![self check:XTTokenComma])
+                        hi = [self parseExpression];
                     }
+                if (dots)
+                    {
+                    if (positions.count == 0 && ![self check:XTTokenComma])
+                        {
+                        isSlice = YES;
+                        startExpr = lo;
+                        endExpr = hi;
+                        inclusive = incl;
+                        break;
+                        }
+                    [positions addObject:[[XTRangeExprNode alloc] initWithStart:lo end:hi inclusive:incl location:ploc]];
+                    }
+                else
+                    [positions addObject:lo];
+                if (![self check:XTTokenComma])
+                    break;
+                [self advance];
                 }
             [self expect:XTTokenRBracket];
             if (isSlice)
@@ -572,8 +582,11 @@ static BOOL parPlainDecimal(NSString* t)
                 }
             else
                 {
-                XTSubscriptExprNode* sub = [[XTSubscriptExprNode alloc] initWithBase:base index:startExpr location:lbLoc];
-                sub.extraIndices = extra;
+                XTSubscriptExprNode* sub = [[XTSubscriptExprNode alloc] initWithBase:base
+                                                                               index:positions.firstObject
+                                                                            location:lbLoc];
+                if (positions.count > 1)
+                    sub.extraIndices = [positions subarrayWithRange:NSMakeRange(1, positions.count - 1)];
                 base = sub;
                 }
             }
@@ -629,6 +642,7 @@ static BOOL parPlainDecimal(NSString* t)
                                                                           methodName:ma.memberName
                                                                            arguments:args
                                                                             location:cur.location]];
+                [self tensorCheckConstantView:(XTMethodCallExprNode*)base];
                 }
             else if ([base isKindOfClass:[XTIdentifierNode class]])
                 {
