@@ -1743,13 +1743,17 @@
         // A grid's rows (#776): per buffer, the field of K when every access
         // is y * K + k (k counting over [0, K)), else -1.
         Map* rowFld = new Map();
+        // And whether every item walks all of its rows (whole=).
+        Map* rowWhole = new Map();
         // whole=<k> (an outlined block only: C's malloc'd arrays are in no
         // registry, so the runtime sizes them from the footprint): accesses
         // that run for every item reach both ends of the array's footprint,
         // so the program itself touches all of it. The reference has no
         // outliner.
+        // Written blocks too (#776): an array from new under 64 KB is in no
+        // registry either, so a GPU sizes it from its footprint.
         Map* every = (Map*)0;
-        if (iv != (IRValue*)0 && f.parKernel() == (u8)PARK_OUTLINED)
+        if (iv != (IRValue*)0)
             {
             IRBlock* hb = (IRBlock*)phiBlk.get((Hashable*)String.withU32(iv.seq()));
             if (hb != (IRBlock*)0)
@@ -1838,10 +1842,33 @@
                 i64 rowF = (i64)-1;
                 if (terms.count() == (u32)1 && (px == (ParIdx*)0 || !px.affine))
                     rowF = parRowField((IROperand*)ea.ops().get((u32)1), iv, selfVal, ivars, def, phiBlk);
+                // Whole: the access runs on every pass of an inner loop that
+                // runs for every item, counting by one over all of [0, K).
+                bool rw = rowF >= (i64)0 && every != (Map*)0 && _parRowHead != (IRBlock*)0 && _parRowStep == (i64)1
+                          && every.get((Hashable*)_parRowHead.name()) != (Object*)0;
+                // The inner loop's body is one block, the header's true edge,
+                // straight back to the header: the access runs every pass.
+                if (rw)
+                    {
+                    IRInsn* ht = _parRowHead.term();
+                    IRInsn* bt = bb.term();
+                    rw = ht != (IRInsn*)0 && ht.isOp(opCondBranch) && ht.ops().count() >= (u32)3
+                         && ((IROperand*)ht.ops().get((u32)1)).kind() == (u8)OPK_BLOCK && ((IROperand*)ht.ops().get((u32)1)).blk() == bb
+                         && bt != (IRInsn*)0 && bt.isOp(opBranch) && bt.ops().count() == (u32)1
+                         && ((IROperand*)bt.ops().get((u32)0)).kind() == (u8)OPK_BLOCK && ((IROperand*)bt.ops().get((u32)0)).blk() == _parRowHead;
+                    }
                 if (rowFld.get((Hashable*)buf) == (Object*)0)
+                    {
                     rowFld.set((Hashable*)buf, (Object*)Number.withI64(rowF));
-                else if (((Number*)rowFld.get((Hashable*)buf)).asI64() != rowF)
-                    rowFld.set((Hashable*)buf, (Object*)Number.withI64((i64)-1));
+                    rowWhole.set((Hashable*)buf, (Object*)Number.with(rw ? (u32)1 : (u32)0));
+                    }
+                else
+                    {
+                    if (((Number*)rowFld.get((Hashable*)buf)).asI64() != rowF)
+                        rowFld.set((Hashable*)buf, (Object*)Number.withI64((i64)-1));
+                    if (rw)
+                        rowWhole.set((Hashable*)buf, (Object*)Number.with((u32)1));
+                    }
                 if (fpOk.get((Hashable*)buf) == (Object*)0)
                     {
                     order.add((Object*)buf);
@@ -1869,7 +1896,17 @@
             String* buf = (String*)order.get(i);
             if (((Number*)fpOk.get((Hashable*)buf)).asI64() == (i64)0)
                 {
-                words.append(parRowWord(f, buf, ivars, ((Number*)rowFld.get((Hashable*)buf)).asI64()));
+                String* rw = parRowWord(f, buf, ivars, ((Number*)rowFld.get((Hashable*)buf)).asI64());
+                words.append(rw);
+                if (rw.byteLength() > (u32)0 && ((Number*)rowWhole.get((Hashable*)buf)).asU32() != (u32)0)
+                    {
+                    u32 ra = (u32)0;
+                    for (u32 j = (u32)0; j < ivars.count(); j = j + (u32)1)
+                        if (((String*)ivars.get(j)).equals(buf))
+                            ra = j;
+                    wholes.appendCString(" whole=");
+                    wholes.append(String.withU32(ra - (u32)2));
+                    }
                 continue;
                 }
             u32 at = (u32)0;
@@ -1948,6 +1985,8 @@
             }
         if (!hasW || iv == (IRValue*)0)
             return (i64)-1;
+        _parRowHead = (IRBlock*)0;
+        _parRowStep = (i64)0;
         IRInsn* d = parStripExt(op, def);
         if (d == (IRInsn*)0 || !d.isOp(opAdd) || d.ops().count() != (u32)2)
             return (i64)-1;
@@ -2019,6 +2058,7 @@
             return false;
         bool zero = false;
         bool stepped = false;
+        i64 stepBy = (i64)0;
         for (u32 e = (u32)0; e < (u32)2; e = e + (u32)1)
             {
             IROperand* ev = (IROperand*)ph.ops().get(e * (u32)2 + (u32)1);
@@ -2050,6 +2090,7 @@
             if (ed.isOp(opAdd) && a0 != (IROperand*)0 && a0.kind() == (u8)OPK_USE && a0.val() == pv && st > (i64)0)
                 {
                 stepped = true;
+                stepBy = st;
                 continue;
                 }
             return false;
@@ -2069,7 +2110,11 @@
         if (g0.kind() != (u8)OPK_USE || g0.val() != pv)
             return false;
         Map* pb = parGridPoly((IROperand*)g.ops().get((u32)1), iv, selfVal, ivars, def, (u32)0);
-        return pb != (Map*)0 && parCapAtom(pb) == fld;
+        if (pb == (Map*)0 || parCapAtom(pb) != fld)
+            return false;
+        _parRowHead = H;
+        _parRowStep = stepBy;
+        return true;
         }
 
     // The blocks of f's item loop (through H, the induction phi's block) that

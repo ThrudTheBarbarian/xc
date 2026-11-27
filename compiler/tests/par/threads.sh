@@ -63,8 +63,13 @@ for src in tests/fixtures/par_*.xc; do
     # sends every block that has a Metal kernel there; the rest stay on the
     # CPU, which is the fallback and must still agree).
     if [ -z "$ARCH" ] && [ "$(uname -s)" = Darwin ] && [ "$(uname -m)" = arm64 ]; then
-        if ! XC_PAR=gpu timeout 60 "$WORK/$name" > "$WORK/$name.out" 2>&1 ||
-           ! cmp -s "$WORK/$name.out" "$exp"; then
+        # A program that prints where its blocks ran has its own answer for
+        # the GPU (<name>.expected-gpu.out), the device named only "metal".
+        gexp="$exp"
+        [ -f "tests/fixtures/$name.expected-gpu.out" ] && gexp="tests/fixtures/$name.expected-gpu.out"
+        if ! XC_PAR=gpu timeout 60 "$WORK/$name" > "$WORK/$name.raw" 2>&1 ||
+           ! sed 's/metal:.*$/metal/' "$WORK/$name.raw" > "$WORK/$name.out" ||
+           ! cmp -s "$WORK/$name.out" "$gexp"; then
             echo "FAIL $name with XC_PAR=gpu:"; sed 's/^/    /' "$WORK/$name.out" | head -5
             ok=0
         fi
