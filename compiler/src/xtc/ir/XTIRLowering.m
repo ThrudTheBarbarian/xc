@@ -8923,6 +8923,14 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
     return [self rbvReturnsIn:body instances:inst];
     }
 
+// A STATIC method call: the receiver is a class's name, not an instance
+// (the port's bindsWithoutSlot test, #754).
+- (BOOL)callIsOnClassName:(XTMethodCallExprNode*)call
+    {
+    XTASTNode* r = call.receiver;
+    return [r isKindOfClass:[XTIdentifierNode class]] && self.classesByName[((XTIdentifierNode*)r).identName] != nil;
+    }
+
 - (void)rbvDeclsIn:(nullable XTASTNode*)n class:(NSString*)cls into:(NSMutableSet<NSString*>*)out
     {
     if (!n)
@@ -8939,7 +8947,7 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
         if (init && [self valueClassForASTType:init.resolvedType] && [init.resolvedType.displayName isEqualToString:cls])
             {
             copied = YES;
-            if (init.nodeKind == XTASTNodeKindMethodCallExpr)
+            if (init.nodeKind == XTASTNodeKindMethodCallExpr && ![self callIsOnClassName:(XTMethodCallExprNode*)init])
                 {
                 XTType* rt = ((XTMethodCallExprNode*)init).receiver.resolvedType;
                 if (rt && ![rt isKindOfClass:[XTPointerType class]] && self.classesByName[rt.displayName])
@@ -19597,6 +19605,13 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
             // …and any other initialiser yielding the class (a call's result,
             // another instance): its bytes are copied (owner, 2026-10-28).
             if (!needsPin && vd.initialiser.nodeKind != XTASTNodeKindNewExpr && vd.initialiser.nodeKind != XTASTNodeKindMethodCallExpr
+                && [self valueClassForASTType:vd.initialiser.resolvedType])
+                needsPin = YES;
+            // …and a STATIC method's result: its receiver is the class's
+            // name, not an instance, so it is a new instance, as a function's
+            // result is (#754).
+            if (!needsPin && vd.initialiser.nodeKind == XTASTNodeKindMethodCallExpr
+                && [self callIsOnClassName:(XTMethodCallExprNode*)vd.initialiser]
                 && [self valueClassForASTType:vd.initialiser.resolvedType])
                 needsPin = YES;
             // …and from a method called on a HEAP instance, as the port's

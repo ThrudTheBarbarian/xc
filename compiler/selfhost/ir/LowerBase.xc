@@ -17339,7 +17339,14 @@ class ClassInfo
             return true;
         if (ini.kind() != (u16)nkMethodCall || ini.kidCount() == (u32)0)
             return false;
-        String* rt = ini.kid((u32)0).ty();
+        // A STATIC method's receiver is the class's name, not an instance: its
+        // result is a new instance and needs a slot, as a function's does.
+        // Taken for a stack instance's method, `V g = V.make(); return g;`
+        // returned the address of g, already torn down (#754).
+        Node* rv = ini.kid((u32)0);
+        if (rv.kind() == (u16)nkIdent && rv.name() != 0 && classFor(rv.name()) != 0)
+            return false;
+        String* rt = rv.ty();
         return rt != 0 && !Types.isPointer(rt) && classFor(stripQual(rt)) != 0;
         }
 
