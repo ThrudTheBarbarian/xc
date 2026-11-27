@@ -2063,6 +2063,19 @@ class LlvmReader
         return r;
         }
 
+    // A compare `op` (ICmp, FCmp) of a and b by pred, its result a new value.
+    IRValue* emitPred(String* op, String* ty, IRValue* a, IRValue* b, String* pred)
+        {
+        IRInsn* n = IRInsn.with(op);
+        IRValue* r = new IRValue(ty);
+        n.setRes(r);
+        n.add(IROperand.useVal(a));
+        n.add(IROperand.useVal(b));
+        n.setPred(pred);
+        _blk.add(n);
+        return r;
+        }
+
     // v's value when the current block made it a non-negative integer
     // literal (operand's Const), else -1.
     i64 constImm(IRValue* v)
@@ -2722,6 +2735,48 @@ class LlvmReader
                     return;
                 a = halfToF32(a, clt, (String*)0);
                 b = halfToF32(b, clt, (String*)0);
+                }
+            // The unordered float compares (true when either side is NaN):
+            // the negation of the ordered complement, `une` as !(a oeq b),
+            // `ult` as !(a oge b) and so on; `ord` as (a oeq a) & (b oeq b),
+            // `uno` its negation. Every back end and par lowering knows the
+            // ordered ones; an unordered one reached arm64's condition table
+            // as `eq`, so C's `x != y` (clang's `fcmp une`) was x == y.
+            if (op.equals(String.withCString("fcmp")))
+                {
+                String* ord = (String*)0;
+                if (pred.equals(String.withCString("UNE"))) ord = String.withCString("OEQ");
+                else if (pred.equals(String.withCString("UEQ"))) ord = String.withCString("ONE");
+                else if (pred.equals(String.withCString("ULT"))) ord = String.withCString("OGE");
+                else if (pred.equals(String.withCString("ULE"))) ord = String.withCString("OGT");
+                else if (pred.equals(String.withCString("UGT"))) ord = String.withCString("OLE");
+                else if (pred.equals(String.withCString("UGE"))) ord = String.withCString("OLT");
+                String* boolT = String.withCString("Bool");
+                if (pred.equals(String.withCString("TRUE")) || pred.equals(String.withCString("FALSE")))
+                    {
+                    define(res, String.withCString("Const"), boolT,
+                           IROperand.immI(pred.equals(String.withCString("TRUE")) ? (i64)1 : (i64)0, boolT), (IROperand*)0, (IROperand*)0, (String*)0);
+                    return;
+                    }
+                if (pred.equals(String.withCString("ORD")) || pred.equals(String.withCString("UNO")))
+                    {
+                    IRValue* aa = emitPred(String.withCString("FCmp"), boolT, a, a, String.withCString("OEQ"));
+                    IRValue* bb = emitPred(String.withCString("FCmp"), boolT, b, b, String.withCString("OEQ"));
+                    if (pred.equals(String.withCString("ORD")))
+                        {
+                        define(res, String.withCString("And"), boolT, IROperand.useVal(aa), IROperand.useVal(bb), (IROperand*)0, (String*)0);
+                        return;
+                        }
+                    IRValue* both = emit(String.withCString("And"), boolT, IROperand.useVal(aa), IROperand.useVal(bb), (IROperand*)0);
+                    define(res, String.withCString("Xor"), boolT, IROperand.useVal(both), IROperand.immI((i64)1, boolT), (IROperand*)0, (String*)0);
+                    return;
+                    }
+                if (ord != (String*)0)
+                    {
+                    IRValue* o = emitPred(String.withCString("FCmp"), boolT, a, b, ord);
+                    define(res, String.withCString("Xor"), boolT, IROperand.useVal(o), IROperand.immI((i64)1, boolT), (IROperand*)0, (String*)0);
+                    return;
+                    }
                 }
             define(res, String.withCString(op.equals(String.withCString("icmp")) ? "ICmp" : "FCmp"), String.withCString("Bool"),
                    IROperand.useVal(a), IROperand.useVal(b), (IROperand*)0, pred);
