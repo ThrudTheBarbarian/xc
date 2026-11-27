@@ -8834,9 +8834,15 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
 // 2026-10-28).
 - (nullable XTIRClassInfo*)valueClassForASTType:(nullable XTType*)t
     {
-    if (t && t.kind == XTTypeKindClass && ![t isKindOfClass:[XTPointerType class]])
-        return self.classesByName[t.displayName];
-    return nil;
+    if (!t || t.kind != XTTypeKindClass || [t isKindOfClass:[XTPointerType class]])
+        return nil;
+    // A tensor class's method may return another tensor class the pre-scan
+    // has not reached yet (a slice of a tensor<f32, 2> is a tensor<f32, 1>,
+    // written after it): its layout, on demand, so the method returns it by
+    // value. As the port.
+    if ([t.displayName hasPrefix:@"__tensor_"])
+        return [self classInfoResolvingName:t.displayName];
+    return self.classesByName[t.displayName];
     }
 
 #pragma mark - Instances held by value inside another (#564)

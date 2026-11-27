@@ -14743,6 +14743,12 @@ class ClassInfo
         {
         if (ast == 0 || Types.isPointer(ast))
             return (ClassInfo*)0;
+        // A tensor class's method may return another tensor class the
+        // pre-scan has not reached yet (a slice of a tensor<f32, 2> is a
+        // tensor<f32, 1>, written after it): its layout, on demand, so the
+        // method returns it by value. As the reference.
+        if (stripQual(ast).hasPrefix(String.withCString("__tensor_")))
+            return classResolving(ast);
         return classFor(stripQual(ast));
         }
 
