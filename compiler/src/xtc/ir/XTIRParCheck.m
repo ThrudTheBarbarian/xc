@@ -168,6 +168,9 @@ static NSString* _Nullable unlocatedGlobal(XTIRFunction* run, XTIRModule* runMod
 
 @interface XTIRParCheck ()
 @property(nonatomic) XTIRModule* module;
+// The block's fields holding tensors that are each a storage of their own
+// (XTClassDeclNode parFreshTensors), for tensorDependenceIn:.
+@property(nonatomic, nullable) NSSet<NSString*>* freshTensors;
 @property(nonatomic) NSMutableDictionary<NSString*, XTIRFunction*>* fnByName;
 @property(nonatomic) NSMutableSet<NSString*>* onStack;
 @property(nonatomic) NSMutableDictionary<NSString*, NSString*>* verdict; // fn -> reason, @"" = clean
@@ -1971,6 +1974,7 @@ static BOOL gEmitsWGSL = NO;
             // §4: the work items must not touch each other's data.
             NSString* scatter = nil;
             NSMutableArray<NSString*>* guards = [NSMutableArray array];
+            c.freshTensors = decl.parFreshTensors;
             NSString* dep = [c dependenceIn:f ivarNames:[c ivarNamesOf:decl in:classDecls] scatter:&scatter guards:guards];
             if (!dep && gParF4Pair >= 0)
                 gParPairs[cls] = @(gParF4Pair);
@@ -2739,6 +2743,16 @@ static NSString* shownIndex(XTParIndex x)
     return (k >= 1 && (NSUInteger)k <= ivars.count) ? ivars[(NSUInteger)k - 1] : nil;
     }
 
+// A tensor accessor's element type, from its symbol `__tensor_<T>_<R>$_get`:
+// `<T>` (the rank and method cut off). Mirrored in the port.
+static NSString* XTTensorElemOf(NSString* sym)
+    {
+    NSRange d = [sym rangeOfString:@"$"];
+    NSString* cls = d.location == NSNotFound ? sym : [sym substringToIndex:d.location];
+    NSRange us = [cls rangeOfString:@"_" options:NSBackwardsSearch];
+    return us.location == NSNotFound || us.location < 9 ? cls : [cls substringWithRange:NSMakeRange(9, us.location - 9)];
+    }
+
 // The captured tensor whose address `base` is (the block object's field k,
 // or a pointer loaded from it): its name, or nil. Mirrored in the port.
 - (nullable NSString*)tensorOf:(XTIROperand*)base self:(XTIRValueId)selfId ivars:(NSArray<NSString*>*)ivars
@@ -2771,6 +2785,7 @@ static NSString* shownIndex(XTParIndex x)
                                     defs:(NSDictionary<NSNumber*, XTIRInsn*>*)def
     {
     NSString* wbuf = nil;
+    NSString* wsym = nil;
     int64_t wk = 0, wc = 0;
     for (int pass = 0; pass < 2; pass++)
         for (XTIRBlock* b in f.blocks)
@@ -2803,11 +2818,25 @@ static NSString* shownIndex(XTParIndex x)
                     wbuf = buf;
                     wk = x.k;
                     wc = x.c;
+                    wsym = XTTensorElemOf(sn);
                     }
-                else if (wbuf && (!buf || [buf isEqualToString:wbuf]) && !(x.affine && x.k == wk && x.c == wc))
-                    return [NSString stringWithFormat:@"reads the tensor '%@' at a first index other than the one it writes, "
-                                                      @"so a work item could read an element another one writes",
-                                                      shownName(wbuf)];
+                else if (wbuf && !(x.affine && x.k == wk && x.c == wc))
+                    {
+                    // A read elsewhere than the written row: of the written
+                    // tensor, or of any tensor that may share its storage (the
+                    // same element type, unless both are fresh locals).
+                    if (buf && [buf isEqualToString:wbuf])
+                        return [NSString stringWithFormat:@"reads the tensor '%@' at a first index other than the one it "
+                                                          @"writes, so a work item could read an element another one writes",
+                                                          shownName(wbuf)];
+                    BOOL sameElem = [XTTensorElemOf(sn) isEqualToString:wsym];
+                    BOOL distinct = buf && [self.freshTensors containsObject:buf] && [self.freshTensors containsObject:wbuf];
+                    if (sameElem && !distinct)
+                        return [NSString stringWithFormat:@"writes the tensor '%@' and reads the tensor '%@' at a different "
+                                                          @"row; they may share storage: read '%@' at the same row, or copy "
+                                                          @"it first",
+                                                          shownName(wbuf), buf ? shownName(buf) : @"?", buf ? shownName(buf) : @"?"];
+                    }
                 }
     return nil;
     }

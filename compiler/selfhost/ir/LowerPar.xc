@@ -80,6 +80,7 @@
                 // §4: the work items must not touch each other's data.
                 _parScatter = (String*)0;
                 _parGuardList = new Array();
+                _parFreshNow = Node.parFresh(cls);
                 String* dep = parDependence(f, parIvarNames(cls));
                 if (dep == (String*)0 && _parF4Pair >= (i32)0)
                     _parPairs.set((Hashable*)cls, (Object*)Number.with((u32)_parF4Pair));
@@ -1022,6 +1023,21 @@
     // The buffer an address indexes into, by name, or 0 when it is not one: a
     // captured array is a pointer ivar of the block's object, a global array
     // its symbol.
+    // A tensor accessor's element type, from its symbol
+    // `__tensor_<T>_<R>$_get`: `<T>` (the rank and method cut off). As the
+    // reference's XTTensorElemOf.
+    static String* tensorElemOf(String* sym)
+        {
+        u32 d = sym.indexOfByte((u8)'$');
+        String* cls = sym;
+        if (d != String.notFound())
+            cls = sym.substringBytes((u32)0, d);
+        u32 us = cls.lastIndexOfByte((u8)'_');
+        if (us == String.notFound() || us < (u32)9)
+            return cls;
+        return cls.substringBytes((u32)9, us - (u32)9);
+        }
+
     // The captured tensor whose address `base` is (the block object's field
     // k, or a pointer loaded from it): its name, or 0. As the reference's
     // tensorOf.
@@ -1050,10 +1066,14 @@
     // tensor values may share one storage, so a block writes through one
     // tensor only, and each work item keeps to its own first index: every
     // write's, and every read's of the written tensor, is the one k * i + c
-    // with k != 0. The dependence, or 0. As the reference's tensorDependenceIn.
+    // with k != 0. So is every read of another tensor of the same element
+    // type, which may share the written one's storage, unless both are fresh
+    // locals (Node.parFresh). The dependence, or 0. As the reference's
+    // tensorDependenceIn.
     final String* parTensorDependence(IRFunc* f, IRValue* iv, Array* ivars, Map* def)
         {
         String* wbuf = (String*)0;
+        String* wsym = (String*)0;
         i64 wk = 0;
         i64 wc = 0;
         for (u32 pass = (u32)0; pass < (u32)2; pass = pass + (u32)1)
@@ -1088,10 +1108,29 @@
                         wbuf = buf;
                         wk = x.k;
                         wc = x.c;
+                        wsym = Lower.tensorElemOf(o.name());
                         }
-                    else if (wbuf != (String*)0 && (buf == (String*)0 || buf.equals(wbuf)) && !(x.affine && x.k == wk && x.c == wc))
-                        return String.withFormat("reads the tensor '%s' at a first index other than the one it writes, so a work item could read an element another one writes",
-                                                 self.parShown(wbuf).cString());
+                    else if (wbuf != (String*)0 && !(x.affine && x.k == wk && x.c == wc))
+                        {
+                        // A read elsewhere than the written row: of the written
+                        // tensor, or of any tensor that may share its storage
+                        // (the same element type, unless both are fresh
+                        // locals). As the reference.
+                        if (buf != (String*)0 && buf.equals(wbuf))
+                            return String.withFormat("reads the tensor '%s' at a first index other than the one it writes, so a work item could read an element another one writes",
+                                                     self.parShown(wbuf).cString());
+                        bool sameElem = Lower.tensorElemOf(o.name()).equals(wsym);
+                        bool distinct = buf != (String*)0 && _parFreshNow != (Set*)0 && _parFreshNow.contains((Hashable*)buf)
+                                        && _parFreshNow.contains((Hashable*)wbuf);
+                        if (sameElem && !distinct)
+                            {
+                            String* bs = String.withCString("?");
+                            if (buf != (String*)0)
+                                bs = self.parShown(buf);
+                            return String.withFormat("writes the tensor '%s' and reads the tensor '%s' at a different row; they may share storage: read '%s' at the same row, or copy it first",
+                                                     self.parShown(wbuf).cString(), bs.cString(), bs.cString());
+                            }
+                        }
                     }
                 }
         return (String*)0;

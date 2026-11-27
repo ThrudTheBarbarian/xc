@@ -160,6 +160,25 @@ enum NodeKind = {
 
 class Node
     {
+    // A par block's class (`ParImpl$N`) -> the fields holding tensors the
+    // enclosing function made fresh, each a storage of its own (the parser's
+    // parTensorFresh; LowerPar's tensor rule). The reference keeps them on
+    // the class declaration (parFreshTensors). Set for every block as it is
+    // made, so a pass started again overwrites the last one's.
+    static Map* _parFresh;
+    static void setParFresh(String* cls, Set* fields)
+        {
+        if (_parFresh == (Map*)0)
+            _parFresh = new Map();
+        _parFresh.set((Hashable*)String.withString(cls), (Object*)fields);
+        }
+    static Set* parFresh(String* cls)
+        {
+        if (_parFresh == (Map*)0 || cls == (String*)0)
+            return (Set*)0;
+        return (Set*)_parFresh.get((Hashable*)cls);
+        }
+
     // Strip a collection's ELEMENT annotation: `Array<String>*` -> `Array*`.
     //
     // The ObjC compiler keeps the element type on the type OBJECT and leaves the

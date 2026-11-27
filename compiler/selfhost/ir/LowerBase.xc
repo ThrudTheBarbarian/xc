@@ -682,6 +682,7 @@ class ClassInfo
     Map* _parVerdict;  // function name -> reason ("" = clean)
     Map* _parOnStack;  // function names being scanned
     String* _parScatter; // the first unprovable write of the block being checked
+    Set* _parFreshNow;   // the block's fields holding tensors each a storage of its own (Node.parFresh)
     Array* _parGuardList; // the run's checks parDependence collects ("slot:m:d0:k"), or 0
     Map* _parGuards;      // block class -> its guard list, for the header's guard= words
     // f4 writes (step F4): the parity each chunk of the block being checked

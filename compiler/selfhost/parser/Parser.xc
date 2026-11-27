@@ -9434,6 +9434,52 @@ class Parser
         return _tokens.count();
     }
 
+    // n is a tensor local the function makes once, `T n = new tensor<…>(…)`,
+    // and never sets again: no other assignment (a tuple's target included),
+    // no increment and no address taken. Two such locals are two storages.
+    // As the reference's parTensorFresh.
+    bool parTensorFresh(String* n, u32 end)
+    {
+        u32 made = (u32)0;
+        u32 count = _tokens.count();
+        for (u32 i = _fnTok; i < end; i = i + (u32)1) {
+            Token* t = (Token*)_tokens.get(i);
+            if (t.type() != (u16)tokIdentifier || !t.value().equals(n)) continue;
+            u16 before = i > (u32)0 ? ((Token*)_tokens.get(i - (u32)1)).type() : (u16)0;
+            u16 after = i + (u32)1 < count ? ((Token*)_tokens.get(i + (u32)1)).type() : (u16)0;
+            if (before == (u16)tokAmpersand || before == (u16)tokPlusPlus || before == (u16)tokMinusMinus
+                || before == (u16)tokDot || before == (u16)tokArrow)
+                return false;
+            if (after == (u16)tokPlusPlus || after == (u16)tokMinusMinus) return false;
+            if (after >= (u16)tokAssign && after <= (u16)tokRorAssign) {
+                Token* next = i + (u32)2 < count ? (Token*)_tokens.get(i + (u32)2) : (Token*)0;
+                if (after != (u16)tokAssign || before != (u16)tokIdentifier || next == (Token*)0
+                    || next.type() != (u16)tokIdentifier || !next.value().hasPrefix(String.withCString("__tensor_"))
+                    || !next.value().hasSuffix(String.withCString("_make")))
+                    return false;
+                made = made + (u32)1;
+                continue;
+            }
+            // `(a, n) = f()`: a tuple's target.
+            if (after == (u16)tokComma || after == (u16)tokRParen) {
+                i32 depth = (i32)0;
+                for (u32 j = i + (u32)1; j < end; j = j + (u32)1) {
+                    u16 u = ((Token*)_tokens.get(j)).type();
+                    if (u == (u16)tokSemicolon || u == (u16)tokLBrace || u == (u16)tokRBrace) break;
+                    if (u == (u16)tokLParen) depth = depth + (i32)1;
+                    else if (u == (u16)tokRParen) {
+                        if (depth == (i32)0) {
+                            if (j + (u32)1 < count && ((Token*)_tokens.get(j + (u32)1)).type() == (u16)tokAssign) return false;
+                            break;
+                        }
+                        depth = depth - (i32)1;
+                    }
+                }
+            }
+        }
+        return made == (u32)1;
+    }
+
     // n is a local the function sets once, `T* n = new …`, and never again
     // (no other assignment, increment or address taken): its block is its own.
     bool parFuseFresh(String* n, u32 end)
@@ -10452,6 +10498,20 @@ class Parser
         cls.setOp(String.withCString("ParChunk"));
         // The block's class: its run is the kernel (lowering marks it).
         cls.addFlag((u32)NF_PARBLOCK);
+        // Its captured tensors that are each a storage of their own (the par
+        // check's tensor rule). As the reference.
+        {
+            Set* fresh = new Set();
+            u32 fnEnd = parFuseFnEnd();
+            for (u32 i = (u32)0; i < caps.count(); i = i + (u32)1) {
+                String* cn = (String*)caps.get(i);
+                String* ft = (String*)frameTypes.get((Hashable*)cn);
+                if (ft != (String*)0 && ft.hasPrefix(String.withCString("__tensor_")) && ft.indexOfByte((u8)'*') == String.notFound()
+                    && ft.indexOfByte((u8)'[') == String.notFound() && parTensorFresh(cn, fnEnd))
+                    fresh.add((Hashable*)Parser.parFieldOf(cn));
+            }
+            Node.setParFresh(implName, fresh);
+        }
         for (u32 i = (u32)0; i < caps.count(); i = i + (u32)1) {
             String* cn = (String*)caps.get(i);
             String* t = String.withString((String*)frameTypes.get((Hashable*)cn));

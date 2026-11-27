@@ -148,6 +148,8 @@ NS_ASSUME_NONNULL_BEGIN
 // Operators a class defines with a shape of its own (XTParser+Shapes.m).
 @interface XTParser (Packs)
 - (void)fusePackSuffixes;
+- (NSUInteger)parFuseFnEnd;
+- (BOOL)parTensorFresh:(NSString*)n end:(NSUInteger)end;
 @end
 
 @interface XTParser (Shapes)

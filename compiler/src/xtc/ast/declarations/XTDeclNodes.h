@@ -617,6 +617,10 @@ typedef NS_ENUM(NSInteger, XTPlacement) {
 |* class of the program's own called ParImpl is never taken for one.
 \****************************************************************************/
 @property(nonatomic) BOOL isParBlock;
+// A par block's class: the fields holding tensors the enclosing function made
+// fresh (`T t = new tensor<…>(…)`, never assigned again, address never
+// taken), each its own storage (XTParser+Tensors.m, the par check).
+@property(nonatomic, copy, nullable) NSSet<NSString*>* parFreshTensors;
 /****************************************************************************\
 |* Set by sema when it observes at least one `new ClassName(…)` site.
 |* On banked-heap targets the codegen uses this to auto-place methods

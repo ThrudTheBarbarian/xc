@@ -2522,6 +2522,19 @@ NSString* _Nullable parRootName(XTASTNode* _Nullable n)
                                                          location:loc];
     // The block's class: its run is the kernel (the lowering marks it).
     impl.isParBlock = YES;
+    // Its captured tensors that are each a storage of their own (the par
+    // check's tensor rule).
+        {
+        NSMutableSet<NSString*>* fresh = [NSMutableSet set];
+        NSUInteger fnEnd = [self parFuseFnEnd];
+        for (NSString* cn in caps)
+            {
+            XTType* t = frameTypes[cn];
+            if (t.kind == XTTypeKindClass && [t.displayName hasPrefix:@"__tensor_"] && [self parTensorFresh:cn end:fnEnd])
+                [fresh addObject:fieldOf(cn)];
+            }
+        impl.parFreshTensors = fresh.count ? fresh : nil;
+        }
     [[self blkClasses] addObject:impl];
 
     // ── the site ──

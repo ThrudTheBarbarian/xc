@@ -7010,6 +7010,62 @@ static XTForCStyleNode* _Nullable parFuseLoop(XTBlockNode* body)
     return _tokens.count;
     }
 
+// n is a tensor local the function makes once, `T n = new tensor<…>(…)`, and
+// never sets again: no other assignment (a tuple's target included), no
+// increment and no address taken. Two such locals are two storages. Mirrored
+// in the port.
+- (BOOL)parTensorFresh:(NSString*)n end:(NSUInteger)end
+    {
+    NSUInteger made = 0;
+    NSUInteger count = _tokens.count;
+    for (NSUInteger i = self.fnTok; i < end; i++)
+        {
+        XTToken* t = _tokens[i];
+        if (t.type != XTTokenIdentifier || ![t.value isEqualToString:n])
+            continue;
+        XTTokenType before = i > 0 ? _tokens[i - 1].type : (XTTokenType)0;
+        XTTokenType after = i + 1 < count ? _tokens[i + 1].type : (XTTokenType)0;
+        if (before == XTTokenAmpersand || before == XTTokenPlusPlus || before == XTTokenMinusMinus || before == XTTokenDot ||
+            before == XTTokenArrow)
+            return NO;
+        if (after == XTTokenPlusPlus || after == XTTokenMinusMinus)
+            return NO;
+        if (after >= XTTokenAssign && after <= XTTokenRorAssign)
+            {
+            XTToken* next = i + 2 < count ? _tokens[i + 2] : nil;
+            if (after != XTTokenAssign || before != XTTokenIdentifier || next.type != XTTokenIdentifier ||
+                ![next.value hasPrefix:@"__tensor_"] || ![next.value hasSuffix:@"_make"])
+                return NO;
+            made++;
+            continue;
+            }
+        // `(a, n) = f()`: a tuple's target.
+        if (after == XTTokenComma || after == XTTokenRParen)
+            {
+            NSInteger depth = 0;
+            for (NSUInteger j = i + 1; j < end; j++)
+                {
+                XTTokenType u = _tokens[j].type;
+                if (u == XTTokenSemicolon || u == XTTokenLBrace || u == XTTokenRBrace)
+                    break;
+                if (u == XTTokenLParen)
+                    depth++;
+                else if (u == XTTokenRParen)
+                    {
+                    if (depth == 0)
+                        {
+                        if (j + 1 < count && _tokens[j + 1].type == XTTokenAssign)
+                            return NO;
+                        break;
+                        }
+                    depth--;
+                    }
+                }
+            }
+        }
+    return made == 1;
+    }
+
 // n is a local the function sets once, `T* n = new …`, and never again (no
 // other assignment, increment or address taken): its block is its own.
 - (BOOL)parFuseFresh:(NSString*)n end:(NSUInteger)end
