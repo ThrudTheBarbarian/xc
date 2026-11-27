@@ -259,7 +259,7 @@ enum X86Mnemonic = {
     x86Pcmpeqd, x86Pcmpeqw, x86Pcmpgtb, x86Pcmpgtd, x86Pcmpgtw, x86Phaddd,
     x86Phaddw, x86Pmaddubsw, x86Pmaddwd, x86Pmaxsb, x86Pmaxsd, x86Pmaxsw,
     x86Pmaxub, x86Pmaxud, x86Pmaxuw, x86Pminsb, x86Pminsd, x86Pminsw,
-    x86Pminub, x86Pminud, x86Pminuw, x86Pmulld, x86Pmullw, x86Pmuludq,
+    x86Pminub, x86Pminud, x86Pminuw, x86Pmulld, x86Pmullw, x86Pmuludq, x86Packusdw, x86Vpmovzxwd,
     x86Pop, x86Por, x86Pshufd, x86Pshufhw, x86Pshuflw, x86Pslld,
     x86Psllq, x86Psllw, x86Psrad, x86Psraw, x86Psrld, x86Psrlq,
     x86Psrlw, x86Psubd, x86Psubw, x86Punpcklbw, x86Punpckldq, x86Punpcklqdq,
@@ -342,6 +342,7 @@ class X86Mn
         X86Mn.def(x86Pminsb, "pminsb"); X86Mn.def(x86Pminsd, "pminsd"); X86Mn.def(x86Pminsw, "pminsw");
         X86Mn.def(x86Pminub, "pminub"); X86Mn.def(x86Pminud, "pminud"); X86Mn.def(x86Pminuw, "pminuw");
         X86Mn.def(x86Pmulld, "pmulld"); X86Mn.def(x86Pmullw, "pmullw"); X86Mn.def(x86Pmuludq, "pmuludq");
+        X86Mn.def(x86Packusdw, "packusdw"); X86Mn.def(x86Vpmovzxwd, "vpmovzxwd");
         X86Mn.def(x86Pop, "pop"); X86Mn.def(x86Por, "por"); X86Mn.def(x86Pshufd, "pshufd");
         X86Mn.def(x86Pshufhw, "pshufhw"); X86Mn.def(x86Pshuflw, "pshuflw"); X86Mn.def(x86Pslld, "pslld");
         X86Mn.def(x86Psllq, "psllq"); X86Mn.def(x86Psllw, "psllw"); X86Mn.def(x86Psrad, "psrad");
@@ -2176,6 +2177,8 @@ class X86Mn
         if (mc == x86Pmaxuw) return $663E;
         if (mc == x86Pminuw) return $663A;
         if (mc == x86Pmulld) return $6640;
+        // dwords to words, unsigned saturation (a P1 narrow).
+        if (mc == x86Packusdw) return $662B;
         // The u8 pair sum the 256-bit widening reductions use (bug 644).
         if (mc == x86Pmaddubsw) return $6604;
         // Scalar FMA (:goal(speed) code's fused multiply-adds), VEX.W1 for the
@@ -2728,8 +2731,11 @@ class X86Mn
         // and the lane conversions, int to float and float to int (#27).
         else if (mc == x86Vcvtdq2ps) { pp = 0; map = 1; ld = $5B; }
         else if (mc == x86Vcvttps2dq) { pp = 2; map = 1; ld = $5B; }
-        // F16C: four halves to floats (VEX.128.66.0F38.W0 13 /r).
+        // F16C: four halves to floats (VEX.128.66.0F38.W0 13 /r), eight from
+        // an xmm into a ymm (VEX.256).
         else if (mc == x86Vcvtph2ps) { pp = 1; map = 2; ld = $13; }
+        // u16 lanes zero-extended to dwords (P1): VEX.256.66.0F38 33.
+        else if (mc == x86Vpmovzxwd) { pp = 1; map = 2; ld = $33; }
         // The scalar compares, and the scalar moves to or from memory (a
         // register-to-register vmovss takes three operands, encVex128): what an
         // AVX function's scalar float code uses. As the reference.
@@ -2792,11 +2798,11 @@ class X86Mn
             return true;
             }
         if (mc == x86Vcvtps2ph && _ops.count() == 3 && a != (XOperand*)0 && b != (XOperand*)0
-            && b.kind() == (u32)OP_REG && b.size() == 16)
+            && b.kind() == (u32)OP_REG && (b.size() == 16 || b.size() == 32))
             {
             // F16C, VEX.128.66.0F3A.W0 1D /r ib: reg = the xmm source, r/m =
-            // the destination, the immediate the rounding control. As the
-            // reference.
+            // the destination, the immediate the rounding control; VEX.256
+            // for a ymm source (eight floats, P1). As the reference.
             XOperand* im = (XOperand*)_ops.get(2);
             if (im.kind() == (u32)OP_IMM)
                 {
@@ -2804,7 +2810,7 @@ class X86Mn
                 i32 xx = a.kind() == (u32)OP_REG ? 0 : a.index();
                 if (bb < 0) bb = 0;
                 if (xx < 0) xx = 0;
-                eVex(b.reg(), xx, bb, 3, $0F, 0, 1);
+                eVex(b.reg(), xx, bb, 3, $0F, b.size() == 32 ? (u32)4 : (u32)0, 1);
                 e8($1D);
                 eModRM(b.reg(), a);
                 e8((u32)im.disp() & $FF);

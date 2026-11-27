@@ -467,6 +467,24 @@ static NSString* dbgSuffix(XTIRInsn* insn)
         return @"VSIToFp";
     case XTIROpVFpToSI:
         return @"VFpToSI";
+    case XTIROpVFpExt:
+        return @"VFpExt";
+    case XTIROpVFpTrunc:
+        return @"VFpTrunc";
+    case XTIROpVWiden:
+        return @"VWiden";
+    case XTIROpVNarrow:
+        return @"VNarrow";
+    case XTIROpVHAdd:
+        return @"VHAdd";
+    case XTIROpVHSub:
+        return @"VHSub";
+    case XTIROpVHMul:
+        return @"VHMul";
+    case XTIROpVHDiv:
+        return @"VHDiv";
+    case XTIROpVHSqrt:
+        return @"VHSqrt";
         }
     return @"?";
     }

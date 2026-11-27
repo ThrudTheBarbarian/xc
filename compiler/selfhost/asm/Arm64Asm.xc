@@ -176,7 +176,9 @@ enum Arm64Mnemonic = {
     a64Umaxv, a64Umin, a64Uminv, a64Umopa, a64Umulh, a64Umull,
     a64Umull2, a64Ushl, a64Ushr, a64Usmopa, a64Usra, a64Uxtb,
     a64Uxth, a64Uxtw, a64Uzp1, a64Uzp2, a64Whilelo, a64Whilelt,
-    a64Zero, a64Zip1, a64Zip2
+    a64Zero, a64Zip1, a64Zip2,
+    a64Fcvtl, a64Fcvtl2, a64Fcvtn, a64Fcvtn2, a64Xtn, a64Xtn2,
+    a64Ushll, a64Ushll2, a64Shll, a64Shll2
 };
 
 class Arm64Mn
@@ -259,6 +261,10 @@ class Arm64Mn
         Arm64Mn.def(a64Uxth, "uxth"); Arm64Mn.def(a64Uxtw, "uxtw"); Arm64Mn.def(a64Uzp1, "uzp1");
         Arm64Mn.def(a64Uzp2, "uzp2"); Arm64Mn.def(a64Whilelo, "whilelo"); Arm64Mn.def(a64Whilelt, "whilelt");
         Arm64Mn.def(a64Zero, "zero"); Arm64Mn.def(a64Zip1, "zip1"); Arm64Mn.def(a64Zip2, "zip2");
+        Arm64Mn.def(a64Fcvtl, "fcvtl"); Arm64Mn.def(a64Fcvtl2, "fcvtl2"); Arm64Mn.def(a64Fcvtn, "fcvtn");
+        Arm64Mn.def(a64Fcvtn2, "fcvtn2"); Arm64Mn.def(a64Xtn, "xtn"); Arm64Mn.def(a64Xtn2, "xtn2");
+        Arm64Mn.def(a64Ushll, "ushll"); Arm64Mn.def(a64Ushll2, "ushll2"); Arm64Mn.def(a64Shll, "shll");
+        Arm64Mn.def(a64Shll2, "shll2");
     }
 
     // The number of a mnemonic, or a64Unknown for one no encoder tests.
@@ -1111,6 +1117,81 @@ class Arm64Asm
     // Dispatched FIRST, because it shares mnemonics with the scalar handlers
     // (add, mul, the f-ops) and is told apart only by the operands being
     // vector registers. Fields OR'd in: Q<<30, size<<22, Rm<<16, Rn<<5, Rd.
+    // FP16 arithmetic (three-same FP16, FEAT_FP16) on .4h/.8h, whose
+    // encoding the float table's one size bit cannot spell; and the widen and
+    // narrow between .4h/.8h and .4s, where the `2` forms take or write the
+    // high half, so Q comes from the 8-lane operand and must agree with the
+    // suffix. As the reference's handlers ahead of its int3 table.
+    u32 encNeonHalf(String* mn, u16 mc, Array* ops, VRegRef* d)
+    {
+        if (!d.ok())
+            return (u32)0;
+        if (d.size() == (u32)1 && ops.count() == (u32)3) {
+            VRegRef* n = parseVReg(opAt(ops, (u32)1));
+            VRegRef* m = parseVReg(opAt(ops, (u32)2));
+            u32 hb = mc == a64Fadd ? (u32)$0E401400 : mc == a64Fsub ? (u32)$0EC01400
+                   : mc == a64Fmul ? (u32)$2E401C00 : mc == a64Fdiv ? (u32)$2E403C00 : (u32)0;
+            if (n.ok() && m.ok() && hb != (u32)0) {
+                _hit = true;
+                return hb | (d.q() << (u32)30) | (m.num() << (u32)16) | (n.num() << (u32)5) | d.num();
+            }
+        }
+        if (d.size() == (u32)1 && ops.count() == (u32)2 && mc == a64Fsqrt) {
+            VRegRef* n = parseVReg(opAt(ops, (u32)1));
+            if (n.ok()) {
+                _hit = true;
+                return (u32)$2EF9F800 | (d.q() << (u32)30) | (n.num() << (u32)5) | d.num();
+            }
+        }
+        bool fl = mc == a64Fcvtl || mc == a64Fcvtl2;
+        bool fn = mc == a64Fcvtn || mc == a64Fcvtn2;
+        bool xt = mc == a64Xtn || mc == a64Xtn2;
+        bool us = mc == a64Ushll || mc == a64Ushll2;
+        bool sl = mc == a64Shll || mc == a64Shll2;
+        if (!(fl || fn || xt || us || sl) || ops.count() < (u32)2)
+            return (u32)0;
+        VRegRef* s = parseVReg(opAt(ops, (u32)1));
+        if (!s.ok()) {
+            fail(String.withCString("bad widen or narrow source"));
+            return (u32)0;
+        }
+        bool two = mc == a64Fcvtl2 || mc == a64Fcvtn2 || mc == a64Xtn2 || mc == a64Ushll2 || mc == a64Shll2;
+        bool widen = fl || us || sl;
+        u32 wq = widen ? d.q() : s.q();
+        u32 ws = widen ? d.size() : s.size();
+        u32 nq = widen ? s.q() : d.q();
+        u32 ns = widen ? s.size() : d.size();
+        if (ws != (u32)2 || wq != (u32)1 || ns != (u32)1 || (nq == (u32)1) != two) {
+            fail(String.withCString("unsupported widen or narrow arrangement"));
+            return (u32)0;
+        }
+        u32 q = nq << (u32)30;
+        if (fl) { _hit = true; return (u32)$0E217800 | q | (s.num() << (u32)5) | d.num(); }
+        if (fn) { _hit = true; return (u32)$0E216800 | q | (s.num() << (u32)5) | d.num(); }
+        if (xt) { _hit = true; return (u32)$0E612800 | q | (s.num() << (u32)5) | d.num(); }
+        if (ops.count() != (u32)3 || !opAt(ops, (u32)2).hasPrefix(String.withCString("#"))) {
+            fail(String.withCString("a widening shift needs a shift"));
+            return (u32)0;
+        }
+        U64* shv = parseImm(opAt(ops, (u32)2));
+        if (!_immOk || shv.hi() != (u32)0) { fail(String.withCString("bad shift amount")); return (u32)0; }
+        u32 sh = shv.lo();
+        if (sl) {
+            if (sh != (u32)16) {
+                fail(String.withCString("shll shift must be 16"));
+                return (u32)0;
+            }
+            _hit = true;
+            return (u32)$2E613800 | q | (s.num() << (u32)5) | d.num();
+        }
+        if (sh > (u32)15) {
+            fail(String.withCString("ushll shift out of range 0..15"));
+            return (u32)0;
+        }
+        _hit = true;
+        return (u32)$2F00A400 | q | (((u32)16 + sh) << (u32)16) | (s.num() << (u32)5) | d.num();
+    }
+
     u32 encNeon(String* mn, u16 mc, Array* ops, u32 pc)
     {
         VRegRef* d = ops.count() >= (u32)1 ? parseVReg(opAt(ops, (u32)0)) : VRegRef.no();
@@ -1124,6 +1205,11 @@ class Arm64Asm
             return (u32)$0E000C00 | (d.q() << (u32)30) | (((u32)1 << d.size()) << (u32)16)
                  | (n.num() << (u32)5) | d.num();
         }
+
+        // The 16-bit floats' lanes (float sizes P1), byte-exact from clang.
+        u32 hw = encNeonHalf(mn, mc, ops, d);
+        if (_hit || _failed)
+            return hw;
 
         if (d.ok() && ops.count() == (u32)3) {
             VRegRef* n = parseVReg(opAt(ops, (u32)1));

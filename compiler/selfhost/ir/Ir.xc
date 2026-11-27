@@ -601,6 +601,17 @@ enum IROpcode = {
     opVFCmp,
     opVSIToFp,
     opVFpToSI,
+    // The 16-bit floats' lanes (float sizes P1): f16 to and from f32, u16
+    // widened (shifted) and 32-bit lanes narrowed, and FEAT_FP16 arithmetic.
+    opVFpExt,
+    opVFpTrunc,
+    opVWiden,
+    opVNarrow,
+    opVHAdd,
+    opVHSub,
+    opVHMul,
+    opVHDiv,
+    opVHSqrt,
     // Atomics (C and C++ through the LLVM reader): each takes and returns
     // the memory token, and an ordering as an immediate (ATOMIC_* in
     // IrDefs.xc). AtomicRMW: (addr, value, ATOMIC_RMW_*, order) -> the old
@@ -764,6 +775,15 @@ class IROp
         IROp.def(opVFCmp, "VFCmp", 0);
         IROp.def(opVSIToFp, "VSIToFp", 0);
         IROp.def(opVFpToSI, "VFpToSI", 0);
+        IROp.def(opVFpExt, "VFpExt", 0);
+        IROp.def(opVFpTrunc, "VFpTrunc", 0);
+        IROp.def(opVWiden, "VWiden", 0);
+        IROp.def(opVNarrow, "VNarrow", 0);
+        IROp.def(opVHAdd, "VHAdd", 0);
+        IROp.def(opVHSub, "VHSub", 0);
+        IROp.def(opVHMul, "VHMul", 0);
+        IROp.def(opVHDiv, "VHDiv", 0);
+        IROp.def(opVHSqrt, "VHSqrt", 0);
         IROp.def(opAtomicRMW, "AtomicRMW", OPF_MEM | OPF_WRITES);
         IROp.def(opCmpXchg, "CmpXchg", OPF_MEM | OPF_WRITES);
         IROp.def(opAtomicLoad, "AtomicLoad", OPF_MEM | OPF_WRITES);

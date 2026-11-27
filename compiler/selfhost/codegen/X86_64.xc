@@ -2810,6 +2810,42 @@ class X86_64
                               d.cString(), lhs.cString(), d.cString(), rhs.cString(), pr);
         }
 
+    // The 16-bit floats' lanes (float sizes P1): eight halves in an xmm
+    // beside the eight 32-bit lanes in a ymm (the vectoriser makes them in
+    // 32-byte code only). F16C converts; vpmovzxwd widens; a narrow is
+    // vpackusdw of the two halves of the ymm (each lane is below 2^16, so the
+    // saturation never acts). xmm0 is the emission scratch. As the reference.
+    void emitVHalfConv(IRInsn* n)
+        {
+        if (n.res() == (IRValue*)0 || n.ops().count() < (u32)1)
+            return;
+        IROperand* o0 = (IROperand*)n.ops().get((u32)0);
+        if (o0.kind() != (u8)OPK_USE)
+            return;
+        String* d = vecOf(n.res());
+        String* a = vecOf(o0.val());
+        if (d == (String*)0 || a == (String*)0)
+            return;
+        if (n.isOp(opVFpExt))
+            _out.appendFormat("\tvcvtph2ps\t%s, %s\n", d.cString(), a.cString());
+        else if (n.isOp(opVFpTrunc))
+            _out.appendFormat("\tvcvtps2ph\t%s, %s, 0\n", d.cString(), a.cString());
+        else if (n.isOp(opVWiden))
+            {
+            _out.appendFormat("\tvpmovzxwd\t%s, %s\n", d.cString(), a.cString());
+            i64 sh = n.ops().count() > (u32)1 ? ((IROperand*)n.ops().get((u32)1)).imm() : (i64)0;
+            if (sh != (i64)0)
+                _out.appendFormat("\tvpslld\t%s, %s, %lld\n", d.cString(), d.cString(), sh);
+            }
+        else
+            {
+            String* ax = String.withCString("x");
+            ax.append(a.substringBytes((u32)1, a.byteLength() - (u32)1));
+            _out.appendFormat("\tvextracti128\txmm0, %s, 1\n\tvpackusdw\t%s, %s, xmm0\n",
+                              a.cString(), d.cString(), ax.cString());
+            }
+        }
+
     // Signed 32-bit lanes to float ones.
     void emitVSIToFp(IRInsn* n)
         {
@@ -8915,6 +8951,11 @@ class X86_64
         if (op == opVFpToSI)
             {
             emitVFpToSI(n);
+            return true;
+            }
+        if (op == opVFpExt || op == opVFpTrunc || op == opVWiden || op == opVNarrow)
+            {
+            emitVHalfConv(n);
             return true;
             }
         if (op == opVAddLP)

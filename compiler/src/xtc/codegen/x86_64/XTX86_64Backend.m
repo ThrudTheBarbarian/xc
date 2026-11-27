@@ -7496,6 +7496,39 @@ static BOOL xtConstThrough(XTIRValueId v, XTIRInsn* (^defOf)(XTIRValueId), int d
             [out appendFormat:@"\tcvttps2dq\t%@, %@\n", d, a];
         return;
         }
+    // The 16-bit floats' lanes (float sizes P1): eight halves in an xmm beside
+    // the eight 32-bit lanes in a ymm (the vectoriser makes them in 32-byte
+    // code only). F16C converts; vpmovzxwd widens; a narrow is vpackusdw of
+    // the two halves of the ymm (each lane is below 2^16, so the saturation
+    // never acts). xmm0 is the emission scratch. As the port.
+    case XTIROpVFpExt:
+    case XTIROpVFpTrunc:
+    case XTIROpVWiden:
+    case XTIROpVNarrow:
+        {
+        if (!res || ops.count < 1 || ops[0].kind != XTIROperandKindUse)
+            return;
+        NSString *d = sVec[@(res.valueId)], *a = sVec[@(ops[0].valueId)];
+        if (!d || !a)
+            return;
+        if (op == XTIROpVFpExt)
+            [out appendFormat:@"\tvcvtph2ps\t%@, %@\n", d, a];
+        else if (op == XTIROpVFpTrunc)
+            [out appendFormat:@"\tvcvtps2ph\t%@, %@, 0\n", d, a];
+        else if (op == XTIROpVWiden)
+            {
+            [out appendFormat:@"\tvpmovzxwd\t%@, %@\n", d, a];
+            int64_t sh = ops.count > 1 ? ops[1].intValue : 0;
+            if (sh)
+                [out appendFormat:@"\tvpslld\t%@, %@, %lld\n", d, d, (long long)sh];
+            }
+        else
+            {
+            NSString* ax = [@"x" stringByAppendingString:[a substringFromIndex:1]];
+            [out appendFormat:@"\tvextracti128\txmm0, %@, 1\n\tvpackusdw\t%@, %@, xmm0\n", a, d, ax];
+            }
+        return;
+        }
     // %v:Vec <- lane-wise compare → 0/-1 mask (i32 lanes)
     case XTIROpVICmp:
         {

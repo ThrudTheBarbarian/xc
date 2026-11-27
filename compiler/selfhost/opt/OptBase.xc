@@ -1370,6 +1370,19 @@ class OptProfile
         {
         return _overlap;
         }
+    // A map over 16-bit float arrays (float sizes P1): FloatPack's unpack and
+    // f32 pack become lane conversions; _mixed holds its bases of different
+    // element sizes that may overlap; _pure, with FEAT_FP16, says every value
+    // is a half and the lanes are 16-bit.
+    bool _isPack;
+    Array* _mixed;
+    bool _isPure;
+    bool isPack(void) { return _isPack; }
+    void setPack(bool v) { _isPack = v; }
+    Array* mixed(void) { return _mixed; }
+    void setMixed(Array* a) { _mixed = a; }
+    bool isPure(void) { return _isPure; }
+    void setPure(bool v) { _isPure = v; }
     void setOverlap(Array* a)
         {
         _overlap = a;
@@ -2388,6 +2401,11 @@ class BeFact : Object
     bool _vrRuntime;       // the bound is a RUNTIME value, not a literal
     bool _vrMapRT;         // ... the same, for the MAP recogniser's own bound check
     Array* _vrOverlap;     // the map body's base pairs that may overlap (#95)
+    Array* _vrMixed;       // a pack map's base pairs of two element sizes (P1)
+    bool _vrPackPure;      // vecHalfFused's: the body is all f16 operations
+    Map* _vecMemFwd;       // a pack map's dropped calls: token -> input token
+    Map* _vecHalfSrc;      // an f16 unpack -> the half vector it widened
+    Map* _vecFused;        // the f32 operations made f16 ones
     u32 _magicM;           // magic multiplier from vecMagicU32
     u32 _magicS;           // and its post-shift
     // Constant divides in the body, keyed by the UDiv result, each holding

@@ -3988,6 +3988,8 @@ class Arm64
         if (op == opVFCmp)  { emitVFCmp(n);  return true; }
         if (op == opVSIToFp) { emitVSIToFp(n); return true; }
         if (op == opVFpToSI) { emitVFpToSI(n); return true; }
+        if (op == opVFpExt || op == opVFpTrunc || op == opVWiden || op == opVNarrow) { emitVHalfConv(n); return true; }
+        if (op == opVHAdd || op == opVHSub || op == opVHMul || op == opVHDiv || op == opVHSqrt) { emitVHalfOp(n); return true; }
         if (op == opVReduceAdd || op == opVReduceMax
          || op == opVReduceMin) { emitVReduce(n); return true; }
         return false;
@@ -4041,11 +4043,26 @@ class Arm64
         return o;
     }
 
+    // The bytes a VLoad or VStore moves: 8 for a half vector (a 16-bit
+    // float map's U16 lanes, P1), else 16.
+    u32 vecAccessBytes(IRInsn* n)
+    {
+        String* t = (String*)0;
+        if (n.isOp(opVLoad) && n.res() != (IRValue*)0)
+            t = n.res().ty();
+        else if (n.isOp(opVStore) && n.ops().count() >= (u32)2) {
+            IROperand* v = (IROperand*)n.ops().get((u32)1);
+            if (v.kind() == (u8)OPK_USE && v.val() != (IRValue*)0)
+                t = v.val().ty();
+        }
+        return t != (String*)0 && isVecTy(t) && IRType.storageBytes(t, (u32)8) == (u32)8 ? (u32)8 : (u32)16;
+    }
+
     void emitVLoad(IRInsn* n)
     {
         if (n.ops().count() < (u32)1 || n.res() == (IRValue*)0) { unsupported(n.op()); return; }
         String* addr = vecAddrOperand(n);
-        _out.appendFormat("    ldr q%lu, %s\n", vecIndex(n.res()), addr.cString());
+        _out.appendFormat("    ldr %s%lu, %s\n", vecAccessBytes(n) == (u32)8 ? "d" : "q", vecIndex(n.res()), addr.cString());
     }
 
     void emitVStore(IRInsn* n)
@@ -4054,7 +4071,7 @@ class Arm64
         IROperand* v = (IROperand*)n.ops().get((u32)1);
         if (v.kind() != (u8)OPK_USE) { unsupported(n.op()); return; }
         String* addr = vecAddrOperand(n);
-        _out.appendFormat("    str q%lu, %s\n", vecIndex(v.val()), addr.cString());
+        _out.appendFormat("    str %s%lu, %s\n", vecAccessBytes(n) == (u32)8 ? "d" : "q", vecIndex(v.val()), addr.cString());
     }
 
     void emitVSplat(IRInsn* n)
@@ -4389,6 +4406,51 @@ class Arm64
         u32 d = vecIndex(n.res());
         emitVec3(cm, String.withCString("4s"), d, swap ? b : a, swap ? a : b);
         if (invert) _out.appendFormat("    not v%lu.16b, v%lu.16b\n", d, d);
+    }
+
+    // The 16-bit floats' lanes (P1): four f16, bf16 or u16 lanes in a d
+    // register beside the four 32-bit ones in a q register.
+    void emitVHalfConv(IRInsn* n)
+    {
+        if (n.ops().count() < (u32)1 || n.res() == (IRValue*)0) { unsupported(n.op()); return; }
+        IROperand* o0 = (IROperand*)n.ops().get((u32)0);
+        if (o0.kind() != (u8)OPK_USE) { unsupported(n.op()); return; }
+        u32 a = vecIndex(o0.val());
+        u32 d = vecIndex(n.res());
+        if (n.isOp(opVFpExt))
+            _out.appendFormat("    fcvtl v%lu.4s, v%lu.4h\n", d, a);
+        else if (n.isOp(opVFpTrunc))
+            _out.appendFormat("    fcvtn v%lu.4h, v%lu.4s\n", d, a);
+        else if (n.isOp(opVNarrow))
+            _out.appendFormat("    xtn v%lu.4h, v%lu.4s\n", d, a);
+        else {
+            i64 sh = n.ops().count() > (u32)1 ? ((IROperand*)n.ops().get((u32)1)).imm() : (i64)0;
+            if (sh == (i64)16)
+                _out.appendFormat("    shll v%lu.4s, v%lu.4h, #16\n", d, a);
+            else
+                _out.appendFormat("    ushll v%lu.4s, v%lu.4h, #%lld\n", d, a, sh);
+        }
+    }
+
+    // f16 arithmetic in lanes (FEAT_FP16): four halves in a d register, or
+    // eight in a q register.
+    void emitVHalfOp(IRInsn* n)
+    {
+        if (n.ops().count() < (u32)1 || n.res() == (IRValue*)0) { unsupported(n.op()); return; }
+        IROperand* o0 = (IROperand*)n.ops().get((u32)0);
+        if (o0.kind() != (u8)OPK_USE) { unsupported(n.op()); return; }
+        string arr = IRType.storageBytes(n.res().ty(), (u32)8) == (u32)8 ? "4h" : "8h";
+        u32 a = vecIndex(o0.val());
+        u32 d = vecIndex(n.res());
+        if (n.isOp(opVHSqrt)) {
+            _out.appendFormat("    fsqrt v%lu.%s, v%lu.%s\n", d, arr, a, arr);
+            return;
+        }
+        if (n.ops().count() < (u32)2) { unsupported(n.op()); return; }
+        IROperand* o1 = (IROperand*)n.ops().get((u32)1);
+        if (o1.kind() != (u8)OPK_USE) { unsupported(n.op()); return; }
+        string mn = n.isOp(opVHAdd) ? "fadd" : n.isOp(opVHSub) ? "fsub" : n.isOp(opVHMul) ? "fmul" : "fdiv";
+        _out.appendFormat("    %s v%lu.%s, v%lu.%s, v%lu.%s\n", mn, d, arr, a, arr, vecIndex(o1.val()), arr);
     }
 
     // Signed 32-bit lanes to float ones.
@@ -12200,7 +12262,9 @@ class Arm64
                     i32 vk = (i32)0;
                     if (!constIndex(ea, &vk) || vk < (i32)0) continue;
                     u32 voff = (u32)vk * elemSize(ea);
-                    if (voff % (u32)16 != (u32)0 || voff > (u32)65520) continue;
+                    // A half vector (a 16-bit float map's, P1) is a d register.
+                    u32 accV = vecAccessBytes(n);
+                    if (voff % accV != (u32)0 || voff > (u32)4095 * accV) continue;
                     _foldInfo.set((Hashable*)vp.val(), (Object*)ea);
                     _foldedAddr.set((Hashable*)ea.res(), (Object*)ea.res());
                     continue;
@@ -12284,7 +12348,7 @@ class Arm64
             // the fold and leaving exactly the diff bug 070 was about.
             bool isVec = n.isOp(opVLoad)
                       || n.isOp(opVStore);
-            u32 accW = isVec ? (u32)16
+            u32 accW = isVec ? vecAccessBytes(n)
                              : accessWidth(n.isOp(opStore)
                                 || n.isOp(opStoreVolatile)
                                    ? argType((IROperand*)n.ops().get((u32)1))

@@ -127,6 +127,16 @@
 // the widening-sum lowering with a VMul inserted before the widen.
 @property(nonatomic) BOOL isDotProduct;
 @property(nonatomic) XTIRValueId loadId2; // the second narrow Load result
+// A map over 16-bit float arrays (float sizes P1): FloatPack's unpack and f32
+// pack of f16 and bf16 become lane conversions. The lanes are 32-bit, so a
+// Vec(U16) of the same lanes is half a vector. mixed holds the store and load
+// bases of different element sizes that may overlap, as (base, size) pairs of
+// pairs, which the preheader checks over the whole vector range.
+@property(nonatomic) BOOL isPack;
+@property(nonatomic) NSArray* mixed;
+// With FEAT_FP16 (the fp16 copy): every value is a half and every operation
+// a half one, so the lanes are 16-bit and a vector holds twice as many.
+@property(nonatomic) BOOL isPure;
 @end
 @implementation XTVecCand
 @end
@@ -134,6 +144,8 @@
 // The vector width of the function being vectorised, when it is a dispatch
 // clone with its own (0: the profile's).
 static NSUInteger sVecFnBytes = 0;
+// The module being vectorised (the iota tables, the call names).
+static XTIRModule* sVecModule = nil;
 
 // Escape-time loops (mandelbrot): the pass is at the end of this file.
 @interface XTEscapeVec : NSObject
@@ -242,6 +254,8 @@ static XTIROpcode vectorOpFor(XTIROpcode op)
         return XTIROpVOr;
     case XTIROpXor:
         return XTIROpVXor;
+    case XTIROpFDiv: // a pack map's (P1)
+        return XTIROpVDiv;
     default:
         return op;
         }
@@ -281,6 +295,131 @@ static BOOL xtvMapConvOK(XTIRFunction* fn, XTIRInsn* insn)
     case XTIROpFpToUI: return s == XTIRTypeKindF32 && r == XTIRTypeKindU32;
     default: return NO;
         }
+    }
+
+// A FloatPack call a pack map converts in lanes (P1): 1 for the unpack of a
+// 16-bit float to f32, 2 for the f32 pack to one, 0 for anything else; *bf
+// says which float (bf16: e8m7, else f16: e5m10). As the port's vecPackCall.
+static int xtvPackCall(XTIRInsn* n, NSDictionary<NSNumber*, XTIRInsn*>* defOf, BOOL* bf)
+    {
+    if (n.opcode != XTIROpCall || !n.result || n.operands.count != 5 || n.operands[0].kind != XTIROperandKindSym
+        || n.operands[1].kind != XTIROperandKindUse)
+        return 0;
+    NSString* nm = sVecModule.symbols[n.operands[0].symbolId].name;
+    int k = [nm isEqualToString:@"_xt_fpk_unpack"] ? 1 : [nm isEqualToString:@"_xt_fpk_pack_f32"] ? 2 : 0;
+    if (!k)
+        return 0;
+    int64_t e = 0, m = 0;
+    if (!resolveConstIntExt(n.operands[2], defOf, &e) || !resolveConstIntExt(n.operands[3], defOf, &m))
+        return 0;
+    if (e == 5 && m == 10)
+        *bf = NO;
+    else if (e == 8 && m == 7)
+        *bf = YES;
+    else
+        return 0;
+    if (k == 1 && n.result.type.kind != XTIRTypeKindF32)
+        return 0;
+    if (k == 2 && n.result.type.kind != XTIRTypeKindU16)
+        return 0;
+    return k;
+    }
+
+// Can fn's loops convert 16-bit floats in lanes? Where pack-native makes the
+// scalar conversions native: every arm64 row (fcvtl/fcvtn are ARMv8.0), and
+// on x86 the F16C levels (an avx2 or avx512 copy, or a fixed -mavx2 build).
+// The x86 base copy has no F16C and stays scalar, bf16 too. Not at 64 bytes:
+// the half vectors would be ymm16-31, which the assemblers do not name.
+static BOOL xtvPackLanes(XTIRFunction* fn, XTIROptTargetProfile* prof, NSUInteger vecBytes)
+    {
+    NSString* lvl = fn.simdLevel;
+    BOOL hw = prof.packF16Hardware || [lvl isEqualToString:@"avx2"] || [lvl isEqualToString:@"avx512"];
+    return hw && prof.packBF16Inline && prof.vectorizesEscapeLoops && vecBytes <= 32;
+    }
+
+// Does fn's code have FEAT_FP16 arithmetic (pack-native's arith)?
+static BOOL xtvHalfArith(XTIRFunction* fn, XTIROptTargetProfile* prof)
+    {
+    return prof.packF16Arith || [fn.simdLevel isEqualToString:@"fp16"];
+    }
+
+// The f32 operations of a pack map that become f16 ones where the code has
+// FEAT_FP16, as pack-native fuses them: + - * / of two f16 unpacks (sqrt of
+// one), read by an f16 pack alone. Their result ids; *pure says the body is
+// those, the unpacks they read, the packs of them and 16-bit loads and stores
+// and nothing else. As the port's vecHalfFused.
+static NSSet<NSNumber*>* xtvHalfFused(XTIRFunction* fn, XTIRBlock* B, NSDictionary<NSNumber*, XTIRInsn*>* defOf,
+                                      BOOL* pure)
+    {
+    NSCountedSet<NSNumber*>* uses = [NSCountedSet set];
+    for (XTIRBlock* bb in fn.blocks)
+        {
+        NSMutableArray<XTIRInsn*>* all = [NSMutableArray arrayWithArray:bb.phiNodes];
+        [all addObjectsFromArray:bb.instructions];
+        if (bb.terminator)
+            [all addObject:bb.terminator];
+        for (XTIRInsn* n in all)
+            for (XTIROperand* o in n.operands)
+                if (o.kind == XTIROperandKindUse)
+                    [uses addObject:@(o.valueId)];
+        }
+    NSMutableSet<NSNumber*>* fused = [NSMutableSet set];
+    BOOL p = YES;
+    for (XTIRInsn* n in B.instructions)
+        {
+        BOOL bf = NO;
+        int pk = xtvPackCall(n, defOf, &bf);
+        if (pk && bf)
+            p = NO;
+        if (pk != 2 || bf)
+            continue;
+        XTIRInsn* d = defOf[@(n.operands[1].valueId)];
+        XTIROpcode op = d ? d.opcode : XTIROpConst;
+        NSUInteger ar = (op == XTIROpFAdd || op == XTIROpFSub || op == XTIROpFMul || op == XTIROpFDiv) ? 2
+                        : op == XTIROpFSqrt ? 1 : 0;
+        BOOL ok = ar && d.operands.count == ar && [uses countForObject:@(d.result.valueId)] == 1
+                  && [B.instructions indexOfObjectIdenticalTo:d] != NSNotFound;
+        for (NSUInteger k = 0; ok && k < ar; k++)
+            {
+            XTIROperand* o = d.operands[k];
+            XTIRInsn* u = o.kind == XTIROperandKindUse ? defOf[@(o.valueId)] : nil;
+            BOOL ubf = NO;
+            if (!u || xtvPackCall(u, defOf, &ubf) != 1 || ubf)
+                ok = NO;
+            }
+        if (ok)
+            [fused addObject:@(d.result.valueId)];
+        }
+    // Pure: each unpack read only by fused operations, each operation fused,
+    // each load and store 16-bit.
+    for (XTIRInsn* n in B.instructions)
+        {
+        if (!p)
+            break;
+        XTIROpcode op = n.opcode;
+        BOOL bf = NO;
+        int pk = xtvPackCall(n, defOf, &bf);
+        if (pk == 1)
+            {
+            NSUInteger seen = 0;
+            for (XTIRInsn* m in B.instructions)
+                if (m.result && [fused containsObject:@(m.result.valueId)])
+                    for (XTIROperand* o in m.operands)
+                        if (o.kind == XTIROperandKindUse && o.valueId == n.result.valueId)
+                            seen++;
+            if (seen != [uses countForObject:@(n.result.valueId)])
+                p = NO;
+            }
+        else if (op == XTIROpLoad)
+            p = n.result.type.kind == XTIRTypeKindU16;
+        else if (op == XTIROpStore)
+            p = xtvOperandType(fn, n.operands[1]).kind == XTIRTypeKindU16;
+        else if (n.result && !pk && op != XTIROpConst && op != XTIROpAddrOf && op != XTIROpElementAddr
+                 && op != XTIROpAdd && op != XTIROpZExt && op != XTIROpSExt && op != XTIROpTrunc)
+            p = [fused containsObject:@(n.result.valueId)];
+        }
+    *pure = p;
+    return fused;
     }
 
 static BOOL vectorisableLane(XTIRTypeKind k)
@@ -402,7 +541,7 @@ static BOOL resolveConstInt(XTIROperand* op, NSDictionary<NSNumber*, XTIRInsn*>*
 //
 // The name is fixed, and the symbol is reused across every loop in the module:
 // two definitions of one label is a hard error in the in-house assemblers.
-static XTIRModule* sVecModule = nil;
+// (sVecModule, declared at the top: the pack maps read call names through it.)
 
 static XTIRSymbolId xtvIotaSymbol(XTIRType* laneType, NSUInteger vecBytes, XTIRFunction* fn)
     {
@@ -1546,6 +1685,26 @@ static BOOL xtvBasesApart(NSArray<XTIROperand*>* stBases, NSArray<XTIROperand*>*
         // the vector register pool (#27). As the port's vecClassifyBody.
         NSUInteger convs = 0;
         BOOL convLanes = self.profile.vectorizesEscapeLoops;
+        // A pack map (P1): the body converts 16-bit floats with FloatPack's
+        // calls, which become lane conversions where the target has them.
+        // Its lanes are 32-bit; a U16 element (halfIds) is loaded, stored,
+        // unpacked and packed, and nothing else. As the port's vecClassifyBody.
+        BOOL packMode = NO;
+        if (xtvPackLanes(fn, self.profile ?: [XTIROptTargetProfile conservativeProfile], [self vectorBytes]))
+            for (XTIRInsn* insn in B.instructions)
+                {
+                BOOL bf = NO;
+                if (xtvPackCall(insn, defOf, &bf))
+                    {
+                    packMode = YES;
+                    break;
+                    }
+                }
+        NSMutableSet<NSNumber*>* halfIds = [NSMutableSet set];
+        NSUInteger packCalls = 0;
+        // Each base with its element size, for the pairs of different sizes.
+        NSMutableArray* stSized = [NSMutableArray array];
+        NSMutableArray* ldSized = [NSMutableArray array];
         // The bases the body loads from and stores to (xtvBasesApart).
         NSMutableArray<XTIROperand*>* ldBases = [NSMutableArray array];
         NSMutableArray<XTIROperand*>* stBases = [NSMutableArray array];
@@ -1648,6 +1807,25 @@ static BOOL xtvBasesApart(NSArray<XTIROperand*>* stBases, NSArray<XTIROperand*>*
                     ok = NO;
                     break;
                     }
+                if (packMode)
+                    {
+                    // 16-bit floats, or the 32-bit lanes.
+                    XTIROperand* lb = defOf[@(insn.operands[0].valueId)].operands[0];
+                    if (lt.kind == XTIRTypeKindU16)
+                        {
+                        [halfIds addObject:@(insn.result.valueId)];
+                        [elemIds addObject:@(insn.result.valueId)];
+                        sawLoad = YES;
+                        [ldSized addObject:@[ lb, @2 ]];
+                        continue;
+                        }
+                    if (lt.byteWidth != 4)
+                        {
+                        ok = NO;
+                        break;
+                        }
+                    [ldSized addObject:@[ lb, @4 ]];
+                    }
                 // Lanes of one width may differ in type where the back end
                 // converts between them (#27): the loop's lane is the first.
                 if (laneType && laneType.kind != lt.kind &&
@@ -1674,6 +1852,20 @@ static BOOL xtvBasesApart(NSArray<XTIROperand*>* stBases, NSArray<XTIROperand*>*
                 // The stored lanes are as wide as the loop's, or the vector
                 // store writes a different number of elements than it steps.
                 XTIRType* sty = xtvOperandType(fn, insn.operands[1]);
+                if (packMode)
+                    {
+                    // A 16-bit float the body made or loaded, or a 32-bit lane.
+                    XTIROperand* sv = insn.operands[1];
+                    BOOL half = sv.kind == XTIROperandKindUse && [halfIds containsObject:@(sv.valueId)];
+                    if (sty && sty.kind == XTIRTypeKindU16 ? !half : (half || !sty || sty.byteWidth != 4))
+                        {
+                        ok = NO;
+                        break;
+                        }
+                    [stSized addObject:@[ defOf[@(insn.operands[0].valueId)].operands[0], half ? @2 : @4 ]];
+                    sawStore = YES;
+                    continue;
+                    }
                 if (laneType && sty && vectorisableLane(sty.kind) && sty.byteWidth != laneType.byteWidth)
                     {
                     ok = NO;
@@ -1688,6 +1880,55 @@ static BOOL xtvBasesApart(NSArray<XTIROperand*>* stBases, NSArray<XTIROperand*>*
             if (op == XTIROpConst || op == XTIROpZExt || op == XTIROpSExt ||
                 op == XTIROpTrunc)
                 continue;
+            if (packMode)
+                {
+                BOOL bf = NO;
+                int pk = xtvPackCall(insn, defOf, &bf);
+                if (pk)
+                    {
+                    // The unpack of a 16-bit float, or the pack of an f32 lane.
+                    XTIROperand* a = insn.operands[1];
+                    BOOL half = [halfIds containsObject:@(a.valueId)];
+                    if ((pk == 1) != half || ![elemIds containsObject:@(a.valueId)] || ++packCalls > 12
+                        || (pk == 2 && xtvOperandType(fn, a).kind != XTIRTypeKindF32))
+                        {
+                        ok = NO;
+                        break;
+                        }
+                    if (pk == 2)
+                        [halfIds addObject:@(insn.result.valueId)];
+                    [elemIds addObject:@(insn.result.valueId)];
+                    continue;
+                    }
+                // f32 division and square root, which the conversions make
+                // worth having.
+                BOOL fdiv = op == XTIROpFDiv, fsq = op == XTIROpFSqrt;
+                if (fdiv || fsq || elementwiseArith(op))
+                    {
+                    NSUInteger ar = fsq ? 1 : 2;
+                    BOOL fine = insn.result && insn.operands.count == ar && vectorisableLane(insn.result.type.kind)
+                                && ((!fdiv && !fsq) || insn.result.type.kind == XTIRTypeKindF32);
+                    for (NSUInteger k = 0; fine && k < ar; k++)
+                        {
+                        XTIROperand* o = insn.operands[k];
+                        if (!elemOperandOK(o) || (o.kind == XTIROperandKindUse && [halfIds containsObject:@(o.valueId)])
+                            || (o.kind == XTIROperandKindUse && o.valueId == ivId))
+                            fine = NO;
+                        }
+                    if (!fine)
+                        {
+                        ok = NO;
+                        break;
+                        }
+                    [elemIds addObject:@(insn.result.valueId)];
+                    continue;
+                    }
+                if (xtvConvOp(op))
+                    {
+                    ok = NO;
+                    break;
+                    }
+                }
             // A conversion between 32-bit integer and float lanes (#27), of a
             // lane value.
             if (xtvConvOp(op))
@@ -1724,6 +1965,13 @@ static BOOL xtvBasesApart(NSArray<XTIROperand*>* stBases, NSArray<XTIROperand*>*
             }
         // With no load, the elements ARE the iv and its type is the lane type;
         // with loads, the iv's lanes must be theirs.
+        if (packMode && ok)
+            {
+            if (mapUsesIv || !packCalls)
+                continue;
+            if (!laneType)
+                laneType = [XTIRType f32Type];
+            }
         if (!laneType && mapUsesIv)
             laneType = mapIvTy;
         if (ok && mapUsesIv && laneType.kind != mapIvTy.kind)
@@ -1731,11 +1979,65 @@ static BOOL xtvBasesApart(NSArray<XTIROperand*>* stBases, NSArray<XTIROperand*>*
         if (!ok || !(sawLoad || mapUsesIv) || !sawStore || !laneType)
             continue;
         NSMutableArray<XTIROperand*>* overlapPairs = [NSMutableArray array];
-        if (!xtvBasesApart(stBases, ldBases, B, defOf, defBlk, overlapPairs))
+        NSMutableArray* mixedPairs = [NSMutableArray array];
+        if (packMode)
+            {
+            // Bases of one element size as any map's; of two sizes, apart
+            // when both are objects of known identity and not the same one,
+            // else checked in the preheader over the whole vector range: the
+            // two advance at different rates, so no distance is safe. A store
+            // pairs with every load and with every store of the other size.
+            BOOL apart = YES;
+            for (NSUInteger w = 2; w <= 4 && apart; w += 2)
+                {
+                NSMutableArray<XTIROperand*>* sb = [NSMutableArray array];
+                NSMutableArray<XTIROperand*>* lb = [NSMutableArray array];
+                for (NSArray* e in stSized)
+                    if ([e[1] unsignedIntegerValue] == w)
+                        [sb addObject:e[0]];
+                for (NSArray* e in ldSized)
+                    if ([e[1] unsignedIntegerValue] == w)
+                        [lb addObject:e[0]];
+                apart = xtvBasesApart(sb, lb, B, defOf, defBlk, overlapPairs);
+                }
+            NSMutableArray* others = [NSMutableArray arrayWithArray:ldSized];
+            [others addObjectsFromArray:stSized];
+            for (NSArray* st in stSized)
+                for (NSArray* ot in others)
+                    {
+                    if (!apart || [st[1] isEqual:ot[1]])
+                        continue;
+                    XTIROperand *a = st[0], *b = ot[0];
+                    id oa = xtvBaseObject(a, defOf), ob = xtvBaseObject(b, defOf);
+                    if (oa && ob)
+                        {
+                        if ([oa isEqual:ob])
+                            apart = NO;
+                        continue;
+                        }
+                    if (a.kind != XTIROperandKindUse || b.kind != XTIROperandKindUse
+                        || defBlk[@(a.valueId)] == B || defBlk[@(b.valueId)] == B)
+                        {
+                        apart = NO;
+                        continue;
+                        }
+                    [mixedPairs addObject:@[ st, ot ]];
+                    }
+            if (!apart)
+                continue;
+            }
+        else if (!xtvBasesApart(stBases, ldBases, B, defOf, defBlk, overlapPairs))
             continue;
 
         NSUInteger vb = [self vectorBytes];
         NSUInteger vw = vb / laneType.byteWidth; // 4 for i32 at 16 bytes
+        BOOL pure = NO;
+        if (packMode && xtvHalfArith(fn, self.profile ?: [XTIROptTargetProfile conservativeProfile]))
+            {
+            xtvHalfFused(fn, B, defOf, &pure);
+            if (pure)
+                vw = vb / 2;
+            }
         if (vw < 2)
             continue;
         // A non-zero start is VECTORISED, not refused: the epilogue below works
@@ -1771,7 +2073,7 @@ static BOOL xtvBasesApart(NSArray<XTIROperand*>* stBases, NSArray<XTIROperand*>*
         // Bases that may overlap are checked in the preheader (#95), against a
         // limit computed there, as a runtime trip's is; the scalar clone takes
         // the range when they do. As the port's vecMapAt.
-        BOOL guarded = overlapPairs.count > 0;
+        BOOL guarded = overlapPairs.count > 0 || mixedPairs.count > 0;
         XTIROperand* boundOp = guard.operands[1];
         if (!runtimeTrip && (rtStart || guarded))
             boundOp = [XTIROperand immIWithType:ivPhi.result.type value:N];
@@ -1834,6 +2136,9 @@ static BOOL xtvBasesApart(NSArray<XTIROperand*>* stBases, NSArray<XTIROperand*>*
         c.ivStartOp = rtStart;
         c.overlap = overlapPairs;
         c.isIota = mapUsesIv;
+        c.isPack = packMode;
+        c.mixed = mixedPairs;
+        c.isPure = pure;
         return c;
         }
     return nil;
@@ -2221,6 +2526,94 @@ static XTIRValueId xtvEmitOverlapGuard(XTIRFunction* fn, XTIRBlock* PH, XTIRValu
     return lim;
     }
 
+// The vector limit again, for a pack map's bases of different element sizes
+// (P1): where the bytes the vector loop stores through one base meet the
+// bytes it reads or stores through the other, the limit is the start and the
+// scalar clone takes the whole range. The ranges are [base + start * size,
+// base + limit * size); two Selects make the And of the two compares. As the
+// port's vecMixedGuard.
+static XTIRValueId xtvEmitMixedGuard(XTIRFunction* fn, XTIRBlock* PH, XTIRValueId lim, XTVecCand* c)
+    {
+    XTIRType* ivTy = c.ivPhi.result.type;
+    XTIROperand* (^emit)(XTIROpcode, XTIRType*, NSArray<XTIROperand*>*, uint8_t) =
+        ^XTIROperand*(XTIROpcode op, XTIRType* ty, NSArray<XTIROperand*>* ops, uint8_t pred) {
+          XTIRValueId rid = [fn allocateValueId];
+          XTIRValue* rv = [[XTIRValue alloc] initWithValueId:rid
+                                                        type:ty
+                                                     defSite:[[XTIRDefSite alloc] initWithBlock:PH insnIndex:0]];
+          [fn registerValue:rv];
+          [PH.instructions addObject:[[XTIRInsn alloc] initWithOpcode:op
+                                                               result:rv
+                                                             operands:ops
+                                                            predicate:pred
+                                                               dbgLoc:nil]];
+          return [XTIROperand useWithValueId:rid];
+        };
+    XTIROperand* start = c.ivStartOp ?: [XTIROperand immIWithType:ivTy value:c.ivStart];
+    XTIRType* w = [XTIRType i64Type];
+    XTIROpcode ext = XTIRTypeKindIsSigned(ivTy.kind) ? XTIROpSExt : XTIROpZExt;
+    for (NSArray* pr in c.mixed)
+        {
+        NSArray *a = pr[0], *b = pr[1];
+        XTIROperand* s64 = emit(ext, w, @[ start ], 0);
+        XTIROperand* l64 = emit(ext, w, @[ [XTIROperand useWithValueId:lim] ], 0);
+        XTIROperand* (^edge)(XTIROperand*, XTIROperand*, NSUInteger) =
+            ^XTIROperand*(XTIROperand* base, XTIROperand* at, NSUInteger size) {
+              XTIROperand* p = emit(XTIROpPtrToInt, w, @[ base ], 0);
+              XTIROperand* off = emit(XTIROpShl, w, @[ at, [XTIROperand immIWithType:w value:size == 2 ? 1 : 2] ], 0);
+              return emit(XTIROpAdd, w, @[ p, off ], 0);
+            };
+        XTIROperand* aLo = edge(a[0], s64, [a[1] unsignedIntegerValue]);
+        XTIROperand* aHi = edge(a[0], l64, [a[1] unsignedIntegerValue]);
+        XTIROperand* bLo = edge(b[0], s64, [b[1] unsignedIntegerValue]);
+        XTIROperand* bHi = edge(b[0], l64, [b[1] unsignedIntegerValue]);
+        XTIROperand* c1 = emit(XTIROpICmp, [XTIRType boolType], @[ aLo, bHi ], (uint8_t)XTIRICmpULT);
+        XTIROperand* c2 = emit(XTIROpICmp, [XTIRType boolType], @[ bLo, aHi ], (uint8_t)XTIRICmpULT);
+        XTIROperand* t = emit(XTIROpSelect, ivTy, @[ c1, start, [XTIROperand useWithValueId:lim] ], 0);
+        lim = emit(XTIROpSelect, ivTy, @[ c2, t, [XTIROperand useWithValueId:lim] ], 0).valueId;
+        }
+    return lim;
+    }
+
+// Does a use of the f16 widening v tell a quiet NaN from a signalling one,
+// as pack-native asks of the scalar one (quietIsInvisible)? Its pack back to
+// a 16-bit float and a square root cannot, nor f32 arithmetic where the
+// target picks between NaN operands by position alone; a store, anything
+// else and any use outside the loop body can. As the port's vecHalfQuietSeen.
+static BOOL xtvQuietSeen(XTIRFunction* fn, XTIRBlock* B, XTIRValueId v, NSDictionary<NSNumber*, XTIRInsn*>* defOf,
+                         XTIROptTargetProfile* prof, NSSet<NSNumber*>* fused)
+    {
+    for (XTIRBlock* bb in fn.blocks)
+        {
+        NSMutableArray<XTIRInsn*>* all = [NSMutableArray arrayWithArray:bb.phiNodes];
+        [all addObjectsFromArray:bb.instructions];
+        if (bb.terminator)
+            [all addObject:bb.terminator];
+        for (XTIRInsn* n in all)
+            {
+            BOOL reads = NO;
+            for (XTIROperand* o in n.operands)
+                if (o.kind == XTIROperandKindUse && o.valueId == v)
+                    reads = YES;
+            if (!reads)
+                continue;
+            if (bb != B || n.opcode == XTIROpPhi || n == bb.terminator)
+                return YES;
+            // A half operation reads the half itself.
+            if (n.result && [fused containsObject:@(n.result.valueId)])
+                continue;
+            BOOL bf = NO;
+            if (xtvPackCall(n, defOf, &bf) == 2 || n.opcode == XTIROpFSqrt)
+                continue;
+            if ((n.opcode == XTIROpFAdd || n.opcode == XTIROpFSub || n.opcode == XTIROpFMul
+                 || n.opcode == XTIROpFDiv) && !prof.packNaNPrecedence)
+                continue;
+            return YES;
+            }
+        }
+    return NO;
+    }
+
 // The vector width this target's profile allows: 16 bytes, 32 under -mavx2
 // (SIMD step 1, S2), or 64 under -mavx512. Map, reduce and min/max loops take it; the
 // widening forms (u8/u16 sums and products) stay at 16 until the back ends
@@ -2374,6 +2767,8 @@ static XTIRValue* xtvApplyConv(XTIRFunction* fn, XTIRInsn* n, XTVecCand* c, XTIR
                                               c.ivPhi.result.type, c.guard.predicate);
             if (c.overlap.count)
                 mid = xtvEmitOverlapGuard(fn, c.preheader, mid, c);
+            if (c.mixed.count)
+                mid = xtvEmitMixedGuard(fn, c.preheader, mid, c);
             runtimeMId = mid;
             gops[1] = [XTIROperand useWithValueId:mid];
             }
@@ -2585,8 +2980,166 @@ static XTIRValue* xtvApplyConv(XTIRFunction* fn, XTIRInsn* n, XTVecCand* c, XTIR
         vmap[@(c.ivId)] = viv;
         }
 
+    // A pack map's calls go (P1): each one's memory token is its input's,
+    // in the body and after it.
+    NSMutableDictionary<NSNumber*, NSNumber*>* memFwd = [NSMutableDictionary dictionary];
+    NSArray<XTIROperand*>* (^fwdOps)(NSArray<XTIROperand*>*) = ^NSArray<XTIROperand*>*(NSArray<XTIROperand*>* ops) {
+      if (!memFwd.count)
+          return ops;
+      NSMutableArray<XTIROperand*>* r = [ops mutableCopy];
+      BOOL hit = NO;
+      for (NSUInteger k = 0; k < r.count; k++)
+          if (r[k].kind == XTIROperandKindUse && memFwd[@(r[k].valueId)])
+              {
+              r[k] = [XTIROperand useWithValueId:(XTIRValueId)memFwd[@(r[k].valueId)].unsignedLongLongValue];
+              hit = YES;
+              }
+      return hit ? r : ops;
+    };
+    XTIROptTargetProfile* packProf = self.profile ?: [XTIROptTargetProfile conservativeProfile];
+    XTIRType* halfTy = [XTIRType vecWithLane:[XTIRType u16Type] bytes:(uint32_t)(c.isPure ? c.vecBytes : c.vecBytes / 2)];
+    // With FEAT_FP16, the operations that become half ones, and each f16
+    // unpack's half (halfSrc); an unpack read by them alone is not made.
+    BOOL pureUnused = NO;
+    NSSet<NSNumber*>* fused = c.isPack && xtvHalfArith(fn, self.profile ?: [XTIROptTargetProfile conservativeProfile])
+                                  ? xtvHalfFused(fn, B, defOf, &pureUnused)
+                                  : [NSSet set];
+    NSMutableDictionary<NSNumber*, XTIRValue*>* halfSrc = [NSMutableDictionary dictionary];
+    XTIRType* wordTy = [XTIRType vecWithLane:[XTIRType u32Type] bytes:(uint32_t)c.vecBytes];
+    XTIRType* floatTy = [XTIRType vecWithLane:[XTIRType f32Type] bytes:(uint32_t)c.vecBytes];
+    XTIROperand* (^u32k)(int64_t) = ^XTIROperand*(int64_t v) {
+      return xtvConstSplat(fn, entry, [XTIRType u32Type], [XTIROperand immIWithType:[XTIRType u32Type] value:v], c,
+                           entrySplatCache);
+    };
+    XTIROperand* (^vuse)(XTIRValue*) = ^XTIROperand*(XTIRValue* v) {
+      return [XTIROperand useWithValueId:v.valueId];
+    };
+
     for (XTIRInsn* insn in B.instructions)
         {
+        if (c.isPack)
+            {
+            BOOL bf = NO;
+            int pk = xtvPackCall(insn, defOf, &bf);
+            if (pk)
+                {
+                if (insn.memoryResult)
+                    {
+                    XTIROperand* mi = insn.operands.lastObject;
+                    if (mi.kind == XTIROperandKindUse)
+                        memFwd[@(insn.memoryResult.valueId)] = memFwd[@(mi.valueId)] ?: @(mi.valueId);
+                    }
+                XTIRValue* a = vmap[@(insn.operands[1].valueId)];
+                XTIRValue* r = nil;
+                if (pk == 1 && !bf)
+                    {
+                    halfSrc[@(insn.result.valueId)] = a;
+                    BOOL other = NO;
+                    for (XTIRBlock* bb in fn.blocks)
+                        {
+                        NSMutableArray<XTIRInsn*>* all = [NSMutableArray arrayWithArray:bb.phiNodes];
+                        [all addObjectsFromArray:bb.instructions];
+                        if (bb.terminator)
+                            [all addObject:bb.terminator];
+                        for (XTIRInsn* m in all)
+                            {
+                            if (m.result && [fused containsObject:@(m.result.valueId)])
+                                continue;
+                            for (XTIROperand* o in m.operands)
+                                if (o.kind == XTIROperandKindUse && o.valueId == insn.result.valueId)
+                                    other = YES;
+                            }
+                        }
+                    if (!other)
+                        continue;
+                    }
+                XTIRInsn* fd = pk == 2 && !bf ? defOf[@(insn.operands[1].valueId)] : nil;
+                if (fd && [fused containsObject:@(fd.result.valueId)])
+                    {
+                    // The f16 operation itself, on the halves.
+                    XTIROpcode hop = fd.opcode == XTIROpFAdd ? XTIROpVHAdd : fd.opcode == XTIROpFSub ? XTIROpVHSub
+                                   : fd.opcode == XTIROpFMul ? XTIROpVHMul : fd.opcode == XTIROpFDiv ? XTIROpVHDiv
+                                                                                                : XTIROpVHSqrt;
+                    NSMutableArray<XTIROperand*>* hs = [NSMutableArray array];
+                    for (XTIROperand* o in fd.operands)
+                        [hs addObject:vuse(halfSrc[@(o.valueId)])];
+                    vmap[@(insn.result.valueId)] = xtvPut1(fn, B, newBody, hop, halfTy, hs, 0, insn);
+                    continue;
+                    }
+                if (pk == 1 && bf)
+                    // The pattern is the top half of the f32.
+                    r = xtvPut1(fn, B, newBody, XTIROpVWiden, floatTy,
+                                @[ vuse(a), [XTIROperand immIWithType:[XTIRType u32Type] value:16] ], 0, insn);
+                else if (pk == 1)
+                    {
+                    r = xtvPut1(fn, B, newBody, XTIROpVFpExt, floatTy, @[ vuse(a) ], 0, insn);
+                    // FloatPack keeps a signalling NaN signalling where the
+                    // hardware quiets it: clear the quiet bit again for the
+                    // halves 0x7C01..0x7DFF of either sign, as pack-native's
+                    // keepSignalling does.
+                    if (xtvQuietSeen(fn, B, insn.result.valueId, defOf, packProf, fused))
+                        {
+                        XTIRValue* z = xtvPut1(fn, B, newBody, XTIROpVWiden, wordTy,
+                                               @[ vuse(a), [XTIROperand immIWithType:[XTIRType u32Type] value:0] ], 0,
+                                               insn);
+                        XTIRValue* mag = xtvPut1(fn, B, newBody, XTIROpVAnd, wordTy, @[ vuse(z), u32k(0x7FFF) ], 0, insn);
+                        XTIRValue* d = xtvPut1(fn, B, newBody, XTIROpVSub, wordTy, @[ vuse(mag), u32k(0x7C01) ], 0, insn);
+                        XTIRValue* sig = xtvPut1(fn, B, newBody, XTIROpVICmp, wordTy, @[ vuse(d), u32k(0x1FF) ],
+                                                 (uint8_t)XTIRICmpULT, insn);
+                        XTIRValue* cl = xtvPut1(fn, B, newBody, XTIROpVAnd, wordTy, @[ vuse(r), u32k(0xFFBFFFFF) ], 0,
+                                                insn);
+                        r = xtvPut1(fn, B, newBody, XTIROpVBsl, floatTy, @[ vuse(sig), vuse(cl), vuse(r) ], 0, insn);
+                        }
+                    }
+                else if (!bf)
+                    r = xtvPut1(fn, B, newBody, XTIROpVFpTrunc, halfTy, @[ vuse(a) ], 0, insn);
+                else
+                    {
+                    // Round to nearest even on the bits; a NaN keeps its sign
+                    // and top payload and is made quiet (pack-native's form).
+                    XTIRValue* hi = xtvPut1(fn, B, newBody, XTIROpVLShr, wordTy,
+                                            @[ vuse(a), [XTIROperand immIWithType:[XTIRType u32Type] value:16] ], 0,
+                                            insn);
+                    XTIRValue* lsb = xtvPut1(fn, B, newBody, XTIROpVAnd, wordTy, @[ vuse(hi), u32k(1) ], 0, insn);
+                    XTIRValue* t1 = xtvPut1(fn, B, newBody, XTIROpVAdd, wordTy, @[ vuse(a), u32k(0x7FFF) ], 0, insn);
+                    XTIRValue* t2 = xtvPut1(fn, B, newBody, XTIROpVAdd, wordTy, @[ vuse(t1), vuse(lsb) ], 0, insn);
+                    XTIRValue* rne = xtvPut1(fn, B, newBody, XTIROpVLShr, wordTy,
+                                             @[ vuse(t2), [XTIROperand immIWithType:[XTIRType u32Type] value:16] ], 0,
+                                             insn);
+                    XTIRValue* mag = xtvPut1(fn, B, newBody, XTIROpVAnd, wordTy, @[ vuse(a), u32k(0x7FFFFFFF) ], 0,
+                                             insn);
+                    // mag is below 2^31, so the signed compare is the unsigned one.
+                    XTIRValue* nan = xtvPut1(fn, B, newBody, XTIROpVICmp, wordTy, @[ vuse(mag), u32k(0x7F800000) ],
+                                             (uint8_t)XTIRICmpSGT, insn);
+                    XTIRValue* q = xtvPut1(fn, B, newBody, XTIROpVOr, wordTy, @[ vuse(hi), u32k(0x40) ], 0, insn);
+                    XTIRValue* sel = xtvPut1(fn, B, newBody, XTIROpVBsl, wordTy, @[ vuse(nan), vuse(q), vuse(rne) ],
+                                             0, insn);
+                    r = xtvPut1(fn, B, newBody, XTIROpVNarrow, halfTy, @[ vuse(sel) ], 0, insn);
+                    }
+                vmap[@(insn.result.valueId)] = r;
+                continue;
+                }
+            if (insn.opcode == XTIROpLoad && insn.result.type.kind == XTIRTypeKindU16)
+                {
+                XTIRValue* vr = newValIn(B, halfTy);
+                XTIRInsn* vl = [[XTIRInsn alloc] initWithOpcode:XTIROpVLoad
+                                                         result:vr
+                                                       operands:fwdOps(insn.operands)
+                                                         dbgLoc:insn.dbgLoc];
+                vl.memoryResult = insn.memoryResult;
+                [newBody addObject:vl];
+                vmap[@(insn.result.valueId)] = vr;
+                continue;
+                }
+            if (insn.result && [fused containsObject:@(insn.result.valueId)])
+                continue;
+            if (insn.opcode == XTIROpFSqrt)
+                {
+                vmap[@(insn.result.valueId)] =
+                    xtvPut1(fn, B, newBody, XTIROpVSqrt, floatTy, @[ vecOperand(insn.operands[0]) ], 0, insn);
+                continue;
+                }
+            }
         if (insn == c.ivNext)
             {
             // Step the induction variable by the vector width.
@@ -2616,7 +3169,7 @@ static XTIRValue* xtvApplyConv(XTIRFunction* fn, XTIRInsn* n, XTVecCand* c, XTIR
             XTIRValue* vr = newValIn(B, [XTIRType vecWithLane:insn.result.type bytes:(uint32_t)c.vecBytes]);
             XTIRInsn* vl = [[XTIRInsn alloc] initWithOpcode:XTIROpVLoad
                                                      result:vr
-                                                   operands:insn.operands
+                                                   operands:fwdOps(insn.operands)
                                                      dbgLoc:insn.dbgLoc]; // [ea, mem]
             vl.memoryResult = insn.memoryResult;                          // preserve mem chain
             [newBody addObject:vl];
@@ -2627,7 +3180,7 @@ static XTIRValue* xtvApplyConv(XTIRFunction* fn, XTIRInsn* n, XTVecCand* c, XTIR
             {
             setLane(xtvOperandType(fn, insn.operands[1]));
             XTIROperand* vval = vecOperand(insn.operands[1]);
-            NSMutableArray<XTIROperand*>* ops = [insn.operands mutableCopy];
+            NSMutableArray<XTIROperand*>* ops = [fwdOps(insn.operands) mutableCopy];
             ops[1] = vval;
             XTIRInsn* vs = [[XTIRInsn alloc] initWithOpcode:XTIROpVStore
                                                      result:nil
@@ -2662,6 +3215,23 @@ static XTIRValue* xtvApplyConv(XTIRFunction* fn, XTIRInsn* n, XTVecCand* c, XTIR
         }
 
     [B.instructions setArray:newBody];
+    // The calls' tokens read after the loop name their inputs too.
+    if (memFwd.count)
+        for (XTIRBlock* bb in fn.blocks)
+            {
+            if (bb == B)
+                continue;
+            NSMutableArray<XTIRInsn*>* all = [NSMutableArray arrayWithArray:bb.phiNodes];
+            [all addObjectsFromArray:bb.instructions];
+            if (bb.terminator)
+                [all addObject:bb.terminator];
+            for (XTIRInsn* n in all)
+                {
+                NSArray<XTIROperand*>* r = fwdOps(n.operands);
+                if (r != n.operands)
+                    [n replaceOperands:r];
+                }
+            }
 
     // ── Epilogue, part 2: the vector loop falls into the remainder instead of
     // the exit, through a LANDING PAD (VE) that does nothing but branch.

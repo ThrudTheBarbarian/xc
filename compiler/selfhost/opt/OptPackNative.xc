@@ -62,7 +62,8 @@
             m.funcs().add(keep.get(f));
         }
 
-    // A half-precision operation or comparison: what FEAT_FP16 adds.
+    // A half-precision operation or comparison, scalar or in lanes: what
+    // FEAT_FP16 adds.
     final bool pnHasHalfOp(IRFunc* fn)
         {
         for (u32 b = 0; b < fn.blocks().count(); b = b + 1)
@@ -71,6 +72,9 @@
             for (u32 i = 0; i < bb.insns().count(); i = i + 1)
                 {
                 IRInsn* x = (IRInsn*)bb.insns().get(i);
+                // The vectoriser's f16 lane operations (P1).
+                if (x.isOp(opVHAdd) || x.isOp(opVHSub) || x.isOp(opVHMul) || x.isOp(opVHDiv) || x.isOp(opVHSqrt))
+                    return true;
                 if ((x.isOp(opFAdd) || x.isOp(opFSub) || x.isOp(opFMul) || x.isOp(opFDiv) || x.isOp(opFSqrt))
                     && x.res() != (IRValue*)0 && IRType.is(x.res().ty(), tyU16))
                     return true;

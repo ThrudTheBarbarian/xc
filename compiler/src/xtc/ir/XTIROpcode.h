@@ -206,6 +206,21 @@ typedef NS_ENUM(uint16_t, XTIROpcode) {
     XTIROpVFCmp,      // %v:Vec(I32) <- a:Vec(F32), b  (lane-wise float compare -> 0/-1 mask)
     XTIROpVSIToFp,    // %v:Vec(F32) <- a:Vec(I32)     (signed lanes to float)
     XTIROpVFpToSI,    // %v:Vec(I32) <- a:Vec(F32)     (float lanes to signed, truncating; #27)
+    // The 16-bit floats' lanes (float sizes P1). A Vec(U16) holds f16 or bf16
+    // patterns, at half the width of the Vec(F32) it widens to: the lane counts
+    // agree. VFpExt / VFpTrunc: f16 to f32 and back, rounding to nearest even.
+    // VWiden: each u16 lane zero-extended to 32 bits and shifted left by #imm
+    // (16: bf16 to f32). VNarrow: each 32-bit lane's low half. VHAdd .. VHSqrt:
+    // f16 arithmetic, one rounding per lane (FEAT_FP16).
+    XTIROpVFpExt,     // %v:Vec(F32) <- a:Vec(U16)
+    XTIROpVFpTrunc,   // %v:Vec(U16) <- a:Vec(F32)
+    XTIROpVWiden,     // %v:Vec(32-bit) <- a:Vec(U16), #imm
+    XTIROpVNarrow,    // %v:Vec(U16) <- a:Vec(32-bit)
+    XTIROpVHAdd,      // %v:Vec(U16) <- a, b   (f16 lanes)
+    XTIROpVHSub,
+    XTIROpVHMul,
+    XTIROpVHDiv,
+    XTIROpVHSqrt,     // %v:Vec(U16) <- a
 };
 
 /// Returns YES for terminator opcodes (Branch, CondBranch, Switch,

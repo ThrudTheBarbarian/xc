@@ -10,6 +10,7 @@
 #import "OptDefs.xc"
 #import <OptBase>
 #import <OptVectorizeParts>
+#import <OptVectorizePack>
 #import <OptVectorizeShapes>
 
     class Opt (VectorizeRewrite)
@@ -1297,7 +1298,21 @@
                     return (VecCand*)0;
             }
 
-        String* laneTy = self.vecClassifyBody(B, iv, ivNext, defOf, defBlk);
+        // A pack map (P1): the body converts 16-bit floats with FloatPack's
+        // calls, which become lane conversions where the target has them.
+        bool pack = false;
+        if (self.vecPackLanes(fn))
+            for (u32 i = (u32)0; i < B.insns().count() && !pack; i = i + (u32)1)
+                pack = self.vecPackCall((IRInsn*)B.insns().get(i), defOf) != (u32)0;
+        _vrMixed = new Array();
+        String* laneTy = (String*)0;
+        if (pack)
+            {
+            _vrMapUsesIv = false;
+            laneTy = self.vecClassifyPack(B, iv, ivNext, defOf, defBlk);
+            }
+        else
+            laneTy = self.vecClassifyBody(B, iv, ivNext, defOf, defBlk);
         if (laneTy == (String*)0)
             return (VecCand*)0;
         u32 lw = IRType.bytes(laneTy);
@@ -1305,6 +1320,14 @@
             return (VecCand*)0;
         u32 vb = self.vectorBytes();
         u32 vw = vb / lw;
+        bool pure = false;
+        if (pack && self.vecHalfArith(fn))
+            {
+            self.vecHalfFused(fn, B, defOf);
+            pure = _vrPackPure;
+            if (pure)
+                vw = vb / (u32)2;
+            }
         // A partial final vector would need a scalar tail, which this does not
         // emit — so the trip count has to divide evenly.
         // Trailing test: the non-zero-start refusal, folded in to avoid a
@@ -1340,7 +1363,7 @@
         // Bases that may overlap are checked in the preheader (#95), against
         // a limit computed there, as a runtime trip's is; the scalar clone
         // takes the range when they do.
-        bool guarded = _vrOverlap.count() > (u32)0;
+        bool guarded = _vrOverlap.count() > (u32)0 || _vrMixed.count() > (u32)0;
         IROperand* boundOp = (IROperand*)guard.ops().get((u32)1);
         if (!_vrMapRT && (rtStart != (IROperand*)0 || guarded))
             boundOp = IROperand.immI((i64)n, iv.ty());
@@ -1375,6 +1398,9 @@
         c.setIvStartOp(rtStart);
         c.setOverlap(_vrOverlap);
         c.setIota(_vrMapUsesIv);
+        c.setPack(pack);
+        c.setMixed(_vrMixed);
+        c.setPure(pure);
         return c;
         }
 
@@ -1848,6 +1874,12 @@
             // The vector loop now stops at the last whole vector; the clone's
             // own (cloned) guard still tests the original bound.
             self.vecMapSetBound(c);
+            // A pack map's bases of two sizes, checked after the overlap guard.
+            if (c.rtTrip() && c.mixed() != (Array*)0 && c.mixed().count() > (u32)0)
+                {
+                _vecMapRtM = self.vecMixedGuard(c, c.pre(), _vecMapRtM);
+                c.guard().ops().set((u32)1, (Object*)IROperand.useVal(_vecMapRtM));
+                }
             }
         _vecTy = new String();
         _vecTy = self.vecTyOf(c.laneTy(), c.vecBytes());
@@ -1864,6 +1896,7 @@
             IRBlock* bb = (IRBlock*)fn.blocks().get(b);
             self.vecNoteDefs(defOf, defBlk, bb.insns(), bb);
             }
+        self.vecPackBegin(fn, c, defOf);
         // Hoist invariant splats to the loop's PREHEADER, not the function entry.
         // The arm64 vector pool is v18..v31, every one CALLER-saved under AAPCS,
         // and the allocator has no call-clobber handling: a splat parked in the
@@ -1910,6 +1943,8 @@
         for (u32 i = (u32)0; i < B.insns().count(); i = i + (u32)1)
             {
             IRInsn* n = (IRInsn*)B.insns().get(i);
+            if (c.isPack() && self.vecApplyPack(fn, n, c, entry, B, defOf, defBlk))
+                continue;
             if (n == c.ivNext())
                 {
                 // Step the induction variable by the vector width.
@@ -1937,7 +1972,7 @@
                 vl.copyDbg(n);
                 vl.setRes(vr);
                 for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
-                    vl.add((IROperand*)n.ops().get(k)); // [ea, mem]
+                    vl.add(self.vecMemFwd((IROperand*)n.ops().get(k))); // [ea, mem]
                 vl.setMemRes(n.memRes());               // keep the memory chain
                 _vecBody.add((Object*)vl);
                 _vecMap.set((Hashable*)n.res(), (Object*)vr);
@@ -1951,7 +1986,7 @@
                 IRInsn* vs = IRInsn.with(String.withCString("VStore"));
                 vs.copyDbg(n);
                 for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
-                    vs.add(k == (u32)1 ? vval : (IROperand*)n.ops().get(k));
+                    vs.add(k == (u32)1 ? vval : self.vecMemFwd((IROperand*)n.ops().get(k)));
                 vs.setMemRes(n.memRes());
                 _vecBody.add((Object*)vs);
                 continue;
@@ -1977,6 +2012,8 @@
             _vecMap.set((Hashable*)n.res(), (Object*)vr);
             }
         B.setInsns(_vecBody);
+        // The dropped calls' tokens read after the loop name their inputs too.
+        self.vecMemFwdRest(fn, B);
         _vecLane = (String*)0;
         _vecTy = self.vecTyOf(c.laneTy(), c.vecBytes());
         if (c.needEpi())
@@ -1998,45 +2035,6 @@
         }
 
     // A constant broadcast in the preheader, once per lane and bits (#27).
-    final IROperand* vecConstSplat(IRBlock* entry, String* lane, IROperand* imm, VecCand* c)
-        {
-        String* ck = String.withCString("k");
-        ck.append(lane);
-        ck.appendCString(":");
-        if (imm.kind() == (u8)OPK_IMMF)
-            ck.append(imm.fpHex());
-        else
-            ck.appendFormat("%lld", imm.imm());
-        Object* hit = _vecEntryCache.get((Hashable*)ck);
-        if (hit != (Object*)0)
-            return IROperand.useVal((IRValue*)hit);
-        IRValue* cst = new IRValue(lane);
-        IRInsn* ci = IRInsn.with(String.withCString("Const"));
-        ci.setRes(cst);
-        ci.add(imm);
-        entry.insns().add((Object*)ci);
-        IRValue* sp = new IRValue(self.vecTyOf(lane, c.vecBytes()));
-        IRInsn* s = IRInsn.with(String.withCString("VSplat"));
-        s.setRes(sp);
-        s.add(IROperand.useVal(cst));
-        entry.insns().add((Object*)s);
-        _vecEntryCache.set((Hashable*)ck, (Object*)sp);
-        return IROperand.useVal(sp);
-        }
-
-    final IRValue* vecPut1(string op, String* ty, IROperand* a, IROperand* b, IRInsn* dbg)
-        {
-        IRValue* r = new IRValue(ty);
-        IRInsn* n = IRInsn.with(String.withCString(op));
-        n.copyDbg(dbg);
-        n.setRes(r);
-        n.add(a);
-        if (b != (IROperand*)0)
-            n.add(b);
-        _vecBody.add((Object*)n);
-        return r;
-        }
-
     final IRValue* vecPutCmp(string pred, String* ty, IRValue* a, IROperand* b, IRInsn* dbg)
         {
         IRValue* r = self.vecPut1("VFCmp", ty, IROperand.useVal(a), b, dbg);

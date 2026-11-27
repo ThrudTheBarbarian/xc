@@ -87,13 +87,17 @@ typedef NS_ENUM(NSInteger, XTPackNativeType) {
     return YES;
     }
 
-// A half-precision operation or comparison: what FEAT_FP16 adds.
+// A half-precision operation or comparison, scalar or in lanes: what FEAT_FP16
+// adds.
 static BOOL hasHalfOp(XTIRFunction* fn)
     {
     for (XTIRBlock* bb in fn.blocks)
         for (XTIRInsn* x in bb.instructions)
             {
             XTIROpcode op = x.opcode;
+            // The vectoriser's f16 lane operations (P1).
+            if (op == XTIROpVHAdd || op == XTIROpVHSub || op == XTIROpVHMul || op == XTIROpVHDiv || op == XTIROpVHSqrt)
+                return YES;
             if ((op == XTIROpFAdd || op == XTIROpFSub || op == XTIROpFMul || op == XTIROpFDiv || op == XTIROpFSqrt)
                 && x.result && x.result.type.kind == XTIRTypeKindU16)
                 return YES;

@@ -909,6 +909,63 @@ static int xaEncodeSME(NSString *mn, NSArray<NSString *> *ops, uint32_t *out, NS
         if (op0vec && [mn isEqualToString:@"mov"] && ops.count==2 && parseVReg(ops[1],&vn2,&t,&t) && t == vq)
             return 0x0EA01C00u | ((uint32_t)vq<<30) | ((uint32_t)vn2<<16) | ((uint32_t)vn2<<5) | (uint32_t)vd;
         NSNumber *b;
+        // The 16-bit floats' lanes (float sizes P1), byte-exact from clang.
+        // FP16 arithmetic (three-same FP16, FEAT_FP16) on .4h/.8h: its own
+        // encoding, which the float3 table's 1-bit size cannot spell.
+        if (op0vec && vs == 1 && ops.count == 3 && parseVReg(ops[1],&vn2,&t,&t) && parseVReg(ops[2],&vm2,&t,&t)) {
+            uint32_t hb = [mn isEqualToString:@"fadd"] ? 0x0E401400u : [mn isEqualToString:@"fsub"] ? 0x0EC01400u
+                        : [mn isEqualToString:@"fmul"] ? 0x2E401C00u : [mn isEqualToString:@"fdiv"] ? 0x2E403C00u : 0;
+            if (hb)
+                return hb | ((uint32_t)vq<<30) | ((uint32_t)vm2<<16) | ((uint32_t)vn2<<5) | (uint32_t)vd;
+        }
+        if (op0vec && vs == 1 && ops.count == 2 && [mn isEqualToString:@"fsqrt"] && parseVReg(ops[1],&vn2,&t,&t))
+            return 0x2EF9F800u | ((uint32_t)vq<<30) | ((uint32_t)vn2<<5) | (uint32_t)vd;
+        // Widen and narrow between .4h/.8h and .4s: the `2` forms take or
+        // write the high half, so Q comes from the 8-lane operand and must
+        // agree with the suffix.
+        if (op0vec && ops.count >= 2 && ([mn isEqualToString:@"fcvtl"] || [mn isEqualToString:@"fcvtl2"]
+                                         || [mn isEqualToString:@"fcvtn"] || [mn isEqualToString:@"fcvtn2"]
+                                         || [mn isEqualToString:@"xtn"] || [mn isEqualToString:@"xtn2"]
+                                         || [mn isEqualToString:@"ushll"] || [mn isEqualToString:@"ushll2"]
+                                         || [mn isEqualToString:@"shll"] || [mn isEqualToString:@"shll2"])) {
+            int ss, sq;
+            if (!parseVReg(ops[1],&vn2,&ss,&sq)) {
+                if (error) *error = asmErr(@"bad %@ source", mn);
+                return 0;
+            }
+            BOOL two = [mn hasSuffix:@"2"];
+            BOOL widen = [mn hasPrefix:@"fcvtl"] || [mn hasPrefix:@"ushll"] || [mn hasPrefix:@"shll"];
+            // The wide side is .4s, the narrow side .4h (or .8h for the 2 form).
+            int wq = widen ? vq : sq, ws = widen ? vs : ss, nq = widen ? sq : vq, ns = widen ? ss : vs;
+            if (ws != 2 || wq != 1 || ns != 1 || (nq == 1) != two) {
+                if (error) *error = asmErr(@"%@: unsupported arrangement", mn);
+                return 0;
+            }
+            uint32_t q = (uint32_t)nq << 30;
+            if ([mn hasPrefix:@"fcvtl"])
+                return 0x0E217800u | q | ((uint32_t)vn2<<5) | (uint32_t)vd;
+            if ([mn hasPrefix:@"fcvtn"])
+                return 0x0E216800u | q | ((uint32_t)vn2<<5) | (uint32_t)vd;
+            if ([mn hasPrefix:@"xtn"])
+                return 0x0E612800u | q | ((uint32_t)vn2<<5) | (uint32_t)vd;
+            int64_t sh = 0;
+            if (ops.count != 3 || !parseImm(ops[2],&sh)) {
+                if (error) *error = asmErr(@"%@ needs a shift", mn);
+                return 0;
+            }
+            if ([mn hasPrefix:@"shll"]) {
+                if (sh != 16) {
+                    if (error) *error = asmErr(@"shll shift must be 16");
+                    return 0;
+                }
+                return 0x2E613800u | q | ((uint32_t)vn2<<5) | (uint32_t)vd;
+            }
+            if (sh < 0 || sh > 15) {
+                if (error) *error = asmErr(@"ushll shift %lld out of range 0..15", (long long)sh);
+                return 0;
+            }
+            return 0x2F00A400u | q | ((uint32_t)(16 + sh)<<16) | ((uint32_t)vn2<<5) | (uint32_t)vd;
+        }
         if (op0vec && (b=int3[mn]) && ops.count==3 && parseVReg(ops[1],&vn2,&t,&t) && parseVReg(ops[2],&vm2,&t,&t))
             return b.unsignedIntValue | ((uint32_t)vq<<30) | ((uint32_t)vs<<22) | ((uint32_t)vm2<<16) | ((uint32_t)vn2<<5) | (uint32_t)vd;
         if (op0vec && (b=logic3[mn]) && ops.count==3 && parseVReg(ops[1],&vn2,&t,&t) && parseVReg(ops[2],&vm2,&t,&t))

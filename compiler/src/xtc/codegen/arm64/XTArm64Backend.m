@@ -4673,7 +4673,9 @@ static XTIROperand *icmpZeroTestValue(XTIRInsn *icmp, XTArm64FnCtx *ctx) {
                 if (![self constIndexForElementAddr:ea ctx:ctx value:&k]) continue;
                 uint32_t scale = [self arm64ElemSizeForElementAddr:ea ctx:ctx];
                 int64_t off = k * (int64_t)scale;
-                if (off < 0 || off % 16 != 0 || off > 65520) continue;
+                // A half vector (a 16-bit float map's, P1) is a d register.
+                int64_t accV = [self vecAccessBytes:insn ctx:ctx];
+                if (off < 0 || off % accV != 0 || off > 4095 * accV) continue;
                 ctx.foldInfo[@(vptr.valueId)] = ea;
                 [ctx.foldedAddr addObject:@(ea.result.valueId)];
                 continue;
@@ -4792,6 +4794,17 @@ static BOOL xtConstThrough(XTIRValueId v, XTIRInsn* (^defOf)(XTIRValueId), int d
     return xtConstThrough(idx.valueId, ^XTIRInsn *(XTIRValueId v) { return ctx.defOf[@(v)]; }, 0, out, &ct);
 }
 
+// The bytes a VLoad or VStore moves: 8 for a half vector (a 16-bit float
+// map's U16 lanes, P1), else 16.
++ (int64_t)vecAccessBytes:(XTIRInsn *)insn ctx:(XTArm64FnCtx *)ctx {
+    XTIRType *t = nil;
+    if (insn.opcode == XTIROpVLoad)
+        t = insn.result.type;
+    else if (insn.opcode == XTIROpVStore && insn.operands.count >= 2 && insn.operands[1].kind == XTIROperandKindUse)
+        t = [ctx.fn valueForId:insn.operands[1].valueId].type;
+    return t && t.kind == XTIRTypeKindVec && t.byteWidth == 8 ? 8 : 16;
+}
+
 + (NSString *)foldedAddrOperandFor:(XTIRInsn *)insn ctx:(XTArm64FnCtx *)ctx {
     XTIRInsn *a = ctx.foldInfo[@(insn.operands[0].valueId)];
     NSString *base = [self operandReg:a.operands[0] intoScratch:@"x16" ctx:ctx];
@@ -4808,8 +4821,9 @@ static BOOL xtConstThrough(XTIRValueId v, XTIRInsn* (^defOf)(XTIRValueId), int d
     if ([self constIndexForElementAddr:a ctx:ctx value:&k] && k >= 0) {
         uint32_t scale = [self arm64ElemSizeForElementAddr:a ctx:ctx];
         int64_t off = k * (int64_t)scale;
-        // Access width: 16 for a vector q load/store, else the scalar transfer size.
-        uint32_t accW = 16;
+        // Access width: 16 for a vector q load/store (8 for a d one), else the
+        // scalar transfer size.
+        uint32_t accW = (uint32_t)[self vecAccessBytes:insn ctx:ctx];
         if (insn.opcode != XTIROpVLoad && insn.opcode != XTIROpVStore) {
             XTIRType *xt = (insn.opcode == XTIROpStore || insn.opcode == XTIROpStoreVolatile)
                 ? (insn.operands[1].kind == XTIROperandKindUse ? [ctx.fn valueForId:insn.operands[1].valueId].type : insn.operands[1].type)
@@ -7835,7 +7849,8 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
                 ? [self foldedAddrOperandFor:insn ctx:ctx]
                 : [NSString stringWithFormat:@"[%@]", [self operandReg:insn.operands[0] intoScratch:@"x16" ctx:ctx]];
             NSUInteger n = [self vecIndexForValue:insn.result.valueId ctx:ctx];
-            [ctx.out appendFormat:@"    ldr q%lu, %@\n", (unsigned long)n, addr];
+            [ctx.out appendFormat:@"    ldr %@%lu, %@\n", [self vecAccessBytes:insn ctx:ctx] == 8 ? @"d" : @"q",
+             (unsigned long)n, addr];
             break;
         }
         case XTIROpVStore: {      // operands: [ptr, vec, mem]
@@ -7844,7 +7859,8 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
                 ? [self foldedAddrOperandFor:insn ctx:ctx]
                 : [NSString stringWithFormat:@"[%@]", [self operandReg:insn.operands[0] intoScratch:@"x16" ctx:ctx]];
             NSUInteger v = [self vecIndexForValue:insn.operands[1].valueId ctx:ctx];
-            [ctx.out appendFormat:@"    str q%lu, %@\n", (unsigned long)v, addr];
+            [ctx.out appendFormat:@"    str %@%lu, %@\n", [self vecAccessBytes:insn ctx:ctx] == 8 ? @"d" : @"q",
+             (unsigned long)v, addr];
             break;
         }
         case XTIROpVSplat: {      // operands: [scalar] — broadcast to all lanes
@@ -8188,6 +8204,46 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
             NSUInteger a = [self vecIndexForValue:insn.operands[0].valueId ctx:ctx];
             NSUInteger d = [self vecIndexForValue:insn.result.valueId ctx:ctx];
             [ctx.out appendFormat:@"    fcvtzs v%lu.4s, v%lu.4s\n", (unsigned long)d, (unsigned long)a];
+            break;
+        }
+        // The 16-bit floats' lanes (P1): four f16, bf16 or u16 lanes in a d
+        // register beside the four 32-bit ones in a q register, or eight
+        // halves in a q register for the f16 arithmetic.
+        case XTIROpVFpExt: case XTIROpVFpTrunc: case XTIROpVWiden: case XTIROpVNarrow: {
+            if (insn.operands.count < 1 || !insn.result || insn.operands[0].kind != XTIROperandKindUse) break;
+            NSUInteger a = [self vecIndexForValue:insn.operands[0].valueId ctx:ctx];
+            NSUInteger d = [self vecIndexForValue:insn.result.valueId ctx:ctx];
+            if (insn.opcode == XTIROpVFpExt)
+                [ctx.out appendFormat:@"    fcvtl v%lu.4s, v%lu.4h\n", (unsigned long)d, (unsigned long)a];
+            else if (insn.opcode == XTIROpVFpTrunc)
+                [ctx.out appendFormat:@"    fcvtn v%lu.4h, v%lu.4s\n", (unsigned long)d, (unsigned long)a];
+            else if (insn.opcode == XTIROpVNarrow)
+                [ctx.out appendFormat:@"    xtn v%lu.4h, v%lu.4s\n", (unsigned long)d, (unsigned long)a];
+            else {
+                int64_t sh = insn.operands.count > 1 ? insn.operands[1].intValue : 0;
+                if (sh == 16)
+                    [ctx.out appendFormat:@"    shll v%lu.4s, v%lu.4h, #16\n", (unsigned long)d, (unsigned long)a];
+                else
+                    [ctx.out appendFormat:@"    ushll v%lu.4s, v%lu.4h, #%lld\n", (unsigned long)d,
+                     (unsigned long)a, (long long)sh];
+            }
+            break;
+        }
+        case XTIROpVHAdd: case XTIROpVHSub: case XTIROpVHMul: case XTIROpVHDiv: case XTIROpVHSqrt: {
+            if (insn.operands.count < 1 || !insn.result || insn.operands[0].kind != XTIROperandKindUse) break;
+            NSString *arr = insn.result.type.byteWidth == 8 ? @"4h" : @"8h";
+            NSUInteger a = [self vecIndexForValue:insn.operands[0].valueId ctx:ctx];
+            NSUInteger d = [self vecIndexForValue:insn.result.valueId ctx:ctx];
+            if (insn.opcode == XTIROpVHSqrt) {
+                [ctx.out appendFormat:@"    fsqrt v%lu.%@, v%lu.%@\n", (unsigned long)d, arr, (unsigned long)a, arr];
+                break;
+            }
+            if (insn.operands.count < 2 || insn.operands[1].kind != XTIROperandKindUse) break;
+            NSUInteger b = [self vecIndexForValue:insn.operands[1].valueId ctx:ctx];
+            NSString *mnem = insn.opcode == XTIROpVHAdd ? @"fadd" : insn.opcode == XTIROpVHSub ? @"fsub"
+                           : insn.opcode == XTIROpVHMul ? @"fmul" : @"fdiv";
+            [ctx.out appendFormat:@"    %@ v%lu.%@, v%lu.%@, v%lu.%@\n", mnem, (unsigned long)d, arr,
+             (unsigned long)a, arr, (unsigned long)b, arr];
             break;
         }
         case XTIROpVReduceMax: case XTIROpVReduceMin: {  // horizontal max/min

@@ -1212,8 +1212,11 @@ static BOOL namesHighZmm(NSString *s) {
                      @"vsqrtps":@[@0,@1,@0x51,@0], @"vsqrtpd":@[@1,@1,@0x51,@0],
                      // and the lane conversions, int to float and float to int (#27).
                      @"vcvtdq2ps":@[@0,@1,@0x5B,@0], @"vcvttps2dq":@[@2,@1,@0x5B,@0],
-                     // F16C: four halves to floats (VEX.128.66.0F38.W0 13 /r).
+                     // F16C: four halves to floats (VEX.128.66.0F38.W0 13 /r),
+                     // eight from an xmm into a ymm (VEX.256).
                      @"vcvtph2ps":@[@1,@2,@0x13,@0],
+                     // u16 lanes zero-extended to dwords (P1): VEX.256.66.0F38 33.
+                     @"vpmovzxwd":@[@1,@2,@0x33,@0],
                      // The scalar compares, and the scalar moves to or from
                      // memory (a register-to-register vmovss takes three
                      // operands, below): what an AVX function's scalar float
@@ -1278,15 +1281,16 @@ static BOOL namesHighZmm(NSString *s) {
             CLEANUP(); return out;
         }
         if ([mn isEqualToString:@"vcvtps2ph"] && opCount == 3 && a && b && b->kind == OpReg
-            && b->size == 16 && opv[2].kind == OpImm) {
+            && (b->size == 16 || b->size == 32) && opv[2].kind == OpImm) {
             // F16C, VEX.128.66.0F3A.W0 1D /r ib: reg = the xmm source, r/m = the
-            // destination, the immediate the rounding control. As the port.
+            // destination, the immediate the rounding control; VEX.256 for a
+            // ymm source (eight floats, P1). As the port.
             int rr = b->reg, bb = a->kind == OpReg ? a->reg : a->base;
             int xx = a->kind == OpReg ? 0 : a->index;
             bb = bb < 0 ? 0 : bb; xx = xx < 0 ? 0 : xx;
             emit8(out, 0xC4);
             emit8(out, (uint8_t)(((rr & 8) ? 0 : 0x80) | ((xx & 8) ? 0 : 0x40) | ((bb & 8) ? 0 : 0x20) | 3));
-            emit8(out, (uint8_t)((0x0F << 3) | 1));
+            emit8(out, (uint8_t)((0x0F << 3) | (b->size == 32 ? 0x04 : 0) | 1));
             emit8(out, 0x1D);
             emitModRM(out, rr, a);
             emit8(out, (uint8_t)opv[2].imm);
@@ -1418,6 +1422,8 @@ static BOOL namesHighZmm(NSString *s) {
                       @"pmaxsb":@[@0x66,@0x3C], @"pminsb":@[@0x66,@0x38],
                       @"pmaxuw":@[@0x66,@0x3E], @"pminuw":@[@0x66,@0x3A],
                       @"pmulld":@[@0x66,@0x40],
+                      // dwords to words, unsigned saturation (a P1 narrow).
+                      @"packusdw":@[@0x66,@0x2B],
                       // The u8 pair sum the 256-bit widening reductions use (bug 644).
                       @"pmaddubsw":@[@0x66,@0x04],
                       // Scalar FMA (:goal(speed) code's fused multiply-adds),
