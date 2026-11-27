@@ -60,7 +60,9 @@ Reading and writing follow the usual conversions to and from the element
 type: a literal takes the element's type (`h[0, 0] = 0.5` on a
 `tensor<f16, 2>`), and a conversion that loses information needs a cast
 (`h[0, 0] = (f16)x` for an `f32` x). Compound assignment works
-(`t[i, j] += v`), and evaluates `t` and the indices once. `t[i, j]++` and
+(`t[i, j] += v`), and evaluates `t` and the indices once. Each element access
+is a call of the tensor's accessor, which `-O2` inlines; at `-O0` it stays a
+call. `t[i, j]++` and
 `&t[i, j]` are not available.
 
 Writing an `f4` element reads its byte, replaces one nibble and writes the
@@ -138,8 +140,18 @@ independent in a form the compiler can check:
   are refused, even if they are different storages.
 - Every write to that tensor has the same first index, `k × i + c` with k not
   0, in the block's index i. Each work item then writes its own rows.
-- A read of the written tensor has that first index too. Other tensors may be
-  read anywhere.
+- A read of the written tensor has that first index too, and so does a read of
+  any other tensor of the same element type, since it may share the written
+  tensor's storage (a copy, a parameter, a field). The exception is two local
+  tensors that are each made by their own `new tensor<…>(…)` and never assigned
+  again or have their address taken: they are different storages, and the
+  other one may be read anywhere. Tensors of another element type may be read
+  anywhere.
+
+A block that breaks a rule is refused, and the message says what to do:
+"writes the tensor 't' and reads the tensor 'u' at a different row; they may
+share storage: read 'u' at the same row, or copy it first". A loop that
+`--par-style=auto` would make into a block runs serially instead.
 
 ```c
 par scale
