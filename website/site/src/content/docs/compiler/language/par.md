@@ -220,9 +220,10 @@ same time spread over the machine. `XC_PAR_PIN=0` leaves the threads unpinned.
 
 ### Small floats on the GPU
 
-A block that computes in `f16`, `bf16`, `f8` or another 16- or 8-bit pack has
-a kernel for every GPU interface, and its results are the CPU's, bit for bit:
-each operation is rounded to the element type, whatever the block's goal.
+A block that computes in `f16`, `bf16`, `f8`, `f4` or another 16- or 8-bit
+pack has a kernel for every GPU interface, and its results are the CPU's, bit
+for bit: each operation is rounded to the element type, whatever the block's
+goal.
 
 | GPU interface | `f16` | `bf16` | `f8` and the other packs |
 |---|---|---|---|
@@ -233,7 +234,8 @@ each operation is rounded to the element type, whatever the block's goal.
 "Converted in the kernel" means integer operations that every GPU has, the
 same steps as the CPU's routines, so no device feature is needed (no
 `shaderFloat16`, no `shader-f16`) and every device runs these kernels. The
-arrays are 16- and 8-bit buffers, as `u16` and `u8` arrays are. One `float`
+arrays are 16- and 8-bit buffers, as `u16` and `u8` arrays are; an f4 array is
+a buffer of its bytes. One `float`
 rounding gives the correctly rounded `f16`, `bf16` or `f8` result, so the
 rounded `float` operation is exact. The kernels use the precise forms of the
 `float` operations even when the block's goal is speed: correctly rounded
@@ -256,6 +258,13 @@ GPU:
 par: scale: computes in f16, bf16 on the GPU, converting in the kernel
 ```
 
+A block that writes an f4 array runs on the GPU with the layout the next
+section describes, and `XC_PAR_REPORT=1` says so:
+
+```
+par: quant: f4 pairs per thread: 2 items a thread, each thread's first on the block's parity, so no two threads write one byte
+```
+
 ### f4 arrays
 
 An f4 array packs two elements to a byte, and writing an element rewrites its
@@ -267,13 +276,22 @@ a whole number of bytes, and a chunk can be one item longer or shorter than an
 equal split. With an even `k` the items never share a byte, and the split is
 the usual one.
 
+On a GPU the same rule holds for every thread: each one runs an even number of
+items, at least two, and the first item of each has the parity that makes
+`k * i + c` even, so every thread writes whole bytes. When the range itself
+starts on the other parity, its first item runs on the CPU before the rest,
+and the rest starts on the parity. A range of odd length ends with a thread
+that runs fewer items, and no other thread shares its last byte. A block run
+as tiles across several devices has tiles of an even number of items, so the
+tiles start on the parity too; CUDA and Vulkan devices do not take tiles of a
+block that writes an f4 array, and such a block runs on one of them in one
+launch. A block that only reads f4 arrays has no such rule.
+
 A block whose f4 writes cannot be kept apart this way is refused: one that
 writes an f4 array at an index computed from data (`a[idx[i]]`), or one
 element from every item (`a[0]`), and one that writes at offsets of both
 parities (`a[i]` and `b[i + 1]`). A loop `--par-style=auto` would lift stays a
-loop instead. A block that reads or writes f4 array elements runs on the CPU's
-threads, never on a GPU, and the compiler says so where the GPU could
-otherwise be used.
+loop instead.
 
 ## Blocks next to each other run as one
 

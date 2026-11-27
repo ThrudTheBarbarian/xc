@@ -214,8 +214,8 @@ pack runs on the GPU too, with the CPU's
 results: Metal converts `f16` in its own `half` type, and every other type and
 interface converts in the kernel ([Small floats on the
 GPU](/compiler/language/par/#small-floats-on-the-gpu)). A block that reads or
-writes `f4` array elements runs on the CPU; the compiler says so when the
-block could otherwise use the GPU.
+writes `f4` array elements runs on the GPU as well, each GPU thread writing
+whole bytes ([f4 arrays](/compiler/language/par/#f4-arrays)).
 
 #### Calling C
 
@@ -323,8 +323,8 @@ other small floats.
 
 Because a write rewrites the whole byte, two threads writing the two elements
 of one byte at the same time can lose one of the writes, as two threads
-writing neighbouring C bitfields can. A `par` block never does this: it splits
-its range so that no two threads write one byte (see
+writing neighbouring C bitfields can. A `par` block never does this: on the
+CPU and on a GPU it splits its range so that no two threads write one byte (see
 [par](/compiler/language/par/#f4-arrays)). Hand-written `Thread` code that
 writes neighbouring elements from several threads should store with
 `f4StoreAtomic` from `Fp4.xc`, which swaps the element's nibble into its
