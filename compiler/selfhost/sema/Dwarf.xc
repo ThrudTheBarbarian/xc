@@ -25,7 +25,7 @@
 // and is NOT here yet; `Iface.read` says so rather than pretending.
 #import "Foundation.xc"
 #import "Files.xc"
-#import "Coder.xc"   // inflate and CRC-32, for distributions' debug files
+#import "Deflate.xc"   // inflate and CRC-32, for distributions' debug files
 #import <Node>
 #import "NodeDefs.xc"
 
@@ -823,7 +823,7 @@ class DwCur
                     if (f.equals(path))
                         continue;
                     Data* d = Files.readData(f);
-                    if (d != (Data*)0 && Coder.crc32(d.bytes(), d.length()) == want)
+                    if (d != (Data*)0 && CoderCrc.crc32(d.bytes(), d.length()) == want)
                         return f;
                     }
                 }
