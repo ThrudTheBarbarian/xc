@@ -62,6 +62,7 @@ class LlvmReader
     Map* _locs;             // "!N" -> Number@ line << 16 | column, from the DILocations
     Map* _structs;          // "%struct.X" -> "Agg(<layout id>)"
     Map* _pairTys;          // a two-word result's LLVM type -> "Agg(<layout id>)"
+    Map* _litTys;           // a literal struct's LLVM type -> "Agg(<layout id>)"
     Array* _retPair;        // the function's two-word result: its parts' IR types, else 0
     bool _pairRegs;         // the target returns a two-word aggregate in two registers
     Map* _packedIds;        // layout id -> 1 for a packed struct (`<{ ... }>`): no padding, aligned 1
@@ -102,6 +103,7 @@ class LlvmReader
         _defined = new Map();
         _structs = new Map();
         _pairTys = new Map();
+        _litTys = new Map();
         _packedIds = new Map();
         _declOf = new Map();
         _readFns = new Array();
@@ -953,6 +955,66 @@ class LlvmReader
         return at;
         }
 
+    // A literal struct's type (`{ T, T, ... }`, its fields scalars, arrays,
+    // structs read already or literal structs of their own) as
+    // "Agg(<layout id>)", naturally aligned; 0 for any field not read.
+    String* literalStructTy(String* t)
+        {
+        if (!t.hasPrefix(String.withCString("{")) || !t.hasSuffix(String.withCString("}")))
+            return (String*)0;
+        String* had = (String*)_litTys.get((Hashable*)t);
+        if (had != (String*)0)
+            return had;
+        String* body = t.substringBytes((u32)1, t.byteLength() - (u32)2).trimmed();
+        Array* fields = new Array();
+        u32 depth = (u32)0;
+        u32 b = (u32)0;
+        for (u32 k = (u32)0; k <= body.byteLength(); k = k + (u32)1)
+            {
+            u8 c = k < body.byteLength() ? body.byteAt(k) : (u8)',';
+            if (c == (u8)'{' || c == (u8)'[' || c == (u8)'<' || c == (u8)'(')
+                depth = depth + (u32)1;
+            else if (c == (u8)'}' || c == (u8)']' || c == (u8)'>' || c == (u8)')')
+                depth = depth - (u32)1;
+            else if (c == (u8)',' && depth == (u32)0)
+                {
+                fields.add((Object*)body.substringBytes(b, k - b).trimmed());
+                b = k + (u32)1;
+                }
+            }
+        IRLayout* L = IRLayout.with((u32)0, (u32)1);
+        u32 off = (u32)0;
+        u32 maxA = (u32)1;
+        for (u32 k = (u32)0; k < fields.count(); k = k + (u32)1)
+            {
+            String* f = (String*)fields.get(k);
+            String* it = (String*)0;
+            if (f.hasPrefix(String.withCString("{")))
+                it = literalStructTy(f);
+            else
+                {
+                String* ae = arrayOf(f);
+                if (ae != (String*)0)
+                    it = String.withFormat("Agg(%u)", _m.addLayout(IRLayout.array(ae, _arrN, widthOf(ae), alignOf(ae))));
+                else
+                    it = irOf(f);
+                }
+            if (it == (String*)0 || it.equals(String.withCString("Void")))
+                return (String*)0;
+            u32 a = alignOf(it);
+            if (a > maxA)
+                maxA = a;
+            off = (off + a - (u32)1) / a * a;
+            L.addField(off, it);
+            off = off + widthOf(it);
+            }
+        off = (off + maxA - (u32)1) / maxA * maxA;
+        L.setSize(off);
+        String* made = String.withFormat("Agg(%u)", _m.addLayout(L));
+        _litTys.set((Hashable*)t, (Object*)made);
+        return made;
+        }
+
     // At `[`: a constant array's elements (`[i64 ptrtoint (ptr @d to i64),
     // i64 poison]`), each made as an operand; 0 (failed) when one is not read.
     Array* constArrayParts(void)
@@ -1140,7 +1202,12 @@ class LlvmReader
             String* ft = llType();
             String* it = (String*)0;
             String* ae = arrayOf(ft);
-            if (ae != (String*)0)
+            // A literal struct field (`{ double, double }`, libstdc++'s
+            // std::complex; `{ i64, i64 }` in std::function's storage).
+            String* lit = ft == (String*)0 ? litStruct() : (String*)0;
+            if (lit != (String*)0)
+                it = literalStructTy(lit);
+            else if (ae != (String*)0)
                 {
                 u32 n = _arrN;
                 u32 id = _m.addLayout(IRLayout.array(ae, n, widthOf(ae), alignOf(ae)));
@@ -2543,6 +2610,13 @@ class LlvmReader
             {
             String* lt = llType();
             String* t = lt != (String*)0 ? irOf(lt) : (String*)0;
+            // A literal struct (`alloca { double, double }`, C's _Complex).
+            if (lt == (String*)0)
+                {
+                String* lit = litStruct();
+                if (lit != (String*)0)
+                    t = literalStructTy(lit);
+                }
             // A local array (`alloca [256 x double]`, of arrays maybe): a
             // slot of all its innermost elements, which GEPs into it index.
             if (t == (String*)0 && lt != (String*)0 && lt.hasPrefix(String.withCString("[")))
@@ -3558,6 +3632,8 @@ class LlvmReader
     IRValue* gepValue(void)
         {
         String* t = llType();
+        // A literal struct's field (`{ double, double }, ptr p, i32 0, i32 1`).
+        String* litT = t == (String*)0 ? litStruct() : (String*)0;
         eat(",");
         IRValue* base = typedOperand();
         if (base == (IRValue*)0)
@@ -3594,7 +3670,7 @@ class LlvmReader
             idx.add((Object*)i);
             constK.add((Object*)Number.withI64(kc));
             }
-        String* elem = irOf(t);
+        String* elem = litT != (String*)0 ? literalStructTy(litT) : irOf(t);
         IRValue* ix = (IRValue*)0;
         // A field of a struct: `%struct.X, ptr p, i32 0, i32 k`, or of
         // element [i] of an array of them, `%struct.X, ptr p, i64 %i, i32 k`.

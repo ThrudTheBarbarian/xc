@@ -42,6 +42,14 @@ if clang++ --version >/dev/null 2>&1; then
     [ -x "$W/ax" ] && { [ "$("$W/ax")" = "$("$W/aref")" ] || { echo "FAIL c-reads: aggarg.cpp gives '$("$W/ax")', clang++'s '$("$W/aref")'"; fail=1; }; }
     grep -q 'left to clang' "$W/ab" && { echo "FAIL c-reads: aggarg.cpp left to clang:"; grep 'because of' "$W/ab" | head -2; fail=1; }
 fi
+# cplx.c: a literal struct as a struct's field and as a local (_Complex).
+X=tests/par/c-reads/cplx.c
+clang -O2 -o "$W/xref" "$X" || { echo "FAIL c-reads: clang does not build cplx.c"; exit 1; }
+for O in -O0 -O2; do
+    XC_C_TRACE=1 "$XC" -q $O -H . -o "$W/xx" "$X" > "$W/xb" 2>&1 || { echo "FAIL c-reads: cplx.c $O does not build"; grep -v warning "$W/xb" | head -3; fail=1; continue; }
+    [ "$("$W/xx")" = "$("$W/xref")" ] || { echo "FAIL c-reads: cplx.c $O gives '$("$W/xx")', clang's '$("$W/xref")'"; fail=1; }
+    grep -q 'left to clang' "$W/xb" && { echo "FAIL c-reads: cplx.c $O left to clang:"; grep 'because of' "$W/xb" | head -2; fail=1; }
+done
 clang -O2 -o "$W/ref" "$F" || { echo "FAIL c-reads: clang does not build it"; exit 1; }
 want=$("$W/ref")
 for O in -O0 -O2; do
