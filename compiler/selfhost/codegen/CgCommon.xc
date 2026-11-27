@@ -277,6 +277,19 @@ class CgCommon
         return referencesSymbol(m, String.withCString("Plugin$load"));
     }
 
+    // Whether a symbol carries a C `byval` mark (the C/C++ reader's, for a
+    // struct x86-64 System V passes on the stack by copy) on any of its
+    // first n arguments: a back end without that convention refuses it.
+    static bool anyByval(IRSymbol* s, u32 n)
+        {
+        if (s == (IRSymbol*)0)
+            return false;
+        for (u32 i = (u32)0; i < n; i = i + (u32)1)
+            if (s.attr(String.withFormat("byval_%u", i)) || s.attr(String.withFormat("byval16_%u", i)))
+                return true;
+        return false;
+        }
+
     static bool isFloatTy(String* t)
     {
         return IRType.isFloat(t);

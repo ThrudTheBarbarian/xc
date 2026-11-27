@@ -1038,6 +1038,9 @@ class X86_64
         Array* iregs = sysvArgRegs();
         // A hidden sret consumes rdi, shifting the GP arguments right by one.
         u32 ireg = hasSret ? (u32)1 : (u32)0;
+        // The C byval parameters (the function's own symbol's marks): on the
+        // stack whole, at an offset of their alignment, as the caller put them.
+        Array* byv = X86_64.byvalMarks(symNamed(fn.name()), fn.params().count());
         u32 freg = (u32)0;
         u32 sidx = (u32)0;
         for (u32 i = (u32)0; i < fn.params().count(); i = i + (u32)1)
@@ -1047,7 +1050,23 @@ class X86_64
                 continue;
             u32 s = slotOf(pv);
             String* t = pv.ty();
-            if (isAggTy(t))
+            u32 bv = X86_64.byvalAt(byv, i);
+            if (bv != (u32)0 && isAggTy(t))
+                {
+                if (bv == (u32)16 && (sidx & (u32)1) != (u32)0)
+                    sidx = sidx + (u32)1;
+                u32 nw = (aggSize(layoutOf(t)) + (u32)7) / (u32)8;
+                for (u32 k = (u32)0; k < nw; k = k + (u32)1)
+                    {
+                    if (hasSlot(pv))
+                        {
+                        _out.appendFormat("\tmov\trax, [rbp+%lu]\n", (u32)16 + (u32)8 * sidx);
+                        _out.appendFormat("\tmov\t[rbp-%lu], rax\n", s - (u32)8 * k);
+                        }
+                    sidx = sidx + (u32)1;
+                    }
+                }
+            else if (isAggTy(t))
                 {
                 // A struct by value rides ceil(size/8) consecutive GP argument
                 // registers, one 8-byte chunk each, mirroring the caller.
@@ -4164,12 +4183,12 @@ class X86_64
         // arguments to show at all. Same pre-pass as the direct path, so the
         // two agree by construction.
         Array* sTys = sysvArgTys(args);
-        u32 nstack = sysvStackWords(sTys, vMemRet);
+        u32 nstack = sysvStackWords(sTys, vMemRet, (Array*)0);
         u32 vResv = ((nstack * (u32)8) + (u32)15) & ~(u32)15; // 16-align
         if (vResv != (u32)0)
             rspReserve(vResv);
 
-        u32 freg = sysvMarshal(args, sTys, vMemRet, ir64, ir32);
+        u32 freg = sysvMarshal(args, sTys, vMemRet, ir64, ir32, (Array*)0);
         loadZX((IROperand*)n.ops().get((u32)0), (u8)'a');
         _out.appendCString("\tmov\tr11, [rax]\n"); // the vtable at object+0
         _out.appendFormat("\tmov\tr11, [r11 + %ld]\n", slotOp.imm() * (i32)8);
@@ -4224,11 +4243,11 @@ class X86_64
         Array* ir32 = sysvArgRegs32();
         bool vMemRet = n.res() != (IRValue*)0 && returnsSysVMemAgg(n.res().ty());
         Array* sTys = sysvArgTys(args);
-        u32 nstack = sysvStackWords(sTys, vMemRet);
+        u32 nstack = sysvStackWords(sTys, vMemRet, (Array*)0);
         u32 vResv = ((nstack * (u32)8) + (u32)15) & ~(u32)15;
         if (vResv != (u32)0)
             rspReserve(vResv);
-        u32 freg = sysvMarshal(args, sTys, vMemRet, ir64, ir32);
+        u32 freg = sysvMarshal(args, sTys, vMemRet, ir64, ir32, (Array*)0);
         // ── itable walk: recv -> vtable -> itable(entry 1) -> match protoId -> &table -> [index]
         u32 lbl = _arcLabel;
         _arcLabel = _arcLabel + (u32)1;
@@ -6429,6 +6448,12 @@ class X86_64
     // and floats — each argument, scalar or struct, takes exactly one slot.
     void emitWin64Call(IRFunc* fn, IRInsn* n, bool indirect, u32 argEnd)
         {
+        IROperand* wc = (IROperand*)n.ops().get((u32)0);
+        if (!indirect && wc.kind() == (u8)OPK_SYM && CgCommon.anyByval(symNamed(wc.name()), argEnd))
+            {
+            unsupported(String.withCString("a C byval argument (System V only)"));
+            return;
+            }
         bool bigRet = n.res() != (IRValue*)0 && returnsBigAgg(n.res().ty());
         u32 cpos = bigRet ? (u32)1 : (u32)0;
         u32 wstack = (u32)0;
@@ -6580,8 +6605,48 @@ class X86_64
         return tys;
         }
 
+    // A C argument's `byval` mark (the C/C++ reader's, on the callee's or
+    // the function's own symbol): 0 for none, else the copy's stack
+    // alignment, 8 or 16. Such a struct goes whole on the stack, in
+    // argument order, whatever registers are left (System V's MEMORY class
+    // for a struct passed by value), at an offset of its alignment.
+    static u32 byvalAlignOf(IRSymbol* s, u32 i)
+        {
+        if (s == (IRSymbol*)0)
+            return (u32)0;
+        if (s.attr(String.withFormat("byval16_%u", i)))
+            return (u32)16;
+        if (s.attr(String.withFormat("byval_%u", i)))
+            return (u32)8;
+        return (u32)0;
+        }
+
+    // Each of n arguments' byval alignment (byvalAlignOf), or 0 when none
+    // has one: xc's own calls, which never do.
+    static Array* byvalMarks(IRSymbol* s, u32 n)
+        {
+        if (s == (IRSymbol*)0)
+            return (Array*)0;
+        Array* out = new Array();
+        bool any = false;
+        for (u32 i = (u32)0; i < n; i = i + (u32)1)
+            {
+            u32 a = X86_64.byvalAlignOf(s, i);
+            any = any || a != (u32)0;
+            out.add((Object*)Number.withU32(a));
+            }
+        return any ? out : (Array*)0;
+        }
+
+    static u32 byvalAt(Array* byv, u32 i)
+        {
+        if (byv == (Array*)0 || i >= byv.count())
+            return (u32)0;
+        return ((Number*)byv.get(i)).asU32();
+        }
+
     // The outgoing stack words the arguments need.
-    u32 sysvStackWords(Array* tys, bool memRet)
+    u32 sysvStackWords(Array* tys, bool memRet, Array* byv)
         {
         u32 cIreg = memRet ? (u32)1 : (u32)0;
         u32 cFreg = (u32)0;
@@ -6589,7 +6654,14 @@ class X86_64
         for (u32 i = (u32)0; i < tys.count(); i = i + (u32)1)
             {
             String* t = (String*)tys.get(i);
-            if (isAggTy(t))
+            u32 bv = X86_64.byvalAt(byv, i);
+            if (bv != (u32)0 && isAggTy(t))
+                {
+                if (bv == (u32)16 && (nstack & (u32)1) != (u32)0)
+                    nstack = nstack + (u32)1;
+                nstack = nstack + (aggSize(layoutOf(t)) + (u32)7) / (u32)8;
+                }
+            else if (isAggTy(t))
                 {
                 u32 nr = (aggSize(layoutOf(t)) + (u32)7) / (u32)8;
                 if (cIreg + nr <= (u32)6)
@@ -6620,7 +6692,7 @@ class X86_64
 
     // Loads the arguments into their registers and stack slots (the area
     // already reserved); answers the number of xmm registers used, for al.
-    u32 sysvMarshal(Array* ops, Array* tys, bool memRet, Array* ir64, Array* ir32)
+    u32 sysvMarshal(Array* ops, Array* tys, bool memRet, Array* ir64, Array* ir32, Array* byv)
         {
         u32 ireg = memRet ? (u32)1 : (u32)0;
         u32 freg = (u32)0;
@@ -6629,7 +6701,25 @@ class X86_64
             {
             IROperand* a = (IROperand*)ops.get(i);
             String* t = (String*)tys.get(i);
-            if (isAggTy(t))
+            u32 bv = X86_64.byvalAt(byv, i);
+            if (bv != (u32)0 && isAggTy(t))
+                {
+                // A C struct by value (byval): whole on the stack, its words
+                // in order, at an offset of its alignment; no register.
+                if (bv == (u32)16 && (sidx & (u32)1) != (u32)0)
+                    sidx = sidx + (u32)1;
+                u32 nw = (aggSize(layoutOf(t)) + (u32)7) / (u32)8;
+                for (u32 k = (u32)0; k < nw; k = k + (u32)1)
+                    {
+                    if (hasSlot(a.val()))
+                        {
+                        _out.appendFormat("\tmov\trax, [rbp-%lu]\n", slotOf(a.val()) - (u32)8 * k);
+                        _out.appendFormat("\tmov\t[rsp+%lu], rax\n", (u32)8 * sidx);
+                        }
+                    sidx = sidx + (u32)1;
+                    }
+                }
+            else if (isAggTy(t))
                 {
                 // The private xtc convention, shared with arm64: a by-value
                 // struct occupies ceil(size/8) consecutive GP argument
@@ -6718,14 +6808,18 @@ class X86_64
             String* at = argTypeOf(n, i);
             sTys.add((Object*)(at == (String*)0 ? String.withCString("") : at));
             }
-        u32 nstack = sysvStackWords(sTys, memRet);
+        // A direct call's C byval arguments (the callee symbol's marks).
+        IROperand* callee = (IROperand*)n.ops().get((u32)0);
+        Array* byv = !indirect && callee.kind() == (u8)OPK_SYM
+            ? X86_64.byvalMarks(symNamed(callee.name()), sOps.count()) : (Array*)0;
+        u32 nstack = sysvStackWords(sTys, memRet, byv);
         u32 resv = ((nstack * (u32)8) + (u32)15) & ~(u32)15;
         if (resv != (u32)0)
             rspReserve(resv);
 
         Array* ir64 = sysvArgRegs();
         Array* ir32 = sysvArgRegs32();
-        u32 freg = sysvMarshal(sOps, sTys, memRet, ir64, ir32);
+        u32 freg = sysvMarshal(sOps, sTys, memRet, ir64, ir32, byv);
         if (indirect)
             {
             loadZX((IROperand*)n.ops().get((u32)0), (u8)'a');

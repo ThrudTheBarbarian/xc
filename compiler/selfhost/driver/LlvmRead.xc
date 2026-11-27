@@ -64,6 +64,11 @@ class LlvmReader
     Map* _pairTys;          // a two-word result's LLVM type -> "Agg(<layout id>)"
     Map* _litTys;           // a literal struct's LLVM type -> "Agg(<layout id>)"
     Array* _retPair;        // the function's two-word result: its parts' IR types, else 0
+    bool _sawByval;         // skipAttrs met `byval(T)`: T's text in _byvalTy
+    String* _byvalTy;
+    u32 _sawAlign;          // skipAttrs met `align N`: N, else 0
+    bool _sysv;             // the target is x86-64 System V (byval read)
+    Array* _byvalParams;    // a function's byval parameters: name, its slot, its value
     bool _pairRegs;         // the target returns a two-word aggregate in two registers
     Map* _packedIds;        // layout id -> 1 for a packed struct (`<{ ... }>`): no padding, aligned 1
     bool _cabiAll;          // every function through the C ABI (clang's object calls them, or they its)
@@ -356,6 +361,7 @@ class LlvmReader
         // pointer, and the other targets are not checked: there a pair
         // result is not read.
         _pairRegs = false;
+        _sysv = false;
         for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1)
             {
             String* l = (String*)lines.get(i);
@@ -365,6 +371,7 @@ class LlvmReader
                 || l.contains(String.withCString("\"x86_64"));
             _pairRegs = arch && !l.contains(String.withCString("windows")) && !l.contains(String.withCString("win32"))
                 && !l.contains(String.withCString("mingw")) && !l.contains(String.withCString("cygwin"));
+            _sysv = _pairRegs && l.contains(String.withCString("\"x86_64"));
             break;
             }
         // Struct types first (a global or a function names them), then
@@ -773,6 +780,9 @@ class LlvmReader
         {
         _sawZext = false;
         _sawSret = false;
+        _sawByval = false;
+        _byvalTy = (String*)0;
+        _sawAlign = (u32)0;
         bool again = true;
         while (again)
             {
@@ -791,6 +801,18 @@ class LlvmReader
                 {
                 if (w.equals(String.withCString("zeroext")))
                     _sawZext = true;
+                again = true;
+                }
+            else if (w.equals(String.withCString("byval")))
+                {
+                // `byval(%T)`: a struct the caller copies onto the stack.
+                _sawByval = true;
+                ws();
+                u32 b0 = _p;
+                if (peek() == (u8)'(')
+                    skipParens();
+                if (_p > b0 + (u32)2)
+                    _byvalTy = _s.substringBytes(b0 + (u32)1, _p - b0 - (u32)2).trimmed();
                 again = true;
                 }
             else if (w.equals(String.withCString("sret")))
@@ -815,7 +837,11 @@ class LlvmReader
                 if (peek() == (u8)'(')
                     skipParens();
                 else
-                    word();
+                    {
+                    String* aw = word();
+                    if (w.equals(String.withCString("align")))
+                        _sawAlign = (u32)LlvmReader.decimal(aw);
+                    }
                 again = true;
                 }
             else
@@ -953,6 +979,34 @@ class LlvmReader
         String* at = String.withFormat("Agg(%u)", _m.addLayout(L));
         _pairTys.set((Hashable*)t, (Object*)at);
         return at;
+        }
+
+    // The struct type of a `byval(T)` read by skipAttrs, as the reader takes
+    // it for x86-64 System V's stack copy: a struct read already or a literal
+    // one, aligned at most 16 (the copy goes at an offset of its alignment
+    // in the outgoing area; an over-aligned one is clang's). 0 otherwise.
+    String* byvalType(void)
+        {
+        if (!_sawByval || !_sysv || _byvalTy == (String*)0)
+            return (String*)0;
+        String* t = _byvalTy.hasPrefix(String.withCString("{")) ? literalStructTy(_byvalTy) : irOf(_byvalTy);
+        if (t == (String*)0 || !t.hasPrefix(String.withCString("Agg(")))
+            return (String*)0;
+        u32 a = alignOf(t);
+        if (_sawAlign > a)
+            a = _sawAlign;
+        if (a > (u32)16)
+            return (String*)0;
+        return t;
+        }
+
+    // The byval mark of a struct of type t passed as argument i.
+    String* byvalMark(String* t, u32 i)
+        {
+        u32 a = alignOf(t);
+        if (_sawAlign > a)
+            a = _sawAlign;
+        return String.withFormat(a > (u32)8 ? "byval16_%u" : "byval_%u", i);
         }
 
     // A literal struct's type (`{ T, T, ... }`, its fields scalars, arrays,
@@ -2157,6 +2211,7 @@ class LlvmReader
         Array* llps = new Array();      // the LLVM parameter types, for a `declare`
         bool variadic = false;
         bool sret0 = false;             // the first parameter is `sret`
+        Array* byvalPs = new Array();   // the byval parameters' marks
         if (eat("("))
             {
             while (more() && peek() != (u8)')')
@@ -2172,6 +2227,19 @@ class LlvmReader
                 skipAttrs();
                 if (_sawSret && ptys.count() == (u32)0)
                     sret0 = true;
+                // A byval struct (x86-64 System V): the struct type, marked.
+                String* bvt = byvalType();
+                if (bvt != (String*)0)
+                    {
+                    byvalPs.add((Object*)byvalMark(bvt, ptys.count()));
+                    ptys.add((Object*)bvt);
+                    llps.add((Object*)String.withFormat("%s byval(%s) align %u", pt.cString(), _byvalTy.cString(),
+                                                        _sawAlign != (u32)0 ? _sawAlign : alignOf(bvt)));
+                    if (peek() == (u8)'%')
+                        word();
+                    eat(",");
+                    continue;
+                    }
                 // A zeroext narrow parameter is the unsigned type (eatZeroExt).
                 if (LlvmReader.isHalfTy(pt))
                     {
@@ -2224,6 +2292,8 @@ class LlvmReader
         if (!hasSym(sym))
             {
             IRSymbol* fs = IRSymbol.func(sym, sig, variadic, decl || _cabiAll);
+            for (u32 i = (u32)0; i < byvalPs.count(); i = i + (u32)1)
+                fs.setAttr((String*)byvalPs.get(i), true);
             for (u32 i = (u32)0; i < halves.count(); i = i + (u32)1)
                 fs.setAttr(String.withFormat("half_%u", ((Number*)halves.get(i)).asU32()), true);
             if (retHalf)
@@ -2345,6 +2415,7 @@ class LlvmReader
         _bad = false;
         _fnWhy = (String*)0;
         _zxParams = new Array();
+        _byvalParams = new Array();
         _aggParams = new Map();
         _sretParam = (IRValue*)0;
         _pendingInvoke = (IRInsn*)0;
@@ -2381,6 +2452,44 @@ class LlvmReader
                     nParams = nParams + elems.count();
                     eat(",");
                     continue;
+                    }
+                // `ptr byval(%T) align A %p` (x86-64 System V): the struct
+                // the caller copied onto the stack, an aggregate parameter;
+                // %p is a slot of its own holding it (stored at entry).
+                if (pt != (String*)0 && irOf(pt) != (String*)0)
+                    {
+                    u32 bsave = _p;
+                    skipAttrs();
+                    if (_sawByval)
+                        {
+                        String* bt = byvalType();
+                        String* bn = word();
+                        if (bt == (String*)0)
+                            {
+                            fail("a byval parameter not read");
+                            noteUnread(name);
+                            if (_split)
+                                _bad = false;
+                            return;
+                            }
+                        IRValue* bv = new IRValue(bt);
+                        _fn.addParam(bv);
+                        u32 pa = alignOf(bt);
+                        if (pa < (u32)8)
+                            pa = (u32)8;
+                        _pinOff = (_pinOff + pa - (u32)1) / pa * pa;
+                        IRPinned* bpin = IRPinned.with(new IRValue(bt), bt, _pinOff, false);
+                        _pinOff = _pinOff + (widthOf(bt) + (u32)7) / (u32)8 * (u32)8;
+                        _fn.addPinned(bpin);
+                        _pins.set((Hashable*)bn, (Object*)bpin);
+                        _byvalParams.add((Object*)bpin);
+                        _byvalParams.add((Object*)bv);
+                        gprs = gprs + (u32)0;
+                        nParams = nParams + (u32)1;
+                        eat(",");
+                        continue;
+                        }
+                    _p = bsave;
                     }
                 if (pt == (String*)0 || irOf(pt) == (String*)0)
                     {
@@ -2477,6 +2586,24 @@ class LlvmReader
                     _fn.addBlock(nb);
                     continue;
                     }
+                }
+            if (_byvalParams.count() > (u32)0)
+                {
+                // Each byval parameter into its slot, before the first instruction.
+                for (u32 k = (u32)0; k + (u32)1 < _byvalParams.count(); k = k + (u32)2)
+                    {
+                    IRPinned* bpin = (IRPinned*)_byvalParams.get(k);
+                    IRValue* ba = emit(String.withCString("AddrOf"), ptrTo(bpin.val().ty()), IROperand.useVal(bpin.val()), (IROperand*)0, (IROperand*)0);
+                    IRInsn* bs = IRInsn.with(String.withCString("Store"));
+                    IRValue* bmo = new IRValue(String.withCString("Mem"));
+                    bs.add(IROperand.useVal(ba));
+                    bs.add(IROperand.useVal((IRValue*)_byvalParams.get(k + (u32)1)));
+                    bs.add(IROperand.useVal(_mem));
+                    bs.setMemRes(bmo);
+                    _blk.add(bs);
+                    _mem = bmo;
+                    }
+                _byvalParams = new Array();
                 }
             if (_zxParams.count() > (u32)0)
                 {
@@ -4673,6 +4800,7 @@ class LlvmReader
         Array* argLl = new Array();     // each argument's LLVM type
         bool sretCall = false;
         bool aggArgs = false;           // an `[N x iK]` passed as its parts
+        Array* byvalMarks = new Array(); // the byval arguments' marks for the callee
         if (eat("("))
             {
             while (more() && peek() != (u8)')')
@@ -4733,6 +4861,37 @@ class LlvmReader
                     }
                 skipAttrs();
                 bool z = _sawZext;
+                if (_sawByval)
+                    {
+                    // `ptr byval(%T) align A %p` (x86-64 System V): the struct
+                    // at p, passed as the value it copies; its mark on the
+                    // callee's symbol puts it on the stack (X86_64.xc). Through a
+                    // pointer or to a variadic function it is clang's.
+                    String* bt = byvalType();
+                    if (bt == (String*)0 || fptr != (IRValue*)0 || fnTy)
+                        {
+                        fail("a byval operand not read");
+                        return;
+                        }
+                    byvalMarks.add((Object*)byvalMark(bt, args.count()));
+                    IRValue* bp = operand(at);
+                    if (bp == (IRValue*)0)
+                        return;
+                    IRInsn* bl = IRInsn.with(String.withCString("Load"));
+                    IRValue* bv = new IRValue(bt);
+                    IRValue* bmo = new IRValue(String.withCString("Mem"));
+                    bl.setRes(bv);
+                    bl.setMemRes(bmo);
+                    bl.add(IROperand.useVal(asPtrTo(bp, bt)));
+                    bl.add(IROperand.useVal(_mem));
+                    _blk.add(bl);
+                    _mem = bmo;
+                    args.add((Object*)bv);
+                    zxArg.add((Object*)Number.with((u32)0));
+                    argLl.add((Object*)alt);
+                    eat(",");
+                    continue;
+                    }
                 if (_sawSret)
                     {
                     // First, and to a function of fixed arguments: a variadic
@@ -5092,6 +5251,9 @@ class LlvmReader
             // CallConv::Sret: the first operand is the hidden result pointer.
             c.setCc(String.withCString(sretCall ? "CallConv::Sret" : "CallConv::Standard"));
             c.add(IROperand.sym(sym));
+            IRSymbol* cs = byvalMarks.count() > (u32)0 ? _m.symNamed(sym) : (IRSymbol*)0;
+            for (u32 q = (u32)0; cs != (IRSymbol*)0 && q < byvalMarks.count(); q = q + (u32)1)
+                cs.setAttr((String*)byvalMarks.get(q), true);
             }
         // Through a pointer, a half past the eighth FP argument would need the
         // callee's marks to be placed (Darwin packs it in two bytes): clang's.

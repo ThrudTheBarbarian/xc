@@ -5878,6 +5878,13 @@ class Arm64
     // it does NOT use the indirect result.
     bool emitSretSetupIfNeeded(IRInsn* n)
     {
+        // A C byval argument is x86-64 System V's; AAPCS64 passes a copy's
+        // address, which the reader gives as a pointer. Never seen here.
+        if (isDirectCallOp(n.opc())) {
+            IROperand* bc = (IROperand*)n.ops().get((u32)0);
+            if (bc.kind() == (u8)OPK_SYM && CgCommon.anyByval(symbolNamed(bc.name()), n.ops().count()))
+                unsupported(String.withCString("a C byval argument (System V only)"));
+        }
         if (n.res() == (IRValue*)0 || !isAggTy(n.res().ty())) return false;
         IRLayout* l = layoutOf(n.res().ty());
         bool dbl = false;
