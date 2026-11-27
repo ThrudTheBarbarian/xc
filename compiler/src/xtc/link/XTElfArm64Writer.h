@@ -45,6 +45,10 @@ NS_ASSUME_NONNULL_BEGIN
 + (void)setInterpreter:(NSString*)path;
 // A DT_RUNPATH ("$ORIGIN:<dir>..."), or nil for none (Android's images have none).
 + (void)setRunpath:(nullable NSString*)path;
+// The largest alignment the data was laid out to (the assembler's
+// dataAlignment): the data's address and the head padding of a moved
+// constructor array keep it. At least 16.
++ (void)setDataAlignment:(NSUInteger)align;
 // The symbols an executable may import (arm64 Linux: glibc's, from
 // glibc-imports.map, and those of the libraries it links); any other import is
 // an error naming it. Nil, the default, checks nothing (android).

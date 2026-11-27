@@ -136,6 +136,47 @@ if [ "$CPU-$(uname -s)" = arm64-Linux ]; then
     [ "$got" = "1 3 3 4 1" ] || bad "thread-locals: tl.arm64-linux gives '$got'"
 fi
 
+# Globals aligned above 16 keep their alignment beside a constructor: the
+# data, and the init array moved to its head, sit on the largest alignment.
+# A C object (-c, then linked) and the same source in one step; the init
+# array (the data's head) must be 4096-aligned, and where the program runs,
+# each global's address modulo its alignment is 0.
+cat > "$W/al.c" <<'C'
+int printf(const char*, ...);
+typedef unsigned long uptr;
+_Alignas(64) char a64[100] = {1};
+_Alignas(4096) char a4k[100] = {2};
+_Alignas(64) char z64[100];
+_Alignas(4096) char z4k[100];
+char c1 = 3;
+__attribute__((constructor)) static void ctor(void) { a64[1] = 5; }
+int main(void) { printf("%lu %lu %lu %lu %d %d %d\n", (uptr)a64 % 64, (uptr)a4k % 4096, (uptr)z64 % 64, (uptr)z4k % 4096, a64[0] + a64[1], a4k[0], c1); return 0; }
+C
+initat() { # DT_INIT_ARRAY's address
+    python3 - "$1" <<'PY'
+import struct, sys
+b = open(sys.argv[1], "rb").read()
+phoff, = struct.unpack_from("<Q", b, 32); phn, = struct.unpack_from("<H", b, 56)
+for i in range(phn):
+    p = struct.unpack_from("<IIQQQQQQ", b, phoff + 56 * i)
+    if p[0] == 2:
+        for k in range(p[5] // 16):
+            t, v = struct.unpack_from("<qQ", b, p[2] + 16 * k)
+            if t == 25: print(v)
+PY
+}
+if "$XC" -q -O2 -A arm64-linux -c -o "$W/al.o" "$W/al.c" && "$XC" -q -A arm64-linux -o "$W/al.obj" "$W/al.o" \
+   && "$XC" -q -O2 -A arm64-linux -o "$W/al.one" "$W/al.c"; then
+    for v in obj one; do
+        at=$(initat "$W/al.$v")
+        [ -n "$at" ] && [ $((at % 4096)) = 0 ] || bad "aligned globals ($v): the init array is at '$at', not 4096-aligned"
+        if [ "$CPU-$(uname -s)" = arm64-Linux ]; then
+            got=$("$W/al.$v")
+            [ "$got" = "0 0 0 0 6 2 3" ] || bad "aligned globals ($v): gives '$got'"
+        fi
+    done
+else bad "aligned globals: al.c does not build for arm64-linux"; fi
+
 # Every fixture, every level.
 for f in tests/fixtures/f16_*.xc tests/fixtures/f8_*.xc tests/fixtures/f4_*.xc \
          tests/fixtures/par_f16.xc tests/fixtures/par_pack_gpu.xc tests/fixtures/par_f4_cut.xc; do

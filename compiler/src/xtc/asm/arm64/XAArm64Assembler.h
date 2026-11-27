@@ -58,6 +58,9 @@ typedef NS_ENUM(int, XAArm64FixupKind) {
 @property (nonatomic, readonly) NSArray<XAArm64Fixup *> *fixups;
 @property (nonatomic, readonly) NSDictionary<NSString *, NSNumber *> *symbols;
 @property (nonatomic, readonly) NSData *data;                       // __DATA,__data bytes
+// The largest alignment the data was laid out to (a `.p2align`, a local
+// zero-fill's, a demoted common's); at least 1.
+@property (nonatomic, readonly) NSUInteger dataAlignment;
 @property (nonatomic, readonly) NSSet<NSString *> *dataSymbols;     // names living in `data`
 @property (nonatomic, readonly) NSSet<NSString *> *globalSymbols;   // names under `.globl` — the object's exports
 // `.comm` COMMON (tentative) symbols: name → @[size, log2align]. External,

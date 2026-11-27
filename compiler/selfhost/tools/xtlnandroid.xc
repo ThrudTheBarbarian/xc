@@ -117,6 +117,7 @@ void main(void)
     Array* lnFix  = a.fixups();
     u32 lnMi = Arm64Asm.appendModInit(a, lnData, lnFix);
     ElfArm64* w = new ElfArm64();
+    w.setDataAlign(a.dataAlign());
     // The executable's interpreter, optional, as the reference takes it.
     if (Process.argumentCount() > (u32)8 && !Process.argument((u32)8).equals(String.withCString("-")))
         w.setInterp(Process.argument((u32)8));

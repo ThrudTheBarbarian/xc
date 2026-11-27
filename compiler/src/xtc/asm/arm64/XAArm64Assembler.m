@@ -245,6 +245,7 @@ static int condCode(NSString *cc) {
         NSArray<NSNumber *> *info = _commonSymbols[nm];
         uint64_t sz = info[0].unsignedLongLongValue, alg = info[1].unsignedLongLongValue;
         uint64_t al = 1ull << alg;
+        if (al > _dataAlignment) _dataAlignment = (NSUInteger)al;
         while (_data.length % al) { uint8_t z = 0; [_data appendBytes:&z length:1]; }
         _symbols[nm] = @(_data.length); [_dataSymbolNames addObject:nm];
         [_data increaseLengthBy:(NSUInteger)sz];
@@ -1975,7 +1976,7 @@ static NSString *quadSymbolOperand(NSString *l) {
 
 - (NSData *)assemble:(NSString *)asmText error:(NSError **)error {
     _fixups=[NSMutableArray array]; _symbols=[NSMutableDictionary dictionary];
-    _data=[NSMutableData data]; _dataSymbolNames=[NSMutableSet set]; _globalNames=[NSMutableSet set];
+    _data=[NSMutableData data]; _dataAlignment=1; _dataSymbolNames=[NSMutableSet set]; _globalNames=[NSMutableSet set];
     _commonSymbols=[NSMutableDictionary dictionary];
     _modInit=[NSMutableData data]; _modInitFixups=[NSMutableArray array];
     NSArray<NSString *> *rawLines=[asmText componentsSeparatedByString:@"\n"];
@@ -2042,7 +2043,7 @@ static NSString *quadSymbolOperand(NSString *l) {
                 // alignment there only ever falls between whole instructions,
                 // and moving the address without emitting anything would put
                 // every later label out of step with the bytes.
-                if(section==0){ while(textAddr%al){ [insns addObject:@"nop"]; textAddr+=4; } } else { while(dataAddr%al){ uint8_t z=0;[_data appendBytes:&z length:1]; dataAddr++; } }
+                if(section==0){ while(textAddr%al){ [insns addObject:@"nop"]; textAddr+=4; } } else { if(al>_dataAlignment) _dataAlignment=(NSUInteger)al; while(dataAddr%al){ uint8_t z=0;[_data appendBytes:&z length:1]; dataAddr++; } }
                 continue;
             }
             if([l hasPrefix:@".comm"]||[l hasPrefix:@".zerofill"]||[l hasPrefix:@".lcomm"]) {
@@ -2067,7 +2068,7 @@ static NSString *quadSymbolOperand(NSString *l) {
                     if ([l hasPrefix:@".comm"]) {
                         _commonSymbols[nm] = @[@(sz), @(alg)];
                     } else {
-                        uint64_t al=1ull<<alg; while(dataAddr%al){ uint8_t z=0;[_data appendBytes:&z length:1]; dataAddr++; }
+                        uint64_t al=1ull<<alg; if(al>_dataAlignment) _dataAlignment=(NSUInteger)al; while(dataAddr%al){ uint8_t z=0;[_data appendBytes:&z length:1]; dataAddr++; }
                         _symbols[nm]=@(dataAddr); [_dataSymbolNames addObject:nm];
                         if(sz>0) [_data increaseLengthBy:(NSUInteger)sz]; dataAddr+=sz;
                     }

@@ -821,6 +821,7 @@ int main(int argc, const char *argv[]) {
             NSMutableData *dataM = [as.data mutableCopy];
             NSMutableArray<XAArm64Fixup *> *fixM = [as.fixups mutableCopy];
             NSUInteger miLen = appendModInit(as, dataM, fixM, nil, nil);
+            [XTElfArm64Writer setDataAlignment:as.dataAlignment];
             NSData *img = [XTElfArm64Writer sharedObjectFromText:text
                                                             data:dataM
                                                          symbols:as.symbols

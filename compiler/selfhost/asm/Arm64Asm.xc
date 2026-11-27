@@ -300,6 +300,7 @@ class Arm64Asm
     Array*  _fixups;        // Arm64Fixup@
     Map*    _symbols;       // name -> offset within its own section
     SectionBytes* _dataBytes; // the __data image
+    u32 _dataAlign;           // the largest alignment anything in it asked for
     Array*  _dataSyms;      // String@, names that live in __data
     Array*  _globals;       // `.globl` names, in order
     Map*    _commonSyms;    // `.comm` COMMON: name -> [size, log2align] (bug 169)
@@ -323,7 +324,7 @@ class Arm64Asm
     void init(void)
     {
         _fixups = new Array(); _symbols = new Map();
-        _dataBytes = new SectionBytes(); _dataSyms = new Array(); _globals = new Array(); _textBytes = new SectionBytes();
+        _dataBytes = new SectionBytes(); _dataAlign = (u32)1; _dataSyms = new Array(); _globals = new Array(); _textBytes = new SectionBytes();
         _commonSyms = new Map();
         _modInitBytes = new SectionBytes(); _modInitFixups = new Array();
         _failed = false;
@@ -357,6 +358,11 @@ class Arm64Asm
     }
     Map*    symbols(void)    { return _symbols; }
     SectionBytes* dataBytes(void) { return _dataBytes; }
+    // The largest alignment the data was laid out to (a `.p2align`, a local
+    // zero-fill's, a demoted common's, or one noted by the link), which the
+    // image's data address must keep.
+    u32 dataAlign(void) { return _dataAlign; }
+    void noteDataAlign(u32 al) { if (al > _dataAlign) _dataAlign = al; }
     SectionBytes* textBytes(void) { return _textBytes; }
     Array*  dataSyms(void)   { return _dataSyms; }
     Array*  globals(void)    { return _globals; }     // names under .globl — the object's exports
@@ -380,6 +386,7 @@ class Arm64Asm
             u32 sz = ((Number*)info.get((u32)0)).asU32();
             u32 alg = ((Number*)info.get((u32)1)).asU32();
             u32 al = (u32)1 << alg;
+            noteDataAlign(al);
             _dataBytes.padTo(al);
             _symbols.set((Hashable*)nm, (Object*)Number.withU32(_dataBytes.length()));
             _dataSyms.add((Object*)nm);
@@ -3489,6 +3496,7 @@ class Arm64Asm
                         }
                     }
                     else {
+                        noteDataAlign(al);
                         while (dataAddr % al != (u32)0) {
                             _dataBytes.appendByte((u8)0);
                             dataAddr = dataAddr + (u32)1;
@@ -3521,6 +3529,7 @@ class Arm64Asm
                             _commonSyms.set((Hashable*)nm, (Object*)info);
                         } else {
                             u32 al = (u32)1 << alg;
+                            noteDataAlign(al);
                             while (dataAddr % al != (u32)0) {
                                 _dataBytes.appendByte((u8)0);
                                 dataAddr = dataAddr + (u32)1;

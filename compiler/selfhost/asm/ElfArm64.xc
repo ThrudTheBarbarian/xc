@@ -59,6 +59,7 @@ class ElfArm64
     String* _interp;   // an executable's PT_INTERP (the reference's setInterpreter:)
     String* _runpath;  // a DT_RUNPATH, or 0 for none (the reference's setRunpath:)
     Map* _known;       // the symbols an executable may import, or 0: none checked (setKnownImports:)
+    u32 _dataAlign;    // the data's largest alignment, at least 16 (setDataAlign)
 
     void init(void)
         {
@@ -67,6 +68,15 @@ class ElfArm64
         _interp = String.withCString("/system/bin/linker64");
         _runpath = (String*)0;
         _known = (Map*)0;
+        _dataAlign = (u32)16;
+        }
+
+    // The largest alignment the data was laid out to (Arm64Asm.dataAlign, the
+    // link's included). An image puts its data, and a constructor array moved
+    // to the data's head, on it; an object gives its .data that alignment.
+    void setDataAlign(u32 al)
+        {
+        _dataAlign = al > (u32)16 ? al : (u32)16;
         }
 
     // Android's linker64 unless set (glibc Linux: /lib/ld-linux-aarch64.so.1).
@@ -554,7 +564,7 @@ class ElfArm64
             }
 
         u32 textOff = (u32)64;
-        u32 dataOff = ElfArm64.roundUp(textOff + text.length(), (u32)16);
+        u32 dataOff = ElfArm64.roundUp(textOff + text.length(), _dataAlign);
         u32 initOff = ElfArm64.roundUp(dataOff + data.length(), (u32)8);
         u32 trelOff = ElfArm64.roundUp(initOff + modInit.length(), (u32)8);
         u32 drelOff = trelOff + textRel.length();
@@ -618,7 +628,7 @@ class ElfArm64
         for (u32 i = (u32)0; i < (u32)64; i = i + (u32)1)
             p8((u32)0);
         objSection(((Number*)shName.get((u32)1)).asU32(), (u32)1, (u32)6, textOff, text.length(), (u32)0, (u32)0, (u32)16, (u32)0);
-        objSection(((Number*)shName.get((u32)2)).asU32(), (u32)1, (u32)3, dataOff, data.length(), (u32)0, (u32)0, (u32)16, (u32)0);
+        objSection(((Number*)shName.get((u32)2)).asU32(), (u32)1, (u32)3, dataOff, data.length(), (u32)0, (u32)0, _dataAlign, (u32)0);
         if (hasInit)
             objSection(((Number*)shName.get(secInit)).asU32(), (u32)14, (u32)3, initOff, modInit.length(), (u32)0, (u32)0, (u32)8, (u32)8);
         objSection(((Number*)shName.get(secRelText)).asU32(), (u32)4, (u32)$40, trelOff, textRel.length(), secSym, (u32)1, (u32)8, (u32)24);
@@ -772,14 +782,15 @@ class ElfArm64
         // The constructor array arrives as the tail of the data, after the
         // zero-filled storage of every common; left there it would make all of
         // those zeros file bytes, since only TRAILING zeros are left to the
-        // loader. It moves to the head instead, padded to 16 bytes, and the
-        // data symbols, the fixups in the data and the thread-local template
-        // after it move up by that much. As the reference, which has no
-        // relative data words or thread-locals. A template aligned wider than
-        // 16 bytes widens the padding to its alignment.
+        // loader. It moves to the head instead, padded, and the data symbols,
+        // the fixups in the data and the thread-local template after it move
+        // up by that much. As the reference, which has no relative data words
+        // or thread-locals. The padding is the data's largest alignment (the
+        // template's included), which the data's address is on too, so every
+        // global keeps its alignment.
         Array* tlsP = ElfTlsPending.pending();
         ElfTlsPending.setPending((Array*)0);
-        u32 headAlign = (u32)16;
+        u32 headAlign = _dataAlign;
         if (tlsP != (Array*)0 && ((Number*)tlsP.get((u32)2)).asU32() > headAlign)
             headAlign = ((Number*)tlsP.get((u32)2)).asU32();
         bool miAtHead = false;
@@ -1002,7 +1013,7 @@ class ElfArm64
         u32 rwOff = roundUpTo(textOff + textLen, (u32)AELF_PAGE) + (u32)AELF_PAGE;
         u32 gotOff = rwOff;
         u32 dynOff = gotOff + imports.count() * (u32)8;
-        u32 dataAddr = roundUpTo(dynOff + nDyn * (u32)ADYN_SZ, (u32)16);
+        u32 dataAddr = roundUpTo(dynOff + nDyn * (u32)ADYN_SZ, headAlign);
         u32 rwEnd = dataAddr + data.length();
 
         // ET_DYN vaddrs are file-relative: the loader picks the base and adds it.

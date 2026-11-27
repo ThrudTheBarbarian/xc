@@ -59,6 +59,7 @@ class ElfLinkArm64
     // the template is placed); and the pointers inside the template.
     SectionBytes* _tls;
     u32 _tlsAlign;
+    u32 _dataAlign;     // the largest alignment the merged data was laid out to
     Map* _tlsSyms;
     Array* _tlsRefs;
     Array* _tlsRefSyms;
@@ -70,6 +71,7 @@ class ElfLinkArm64
         _rc = (u32)0;
         _tls = new SectionBytes();
         _tlsAlign = (u32)16;
+        _dataAlign = (u32)16;
         _tlsSyms = new Map();
         _tlsRefs = new Array();
         _tlsRefSyms = new Array();
@@ -80,6 +82,9 @@ class ElfLinkArm64
         _objModInitFix = new Array();
         }
     SectionBytes* objModInit(void) { return _objModInit; }
+    // The image's data address must keep it (the thread-local template's
+    // included), or a 64-byte-aligned global lands 16 bytes off.
+    u32 dataAlign(void) { return _dataAlign > _tlsAlign ? _dataAlign : _tlsAlign; }
     Array* objModInitFix(void) { return _objModInitFix; }
     u32 rc(void)
         {
@@ -303,6 +308,8 @@ class ElfLinkArm64
                 u32 base = mtext.length();
                 ElfLinkArm64.appendData(mtext, obj.text());
                 u32 dalign = obj.dataAlign() < (u32)16 ? (u32)16 : obj.dataAlign();
+                if (dalign > _dataAlign)
+                    _dataAlign = dalign;
                 ElfLinkArm64.padArray(mdata, dalign - (u32)1);
                 u32 dbase = mdata.length();
                 ElfLinkArm64.appendData(mdata, obj.data());
@@ -377,6 +384,8 @@ class ElfLinkArm64
                         if (have)
                             continue;
                         u32 al = sd.align() < (u32)1 ? (u32)1 : sd.align();
+                        if (al > _dataAlign)
+                            _dataAlign = al;
                         ElfLinkArm64.padArray(mdata, al - (u32)1);
                         msyms.set((Hashable*)nm, (Object*)Number.withU32(mdata.length()));
                         mdata.appendZeros(sd.size());

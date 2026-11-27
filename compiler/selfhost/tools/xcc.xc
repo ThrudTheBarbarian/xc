@@ -1799,6 +1799,7 @@ void emitApkPackage(DriverOptions* d, String* prog)
     Array* apkFix  = a.fixups();
     u32 apkMi = Arm64Asm.appendModInit(a, apkData, apkFix);
     ElfArm64* w = new ElfArm64();
+    w.setDataAlign(a.dataAlign());
     w.image(a.textBytes(), apkData, a.symbols(), a.dataSyms(),
             exports, apkFix, soname, needed, (String*)0, apkMi);
     if (w.failed()) {
@@ -4714,6 +4715,7 @@ void mergeElfLinkObjects(DriverOptions* d, SectionBytes* mtext, SectionBytes* md
         if (heap)
             el.setRedirect(redirect);
         el.merge(objs, ars, mtext, mdata, msyms, mdataSyms, mfix);
+        as.noteDataAlign(el.dataAlign());
     }
     if (heap && el.rc() == (u32)0) {
         Map* ex = cAllocExports();
@@ -4831,6 +4833,7 @@ void linkObjectsArm64Elf(DriverOptions* d)
         baseNeeded.append((String*)lrow.needed().get(ni));
     }
     ElfArm64* w = new ElfArm64();
+    w.setDataAlign(as.dataAlign());
     w.setInterp(lrow.interp());
     w.setRunpath(arm64ElfRunpath(d, lrow));
     if (lrow.os().equals(String.withCString("linux")))
@@ -6549,6 +6552,7 @@ void emitModule(DriverOptions* d, IRModule* mod)
             driverExit((i32)1); return;
         }
         ElfArm64* eo = new ElfArm64();
+        eo.setDataAlign(oas.dataAlign());
         eo.setDepLibs(objectDepLibs(d));
         if (gCSplitOut != (String*)0) eo.setEhFunctions(machoFunctionNames(one0));
         Data* od = eo.objectFromText(oas.textBytes(), oas.dataBytes(), oas.symbols(), oas.dataSyms(),
@@ -6744,6 +6748,7 @@ void emitModule(DriverOptions* d, IRModule* mod)
         mergeElfLinkObjects(d, as.textBytes(), aData, as.symbols(), as.dataSyms(), aFix, new Array(), as);
         u32 aMi = Arm64Asm.appendModInit(as, aData, aFix);
         ElfArm64* w = new ElfArm64();
+        w.setDataAlign(as.dataAlign());
         w.setInterp(lrow.interp());
         w.setRunpath(arm64ElfRunpath(d, lrow));
         if (!d.emitLib() && lrow.os().equals(String.withCString("linux")))
@@ -7057,6 +7062,7 @@ void ndkLink(DriverOptions* d, Arm64Asm* as, String* out, String* soname)
         driverExit((i32)1); return;
     }
     ElfArm64* eo = new ElfArm64();
+    eo.setDataAlign(as.dataAlign());
     Data* od = eo.objectFromText(as.textBytes(), as.dataBytes(), as.symbols(), as.dataSyms(),
                                  as.fixups(), as.globals(), as.commonSyms(),
                                  as.modInitBytes(), as.modInitFixups());

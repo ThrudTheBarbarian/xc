@@ -51,6 +51,7 @@ static const char* kInterp = "/system/bin/linker64";
 static char sInterpBuf[256];
 static NSString* sRunpath = nil;
 static NSSet<NSString*>* sKnownImports = nil;
+static NSUInteger sDataAlign = 16;
 
 static void put8v(NSMutableData* d, uint8_t v)
     {
@@ -227,6 +228,12 @@ static BOOL patchLo12(uint8_t* p, uint64_t off, uint64_t target, uint32_t scale,
     sKnownImports = [names copy];
     }
 
++ (void)setDataAlignment:(NSUInteger)align
+    {
+    // As the port's setDataAlign: at least 16.
+    sDataAlign = align > 16 ? align : 16;
+    }
+
 + (void)setRunpath:(nullable NSString*)path
     {
     // As the port's setRunpath: none by default.
@@ -286,12 +293,14 @@ static BOOL patchLo12(uint8_t* p, uint64_t off, uint64_t target, uint32_t scale,
     // zero-filled storage of every common. Left there it would make all of
     // those zeros file bytes (a 40 MB zero global, a 40 MB executable), since
     // only TRAILING zeros are left to the loader. It moves to the head
-    // instead, padded to 16 bytes, and the data symbols and the pointer words
-    // after it move up by that much.
+    // instead, and the data symbols and the pointer words after it move up by
+    // that much. The padding is the data's largest alignment, which the
+    // data's address is on too, so every global keeps its alignment.
+    NSUInteger headAlign = sDataAlign;
     if (modInitLength && modInitLength < dataIn.length)
         {
         NSUInteger tail = dataIn.length - modInitLength;
-        NSUInteger head = (modInitLength + 15) & ~(NSUInteger)15;
+        NSUInteger head = (modInitLength + headAlign - 1) & ~(headAlign - 1);
         NSMutableData* moved = [NSMutableData dataWithBytes:(const uint8_t*)dataIn.bytes + tail length:modInitLength];
         [moved increaseLengthBy:head - modInitLength];
         [moved appendBytes:dataIn.bytes length:tail];
@@ -471,7 +480,7 @@ static BOOL patchLo12(uint8_t* p, uint64_t off, uint64_t target, uint32_t scale,
     uint64_t rwOff = roundUpTo(textOff + textLen, ELF_PAGE) + ELF_PAGE;
     uint64_t gotOff = rwOff;
     uint64_t dynOff = gotOff + imports.count * 8;
-    uint64_t dataAddr = roundUpTo(dynOff + nDyn * DYN_SZ, 16);
+    uint64_t dataAddr = roundUpTo(dynOff + nDyn * DYN_SZ, headAlign);
     uint64_t rwEnd = dataAddr + data.length;
 
     // ET_DYN vaddrs are file-relative; the loader picks the base and adds it.
