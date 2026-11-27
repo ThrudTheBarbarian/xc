@@ -4,7 +4,9 @@
 # its first element; RADV's compiler died on it with a divide error, so a C
 # program whose loops over a large global ran as blocks on an AMD GPU got
 # SIGFPE. Every kernel the program carries is checked with spirv-val; on an
-# x86-64 Linux host the program also runs under the default par style.
+# x86-64 Linux host the program also runs under the default par style. Built
+# with -fno-par-fuse: the two loops would run as one block (#147), and each
+# kernel is the case this checks.
 # Skipped without spirv-val.
 #
 #   bash tests/par/spirv-scalar-global.sh
@@ -38,7 +40,7 @@ int main(void)
     return 0;
 }
 C
-"$XC" -q -O2 -A x86_64 -H . -o "$W/mix" "$W/mix.c" > "$W/b" 2>&1 || { echo "FAIL spirv-scalar-global: does not build"; head -3 "$W/b"; exit 1; }
+"$XC" -q -O2 -A x86_64 -H . -fno-par-fuse -o "$W/mix" "$W/mix.c" > "$W/b" 2>&1 || { echo "FAIL spirv-scalar-global: does not build"; head -3 "$W/b"; exit 1; }
 mkdir -p "$W/spv"
 n=$(python3 - "$W/mix" "$W/spv" <<'PY'
 import sys, re, struct
