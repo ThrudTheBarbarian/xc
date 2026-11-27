@@ -2316,11 +2316,15 @@ static BOOL corpusFrontendPass(NSString *rawSource, NSString *xtPath,
                                BOOL arm64Target,
                                BOOL classNames, BOOL *usesClassNames,
                                BOOL atFmt, BOOL *usesAtFmt,
+                               BOOL tensor, BOOL *usesTensor,
+                               NSUInteger packs, NSUInteger *wantPacks,
                                XTIRModule **outMod, XTIRFunction **outEntry,
                                XTCorpusOutcome *outcome, NSString **msg) {
     *outMod = nil; *outEntry = nil;
     *usesClassNames = NO;
     *usesAtFmt = NO;
+    *usesTensor = NO;
+    *wantPacks = 0;
     if (!sCorpusFrameworks) sCorpusFrameworks = [NSMutableArray array];
     XTDiagnosticEngine *diag = [[XTDiagnosticEngine alloc] init];
     XTPreprocessor *pp = [[XTPreprocessor alloc] initWithDiagnostics:diag];
@@ -2390,6 +2394,15 @@ static BOOL corpusFrontendPass(NSString *rawSource, NSString *xtPath,
     // load pattern for the current pointer width.
     [pp defineMacro:@"XTC_POINTER_WIDTH" value:@"4"];
 
+    // Tensor types are views of a TensorStorage, imported as the driver
+    // imports it: once a first parse finds a tensor type (see after the parse).
+    if (tensor)
+        pp.autoImport = pp.autoImport.length ? [pp.autoImport stringByAppendingString:@";TensorStorage.xc"] : @"TensorStorage.xc";
+    // A small float's routines, imported at the end of the unit once sema
+    // finds one, as the driver imports them.
+    if (packs)
+        pp.tailImport = [XTPreprocessor packTailImport:packs];
+
     NSString *source = nil;
     @try {
         source = [pp preprocessSource:rawSource filename:xtPath];
@@ -2432,6 +2445,8 @@ static BOOL corpusFrontendPass(NSString *rawSource, NSString *xtPath,
     XTParser *parser = [[XTParser alloc] initWithTokens:tokens
                                               typeTable:tt diagnostics:diag];
     parser.defaultPointerPlacement = defaultPlacement;
+    // With TensorStorage imported the parser writes the tensor classes.
+    parser.tensorReady = tensor;
     // `//xtc-flags: --par-style=auto`: plain loops become `par` blocks where their
     // shape allows, as the driver's --par-style=auto does.
     for (NSString *line in [rawSource componentsSeparatedByString:@"\n"]) {
@@ -2456,6 +2471,12 @@ static BOOL corpusFrontendPass(NSString *rawSource, NSString *xtPath,
         }
         *outcome = XTCorpusFailParse;
         *msg = @"parse error";
+        return NO;
+    }
+    // A tensor type: start again with TensorStorage imported, as the driver
+    // does, so a unit without one is unchanged.
+    if (!tensor && parser.tensorNames.count) {
+        *usesTensor = YES;
         return NO;
     }
 
@@ -2531,9 +2552,11 @@ static BOOL corpusFrontendPass(NSString *rawSource, NSString *xtPath,
         *msg = [NSString stringWithFormat:@"sema exception: %@", e.reason];
         return NO;
     }
-    if ((!classNames && sema.usesClassNames) || (!atFmt && sema.usesAtFormat)) {
-        *usesClassNames = sema.usesClassNames;
-        *usesAtFmt = sema.usesAtFormat;
+    if ((!classNames && sema.usesClassNames) || (!atFmt && sema.usesAtFormat) ||
+        (sema.packRoutines & ~packs)) {
+        *usesClassNames = !classNames && sema.usesClassNames;
+        *usesAtFmt = !atFmt && sema.usesAtFormat;
+        *wantPacks = sema.packRoutines & ~packs;
         return NO;
     }
     if (diag.hasFatalError) {
@@ -2711,13 +2734,24 @@ static BOOL corpusFrontend(NSString *rawSource, NSString *xtPath,
                            BOOL arm64Target,
                            XTIRModule **outMod, XTIRFunction **outEntry,
                            XTCorpusOutcome *outcome, NSString **msg) {
-    BOOL names = NO, at = NO;
-    BOOL ok = corpusFrontendPass(rawSource, xtPath, name, includePaths, defaultPlacement,
-                                 arm64Target, NO, &names, NO, &at, outMod, outEntry, outcome, msg);
-    if (names || at) {
-        BOOL n2 = NO, a2 = NO;
+    // Each pass may find that the unit needs a tensor import (after the parse)
+    // or the class-name table, `%@` or a small float's routines (after sema);
+    // the next pass has them, as the driver's next front-end pass does.
+    BOOL names = NO, at = NO, tensor = NO;
+    NSUInteger packs = 0;
+    BOOL ok = NO;
+    for (int pass = 0; pass < 4; pass++) {
+        BOOL n2 = NO, a2 = NO, t2 = NO;
+        NSUInteger p2 = 0;
         ok = corpusFrontendPass(rawSource, xtPath, name, includePaths, defaultPlacement,
-                                arm64Target, names, &n2, at, &a2, outMod, outEntry, outcome, msg);
+                                arm64Target, names, &n2, at, &a2, tensor, &t2, packs, &p2,
+                                outMod, outEntry, outcome, msg);
+        if (!n2 && !a2 && !t2 && !p2)
+            break;
+        names = names || n2;
+        at = at || a2;
+        tensor = tensor || t2;
+        packs = packs | p2;
     }
     return ok;
 }
