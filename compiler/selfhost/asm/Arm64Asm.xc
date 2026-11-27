@@ -506,6 +506,36 @@ class Arm64Asm
         return o;
     }
 
+    // An ELF `.comm name,size,align` gives the alignment in BYTES, Mach-O's in
+    // log2 (#788). clang's ELF output, which the generated runtimes are, writes
+    // it tab-separated; the code generator writes Mach-O's, space-separated. So
+    // a tab-separated `.comm` with a power-of-two alignment is rewritten to
+    // Mach-O's spelling with the log2, space-separated, which this pass leaves
+    // alone the second time round. As the reference.
+    static String* elfCommToMacho(String* l)
+    {
+        if (!l.hasPrefix(String.withCString("\t.comm\t"))) return l;
+        Array* p = l.substringFromByte((u32)7).splitOnByte((u8)',');
+        if (p.count() != (u32)3) return l;
+        String* a = ((String*)p.get((u32)2)).trimmed();
+        if (a.byteLength() == (u32)0) return l;
+        u64 v = (u64)0;
+        for (u32 i = (u32)0; i < a.byteLength(); i = i + (u32)1) {
+            u8 ch = a.byteAt(i);
+            if (ch < (u8)'0' || ch > (u8)'9') return l;
+            v = v * (u64)10 + (u64)(ch - (u8)'0');
+        }
+        if (v == (u64)0 || (v & (v - (u64)1)) != (u64)0) return l;
+        i32 lg = 0;
+        while (((u64)1 << (u64)lg) < v) lg = lg + 1;
+        String* o = String.withCString("    .comm ");
+        o.append(((String*)p.get((u32)0)).trimmed());
+        o.appendCString(", ");
+        o.append(((String*)p.get((u32)1)).trimmed());
+        o.appendFormat(", %d", lg);
+        return o;
+    }
+
     static String* machoDialectFromElf(String* elfAsm)
     {
         if (elfAsm == (String*)0) return new String();
@@ -521,6 +551,7 @@ class Arm64Asm
                                       String.withCString("@GOTPAGE"));
             l = elfOperatorToMacho(l, String.withCString(":lo12:"),
                                       String.withCString("@PAGEOFF"));
+            l = elfCommToMacho(l);
             // A BARE symbol operand on adrp. Anything already carrying an `@`
             // is left alone, which is what makes this idempotent. The symbol
             // must run to end of line, so a decorated or commented operand is

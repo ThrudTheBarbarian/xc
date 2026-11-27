@@ -2002,6 +2002,33 @@ static NSString *quadSymbolOperand(NSString *l) {
     return (c=='_'||c=='.'||c=='L'||(c>='A'&&c<='Z')||(c>='a'&&c<='z')) ? rest : nil;
 }
 
+// An ELF `.comm name,size,align` gives the alignment in BYTES, Mach-O's in
+// log2 (#788). clang's ELF output, which the generated runtimes are, writes it
+// tab-separated; the code generator writes Mach-O's, space-separated. So a
+// tab-separated `.comm` with a power-of-two alignment is rewritten to Mach-O's
+// spelling with the log2, space-separated, which the pass leaves alone the
+// second time round. As the port.
+static NSString *elfCommToMacho(NSString *l) {
+    if (![l hasPrefix:@"\t.comm\t"]) return l;
+    NSArray<NSString *> *p = [[l substringFromIndex:7] componentsSeparatedByString:@","];
+    if (p.count != 3) return l;
+    NSCharacterSet *ws = [NSCharacterSet whitespaceCharacterSet];
+    NSString *a = [p[2] stringByTrimmingCharactersInSet:ws];
+    if (a.length == 0) return l;
+    uint64_t v = 0;
+    for (NSUInteger i = 0; i < a.length; i++) {
+        unichar ch = [a characterAtIndex:i];
+        if (ch < '0' || ch > '9') return l;
+        v = v * 10 + (uint64_t)(ch - '0');
+    }
+    if (v == 0 || (v & (v - 1)) != 0) return l;
+    int lg = 0;
+    while ((1ull << lg) < v) lg++;
+    return [NSString stringWithFormat:@"    .comm %@, %@, %d",
+                                      [p[0] stringByTrimmingCharactersInSet:ws],
+                                      [p[1] stringByTrimmingCharactersInSet:ws], lg];
+}
+
 + (NSString *)machoDialectFromElf:(NSString *)elfAsm {
     if (!elfAsm) return @"";
     NSRegularExpression *(^rx)(NSString *) = ^(NSString *p){
@@ -2025,6 +2052,7 @@ static NSString *quadSymbolOperand(NSString *l) {
         l = XTRegexReplace(gotLo, l, @"$1@GOTPAGEOFF");
         l = XTRegexReplace(got,   l, @"$1@GOTPAGE");
         l = XTRegexReplace(lo12,  l, @"$1@PAGEOFF");
+        l = elfCommToMacho(l);
         l = XTRegexReplace(adrp,  l, @"$1$2@PAGE");
         [out addObject:l];
     }
