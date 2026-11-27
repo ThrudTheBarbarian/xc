@@ -774,15 +774,43 @@ static XTIROperand* memAtEnd(XTIRBlock* P, XTIRBlock* H)
             [body addObject:b];
     int64_t slot = d.operands[1].intValue;
 
-    XTIRValue* cls = [self classOf:ro mem:memP site:d in:P];
+    // The receiver may be null where the loop tests it before the call
+    // (`p != null && p.count() > i`), so P tests it first and a null one runs
+    // the loop as it was: reading its class here, ahead of that test, loaded
+    // through null.
+    XTIRValue* z8 = [self value:[XTIRType u8Type] in:P];
+    [P.instructions addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpConst
+                                                        result:z8
+                                                      operands:@[ [XTIROperand immIWithType:[XTIRType u8Type] value:0] ]
+                                                        dbgLoc:d.dbgLoc]];
+    XTIRValue* np = [self value:[_fn valueForId:ro.valueId].type in:P];
+    [P.instructions addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpIntToPtr
+                                                        result:np
+                                                      operands:@[ [XTIROperand useWithValueId:z8.valueId] ]
+                                                        dbgLoc:d.dbgLoc]];
+    XTIRValue* nn = [self value:[XTIRType boolType] in:P];
+    [P.instructions addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpICmp
+                                                        result:nn
+                                                      operands:@[ ro, [XTIROperand useWithValueId:np.valueId] ]
+                                                     predicate:XTIRICmpNE
+                                                        dbgLoc:d.dbgLoc]];
+    XTIRBlock* T0 = [self block:[NSString stringWithFormat:@"%@_dv%lu_nn", nameOf(P), (unsigned long)_seq]];
+
+    XTIRValue* cls = [self classOf:ro mem:memP site:d in:T0];
 
     NSMutableArray<NSMutableDictionary<NSNumber*, XTIRValue*>*>* vmaps = [NSMutableArray array];
     NSMutableArray<XTIRBlock*>* pres = [NSMutableArray array];
     XTIRBlock* preOrig = [self block:[NSString stringWithFormat:@"%@_dv%lu_po", nameOf(P), (unsigned long)_seq]];
     [preOrig setTerminator:[self branchTo:H]];
+    setTerm(P, [[XTIRInsn alloc] initWithOpcode:XTIROpCondBranch
+                                         result:nil
+                                       operands:@[ [XTIROperand useWithValueId:nn.valueId],
+                                                   [XTIROperand blockWithRef:T0],
+                                                   [XTIROperand blockWithRef:preOrig] ]
+                                         dbgLoc:nil]);
     NSMutableArray<XTIRBlock*>* entries = [NSMutableArray array];
     NSMutableArray<NSMapTable<XTIRBlock*, XTIRBlock*>*>* copies = [NSMutableArray array];
-    XTIRBlock* tb = P;
+    XTIRBlock* tb = T0;
     for (NSUInteger c = 0; c < cands.count; c++)
         {
         XTIRSymbol* vt = cands[c];

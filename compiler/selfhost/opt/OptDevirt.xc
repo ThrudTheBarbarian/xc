@@ -633,14 +633,40 @@
                 body.add(fn.blocks().get(b));
         i64 slot = (i64)((IROperand*)d.ops().get((u32)1)).imm();
 
-        // The test chain at the end of P: P, then one block per further class.
+        // The receiver may be null where the loop tests it before the call
+        // (`p != null && p.count() > i`), so P tests it first and a null one
+        // runs the loop as it was: reading its class here, ahead of that
+        // test, loaded through null.
+        IRValue* z8 = new IRValue(String.withCString("U8"));
+        IRInsn* zi = IRInsn.with(String.withCString("Const"));
+        zi.copyDbg(d);
+        zi.setRes(z8);
+        zi.add(IROperand.immI((i64)0, String.withCString("U8")));
+        P.add(zi);
+        IRValue* np = new IRValue(ro.val().ty());
+        IRInsn* npi = IRInsn.with(String.withCString("IntToPtr"));
+        npi.copyDbg(d);
+        npi.setRes(np);
+        npi.add(IROperand.useVal(z8));
+        P.add(npi);
+        IRValue* nn = new IRValue(String.withCString("Bool"));
+        IRInsn* nni = IRInsn.with(String.withCString("ICmp"));
+        nni.copyDbg(d);
+        nni.setPred(String.withCString("NE"));
+        nni.setRes(nn);
+        nni.add(ro);
+        nni.add(IROperand.useVal(np));
+        P.add(nni);
+        IRBlock* T0 = new IRBlock(String.withFormat("%s_dv%lu_nn", P.name().cString(), _dvSeq));
+
+        // The test chain: T0, then one block per further class.
         IRValue* fa = new IRValue(String.withCString("Ptr(Ptr(Void, unbanked), xt_data)"));
         IRInsn* fai = IRInsn.with(String.withCString("FieldAddr"));
         fai.copyDbg(d);
         fai.setRes(fa);
         fai.add(ro);
         fai.add(IROperand.immI((i32)0, String.withCString("U8")));
-        P.add(fai);
+        T0.add(fai);
         IRValue* cls = new IRValue(String.withCString("Ptr(Void, unbanked)"));
         IRInsn* ld = IRInsn.with(String.withCString("Load"));
         ld.copyDbg(d);
@@ -648,7 +674,7 @@
         ld.setMemRes(new IRValue(String.withCString("Mem")));
         ld.add(IROperand.useVal(fa));
         ld.add(memP);
-        P.add(ld);
+        T0.add(ld);
 
         Array* vmaps = new Array();      // per class: its value map
         Array* pres = new Array();       // per class: its copy's preheader
@@ -657,9 +683,14 @@
         IRInsn* pob = IRInsn.with(String.withCString("Branch"));
         pob.add(IROperand.block(H));
         preOrig.setTerm(pob);
+        IRInsn* nnb = IRInsn.with(String.withCString("CondBranch"));
+        nnb.add(IROperand.useVal(nn));
+        nnb.add(IROperand.block(T0));
+        nnb.add(IROperand.block(preOrig));
+        P.setTerm(nnb);
         Array* entries = new Array();    // per class: the test block entering its copy
         Array* copies = new Array();     // per class: its block map
-        IRBlock* tb = P;
+        IRBlock* tb = T0;
         for (u32 c = (u32)0; c < cands.count(); c = c + (u32)1)
             {
             IRSymbol* vt = (IRSymbol*)cands.get(c);
