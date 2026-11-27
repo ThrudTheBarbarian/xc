@@ -1,0 +1,18 @@
+f32 zero 0 a4 12
+i32 23 10 sum 138
+rank 2 count 12
+shape 3 4
+stride 4 1
+contig 1
+shared 77 100
+compound 32 0
+u8 23 276 st 12
+f64 n 16 r 8
+f64 5 1
+f64 st 8 1
+packs 105
+f16 7
+f4 0 3 0
+f4 bytes d0 73 0
+lit 6 3 12
+field 9 5
