@@ -2033,17 +2033,24 @@ class ParDevice
     // ── resident blocks (#15) ──
     // The mode, read once: XC_PAR_RESIDENT=1 keeps every eligible output (1),
     // =0 none (2), =auto learns per block (3); unset, a program the driver
-    // marked all xc learns per block and any other program keeps none.
+    // marked all xc learns per block and any other program keeps none. On
+    // Windows a kept block's copy back can fail (#784: the driver's DMA into
+    // the block's protected pages runs out of memory now and then), so there
+    // residency is only ever asked for.
     static i32 residentMode(void)
         {
         if (gParResOn == (i32)0)
             {
             String* v = Platform.env(String.withCString("XC_PAR_RESIDENT"));
+            bool byDefault = gParPure;
+#if OS_windows
+            byDefault = false;
+#endif
             if (v.equals(String.withCString("1")))
                 gParResOn = (i32)1;
             else if (v.equals(String.withCString("auto")))
                 gParResOn = (i32)3;
-            else if (v.byteLength() > (u32)0 || !gParPure)
+            else if (v.byteLength() > (u32)0 || !byDefault)
                 gParResOn = (i32)2;
             else
                 gParResOn = (i32)3;

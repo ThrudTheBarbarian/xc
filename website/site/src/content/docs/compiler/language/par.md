@@ -820,7 +820,8 @@ saves a copy of every output after every run. `XC_PAR_RESIDENT` decides:
   or library named for the link (`-l`, `-Wl`, `-Xlinker`, a framework), or a C
   library it imports (or an xc library holding C), keeps nothing unless the
   variable says otherwise, because its C code may hand an array to a system
-  call.
+  call. On Windows nothing is kept unless the variable asks for it: copying a
+  kept array back can fail there.
 
 The host can't tell an array that is on the card from one that isn't: the
 first time the program's code reads or writes it, the array is copied back
