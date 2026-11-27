@@ -2102,6 +2102,7 @@ class BeFact : Object
     Array* _ppGOffHi;
     Array* _ppGStored;
     Array* _ppRO;        // per live-in of the block being made: 1 when the loop only reads through it (#156)
+    Array* _ppWW;        // per live-in: 1 when the loop writes its range whole through it, reading only what it wrote (gpuWritesAllOwn)
     Array* _ppChk;       // per live-in: 1 when the call site's range check covers it (ppGpuLength says so)
     Array* _ppInvLoads;    // IRInsn@: loads from addresses the loop does not move (a std::vector's fields), guarded
     Map* _ppInvSame;       // a later one of _ppInvLoads reading the address an earlier one reads -> the earlier one's result

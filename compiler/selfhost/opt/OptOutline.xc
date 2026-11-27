@@ -1945,6 +1945,121 @@
         return false;
         }
 
+    // _ppWW for the block being made: per live-in, 1 when the loop (a header
+    // and one body block, no branch inside) stores through it once, at the
+    // item's own element, and never reads through it. Every element of the
+    // chunk's range is then written before anything could read it, so a GPU
+    // run need not send its old contents (the runtime still checks that the
+    // run covers the whole buffer).
+    final void ppWrittenWholeCaptures(LRCLoop* L, Array* liveIns, IRValue* iv, Map* defOf)
+        {
+        _ppWW = new Array();
+        for (u32 i = (u32)0; i < liveIns.count(); i = i + (u32)1)
+            _ppWW.add((Object*)Number.with((u32)0));
+        Array* body = L.body();
+        if (body.count() != (u32)2)
+            return;
+        IRBlock* B = (IRBlock*)body.get((u32)0) == L.header() ? (IRBlock*)body.get((u32)1) : (IRBlock*)body.get((u32)0);
+        Array* stores = new Array();
+        for (u32 i = (u32)0; i < liveIns.count(); i = i + (u32)1)
+            stores.add((Object*)Number.with((u32)0));
+        Array* bad = new Array();
+        for (u32 i = (u32)0; i < liveIns.count(); i = i + (u32)1)
+            bad.add((Object*)Number.with((u32)0));
+        for (u32 b = (u32)0; b < body.count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)body.get(b);
+            for (u32 k = (u32)0; k < bb.insns().count(); k = k + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)bb.insns().get(k);
+                if (!(n.isOp(opLoad) || n.isOp(opStore) || n.opHas(OPF_CALL)))
+                    continue;
+                if (n.opHas(OPF_CALL))
+                    return;
+                IROperand* ao = (IROperand*)n.ops().get((u32)0);
+                if (ao.kind() != (u8)OPK_USE)
+                    continue;
+                // The capture the address is into, and whether at [iv].
+                bool atIv = false;
+                IRValue* a = ao.val();
+                IRInsn* ea = (IRInsn*)defOf.get((Hashable*)a);
+                if (ea != (IRInsn*)0 && ea.isOp(opElementAddr) && ea.ops().count() == (u32)2)
+                    {
+                    IROperand* ix = (IROperand*)ea.ops().get((u32)1);
+                    IRValue* iv2 = ix.kind() == (u8)OPK_USE ? ix.val() : (IRValue*)0;
+                    for (u32 d = (u32)0; d < (u32)3 && iv2 != (IRValue*)0 && iv2 != iv; d = d + (u32)1)
+                        {
+                        IRInsn* w = (IRInsn*)defOf.get((Hashable*)iv2);
+                        if (w == (IRInsn*)0 || !(w.isOp(opZExt) || w.isOp(opSExt) || w.isOp(opTrunc))
+                            || ((IROperand*)w.ops().get((u32)0)).kind() != (u8)OPK_USE)
+                            break;
+                        iv2 = ((IROperand*)w.ops().get((u32)0)).val();
+                        }
+                    atIv = iv2 == iv;
+                    a = ((IROperand*)ea.ops().get((u32)0)).kind() == (u8)OPK_USE ? ((IROperand*)ea.ops().get((u32)0)).val() : (IRValue*)0;
+                    }
+                u32 at = a != (IRValue*)0 ? liveIns.indexOf((Object*)a) : (u32)$FFFFFFFF;
+                for (u32 d = (u32)0; d < (u32)8 && at == (u32)$FFFFFFFF && a != (IRValue*)0; d = d + (u32)1)
+                    {
+                    IRInsn* def = (IRInsn*)defOf.get((Hashable*)a);
+                    if (def == (IRInsn*)0 || !def.isOp(opBitcast) || ((IROperand*)def.ops().get((u32)0)).kind() != (u8)OPK_USE)
+                        break;
+                    a = ((IROperand*)def.ops().get((u32)0)).val();
+                    at = liveIns.indexOf((Object*)a);
+                    }
+                if (at == (u32)$FFFFFFFF)
+                    continue;
+                // A read of the item's own element after the item stored it
+                // reads the new value (a fused loop's intermediate).
+                bool readOwnNew = n.isOp(opLoad) && bb == B && atIv && ((Number*)stores.get(at)).asU32() > (u32)0;
+                if (readOwnNew)
+                    continue;
+                if (n.isOp(opLoad) || bb != B || !atIv)
+                    bad.set(at, (Object*)Number.with((u32)1));
+                else
+                    stores.set(at, (Object*)Number.with(((Number*)stores.get(at)).asU32() + (u32)1));
+                }
+            }
+        for (u32 i = (u32)0; i < liveIns.count(); i = i + (u32)1)
+            if (((Number*)bad.get(i)).asU32() == (u32)0 && ((Number*)stores.get(i)).asU32() >= (u32)1)
+                _ppWW.set(i, (Object*)Number.with((u32)1));
+        }
+
+    // gpuWritesAllOwn(self, k): true for capture k when _ppWW says the loop
+    // writes it whole: its old contents need not reach the device.
+    final String* ppGpuWritesAllOwn(IRModule* m, String* stem, String* objT, Array* liveIns)
+        {
+        String* boolT = String.withCString("Bool");
+        IRFunc* F = new IRFunc();
+        F.setName(String.withFormat("%s$gpuWritesAllOwn", stem.cString()));
+        F.setRet(boolT);
+        IRValue* sv = new IRValue(objT);
+        IRValue* k = new IRValue(String.withCString("I32"));
+        IRValue* mem = new IRValue(String.withCString("Mem"));
+        F.addParam(sv);
+        F.addParam(k);
+        F.addParam(mem);
+        IRBlock* b = new IRBlock(String.withCString("bb_entry"));
+        IRValue* acc = ppEmit(b, String.withCString("Const"), boolT, IROperand.immI((i64)0, boolT), (IROperand*)0, (IROperand*)0);
+        for (u32 i = (u32)0; _ppWW != (Array*)0 && i < liveIns.count() && i < _ppWW.count(); i = i + (u32)1)
+            {
+            if (((Number*)_ppWW.get(i)).asU32() == (u32)0)
+                continue;
+            IRValue* fk = ppEmit(b, String.withCString("Const"), String.withCString("I32"), IROperand.immI((i64)i, String.withCString("I32")), (IROperand*)0, (IROperand*)0);
+            IRValue* is = ppCmp(b, String.withCString("EQ"), k, fk);
+            IRValue* yes = ppEmit(b, String.withCString("Const"), boolT, IROperand.immI((i64)1, boolT), (IROperand*)0, (IROperand*)0);
+            acc = ppEmit(b, String.withCString("Select"), boolT, IROperand.useVal(is), IROperand.useVal(yes), IROperand.useVal(acc));
+            }
+        IRInsn* r = IRInsn.with(String.withCString("Return"));
+        r.add(IROperand.useVal(acc));
+        r.add(IROperand.useVal(mem));
+        b.setTerm(r);
+        F.addBlock(b);
+        m.addFunc(F);
+        m.addSym(IRSymbol.func(F.name(), String.withFormat("(%s, I32) -> Bool", objT.cString()), false, false));
+        return F.name();
+        }
+
     // gpuReadsOnly(self, k): true for capture k (a pointer) when the loop only
     // reads through it, so a GPU run need not copy it back. Copying back an
     // array the block never wrote is wasted traffic, and into read-only
@@ -2767,6 +2882,9 @@
         // Which captures the loop only reads (before the casts below replace
         // untyped ones in place: the positions stay).
         ppReadOnlyCaptures(liveIns, defOf);
+        // And which it writes whole over its range, never reading: their old
+        // contents need not reach a GPU.
+        ppWrittenWholeCaptures(L, liveIns, iv.res(), defOf);
         // An untyped pointer (the C path's `ptr`) that the loop only ever
         // casts to one element type is captured as that type, cast once at
         // the call: a kernel cannot cast a device pointer, and the loop then
@@ -3263,6 +3381,7 @@
         String* gbName = ppGpuGlobals(m, stem, objT, B, false);
         String* glName = ppGpuLength(m, stem, objT, recT, liveIns);
         String* groName = ppGpuReadsOnly(m, stem, objT, liveIns);
+        String* gwaName = ppGpuWritesAllOwn(m, stem, objT, liveIns);
         Array* ftys = new Array();
         for (u32 i = (u32)0; i < nIn; i = i + (u32)1)
             ftys.add((Object*)((IRValue*)liveIns.get(i)).ty());
@@ -3304,6 +3423,8 @@
                 s = glName;
             else if (s.equals(String.withCString("ParChunk$gpuReadsOnly")))
                 s = groName;
+            else if (s.equals(String.withCString("ParChunk$gpuWritesAllOwn")))
+                s = gwaName;
             slots.add((Object*)s);
             }
         String* vtName = String.withFormat("%s$vtbl", stem.cString());
