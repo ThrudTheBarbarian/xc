@@ -1,6 +1,7 @@
 #!/bin/bash
 # tensor-lib.sh — a library with tensor types in its interface (a function
-# returning a tensor<f32, 2>, one taking one, a class with a tensor field),
+# returning a tensor<f32, 2>, one taking one, a class with a tensor field,
+# functions returning views),
 # used by a client that has only the interface and makes a tensor of its own
 # type too. Each module writes its own tensor classes from the types it
 # names; the interface carries the types, not the classes. A compiler MATRIX
@@ -25,7 +26,7 @@ T="$ROOT/tests/crossmod"
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
-WANT=$'t 15 total 25 n 6 mine 5 h 8 7\nlive 2'
+WANT=$'t 15 total 25 n 6 mine 5 h 8 7\nviews 15 3 4 1\nlive 2'
 
 fail=0
 bad() { echo "FAIL  $*"; fail=$((fail+1)); }

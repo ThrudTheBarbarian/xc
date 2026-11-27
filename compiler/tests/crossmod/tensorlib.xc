@@ -1,6 +1,6 @@
 // tensorlib.xc — a library with tensors in its interface: a function that
-// makes a tensor, one that takes one, and a class holding one. See
-// tensor-lib.sh.
+// makes a tensor, one that takes one, a class holding one, and functions
+// that return views (a column slice, a transpose). See tensor-lib.sh.
 #import "Stdio.xc"
 
 class Weights
@@ -33,4 +33,14 @@ Weights* holder(u64 n)
     h.w = make(n, n);
     h.tag = 7;
     return h;
+    }
+
+tensor<f32, 1> column(tensor<f32, 2> t, u64 j)
+    {
+    return t[.., j];
+    }
+
+tensor<f32, 2> flip(tensor<f32, 2> t)
+    {
+    return t.transpose();
     }
