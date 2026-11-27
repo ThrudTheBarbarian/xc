@@ -769,6 +769,50 @@ class ElfArm64
                Array* exportsIn, Array* fixups, String* soname, Array* needed,
                String* entry, u32 modInitLength, Array* iface)
         {
+        // The constructor array arrives as the tail of the data, after the
+        // zero-filled storage of every common; left there it would make all of
+        // those zeros file bytes, since only TRAILING zeros are left to the
+        // loader. It moves to the head instead, padded to 16 bytes, and the
+        // data symbols and the pointer words after it move up by that much.
+        // As the reference.
+        bool miAtHead = false;
+        if (modInitLength > (u32)0 && modInitLength < dataIn.length())
+            {
+            u32 tail = dataIn.length() - modInitLength;
+            u32 head = (modInitLength + (u32)15) & ~(u32)15;
+            SectionBytes* moved = dataIn.subrange(tail, modInitLength);
+            moved.appendZeros(head - modInitLength);
+            moved.append(dataIn.subrange((u32)0, tail));
+            dataIn = moved;
+            NameSet* ds = NameSet.of(dataSyms);
+            Map* syms2 = new Map();
+            Array* ks = symbols.allKeys();
+            for (u32 i = (u32)0; i < ks.count(); i = i + (u32)1)
+                {
+                String* k = (String*)ks.get(i);
+                Object* v = symbols.get((Hashable*)k);
+                if (ds.has(k))
+                    v = (Object*)Number.withU32(((Number*)v).asU32() + head);
+                syms2.set((Hashable*)k, v);
+                }
+            symbols = syms2;
+            Array* fx2 = new Array();
+            for (u32 i = (u32)0; i < fixups.count(); i = i + (u32)1)
+                {
+                Arm64Fixup* f = (Arm64Fixup*)fixups.get(i);
+                if (f.kind() != (u32)FIXUP_POINTER64)
+                    {
+                    fx2.add((Object*)f);
+                    continue;
+                    }
+                Arm64Fixup* g = Arm64Fixup.make(f.offset() >= tail ? f.offset() - tail : f.offset() + head,
+                                                f.kind(), f.symbol(), f.scale());
+                g.setAddend(f.addend());
+                fx2.add((Object*)g);
+                }
+            fixups = fx2;
+            miAtHead = true;
+            }
         // The name lists as sets (#335): each was scanned once per symbol or
         // fixup below.
         NameSet* dataSet = NameSet.of(dataSyms);
@@ -1216,7 +1260,7 @@ class ElfArm64
         // their Pointer64 fixups, so they survive a PIE's random base.
         if (miLen > (u32)0)
             {
-            dyn((u32)25, dataAddr + (data.length() - miLen)); // DT_INIT_ARRAY
+            dyn((u32)25, miAtHead ? dataAddr : dataAddr + (data.length() - miLen)); // DT_INIT_ARRAY
             dyn((u32)27, miLen);                             // DT_INIT_ARRAYSZ
             }
         dyn((u32)0, (u32)0); // DT_NULL

@@ -279,8 +279,47 @@ static BOOL patchLo12(uint8_t* p, uint64_t off, uint64_t target, uint32_t scale,
                                    iface:(nullable NSData*)iface
                                    error:(NSError**)error
     {
+    BOOL miAtHead = NO;
     BOOL isExec = (entrySymbol != nil);
     BOOL hasIface = iface.length > 0;
+    // The constructor array arrives as the tail of the data, after the
+    // zero-filled storage of every common. Left there it would make all of
+    // those zeros file bytes (a 40 MB zero global, a 40 MB executable), since
+    // only TRAILING zeros are left to the loader. It moves to the head
+    // instead, padded to 16 bytes, and the data symbols and the pointer words
+    // after it move up by that much.
+    if (modInitLength && modInitLength < dataIn.length)
+        {
+        NSUInteger tail = dataIn.length - modInitLength;
+        NSUInteger head = (modInitLength + 15) & ~(NSUInteger)15;
+        NSMutableData* moved = [NSMutableData dataWithBytes:(const uint8_t*)dataIn.bytes + tail length:modInitLength];
+        [moved increaseLengthBy:head - modInitLength];
+        [moved appendBytes:dataIn.bytes length:tail];
+        dataIn = moved;
+        NSMutableDictionary<NSString*, NSNumber*>* syms = [symbols mutableCopy];
+        for (NSString* n in dataSymbols)
+            if (syms[n])
+                syms[n] = @(syms[n].unsignedLongLongValue + head);
+        symbols = syms;
+        NSMutableArray<XAArm64Fixup*>* fx = [NSMutableArray arrayWithCapacity:fixups.count];
+        for (XAArm64Fixup* f in fixups)
+            {
+            if (f.kind != XAArm64FixupPointer64)
+                {
+                [fx addObject:f];
+                continue;
+                }
+            XAArm64Fixup* g = [XAArm64Fixup new];
+            g.offset = f.offset >= tail ? f.offset - tail : f.offset + head;
+            g.symbol = f.symbol;
+            g.kind = f.kind;
+            g.scale = f.scale;
+            g.addend = f.addend;
+            [fx addObject:g];
+            }
+        fixups = fx;
+        miAtHead = YES;
+        }
     if (isExec && (!symbols[entrySymbol] || [dataSymbols containsObject:entrySymbol]))
         {
         if (error)
@@ -720,7 +759,7 @@ static BOOL patchLo12(uint8_t* p, uint64_t off, uint64_t target, uint32_t scale,
     // their Pointer64 fixups, so they are correct under a PIE's random base.
     if (miLen)
         {
-        dyn(DT_INIT_ARRAY, dataAddr + (data.length - miLen));
+        dyn(DT_INIT_ARRAY, miAtHead ? dataAddr : dataAddr + (data.length - miLen));
         dyn(DT_INIT_ARRAYSZ, miLen);
         }
     dyn(DT_NULL, 0);

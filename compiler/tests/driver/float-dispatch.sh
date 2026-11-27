@@ -13,7 +13,7 @@
 # builds one version.
 #
 # Runs on the machine it is on (arm64 macOS or Linux, x86-64 Linux).
-#   [XC=<xcc>] bash tests/driver/float-dispatch.sh
+#   [XC=<xcc>] [REF=<the other compiler>] bash tests/driver/float-dispatch.sh
 set -u
 export LC_ALL=C
 cd "$(dirname "$0")/../.." || exit 1
@@ -59,6 +59,39 @@ for row in x86_64 win64; do
     "$XC" -q -O2 -A $row -march=x86-64 -S -o "$W/m.s" "$W/mad.xc"
     ! grep -qE 'simd_table|vcvtps2ph' "$W/m.s" || bad "-A $row -march=x86-64 is not one SSE2 version"
 done
+
+# A 40 MB zero-initialised global beside the dispatch constructor stays out of
+# the file: the init array must not follow the zeros in the data image. The
+# program runs where it can, and with REF=<the other compiler> both build the
+# same bytes.
+cat > "$W/big.xc" <<'XC'
+#import "Stdio.xc"
+f32 F[10000000];
+f16 mad(f16 a, f16 b, f16 c) { return a * b + c; }
+i32 main(i32 argc, u8** argv)
+{
+    F[argc] = 1.0;
+    f16 x = (f16)(1.5 * (f32)argc);
+    f16 z = mad(x, (f16)2.25, x);
+    Stdio.printf("%x %f\n", (u32)*(u16*)&z, (f64)F[1]);
+    return 0;
+}
+XC
+for row in arm64-linux android x86_64; do
+    "$XC" -q -O2 -A $row -o "$W/big.$row" "$W/big.xc" || { bad "big global: -A $row does not build"; continue; }
+    sz=$(wc -c < "$W/big.$row")
+    [ "$sz" -lt 1000000 ] || bad "big global: -A $row is $sz bytes; its zeros are in the file"
+    if [ -n "${REF:-}" ]; then
+        "$REF" -q -O2 -A $row -o "$W/big.ref" "$W/big.xc" && cmp -s "$W/big.ref" "$W/big.$row" \
+            || bad "big global: -A $row differs between $XC and $REF"
+    fi
+done
+case "$CPU-$(uname -s)" in
+    arm64-Linux) run="$W/big.arm64-linux" ;;
+    x86_64-Linux) run="$W/big.x86_64" ;;
+    *) run="" ;;
+esac
+[ -z "$run" ] || [ "$("$run")" = "44e0 1.000000" ] || bad "big global: $(basename "$run") does not run"
 
 # Every fixture, every level.
 for f in tests/fixtures/f16_*.xc tests/fixtures/f8_*.xc tests/fixtures/f4_*.xc \
