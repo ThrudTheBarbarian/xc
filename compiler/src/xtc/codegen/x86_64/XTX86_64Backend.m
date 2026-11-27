@@ -6120,21 +6120,11 @@ static BOOL xtConstThrough(XTIRValueId v, XTIRInsn* (^defOf)(XTIRValueId), int d
         BOOL d = res.type.kind == XTIRTypeKindF64;
         XTIROperand* o0 = ops[0];
         XTIROperand* o1 = ops[1];
-        // a + b where b already sits in the result's home: add a to it there,
-        // rather than computing in xmm0 and copying back (two movaps).
-        NSString* rh = sHome[@(res.valueId)];
-        if ((op == XTIROpFAdd || op == XTIROpFMul) && rh && [self isXmmHome:rh] &&
-            o1.kind == XTIROperandKindUse &&
-            !(o0.kind == XTIROperandKindUse && o0.valueId == o1.valueId))
-            {
-            NSString* h1 = sHome[@(o1.valueId)];
-            if (h1 && [self isXmmHome:h1] && [h1 isEqualToString:rh])
-                {
-                XTIROperand* t = o0;
-                o0 = o1;
-                o1 = t;
-                }
-            }
+        // The operands stay in their order even where b already sits in the
+        // result's home: with two NaNs, SSE returns the destination's, so
+        // swapping them made a + b's NaN depend on register allocation, and so
+        // on -O (#726). arm64 returns the first operand's; so does this now.
+        // fdstFor computes in the scratch then, at the cost of a move.
         NSString* D = [self fdstFor:res clobbering:o1 as:o0];
         [self loadF:o0 into:D fn:fn slot:slot out:out];
         // A second operand left in its slot is read from there, as SSE allows,

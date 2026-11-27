@@ -1700,21 +1700,11 @@ class X86_64
         IROperand* o0 = (IROperand*)n.ops().get((u32)0);
         IROperand* o1 = (IROperand*)n.ops().get((u32)1);
         u16 op = n.opc();
-        // a + b where b already sits in the result's home: add a to it there,
-        // rather than computing in xmm0 and copying back (two movaps).
-        bool comm = op == opFAdd || op == opFMul;
-        String* rh = homeOf(n.res());
-        if (comm && isXmmHome(rh) && o1.kind() == (u8)OPK_USE && o1.val() != (IRValue*)0
-            && !(o0.kind() == (u8)OPK_USE && o0.val() == o1.val()))
-            {
-            String* h1 = homeOf(o1.val());
-            if (isXmmHome(h1) && h1.equals(rh))
-                {
-                IROperand* t = o0;
-                o0 = o1;
-                o1 = t;
-                }
-            }
+        // The operands stay in their order even where b already sits in the
+        // result's home: with two NaNs, SSE returns the destination's, so
+        // swapping them made a + b's NaN depend on register allocation, and so
+        // on -O (#726). arm64 returns the first operand's; so does this now.
+        // fdstFor computes in the scratch then, at the cost of a move.
         String* D = fdstFor(n.res(), o1, o0);
         loadF(o0, D);
         // A second operand left in its slot is read from there, as SSE
