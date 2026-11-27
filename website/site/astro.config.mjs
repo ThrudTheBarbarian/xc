@@ -41,6 +41,7 @@ const SIDEBAR = [
 						{ label: 'Errors (throws / try / catch)', slug: 'compiler/language/errors' },
 						{ label: 'Heap, ARC & weak refs', slug: 'compiler/language/memory' },
 						{ label: 'Collections & strings', slug: 'compiler/language/collections' },
+						{ label: 'Tensors', slug: 'compiler/language/tensors' },
 						{ label: 'Threading', slug: 'compiler/language/threading' },
 						{ label: 'Modules & shared libraries', slug: 'compiler/language/modules' },
 						{ label: 'Inline assembly', slug: 'compiler/language/inline-asm' },
