@@ -842,6 +842,19 @@
                 s.append(st); s.appendCString("u8 ["); s.append(a); s.appendCString("], %k;\n");
                 return s;
                 }
+            // A bool value (a predicate) stored as a byte or wider (a `(u8)b`
+            // the lowering leaves as the bool itself): its 0 or 1 in a register
+            // first, as `st` takes no predicate. As the reference.
+            String* vt = mslTypeOf(vo);
+            if (vt != (String*)0 && IRType.is(vt, tyBool))
+                {
+                bool wide = ptxRegType(pt).equals(self.ptxS(".b64"));
+                String* k = self.ptxS(wide ? "%x" : "%k");
+                String* s = self.ptxS(wide ? "\tselp.b64 " : "\tselp.b32 ");
+                s.append(k); s.appendCString(", 1, 0, "); s.append(v); s.appendCString(";\n");
+                s.append(st); s.append(m); s.appendCString(" ["); s.append(a); s.appendCString("], "); s.append(k); s.appendCString(";\n");
+                return s;
+                }
             if (vo.kind() != (u8)OPK_USE)
                 {
                 String* t = ptxRegType(pt);

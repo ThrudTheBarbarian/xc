@@ -1001,6 +1001,15 @@ static NSString* ptxNarrowFix(XTIRType* t, NSString* r)
                 return [NSString stringWithFormat:@"\tmov.b32 %%k, %@;\n\tst.%@.u8 [%@], %%k;\n", v, sp, a];
             if (pt.kind == XTIRTypeKindBool)
                 return [NSString stringWithFormat:@"\tselp.b32 %%k, 1, 0, %@;\n\tst.%@.u8 [%@], %%k;\n", v, sp, a];
+            // A bool value (a predicate) stored as a byte or wider (a `(u8)b`
+            // the lowering leaves as the bool itself): its 0 or 1 in a register
+            // first, as `st` takes no predicate.
+            if (o[1].kind == XTIROperandKindUse && [self typeOf:o[1].valueId].kind == XTIRTypeKindBool)
+                {
+                BOOL wide = [ptxRegType(pt) isEqualToString:@".b64"];
+                return [NSString stringWithFormat:@"\tselp.%@ %@, 1, 0, %@;\n\tst.%@.%@ [%@], %@;\n",
+                                                  wide ? @"b64" : @"b32", wide ? @"%x" : @"%k", v, sp, m, a, wide ? @"%x" : @"%k"];
+                }
             if (o[1].kind != XTIROperandKindUse)
                 {
                 NSString* t = ptxRegType(pt);
