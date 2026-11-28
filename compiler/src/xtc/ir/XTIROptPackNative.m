@@ -59,7 +59,7 @@ typedef NS_ENUM(NSInteger, XTPackNativeType) {
     {
     (void)outErrors;
     XTIROptTargetProfile* prof = self.profile ?: [XTIROptTargetProfile conservativeProfile];
-    if (!prof.packF16Hardware && !prof.packBF16Inline)
+    if (!prof.packF16Hardware && !prof.packBF16Inline && !prof.packF8Inline)
         return YES;
     self.mod = mod;
     NSArray<XTIRFunction*>* fns = [mod.functions copy];
@@ -191,6 +191,151 @@ static BOOL hasHalfOp(XTIRFunction* fn)
     return k;
     }
 
+// A direct call of FloatPack's widening of a pack of at most 8 bits
+// (`_xt_fpk_unpack` [callee, value, e, m, mem], `_xt_fpk_unpackk` [callee,
+// value, e, m, k, mem]) with constant widths and word: the pack's (e, m, k) in
+// out[0..2], the special-value bits of k alone (8 and 16 change only the
+// narrowing).
+- (BOOL)tableCall:(XTIRInsn*)n pack:(int64_t*)out
+    {
+    if (n.opcode != XTIROpCall || !n.result || n.operands.count < 5)
+        return NO;
+    XTIROperand* c = n.operands[0];
+    if (c.kind != XTIROperandKindSym)
+        return NO;
+    NSString* nm = [self.mod symbolForId:c.symbolId].name;
+    BOOL kinds = [nm isEqualToString:@"_xt_fpk_unpackk"];
+    if (!kinds && ![nm isEqualToString:@"_xt_fpk_unpack"])
+        return NO;
+    if (n.operands.count != (kinds ? 6u : 5u) || n.operands[1].kind != XTIROperandKindUse)
+        return NO;
+    int64_t e = 0, m = 0, k = 0;
+    if (![self constOf:n.operands[2] value:&e] || ![self constOf:n.operands[3] value:&m])
+        return NO;
+    if (kinds && ![self constOf:n.operands[4] value:&k])
+        return NO;
+    k = k & 7;
+    if ((k & 4) == 0 && (e < 2 || m < 1 || e + m > 7 || (k & 3) == 3))
+        return NO;
+    out[0] = e;
+    out[1] = m;
+    out[2] = k;
+    return YES;
+    }
+
+// A direct call of FloatPack's narrowing from f32 to a signed pack of at most
+// 8 bits (`_xt_fpk_pack_f32` [callee, value, e, m, mem], `_xt_fpk_pack_f32k`
+// [callee, value, e, m, k, mem]) with constant widths and a word of the kind
+// alone (the compiler's own conversions; the explicit ones that pass 8 or 16,
+// and ue8m0, keep their calls): (e, m, kind) in out[0..2].
+- (BOOL)narrowCall:(XTIRInsn*)n pack:(int64_t*)out
+    {
+    if (n.opcode != XTIROpCall || !n.result || n.operands.count < 5)
+        return NO;
+    XTIROperand* c = n.operands[0];
+    if (c.kind != XTIROperandKindSym)
+        return NO;
+    NSString* nm = [self.mod symbolForId:c.symbolId].name;
+    BOOL kinds = [nm isEqualToString:@"_xt_fpk_pack_f32k"];
+    if (!kinds && ![nm isEqualToString:@"_xt_fpk_pack_f32"])
+        return NO;
+    if (n.operands.count != (kinds ? 6u : 5u) || n.operands[1].kind != XTIROperandKindUse)
+        return NO;
+    int64_t e = 0, m = 0, k = 0;
+    if (![self constOf:n.operands[2] value:&e] || ![self constOf:n.operands[3] value:&m])
+        return NO;
+    if (kinds && ![self constOf:n.operands[4] value:&k])
+        return NO;
+    if (k < 0 || k > 2 || e < 2 || m < 1 || e + m > 7)
+        return NO;
+    out[0] = e;
+    out[1] = m;
+    out[2] = k;
+    return YES;
+    }
+
+// The f32 bits of pattern h of pack (e, m, k): FloatPackKinds'
+// `_xt_fpk_unpackk`, step for step, which for k = 0 and at most 6 exponent
+// bits is FloatPack's `_xt_fpk_unpack`.
+static uint32_t tableBits(uint32_t h, uint32_t e, uint32_t m, uint32_t k)
+    {
+    uint32_t one = 1;
+    uint32_t x = h;
+    uint32_t bits = 0;
+    if ((k & 4) != 0)
+        {
+        uint32_t ue = x & 0xFF;
+        if (ue == 0xFF)
+            bits = 0x7FC00000;
+        else if (ue == 0)
+            bits = 0x00400000;
+        else
+            bits = ue << 23;
+        return bits;
+        }
+    uint32_t sign = (x >> (e + m)) & one;
+    uint32_t emax = (one << e) - one;
+    uint32_t mmax = (one << m) - one;
+    uint32_t ex = (x >> m) & emax;
+    uint32_t mant = x & mmax;
+    uint32_t sh = 23 - m;
+    int32_t bias = (int32_t)((one << (e - one)) - one);
+    uint32_t kind = k & 3;
+    if (ex == emax && kind == 0)
+        bits = 0x7F800000 | (mant << sh);
+    else if (ex == emax && kind == 1 && mant == mmax)
+        bits = 0x7FC00000;
+    else if (ex == 0)
+        {
+        if (mant != 0)
+            {
+            int32_t unb = 1 - bias;
+            while ((mant & (one << m)) == 0)
+                {
+                mant = mant << 1;
+                unb = unb - 1;
+                }
+            bits = ((uint32_t)(unb + 127) << 23) | ((mant & mmax) << sh);
+            }
+        }
+    else
+        bits = ((uint32_t)((int32_t)ex - bias + 127) << 23) | (mant << sh);
+    return bits | (sign << 31);
+    }
+
+// The module's table for pack (e, m, k), made at its first use: a string
+// literal (module-local in every back end, so two objects' tables never
+// meet) of the pack's 2^(1+e+m) values, 256 for ue8m0, as little-endian f32
+// bits, on a 4-byte boundary (align4). Named by the pack, so each module has
+// one per pack: _xt_fpk_tab_e4m3_finite, _xt_fpk_tab_e5m2_ieee,
+// _xt_fpk_tab_ue8m0, _xt_fpk_tab_e2m1_none.
+- (XTIRSymbolId)tableFor:(const int64_t*)pk
+    {
+    uint32_t e = (uint32_t)pk[0], m = (uint32_t)pk[1], k = (uint32_t)pk[2];
+    NSString* nm;
+    if (k & 4)
+        nm = @"_xt_fpk_tab_ue8m0";
+    else
+        {
+        NSArray<NSString*>* kindNames = @[ @"ieee", @"finite", @"none" ];
+        nm = [NSString stringWithFormat:@"_xt_fpk_tab_e%um%u_%@", e, m, kindNames[k & 3]];
+        }
+    for (NSUInteger i = 0; i < self.mod.symbols.count; i++)
+        if ([self.mod.symbols[i].name isEqualToString:nm])
+            return (XTIRSymbolId)i;
+    uint32_t count = (k & 4) ? 256 : 1u << (1 + e + m);
+    NSMutableData* bytes = [NSMutableData dataWithCapacity:count * 4];
+    for (uint32_t h = 0; h < count; h++)
+        {
+        uint32_t b = tableBits(h, e, m, k);
+        uint8_t le[4] = { (uint8_t)b, (uint8_t)(b >> 8), (uint8_t)(b >> 16), (uint8_t)(b >> 24) };
+        [bytes appendBytes:le length:4];
+        }
+    XTIRSymbol* sym = [XTIRSymbol stringLitWithName:nm bytes:bytes];
+    sym.attributes = @{@"align4" : @YES, @"banked" : @NO, @"cloaked" : @NO};
+    return [self.mod addSymbol:sym];
+    }
+
 #pragma mark - Building
 
 - (XTIRValue*)newValue:(XTIRType*)t block:(XTIRBlock*)bb at:(NSUInteger)at
@@ -270,6 +415,9 @@ static XTIROperand* use(XTIRValue* v)
     for (XTIRBlock* bb in fn.blocks)
         for (XTIRInsn* n in bb.instructions)
             {
+            int64_t tp[3];
+            if (prof.packF8Inline && ([self tableCall:n pack:tp] || [self narrowCall:n pack:tp]))
+                found = YES;
             XTPackNativeType pk;
             XTPackCallKind k = [self kindOf:n pack:&pk];
             if (k == XTPackCallNone)
@@ -295,6 +443,23 @@ static XTIROperand* use(XTIRValue* v)
         NSMutableArray<XTIRInsn*>* out = [NSMutableArray arrayWithCapacity:bb.instructions.count];
         for (XTIRInsn* n in bb.instructions)
             {
+            int64_t tp[3];
+            if (prof.packF8Inline && [self tableCall:n pack:tp])
+                {
+                [self tableLoad:n pack:tp into:out block:bb dead:maybeDead];
+                continue;
+                }
+            if (prof.packF8Inline && [self narrowCall:n pack:tp])
+                {
+                [self narrow:n pack:tp into:out block:bb dead:maybeDead];
+                XTIROperand* memIn = n.operands.lastObject;
+                if (n.memoryResult && memIn.kind == XTIROperandKindUse)
+                    {
+                    [memFrom addObject:@(n.memoryResult.valueId)];
+                    [memTo addObject:@(memIn.valueId)];
+                    }
+                continue;
+                }
             XTPackNativeType pk;
             XTPackCallKind k = [self kindOf:n pack:&pk];
             BOOL rewrite = (pk == XTPackNativeBF16 && prof.packBF16Inline
@@ -463,6 +628,159 @@ static XTIROperand* use(XTIRValue* v)
             [self keepSignalling:v];
     }
 
+// An 8- or 4-bit pack widened by a load from its table: the index `ZExt
+// U32` of the pattern (of the byte, when the pattern is a widened byte) and
+// `And mask` unless that is a byte and the table has 256 entries or the byte
+// is already masked to the table, `AddrOf` the table, `ElementAddr`, `Load
+// F32`. The table holds the routine's own results, so the load is the call's
+// bit for bit. The load takes the call's memory token and gives its result.
+- (void)tableLoad:(XTIRInsn*)n
+             pack:(const int64_t*)pk
+             into:(NSMutableArray<XTIRInsn*>*)out
+            block:(XTIRBlock*)bb
+             dead:(NSMutableArray<NSNumber*>*)maybeDead
+    {
+    NSUInteger at = out.count;
+    XTIRDbgLoc* dbg = n.dbgLoc;
+    XTIROperand* src = n.operands[1];
+    for (NSUInteger j = 2; j + 1 < n.operands.count; j++)
+        if (n.operands[j].kind == XTIROperandKindUse)
+            [maybeDead addObject:@(n.operands[j].valueId)];
+    uint32_t count = (pk[2] & 4) ? 256 : 1u << (1 + pk[0] + pk[1]);
+    // A pattern widened from a byte is indexed by the byte (the U16 widening
+    // then has no use left).
+    BOOL inRange = NO;
+    XTIROperand* narrow = src;
+    XTIRInsn* d = self.defOf[@(src.valueId)];
+    if (d && d.opcode == XTIROpZExt && d.operands.count == 1 && d.operands[0].kind == XTIROperandKindUse
+        && self.fn.values[@(d.operands[0].valueId)].type.kind == XTIRTypeKindU8)
+        {
+        XTIRInsn* w = self.defOf[@(d.operands[0].valueId)];
+        int64_t c = 0;
+        narrow = d.operands[0];
+        [maybeDead addObject:@(src.valueId)];
+        if (count == 256)
+            inRange = YES;
+        else if (w && w.opcode == XTIROpAnd && w.operands.count == 2 && [self constOf:w.operands[1] value:&c]
+                 && c >= 0 && (c & ~(int64_t)(count - 1)) == 0)
+            inRange = YES;
+        }
+    XTIRValue* z = [self emit:XTIROpZExt type:[XTIRType u32Type] res:nil operands:@[ narrow ]
+                    predicate:0 into:out block:bb at:at dbg:dbg];
+    XTIROperand* idx = use(z);
+    if (!inRange)
+        {
+        XTIRValue* a = [self emit:XTIROpAnd type:[XTIRType u32Type] res:nil operands:@[ use(z), imm(count - 1) ]
+                        predicate:0 into:out block:bb at:at dbg:dbg];
+        idx = use(a);
+        }
+    XTIRSymbolId sid = [self tableFor:pk];
+    XTIRType* fp = [XTIRType ptrToType:[XTIRType f32Type] window:0];
+    XTIRValue* base = [self emit:XTIROpAddrOf type:fp res:nil operands:@[ [XTIROperand symWithSymbolId:sid] ]
+                       predicate:0 into:out block:bb at:at dbg:dbg];
+    XTIRValue* ea = [self emit:XTIROpElementAddr type:fp res:nil operands:@[ use(base), idx ]
+                     predicate:0 into:out block:bb at:at dbg:dbg];
+    [self emit:XTIROpLoad type:[XTIRType f32Type] res:n.result operands:@[ use(ea), n.operands.lastObject ]
+     predicate:0 into:out block:bb at:at dbg:dbg];
+    out.lastObject.memoryResult = n.memoryResult;
+    }
+
+// f32 to a signed pack of at most 8 bits, as FloatPack's rounding gives it,
+// without a branch. With a = |x| (bits): below the pack's smallest normal,
+// the f32 sum a + 2^(1-bias-m+23) rounds a to the pack's subnormal spacing
+// (round to nearest even, the hardware's mode), and its bits less the
+// constant's are the pattern (the smallest normal when it rounds up); above,
+// the bits rounded to m mantissa bits on the integer, `(a + 2^(s-1) - 1 +
+// lsb) >> s`, rebiased. Then the kind's saturation (ieee: the infinity, which
+// an infinity reaches too; finite: the largest finite value; none: all ones),
+// the sign, and a NaN: ieee keeps the sign and top payload bits, made quiet;
+// finite gives the all-ones pattern of its sign; none gives +0. Checked
+// against the routines over every f32 for each pack.
+- (void)narrow:(XTIRInsn*)n
+          pack:(const int64_t*)pk
+          into:(NSMutableArray<XTIRInsn*>*)out
+         block:(XTIRBlock*)bb
+          dead:(NSMutableArray<NSNumber*>*)maybeDead
+    {
+    NSUInteger at = out.count;
+    XTIRDbgLoc* dbg = n.dbgLoc;
+    XTIROperand* src = n.operands[1];
+    for (NSUInteger j = 2; j + 1 < n.operands.count; j++)
+        if (n.operands[j].kind == XTIROperandKindUse)
+            [maybeDead addObject:@(n.operands[j].valueId)];
+    uint32_t e = (uint32_t)pk[0], m = (uint32_t)pk[1], kind = (uint32_t)pk[2];
+    uint32_t bias = (1u << (e - 1)) - 1, sh = 23 - m;
+    uint32_t all = (1u << (e + m)) - 1, inf = ((1u << e) - 1) << m, mmax = (1u << m) - 1;
+    uint32_t lim = kind == 0 ? inf : kind == 1 ? all - 1 : all;
+    uint32_t magic = (127 + 24 - bias - m) << 23;
+    XTIRType* u = [XTIRType u32Type];
+    XTIRType* b = [XTIRType boolType];
+    XTIRValue* x = [self emit:XTIROpBitcast type:u res:nil operands:@[ src ] predicate:0 into:out block:bb at:at dbg:dbg];
+    XTIRValue* a = [self emit:XTIROpAnd type:u res:nil operands:@[ use(x), imm(0x7FFFFFFF) ]
+                    predicate:0 into:out block:bb at:at dbg:dbg];
+    XTIRValue* fa = [self emit:XTIROpBitcast type:[XTIRType f32Type] res:nil operands:@[ use(a) ]
+                     predicate:0 into:out block:bb at:at dbg:dbg];
+    uint64_t md = (uint64_t)(1023 + 24 - bias - m) << 52;
+    XTIRValue* c = [self emit:XTIROpConst type:[XTIRType f32Type] res:nil
+                     operands:@[ [XTIROperand immFWithType:[XTIRType f32Type] rawBytes:md] ]
+                    predicate:0 into:out block:bb at:at dbg:dbg];
+    XTIRValue* fs = [self emit:XTIROpFAdd type:[XTIRType f32Type] res:nil operands:@[ use(fa), use(c) ]
+                     predicate:0 into:out block:bb at:at dbg:dbg];
+    XTIRValue* sb = [self emit:XTIROpBitcast type:u res:nil operands:@[ use(fs) ] predicate:0 into:out block:bb at:at dbg:dbg];
+    XTIRValue* sub = [self emit:XTIROpSub type:u res:nil operands:@[ use(sb), imm(magic) ]
+                      predicate:0 into:out block:bb at:at dbg:dbg];
+    XTIRValue* hi = [self emit:XTIROpLShr type:u res:nil operands:@[ use(a), imm(sh) ]
+                     predicate:0 into:out block:bb at:at dbg:dbg];
+    XTIRValue* lsb = [self emit:XTIROpAnd type:u res:nil operands:@[ use(hi), imm(1) ]
+                      predicate:0 into:out block:bb at:at dbg:dbg];
+    XTIRValue* t1 = [self emit:XTIROpAdd type:u res:nil operands:@[ use(a), imm((1u << (sh - 1)) - 1) ]
+                     predicate:0 into:out block:bb at:at dbg:dbg];
+    XTIRValue* t2 = [self emit:XTIROpAdd type:u res:nil operands:@[ use(t1), use(lsb) ]
+                     predicate:0 into:out block:bb at:at dbg:dbg];
+    XTIRValue* t3 = [self emit:XTIROpLShr type:u res:nil operands:@[ use(t2), imm(sh) ]
+                     predicate:0 into:out block:bb at:at dbg:dbg];
+    XTIRValue* nrm = [self emit:XTIROpSub type:u res:nil operands:@[ use(t3), imm((127 - bias) << m) ]
+                      predicate:0 into:out block:bb at:at dbg:dbg];
+    XTIRValue* isSub = [self emit:XTIROpICmp type:b res:nil operands:@[ use(a), imm((128 - bias) << 23) ]
+                        predicate:XTIRICmpULT into:out block:bb at:at dbg:dbg];
+    XTIRValue* q = [self emit:XTIROpSelect type:u res:nil operands:@[ use(isSub), use(sub), use(nrm) ]
+                    predicate:0 into:out block:bb at:at dbg:dbg];
+    XTIRValue* big = [self emit:XTIROpICmp type:b res:nil operands:@[ use(q), imm(lim) ]
+                      predicate:XTIRICmpUGT into:out block:bb at:at dbg:dbg];
+    XTIRValue* cl = [self emit:XTIROpConst type:u res:nil operands:@[ imm(lim) ]
+                     predicate:0 into:out block:bb at:at dbg:dbg];
+    XTIRValue* q2 = [self emit:XTIROpSelect type:u res:nil operands:@[ use(big), use(cl), use(q) ]
+                     predicate:0 into:out block:bb at:at dbg:dbg];
+    XTIRValue* sg = [self emit:XTIROpLShr type:u res:nil operands:@[ use(x), imm(31) ]
+                     predicate:0 into:out block:bb at:at dbg:dbg];
+    XTIRValue* sgs = [self emit:XTIROpShl type:u res:nil operands:@[ use(sg), imm(e + m) ]
+                      predicate:0 into:out block:bb at:at dbg:dbg];
+    XTIRValue* r = [self emit:XTIROpOr type:u res:nil operands:@[ use(sgs), use(q2) ]
+                    predicate:0 into:out block:bb at:at dbg:dbg];
+    XTIRValue* isNan = [self emit:XTIROpICmp type:b res:nil operands:@[ use(a), imm(0x7F800000) ]
+                        predicate:XTIRICmpUGT into:out block:bb at:at dbg:dbg];
+    XTIRValue* nanv;
+    if (kind == 0)
+        {
+        XTIRValue* top = [self emit:XTIROpAnd type:u res:nil operands:@[ use(hi), imm(mmax) ]
+                          predicate:0 into:out block:bb at:at dbg:dbg];
+        XTIRValue* qn = [self emit:XTIROpOr type:u res:nil operands:@[ use(top), imm(inf | (1u << (m - 1))) ]
+                         predicate:0 into:out block:bb at:at dbg:dbg];
+        nanv = [self emit:XTIROpOr type:u res:nil operands:@[ use(sgs), use(qn) ]
+                predicate:0 into:out block:bb at:at dbg:dbg];
+        }
+    else if (kind == 1)
+        nanv = [self emit:XTIROpOr type:u res:nil operands:@[ use(sgs), imm(all) ]
+                predicate:0 into:out block:bb at:at dbg:dbg];
+    else
+        nanv = [self emit:XTIROpConst type:u res:nil operands:@[ imm(0) ]
+                predicate:0 into:out block:bb at:at dbg:dbg];
+    XTIRValue* sel = [self emit:XTIROpSelect type:u res:nil operands:@[ use(isNan), use(nanv), use(r) ]
+                      predicate:0 into:out block:bb at:at dbg:dbg];
+    [self emit:XTIROpTrunc type:[XTIRType u16Type] res:n.result operands:@[ use(sel) ]
+     predicate:0 into:out block:bb at:at dbg:dbg];
+    }
+
 #pragma mark - Uses
 
 - (NSCountedSet<NSNumber*>*)usesIn:(XTIRFunction*)fn
@@ -497,7 +815,7 @@ static XTIROperand* use(XTIRValue* v)
         if (!d || d.memoryResult)
             continue;
         XTIROpcode op = d.opcode;
-        if (!(op == XTIROpConst || op == XTIROpFpExt || op == XTIROpFAdd || op == XTIROpFSub
+        if (!(op == XTIROpConst || op == XTIROpFpExt || op == XTIROpZExt || op == XTIROpFAdd || op == XTIROpFSub
               || op == XTIROpFMul || op == XTIROpFDiv || op == XTIROpFSqrt))
             continue;
         for (XTIRBlock* bb in self.fn.blocks)

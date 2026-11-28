@@ -235,6 +235,7 @@ class OptProfile
     bool _packF16Arith;    // f16 arithmetic and comparisons (arm64 FEAT_FP16, a row with LSE)
     bool _packBf16;        // bf16 by integer operations (arm64, x86-64, win64)
     bool _packNanOrder;    // f32 arithmetic prefers a signalling NaN operand (arm64)
+    bool _packF8;          // the 8- and 4-bit packs: widened by a table load, narrowed from f32 by integer operations (arm64, x86-64, win64, wasm32; P2)
 
     void init(void)
         {
@@ -255,6 +256,7 @@ class OptProfile
         _packF16Arith = false;
         _packBf16 = false;
         _packNanOrder = false;
+        _packF8 = false;
         _nativeVarargs = false;
         _sqrtIntrinsic = false;
         _powSquare = false;
@@ -323,6 +325,7 @@ class OptProfile
     void setPackF16Arith(bool b) { _packF16Arith = b; }
     bool packBf16(void) { return _packBf16; }
     bool packNanOrder(void) { return _packNanOrder; }
+    bool packF8(void) { return _packF8; }
 
     bool ptr64(void)
         {
@@ -429,6 +432,7 @@ class OptProfile
         p._packF16From64 = arm64;
         p._packNanOrder = arm64;
         p._packBf16 = wide;
+        p._packF8 = wide || wasm;
         // arm64, x86_64 and win64 (which uses the x86_64 profile) have a
         // hardware sqrt; the 6502 and the 68000 do not, and their profiles say
         // so — the pass is a no-op there rather than a different lowering.

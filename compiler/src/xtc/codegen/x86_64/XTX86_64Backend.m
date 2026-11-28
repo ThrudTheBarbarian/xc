@@ -2496,6 +2496,10 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
         {
         if (sym.kind == XTIRSymbolKindStringLit && sym.stringBytes)
             {
+            // A table of 32-bit words (pack-native's decode tables) starts on
+            // a 4-byte boundary.
+            if ([sym.attributes[@"align4"] boolValue])
+                [rodata appendString:@"\t.p2align\t2\n"];
             [rodata appendFormat:@"%@:\n", [self safeSym:sym.name]];
             [self emitBytes:sym.stringBytes into:rodata];
             }

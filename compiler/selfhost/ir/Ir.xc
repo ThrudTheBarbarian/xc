@@ -2833,8 +2833,20 @@ class IRType
             {
             out.appendCString(": stringlit");
             out.append(byteList());
-            out.appendFormat("\n    attributes: { banked: %s, cloaked: %s }\n",
-                             _banked ? "true" : "false", _cloaked ? "true" : "false");
+            // Generic keys at their sorted places: pack-native's decode tables
+            // carry `align4`.
+            Array* sex = extrasSorted();
+            out.appendCString("\n    attributes: { ");
+            u32 sxi = extrasBefore(out, sex, (u32)0, "banked");
+            out.appendFormat("banked: %s", _banked ? "true" : "false");
+            sxi = extrasAfterBefore(out, sex, sxi, "cloaked");
+            out.appendFormat(", cloaked: %s", _cloaked ? "true" : "false");
+            while (sxi < sex.count())
+                {
+                out.appendFormat(", %s: true", ((String*)sex.get(sxi)).cString());
+                sxi = sxi + (u32)1;
+                }
+            out.appendCString(" }\n");
             return out;
             }
         out.appendCString(": vtable");

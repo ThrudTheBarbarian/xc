@@ -224,6 +224,7 @@
         self.packF16FromF64 = YES;
         self.packBF16Inline = YES;
         self.packNaNPrecedence = YES;
+        self.packF8Inline = YES;
         }
     return self;
     }
@@ -727,6 +728,14 @@
 
 @implementation XTIRWasm32TargetProfile
 
+// The 8- and 4-bit packs by a table load and integer operations (pack-native).
+- (instancetype)init
+    {
+    if ((self = [super init]))
+        self.packF8Inline = YES;
+    return self;
+    }
+
 // wasm32: the engine's JIT does regalloc + isel, so keep the semantic wins and
 // skip machine-level lowering. Full table + rationale: wasm-target.md §9.
 - (BOOL)hoistsLoopInvariants
@@ -853,7 +862,10 @@
 - (instancetype)init
     {
     if ((self = [super init]))
+        {
         self.packBF16Inline = YES;
+        self.packF8Inline = YES;
+        }
     return self;
     }
 // vpternlogd and vprold: one instruction each, at 64 bytes only.

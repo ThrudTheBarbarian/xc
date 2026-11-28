@@ -334,12 +334,16 @@ NS_ASSUME_NONNULL_BEGIN
 // packBF16Inline: bf16 by integer operations (arm64, x86-64, win64).
 // packNaNPrecedence: f32 arithmetic prefers a signalling NaN operand over a
 // quiet one (arm64), so a widened signalling half must stay signalling where
-// it reaches one.
+// it reaches one. packF8Inline: the 8- and 4-bit packs widen to f32 by a load
+// from a table of their 256 or 16 values, and narrow from f32 by integer
+// operations and one f32 addition (arm64, x86-64, win64, wasm32; float sizes
+// P2).
 @property(nonatomic) BOOL packF16Hardware;
 @property(nonatomic) BOOL packF16FromF64;
 @property(nonatomic) BOOL packF16Arith;
 @property(nonatomic) BOOL packBF16Inline;
 @property(nonatomic) BOOL packNaNPrecedence;
+@property(nonatomic) BOOL packF8Inline;
 
 + (instancetype)conservativeProfile;
 

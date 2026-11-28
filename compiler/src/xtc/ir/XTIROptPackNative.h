@@ -33,7 +33,15 @@ NS_ASSUME_NONNULL_BEGIN
 //     operation in half precision (`FAdd %a:U16, %b:U16`), and a comparison of
 //     two converted halves compares the halves (`FCmp` on U16).
 //
-// Other packs, the kinds' routines and the integer conversions from a pack
+//   * the 8- and 4-bit packs (every f8 pack, f4), profile packF8Inline: to
+//     f32 is a load from a table of the pack's 256 (16) values, a module-local
+//     string literal the pass makes at the first use, `_xt_fpk_tab_e4m3_finite`
+//     and so on, filled by the unpack routine's own steps at compile time;
+//     from f32 (to a signed pack) is a branch-free sequence, integer
+//     operations and one f32 addition for the subnormal rounding.
+//
+// The other conversions (from f64 or an integer to an 8-bit pack, to ue8m0,
+// the explicit conversions that pass 8 or 16, and from a pack to an integer)
 // keep their calls.
 //
 // Float dispatch: a clone simd-clone made for a higher level takes that

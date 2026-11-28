@@ -10191,6 +10191,10 @@ class X86_64
             IRSymbol* sym = (IRSymbol*)m.syms().get(i);
             if (sym.kind() == (u8)SYM_STRINGLIT)
                 {
+                // A table of 32-bit words (pack-native's decode tables)
+                // starts on a 4-byte boundary.
+                if (sym.attr(String.withCString("align4")))
+                    rodata.appendCString("\t.p2align\t2\n");
                 rodata.appendFormat("%s:\n", safeSym(sym.name()).cString());
                 emitBytes(sym.bytes(), rodata);
                 }

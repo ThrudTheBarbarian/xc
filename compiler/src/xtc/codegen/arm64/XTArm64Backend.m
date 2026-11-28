@@ -10712,6 +10712,10 @@ static BOOL sArm64LseAtomics = YES;  // Apple Silicon is ARMv8.5; Android's floo
         // link — the client's format string came out as the library's class
         // name (bug 136). The object writer now honours `.globl`, so a bare
         // label is an object-local symbol the linker tags per object.
+        // A table of 32-bit words (pack-native's decode tables) starts on a
+        // 4-byte boundary.
+        if ([sym.attributes[@"align4"] boolValue])
+            [out appendString:@"    .p2align 2\n"];
         [out appendFormat:@"_%@:\n", sym.name];
         const uint8_t *p = sym.stringBytes.bytes;
         NSUInteger len = sym.stringBytes.length;

@@ -3798,6 +3798,10 @@ class Arm64
             if (sym.kind() != (u8)SYM_STRINGLIT) continue;
             initHeader();
             // A literal is object-LOCAL — no .globl (bug 136; mirrors the reference).
+            // A table of 32-bit words (pack-native's decode tables) starts on a
+            // 4-byte boundary.
+            if (sym.attr(String.withCString("align4")))
+                _out.appendCString("    .p2align 2\n");
             _out.appendFormat("_%s:\n", sym.name().cString());
             Array* b = sym.bytes();
             if (b == (Array*)0 || b.count() == (u32)0) {
