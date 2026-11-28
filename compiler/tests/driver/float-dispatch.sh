@@ -10,8 +10,9 @@
 # builds and runs it again at each fixed level (-march=); every run must print
 # the fixture's expected output. It also checks that the dispatch is there: an
 # f16 multiply-add is cloned, the table names the clone, and a fixed level
-# builds one version; and that f16 loops are vectorised at the levels that
-# convert natively (f16_vectorize.xc checks their bits against scalar loops).
+# builds one version; that f16 loops are vectorised at the levels that
+# convert natively (f16_vectorize.xc checks their bits against scalar loops);
+# and that f8 converts by its table and inline.
 #
 # Runs on the machine it is on (arm64 macOS or Linux, x86-64 Linux).
 #   [XC=<xcc>] [REF=<the other compiler>] bash tests/driver/float-dispatch.sh
@@ -88,6 +89,27 @@ grep -qE 'vcvtph2ps[[:space:]]+ymm' "$W/v.s" && grep -qE 'vcvtps2ph[[:space:]]+x
     || bad "x86_64: f16 loops are not vectorised in the avx2 version"
 "$XC" -q -O2 --par-style=cpu -A x86_64 -march=x86-64 -S -o "$W/v.s" "$W/vec.xc"
 ! grep -q vcvtph2ps "$W/v.s" || bad "x86_64 -march=x86-64 uses F16C"
+
+# An f8 or f4 widening is a load from the pack's table, and a narrowing from
+# f32 is inline, on the rows that have them: no call of the routines.
+cat > "$W/q.xc" <<'XC'
+#import "Stdio.xc"
+f32 dq(f8* q, u32 i) { return (f32)q[i]; }
+void eq(f8* q, u32 i, f32 v) { q[i] = (f8)v; }
+f8 Q[4];
+i32 main(i32 argc, u8** argv)
+{
+    eq(&Q[0], 1, (f32)argc * 1.5);
+    Stdio.printf("%f\n", (f64)dq(&Q[0], 1));
+    return 0;
+}
+XC
+for row in arm64 arm64-linux x86_64 win64 wasm32; do
+    "$XC" -q -O2 -A $row -S -o "$W/q.s" "$W/q.xc" || { bad "q.xc -A $row does not build"; continue; }
+    grep -q '_xt_fpk_tab_e4m3_finite' "$W/q.s" \
+        && ! grep -qE '^[[:space:]]+(bl|call)[[:space:]]+[$]?_*_xt_fpk_(unpackk|pack_f32k)$' "$W/q.s" \
+        || bad "-A $row: f8 is not widened by a table and narrowed inline"
+done
 
 # A 40 MB zero-initialised global beside the dispatch constructor stays out of
 # the file: the init array must not follow the zeros in the data image. The
