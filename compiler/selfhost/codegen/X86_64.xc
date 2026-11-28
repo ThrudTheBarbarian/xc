@@ -2254,7 +2254,11 @@ class X86_64
             return;
             }
         String* mov = String.withCString(flt ? "movaps" : "movdqa");
-        bool commut = !n.isOp(opVSub) && !n.isOp(opVDiv);
+        // A float lane keeps its operands in order: with NaNs SSE returns the
+        // destination's (add, mul) or the second source (max, min), so a swap
+        // made the result depend on register allocation (#767). Integer
+        // lanes commute exactly.
+        bool commut = !n.isOp(opVSub) && !n.isOp(opVDiv) && !flt;
         // The two-address destructive form: compute in d, keeping whichever
         // source already sits there when the op allows it.
         if (d.equals(a))
@@ -2264,6 +2268,14 @@ class X86_64
         else if (commut && d.equals(b))
             {
             _out.appendFormat("\t%s\t%s, %s\n", mn.cString(), d.cString(), a.cString());
+            }
+        else if (d.equals(b))
+            {
+            // d holds b, which the copy of a would overwrite: computed in the
+            // xmm0 scratch instead.
+            _out.appendFormat("\t%s\txmm0, %s\n", mov.cString(), a.cString());
+            _out.appendFormat("\t%s\txmm0, %s\n", mn.cString(), b.cString());
+            _out.appendFormat("\t%s\t%s, xmm0\n", mov.cString(), d.cString());
             }
         else
             {
@@ -5339,40 +5351,20 @@ class X86_64
     // it has none here: a destructive `op a, b` is `vop a, a, b`, a move or a
     // compare keeps its operands. As the reference's vexFormOf:.
     // `movaps d, a` (two xmm registers) and then a destructive `op d, b` as one
-    // `vop d, a, b`, or 0. b that is d itself reads the copied a. And a
-    // scalar load `movss d, [m]` then `addss`/`mulss d, b` (b another
-    // register) as `vaddss d, b, [m]`: perlin's constants live in frame
-    // slots, and each `2.0 * v` cost the load and the multiply (eight per
-    // octave). Only add and multiply, which commute; min and max do not (a
-    // NaN picks the second). As the reference's vexFold.
+    // `vop d, a, b`, or 0. b that is d itself reads the copied a. A scalar
+    // load `movss d, [m]` then `addss d, b` is not merged: the three-operand
+    // form takes memory only as its second source, so `vaddss d, b, [m]`
+    // computes b + m, and with two NaNs that returns b's where the loop's
+    // m + b returns m's (#767). As the reference's vexFold.
     String* vexFold(String* mv, String* nx)
         {
-        bool sd = mv.hasPrefix(String.withCString("movsd\t"));
-        bool load = sd || mv.hasPrefix(String.withCString("movss\t"));
-        if (!mv.hasPrefix(String.withCString("movaps\t")) && !load)
+        if (!mv.hasPrefix(String.withCString("movaps\t")))
             return (String*)0;
-        Array* mo = mv.substringFromByte(load ? (u32)6 : (u32)7).splitOnByte((u8)',');
+        Array* mo = mv.substringFromByte((u32)7).splitOnByte((u8)',');
         if (mo.count() != (u32)2)
             return (String*)0;
         String* d = ((String*)mo.get((u32)0)).trimmed();
         String* a = ((String*)mo.get((u32)1)).trimmed();
-        if (load)
-            {
-            if (!vexXmm(d) || !a.contains(String.withCString("[")))
-                return (String*)0;
-            if (!nx.hasPrefix(String.withCString(sd ? "addsd\t" : "addss\t"))
-                && !nx.hasPrefix(String.withCString(sd ? "mulsd\t" : "mulss\t")))
-                return (String*)0;
-            Array* no = nx.substringFromByte((u32)6).splitOnByte((u8)',');
-            if (no.count() != (u32)2)
-                return (String*)0;
-            String* l0 = ((String*)no.get((u32)0)).trimmed();
-            String* l1 = ((String*)no.get((u32)1)).trimmed();
-            if (!l0.equals(d) || !vexXmm(l1) || l1.equals(d))
-                return (String*)0;
-            return String.withFormat("v%s\t%s, %s, %s", nx.substringBytes((u32)0, (u32)5).cString(),
-                                     d.cString(), l1.cString(), a.cString());
-            }
         if (!vexXmm(d) || !vexXmm(a) || d.equals(a))
             return (String*)0;
         u32 tab = (u32)0;

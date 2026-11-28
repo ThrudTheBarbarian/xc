@@ -1392,42 +1392,22 @@ static BOOL x86LeaFlagsRead(NSArray<NSString*>* lines, NSUInteger from)
     }
 
 // `movaps d, a` (two xmm registers) and then a destructive `op d, b` as one
-// `vop d, a, b`, or nil. b that is d itself reads the copied a. And a scalar
-// load `movss d, [m]` then `addss`/`mulss d, b` (b another register) as
-// `vaddss d, b, [m]`: perlin's constants live in frame slots, and each
-// `2.0 * v` cost the load and the multiply (eight per octave). Only add and
-// multiply, which commute; min and max do not (a NaN picks the second). The
-// port's vexFold.
+// `vop d, a, b`, or nil. b that is d itself reads the copied a. A scalar load
+// `movss d, [m]` then `addss d, b` is not merged: the three-operand form takes
+// memory only as its second source, so `vaddss d, b, [m]` computes b + m, and
+// with two NaNs that returns b's where the loop's m + b returns m's (#767).
+// The port's vexFold.
 + (nullable NSString*)vexFold:(NSString*)mv next:(NSString*)nx
     {
-    BOOL load = [mv hasPrefix:@"movss\t"] || [mv hasPrefix:@"movsd\t"];
-    if (![mv hasPrefix:@"movaps\t"] && !load)
+    if (![mv hasPrefix:@"movaps\t"])
         return nil;
-    NSArray<NSString*>* mo = [[mv substringFromIndex:(load ? 6 : 7)] componentsSeparatedByString:@","];
+    NSArray<NSString*>* mo = [[mv substringFromIndex:7] componentsSeparatedByString:@","];
     if (mo.count != 2)
         return nil;
     NSCharacterSet* ws = [NSCharacterSet whitespaceCharacterSet];
     NSString* d = [mo[0] stringByTrimmingCharactersInSet:ws];
     NSString* a = [mo[1] stringByTrimmingCharactersInSet:ws];
     BOOL (^isXmm)(NSString*) = ^BOOL(NSString* r) { return [r hasPrefix:@"xmm"]; };
-    if (load)
-        {
-        if (!isXmm(d) || [a rangeOfString:@"["].location == NSNotFound)
-            return nil;
-        BOOL sd = [mv hasPrefix:@"movsd\t"];
-        NSString* add = sd ? @"addsd\t" : @"addss\t";
-        NSString* mul = sd ? @"mulsd\t" : @"mulss\t";
-        if (![nx hasPrefix:add] && ![nx hasPrefix:mul])
-            return nil;
-        NSArray<NSString*>* no = [[nx substringFromIndex:6] componentsSeparatedByString:@","];
-        if (no.count != 2)
-            return nil;
-        NSString* o0 = [no[0] stringByTrimmingCharactersInSet:ws];
-        NSString* o1 = [no[1] stringByTrimmingCharactersInSet:ws];
-        if (![o0 isEqualToString:d] || !isXmm(o1) || [o1 isEqualToString:d])
-            return nil;
-        return [NSString stringWithFormat:@"v%@\t%@, %@, %@", [nx substringToIndex:5], d, o1, a];
-        }
     if (!isXmm(d) || !isXmm(a) || [d isEqualToString:a])
         return nil;
     NSRange tab = [nx rangeOfString:@"\t"];
@@ -7060,11 +7040,23 @@ static BOOL xtConstThrough(XTIRValueId v, XTIRInsn* (^defOf)(XTIRValueId), int d
         // DIV and SUB are NOT commutative: only `d == a` may skip the copy
         // (`d = d op b` is `a op b`), and `d == b` must not be folded the
         // other way round.
-        BOOL commut = (op != XTIROpVSub && op != XTIROpVDiv);
+        // A float lane keeps its operands in order: with NaNs SSE returns the
+        // destination's (add, mul) or the second source (max, min), so a swap
+        // made the result depend on register allocation (#767). Integer lanes
+        // commute exactly.
+        BOOL commut = (op != XTIROpVSub && op != XTIROpVDiv) && !flt;
         if ([d isEqualToString:a])
             [out appendFormat:@"\t%@\t%@, %@\n", mn, d, b];
         else if (commut && [d isEqualToString:b])
             [out appendFormat:@"\t%@\t%@, %@\n", mn, d, a];
+        else if ([d isEqualToString:b])
+            {
+            // d holds b, which the copy of a would overwrite: computed in the
+            // xmm0 scratch instead.
+            [out appendFormat:@"\t%@\txmm0, %@\n", mov, a];
+            [out appendFormat:@"\t%@\txmm0, %@\n", mn, b];
+            [out appendFormat:@"\t%@\t%@, xmm0\n", mov, d];
+            }
         else
             {
             [out appendFormat:@"\t%@\t%@, %@\n", mov, d, a];
