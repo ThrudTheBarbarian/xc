@@ -2197,16 +2197,19 @@ class IfFrame
                 }
             msg.appendCString(": error: Cannot find include file '");
             msg.append(target);
-            msg.appendCString("' (searched:");
+            // The directories comma-separated, as the reference lists them.
+            msg.appendCString("' (searched: ");
             for (u32 i = (u32)0; i < _includePaths.count(); i = i + (u32)1)
                 {
-                msg.appendCString(" '");
+                if (i > (u32)0)
+                    msg.appendCString(", ");
+                msg.appendCString("'");
                 msg.append((String*)_includePaths.get(i));
                 msg.appendCString("'");
                 }
             for (u32 i = (u32)0; i < _libraryPaths.count(); i = i + (u32)1)
                 {
-                msg.appendCString(" -L '");
+                msg.appendCString(", -L '");
                 msg.append((String*)_libraryPaths.get(i));
                 msg.appendCString("'");
                 }

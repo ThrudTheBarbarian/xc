@@ -16936,7 +16936,7 @@ typedef NS_ENUM(NSInteger, XTStructARCMode) {
             [self lowerRangeArrayInit:(XTRangeExprNode*)node.initialiser
                                pinned:pl
                              declType:node.declaredType
-                             location:node.location];
+                             location:node.nameLocation ?: node.location];
             return;
             }
         // Sized-scalar byte-list with non-constant entries (`float r =
