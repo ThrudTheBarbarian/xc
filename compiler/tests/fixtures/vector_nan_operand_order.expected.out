@@ -1,0 +1,6 @@
+add  7fc00102
+add' 7fc00103
+mul  7fc00102
+addk 7fc00102
+mulk 7fc00102
+dadd 7ff8000000000102
