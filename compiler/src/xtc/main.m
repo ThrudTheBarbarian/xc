@@ -21,6 +21,7 @@
 #import "XTCrypto.h"
 #import "XTMemoryModel.h"
 #import "ir/XTIRElemKind.h"
+#import "XTArm64Link.h"
 
 /****************************************************************************\
 |* A per-invocation temp DIRECTORY, so the files inside it can have stable
@@ -252,24 +253,14 @@ static NSString *runtimeLibFile(const char *argv0, XTCommandLineOptions *opts) {
     if (!support) return nil;
     if (!support.isAbsolutePath)
         support = [[[NSFileManager defaultManager] currentDirectoryPath] stringByAppendingPathComponent:support];
-    NSString *dir = [[support stringByAppendingPathComponent:@"runtime-lib"] stringByAppendingPathComponent:row.name];
-    for (NSString *ext in row.libExts) {
-        NSString *f = [dir stringByAppendingPathComponent:[@"libRuntime." stringByAppendingString:ext]];
-        if ([[NSFileManager defaultManager] fileExistsAtPath:f]) return f.stringByStandardizingPath;
-    }
-    return nil;
+    return [row runtimeLibInSupport:support];
 }
 
 // The stack canary's guard word and the glibc crt's argc/argv are the
 // runtime's: an image that takes libRuntime reaches them through the GOT.
-// The same rewrites as the port's (guardThroughGot, guardThroughGotX86,
-// crtArgsThroughGot), and libRuntime exports what it otherwise hides.
-static NSString *guardThroughGot(NSString *prog) {
-    NSString *a = [prog stringByReplacingOccurrencesOfString:@"    adrp x16, ___xt_stack_guard@PAGE\n    ldr x16, [x16, ___xt_stack_guard@PAGEOFF]\n"
-                                                  withString:@"    adrp x16, ___xt_stack_guard@GOTPAGE\n    ldr x16, [x16, ___xt_stack_guard@GOTPAGEOFF]\n    ldr x16, [x16]\n"];
-    return [a stringByReplacingOccurrencesOfString:@"    adrp x17, ___xt_stack_guard@PAGE\n    ldr x17, [x17, ___xt_stack_guard@PAGEOFF]\n"
-                                        withString:@"    adrp x17, ___xt_stack_guard@GOTPAGE\n    ldr x17, [x17, ___xt_stack_guard@GOTPAGEOFF]\n    ldr x17, [x17]\n"];
-}
+// The same rewrites as the port's (guardThroughGot, in XTArm64Link.h,
+// guardThroughGotX86, crtArgsThroughGot), and libRuntime exports what it
+// otherwise hides.
 static NSString *guardThroughGotX86(NSString *prog) {
     NSString *a = [prog stringByReplacingOccurrencesOfString:@"\tmov\tr11, qword ptr [rip + __xt_stack_guard]\n"
                                                   withString:@"\tmov\tr11, qword ptr [rip + __xt_stack_guard@GOTPCREL]\n\tmov\tr11, qword ptr [r11]\n"];
@@ -1013,7 +1004,6 @@ static BOOL x86SelfHostCanIgnoreLinkFlags(XTCommandLineOptions *opts) {
     return YES;
 }
 
-static NSString *arm64ClassAllocStubs(NSString *prog);   // defined below (shared exec/dylib)
 static int androidClangRefused(void);                     // defined below
 static NSArray<NSString *> *_Nullable arm64ClangRuntime(XTCommandLineOptions *opts, NSString *support,
                                                         NSString *prog, BOOL forLibrary);
@@ -1708,7 +1698,7 @@ static int linkAndroidSelfHost(const char *argv0, XTCommandLineOptions *opts,
     if (!prog) return 1;
     // NOT renameMainSymbol: there is no C stub here to own `main`. The crt's
     // `_start` calls the program's `main` directly, through __libc_init.
-    NSString *stubs   = arm64ClassAllocStubs(prog);   // built from the Mach-O names…
+    NSString *stubs   = XTArm64ClassAllocStubs(prog);   // built from the Mach-O names…
     NSString *crtsrc  = [NSString stringWithContentsOfFile:crt encoding:NSUTF8StringEncoding error:NULL];
     NSString *rtsrc   = [NSString stringWithContentsOfFile:rt  encoding:NSUTF8StringEncoding error:NULL];
     if (xcArgsWanted(opts, prog)) {
@@ -1719,7 +1709,7 @@ static int linkAndroidSelfHost(const char *argv0, XTCommandLineOptions *opts,
     // from it (not Android yet: no device to prove it on). As the port.
     NSString *rtLibF = [lrow.os isEqualToString:@"android"] ? nil : runtimeLibFile(argv0, opts);
     if (rtLibF) {
-        prog = guardThroughGot(prog);
+        prog = XTArm64GuardThroughGot(prog);
         rtsrc = @"";
         if (![neededLibs containsObject:rtLibF]) neededLibs = [neededLibs arrayByAddingObject:rtLibF];
     }
@@ -1796,14 +1786,14 @@ static int linkAndroidShared(const char *argv0, XTCommandLineOptions *opts,
     } else if (![lrow.os isEqualToString:@"android"]) {
         NSString *rtLibF = runtimeLibFile(argv0, opts);
         if (rtLibF) {
-            asmText = guardThroughGot(asmText);
+            asmText = XTArm64GuardThroughGot(asmText);
             rtsrc = @"";
             if (![neededLibs containsObject:rtLibF]) neededLibs = [neededLibs arrayByAddingObject:rtLibF];
         }
     }
     NSString *combined = [NSString stringWithFormat:@"%@\n%@\n%@",
         rtsrc,
-        stripSymbolUnderscoreArm64(arm64ClassAllocStubs(asmText)),
+        stripSymbolUnderscoreArm64(XTArm64ClassAllocStubs(asmText)),
         stripSymbolUnderscoreArm64(asmText)];
     NSString *tmp = xtcTempDir();
     // Written AS IS, exactly as the APK's .so link does. machoToElfArm64Ex is
@@ -2016,7 +2006,7 @@ static int linkAndroidApk(const char *argv0, XTCommandLineOptions *opts,
         NSString *gsrc   = [NSString stringWithContentsOfFile:glueS encoding:NSUTF8StringEncoding error:NULL];
         NSString *combined = [NSString stringWithFormat:@"%@\n%@\n%@\n%@",
             gsrc, rtsrc,
-            stripSymbolUnderscoreArm64(arm64ClassAllocStubs(renamed)),
+            stripSymbolUnderscoreArm64(XTArm64ClassAllocStubs(renamed)),
             stripSymbolUnderscoreArm64(renamed)];
         elfPath = [tmp stringByAppendingPathComponent:@"xtc-android-so.s"];
         [combined writeToFile:elfPath atomically:YES encoding:NSUTF8StringEncoding error:NULL];
@@ -2218,7 +2208,7 @@ static int linkArm64Executable(const char *argv0, XTCommandLineOptions *opts,
         NSString *prog = [NSString stringWithContentsOfFile:asmPath
                                                    encoding:NSUTF8StringEncoding error:NULL];
         NSString *combined = [NSString stringWithFormat:@"%@\n%@",
-                              arm64ClassAllocStubs(prog), prog ?: @""];
+                              XTArm64ClassAllocStubs(prog), prog ?: @""];
         NSString *objAsm = [xtcTempDir() stringByAppendingPathComponent:@"xtc-c-object.s"];
         [combined writeToFile:objAsm atomically:YES encoding:NSUTF8StringEncoding error:NULL];
         NSMutableArray<NSString *> *objArgs = [@[@"--object", objAsm, opts.outputPath] mutableCopy];
@@ -2251,7 +2241,7 @@ static int linkArm64Executable(const char *argv0, XTCommandLineOptions *opts,
         NSString *rtLibF = runtimeLibFile(argv0, opts);
         if (rtLibF) {
             rtsrc = @"";
-            if (prog) prog = guardThroughGot(prog);
+            if (prog) prog = XTArm64GuardThroughGot(prog);
             if (![neededLibs containsObject:rtLibF]) neededLibs = [neededLibs arrayByAddingObject:rtLibF];
         }
         // The iOS platform shim (support/ios/runtime, iOS.md stage 4) rides
@@ -2285,7 +2275,7 @@ static int linkArm64Executable(const char *argv0, XTCommandLineOptions *opts,
         }
         // Per-class allocators (`new Class` → __xtc_new_<Class>); see helper.
         NSString *combined = [NSString stringWithFormat:@"%@\n%@\n%@\n%@\n%@",
-            crtsrc, rtsrc, chksrc, arm64ClassAllocStubs(prog), prog ?: @""];
+            crtsrc, rtsrc, chksrc, XTArm64ClassAllocStubs(prog), prog ?: @""];
         NSString *combinedPath = [xtcTempDir() stringByAppendingPathComponent:@"xtc-selfhost.s"];
         [combined writeToFile:combinedPath atomically:YES encoding:NSUTF8StringEncoding error:NULL];
         NSMutableArray<NSString *> *args = [@[combinedPath, outPath] mutableCopy];
@@ -2354,34 +2344,6 @@ static int linkArm64Executable(const char *argv0, XTCommandLineOptions *opts,
 // bottoms out in libc `malloc`, so the heap is shared, and a destructor is
 // dispatched through the absolute function pointer stamped into the object
 // header at allocation time (valid across images under ASLR).
-// Synthesise the per-class `new` allocators for the self-host path. `new Class`
-// lowers to `__xtc_new_<Class>`, which is program-specific (it installs the
-// class's dealloc) — rt-macos.s ships only the primitive allocators. Each stub
-// is a 3-insn tail-call: `x2 = &<Class>$dealloc; b __xtc_alloc` (x2=0 when the
-// class has no dealloc). Shared by the executable and shared-library paths.
-static NSString *arm64ClassAllocStubs(NSString *prog) {
-    NSMutableString *out = [NSMutableString string];
-    if (!prog) return out;
-    NSRegularExpression *re = [NSRegularExpression
-        regularExpressionWithPattern:@"__xtc_new_([A-Za-z_][A-Za-z0-9_]*)" options:0 error:NULL];
-    NSMutableSet *seen = [NSMutableSet set];
-    for (NSTextCheckingResult *m in [re matchesInString:prog options:0 range:NSMakeRange(0,prog.length)]) {
-        NSString *cls = [prog substringWithRange:[m rangeAtIndex:1]];
-        if (XTIRIsPrimitiveElemName(cls) || [seen containsObject:cls]) continue;
-        [seen addObject:cls];
-        [out appendFormat:@".text\n.globl __xtc_new_%@\n.align 2\n__xtc_new_%@:\n", cls, cls];
-        // Only an aggregate element reaches here (a class allocates through
-        // _xtc_alloc_object), and an aggregate has no dealloc, so every object
-        // carries the SAME body: no hook, and an array of 64 KB or more is
-        // page-aligned and registered as a numeric one is, so a par block can
-        // size it and share it with the GPU (#113). A link may then keep any
-        // object's copy (#663). The port's classAllocStubs.
-        [out appendFormat:@"    mul x9, x0, x1\n    mov x2, #0\n    lsr x10, x9, #16\n    cbz x10, L__xtc_new_%@_small\n"
-                               @"    b __xtc_alloc_aligned\nL__xtc_new_%@_small:\n    b __xtc_alloc\n", cls, cls];
-    }
-    return out;
-}
-
 // An android build through the NDK's clang (--no-self-host, or the fallback
 // after a failed in-house link): refused. That path compiled a generated C
 // runtime that no longer matched the object layout the back ends emit (the
@@ -2435,7 +2397,7 @@ static NSArray<NSString *> *_Nullable arm64ClangRuntime(XTCommandLineOptions *op
         }
         [files addObject:xa];
     }
-    NSString *stubs = arm64ClassAllocStubs(prog);
+    NSString *stubs = XTArm64ClassAllocStubs(prog);
     if (stubs.length) {
         NSString *sp = [xtcTempDir() stringByAppendingPathComponent:
                         forLibrary ? @"xtc-lib-allocators.s" : @"xtc-allocators.s"];
@@ -2445,7 +2407,7 @@ static NSArray<NSString *> *_Nullable arm64ClangRuntime(XTCommandLineOptions *op
     return files;
 }
 
-// The x86-64 counterpart of arm64ClassAllocStubs: `new Class` lowers to a call
+// The x86-64 counterpart of XTArm64ClassAllocStubs: `new Class` lowers to a call
 // to `_xtc_new_<Class>`, which is per-program (it has to know that class's
 // destructor), so it cannot live in the shipped runtime. A tail jump to
 // _xtc_alloc keeps the first two arguments untouched; only the third — the
@@ -2510,7 +2472,7 @@ static int linkArm64Shared(const char *argv0, XTCommandLineOptions *opts,
                 NSString *rtLibF = runtimeLibFile(argv0, opts);
                 if (rtLibF) {
                     rtsrc = @"";
-                    asmText = guardThroughGot(asmText);
+                    asmText = XTArm64GuardThroughGot(asmText);
                     if (![neededLibs containsObject:rtLibF]) neededLibs = [neededLibs arrayByAddingObject:rtLibF];
                 }
             }
@@ -2533,7 +2495,7 @@ static int linkArm64Shared(const char *argv0, XTCommandLineOptions *opts,
                 rtsrc = [NSString stringWithFormat:@"%@\n%@", rtsrc, iossrc];
             }
             NSString *combined = [NSString stringWithFormat:@"%@\n%@\n%@",
-                rtsrc, arm64ClassAllocStubs(asmText), asmText];
+                rtsrc, XTArm64ClassAllocStubs(asmText), asmText];
             NSString *combinedPath = [xtcTempDir() stringByAppendingPathComponent:@"xtc-selfhost-lib.s"];
             [combined writeToFile:combinedPath atomically:YES encoding:NSUTF8StringEncoding error:NULL];
 
@@ -4830,7 +4792,7 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
                 NSString *ltoCombined = [NSString stringWithFormat:@"%@\n%@\n%@\n%@",
                     [NSString stringWithContentsOfFile:crt encoding:NSUTF8StringEncoding error:NULL] ?: @"",
                     [NSString stringWithContentsOfFile:rt  encoding:NSUTF8StringEncoding error:NULL] ?: @"",
-                    arm64ClassAllocStubs(prog2), prog2 ?: @""];
+                    XTArm64ClassAllocStubs(prog2), prog2 ?: @""];
                 NSString *ltoPath = [xtcTempDir() stringByAppendingPathComponent:@"xtc-lto-all.s"];
                 [ltoCombined writeToFile:ltoPath atomically:YES encoding:NSUTF8StringEncoding error:NULL];
                 int rc2 = runChild(ln, @[ltoPath, opts.outputPath]);

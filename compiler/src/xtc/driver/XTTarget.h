@@ -97,6 +97,10 @@ NS_ASSUME_NONNULL_BEGIN
 // OS_<os>, OS_darwin (macos, ios), OS_unix (macos, ios, linux, android),
 // LIBC_<libc> (not for none), ENV_<env>; each defined as 1, in this order.
 - (NSArray<NSString*>*)macros;
+// The row's prebuilt libRuntime under a support root
+// (<support>/runtime-lib/<name>/libRuntime.<ext>, the first of libExts that
+// exists), or nil.
+- (nullable NSString*)runtimeLibInSupport:(NSString*)support;
 // --print-target: the row, one field per line, as the port prints it.
 - (NSString*)describe;
 @end

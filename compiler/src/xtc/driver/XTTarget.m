@@ -190,6 +190,18 @@ static XTTarget* row(NSString* name, NSString* cpu, NSInteger variant, NSString*
     return m;
     }
 
+- (nullable NSString*)runtimeLibInSupport:(NSString*)support
+    {
+    NSString* dir = [[support stringByAppendingPathComponent:@"runtime-lib"] stringByAppendingPathComponent:self.name];
+    for (NSString* ext in self.libExts)
+        {
+        NSString* f = [dir stringByAppendingPathComponent:[@"libRuntime." stringByAppendingString:ext]];
+        if ([[NSFileManager defaultManager] fileExistsAtPath:f])
+            return f.stringByStandardizingPath;
+        }
+    return nil;
+    }
+
 - (NSString*)describe
     {
     NSMutableString* s = [NSMutableString string];

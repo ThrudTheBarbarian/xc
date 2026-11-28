@@ -65,10 +65,62 @@
 #import "XTLinkerScriptParser.h"
 #import "XTPointerType.h"
 #import "XTStructType.h"
+#import "XTTarget.h"
+#import "XTArm64Link.h"
+
+// The target-table row each in-process leg builds for, as `-A` would name it to
+// the driver: the arm64 leg takes this host's arm64 row (macOS natively; the
+// bionic or glibc row where the asm goes through a cross toolchain), the 6502
+// leg the xt row. Its library macros, its object layout and (on macOS) the
+// runtime it links all come from here, as they do in the driver.
+static XTTarget *corpusArm64Row(void) {
+    static XTTarget *row;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        row = [XTTarget rowForToken:XTArm64UsesBionicAbi() ? @"arm64-android"
+                                  : XTArm64NeedsElfDialect() ? @"arm64-linux"
+                                                             : @"arm64-macos"];
+    });
+    return row;
+}
+
+static XTTarget *corpusXt6502Row(void) {
+    return [XTTarget rowForToken:@"6502-xt"];
+}
+
+// The arm64 leg links its programs against the row's own crt and runtime, as
+// the driver's clang link does, wherever that link is a Mach-O one (macOS).
+// Elsewhere the asm goes through a cross toolchain, and the leg keeps its C
+// stub runtime.
+static BOOL corpusArm64LinksRowRuntime(void) {
+    XTTarget *row = corpusArm64Row();
+    return !XTArm64NeedsElfDialect() && [row.exeFormat isEqualToString:@"macho"]
+        && row.crt.length && row.runtime.length;
+}
+
+// libRuntime, as the driver decides it for a program of one xc source: the
+// row's prebuilt library in this tree (make runtime-libs), unless
+// XCC_NO_RUNTIME_LIB=1. With it the arm64 leg builds as the driver does: its
+// front end resolves an import of a Runtime.list file to the library's
+// interface, and the program links the library as its runtime.
+static NSString *corpusArm64RuntimeLib(void) {
+    static NSString *lib;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        const char *e = getenv("XCC_NO_RUNTIME_LIB");
+        if ((e && !strcmp(e, "1")) || !corpusArm64LinksRowRuntime()) return;
+        NSString *support = [[[NSFileManager defaultManager] currentDirectoryPath]
+                             stringByAppendingPathComponent:@"support"];
+        lib = [corpusArm64Row() runtimeLibInSupport:support];
+    });
+    return lib;
+}
 
 // The system frameworks the fixture being built imports (`#import <F>`),
 // recorded by its front end and linked as -framework on macOS.
 static NSMutableArray<NSString *> *sCorpusFrameworks;
+// The libraries it links (libRuntime among them), from the driver's front end.
+static NSMutableArray<NSString *> *sCorpusLibs;
 
 static NSString *const kFixtureDir = @"tests/fixtures";
 // NOT const: a SHARDED run gives each shard its own build root. The
@@ -1422,8 +1474,16 @@ static XTCorpusOutcome runArm64Pipeline(XTIRModule *mod,
         return XTCorpusFailCodegen;
     }
 
+    // Linked as the driver links it, the program is entered at the crt's
+    // _xtc_start, which calls _main: an entry of another name becomes main.
+    // Otherwise the C stub's main calls the entry as xt_main.
+    BOOL rowRuntime = corpusArm64LinksRowRuntime();
     NSString *calleeName = entry.name;
-    if ([calleeName isEqualToString:@"main"]) {
+    if (rowRuntime) {
+        if (![calleeName isEqualToString:@"main"])
+            asmText = renameSymbol(asmText, calleeName, @"main");
+        calleeName = @"main";
+    } else if ([calleeName isEqualToString:@"main"]) {
         asmText = renameSymbol(asmText, @"main", @"xt_main");
         calleeName = @"xt_main";
     }
@@ -1439,26 +1499,57 @@ static XTCorpusOutcome runArm64Pipeline(XTIRModule *mod,
     NSString *stdoutPath = [fixBuildDir stringByAppendingPathComponent:@"stdout.txt"];
     NSString *stderrPath = [fixBuildDir stringByAppendingPathComponent:@"stderr.txt"];
 
+    // libRuntime holds the stack canary's guard word: the program reaches it
+    // through the GOT, as the driver rewrites it.
+    if (rowRuntime && corpusArm64RuntimeLib()) asmText = XTArm64GuardThroughGot(asmText);
     [asmText writeToFile:asmPath atomically:YES
                 encoding:NSUTF8StringEncoding error:NULL];
-    NSString *stubC = buildStubCForFunction(entry, calleeName, mod);
-    [stubC writeToFile:stubPath atomically:YES
-              encoding:NSUTF8StringEncoding error:NULL];
+    if (!rowRuntime) {
+        NSString *stubC = buildStubCForFunction(entry, calleeName, mod);
+        [stubC writeToFile:stubPath atomically:YES
+                  encoding:NSUTF8StringEncoding error:NULL];
+    }
 
     int rc = 0;
     BOOL timedOut = NO;
-    // Link the host runtime archive (real wall-clock time etc.) after the
-    // objects; static-archive semantics keep it quiet for fixtures that
-    // reference none of its symbols.
+    // Off the row's runtime, the C stub and the host runtime archive (real
+    // wall-clock time etc.) after the objects; static-archive semantics keep it
+    // quiet for fixtures that reference none of its symbols.
     NSArray<NSString *> *arm64cc = XTArm64ClangArgv();
     if (!arm64cc) {
         *outMessage = @"no arm64 compiler (set $XC_ARM64_CC or $ANDROID_NDK_HOME)";
         return XTCorpusFailAssembleLink;
     }
-    NSMutableArray *clangArgs =
-        [[arm64cc arrayByAddingObjectsFromArray:@[stubPath, asmPath]] mutableCopy];
-    NSString *libxt = ensureLibxtArchive();
-    if (libxt) [clangArgs addObject:libxt];
+    NSMutableArray *clangArgs = [arm64cc mutableCopy];
+    if (rowRuntime) {
+        // The driver's link: the row's crt from support/arm64/runtime, its
+        // runtime (rt-macos.s, or libRuntime when it is built), the per-class
+        // allocators, then the program, entered at _xtc_start, and the
+        // libraries the front end named, found beside them at run time.
+        XTTarget *row = corpusArm64Row();
+        NSString *allocPath = [fixBuildDir stringByAppendingPathComponent:@"allocators.s"];
+        [XTArm64ClassAllocStubs(asmText) writeToFile:allocPath atomically:YES
+                                            encoding:NSUTF8StringEncoding error:NULL];
+        [clangArgs addObject:[@"support/arm64/runtime" stringByAppendingPathComponent:row.crt]];
+        NSString *rtLib = corpusArm64RuntimeLib();
+        if (!rtLib)
+            [clangArgs addObject:[@"support/arm64/runtime" stringByAppendingPathComponent:row.runtime]];
+        [clangArgs addObjectsFromArray:@[allocPath, asmPath, @"-Wl,-e,_xtc_start"]];
+        NSMutableArray<NSString *> *libs = [sCorpusLibs mutableCopy] ?: [NSMutableArray array];
+        if (rtLib && ![libs containsObject:rtLib]) [libs addObject:rtLib];
+        NSMutableOrderedSet<NSString *> *rpaths = [NSMutableOrderedSet orderedSet];
+        for (NSString *lib in libs) {
+            [clangArgs addObject:lib];
+            if (lib.stringByDeletingLastPathComponent.length)
+                [rpaths addObject:lib.stringByDeletingLastPathComponent];
+        }
+        for (NSString *dir in rpaths)
+            [clangArgs addObjectsFromArray:@[@"-Wl,-rpath", [@"-Wl," stringByAppendingString:dir]]];
+    } else {
+        [clangArgs addObjectsFromArray:@[stubPath, asmPath]];
+        NSString *libxt = ensureLibxtArchive();
+        if (libxt) [clangArgs addObject:libxt];
+    }
     if (!XTArm64NeedsElfDialect())
         for (NSString *fw in sCorpusFrameworks)
             [clangArgs addObjectsFromArray:@[@"-framework", fw]];
@@ -2365,10 +2456,17 @@ static BOOL corpusFrontendPass(NSString *rawSource, NSString *xtPath,
     // so 6502 mnemonics in shared library code (Foundation, etc.) must
     // be wrapped in `#if ARCH_6502 ... #endif` and the arm64 branch
     // either left empty (no-op) or filled with an equivalent.
-    if (defaultPlacement == XTPointerPlacementMain) {
-        [pp defineMacro:@"ARCH_arm64" value:@"1"];
-    } else {
-        [pp defineMacro:@"ARCH_6502" value:@"1"];
+    // The macros come from the target table's row, as the driver defines
+    // them: ARCH_<cpu>, OS_<os> (with OS_darwin and OS_unix where they hold),
+    // LIBC_<libc>, ENV_<env> and OBJECTS_compact.
+    {
+        XTTarget *row = (defaultPlacement == XTPointerPlacementMain)
+            ? corpusArm64Row() : corpusXt6502Row();
+        BOOL compact = (defaultPlacement == XTPointerPlacementMain)
+            && corpusArm64LinksRowRuntime() && row.compactObjects;
+        for (NSString *m in row.macros)
+            if (compact || ![m isEqualToString:@"OBJECTS_compact"])
+                [pp defineMacro:m value:@"1"];
     }
 
     // The implicit platform prelude, exactly as the driver applies it (task
@@ -2591,6 +2689,10 @@ static BOOL corpusFrontendPass(NSString *rawSource, NSString *xtPath,
         // finds a class's name there (bug 537).
         [XTIRLowering setVtableConforms:arm64Target];
         [XTIRLowering setItableProtocols:NO];
+        // The row's object layout (the 8-byte instance header), where the leg
+        // links the row's runtime, which allocates that header.
+        [XTIRLowering setCompactObjects:arm64Target && corpusArm64LinksRowRuntime()
+                                        && corpusArm64Row().compactObjects];
         mod = [XTIRLowering lowerProgram:ast moduleName:name diagnostics:diag
                            nativeVarargs:arm64Target];
     } @catch (NSException *e) {
@@ -2739,6 +2841,80 @@ static NSSet<NSString *> *corpusNASetForSource(NSString *rawSource) {
 // the tree as documentation/future coverage; it's just not counted.
 // The front end for one backend, with the class-name table switched on when
 // the program calls for it (see corpusFrontendPass).
+// The arm64 front end with libRuntime built: the driver's own, given what the
+// driver gives its front end for this program (the row, the support root, no
+// bounds checks, a program of xc alone, the runtime library and its macro).
+// Its interface import, restarts and lowering switches are then the driver's.
+// A fixture with a link companion is compiled from the merged source.
+static BOOL corpusDriverFrontend(NSString *source, NSString *xtPath,
+                                 NSString *fixBuildDir,
+                                 XTIRModule **outMod, XTIRFunction **outEntry,
+                                 XTCorpusOutcome *outcome, NSString **msg) {
+    *outMod = nil; *outEntry = nil; *msg = nil;
+    if (!sCorpusFrameworks) sCorpusFrameworks = [NSMutableArray array];
+    if (!sCorpusLibs) sCorpusLibs = [NSMutableArray array];
+    NSString *input = xtPath;
+    if (![source isEqualToString:readFile(xtPath) ?: @""]) {
+        input = [fixBuildDir stringByAppendingPathComponent:
+                 [[xtPath lastPathComponent] stringByReplacingOccurrencesOfString:@".xc"
+                                                                       withString:@".merged.xc"]];
+        [source writeToFile:input atomically:YES encoding:NSUTF8StringEncoding error:NULL];
+    }
+    NSArray<NSString *> *args = @[
+        @"xcc-fe", @"-m", @"arm64", @"--target-row", corpusArm64Row().name, @"-H", @".",
+        @"-q", @"-fno-bounds-check", @"--pure-program",
+        @"--runtime-lib", corpusArm64RuntimeLib(),
+        [NSString stringWithFormat:@"-DXC_RUNTIME_LIB=\"%s\"", XTC_VERSION], input];
+    const char *argv[args.count];
+    for (NSUInteger i = 0; i < args.count; i++) argv[i] = args[i].UTF8String;
+    XTCommandLineOptions *opts = [XTCommandLineOptions parseArgc:(int)args.count argv:argv];
+    if (!opts) {
+        *outcome = XTCorpusFailPreproc;
+        *msg = @"driver options refused";
+        return NO;
+    }
+    [opts setValue:@(YES) forKey:@"useNewIR"];
+    XTCompilerDriver *drv = [[XTCompilerDriver alloc] initWithOptions:opts];
+    XTIRModule *mod = nil;
+    @try {
+        mod = [drv compileFrontendForFile:input];
+    } @catch (NSException *e) {
+        *outcome = XTCorpusFailLower;
+        *msg = [NSString stringWithFormat:@"front end exception: %@", e.reason];
+    }
+    // The switches it set that the sweep's own front end leaves at their
+    // defaults, back to them for the next fixture's 6502 pass.
+    [XTIRLowering setThreadSafeStatics:-1];
+    [XTIRLowering setPureProgram:NO];
+    [XTIRLowering setCPackCarrier:@""];
+    [XTIRLowering setDebugInfo:NO];
+    if (!mod) {
+        if (!*msg) {
+            *outcome = XTCorpusFailSema;
+            *msg = @"front end error";
+            for (XTDiagnostic *d in drv.diagnostics.diagnostics)
+                if (d.level >= 2) { *msg = d.message; break; }
+        }
+        return NO;
+    }
+    XTIRFunction *entry = pickEntryFunction(mod);
+    if (!entry) {
+        *outcome = XTCorpusFailNoFunctions;
+        *msg = @"no function with a body to call";
+        return NO;
+    }
+    for (NSString *p in drv.neededLibraryPaths) {
+        if ([p hasPrefix:@"framework:"]) {
+            if (![sCorpusFrameworks containsObject:[p substringFromIndex:10]])
+                [sCorpusFrameworks addObject:[p substringFromIndex:10]];
+        } else if (![sCorpusLibs containsObject:p]) {
+            [sCorpusLibs addObject:p];
+        }
+    }
+    *outMod = mod; *outEntry = entry;
+    return YES;
+}
+
 static BOOL corpusFrontend(NSString *rawSource, NSString *xtPath,
                            NSString *name,
                            NSArray<NSString *> *includePaths,
@@ -2850,6 +3026,7 @@ static XTCorpusResult *runFixture(NSString *xtPath, NSString *name) {
 
     NSString *fixBuildDir = [NSString stringWithFormat:@"%@/%@", kBuildDir, name];
     [sCorpusFrameworks removeAllObjects];
+    [sCorpusLibs removeAllObjects];
     ensureDir(fixBuildDir);
     NSString *logPath = [fixBuildDir stringByAppendingPathComponent:@"log.txt"];
 
@@ -2913,10 +3090,13 @@ static XTCorpusResult *runFixture(NSString *xtPath, NSString *name) {
         [XTType setFloatIsIEEE:YES];
         [XTStructType setFieldAlignmentCap:8];   // C natural alignment (blewit #5)
         [XTPointerType setHeapCountWidth:4];     // `.length` is u32 on arm64 (bug 234)
-        BOOL armFE = corpusFrontend(sourceForFE, xtPath, name,
-            @[@"support/arm64/lib", @"support/generic/lib"],
-            XTPointerPlacementMain, YES,
-            &armMod, &armEntry, &armOutcome, &armMsg);
+        BOOL armFE = corpusArm64RuntimeLib()
+            ? corpusDriverFrontend(sourceForFE, xtPath, fixBuildDir,
+                                   &armMod, &armEntry, &armOutcome, &armMsg)
+            : corpusFrontend(sourceForFE, xtPath, name,
+                             @[@"support/arm64/lib", @"support/generic/lib"],
+                             XTPointerPlacementMain, YES,
+                             &armMod, &armEntry, &armOutcome, &armMsg);
 
         // ── xt6502 frontend (3-byte pointers) ─────────────────────
         // The xt6502 backend uses uniform 3-byte pointers [addr-lo,
