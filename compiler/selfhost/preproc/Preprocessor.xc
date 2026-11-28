@@ -101,6 +101,7 @@ class IfFrame
     Array* _includePaths;    // of String@
     Array* _libraryPaths;    // of String@
     Array* _metadataImports; // of String@ — libraries seen, not text-included
+    Map* _libImporters;      // a library seen -> the files that imported it (String@ -> Array of String@, #786)
     Array* _thirdPartyRoots; // of String@ — /opt/xcc/3p and $XCC_3P (see addThirdPartyRoot)
     bool _appleFrameworks;   // macOS/iOS: `#import <F>` may name a system framework
     String* _appleSdk;       // the SDK root, or 0 (then the frameworks on this machine)
@@ -628,6 +629,18 @@ class IfFrame
     // over. As the reference.
     void takeLib(String* p, String* filename, u32 line)
         {
+        // Who asked for it (#786): a library only the standard library's own
+        // files import is the runtime's business, not the program's.
+        if (_libImporters == (Map*)0)
+            _libImporters = new Map();
+        Array* by = (Array*)_libImporters.get((Hashable*)p);
+        if (by == (Array*)0)
+            {
+            by = new Array();
+            _libImporters.set((Hashable*)p, (Object*)by);
+            }
+        if (filename != (String*)0)
+            by.add((Object*)filename);
         for (u32 i = (u32)0; _skippedLibs != (Array*)0 && i < _skippedLibs.count(); i = i + (u32)1)
             {
             Array* e = (Array*)_skippedLibs.get(i);
@@ -657,6 +670,12 @@ class IfFrame
             out.add(_stdNames.get(i));
         out.sort();
         return out;
+        }
+
+    // The files that imported library p (takeLib), or 0.
+    Array* importersOf(String* p)
+        {
+        return _libImporters != (Map*)0 ? (Array*)_libImporters.get((Hashable*)p) : (Array*)0;
         }
 
     Array* metadataImports(void)

@@ -113,6 +113,7 @@ class FeOptions
     bool _analyze;      // -Wanalyze: run the static analyser
     String* _ifaceJson; // …and where it lands
     String* _originsText; // a -c object's definition origins (#663), or null
+    Array* _libsOwn;    // of String@: those of _neededLibs a file of the program imports (#786), or 0
     Array* _neededLibs; // the library FILES `#import <X>` resolved to, for the
                         //   driver: a wasm app's loader has to name the
                         //   modules it will fetch, and only the preprocessor
@@ -390,6 +391,14 @@ class FeOptions
         {
         _libcReferenced = v;
         }
+    Array* ownLibs(void)
+        {
+        return _libsOwn;
+        }
+    void setOwnLibs(Array* a)
+        {
+        _libsOwn = a;
+        }
     void setNeededLibs(Array* a)
         {
         _neededLibs = a;
@@ -577,6 +586,7 @@ class FeOptions
     // xc (#15).
     static bool onlyRuntimeLibs(FeOptions* o)
         {
+        Array* own = o.ownLibs();
         // arm9's libc is auto-imported, not `#import`ed: a module naming any
         // of its functions calls C, as the reference counts it.
         if (o.libcReferenced())
@@ -585,6 +595,13 @@ class FeOptions
         for (u32 i = (u32)0; nl != (Array*)0 && i < nl.count(); i = i + (u32)1)
             {
             String* p = (String*)nl.get(i);
+            // Only the standard library imports it (#786): not the program's.
+            bool ownImport = own == (Array*)0;
+            for (u32 k = (u32)0; own != (Array*)0 && k < own.count() && !ownImport; k = k + (u32)1)
+                if (((String*)own.get(k)).equals(p))
+                    ownImport = true;
+            if (!ownImport)
+                continue;
             if (!p.lastPathComponent().hasPrefix(String.withCString("libRuntime.")) && !IfaceImport.pureOf(p))
                 return false;
             }
@@ -788,6 +805,22 @@ class FeOptions
             // Handed to the DRIVER: a wasm app's loader lists the modules it
             // will fetch, and `#import <X>` is the only place that is known.
             o.setNeededLibs(metas);
+            // Which of them the program's own files import (#786): one only
+            // the standard library imports (a system library its runtime
+            // calls) does not make the program's arrays the system's.
+            Array* own = new Array();
+            for (u32 i = (u32)0; i < metas.count(); i = i + (u32)1)
+                {
+                String* mp = (String*)metas.get(i);
+                Array* by = pp.importersOf(mp);
+                bool mine = by == (Array*)0;
+                for (u32 k = (u32)0; by != (Array*)0 && k < by.count() && !mine; k = k + (u32)1)
+                    if (!IRDbg.isLibraryPath(IRDbg.canonicalPath((String*)by.get(k))))
+                        mine = true;
+                if (mine)
+                    own.add((Object*)mp);
+                }
+            o.setOwnLibs(own);
             for (u32 i = (u32)0; i < metas.count(); i = i + (u32)1)
                 {
                 String* mp = (String*)metas.get(i);

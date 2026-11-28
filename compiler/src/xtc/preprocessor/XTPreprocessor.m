@@ -62,6 +62,8 @@ static inline BOOL xt_pp_isalpha(unichar c) { return c < 0x80 && isalpha(c); }
 \****************************************************************************/
 @property(nonatomic) NSMutableArray<NSString*>* mutableMetadataImports;
 @property(nonatomic) NSMutableSet<NSString*>* metadataImportSet;
+// A library seen -> the files that imported it (#786). As the port's _libImporters.
+@property(nonatomic) NSMutableDictionary<NSString*, NSMutableArray<NSString*>*>* libImporters;
 @property(nonatomic) NSMutableDictionary<NSString*, NSString*>* mutableStdlibFiles;
 @property(nonatomic) NSMutableSet<NSString*>* mutableLibraryFiles;
 // libRuntime: the member files taken in (absolute path -> name), the names an
@@ -149,6 +151,11 @@ static inline BOOL xt_pp_isalpha(unichar c) { return c < 0x80 && isalpha(c); }
 - (NSSet<NSString*>*)libraryFiles
     {
     return _mutableLibraryFiles;
+    }
+
+- (nullable NSArray<NSString*>*)importersOf:(NSString*)path
+    {
+    return _libImporters[path];
     }
 
 - (NSArray<NSString*>*)metadataImports
@@ -1683,6 +1690,14 @@ static BOOL fileExistsCaseSensitive(NSFileManager* fm, NSString* path)
         if (hit)
             {
             NSString* abs = [hit stringByStandardizingPath];
+            // Who asked for it (#786): a library only the standard library's
+            // own files import is the runtime's business. As the port.
+            if (!_libImporters)
+                _libImporters = [NSMutableDictionary dictionary];
+            if (!_libImporters[abs])
+                _libImporters[abs] = [NSMutableArray array];
+            if (loc.filename.length)
+                [_libImporters[abs] addObject:loc.filename];
             // #import is once-only
             if (![_metadataImportSet containsObject:abs])
                 {

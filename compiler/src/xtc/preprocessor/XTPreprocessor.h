@@ -151,6 +151,8 @@ NS_ASSUME_NONNULL_BEGIN
 |* consumes these after preprocessing to synthesise typed declarations.
 \****************************************************************************/
 @property(nonatomic, readonly) NSArray<NSString*>* metadataImports;
+/// The files that imported library `path`, or nil (#786).
+- (nullable NSArray<NSString*>*)importersOf:(NSString*)path;
 
 - (instancetype)initWithDiagnostics:(nullable XTDiagnosticEngine*)diagnostics NS_DESIGNATED_INITIALIZER;
 

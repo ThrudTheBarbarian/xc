@@ -44,6 +44,8 @@
     {
     NSUInteger _goalDirective;   // the unit's #goal, read after preprocessing
     NSSet<NSString*>* _libraryFiles;   // the library's files, which --par-style=auto leaves alone
+    NSSet<NSString*>* _ownLibs;        // the imported libraries a file of the program imports (#786), or nil
+    NSSet<NSString*>* _seenLibs;       // every library the preprocessor saw imported (#786), or nil
     BOOL _parAutoImport;               // --par-style=auto wraps a loop in a program without Par.xc: import it
     BOOL _tensorImport;                // the unit uses a tensor type: TensorStorage.xc is imported
     NSArray<NSString*>* _stdlibDirs;   // the preprocessor's standard-library directories
@@ -1639,6 +1641,36 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
         win64SysLibDir = [(tc ? @(tc) : @"/opt/clang/win64")
             stringByAppendingPathComponent:@"x86_64-w64-mingw32/lib"];
         }
+    // Which of the libraries the program's own files import (#786): one only
+    // the standard library imports (a system library its runtime calls) does
+    // not make the program's arrays the system's. As the port.
+    {
+    NSString* root = [self resolveSupportRoot];
+    NSString* rootSlash = root.length ? ([[root stringByStandardizingPath] hasSuffix:@"/"] ? [root stringByStandardizingPath]
+                                                                                             : [[root stringByStandardizingPath] stringByAppendingString:@"/"])
+                                      : nil;
+    NSMutableSet<NSString*>* own = [NSMutableSet set];
+    NSMutableSet<NSString*>* seen = [NSMutableSet set];
+    for (NSString* p in [self importsWithStateOwners:pp.metadataImports])
+        {
+        [seen addObject:p];
+        NSArray<NSString*>* by = [pp importersOf:p];
+        BOOL mine = by == nil;
+        for (NSString* f in by)
+            {
+            NSString* a = [f isAbsolutePath] ? [f stringByStandardizingPath]
+                                              : [[[[NSFileManager defaultManager] currentDirectoryPath]
+                                                    stringByAppendingPathComponent:f] stringByStandardizingPath];
+            BOOL lib = [a containsString:@"/support/"] || (rootSlash && ([a hasPrefix:rootSlash] || [a containsString:rootSlash]));
+            if (!lib)
+                mine = YES;
+            }
+        if (mine)
+            [own addObject:p];
+        }
+    _ownLibs = own;
+    _seenLibs = seen;
+    }
     NSMutableArray<NSString*>* frameworkImports = [NSMutableArray array];
     for (NSString* p in [self importsWithStateOwners:pp.metadataImports])
         {
@@ -2308,6 +2340,11 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     for (NSString* p in _neededLibraryPaths)
         {
         if ([p.lastPathComponent hasPrefix:@"libRuntime."])
+            continue;
+        // Only the standard library imports it (#786): not the program's. A
+        // library the driver adds itself (arm9's libc) counts, as the port's
+        // libcReferenced does.
+        if (_ownLibs && [_seenLibs containsObject:p] && ![_ownLibs containsObject:p])
             continue;
         NSString* json = [p hasPrefix:@"framework:"] ? nil : [XTInterfaceImporter interfaceJSONFromLibrary:p];
         NSDictionary* root = json.length ? [NSJSONSerialization JSONObjectWithData:[json dataUsingEncoding:NSUTF8StringEncoding]
