@@ -199,10 +199,11 @@ results are the same bits the software routines give, NaN payloads included:
 
 | Target | Native | Software |
 |---|---|---|
-| arm64 macOS and iOS | `f16` conversions to and from `f32` and `f64`, from integers, `+ - * /`, the square root and comparisons (half-precision instructions); `bf16` conversions to and from `f32` (integer instructions) | `bf16` from `f64` and integers, every other pack, conversions to integers |
-| arm64 Linux and Android | `f16` conversions to and from `f32` and `f64` and from integers; on CPUs with FP16 (ARMv8.2, such as the Raspberry Pi 5) `f16` arithmetic and comparisons as on macOS; `bf16` as above | `f16` arithmetic on ARMv8.0 CPUs (such as the Raspberry Pi 4) is done in `f32` with the native conversions; the rest as above |
-| x86-64, win64 | `f16` conversions to and from `f32` and from integers on CPUs with AVX2 (F16C); `bf16` as above | `f16` on CPUs without AVX2; `f16` from `f64`; arithmetic in `f32` |
-| arm9, m68k, wasm32, xt6502 | none | everything |
+| arm64 macOS and iOS | `f16` conversions to and from `f32` and `f64`, from integers, `+ - * /`, the square root and comparisons (half-precision instructions); `bf16` conversions to and from `f32` (integer instructions); every `f8` pack and `f4` to `f32` (a load from a table of the pack's 256 or 16 values) and from `f32` (integer instructions and one `f32` addition; `f8:pack(ue8m0)` excepted) | `bf16` from `f64` and integers, the other 16-bit packs, `f8` and `f4` from `f64` and integers, `f8:pack(ue8m0)` from `f32`, conversions to integers |
+| arm64 Linux and Android | `f16` conversions to and from `f32` and `f64` and from integers; on CPUs with FP16 (ARMv8.2, such as the Raspberry Pi 5) `f16` arithmetic and comparisons as on macOS; `bf16`, `f8` and `f4` as above | `f16` arithmetic on ARMv8.0 CPUs (such as the Raspberry Pi 4) is done in `f32` with the native conversions; the rest as above |
+| x86-64, win64 | `f16` conversions to and from `f32` and from integers on CPUs with AVX2 (F16C); `bf16`, `f8` and `f4` as above | `f16` on CPUs without AVX2; `f16` from `f64`; arithmetic in `f32`; the rest as above |
+| wasm32 | `f8` and `f4` as above | everything else |
+| arm9, m68k, xt6502 | none | everything |
 
 At `-O2` a loop over `f16` or `bf16` arrays (loads, conversions, `+ - * /`,
 square roots and stores, with `f32` arrays mixed in) is vectorised where the
@@ -217,7 +218,9 @@ conversions are native, with the same bits as the scalar loop:
 
 `bf16` widens by a shift and narrows by rounding the bits to nearest even in
 integer lanes, on every row above. A sum over `f16` or `bf16` elements stays
-scalar, so it adds in the order the loop is written.
+scalar, so it adds in the order the loop is written. A loop over `f8` or `f4`
+elements is not vectorised: each element converts through its table or the
+integer sequence.
 
 Where the instructions depend on the CPU, a program has one version of each
 function that uses them and one without, and picks per function when it loads
