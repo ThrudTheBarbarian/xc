@@ -153,14 +153,20 @@ if msz != 40 or fsz > msz or va % al or al < 8 or mem(va, fsz) + bytes(msz - fsz
     sys.exit("PT_TLS at %#x filesz %d memsz %d align %d holds %s" % (va, fsz, msz, al, mem(va, msz).hex()))
 PY
 }
-for row in arm64-linux; do
+# The C checks need C for arm64-linux (an aarch64 C sysroot); a host without
+# one skips them rather than failing.
+printf 'int f(void) { return 1; }\n' > "$W/probe.c"
+CARM=0
+"$XC" -q -A arm64-linux -c -o "$W/probe.o" "$W/probe.c" >/dev/null 2>&1 && CARM=1
+[ $CARM = 1 ] || echo "SKIP float-dispatch: no C for arm64-linux on this host (thread-local and aligned-global checks)"
+for row in $( [ $CARM = 1 ] && echo arm64-linux ); do
     "$XC" -q -O2 -A $row -o "$W/tl.$row" "$W/tl.c" || { bad "thread-locals: -A $row does not build"; continue; }
     why=$(tlscheck "$W/tl.$row" 2>&1) || bad "thread-locals: -A $row: $why"
     if [ -n "${REF:-}" ] && "$REF" -q -O2 -A $row -o "$W/tl.ref" "$W/tl.c" 2>/dev/null; then
         cmp -s "$W/tl.ref" "$W/tl.$row" || bad "thread-locals: -A $row differs between $XC and $REF"
     fi
 done
-if [ "$CPU-$(uname -s)" = arm64-Linux ]; then
+if [ $CARM = 1 ] && [ "$CPU-$(uname -s)" = arm64-Linux ]; then
     got=$("$W/tl.arm64-linux")
     [ "$got" = "1 3 3 4 1" ] || bad "thread-locals: tl.arm64-linux gives '$got'"
 fi
@@ -194,7 +200,8 @@ for i in range(phn):
             if t == 25: print(v)
 PY
 }
-if "$XC" -q -O2 -A arm64-linux -c -o "$W/al.o" "$W/al.c" && "$XC" -q -A arm64-linux -o "$W/al.obj" "$W/al.o" \
+if [ $CARM = 0 ]; then :
+elif "$XC" -q -O2 -A arm64-linux -c -o "$W/al.o" "$W/al.c" && "$XC" -q -A arm64-linux -o "$W/al.obj" "$W/al.o" \
    && "$XC" -q -O2 -A arm64-linux -o "$W/al.one" "$W/al.c"; then
     for v in obj one; do
         at=$(initat "$W/al.$v")
