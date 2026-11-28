@@ -4229,6 +4229,26 @@ class Sema
             {
             if (n.kidCount() > (u32)0 && n.kid((u32)0).ty() != 0)
                 n.setTy(n.kid((u32)0).ty());
+            // `%=`, the bitwise, shift and rotate compound forms take integers,
+            // as their operators do (#795). As the reference.
+            if (n.kidCount() >= (u32)2 && (_isOp(n.op(), "%=") || _isOp(n.op(), "&=") || _isOp(n.op(), "|=")
+                || _isOp(n.op(), "^=") || _isOp(n.op(), "<<=") || _isOp(n.op(), ">>=") || _isOp(n.op(), "<:=")
+                || _isOp(n.op(), ":>=")))
+                {
+                String* al = n.kid((u32)0).ty();
+                String* ar = n.kid((u32)1).ty();
+                String* ft = (String*)0;
+                if (al != 0 && (Types.isFloating(al) || Types.isPack(al)))
+                    ft = al;
+                else if (ar != 0 && (Types.isFloating(ar) || Types.isPack(ar)))
+                    ft = ar;
+                if (ft != (String*)0)
+                    {
+                    _errorAt(String.withFormat("'%s' needs integer operands, not '%s'; to work on a float's bits, cast it to the integer of its width",
+                                               n.op().cString(), ft.cString()), n);
+                    return;
+                    }
+                }
             // `b = &c.m;` where b is a block compiled clean, tested TRUE, and
             // then the call did NOTHING — the button that does nothing.
             if (n.kidCount() >= (u32)2)
@@ -6257,6 +6277,27 @@ class Sema
         // below, which would otherwise fold `nil + 1` to a number. The literal
         // is the 0 the lowering has always seen, so a comparison's IR is
         // unchanged. The messages are the reference's, word for word.
+        // `%`, the bitwise operators, the shifts and the rotates take integers.
+        // A float operand used to pass here and stop the lowering (#795). As
+        // the reference.
+        if (_isOp(n.op(), "%") || _isOp(n.op(), "&") || _isOp(n.op(), "|") || _isOp(n.op(), "^")
+            || _isOp(n.op(), "<<") || _isOp(n.op(), ">>") || _isOp(n.op(), "<:") || _isOp(n.op(), ":>"))
+            {
+            String* fl = n.kid((u32)0).ty();
+            String* fr = n.kid((u32)1).ty();
+            String* ft = (String*)0;
+            if (fl != 0 && (Types.isFloating(fl) || Types.isPack(fl)))
+                ft = fl;
+            else if (fr != 0 && (Types.isFloating(fr) || Types.isPack(fr)))
+                ft = fr;
+            if (ft != (String*)0)
+                {
+                _errorAt(String.withFormat("'%s' needs integer operands, not '%s'; to work on a float's bits, cast it to the integer of its width",
+                                           n.op().cString(), ft.cString()), n);
+                n.setTy(fl != 0 ? fl : fr);
+                return;
+                }
+            }
         // Tensor values have no equality: two views may share a storage or hold
         // equal elements, and neither is what `==` would say. As the reference.
         if (_isOp(n.op(), "==") || _isOp(n.op(), "!="))

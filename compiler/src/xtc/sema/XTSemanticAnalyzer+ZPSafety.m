@@ -2220,6 +2220,29 @@ static void XTCheckF4Unary(XTDiagnosticEngine* diags, XTUnaryExprNode* node)
 
     XTType* lt = node.left.resolvedType;
     XTType* rt = node.right.resolvedType;
+    // `%`, the bitwise operators, the shifts and the rotates take integers. A
+    // float operand used to pass here and stop the lowering with "unhandled
+    // binary op" (or, for a shift, be shifted as its converted value) (#795).
+    // As the port.
+    if (node.op == XTBinaryOpMod || node.op == XTBinaryOpBitAnd || node.op == XTBinaryOpBitOr
+        || node.op == XTBinaryOpBitXor || node.op == XTBinaryOpShl || node.op == XTBinaryOpShr
+        || node.op == XTBinaryOpRol || node.op == XTBinaryOpRor)
+        {
+        XTType* ft = (lt && (lt.isFloating || lt.isFloatPack)) ? lt : ((rt && (rt.isFloating || rt.isFloatPack)) ? rt : nil);
+        if (ft)
+            {
+            static NSString* const names[] = { [XTBinaryOpMod] = @"%", [XTBinaryOpBitAnd] = @"&", [XTBinaryOpBitOr] = @"|",
+                                               [XTBinaryOpBitXor] = @"^", [XTBinaryOpShl] = @"<<", [XTBinaryOpShr] = @">>",
+                                               [XTBinaryOpRol] = @"<:", [XTBinaryOpRor] = @":>" };
+            [self.diagnostics emitError:[NSString stringWithFormat:
+                                                      @"'%@' needs integer operands, not '%@'; to work on a float's bits, "
+                                                      @"cast it to the integer of its width",
+                                                      names[node.op], ft.displayName]
+                                     at:node.location];
+            node.resolvedType = lt ?: rt;
+            return;
+            }
+        }
     // Tensor values have no equality (XTParser+Tensors.m): two views may
     // share a storage or hold equal elements, and neither is what `==` would
     // say. As the port.
@@ -3042,6 +3065,28 @@ static void XTCheckF4Unary(XTDiagnosticEngine* diags, XTUnaryExprNode* node)
     // `a = a op b`): the assignment is the call or rewrite it becomes.
     if ([self resolveOperatorOfAssign:node])
         return;
+    // `%=`, the bitwise, shift and rotate compound forms take integers, as
+    // their operators do (#795). As the port.
+    if (node.assignOp == XTAssignOpMod || node.assignOp == XTAssignOpBitAnd || node.assignOp == XTAssignOpBitOr
+        || node.assignOp == XTAssignOpBitXor || node.assignOp == XTAssignOpShl || node.assignOp == XTAssignOpShr
+        || node.assignOp == XTAssignOpRol || node.assignOp == XTAssignOpRor)
+        {
+        XTType* al = node.lhs.resolvedType;
+        XTType* ar = node.rhs.resolvedType;
+        XTType* ft = (al && (al.isFloating || al.isFloatPack)) ? al : ((ar && (ar.isFloating || ar.isFloatPack)) ? ar : nil);
+        if (ft)
+            {
+            static NSString* const anames[] = { [XTAssignOpMod] = @"%=", [XTAssignOpBitAnd] = @"&=", [XTAssignOpBitOr] = @"|=",
+                                                [XTAssignOpBitXor] = @"^=", [XTAssignOpShl] = @"<<=", [XTAssignOpShr] = @">>=",
+                                                [XTAssignOpRol] = @"<:=", [XTAssignOpRor] = @":>=" };
+            [self.diagnostics emitError:[NSString stringWithFormat:
+                                                      @"'%@' needs integer operands, not '%@'; to work on a float's bits, "
+                                                      @"cast it to the integer of its width",
+                                                      anames[node.assignOp], ft.displayName]
+                                     at:node.location];
+            return;
+            }
+        }
 
     // Unboxing: `v = arr.get(0);` where v is a primitive numeric
     // and the RHS resolved to a class pointer. Splice the
