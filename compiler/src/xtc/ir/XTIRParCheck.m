@@ -3012,7 +3012,10 @@ static long long parCapAtom(NSDictionary<NSString*, NSNumber*>* p)
 // parRowField.
 - (long long)rowFieldOf:(XTIROperand*)op iv:(XTIRValueId)iv self:(XTIRValueId)selfId ivars:(NSArray<NSString*>*)ivars
                    defs:(NSDictionary<NSNumber*, XTIRInsn*>*)def phiBlocks:(NSDictionary<NSNumber*, XTIRBlock*>*)phiBlk
+                   head:(XTIRBlock* __strong _Nullable*)head step:(long long*)step
     {
+    *head = nil;
+    *step = 0;
     if (![ivars containsObject:@"par$w"] || [ivars containsObject:@"par$d"])
         return -1;
     XTIRInsn* d = parStripExt(op, def);
@@ -3033,7 +3036,8 @@ static long long parCapAtom(NSDictionary<NSString*, NSNumber*>* p)
             long long fld = parCapAtom(pk);
             if (fld < 0)
                 continue;
-            if ([self counterBelow:d.operands[1 - s] field:fld iv:iv self:selfId ivars:ivars defs:def phiBlocks:phiBlk])
+            if ([self counterBelow:d.operands[1 - s] field:fld iv:iv self:selfId ivars:ivars defs:def phiBlocks:phiBlk
+                              head:head step:step])
                 return fld;
             }
         }
@@ -3046,6 +3050,7 @@ static long long parCapAtom(NSDictionary<NSString*, NSNumber*>* p)
 - (BOOL)counterBelow:(XTIROperand*)op field:(long long)fld iv:(XTIRValueId)iv self:(XTIRValueId)selfId
                ivars:(NSArray<NSString*>*)ivars defs:(NSDictionary<NSNumber*, XTIRInsn*>*)def
            phiBlocks:(NSDictionary<NSNumber*, XTIRBlock*>*)phiBlk
+                head:(XTIRBlock* __strong _Nullable*)head step:(long long*)step
     {
     XTIRInsn* ph = parStripExt(op, def);
     if (!ph || ph.opcode != XTIROpPhi || ph.operands.count != 4 || !ph.result || ph.result.valueId == iv)
@@ -3056,6 +3061,7 @@ static long long parCapAtom(NSDictionary<NSString*, NSNumber*>* p)
         return NO;
     BOOL zero = NO;
     BOOL stepped = NO;
+    long long stepBy = 0;
     for (NSUInteger e = 0; e < 2; e++)
         {
         XTIROperand* ev = ph.operands[e * 2 + 1];
@@ -3086,6 +3092,7 @@ static long long parCapAtom(NSDictionary<NSString*, NSNumber*>* p)
         if (ed.opcode == XTIROpAdd && a0 && a0.kind == XTIROperandKindUse && a0.valueId == pv && st > 0)
             {
             stepped = YES;
+            stepBy = st;
             continue;
             }
         return NO;
@@ -3103,7 +3110,113 @@ static long long parCapAtom(NSDictionary<NSString*, NSNumber*>* p)
     if (g.operands[0].kind != XTIROperandKindUse || g.operands[0].valueId != pv)
         return NO;
     NSDictionary<NSString*, NSNumber*>* pb = [self gridPoly:g.operands[1] iv:iv self:selfId ivars:ivars defs:def depth:0];
-    return pb && parCapAtom(pb) == fld;
+    if (!pb || parCapAtom(pb) != fld)
+        return NO;
+    *head = H;
+    *step = stepBy;
+    return YES;
+    }
+
+// The blocks of f's loop through H that run once for every pass: those on
+// every path from H to the loop's one back edge, when the loop is left only
+// from H or from that back edge's block. nil for any other shape. As the
+// port's parEveryItemBlocks.
+- (nullable NSSet<XTIRBlock*>*)everyItemBlocksIn:(XTIRFunction*)f head:(XTIRBlock*)H
+    {
+    NSMutableSet<XTIRBlock*>* fwd = [NSMutableSet setWithObject:H];
+    NSMutableArray<XTIRBlock*>* work = [NSMutableArray arrayWithObject:H];
+    for (NSUInteger w = 0; w < work.count; w++)
+        {
+        XTIRInsn* t = work[w].terminator;
+        for (XTIROperand* o in t.operands)
+            if (o.kind == XTIROperandKindBlock && o.blockRef && ![fwd containsObject:o.blockRef])
+                {
+                [fwd addObject:o.blockRef];
+                [work addObject:o.blockRef];
+                }
+        }
+    // The blocks that reach H, among those H reaches: the loop.
+    NSMutableSet<XTIRBlock*>* loop = [NSMutableSet setWithObject:H];
+    BOOL grew = YES;
+    while (grew)
+        {
+        grew = NO;
+        for (XTIRBlock* bb in f.blocks)
+            {
+            if (![fwd containsObject:bb] || [loop containsObject:bb] || !bb.terminator)
+                continue;
+            for (XTIROperand* o in bb.terminator.operands)
+                if (o.kind == XTIROperandKindBlock && [loop containsObject:o.blockRef])
+                    {
+                    [loop addObject:bb];
+                    grew = YES;
+                    break;
+                    }
+            }
+        }
+    // One back edge (its block, the latch) and every way out from H or the latch.
+    XTIRBlock* latch = nil;
+    NSUInteger latches = 0;
+    XTIRBlock* exitFrom = nil;
+    for (XTIRBlock* bb in f.blocks)
+        {
+        if (![loop containsObject:bb])
+            continue;
+        XTIRInsn* t = bb.terminator;
+        if (!t || (t.opcode != XTIROpBranch && t.opcode != XTIROpCondBranch))
+            return nil;
+        for (XTIROperand* o in t.operands)
+            {
+            if (o.kind != XTIROperandKindBlock)
+                continue;
+            if (o.blockRef == H)
+                {
+                if (latch != bb)
+                    latches++;
+                latch = bb;
+                }
+            else if (![loop containsObject:o.blockRef])
+                {
+                if (exitFrom && exitFrom != bb)
+                    return nil;
+                exitFrom = bb;
+                }
+            }
+        }
+    if (latches != 1 || !exitFrom || (exitFrom != H && exitFrom != latch))
+        return nil;
+    // A block runs for every pass when the latch cannot be reached from H
+    // without passing through it.
+    NSMutableSet<XTIRBlock*>* once = [NSMutableSet set];
+    for (XTIRBlock* cand in f.blocks)
+        {
+        if (![loop containsObject:cand])
+            continue;
+        if (cand == H || cand == latch)
+            {
+            [once addObject:cand];
+            continue;
+            }
+        NSMutableSet<XTIRBlock*>* seen = [NSMutableSet setWithObject:H];
+        NSMutableArray<XTIRBlock*>* q = [NSMutableArray arrayWithObject:H];
+        BOOL reached = NO;
+        for (NSUInteger w = 0; w < q.count && !reached; w++)
+            for (XTIROperand* o in q[w].terminator.operands)
+                {
+                if (reached)
+                    break;
+                if (o.kind != XTIROperandKindBlock || o.blockRef == cand || o.blockRef == H || ![loop containsObject:o.blockRef]
+                    || [seen containsObject:o.blockRef])
+                    continue;
+                if (o.blockRef == latch)
+                    reached = YES;
+                [seen addObject:o.blockRef];
+                [q addObject:o.blockRef];
+                }
+        if (!reached)
+            [once addObject:cand];
+        }
+    return once;
     }
 
 - (NSString*)footprintWordsIn:(XTIRFunction*)f ivarNames:(NSArray<NSString*>*)ivars
@@ -3144,6 +3257,14 @@ static long long parCapAtom(NSDictionary<NSString*, NSNumber*>* p)
         for (XTIRInsn* i in b.phiNodes)
             if (i.result)
                 phiBlk[@(i.result.valueId)] = b;
+    // whole=<k> (#776): accesses that run for every item reach both ends of
+    // an array's footprint, so the program touches all of it and a GPU may
+    // size the array from it. As the port.
+    XTIRBlock* itemHead = phiBlk[@(iv)];
+    NSSet<XTIRBlock*>* every = itemHead ? [self everyItemBlocksIn:f head:itemHead] : nil;
+    NSMutableDictionary<NSString*, NSNumber*>* onceLo = [NSMutableDictionary dictionary];
+    NSMutableDictionary<NSString*, NSNumber*>* onceHi = [NSMutableDictionary dictionary];
+    NSMutableDictionary<NSString*, NSNumber*>* rowWhole = [NSMutableDictionary dictionary];
     for (XTIRBlock* b in f.blocks)
         {
         for (XTIRInsn* i in b.instructions)
@@ -3165,13 +3286,44 @@ static long long parCapAtom(NSDictionary<NSString*, NSNumber*>* p)
             XTIRInsn* inner = ea.operands[0].kind == XTIROperandKindUse ? def[@(ea.operands[0].valueId)] : nil;
             BOOL nested = inner.opcode == XTIROpElementAddr && inner.operands.count >= 2 && inner.result && ea.result
                           && [inner.result.type isEqual:ea.result.type];
+            if (every && [every containsObject:b] && x.affine && x.k != 0)
+                {
+                NSString* kk = [NSString stringWithFormat:@"%@:%lld", buf, (long long)x.k];
+                if (!onceLo[kk] || x.c < onceLo[kk].longLongValue)
+                    onceLo[kk] = @(x.c);
+                if (!onceHi[kk] || x.c > onceHi[kk].longLongValue)
+                    onceHi[kk] = @(x.c);
+                }
             long long rowF = -1;
+            XTIRBlock* rowHead = nil;
+            long long rowStep = 0;
             if (!nested && !x.affine)
-                rowF = [self rowFieldOf:ea.operands[1] iv:iv self:selfId ivars:ivars defs:def phiBlocks:phiBlk];
+                rowF = [self rowFieldOf:ea.operands[1] iv:iv self:selfId ivars:ivars defs:def phiBlocks:phiBlk
+                                   head:&rowHead step:&rowStep];
+            BOOL rw = rowF >= 0 && every && rowHead && rowStep == 1 && [every containsObject:rowHead];
+            // The inner loop's body is one block, the header's true edge,
+            // straight back to the header: the access runs every pass.
+            if (rw)
+                {
+                XTIRInsn* ht = rowHead.terminator;
+                XTIRInsn* bt = b.terminator;
+                rw = ht && ht.opcode == XTIROpCondBranch && ht.operands.count >= 3
+                     && ht.operands[1].kind == XTIROperandKindBlock && ht.operands[1].blockRef == b
+                     && bt && bt.opcode == XTIROpBranch && bt.operands.count == 1
+                     && bt.operands[0].kind == XTIROperandKindBlock && bt.operands[0].blockRef == rowHead;
+                }
             if (!rowFld[buf])
+                {
                 rowFld[buf] = @(rowF);
-            else if (rowFld[buf].longLongValue != rowF)
-                rowFld[buf] = @(-1);
+                rowWhole[buf] = @(rw);
+                }
+            else
+                {
+                if (rowFld[buf].longLongValue != rowF)
+                    rowFld[buf] = @(-1);
+                if (rw)
+                    rowWhole[buf] = @YES;
+                }
             NSMutableArray<NSNumber*>* e = fp[buf];
             if (!e)
                 {
@@ -3192,15 +3344,23 @@ static long long parCapAtom(NSDictionary<NSString*, NSNumber*>* p)
             }
         }
     NSMutableString* words = [NSMutableString string];
+    NSMutableString* wholes = [NSMutableString string];
     for (NSString* buf in order)
         {
         NSArray<NSNumber*>* e = fp[buf];
         if (!e[3].boolValue)
             {
-            [words appendString:[self rowWordIn:f buffer:buf ivars:ivars field:rowFld[buf].longLongValue]];
+            NSString* rw = [self rowWordIn:f buffer:buf ivars:ivars field:rowFld[buf].longLongValue];
+            [words appendString:rw];
+            if (rw.length && rowWhole[buf].boolValue)
+                [wholes appendFormat:@" whole=%lu", (unsigned long)([ivars indexOfObject:buf] - 2)];
             continue;
             }
         NSUInteger at = [ivars indexOfObject:buf];
+        NSString* kk = [NSString stringWithFormat:@"%@:%lld", buf, e[0].longLongValue];
+        if (at != NSNotFound && at >= 2 && onceLo[kk] && onceHi[kk] && onceLo[kk].longLongValue == e[1].longLongValue
+            && onceHi[kk].longLongValue == e[2].longLongValue)
+            [wholes appendFormat:@" whole=%lu", (unsigned long)(at - 2)];
         // A captured array is ivar 2 + <index> (after lo and hi); a global
         // is named as the glob= word names it.
         if (at != NSNotFound && at >= 2)
@@ -3210,6 +3370,7 @@ static long long parCapAtom(NSDictionary<NSString*, NSNumber*>* p)
             [words appendFormat:@" gfp=%@:%lld:%lld:%lld", buf, (long long)e[0].longLongValue,
                                 (long long)e[1].longLongValue, (long long)(e[2].longLongValue + 1)];
         }
+    [words appendString:wholes];
     return words;
     }
 

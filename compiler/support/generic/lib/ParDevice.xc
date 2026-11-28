@@ -245,6 +245,8 @@ class ParLayout : Object
     // header's whole=<k>), so where the runtime knows no block for it, its
     // length is the footprint's over the run's range.
     i64 bufWhole[16];
+    i64 bufFrW[16];     // a grid's rows (fpr=, #776): its width, 0 for none
+    i64 bufFrK[16];     // and the elements in each row
     // The run's range, which the devices' tiles index: a worker's layout is
     // made over [0, n), and a whole= length comes from this one.
     i64 runLo;
@@ -3421,6 +3423,26 @@ class ParDevice
                 l.nglob = k + (u32)1;
                 continue;
                 }
+            // fpr=<buffer>:<woff>:<koff>: captured array <buffer>'s footprint
+            // is whole rows of a grid (#776), the grid's width and the row's
+            // length read from the block's object at those offsets.
+            if (src[at] == (u8)'f' && src[at + (u32)1] == (u8)'p' && src[at + (u32)2] == (u8)'r' && src[at + (u32)3] == (u8)'=')
+                {
+                at = at + (u32)4;
+                i64 which = num(src, &at);
+                at = at + (u32)1;
+                i64 wo = num(src, &at);
+                at = at + (u32)1;
+                i64 ko = num(src, &at);
+                u8* ob = proto.objBytes();
+                for (u32 q = (u32)0; q < l.nbuf; q = q + (u32)1)
+                    if (l.bufIvar[q] == which)
+                        {
+                        l.bufFrW[q] = (i64)*(u32*)((pointer)((u64)ob + (u64)wo));
+                        l.bufFrK[q] = (i64)*(u32*)((pointer)((u64)ob + (u64)ko));
+                        }
+                continue;
+                }
             // fp=<buffer>:<k>:<lo>:<hi>: captured array <buffer>'s footprint.
             if (src[at] == (u8)'f' && src[at + (u32)1] == (u8)'p' && src[at + (u32)2] == (u8)'=')
                 {
@@ -3613,6 +3635,11 @@ class ParDevice
                     && ((l.bufLen[i] < (i64)0 && l.bufWhole[i] != (i64)0) || l.bufLen[i] > reach))
                     l.bufLen[i] = reach;
                 }
+            // Whole rows of a grid, walked whole by every item (whole=): an
+            // array of no known length is the rows up to the run's last.
+            if (l.bufFp[i] == (i64)0 && l.bufFrW[i] > (i64)0 && l.bufLen[i] < (i64)0 && l.bufWhole[i] != (i64)0
+                && l.runHi > l.runLo && l.runLo >= (i64)0)
+                l.bufLen[i] = ((l.runHi - (i64)1) / l.bufFrW[i] + (i64)1) * l.bufFrK[i] * l.bufElem[i];
             // No bytes is no size too: a device buffer of length 0 is no
             // buffer (Metal's is nil), and the kernel's writes to it were
             // lost while the run counted as the GPU's.
