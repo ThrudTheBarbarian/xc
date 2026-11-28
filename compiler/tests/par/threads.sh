@@ -8,7 +8,8 @@
 # all), 2, 3 (a split that does not divide the range) and 16 (more threads than
 # most chunks), and every run must print the expected output. On a Mac with
 # Apple silicon it also runs with XC_PAR=gpu, which must agree too. The
-# compile itself must print nothing.
+# compile itself must print nothing. tensor_expr_par.xc is here too: the
+# kernels of tensor expressions run on the same threads.
 #
 #   bash tests/par/threads.sh                 # this machine, with bin/<plat>/xcc-xc
 #   XCC=path/to/xcc ARCH=x86_64 bash tests/par/threads.sh
@@ -25,7 +26,7 @@ WORK=$(mktemp -d "${TMPDIR:-/tmp}/par-threads.XXXXXX")
 trap 'rm -rf "${WORK:?}"' EXIT
 
 pass=0; fail=0
-for src in tests/fixtures/par_*.xc; do
+for src in tests/fixtures/par_*.xc tests/fixtures/tensor_expr_par.xc; do
     name=$(basename "$src" .xc)
     exp="tests/fixtures/$name.expected.out"
     [ -f "$exp" ] || continue

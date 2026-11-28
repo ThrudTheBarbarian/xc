@@ -1,0 +1,11 @@
+same layout ok
+shifted right ok
+shifted left ok
+transposed ok
+broadcast row of itself ok
+overlap at run time ok
+two storages at run time ok
+one storage, same layout, at run time ok
+shifted, 100000 elements ok
+same layout, 100000 elements ok
+storages 0

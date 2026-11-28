@@ -490,6 +490,7 @@ static int XTDumpSema(int argc, const char* argv[])
     // at the end, as a compile reads it (sema's packRoutines).
     NSUInteger packRoutines = 0;
     BOOL withTensor = NO;
+    NSArray<NSString*>* kernels = nil;
 again:;
     XTDiagnosticEngine* diag = [[XTDiagnosticEngine alloc] init];
     XTPreprocessor* pp = [[XTPreprocessor alloc] initWithDiagnostics:diag];
@@ -498,7 +499,7 @@ again:;
     if (packRoutines)
         pp.tailImport = [XTPreprocessor packTailImport:packRoutines];
     if (withTensor)
-        pp.autoImport = @"TensorStorage.xc";
+        pp.autoImport = kernels.count ? @"TensorStorage.xc;TensorPar.xc" : @"TensorStorage.xc";
     for (NSString* d in defines)
         {
         NSRange eq = [d rangeOfString:@"="];
@@ -525,6 +526,7 @@ again:;
     parser.goalDefault = pp.goalDirective;     // a #goal in the file, as a compile honours it
     parser.libraryFiles = pp.libraryFiles;
     parser.tensorReady = withTensor;
+    parser.tensorKernels = kernels;
     XTProgramNode* program = [parser parse];
     // A tensor type: TensorStorage.xc imported and read again, as a compile does.
     if (program && !withTensor && parser.tensorNames.count)
@@ -547,10 +549,16 @@ again:;
     sema.libraryBuild = NO;
     sema.itableProtocols = NO;
     sema.vtableConforms = YES;
+    sema.tensorKernelsGiven = kernels;
     [sema analyzeProgram:program];
-    if (sema.packRoutines & ~packRoutines)
+    // The kernels of its tensor expressions, written by the parse, as a
+    // compile does.
+    NSArray<NSString*>* wantKernels = [XTCompilerDriver tensorKernels:kernels with:[sema tensorKernelRequests]];
+    if ((sema.packRoutines & ~packRoutines) || wantKernels)
         {
         packRoutines = packRoutines | sema.packRoutines;
+        if (wantKernels)
+            kernels = wantKernels;
         goto again;
         }
     // A parse or sema ERROR is reported but still dumps. The distinction that

@@ -77,6 +77,7 @@ class FeOptions
     u32 _parDeviceDefault; // --par-style's device for a block with no :device: 1 the CPU, 2 the GPU, 0 the run's choice
     bool _parAutoImport; // --par-style=auto wraps a loop in a program without Par.xc: import it
     bool _tensorImport;  // the unit uses a tensor type: TensorStorage.xc is imported
+    Array* _tensorKernels; // the kernels of its tensor expressions (signatures), sema's ask
     // Sema found a call to Object.className() or Object.newInstanceOfClass():
     // the class-name table is on (injectClassNames, and the restart in lower).
     bool _classNames;
@@ -163,6 +164,7 @@ class FeOptions
         _parDeviceDefault = (u32)0;
         _parAutoImport = false;
         _tensorImport = false;
+        _tensorKernels = (Array*)0;
         _classNames = false;
         _atFormat = false;
         _packRoutines = (u32)0;
@@ -538,6 +540,14 @@ class FeOptions
     void setTensorImport(bool b)
         {
         _tensorImport = b;
+        }
+    Array* tensorKernels(void)
+        {
+        return _tensorKernels;
+        }
+    void setTensorKernels(Array* a)
+        {
+        _tensorKernels = a;
         }
     bool classNames(void)
         {
@@ -986,6 +996,7 @@ class FeOptions
             }
         parser.setTensorReady(o.tensorImport());
         parser.setImportedTensorNames(ifaceTensors);
+        parser.setTensorKernels(o.tensorKernels());
 
         Node* program = parser.parse();
         // --par-style=auto found a loop to make a block of in a program that did not
@@ -1215,6 +1226,7 @@ class FeOptions
                     }
                 }
             }
+        sema.setTensorKernelsGiven(o.tensorKernels());
         sema.analyse(program);
         // The class-name table and HAS_ATFMT are decided by the program: sema
         // saw a call resolve to Object.className() or
@@ -1228,13 +1240,18 @@ class FeOptions
         // the entry file when sema finds one, so a program with none is
         // unchanged.
         u32 wantPack = sema.packRoutines() & ~o.packRoutines();
-        if (wantNames || wantAt || wantPack != (u32)0)
+        // Tensor expressions: sema read each as a tree; the parse writes their
+        // kernels in the next pass.
+        Array* wantKernels = Sema.tensorKernelsJoin(o.tensorKernels(), sema.tensorKernelRequests());
+        if (wantNames || wantAt || wantPack != 0 || wantKernels != (Array*)0)
             {
             if (wantNames)
                 o.setClassNames(true);
             if (wantAt)
                 o.setAtFormat(true);
             o.setPackRoutines(o.packRoutines() | wantPack);
+            if (wantKernels != (Array*)0)
+                o.setTensorKernels(wantKernels);
             return Frontend.lowerUnit(o);
             }
         Frontend.flushEarly(early);
@@ -2076,9 +2093,9 @@ bool injectClassNames(Node* program, FeOptions* o, Array* ifaces, u32 xtcImports
         if (d.name().indexOfByte((u8)'$') != String.notFound())
             continue;
         // Nor the tensor classes (`__tensor_<T>_<R>`): values made by `new
-        // tensor<T, R>(…)` alone, which every module writes for itself. As the
-        // reference.
-        if (d.name().hasPrefix(String.withCString("__tensor_")))
+        // tensor<T, R>(…)` alone, which every module writes for itself; nor
+        // the blocks of tensor kernels (`__tkc_<hash>`). As the reference.
+        if (d.name().hasPrefix(String.withCString("__tensor_")) || d.name().hasPrefix(String.withCString("__tkc_")))
             continue;
         if (byName.get((Hashable*)d.name()) == (Object*)0)
             names.add((Object*)d.name());
@@ -2808,6 +2825,9 @@ Preprocessor* buildPP(FeOptions* o)
     // one (see after the parse).
     if (o.tensorImport())
         pp.addAutoImport(String.withCString("TensorStorage.xc"));
+    // The kernels of tensor expressions run on TensorPar.xc (and Par.xc).
+    if (o.tensorKernels() != (Array*)0 && o.tensorKernels().count() > 0)
+        pp.addAutoImport(String.withCString("TensorPar.xc"));
     if (o.packRoutines() != (u32)0)
         pp.setTailImport(Preprocessor.packTailImport(o.packRoutines()));
     // Checked subscripts take their checks from Checked.xc: everywhere under

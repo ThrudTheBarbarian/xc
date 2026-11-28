@@ -62,6 +62,9 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic) BOOL tensorReady;
 // The tensor class names the imported interfaces use.
 @property(nonatomic, nullable) NSArray<NSString*>* importedTensorNames;
+// The kernels of the unit's tensor expressions, one signature each, as sema
+// asked for them: the parse writes each one's source after the classes.
+@property(nonatomic, nullable) NSArray<NSString*>* tensorKernels;
 
 /****************************************************************************\
 |* Initialise the parser with a token stream, a type table for resolving
@@ -119,6 +122,11 @@ NS_ASSUME_NONNULL_BEGIN
                                patterns:(NSArray<NSString*>*)patterns
                              shapeRanks:(NSIndexSet*)shapeRanks
                              bcastRanks:(NSIndexSet*)bcastRanks;
+// A tensor expression's kernel (XTParser+TensorKernels.m): its function's
+// name, the tensor classes it uses, and its source, from its signature.
++ (NSString*)tensorKernelName:(NSString*)sig;
++ (NSArray<NSString*>*)tensorKernelClasses:(NSString*)sig;
++ (NSString*)tensorKernelSource:(NSString*)sig;
 @end
 
 NS_ASSUME_NONNULL_END

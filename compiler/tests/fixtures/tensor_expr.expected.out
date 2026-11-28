@@ -1,0 +1,59 @@
+i8 ok
+  -56 16 -2 -1 0
+u8 ok
+  4 196 2 1 0
+i16 ok
+  -5536 -5888 -2 -1 0
+u16 ok
+  464 53824 2 1 0
+i32 ok
+  -294967296 -1651507200 -2 -1 0
+u32 ok
+  705032704 -1651507200 2 1 0
+i64 ok
+  -989331456 0 -2 -1 0
+u64 ok
+  1819017216 0 2 1 0
+f64 ok
+  -1.8750 -0.7500 1.6583 1000.0000
+f32 ok
+  -1.8750 -0.7500 1.6583 1000.0000
+f16 ok
+  3d99 ba1f bcba 45b3 350f
+bf16 ok
+  3fb4 bf44 bf97 40b6 3ea2
+f8 ok
+  3c b4 b9 4b 2a
+e5m2 ok
+  3d ba bd 46 35
+f4 ok
+  3 a b 7 0
+row + matrix 3x4: | 0.0 101.0 202.0 303.0 | 10.0 111.0 212.0 313.0 | 20.0 121.0 222.0 323.0
+matrix * column 3x4: | 0.0 1.0 2.0 3.0 | 20.0 22.0 24.0 26.0 | 60.0 63.0 66.0 69.0
+scalar - matrix 3x4: | 1.0 0.0 -1.0 -2.0 | -9.0 -10.0 -11.0 -12.0 | -19.0 -20.0 -21.0 -22.0
+column + row 3x4: | 1.0 101.0 201.0 301.0 | 2.0 102.0 202.0 302.0 | 3.0 103.0 203.0 303.0
+rank 3 + rank 2 - rank 1: 2 3 4, 723.0 -188.0
+1x1 * matrix 3x4: | 0.0 0.5 1.0 1.5 | 5.0 5.5 6.0 6.5 | 10.0 10.5 11.0 11.5
+long expression ok
+  3.5607 15.7873 storages 5
+new: a[0, 0] 0 c[0, 0] 99 c[1, 2] 15
+in place: a[1, 2] 25 alias[1, 2] 25
+compound: a[0, 1] 61 alias[0, 1] 61
+views: 59 12 12 / 7 7 7
+into a rank 1: 16 17 18
+x -2.0 pos 0 same 1 n -2 back -1.0 flag 0 h c000 q e wide -6000000000
+x -0.7 pos 0 same 1 n 0 back 0.0 flag 0 h b99a q b wide 0
+x 0.6 pos 1 same 1 n 0 back 0.0 flag 1 h 38cd q 2 wide 0
+x 1.9 pos 1 same 1 n 1 back 0.5 flag 1 h 3f9a q 6 wide 3000000000
+x 3.2 pos 1 same 1 n 3 back 1.5 flag 1 h 4266 q 7 wide 9000000000
+transposed 4x3: | 0.0 12.0 24.0 | 3.0 15.0 27.0 | 6.0 18.0 30.0 | 9.0 21.0 33.0
+sliced 2x2: | 7.0 9.0 | 15.0 17.0
+broadcast view 3x4: | 0.0 0.0 0.0 0.0 | -4.0 -4.0 -4.0 -4.0 | -8.0 -8.0 -8.0 -8.0
+transposed slice * column 2x3: | 3.0 35.0 99.0 | 6.0 42.0 110.0
+f4 3x5 ok
+  1 0 1 4 6
+  9 9 1 4 6
+  b a 1 4 7
+  odd offset: d a 2
+  written row: 1 c 0 4 6, row 0 4, row 2 2
+storages 0

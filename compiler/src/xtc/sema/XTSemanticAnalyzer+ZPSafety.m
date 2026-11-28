@@ -969,6 +969,7 @@ static void XTCheckF4Unary(XTDiagnosticEngine* diags, XTUnaryExprNode* node)
 - (void)visitIf:(XTIfNode*)node
     {
     [self analyzeNode:node.condition];
+    [self tensorRefuseCondition:node.condition];
     [self analyzeNode:node.thenBlock];
     if (node.elseBlock)
         [self analyzeNode:node.elseBlock];
@@ -1086,6 +1087,7 @@ static void XTCheckF4Unary(XTDiagnosticEngine* diags, XTUnaryExprNode* node)
 - (void)visitWhile:(XTWhileNode*)node
     {
     [self analyzeNode:node.condition];
+    [self tensorRefuseCondition:node.condition];
     [self analyzeNode:node.body];
     }
 
@@ -2209,6 +2211,10 @@ static void XTCheckF4Unary(XTDiagnosticEngine* diags, XTUnaryExprNode* node)
     // An operand whose class defines this operator makes the operator a call
     // of the method (`:operator(self + o)`), and none of the built-in typing
     // below applies.
+    // A tensor operand: an element-wise expression, one tree with the
+    // operands' (XTSemanticAnalyzer+TensorExpr.m).
+    if ([self tensorExprBinary:node])
+        return;
     if ([self resolveOperatorOfBinary:node])
         return;
     if (node.op != XTBinaryOpShl && node.op != XTBinaryOpShr && node.op != XTBinaryOpRol && node.op != XTBinaryOpRor &&
@@ -2220,20 +2226,6 @@ static void XTCheckF4Unary(XTDiagnosticEngine* diags, XTUnaryExprNode* node)
 
     XTType* lt = node.left.resolvedType;
     XTType* rt = node.right.resolvedType;
-    // Tensor values have no equality (XTParser+Tensors.m): two views may
-    // share a storage or hold equal elements, and neither is what `==` would
-    // say. As the port.
-    if ((node.op == XTBinaryOpEq || node.op == XTBinaryOpNeq) &&
-        ((lt.kind == XTTypeKindClass && [lt.displayName hasPrefix:@"__tensor_"]) ||
-         (rt.kind == XTTypeKindClass && [rt.displayName hasPrefix:@"__tensor_"])))
-        {
-        [self.diagnostics emitError:[NSString stringWithFormat:@"'%@' has no '%@': compare the elements, or the shapes and the data() pointers",
-                                                               (lt.kind == XTTypeKindClass && [lt.displayName hasPrefix:@"__tensor_"]) ? lt.displayName : rt.displayName,
-                                                               node.op == XTBinaryOpEq ? @"==" : @"!="]
-                                 at:node.location];
-        node.resolvedType = [XTType boolType];
-        return;
-        }
     // `nil` is a pointer: it takes part in `==` and `!=` against a pointer
     // (or another nil), and in nothing else — `nil + 1`, `nil < p` and
     // `n == nil` with an integer `n` are refused. The literal is the 0 the
@@ -2807,6 +2799,8 @@ static void XTCheckF4Unary(XTDiagnosticEngine* diags, XTUnaryExprNode* node)
         }
     [self analyzeNode:node.operand];
     XTType* ot = node.operand.resolvedType;
+    if ([self tensorExprUnary:node])
+        return;
     if ([self resolveOperatorOfUnary:node])
         return;
     // An element an index operator reads is a call's result: no address, no

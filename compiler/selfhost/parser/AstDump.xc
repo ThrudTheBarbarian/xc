@@ -785,7 +785,8 @@ class AstDump
             AstDump.indent(out, depth);
             out.appendFormat("Cast type=%s failable=%lu\n",
                              AstDump.tyField(n.name()).cString(), AstDump.flag(n, (u32)NF_FAILABLE));
-            AstDump.emitKids(n, out, depth + (u32)1, (u32)0);
+            // The operand: a tensor cast's kernel call hangs past it.
+            AstDump.emitOperands(n, out, depth + (u32)1);
             return;
             }
         if (k == (u16)nkIdent)

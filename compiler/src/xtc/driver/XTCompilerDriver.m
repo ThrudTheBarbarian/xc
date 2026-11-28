@@ -48,6 +48,7 @@
     NSSet<NSString*>* _seenLibs;       // every library the preprocessor saw imported (#786), or nil
     BOOL _parAutoImport;               // --par-style=auto wraps a loop in a program without Par.xc: import it
     BOOL _tensorImport;                // the unit uses a tensor type: TensorStorage.xc is imported
+    NSArray<NSString*>* _tensorKernels;  // the kernels of its tensor expressions (signatures), sema's ask
     NSArray<NSString*>* _stdlibDirs;   // the preprocessor's standard-library directories
     NSMutableSet<NSString*>* _noDebugInfoWarned;   // libraries already warned about, once across a --par-style=auto restart
     BOOL _classNamesUsed;              // sema found a call to Object.className()/newInstanceOfClass(): the class-name table is on
@@ -997,8 +998,10 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
         // `$` cannot occur in a name anybody wrote: those are the compiler's
         // own classes (block shapes), which no one can name.
         // Nor the tensor classes (`__tensor_<T>_<R>`): values made by `new
-        // tensor<T, R>(…)` alone, which every module writes for itself.
-        if (c.isExternal || c.isCategory || [c.className containsString:@"$"] || [c.className hasPrefix:@"__tensor_"])
+        // tensor<T, R>(…)` alone, which every module writes for itself; nor
+        // the blocks of tensor kernels (`__tkc_<hash>`).
+        if (c.isExternal || c.isCategory || [c.className containsString:@"$"] || [c.className hasPrefix:@"__tensor_"] ||
+            [c.className hasPrefix:@"__tkc_"])
             continue;
         byName[c.className] = c;
         }
@@ -1352,12 +1355,30 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     return out;
     }
 
+/****************************************************************************\
+|* The kernels a pass has, joined with those its sema asks for, sorted; nil
+|* when it asks for none it lacks. Mirrored in the port.
+\****************************************************************************/
++ (nullable NSArray<NSString*>*)tensorKernels:(nullable NSArray<NSString*>*)have with:(NSArray<NSString*>*)want
+    {
+    NSMutableSet<NSString*>* all = [NSMutableSet setWithArray:have ?: @[]];
+    BOOL more = NO;
+    for (NSString* k in want)
+        if (![all containsObject:k])
+            {
+            [all addObject:k];
+            more = YES;
+            }
+    return more ? [all.allObjects sortedArrayUsingSelector:@selector(compare:)] : nil;
+    }
+
 - (nullable XTIRModule*)compileFrontendForFile:(NSString*)inputFile
     {
     _classNamesUsed = NO;
     _atFmtUsed = NO;
     _packRoutines = 0;
     _tensorImport = NO;
+    _tensorKernels = nil;
     return [self frontendPassForFile:inputFile];
     }
 
@@ -1476,6 +1497,9 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     // finds one (see after the parse).
     if (_tensorImport)
         pp.autoImport = pp.autoImport.length ? [pp.autoImport stringByAppendingString:@";TensorStorage.xc"] : @"TensorStorage.xc";
+    // The kernels of tensor expressions run on TensorPar.xc (and Par.xc).
+    if (_tensorKernels.count)
+        pp.autoImport = [pp.autoImport stringByAppendingString:@";TensorPar.xc"];
     if (_packRoutines)
         pp.tailImport = [XTPreprocessor packTailImport:_packRoutines];
     // Checked subscripts take their checks from Checked.xc: everywhere under
@@ -1893,6 +1917,7 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     [parser addImportedOperatorShapes:importedXtcDecls];
     parser.tensorReady = _tensorImport;
     parser.importedTensorNames = ifaceTensors;
+    parser.tensorKernels = _tensorKernels;
     // Loops become blocks only where a block has threads to run on: the
     // arm64, x86-64, win64 and wasm32 back ends. On xt6502, the Atari and
     // arm9 a block runs serially, and the lifting only moves the loop's code.
@@ -2389,6 +2414,7 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     [XTIRLowering setCompactObjects:[_options effectiveTarget].compactObjects];
     sema.importedProtocolSlots = impProtoSlots.count ? impProtoSlots : nil;
     sema.importedMethodSlots = impMethodSlots.count ? impMethodSlots : nil;
+    sema.tensorKernelsGiven = _tensorKernels;
     [sema analyzeProgram:ast];
     // The class-name table and HAS_ATFMT are decided by the program: sema saw
     // a call resolve to Object.className() or Object.newInstanceOfClass(), or
@@ -2400,11 +2426,16 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     // FloatPackKinds' for a pack that is not ieee): imported at the end of the
     // entry file when sema finds one, so a program with none is unchanged.
     NSUInteger wantPack = sema.packRoutines & ~_packRoutines;
-    if (wantNames || wantAt || wantPack)
+    // Tensor expressions: sema read each as a tree; the parse writes their
+    // kernels in the next pass.
+    NSArray<NSString*>* wantKernels = [XTCompilerDriver tensorKernels:_tensorKernels with:[sema tensorKernelRequests]];
+    if (wantNames || wantAt || wantPack || wantKernels)
         {
         _classNamesUsed = _classNamesUsed || wantNames;
         _atFmtUsed = _atFmtUsed || wantAt;
         _packRoutines = _packRoutines | wantPack;
+        if (wantKernels)
+            _tensorKernels = wantKernels;
         [_diagnostics truncateToCount:diagMark];
         return [self frontendPassForFile:inputFile];
         }

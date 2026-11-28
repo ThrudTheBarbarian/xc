@@ -948,7 +948,8 @@ class Node
 
     // The call an overloaded operator node became (NF_OPCALL), hung past its
     // operands: a binary's third kid, a prefix operator's second, a
-    // subscript's or slice's last, an assignment's third. 0 for any other node.
+    // subscript's or slice's last, an assignment's third, a method call's
+    // after its arguments, a cast's second. 0 for any other node.
     static Node* opCallOf(Node* n)
         {
         if (n == 0 || !n.hasFlag((u32)NF_OPCALL))
@@ -963,6 +964,12 @@ class Node
             return n.kid(c - 1);
         if (k == (u16)nkAssign && c > 2)
             return n.kid(2);
+        // A tensor expression's Math call (past the receiver and arguments)
+        // or cast (past the operand): its kernel's call.
+        if (k == (u16)nkMethodCall && c > (u32)n.num() + (u32)1)
+            return n.kid((u32)n.num() + (u32)1);
+        if (k == (u16)nkCast && c > 1)
+            return n.kid(1);
         return (Node*)0;
         }
     // On an assignment: the operands an operator reads twice, evaluated once

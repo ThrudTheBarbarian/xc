@@ -3537,6 +3537,9 @@ static NSInteger XTFmtWrapperIndex(BOOL isVarArgs, NSArray<XTParamNode*>* params
 
 - (void)visitMethodCallExpr:(XTMethodCallExprNode*)node
     {
+    // `Math.sqrt(t)` on a tensor: an element-wise expression.
+    if ([self tensorExprMath:node])
+        return;
     // See visitCallExpr: — checked, then dropped.
     if (node.forwardsVarargs)
         [self checkVarargForwardAt:node.location];
@@ -5269,6 +5272,9 @@ static NSInteger XTFmtWrapperIndex(BOOL isVarArgs, NSArray<XTParamNode*>* params
     // `.length` by destination (#321).
     [self narrowLength:node.operand to:node.castType];
     self.expectedType = prev;
+    // A cast to a tensor type converts the elements (a new tensor).
+    if ([self tensorExprCast:node])
+        return;
     // `(f16)0.1` is the literal rounded once, from its digits.
     if (node.castType.isFloatPack)
         [self packAdoptLiteral:node.operand to:node.castType];

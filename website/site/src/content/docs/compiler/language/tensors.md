@@ -1,6 +1,6 @@
 ---
 title: Tensors
-description: The tensor<T, R> value type — creating, indexing, views (slices, transpose, broadcast, view and reshape), value semantics, bounds checks, par and C.
+description: The tensor<T, R> value type — creating, indexing, views (slices, transpose, broadcast, view and reshape), element-wise expressions with broadcasting, value semantics, bounds checks, par and C.
 ---
 
 A `tensor<T, R>` is an R-dimensional array of elements of type T, held as a
@@ -125,8 +125,9 @@ p[0, 0] = 5.0;                           // c[1, 0, 1] is 5.0 too
 
 A slice starting at `start` in dimension k adds `start × stride_k` to the
 offset, and a kept dimension's shape is its range's length, with the stride
-unchanged. Bounds are integers of any width. A slice is a view, so it cannot
-be assigned to: `t[0..2, ..] = x` is an error; assign to its elements.
+unchanged. Bounds are integers of any width. Assigning to a slice writes
+into the elements it views (see
+[A new tensor, or a write in place](#a-new-tensor-or-a-write-in-place)).
 
 A class's own [range index operator](/compiler/language/operators/#index-operators)
 still takes a range alone in its brackets, with both bounds. Mixing ranges
@@ -187,6 +188,177 @@ never assigned again, viewed or reshaped with literal shapes, perhaps after a
 contiguous storage of its own. `t.isContiguous` says whether a tensor is
 contiguous already.
 
+## Expressions
+
+Arithmetic, comparisons, unary minus, casts and some `Math` functions work on
+whole tensors, element by element. The value of an expression is a new tensor:
+each element is computed from the operands' elements at its position.
+
+```c
+tensor<f32, 2> a = new tensor<f32, 2>(3, 4);
+tensor<f32, 1> b = new tensor<f32, 1>(4);
+tensor<f32, 2> c = a * b + 1.0;          // c[i, j] is a[i, j] * b[j] + 1.0
+tensor<f32, 2> d = Math.sqrt(a * a + c) - c;
+tensor<bool, 2> big = d > 0.5;
+```
+
+### Operators and functions
+
+| Form | Elements |
+|---|---|
+| `a + b`, `a - b`, `a * b`, `a / b` | any number type |
+| `a % b` | integers |
+| `-a` | any number type |
+| `a < b`, `a <= b`, `a > b`, `a >= b` | any number type; the result is a `tensor<bool, R>` |
+| `a == b`, `a != b` | any type, `bool` included; the result is a `tensor<bool, R>` |
+| `(tensor<E, R>)a` | any type; a tensor of the same rank with elements of type E |
+| `Math.sqrt`, `Math.exp`, `Math.ln`, `Math.sin`, `Math.cos`, `Math.tan`, `Math.atan` | `f64`, `f32`, `f16`, `bf16`, `f8`, `f4` and their packs |
+| `Math.abs` | the floats above, and `i8`, `i16`, `i32` |
+| `Math.pow(a, b)` | the floats above |
+
+Either operand of a binary operator, and the second of `Math.pow`, may be a
+scalar: `t * 2.0`, `1 - t`. Other operators (`&`, `<<`, `&&`, `~`, `!`) and
+other `Math` functions take no tensors.
+
+Each element is computed as the same expression on scalars would compute it.
+An operation works in its operands' type and rounds its result to that type,
+so an `f16` expression rounds after every operation, and `Math` functions on
+`f16`, `bf16`, `f8` and `f4` work in `f32` and round the result. Integer
+arithmetic wraps at the operands' width: two `u8` tensors add to a `u8`
+tensor. A cast converts each element as a scalar cast does.
+
+### Element types
+
+Two operands of different element types mix only when one type holds every
+value of the other, as for scalars: a wider integer of the same signedness, or
+a wider signed integer for an unsigned one, and among floats `f16` and `bf16`
+into `f32`, `f32` into `f64`, `f8` into `f16`, and `f4` into any float. The
+result has the wider type. Integers and floats do not mix, and `bool` mixes
+with nothing but `bool`. Anything else is an error that names the cast to
+write:
+
+```
+error: 'tensor<f16, 1>' and 'tensor<bf16, 1>' have no common element type: neither holds every value of the other; cast one, as in (tensor<f32, 1>)x
+```
+
+A literal takes the element type of the tensor beside it: in `h * 0.5` on a
+`tensor<f16, 1>`, the `0.5` is an `f16`. An integer literal must fit an
+integer element type. A scalar variable mixes as its type does.
+
+### Broadcasting
+
+The operands' shapes line up from the last dimension. In each dimension the
+sizes are equal, or one of them is 1 and repeats; a dimension an operand of
+lower rank lacks counts as 1. The result has the larger rank and, in each
+dimension, the larger size.
+
+```c
+tensor<f32, 2> m = new tensor<f32, 2>(3, 4);
+tensor<f32, 2> col = new tensor<f32, 2>(3, 1);
+tensor<f32, 1> row = new tensor<f32, 1>(4);
+tensor<f32, 2> p = m * col + row;        // 3 × 4
+tensor<f32, 2> q = col + row;            // 3 × 4
+tensor<f32, 3> r = new tensor<f32, 3>(2, 3, 4) - m;  // 2 × 3 × 4
+```
+
+Where the compiler knows the shapes (locals made by `new tensor<…>(…)` with
+literal dimensions and never assigned again), shapes that do not broadcast
+are an error. Otherwise the program checks them as it runs, and stops with a
+report and status 134:
+
+```
+=== xcc: tensor shapes that do not broadcast ===
+  dimension 1 of the result: sizes 4 and 5; each must be the same, or 1
+```
+
+### A new tensor, or a write in place
+
+`c = a + b` makes a new tensor with contiguous storage of its own, of the
+broadcast shape; `c` refers to it from then on. Assigning a tensor variable
+from another (`c = a`) copies the view, as before.
+
+A slice on the left writes into the elements it views:
+
+```c
+m[.., ..] = m * 2.0 + row;               // every element of m
+m[0, ..] = row;                          // row 0
+m[1.., 2] = 0.0;                         // a scalar fills
+```
+
+The value broadcasts to the slice's shape; the slice does not broadcast.
+`m[.., ..]` names all of `m`, so `m[.., ..] = expr` overwrites `m`'s elements
+in place, where `m = expr` makes `m` refer to a new tensor. Each element
+converts to the destination's element type when the type holds every value of
+the value's type; otherwise a cast is needed (a `tensor<bool, R>` written into
+float elements needs `(tensor<f32, R>)`).
+
+A compound assignment, `t += u` (and `-=`, `*=`, `/=`, `%=`), writes in place
+too, on a tensor variable or a slice: every value that refers to the storage
+sees the change.
+
+### Writes into a storage the value reads
+
+A write in place may read the storage it writes, through the same tensor or
+through a view of it. An operand at the destination's own offset and strides
+(`a += a`, `a[.., ..] = a * 2.0`) reads each element before the element is
+written, so the write needs nothing more. An operand that views the same
+storage at another offset or with other strides (`a[1..] = a[..9] + 1`,
+`m[.., ..] = m.transpose() - m`, `m += m[0, ..]`) would read elements the
+write has already changed, so its value is computed into a temporary first
+and then copied into the destination. Which of the two happens is decided as
+the program runs, from the storages, offsets and strides, so it holds for
+parameters and fields too. A result in a new tensor shares no storage with its
+operands.
+
+### One pass for each expression
+
+An expression is computed by one loop over the result's elements, however
+many operators it has: `Math.sqrt(a * b + c) - e` reads each element of `a`,
+`b`, `c` and `e` once and makes no tensor for `a * b` or for the square root.
+Each statement is one loop; two statements are two.
+
+The loop runs on the CPU's threads, as a [CPU par block](/compiler/language/par/)
+does, when the result has 32768 elements or more; a smaller one, one
+started inside a running par block, and every one on a target without
+threads (wasm32, m68k) runs on the calling thread.
+`XC_PAR_THREADS` sets the number of threads. When the result and every operand
+are contiguous with the same shape, the loop is one flat loop the vectoriser
+can take; otherwise it walks the result's rows, reading each operand through
+its offset and strides (a broadcast dimension has stride 0). An `f4` result is
+split where a byte starts, so no two threads write one byte. A write through a
+view that repeats elements (a broadcast) runs on one thread.
+
+A fused expression written in place runs as fast as the same computation
+written as a par loop over the elements; see [Performance](#performance) below.
+
+### Performance
+
+`a * b + c` on `f32` tensors, timed against the same loop written as a CPU
+par block over plain arrays, and against C built with clang `-O2`, serially
+and with OpenMP. The first case has 10<sup>7</sup> contiguous elements; the
+second is 4096 × 4096 with `a` and `b` transposed, so they are read with a
+stride of 4096 elements. The machines are the arm64 macOS and x86-64 Linux
+machines of the [performance page](/compiler/performance/), with all their
+threads. Times are in milliseconds, each the median of three runs of a
+program that reports the median of five.
+
+| `a * b + c` | arm64 | x86-64 |
+|---|---|---|
+| 10<sup>7</sup>, new tensor (`e = a * b + c`) | 1.32 | 3.28 |
+| 10<sup>7</sup>, in place (`d[..] = a * b + c`) | 1.11 | 2.78 |
+| 10<sup>7</sup>, par block | 1.06 | 2.74 |
+| 10<sup>7</sup>, clang `-O2` | 1.71 | 3.74 |
+| 10<sup>7</sup>, clang `-O2 -fopenmp` | 1.03 | 2.70 |
+| 4096 × 4096 strided, new tensor | 37.1 | 33.7 |
+| 4096 × 4096 strided, in place | 36.7 | 33.9 |
+| 4096 × 4096 strided, par block | 36.7 | 40.6 |
+| 4096 × 4096 strided, clang `-O2` | 101.3 | 166.4 |
+| 4096 × 4096 strided, clang `-O2 -fopenmp` | 36.8 | 32.9 |
+
+Both cases are limited by memory bandwidth. A write in place runs at the
+speed of the par block and of OpenMP; a new tensor takes longer by the time
+it takes to allocate the 40 MB result and touch it for the first time.
+
 ## Value semantics
 
 A tensor value behaves like a [stack instance](/compiler/language/classes/#stack-instance)
@@ -202,8 +374,10 @@ of a class that refers to the storage:
   goes.
 - `&t` follows the rules for a stack instance: the variable moves to the heap
   and its address is a strong reference.
-- `==` and `!=` are not defined for tensors. Compare elements, or compare the
-  shapes and the `data()` pointers.
+- `==` and `!=` compare elements, as the other comparisons do (see
+  [Expressions](#expressions)): `a == b` is a `tensor<bool, R>`, not a
+  condition. To ask whether two values are views of one storage, compare
+  their shapes, strides and `data()` pointers.
 
 ```c
 tensor<i32, 1> a = new tensor<i32, 1>(4);

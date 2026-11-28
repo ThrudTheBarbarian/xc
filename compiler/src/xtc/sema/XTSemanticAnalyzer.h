@@ -284,6 +284,13 @@ NS_ASSUME_NONNULL_BEGIN
 |* of the entry file (-[XTPreprocessor tailImport]) and starts again.
 \****************************************************************************/
 @property(nonatomic, readonly) NSUInteger packRoutines;
+/****************************************************************************\
+|* The kernels the driver has had the parse write for the unit's tensor
+|* expressions, by signature (XTParser+TensorKernels.m). An expression whose
+|* kernel is among them becomes a call of it; tensorKernelRequests gives the
+|* signatures the unit needs, and the driver starts again when one is new.
+\****************************************************************************/
+@property(nonatomic, nullable) NSArray<NSString*>* tensorKernelsGiven;
 
 @end
 
@@ -294,3 +301,4 @@ NS_ASSUME_NONNULL_END
 #import "XTSemanticAnalyzer+ZPSafety.h"
 #import "XTSemanticAnalyzer+Overload.h"
 #import "XTSemanticAnalyzer+Operators.h"
+#import "XTSemanticAnalyzer+TensorExpr.h"

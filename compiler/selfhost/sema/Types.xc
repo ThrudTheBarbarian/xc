@@ -237,6 +237,25 @@ class Types
         return r;
         }
 
+    // A tensor expression's kernel name from its signature: FNV-1a over its
+    // bytes, 64 bits, as 16 lower-case hex digits. The parser writes the
+    // kernel `__tk_<this>`; sema calls it. As the reference's
+    // tensorKernelName:.
+    static String* tensorKernelName(String* sig)
+        {
+        u64 h = (u64)$CBF29CE484222325;
+        for (u32 i = 0; i < sig.byteLength(); i++)
+            {
+            h = h ^ (u64)sig.byteAt(i);
+            h = h * (u64)$100000001B3;
+            }
+        String* out = new String();
+        u8* digits = "0123456789abcdef";
+        for (u32 k = 0; k < 16; k++)
+            out.appendByte(digits[(u32)((h >> (u64)(60 - k * 4)) & (u64)15)]);
+        return out;
+        }
+
     // A small float's canonical type name as the source writes it: `f8$e5m2`
     // is `f8:pack(e5m2)`, `f8$e4m3$ieee` is `f8:pack(e4m3, ieee)`. Every
     // diagnostic's text passes through here (Frontend.printDiagnostic). An

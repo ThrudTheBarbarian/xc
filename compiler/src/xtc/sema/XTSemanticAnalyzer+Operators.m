@@ -1564,6 +1564,10 @@ static void XTSharedLvalue(XTASTNode* lv, NSMutableArray<XTASTNode*>* out)
 
 - (BOOL)resolveOperatorOfAssign:(XTAssignExprNode*)node
     {
+    // A write into a tensor view, or a tensor's compound assignment: in
+    // place (XTSemanticAnalyzer+TensorExpr.m).
+    if ([self tensorExprAssign:node])
+        return YES;
     if (!self.hasOperatorMethods)
         return NO;
     XTASTNode* lhs = node.lhs;

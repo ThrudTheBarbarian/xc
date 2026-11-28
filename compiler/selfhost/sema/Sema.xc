@@ -97,6 +97,15 @@ class Sema
     bool _rangeIsInitialiser; // inside an ARRAY declaration's initialiser,
                               // the one position a range survives the parser
     Array* _errors;           // of String@
+    // Tensor expressions (tensorExprBinary and the rest): the nodes that made
+    // trees, their trees, whether a larger tree took each in; the kernels the
+    // driver has had the parse write; tensorPair's two element types.
+    Array* _tNodes;
+    Array* _tTrees;
+    Array* _tAbsorbed;
+    Array* _tensorKernelsGiven;
+    String* _tLe;
+    String* _tRe;
     Array* _warnings;         // of String@ — "<cat>\t<file:line:col: warning: text>"
     Array* _scopes;           // of Map@ (name -> type spelling); innermost last
     Map* _globals;            // file-scope variables
@@ -3790,7 +3799,12 @@ class Sema
             return;
             }
         for (u32 i = (u32)0; i < n.kidCount(); i = i + (u32)1)
+            {
             typeStmt(n.kid(i));
+            // A tensor is not a condition (`if (a == b)`).
+            if (i == 0 && (k == (u16)nkIf || k == (u16)nkWhile))
+                tensorRefuseCondition(n.kid((u32)0));
+            }
         }
 
     // Bottom-up: children first, then the node's own rule.
@@ -4074,6 +4088,9 @@ class Sema
             }
         if (k == (u16)nkCast)
             {
+            // A cast to a tensor type converts the elements (a new tensor).
+            if (tensorExprCast(n))
+                return;
             // `(u16)a.get(i)` converts the VALUE, so a boxed element read
             // unboxes first. Only for a cast to a PRIMITIVE: a cast to a class
             // pointer is how the unbox rewrite itself is spelled, and unboxing
@@ -5503,6 +5520,783 @@ class Sema
         return true;
         }
 
+    // ── TENSOR EXPRESSIONS ───────────────────────────────────────────
+    // An operator, unary minus, a cast or a Math function with a tensor
+    // operand is an element-wise expression: a new tensor of the broadcast
+    // shape, each element computed from the operands' elements at its
+    // position under the scalar rules. A whole expression is one tree: a node
+    // whose operand is such a node takes that node's tree in, and one kernel
+    // (the parser's tensorKernelSource) computes it. A write into a view and a
+    // compound assignment are trees too, written in place. The first pass
+    // records each tree's signature; the driver has the parse write the
+    // kernels and starts again; the second makes each tree's root a call of
+    // its kernel, hung past the node's operands (NF_OPCALL). Mirrors the
+    // reference's XTSemanticAnalyzer+TensorExpr.m.
+    //
+    // A tree is an Array: [0] its signature (prefix), [1] its operands
+    // (Node@), [2] its element type, [3] its rank (Number), [4] its root
+    // signature, "" until it is a root's. _tNodes / _tTrees / _tAbsorbed are
+    // the nodes that made trees, in order, their trees, and whether a larger
+    // tree took each in.
+    void setTensorKernelsGiven(Array* a) { _tensorKernelsGiven = a; }
+
+    // The rank of a tensor value's type (`__tensor_<T>_<R>`), 0 for any other.
+    static u32 tensorTypeRank(String* t)
+        {
+        if (t == 0 || !t.hasPrefix(String.withCString("__tensor_")) || t.byteLength() < 12)
+            return 0;
+        u8 c = t.byteAt(t.byteLength() - (u32)1);
+        if (c < (u8)'1' || c > (u8)'8')
+            return 0;
+        return (u32)(c - (u8)'0');
+        }
+
+    // An element type as a signature and a class name spell it.
+    static String* elemCanon(String* t)
+        {
+        if (Types._is(t, "float"))
+            return String.withCString("f32");
+        if (Types._is(t, "double"))
+            return String.withCString("f64");
+        return t;
+        }
+
+    // The kinds of element: an integer (not bool), a float (f64, f32 or a
+    // pack), bool.
+    static bool elemInt(String* t)
+        {
+        return t != 0 && Types.isInteger(t) && !Types._is(t, "bool");
+        }
+
+    static bool elemFloat(String* t)
+        {
+        return t != 0 && (Types.isFloating(t) || Types.isPack(t));
+        }
+
+    static bool elemNumeric(String* t)
+        {
+        return Sema.elemInt(t) || Sema.elemFloat(t) || (t != 0 && Types._is(t, "bool"));
+        }
+
+    // Does every value of `a` convert exactly to `b`? As the reference's
+    // XTElemHolds.
+    static bool elemHolds(String* a, String* b)
+        {
+        if (Sema.elemCanon(a).equals(Sema.elemCanon(b)))
+            return true;
+        if (Types._is(a, "bool") || Types._is(b, "bool"))
+            return false;
+        if (Sema.elemInt(a) && Sema.elemInt(b))
+            return Types.byteWidth(a) < Types.byteWidth(b) && (Types.isSigned(a) == Types.isSigned(b) || !Types.isSigned(a));
+        if (!Sema.elemFloat(a) || !Sema.elemFloat(b))
+            return false;
+        return Types.packHolds(a, b);
+        }
+
+    static bool tensorIsLiteral(Node* n)
+        {
+        u16 k = n.kind();
+        if (k == (u16)nkInt)
+            return !n.nilLit();
+        if (k == (u16)nkFloat || k == (u16)nkBool)
+            return true;
+        if (k == (u16)nkUnary && Types._is(n.op(), "-") && n.kidCount() > 0)
+            return n.kid((u32)0).kind() == (u16)nkInt || n.kid((u32)0).kind() == (u16)nkFloat;
+        return false;
+        }
+
+    static String* tensorTypeOf(String* elem, u32 rank)
+        {
+        return String.withFormat("__tensor_%s_%lu", Sema.tensorSwapDollar(Sema.elemCanon(elem)).cString(), rank);
+        }
+
+    static String* tensorSwapDollar(String* s)
+        {
+        String* out = new String();
+        for (u32 i = 0; i < s.byteLength(); i = i + (u32)1)
+            {
+            u8 c = s.byteAt(i);
+            out.appendByte(c == (u8)'$' ? (u8)'_' : c);
+            }
+        return out;
+        }
+
+    // A tensor type's element type: its class's `_get` result.
+    String* tensorElemOf(String* t)
+        {
+        Node* c = (Node*)_classes.get((Hashable*)t);
+        if (c == 0)
+            return (String*)0;
+        for (u32 i = 0; i < c.kidCount(); i = i + (u32)1)
+            {
+            Node* m = c.kid(i);
+            if (m.kind() == (u16)nkMethodDecl && m.name() != 0 && _isOp(m.name(), "_get"))
+                return firstReturn(m.op());
+            }
+        return (String*)0;
+        }
+
+    // The tree a node made, or 0.
+    Array* tensorTreeOf(Node* n)
+        {
+        if (_tNodes == 0)
+            return (Array*)0;
+        for (u32 i = _tNodes.count(); i > 0; i = i - (u32)1)
+            if ((Node*)_tNodes.get(i - (u32)1) == n)
+                return (Array*)_tTrees.get(i - (u32)1);
+        return (Array*)0;
+        }
+
+    void tensorSetAbsorbed(Node* n, bool on)
+        {
+        if (_tNodes == 0)
+            return;
+        for (u32 i = _tNodes.count(); i > 0; i = i - (u32)1)
+            if ((Node*)_tNodes.get(i - (u32)1) == n)
+                {
+                _tAbsorbed.set(i - (u32)1, (Object*)Number.withI64(on ? (i64)1 : (i64)0));
+                return;
+                }
+        }
+
+    static String* treeSig(Array* t) { return (String*)t.get((u32)0); }
+    static Array* treeLeaves(Array* t) { return (Array*)t.get((u32)1); }
+    static String* treeElem(Array* t) { return (String*)t.get((u32)2); }
+    static u32 treeRank(Array* t) { return (u32)((Number*)t.get((u32)3)).asI64(); }
+
+    static Array* treeMake(String* sig, Array* leaves, String* elem, u32 rank)
+        {
+        Array* t = new Array();
+        t.add((Object*)sig);
+        t.add((Object*)leaves);
+        t.add((Object*)elem);
+        t.add((Object*)Number.withI64((i64)rank));
+        t.add((Object*)new String());
+        return t;
+        }
+
+    // The element type an operand gives: its tree's, a tensor's, or a scalar's.
+    String* tensorSideElem(Node* x)
+        {
+        Array* t = tensorTreeOf(x);
+        if (t != 0)
+            return Sema.treeElem(t);
+        if (Sema.tensorTypeRank(x.ty()) > 0)
+            return tensorElemOf(x.ty());
+        return x.ty();
+        }
+
+    u32 tensorSideRank(Node* x)
+        {
+        Array* t = tensorTreeOf(x);
+        if (t != 0)
+            return Sema.treeRank(t);
+        return Sema.tensorTypeRank(x.ty());
+        }
+
+    // A literal operand takes the element type of the tensor beside it. false
+    // after reporting one that cannot.
+    bool tensorAdoptLiteral(Node* lit, String* e)
+        {
+        if (Types.isPack(e))
+            {
+            if (lit.kind() == (u16)nkBool)
+                return true;
+            packAdoptLiteral(lit, e);
+            return true;
+            }
+        if (Sema.elemInt(e))
+            {
+            bool neg = lit.kind() == (u16)nkUnary;
+            Node* v = neg ? lit.kid((u32)0) : lit;
+            if (v.kind() == (u16)nkFloat)
+                {
+                _errorAt(String.withFormat("a literal for '%s' elements is an integer", Sema.elemCanon(e).cString()), lit);
+                return false;
+                }
+            if (v.kind() != (u16)nkInt)
+                return true;
+            i64 x = v.num();
+            if (neg)
+                x = (i64)0 - x;
+            u32 bits = Types.byteWidth(e) * (u32)8;
+            bool fits = false;
+            if (bits >= 64)
+                fits = Types.isSigned(e) || x >= 0;
+            else if (Types.isSigned(e))
+                fits = x >= (i64)0 - ((i64)1 << (i64)(bits - (u32)1)) && x < ((i64)1 << (i64)(bits - (u32)1));
+            else
+                fits = x >= (i64)0 && x < ((i64)1 << (i64)bits);
+            if (!fits)
+                {
+                _errorAt(String.withFormat("%lld does not fit '%s' elements", x, Sema.elemCanon(e).cString()), lit);
+                return false;
+                }
+            }
+        return true;
+        }
+
+    // An operand as a tree: the tree its node made, taken into the larger
+    // one, or a leaf, a tensor (`t:<E>:<R>`) or a scalar (`s:<E>`) of type
+    // `as`.
+    Array* tensorOperand(Node* x, String* as)
+        {
+        Array* t = tensorTreeOf(x);
+        if (t != 0)
+            {
+            tensorSetAbsorbed(x, true);
+            return t;
+            }
+        Array* leaves = new Array();
+        leaves.add((Object*)x);
+        u32 r = Sema.tensorTypeRank(x.ty());
+        String* elem = as != 0 ? as : (r > (u32)0 ? tensorElemOf(x.ty()) : x.ty());
+        String* sig = r > (u32)0 ? String.withFormat("t:%s:%lu", Sema.elemCanon(elem).cString(), r)
+                                 : String.withFormat("s:%s", Sema.elemCanon(elem).cString());
+        return Sema.treeMake(sig, leaves, elem, r);
+        }
+
+    // The routines of a small float the tree computes in.
+    void tensorNotePack(String* t)
+        {
+        if (t != 0 && Types.isPack(t))
+            _packRoutines = _packRoutines | (Types.packFlags(t) != (u32)0 ? (u32)3 : (u32)1);
+        }
+
+    // A node's tree is made: in the pass that has its kernel, the call of it,
+    // hung past the node's operands. `args` are the call's arguments.
+    void tensorFinish(Node* node, Array* t, String* full, Array* args)
+        {
+        t.set((u32)4, (Object*)full);
+        if (_tNodes == 0)
+            {
+            _tNodes = new Array();
+            _tTrees = new Array();
+            _tAbsorbed = new Array();
+            }
+        bool found = false;
+        for (u32 i = _tNodes.count(); i > 0 && !found; i = i - (u32)1)
+            if ((Node*)_tNodes.get(i - (u32)1) == node)
+                {
+                _tTrees.set(i - (u32)1, (Object*)t);
+                _tAbsorbed.set(i - (u32)1, (Object*)Number.withI64((i64)0));
+                found = true;
+                }
+        if (!found)
+            {
+            _tNodes.add((Object*)node);
+            _tTrees.add((Object*)t);
+            _tAbsorbed.add((Object*)Number.withI64((i64)0));
+            }
+        tensorNotePack(Sema.treeElem(t));
+        Array* lv = Sema.treeLeaves(t);
+        for (u32 i = 0; i < lv.count(); i = i + (u32)1)
+            tensorNotePack(tensorSideElem((Node*)lv.get(i)));
+        if (_tensorKernelsGiven == 0)
+            return;
+        bool have = false;
+        for (u32 i = 0; i < _tensorKernelsGiven.count(); i = i + (u32)1)
+            if (((String*)_tensorKernelsGiven.get(i)).equals(full))
+                have = true;
+        if (!have)
+            return;
+        Node* call = Node.withName((u16)nkCall, String.withFormat("__tk_%s", Types.tensorKernelName(full).cString()));
+        call.setPos(node.fileId(), node.line(), node.col());
+        for (u32 i = 0; i < args.count(); i = i + (u32)1)
+            call.add((Node*)args.get(i));
+        call.setNum((i64)args.count());
+        // The operands were typed with the expression, and what that reported
+        // stands: typed again as the call's arguments, they report nothing
+        // more.
+        u32 em = _errors.count();
+        u32 wm = _warnings.count();
+        typeExpr(call);
+        while (_errors.count() > em)
+            _errors.removeLast();
+        while (_warnings.count() > wm)
+            _warnings.removeLast();
+        u16 k = node.kind();
+        u32 slot = 1;
+        if (k == (u16)nkBinary || k == (u16)nkAssign)
+            slot = 2;
+        else if (k == (u16)nkMethodCall)
+            slot = (u32)node.num() + (u32)1;
+        if (node.hasFlag((u32)NF_OPCALL) && node.kidCount() > slot)
+            node.setKid(slot, call);
+        else
+            node.add(call);
+        node.addFlag((u32)NF_OPCALL);
+        }
+
+    // The type a cast of a mismatch suggests: f32 for floats that fit it, f64
+    // for the others, i64 for integers; the float's for an integer and a float.
+    static String* suggestElem(String* a, String* b)
+        {
+        if (Sema.elemInt(a) && Sema.elemInt(b))
+            return String.withCString("i64");
+        if (!Sema.elemFloat(a))
+            return Sema.elemCanon(b);
+        if (!Sema.elemFloat(b))
+            return Sema.elemCanon(a);
+        return Types._is(a, "double") || Types._is(b, "double") ? String.withCString("f64") : String.withCString("f32");
+        }
+
+    // An operand's type as a message names it: the tensor's, or the scalar's.
+    String* tensorOperandName(Node* x)
+        {
+        Array* t = tensorTreeOf(x);
+        if (t != 0)
+            return Sema.tensorTypeOf(Sema.treeElem(t), Sema.treeRank(t));
+        if (Sema.elemNumeric(x.ty()))
+            return Sema.elemCanon(x.ty());
+        return x.ty() != 0 ? x.ty() : String.withCString("?");
+        }
+
+    // The common element type of two operands, or 0 after reporting there is
+    // none.
+    String* tensorCommon(Node* l, String* le, Node* r, String* re, u32 rank, Node* at)
+        {
+        if (Sema.elemHolds(le, re))
+            return re;
+        if (Sema.elemHolds(re, le))
+            return le;
+        _errorAt(String.withFormat("'%s' and '%s' have no common element type: neither holds every value of the other; cast one, as in (__tensor_%s_%lu)x",
+                                   tensorOperandName(l).cString(), tensorOperandName(r).cString(), Sema.suggestElem(le, re).cString(), rank), at);
+        return (String*)0;
+        }
+
+    // Two operands' elements, a literal taking the other's type, in
+    // _tLe / _tRe. false after an error.
+    bool tensorPair(Node* l, Node* r)
+        {
+        _tLe = tensorSideElem(l);
+        _tRe = tensorSideElem(r);
+        bool lt = tensorTreeOf(l) != 0 || Sema.tensorTypeRank(l.ty()) > 0;
+        bool rt = tensorTreeOf(r) != 0 || Sema.tensorTypeRank(r.ty()) > 0;
+        for (u32 side = 0; side < 2; side = side + (u32)1)
+            {
+            Node* x = side > (u32)0 ? r : l;
+            bool isT = side > (u32)0 ? rt : lt;
+            if (isT || Sema.elemNumeric(x.ty()))
+                continue;
+            _errorAt(String.withFormat("a tensor expression takes tensors and numbers, not '%s'",
+                                       x.ty() != 0 ? x.ty().cString() : (u8*)"?"), x);
+            return false;
+            }
+        if (!lt && Sema.tensorIsLiteral(l) && _tRe != 0)
+            {
+            if (!tensorAdoptLiteral(l, _tRe))
+                return false;
+            _tLe = _tRe;
+            }
+        if (!rt && Sema.tensorIsLiteral(r) && _tLe != 0)
+            {
+            if (!tensorAdoptLiteral(r, _tLe))
+                return false;
+            _tRe = _tLe;
+            }
+        return _tLe != 0 && _tRe != 0;
+        }
+
+    static bool tensorCompareOp(String* op)
+        {
+        return Types._is(op, "==") || Types._is(op, "!=") || Types._is(op, "<") || Types._is(op, ">") || Types._is(op, "<=")
+            || Types._is(op, ">=");
+        }
+
+    // The tree of `l op r`, or 0 after an error. Shared by binary operators,
+    // compound assignment and Math.pow.
+    Array* tensorTreeOp(String* op, Node* l, Node* r, Array* lsig, Node* at)
+        {
+        if (!tensorPair(l, r))
+            return (Array*)0;
+        String* le = _tLe;
+        String* re = _tRe;
+        u32 rank = tensorSideRank(l);
+        if (tensorSideRank(r) > rank)
+            rank = tensorSideRank(r);
+        if (lsig != 0 && Sema.treeRank(lsig) > rank)
+            rank = Sema.treeRank(lsig);
+        bool cmp = Sema.tensorCompareOp(op);
+        String* c = tensorCommon(l, le, r, re, rank, at);
+        if (c == 0)
+            return (Array*)0;
+        if (Types._is(c, "bool") && !(_isOp(op, "==") || _isOp(op, "!=")))
+            {
+            _errorAt(String.withFormat("bool elements take only == and !=, not '%s'", op.cString()), at);
+            return (Array*)0;
+            }
+        if (_isOp(op, "%") && !Sema.elemInt(c))
+            {
+            _errorAt(String.withFormat("'%%' takes integer elements, not '%s'", Sema.elemCanon(c).cString()), at);
+            return (Array*)0;
+            }
+        Array* a = lsig != 0 ? lsig : tensorOperand(l, le);
+        Array* b = tensorOperand(r, re);
+        Array* leaves = new Array();
+        Array* al = Sema.treeLeaves(a);
+        Array* bl = Sema.treeLeaves(b);
+        for (u32 i = 0; i < al.count(); i = i + (u32)1)
+            leaves.add(al.get(i));
+        for (u32 i = 0; i < bl.count(); i = i + (u32)1)
+            leaves.add(bl.get(i));
+        String* sig = String.withFormat("%s:%s %s %s", op.cString(), Sema.elemCanon(c).cString(), Sema.treeSig(a).cString(),
+                                        Sema.treeSig(b).cString());
+        tensorNotePack(c);
+        return Sema.treeMake(sig, leaves, cmp ? String.withCString("bool") : c, rank);
+        }
+
+    static String* tensorNew(Array* t)
+        {
+        return String.withFormat("new %s", Sema.treeSig(t).cString());
+        }
+
+    bool tensorExprBinary(Node* n)
+        {
+        Node* l = n.kid((u32)0);
+        Node* r = n.kid((u32)1);
+        u32 lr = Sema.tensorTypeRank(l.ty());
+        u32 rr = Sema.tensorTypeRank(r.ty());
+        if (lr == 0 && rr == 0)
+            return false;
+        String* tt = lr > (u32)0 ? l.ty() : r.ty();
+        String* op = n.op();
+        bool ok = _isOp(op, "+") || _isOp(op, "-") || _isOp(op, "*") || _isOp(op, "/") || _isOp(op, "%") || Sema.tensorCompareOp(op);
+        if (!ok)
+            {
+            _errorAt(String.withFormat("'%s' does not take '%s': a tensor expression takes + - * / %%, the comparisons, unary -, casts and Math functions",
+                                       tt.cString(), op.cString()), n);
+            n.setTy(tt);
+            return true;
+            }
+        Array* t = tensorTreeOp(op, l, r, (Array*)0, n);
+        if (t == 0)
+            {
+            n.setTy(tt);
+            return true;
+            }
+        n.setTy(Sema.tensorTypeOf(Sema.treeElem(t), Sema.treeRank(t)));
+        tensorFinish(n, t, Sema.tensorNew(t), Sema.treeLeaves(t));
+        return true;
+        }
+
+    bool tensorExprUnary(Node* n)
+        {
+        Node* x = n.kid((u32)0);
+        u32 rank = Sema.tensorTypeRank(x.ty());
+        if (rank == 0)
+            return false;
+        // `&t` and `*p` keep their meaning; `~`, `!` and `+` are refused.
+        if (!_isOp(n.op(), "-") && !_isOp(n.op(), "~") && !_isOp(n.op(), "!") && !_isOp(n.op(), "+"))
+            return false;
+        if (!_isOp(n.op(), "-"))
+            {
+            _errorAt(String.withFormat("'%s' takes no prefix operator but '-' in a tensor expression", x.ty().cString()), n);
+            n.setTy(x.ty());
+            return true;
+            }
+        Array* a = tensorTreeOf(x);
+        if (a == 0)
+            a = tensorOperand(x, (String*)0);
+        if (Types._is(Sema.treeElem(a), "bool"))
+            {
+            _errorAt(String.withCString("bool elements take no unary '-'"), n);
+            n.setTy(x.ty());
+            return true;
+            }
+        if (tensorTreeOf(x) != 0)
+            tensorOperand(x, (String*)0);
+        Array* lv = new Array();
+        Array* al = Sema.treeLeaves(a);
+        for (u32 i = 0; i < al.count(); i = i + (u32)1)
+            lv.add(al.get(i));
+        Array* t = Sema.treeMake(String.withFormat("neg:%s %s", Sema.elemCanon(Sema.treeElem(a)).cString(), Sema.treeSig(a).cString()),
+                                 lv, Sema.treeElem(a), Sema.treeRank(a));
+        n.setTy(Sema.tensorTypeOf(Sema.treeElem(t), Sema.treeRank(t)));
+        tensorFinish(n, t, Sema.tensorNew(t), Sema.treeLeaves(t));
+        return true;
+        }
+
+    bool tensorExprCast(Node* n)
+        {
+        u32 rank = Sema.tensorTypeRank(n.name());
+        if (rank == 0 || n.kidCount() == 0)
+            return false;
+        n.setTy(n.name());
+        Node* x = n.kid((u32)0);
+        u32 xr = Sema.tensorTypeRank(x.ty());
+        if (xr == 0)
+            {
+            _errorAt(String.withFormat("a cast to '%s' takes a tensor, not '%s'", n.name().cString(),
+                                       x.ty() != 0 ? x.ty().cString() : (u8*)"?"), n);
+            return true;
+            }
+        if (xr != rank)
+            {
+            _errorAt(String.withFormat("a cast to '%s' keeps the rank: it takes a tensor of rank %lu, not '%s'", n.name().cString(),
+                                       rank, x.ty().cString()), n);
+            return true;
+            }
+        String* to = tensorElemOf(n.name());
+        if (to == 0)
+            return true;
+        Array* a = tensorOperand(x, (String*)0);
+        Array* lv = new Array();
+        Array* al = Sema.treeLeaves(a);
+        for (u32 i = 0; i < al.count(); i = i + (u32)1)
+            lv.add(al.get(i));
+        Array* t = Sema.treeMake(String.withFormat("cast:%s %s", Sema.elemCanon(to).cString(), Sema.treeSig(a).cString()), lv, to, rank);
+        tensorFinish(n, t, Sema.tensorNew(t), Sema.treeLeaves(t));
+        return true;
+        }
+
+    bool tensorExprMath(Node* n)
+        {
+        if (n.kidCount() == 0 || n.kid((u32)0).kind() != (u16)nkIdent || !_isOp(n.kid((u32)0).name(), "Math"))
+            return false;
+        String* name = n.name();
+        u32 argc = (u32)n.num();
+        if (argc == 0 || argc > 2 || n.kidCount() < argc + (u32)1)
+            return false;
+        bool any = false;
+        for (u32 i = 1; i <= argc; i = i + (u32)1)
+            if (Sema.tensorTypeRank(n.kid(i).ty()) > 0)
+                any = true;
+        if (!any)
+            return false;
+        Node* x = n.kid((u32)1);
+        String* tt = x.ty();
+        bool known = _isOp(name, "sqrt") || _isOp(name, "exp") || _isOp(name, "ln") || _isOp(name, "sin") || _isOp(name, "cos")
+                  || _isOp(name, "tan") || _isOp(name, "atan") || _isOp(name, "abs") || _isOp(name, "pow");
+        if (!known || argc != (_isOp(name, "pow") ? (u32)2 : (u32)1))
+            {
+            _errorAt(String.withFormat("Math.%s has no tensor form; the tensor forms are sqrt, exp, ln, sin, cos, tan, atan and abs of one tensor, and pow of two operands",
+                                       name.cString()), n);
+            n.setTy(tt);
+            return true;
+            }
+        Array* t = (Array*)0;
+        if (_isOp(name, "pow"))
+            {
+            Array* p = tensorTreeOp(String.withCString("*"), x, n.kid((u32)2), (Array*)0, n);
+            if (p == 0)
+                {
+                n.setTy(Sema.tensorTypeRank(tt) > (u32)0 ? tt : n.kid((u32)2).ty());
+                return true;
+                }
+            String* ps = Sema.treeSig(p);
+            u32 sp = ps.byteIndexOf(String.withCString(" "));
+            t = p;
+            t.set((u32)0, (Object*)String.withFormat("fn:pow:%s%s", Sema.elemCanon(Sema.treeElem(p)).cString(),
+                                                      ps.substringFromByte(sp).cString()));
+            }
+        else
+            {
+            Array* a = tensorTreeOf(x);
+            if (a == 0)
+                a = tensorOperand(x, (String*)0);
+            String* e = Sema.treeElem(a);
+            bool fl = Sema.elemFloat(e);
+            bool ints = _isOp(name, "abs") && Sema.elemInt(e) && Types.isSigned(e) && Types.byteWidth(e) <= 4;
+            if (!fl && !ints)
+                {
+                _errorAt(String.withFormat("Math.%s takes tensors of f64, f32, f16, bf16, f8 or f4%s, not '%s'", name.cString(),
+                                           _isOp(name, "abs") ? (u8*)", or i8, i16 or i32" : (u8*)"", tensorOperandName(x).cString()), n);
+                n.setTy(tt);
+                return true;
+                }
+            if (tensorTreeOf(x) != 0)
+                tensorOperand(x, (String*)0);
+            Array* lv = new Array();
+            Array* al = Sema.treeLeaves(a);
+            for (u32 i = 0; i < al.count(); i = i + (u32)1)
+                lv.add(al.get(i));
+            t = Sema.treeMake(String.withFormat("fn:%s:%s %s", name.cString(), Sema.elemCanon(e).cString(), Sema.treeSig(a).cString()),
+                              lv, e, Sema.treeRank(a));
+            }
+        if (!Sema.elemFloat(Sema.treeElem(t)) && !_isOp(name, "abs"))
+            {
+            _errorAt(String.withFormat("Math.%s takes tensors of f64, f32, f16, bf16, f8 or f4, not '%s'", name.cString(),
+                                       tensorOperandName(x).cString()), n);
+            n.setTy(tt);
+            return true;
+            }
+        n.setTy(Sema.tensorTypeOf(Sema.treeElem(t), Sema.treeRank(t)));
+        tensorFinish(n, t, Sema.tensorNew(t), Sema.treeLeaves(t));
+        return true;
+        }
+
+    bool tensorExprAssign(Node* n)
+        {
+        if (n.kidCount() < 2)
+            return false;
+        Node* lhs = n.kid((u32)0);
+        bool slice = lhs.kind() == (u16)nkSlice || (lhs.kind() == (u16)nkSubscript && subscriptHasRange(lhs));
+        bool plain = _isOp(n.op(), "=");
+        Node* dest = (Node*)0;
+        if (slice && lhs.kidCount() > 0 && Sema.tensorTypeRank(lhs.kid((u32)0).ty()) > 0)
+            {
+            // The view the slice gives, as it would be read.
+            Node* prev = _opIndexTarget;
+            _opIndexTarget = (Node*)0;
+            typeExpr(lhs);
+            _opIndexTarget = prev;
+            dest = lhs;
+            }
+        else if (!slice && !plain && Sema.tensorTypeRank(lhs.ty()) > 0)
+            dest = lhs;
+        if (dest == 0)
+            return false;
+        n.setTy(String.withCString("void"));
+        String* dt = dest.ty();
+        u32 drank = Sema.tensorTypeRank(dt);
+        if (drank == 0)
+            return true;
+        String* de = tensorElemOf(dt);
+        Node* v = n.kid((u32)1);
+        Array* t = (Array*)0;
+        if (plain)
+            {
+            String* ve = tensorSideElem(v);
+            if (Sema.tensorTypeRank(v.ty()) == 0 && tensorTreeOf(v) == 0)
+                {
+                if (!Sema.elemNumeric(v.ty()))
+                    {
+                    _errorAt(String.withFormat("a tensor expression takes tensors and numbers, not '%s'",
+                                               v.ty() != 0 ? v.ty().cString() : (u8*)"?"), v);
+                    return true;
+                    }
+                if (Sema.tensorIsLiteral(v))
+                    {
+                    if (!tensorAdoptLiteral(v, de))
+                        return true;
+                    ve = de;
+                    }
+                }
+            t = tensorOperand(v, ve);
+            }
+        else
+            {
+            // `t op= v` is `t = t op v`, written in place: `d` reads the
+            // destination's own element.
+            String* aop = n.op();
+            String* op = aop.substringBytes((u32)0, aop.byteLength() - (u32)1);
+            if (!(_isOp(op, "+") || _isOp(op, "-") || _isOp(op, "*") || _isOp(op, "/") || _isOp(op, "%")))
+                {
+                _errorAt(String.withFormat("'%s' takes no compound assignment but += -= *= /= and %%=", dt.cString()), n);
+                return true;
+                }
+            Array* d = Sema.treeMake(String.withCString("d"), new Array(), de, drank);
+            t = tensorTreeOp(op, dest, v, d, n);
+            if (t == 0)
+                return true;
+            }
+        if (Sema.treeRank(t) > drank)
+            {
+            _errorAt(String.withFormat("a value of rank %lu does not fit '%s', of rank %lu", Sema.treeRank(t), dt.cString(), drank), n);
+            return true;
+            }
+        if (!Sema.elemHolds(Sema.treeElem(t), de))
+            {
+            String* vn = Sema.treeRank(t) > (u32)0 ? Sema.tensorTypeOf(Sema.treeElem(t), Sema.treeRank(t)) : Sema.elemCanon(Sema.treeElem(t));
+            String* cast = Sema.treeRank(t) > (u32)0 ? Sema.tensorTypeOf(de, Sema.treeRank(t)) : Sema.elemCanon(de);
+            _errorAt(String.withFormat("'%s' does not hold every value of '%s': cast it, as in (%s)x", dt.cString(), vn.cString(),
+                                       cast.cString()), n);
+            return true;
+            }
+        Array* args = new Array();
+        args.add((Object*)dest);
+        Array* tl = Sema.treeLeaves(t);
+        for (u32 i = 0; i < tl.count(); i = i + (u32)1)
+            args.add(tl.get(i));
+        tensorFinish(n, t, String.withFormat("set:%s:%lu %s", Sema.elemCanon(de).cString(), drank, Sema.treeSig(t).cString()), args);
+        return true;
+        }
+
+    // A tensor written as a condition (`if (a == b)`) is refused.
+    void tensorRefuseCondition(Node* c)
+        {
+        if (c != 0 && Sema.tensorTypeRank(c.ty()) > 0)
+            _errorAt(String.withFormat("'%s' is not a condition: test its elements one at a time", c.ty().cString()), c);
+        }
+
+    // The kernels the unit's expressions need, by signature, sorted.
+    Array* tensorKernelRequests(void)
+        {
+        Array* out = new Array();
+        if (_tNodes == 0)
+            return out;
+        for (u32 i = 0; i < _tNodes.count(); i = i + (u32)1)
+            {
+            if (((Number*)_tAbsorbed.get(i)).asI64() != 0)
+                continue;
+            String* full = (String*)((Array*)_tTrees.get(i)).get((u32)4);
+            if (full.byteLength() == 0)
+                continue;
+            bool have = false;
+            for (u32 j = 0; j < out.count(); j = j + (u32)1)
+                if (((String*)out.get(j)).equals(full))
+                    have = true;
+            if (!have)
+                out.add((Object*)full);
+            }
+        return Sema.sortStrings(out);
+        }
+
+    // The kernels a pass has, joined with those its sema asks for, sorted; 0
+    // when it asks for none it lacks. As the reference's
+    // tensorKernels:with:.
+    static Array* tensorKernelsJoin(Array* have, Array* want)
+        {
+        Array* all = new Array();
+        if (have != 0)
+            for (u32 i = 0; i < have.count(); i = i + (u32)1)
+                all.add(have.get(i));
+        bool more = false;
+        for (u32 i = 0; i < want.count(); i = i + (u32)1)
+            {
+            String* k = (String*)want.get(i);
+            bool got = false;
+            for (u32 j = 0; j < all.count(); j = j + (u32)1)
+                if (((String*)all.get(j)).equals(k))
+                    got = true;
+            if (!got)
+                {
+                all.add((Object*)k);
+                more = true;
+                }
+            }
+        if (!more)
+            return (Array*)0;
+        return Sema.sortStrings(all);
+        }
+
+    // Strings in byte order (insertion sort; the lists are short).
+    static Array* sortStrings(Array* a)
+        {
+        Array* out = new Array();
+        for (u32 i = 0; i < a.count(); i = i + (u32)1)
+            {
+            String* s = (String*)a.get(i);
+            u32 at = out.count();
+            while (at > 0 && Sema.byteLess(s, (String*)out.get(at - (u32)1)))
+                at = at - (u32)1;
+            out.insert(at, (Object*)s);
+            }
+        return out;
+        }
+
+    static bool byteLess(String* a, String* b)
+        {
+        u32 n = a.byteLength() < b.byteLength() ? a.byteLength() : b.byteLength();
+        for (u32 i = 0; i < n; i = i + (u32)1)
+            {
+            if (a.byteAt(i) != b.byteAt(i))
+                return a.byteAt(i) < b.byteAt(i);
+            }
+        return a.byteLength() < b.byteLength();
+        }
+
     // ── INDEX OPERATORS AND ASSIGNMENT ───────────────────────────────
     // Mirrors the reference's XTSemanticAnalyzer+Operators.m. A subscript's
     // kids are the base and its indices; a slice's the base and the bounds it
@@ -6068,6 +6862,10 @@ class Sema
     // applies. Both sides are typed.
     bool resolveOpAssign(Node* n)
         {
+        // A write into a tensor view, or a tensor's compound assignment: in
+        // place (tensorExprAssign).
+        if (tensorExprAssign(n))
+            return true;
         if (!_anyOps || n.kidCount() < 2)
             return false;
         Node* lhs = n.kid(0);
@@ -6257,25 +7055,6 @@ class Sema
         // below, which would otherwise fold `nil + 1` to a number. The literal
         // is the 0 the lowering has always seen, so a comparison's IR is
         // unchanged. The messages are the reference's, word for word.
-        // Tensor values have no equality: two views may share a storage or hold
-        // equal elements, and neither is what `==` would say. As the reference.
-        if (_isOp(n.op(), "==") || _isOp(n.op(), "!="))
-            {
-            String* tl = n.kid((u32)0).ty();
-            String* tr = n.kid((u32)1).ty();
-            String* tt = (String*)0;
-            if (tl != 0 && Sema.tensorRank(tl) > (u32)0)
-                tt = tl;
-            else if (tr != 0 && Sema.tensorRank(tr) > (u32)0)
-                tt = tr;
-            if (tt != (String*)0)
-                {
-                _errorAt(String.withFormat("'%s' has no '%s': compare the elements, or the shapes and the data() pointers",
-                                           tt.cString(), n.op().cString()), n);
-                n.setTy(String.withCString("bool"));
-                return;
-                }
-            }
         bool leftNil = n.kid((u32)0).kind() == (u16)nkInt && n.kid((u32)0).nilLit();
         bool rightNil = n.kid((u32)1).kind() == (u16)nkInt && n.kid((u32)1).nilLit();
         if (leftNil || rightNil)
@@ -6296,6 +7075,10 @@ class Sema
         // operands — so it happens here, ahead of everything below.
         n.setKid((u32)0, unboxCollectionElement(n.kid((u32)0)));
         n.setKid((u32)1, unboxCollectionElement(n.kid((u32)1)));
+        // A tensor operand: an element-wise expression, one tree with the
+        // operands' (tensorExprBinary).
+        if (tensorExprBinary(n))
+            return;
         // An operand whose class defines this operator makes the operator a
         // call of the method (`:operator(self + o)`), and none of the built-in
         // typing below applies.
@@ -6521,6 +7304,8 @@ class Sema
         if (n.kidCount() == (u32)0)
             return;
         String* op = n.op();
+        if (tensorExprUnary(n))
+            return;
         if (resolveOperator(n))
             return;
         // An element an index operator reads is a call's result: no address,
@@ -7652,6 +8437,9 @@ class Sema
         // Taken at once, so no call typed below this one sees it.
         Node* opForced = _opForced;
         _opForced = (Node*)0;
+        // `Math.sqrt(t)` on a tensor: an element-wise expression.
+        if (opForced == 0 && tensorExprMath(n))
+            return;
         // Not a method call at all — the member is a field holding a callback,
         // a function pointer or a block. private:docs/bugs/074.
         if (opForced == 0 && rewriteFieldCall(n))

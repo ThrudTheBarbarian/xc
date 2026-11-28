@@ -220,6 +220,7 @@ static XTOpInfo operatorInfo(XTTokenType type)
         int nextMinPrec = info.rightAssoc ? info.prec : info.prec + 1;
         XTASTNode* rhs = [self parseExprWithMinPrec:nextMinPrec];
         lhs = [self buildBinaryExpr:op left:lhs right:rhs];
+        [self tensorCheckConstantShapes:lhs at:op.location];
         }
 
     return lhs;
