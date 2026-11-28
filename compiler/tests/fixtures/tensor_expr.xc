@@ -6,7 +6,8 @@
 // scalar, a rank below the other's), one long expression made one kernel,
 // a new tensor against a write in place and a compound assignment,
 // comparisons giving bool tensors, casts, views as operands (transposed,
-// sliced, broadcast) and f4 results of odd length.
+// sliced, broadcast), f4 results of odd length and byte products long enough
+// for whole vectors.
 //xtc-na: xt6502 — tensors are not available there
 #import "Stdio.xc"
 #import "Math.xc"
@@ -884,6 +885,36 @@ void f4_odd(void)
     Stdio.printf("  written row: %x %x %x %x %x, row 0 %x, row 2 %x\n", qb(a[1, 0]), qb(a[1, 1]), qb(a[1, 2]), qb(a[1, 3]), qb(a[1, 4]), qb(a[0, 4]), qb(a[2, 0]));
 }
 
+// Long enough for whole vectors: a byte multiply is computed lane by lane
+// where the target has one, and stays scalar where it does not.
+void long_bytes(void)
+{
+    tensor<i8, 1> x = new tensor<i8, 1>(37);
+    tensor<i8, 1> y = new tensor<i8, 1>(37);
+    tensor<u8, 1> u = new tensor<u8, 1>(37);
+    tensor<u8, 1> v = new tensor<u8, 1>(37);
+    for (u64 j = 0; j < 37; j++)
+    {
+        x[j] = (i8)((i32)j * 7 - 120);
+        y[j] = (i8)(13 - (i32)j * 3);
+        u[j] = (u8)(j * 11 + 5);
+        v[j] = (u8)(250 - j * 6);
+    }
+    tensor<i8, 1> m = x * y;
+    tensor<u8, 1> w = u * v + u;
+    u32 bad = 0;
+    for (u64 j = 0; j < 37; j++)
+    {
+        i8 a = x[j];
+        i8 b = y[j];
+        u8 c = u[j];
+        u8 e = v[j];
+        if (m[j] != a * b || w[j] != c * e + c)
+            bad++;
+    }
+    report("long bytes", bad);
+}
+
 i32 main(void)
 {
 
@@ -908,6 +939,7 @@ i32 main(void)
     comparisons_and_casts();
     views();
     f4_odd();
+    long_bytes();
     Stdio.printf("storages %d\n", (i32)TensorStorage.live());
     return 0;
 }

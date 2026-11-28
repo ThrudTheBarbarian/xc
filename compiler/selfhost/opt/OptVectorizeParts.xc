@@ -1059,6 +1059,14 @@
         return op == opAdd || op == opSub || op == opMul || op == opAnd || op == opOr || op == opXor || op == opFAdd || op == opFSub || op == opFMul;
         }
 
+    // A lane multiply the back end has: x86 has none on 8-bit lanes.
+    final bool vecLaneMulOK(u16 op, String* ty)
+        {
+        if (op != opMul || IRType.bytes(ty) != (u32)1)
+            return true;
+        return _profile != (OptProfile*)0 && _profile.byteMul();
+        }
+
     // The vector opcode for a scalar elementwise one. The float ops reuse
     // VAdd/VSub/VMul — the backend emits fadd/fsub/fmul when the result
     // vector's lane is floating.

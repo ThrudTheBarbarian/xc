@@ -169,6 +169,7 @@ class OptProfile
     bool _vectorize;         // map/reduce kernels go to SIMD
     bool _highMul;           // back end lowers VMulHi (constant divide)
     bool _laneShift;         // back end lowers VLShr (lane shift by a constant)
+    bool _byteMul;           // back end lowers VMul on 8-bit integer lanes
     bool _iota;              // back end can build the lane-index vector
     bool _escapeVec;         // back end has VFCmp and VSIToFp (escape-time loops)
     u32 _escapeJam;          // vectors an escape-time loop runs side by side (escapeInterleave)
@@ -267,6 +268,7 @@ class OptProfile
         _vectorize = false;
         _highMul = false;
         _laneShift = false;
+        _byteMul = false;
         _iota = false;
         _escapeVec = false;
         _escapeJam = (u32)1;
@@ -386,6 +388,10 @@ class OptProfile
         // because a back end can have the lane shift without the widening
         // multiply the magic divide needs.
         p._laneShift = wide;
+        // mul.16b on arm64, vmul.i8 on arm9, a widened i16x8.mul on wasm32.
+        // x86 has no byte-lane multiply, so a map multiplying bytes stays
+        // scalar there.
+        p._byteMul = arm64 || arm9 || wasm;
         // The lane-index vector is a 16-byte read-only global loaded with the
         // VLoad the back end already has, so this needs no instruction
         // selection of its own — only somewhere to put the constant.
@@ -615,6 +621,10 @@ class OptProfile
     bool laneShift(void)
         {
         return _laneShift;
+        }
+    bool byteMul(void)
+        {
+        return _byteMul;
         }
     bool escapeVec(void)
         {

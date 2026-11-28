@@ -1029,7 +1029,7 @@
                 }
             if (vecElementwise(op))
                 {
-                if (n.res() == (IRValue*)0 || !self.vecLaneOK(n.res().ty()))
+                if (n.res() == (IRValue*)0 || !self.vecLaneOK(n.res().ty()) || !self.vecLaneMulOK(op, n.res().ty()))
                     return (String*)0;
                 if (n.ops().count() < (u32)2)
                     return (String*)0;
@@ -1817,7 +1817,7 @@
                 }
             if (vecElementwise(op))
                 {
-                if (n.res() == (IRValue*)0 || n.ops().count() < (u32)2)
+                if (n.res() == (IRValue*)0 || n.ops().count() < (u32)2 || !self.vecLaneMulOK(op, n.res().ty()))
                     return false;
                 if (!vecOperandOK((IROperand*)n.ops().get((u32)0), elemIds, B, H, defOf, defBlk, L))
                     return false;

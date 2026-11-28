@@ -180,6 +180,10 @@
     {
     return NO;
     }
+- (BOOL)vectorizesByteMultiply
+    {
+    return NO;
+    }
 - (BOOL)vectorizesEscapeLoops
     {
     return [self vectorizesLaneShift];
@@ -399,6 +403,11 @@
     }
 // ushr does the lane-wise shift.
 - (BOOL)vectorizesLaneShift
+    {
+    return YES;
+    }
+// mul.16b multiplies byte lanes.
+- (BOOL)vectorizesByteMultiply
     {
     return YES;
     }
@@ -717,6 +726,11 @@
     {
     return YES;
     }
+// vmul.i8 multiplies byte lanes.
+- (BOOL)vectorizesByteMultiply
+    {
+    return YES;
+    }
 
 // LEFT OFF (verified to regress arm9):
 //   • collapsesInvariantReductions — its trip-1 rewrite + reduction-nest CFG
@@ -818,6 +832,11 @@
 // rather than a suspicion. private:docs/bugs/238.
 // The backend lowers every V* opcode to wasm SIMD (v128) — W4.
 - (BOOL)vectorizesLoops
+    {
+    return YES;
+    }
+// Byte lanes multiply as two widened i16x8.mul halves.
+- (BOOL)vectorizesByteMultiply
     {
     return YES;
     }

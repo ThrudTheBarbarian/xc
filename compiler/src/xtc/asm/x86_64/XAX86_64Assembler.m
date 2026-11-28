@@ -923,6 +923,7 @@ static BOOL namesHighZmm(NSString *s) {
                   @"paddd":@[@0x66,@0xFE],  @"paddw":@[@0x66,@0xFD],
                   @"paddb":@[@0x66,@0xFC],  @"paddq":@[@0x66,@0xD4],
                   @"psubd":@[@0x66,@0xFA],  @"psubw":@[@0x66,@0xF9],
+                  @"psubb":@[@0x66,@0xF8],
                   @"maxsd":@[@0xF2,@0x5F],  @"maxss":@[@0xF3,@0x5F],
                   @"minsd":@[@0xF2,@0x5D],  @"minss":@[@0xF3,@0x5D],
                   @"maxpd":@[@0x66,@0x5F],  @"maxps":@[@0x00,@0x5F],

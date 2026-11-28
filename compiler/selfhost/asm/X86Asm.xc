@@ -262,7 +262,7 @@ enum X86Mnemonic = {
     x86Pminub, x86Pminud, x86Pminuw, x86Pmulld, x86Pmullw, x86Pmuludq, x86Packusdw, x86Vpmovzxwd,
     x86Pop, x86Por, x86Pshufd, x86Pshufhw, x86Pshuflw, x86Pslld,
     x86Psllq, x86Psllw, x86Psrad, x86Psraw, x86Psrld, x86Psrlq,
-    x86Psrlw, x86Psubd, x86Psubw, x86Punpcklbw, x86Punpckldq, x86Punpcklqdq,
+    x86Psrlw, x86Psubb, x86Psubd, x86Psubw, x86Punpcklbw, x86Punpckldq, x86Punpcklqdq,
     x86Push, x86Pxor, x86Rdtsc, x86Ret, x86Rex64, x86Rol,
     x86Ror, x86Sal, x86Sar, x86Sbb, x86Sfence, x86Shl,
     x86Shr, x86Shufpd, x86Shufps, x86Sqrtpd, x86Sqrtps, x86Sqrtsd,
@@ -347,7 +347,8 @@ class X86Mn
         X86Mn.def(x86Pshufhw, "pshufhw"); X86Mn.def(x86Pshuflw, "pshuflw"); X86Mn.def(x86Pslld, "pslld");
         X86Mn.def(x86Psllq, "psllq"); X86Mn.def(x86Psllw, "psllw"); X86Mn.def(x86Psrad, "psrad");
         X86Mn.def(x86Psraw, "psraw"); X86Mn.def(x86Psrld, "psrld"); X86Mn.def(x86Psrlq, "psrlq");
-        X86Mn.def(x86Psrlw, "psrlw"); X86Mn.def(x86Psubd, "psubd"); X86Mn.def(x86Psubw, "psubw");
+        X86Mn.def(x86Psrlw, "psrlw"); X86Mn.def(x86Psubb, "psubb"); X86Mn.def(x86Psubd, "psubd");
+        X86Mn.def(x86Psubw, "psubw");
         X86Mn.def(x86Punpcklbw, "punpcklbw"); X86Mn.def(x86Punpckldq, "punpckldq"); X86Mn.def(x86Punpcklqdq, "punpcklqdq");
         X86Mn.def(x86Push, "push"); X86Mn.def(x86Pxor, "pxor"); X86Mn.def(x86Rdtsc, "rdtsc");
         X86Mn.def(x86Ret, "ret"); X86Mn.def(x86Rex64, "rex64"); X86Mn.def(x86Rol, "rol");
@@ -3213,6 +3214,8 @@ class X86Mn
             return (u32)$66FA;
         if (mc == x86Psubw)
             return (u32)$66F9;
+        if (mc == x86Psubb)
+            return (u32)$66F8;
         if (mc == x86Maxsd)
             return (u32)$F25F;
         if (mc == x86Maxss)

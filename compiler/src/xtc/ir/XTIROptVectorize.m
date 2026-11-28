@@ -429,6 +429,14 @@ static BOOL vectorisableLane(XTIRTypeKind k)
            k == XTIRTypeKindI32 || k == XTIRTypeKindU32 || k == XTIRTypeKindF32;
     }
 
+// A lane multiply the back end has: x86 has none on 8-bit lanes.
+static BOOL laneMulOK(XTIROptTargetProfile* prof, XTIROpcode op, XTIRType* t)
+    {
+    if (op != XTIROpMul || !t || t.byteWidth != 1)
+        return YES;
+    return (prof ?: [XTIROptTargetProfile conservativeProfile]).vectorizesByteMultiply;
+    }
+
 static BOOL resolveConstIntExt(XTIROperand* op, NSDictionary<NSNumber*, XTIRInsn*>* defOf, int64_t* out)
     {
     if (op.kind == XTIROperandKindImmI)
@@ -1946,7 +1954,8 @@ static BOOL xtvBasesApart(NSArray<XTIROperand*>* stBases, NSArray<XTIROperand*>*
                 }
             if (elementwiseArith(op))
                 {
-                if (!insn.result || !vectorisableLane(insn.result.type.kind))
+                if (!insn.result || !vectorisableLane(insn.result.type.kind)
+                    || !laneMulOK(self.profile, op, insn.result.type))
                     {
                     ok = NO;
                     break;
@@ -5321,7 +5330,7 @@ static XTIRValue* xtvApplyConv(XTIRFunction* fn, XTIRInsn* n, XTVecCand* c, XTIR
                 }
             if (elementwiseArith(op))
                 {
-                if (!insn.result || insn.operands.count < 2 ||
+                if (!insn.result || insn.operands.count < 2 || !laneMulOK(self.profile, op, insn.result.type) ||
                     !elemOperandOK(insn.operands[0]) || !elemOperandOK(insn.operands[1]))
                     {
                     ok = NO;

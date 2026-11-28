@@ -194,6 +194,10 @@ NS_ASSUME_NONNULL_BEGIN
 /// from vectorizesHighMultiply because a back end can have the shift without
 /// the widening multiply the magic divide needs.
 - (BOOL)vectorizesLaneShift;
+/// The back end lowers VMul on 8-bit integer lanes: mul.16b on arm64,
+/// vmul.i8 on arm9, a widened i16x8.mul on wasm32. x86 has no byte-lane
+/// multiply, so a map multiplying bytes stays scalar there.
+- (BOOL)vectorizesByteMultiply;
 /// The back end lowers VFCmp and VSIToFp, which escape-time loops need
 /// (mandelbrot): fcm*/scvtf on arm64, cmpps/cvtdq2ps on x86.
 - (BOOL)vectorizesEscapeLoops;
