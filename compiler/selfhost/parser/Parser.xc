@@ -90,6 +90,20 @@ class Parser
     u32     _tensorBcastRanks;
     u32     _tensorSetAt;    // parTensorSets: the token after the declaration's `=`
     Array*  _tensorErrors;   // the tensor checks' errors, message then position token, reported after the parse
+    Array*  _tensorKernels;  // the kernels of the unit's tensor expressions, as sema asked for them (signatures)
+    // A kernel being written (tensorKernelSource): its tokens and operands,
+    // the place in the tree, the rank, the destination's element type, the
+    // mode, and the type of the last value tkExpr wrote.
+    Array*  _tkTok;
+    Array*  _tkKind;
+    Array*  _tkElem;
+    Array*  _tkRank;
+    u32     _tkPos;
+    u32     _tkLeaf;
+    u32     _tkR;
+    String* _tkEr;
+    u32     _tkMode;
+    String* _tkType;
     Node*   _parTensorGuard; // the par block being made: its tensors' run-time test (parTensorGuard), or 0
     u32     _loopDepth;     // loops open in the code being parsed (an auto par wraps an outermost one)
     u32     _parAutoDepthReads; // decisions made on _loopDepth so far (parAutoFor)
@@ -1855,6 +1869,15 @@ class Parser
                 if (!have) names.add((Object*)nm);
             }
         }
+        // The classes the kernels of the unit's tensor expressions use (a
+        // comparison's tensor<bool, R> may be named nowhere else).
+        if (_tensorKernels != (Array*)0) {
+            for (u32 q = 0; q < _tensorKernels.count(); q = q + (u32)1) {
+                Array* kc = tensorKernelClasses((String*)_tensorKernels.get(q));
+                for (u32 w = 0; w < kc.count(); w = w + (u32)1)
+                    if (!Parser.tkHas(names, ((String*)kc.get(w)).cString())) names.add(kc.get(w));
+            }
+        }
         // The views the unit takes: its slice patterns, and the ranks it
         // views, reshapes and broadcasts to. Each class gets the methods for
         // them, and the classes of their results join the unit.
@@ -1875,6 +1898,14 @@ class Parser
                                                          _tensorBcastRanks);
                 if (c != (String*)0) src.append(c);
             }
+            // Each kernel's block class is a type name before its tokens are
+            // read, as the tensor classes are.
+            if (_tensorKernels != (Array*)0)
+                for (u32 q = 0; q < _tensorKernels.count(); q = q + (u32)1) {
+                    String* ks = (String*)_tensorKernels.get(q);
+                    addTypeName(String.withFormat("__tkc_%s", Types.tensorKernelName(ks).cString()));
+                    src.append(tensorKernelSource(ks));
+                }
             Lexer* lx = Lexer.with(src, String.withCString("<tensor>"));
             Array* toks = lx.tokenise();
             if (toks.count() > (u32)0 && ((Token*)toks.get(toks.count() - (u32)1)).type() == (u16)tokEOF)
@@ -1885,6 +1916,448 @@ class Parser
             // The classes spell their element types as the source does.
             fusePackSuffixes();
         }
+    }
+
+    // ── TENSOR EXPRESSION KERNELS ────────────────────────────────────
+    // Sema reads an element-wise tensor expression as one tree and writes it
+    // as a signature; the driver starts again with the signatures, and the
+    // parse writes each one's kernel after the tensor classes: a function
+    // `__tk_<hash>` and the block class `__tkc_<hash>` it runs. The
+    // signature's grammar is the reference's (XTParser+TensorKernels.m), and
+    // the text written is the same, text for text.
+    void setTensorKernels(Array* a) { _tensorKernels = a; }
+
+    // A pointer to elements of e, as a field or local is declared.
+    static String* tkPtr(String* e)
+    {
+        if (Parser._same(e, "f4")) return String.withCString("f4[]");
+        String* s = String.withString(Parser.tensorElemSource(e));
+        s.appendByte((u8)'*');
+        return s;
+    }
+
+    static String* tkClass(String* e, u32 r)
+    {
+        return String.withFormat("__tensor_%s_%lu", Parser.tensorSwap(e, (u8)'$', (u8)'_').cString(), r);
+    }
+
+    // Part n of a token split at its `:`s, or "" when it has none.
+    static String* tkAfter(String* tok, u32 n)
+    {
+        Array* parts = tok.splitOnByte((u8)':');
+        if (n < parts.count()) return (String*)parts.get(n);
+        return new String();
+    }
+
+    static bool tkHas(Array* a, string lit)
+    {
+        for (u32 i = 0; i < a.count(); i = i + (u32)1)
+            if (Parser._same((String*)a.get(i), lit)) return true;
+        return false;
+    }
+
+    static bool tkCompare(String* op)
+    {
+        return Parser._same(op, "<") || Parser._same(op, "<=") || Parser._same(op, ">") || Parser._same(op, ">=")
+            || Parser._same(op, "==") || Parser._same(op, "!=");
+    }
+
+    // The operands: kind ('t', 's'), element type and rank, in order.
+    void tkLeaves(Array* tk)
+    {
+        _tkKind = new Array();
+        _tkElem = new Array();
+        _tkRank = new Array();
+        for (u32 i = 1; i < tk.count(); i = i + (u32)1) {
+            String* t = (String*)tk.get(i);
+            if (t.hasPrefix(String.withCString("t:"))) {
+                _tkKind.add((Object*)String.withCString("t"));
+                _tkElem.add((Object*)Parser.tkAfter(t, (u32)1));
+                _tkRank.add((Object*)Number.withI64(Parser.tensorDecimal(Parser.tkAfter(t, (u32)2))));
+            } else if (t.hasPrefix(String.withCString("s:"))) {
+                _tkKind.add((Object*)String.withCString("s"));
+                _tkElem.add((Object*)Parser.tkAfter(t, (u32)1));
+                _tkRank.add((Object*)Number.withI64((i64)0));
+            }
+        }
+    }
+
+    u32 tkRankAt(u32 i) { return (u32)((Number*)_tkRank.get(i)).asI64(); }
+    bool tkScalar(u32 i) { return Parser._same((String*)_tkKind.get(i), "s"); }
+    String* tkElemAt(u32 i) { return (String*)_tkElem.get(i); }
+
+    // The tensor classes a kernel uses: its result's (or destination's)
+    // first, then its operands'.
+    Array* tensorKernelClasses(String* sig)
+    {
+        Array* tk = sig.splitOnByte((u8)' ');
+        tkLeaves(tk);
+        Array* out = new Array();
+        u32 R = 0;
+        for (u32 i = 0; i < _tkRank.count(); i = i + (u32)1)
+            if (tkRankAt(i) > R) R = tkRankAt(i);
+        String* er = (String*)0;
+        String* head = (String*)tk.get((u32)0);
+        if (head.hasPrefix(String.withCString("set:"))) {
+            er = Parser.tkAfter(head, (u32)1);
+            R = (u32)Parser.tensorDecimal(Parser.tkAfter(head, (u32)2));
+        } else {
+            // The root's type: a comparison gives bool, any other node its own.
+            String* root = tk.count() > (u32)1 ? (String*)tk.get((u32)1) : new String();
+            String* op = Parser.tkAfter(root, (u32)0);
+            if (Parser.tkCompare(op)) er = String.withCString("bool");
+            else if (Parser._same(op, "fn")) er = Parser.tkAfter(root, (u32)2);
+            else er = Parser.tkAfter(root, (u32)1);
+        }
+        out.add((Object*)Parser.tkClass(er, R));
+        for (u32 i = 0; i < _tkKind.count(); i = i + (u32)1) {
+            if (tkScalar(i)) continue;
+            String* c = Parser.tkClass(tkElemAt(i), tkRankAt(i));
+            if (!Parser.tkHas(out, c.cString())) out.add((Object*)c);
+        }
+        return out;
+    }
+
+    // `text`, of type `from`, as a value of type `to`.
+    static String* tkAs(String* text, String* from, String* to)
+    {
+        if (from.equals(to)) return text;
+        return String.withFormat("((%s)(%s))", Parser.tensorElemSource(to).cString(), text.cString());
+    }
+
+    static bool tkWide(String* e)
+    {
+        return Parser._same(e, "f32") || Parser._same(e, "f64");
+    }
+
+    // The index of an operand's (or the destination's) element at the
+    // innermost level of the nest.
+    static String* tkInner(String* outer, String* stride, u32 R)
+    {
+        return String.withFormat("%s + j%lu * %s", outer.cString(), R - (u32)1, stride.cString());
+    }
+
+    // The value of the tree from _tkPos, its type left in _tkType: mode 0 at
+    // the flat index `i`, 1 at the innermost level of the nest.
+    String* tkExpr(void)
+    {
+        String* t = _tkPos < _tkTok.count() ? (String*)_tkTok.get(_tkPos) : new String();
+        _tkPos = _tkPos + (u32)1;
+        u32 R = _tkR;
+        if (t.hasPrefix(String.withCString("t:")) || t.hasPrefix(String.withCString("s:"))) {
+            u32 i = _tkLeaf;
+            _tkLeaf = _tkLeaf + (u32)1;
+            String* e = tkElemAt(i);
+            _tkType = e;
+            if (t.hasPrefix(String.withCString("s:"))) return String.withFormat("v%lu", i);
+            bool f4 = Parser._same(e, "f4");
+            if (_tkMode == 0)
+                return f4 ? String.withFormat("b%lu[o%lu + (u64)i]", i, i) : String.withFormat("q%lu[i]", i);
+            String* outer = R == (u32)1 ? String.withFormat("o%lu", i) : String.withFormat("a%lu_%lu", i, R - (u32)2);
+            String* st = String.withFormat("s%lu_%lu", i, R - (u32)1);
+            return String.withFormat("b%lu[%s]", i, Parser.tkInner(outer, st, R).cString());
+        }
+        if (Parser._same(t, "d")) {
+            _tkType = _tkEr;
+            bool f4 = Parser._same(_tkEr, "f4");
+            if (_tkMode == (u32)0) return f4 ? String.withCString("eb[eo + (u64)i]") : String.withCString("pe[i]");
+            String* outer = R == (u32)1 ? String.withCString("eo") : String.withFormat("e%lu", R - (u32)2);
+            return String.withFormat("eb[%s]", Parser.tkInner(outer, String.withFormat("es%lu", R - (u32)1), R).cString());
+        }
+        String* op = Parser.tkAfter(t, (u32)0);
+        if (Parser._same(op, "neg")) {
+            String* E = Parser.tkAfter(t, (u32)1);
+            String* x = tkExpr();
+            String* xt = _tkType;
+            _tkType = E;
+            return String.withFormat("(-%s)", Parser.tkAs(x, xt, E).cString());
+        }
+        if (Parser._same(op, "cast")) {
+            String* E = Parser.tkAfter(t, (u32)1);
+            String* x = tkExpr();
+            _tkType = E;
+            return String.withFormat("((%s)(%s))", Parser.tensorElemSource(E).cString(), x.cString());
+        }
+        if (Parser._same(op, "fn")) {
+            String* name = Parser.tkAfter(t, (u32)1);
+            String* E = Parser.tkAfter(t, (u32)2);
+            String* x = tkExpr();
+            String* xt = _tkType;
+            String* y = (String*)0;
+            String* yt = (String*)0;
+            if (Parser._same(name, "pow")) {
+                y = tkExpr();
+                yt = _tkType;
+            }
+            _tkType = E;
+            bool direct = Parser.tkWide(E) || E.hasPrefix(String.withCString("i"));
+            String* via = direct ? E : String.withCString("f32");
+            String* call = y != (String*)0
+                ? String.withFormat("Math.%s(%s, %s)", name.cString(), Parser.tkAs(x, xt, via).cString(), Parser.tkAs(y, yt, via).cString())
+                : String.withFormat("Math.%s(%s)", name.cString(), Parser.tkAs(x, xt, via).cString());
+            if (direct) return call;
+            return String.withFormat("((%s)%s)", Parser.tensorElemSource(E).cString(), call.cString());
+        }
+        // A binary operator: arithmetic in E, or a comparison in E giving bool.
+        String* E = Parser.tkAfter(t, (u32)1);
+        String* l = tkExpr();
+        String* lt = _tkType;
+        String* r = tkExpr();
+        String* rt = _tkType;
+        _tkType = Parser.tkCompare(op) ? String.withCString("bool") : E;
+        return String.withFormat("(%s %s %s)", Parser.tkAs(l, lt, E).cString(), op.cString(), Parser.tkAs(r, rt, E).cString());
+    }
+
+    // The kernel of a signature, as the reference's tensorKernelSource:.
+    String* tensorKernelSource(String* sig)
+    {
+        Array* tk = sig.splitOnByte((u8)' ');
+        String* h = Types.tensorKernelName(sig);
+        String* cls = String.withFormat("__tkc_%s", h.cString());
+        String* head = (String*)tk.get((u32)0);
+        bool set = head.hasPrefix(String.withCString("set:"));
+        bool reads = Parser.tkHas(tk, "d");
+        String* dc = (String*)tensorKernelClasses(sig).get((u32)0);
+        tkLeaves(tk);
+        u32 R = (u32)(dc.byteAt(dc.byteLength() - (u32)1) - (u8)'0');
+        String* er = set ? Parser.tkAfter(head, (u32)1) : (String*)0;
+        // The value's type, from a first walk of the tree.
+        _tkTok = tk;
+        _tkPos = 1;
+        _tkLeaf = 0;
+        _tkR = R;
+        _tkEr = er != (String*)0 ? er : new String();
+        _tkMode = 0;
+        tkExpr();
+        if (er == (String*)0) er = _tkType;
+        bool f4 = Parser._same(er, "f4");
+        u32 n = _tkKind.count();
+        String* P = Parser.tkPtr(er);
+        String* s = new String();
+
+        // The block: what run() reads, then run(), copyChunk() and its name.
+        s.append(String.withFormat("class %s : ParChunk\n{\n", cls.cString()));
+        s.append(String.withFormat("%s rb_;\nu64 ro_;\n%s eb_;\nu64 eo_;\n%s tb_;\n", P.cString(), P.cString(), P.cString()));
+        for (u32 k = 0; k < R; k = k + (u32)1)
+            s.append(String.withFormat("u64 n%lu_;\nu64 rs%lu_;\nu64 es%lu_;\n", k, k, k));
+        for (u32 i = 0; i < n; i = i + (u32)1) {
+            if (tkScalar(i)) {
+                s.append(String.withFormat("%s v%lu_;\n", Parser.tensorElemSource(tkElemAt(i)).cString(), i));
+                continue;
+            }
+            s.append(String.withFormat("%s b%lu_;\nu64 o%lu_;\n", Parser.tkPtr(tkElemAt(i)).cString(), i, i));
+            for (u32 k = 0; k < R; k = k + (u32)1)
+                s.append(String.withFormat("u64 s%lu_%lu_;\n", i, k));
+        }
+        s.appendCString("bool flat_;\nbool copying_;\nu8 parity_;\n");
+
+        // run(): locals first, so the loops read no field.
+        s.appendCString("void run(void)\n{\n");
+        s.append(String.withFormat("%s rb = rb_;\nu64 ro = ro_;\n%s eb = eb_;\nu64 eo = eo_;\n%s tb = tb_;\n", P.cString(), P.cString(), P.cString()));
+        for (u32 k = 0; k < R; k = k + (u32)1)
+            s.append(String.withFormat("u64 n%lu = n%lu_;\nu64 rs%lu = rs%lu_;\nu64 es%lu = es%lu_;\n", k, k, k, k, k, k));
+        for (u32 i = 0; i < n; i = i + (u32)1) {
+            if (tkScalar(i)) {
+                s.append(String.withFormat("%s v%lu = v%lu_;\n", Parser.tensorElemSource(tkElemAt(i)).cString(), i, i));
+                continue;
+            }
+            s.append(String.withFormat("%s b%lu = b%lu_;\nu64 o%lu = o%lu_;\n", Parser.tkPtr(tkElemAt(i)).cString(), i, i, i, i));
+            for (u32 k = 0; k < R; k = k + (u32)1)
+                s.append(String.withFormat("u64 s%lu_%lu = s%lu_%lu_;\n", i, k, i, k));
+        }
+        // The value at the flat index, and at the innermost level of the nest.
+        _tkPos = 1;
+        _tkLeaf = 0;
+        _tkMode = 0;
+        String* fv = tkExpr();
+        String* flatValue = Parser.tkAs(fv, _tkType, er);
+        _tkPos = 1;
+        _tkLeaf = 0;
+        _tkMode = 1;
+        String* nv = tkExpr();
+        String* nestValue = Parser.tkAs(nv, _tkType, er);
+        String* rIdx = Parser.tkInner(R == (u32)1 ? String.withCString("ro") : String.withFormat("r%lu", R - (u32)2),
+                                      String.withFormat("rs%lu", R - (u32)1), R);
+        String* tIdx = R == (u32)1 ? String.withCString("j0")
+                                   : String.withFormat("t%lu * n%lu + j%lu", R - (u32)2, R - (u32)1, R - (u32)1);
+        // The copy out of a temporary (an in-place write through one).
+        s.appendCString("if (copying_)\n{\nif (flat_)\n{\n");
+        if (f4) s.appendCString("for (i64 i = lo; i < hi; i++)\nrb[ro + (u64)i] = tb[(u64)i];\nreturn;\n}\n");
+        else s.append(String.withFormat("%s p = rb + ro;\nfor (i64 i = lo; i < hi; i++)\np[i] = tb[i];\nreturn;\n}\n", P.cString()));
+        for (u32 k = 0; k < R; k = k + (u32)1) {
+            if (k == 0) s.appendCString("for (u64 j0 = (u64)lo; j0 < (u64)hi; j0++)\n{\n");
+            else s.append(String.withFormat("for (u64 j%lu = 0; j%lu < n%lu; j%lu++)\n{\n", k, k, k, k));
+            if (k + (u32)1 < R) {
+                String* ro = k == (u32)0 ? String.withCString("ro") : String.withFormat("r%lu", k - (u32)1);
+                s.append(String.withFormat("u64 r%lu = %s + j%lu * rs%lu;\n", k, ro.cString(), k, k));
+                String* tp = k == (u32)0 ? new String() : String.withFormat("t%lu * n%lu + ", k - (u32)1, k);
+                s.append(String.withFormat("u64 t%lu = %sj%lu;\n", k, tp.cString(), k));
+            }
+        }
+        s.append(String.withFormat("rb[%s] = tb[%s];\n", rIdx.cString(), tIdx.cString()));
+        for (u32 k = 0; k < R; k = k + (u32)1) s.appendCString("}\n");
+        s.appendCString("return;\n}\n");
+        // The flat loop.
+        s.appendCString("if (flat_)\n{\n");
+        if (!f4) {
+            s.append(String.withFormat("%s p = rb + ro;\n", P.cString()));
+            if (reads) s.append(String.withFormat("%s pe = eb + eo;\n", P.cString()));
+        }
+        for (u32 i = 0; i < n; i = i + (u32)1)
+            if (!tkScalar(i) && !Parser._same(tkElemAt(i), "f4"))
+                s.append(String.withFormat("%s q%lu = b%lu + o%lu;\n", Parser.tkPtr(tkElemAt(i)).cString(), i, i, i));
+        s.append(String.withFormat("for (i64 i = lo; i < hi; i++)\n%s = %s;\nreturn;\n}\n", f4 ? "rb[ro + (u64)i]" : "p[i]",
+                                   flatValue.cString()));
+        // The nest: the outermost dimension split, each level's indices advanced.
+        for (u32 k = 0; k < R; k = k + (u32)1) {
+            if (k == 0) s.appendCString("for (u64 j0 = (u64)lo; j0 < (u64)hi; j0++)\n{\n");
+            else s.append(String.withFormat("for (u64 j%lu = 0; j%lu < n%lu; j%lu++)\n{\n", k, k, k, k));
+            if (k + (u32)1 == R) continue;
+            String* ro = k == (u32)0 ? String.withCString("ro") : String.withFormat("r%lu", k - (u32)1);
+            s.append(String.withFormat("u64 r%lu = %s + j%lu * rs%lu;\n", k, ro.cString(), k, k));
+            if (reads) {
+                String* eo = k == (u32)0 ? String.withCString("eo") : String.withFormat("e%lu", k - (u32)1);
+                s.append(String.withFormat("u64 e%lu = %s + j%lu * es%lu;\n", k, eo.cString(), k, k));
+            }
+            for (u32 i = 0; i < n; i = i + (u32)1) {
+                if (tkScalar(i)) continue;
+                String* ao = k == (u32)0 ? String.withFormat("o%lu", i) : String.withFormat("a%lu_%lu", i, k - (u32)1);
+                s.append(String.withFormat("u64 a%lu_%lu = %s + j%lu * s%lu_%lu;\n", i, k, ao.cString(), k, i, k));
+            }
+        }
+        s.append(String.withFormat("rb[%s] = %s;\n", rIdx.cString(), nestValue.cString()));
+        for (u32 k = 0; k < R; k = k + (u32)1) s.appendCString("}\n");
+        s.appendCString("}\n");
+        // copyChunk(): every field, for the other threads' pieces.
+        s.append(String.withFormat("ParChunk* copyChunk(void)\n{\n%s* c = new %s();\n", cls.cString(), cls.cString()));
+        s.appendCString("c.rb_ = rb_;\nc.ro_ = ro_;\nc.eb_ = eb_;\nc.eo_ = eo_;\nc.tb_ = tb_;\n");
+        for (u32 k = 0; k < R; k = k + (u32)1)
+            s.append(String.withFormat("c.n%lu_ = n%lu_;\nc.rs%lu_ = rs%lu_;\nc.es%lu_ = es%lu_;\n", k, k, k, k, k, k));
+        for (u32 i = 0; i < n; i = i + (u32)1) {
+            if (tkScalar(i)) {
+                s.append(String.withFormat("c.v%lu_ = v%lu_;\n", i, i));
+                continue;
+            }
+            s.append(String.withFormat("c.b%lu_ = b%lu_;\nc.o%lu_ = o%lu_;\n", i, i, i, i));
+            for (u32 k = 0; k < R; k = k + (u32)1)
+                s.append(String.withFormat("c.s%lu_%lu_ = s%lu_%lu_;\n", i, k, i, k));
+        }
+        s.appendCString("c.flat_ = flat_;\nc.copying_ = copying_;\nc.parity_ = parity_;\nreturn (ParChunk*)c;\n}\n");
+        s.appendCString("u8* parName(void)\n{\nreturn \"tensor\";\n}\n");
+        // f4 elements, two to a byte: each thread's piece starts on a byte.
+        if (f4) s.appendCString("u8* gpuSource(void)\n{\nreturn parity_ == 0 ? \"// xcpar cpu pairs=0\" : \"// xcpar cpu pairs=1\";\n}\n");
+        s.appendCString("}\n");
+
+        // The function: the shape, the destination, the block's fields, the run.
+        String* params = new String();
+        if (set) params.append(String.withFormat("%s d", dc.cString()));
+        for (u32 i = 0; i < n; i = i + (u32)1) {
+            if (params.byteLength() > 0) params.appendCString(", ");
+            if (tkScalar(i)) params.append(String.withFormat("%s x%lu", Parser.tensorElemSource(tkElemAt(i)).cString(), i));
+            else params.append(String.withFormat("%s x%lu", Parser.tkClass(tkElemAt(i), tkRankAt(i)).cString(), i));
+        }
+        s.append(String.withFormat("%s __tk_%s(%s)\n{\n", set ? "void" : dc.cString(), h.cString(), params.cString()));
+        for (u32 k = 0; k < R; k = k + (u32)1) {
+            if (set) s.append(String.withFormat("u64 n%lu = d._shape[%lu];\n", k, k));
+            else s.append(String.withFormat("u64 n%lu = 1;\n", k));
+        }
+        for (u32 i = 0; i < n; i = i + (u32)1) {
+            if (tkScalar(i)) continue;
+            u32 r = tkRankAt(i);
+            for (u32 j = 0; j < r; j = j + (u32)1) {
+                u32 k = R - r + j;
+                if (set) s.append(String.withFormat("_xt_tensor_bset(n%lu, x%lu._shape[%lu], %lu);\n", k, i, j, k));
+                else s.append(String.withFormat("n%lu = _xt_tensor_bdim(n%lu, x%lu._shape[%lu], %lu);\n", k, k, i, j, k));
+            }
+        }
+        String* dims = new String();
+        String* total = new String();
+        for (u32 k = 0; k < R; k = k + (u32)1) {
+            if (k > 0) {
+                dims.appendCString(", ");
+                total.appendCString(" * ");
+            }
+            dims.append(String.withFormat("n%lu", k));
+            total.append(String.withFormat("n%lu", k));
+        }
+        if (!set) s.append(String.withFormat("%s d = %s_make(%s);\n", dc.cString(), dc.cString(), dims.cString()));
+        String* cast = f4 ? String.withCString("(f4[])") : String.withFormat("(%s)", P.cString());
+        s.append(String.withFormat("%s* c = new %s();\n", cls.cString(), cls.cString()));
+        s.append(String.withFormat("c.rb_ = %sd._storage.data;\nc.ro_ = d._offset;\nc.eb_ = c.rb_;\nc.eo_ = d._offset;\n", cast.cString()));
+        for (u32 k = 0; k < R; k = k + (u32)1)
+            s.append(String.withFormat("c.n%lu_ = n%lu;\nc.rs%lu_ = d._stride[%lu];\nc.es%lu_ = d._stride[%lu];\n", k, k, k, k, k, k));
+        // Each operand's base, offset and strides against the result's
+        // dimensions: a dimension it lacks, or one of size 1, repeats (stride
+        // 0). The flat loop needs every operand contiguous, with the result's
+        // shape.
+        String* flat = String.withCString(set || reads ? "d.isContiguous()" : "true");
+        bool never = false;
+        for (u32 i = 0; i < n; i = i + (u32)1) {
+            if (tkScalar(i)) {
+                s.append(String.withFormat("c.v%lu_ = x%lu;\n", i, i));
+                continue;
+            }
+            u32 r = tkRankAt(i);
+            String* ic = Parser._same(tkElemAt(i), "f4") ? String.withCString("(f4[])")
+                                                          : String.withFormat("(%s)", Parser.tkPtr(tkElemAt(i)).cString());
+            s.append(String.withFormat("c.b%lu_ = %sx%lu._storage.data;\nc.o%lu_ = x%lu._offset;\n", i, ic.cString(), i, i, i));
+            for (u32 k = 0; k < R; k = k + (u32)1) {
+                if (k < R - r) s.append(String.withFormat("c.s%lu_%lu_ = 0;\n", i, k));
+                else {
+                    u32 j = k - (R - r);
+                    s.append(String.withFormat("c.s%lu_%lu_ = x%lu._shape[%lu] == 1 ? 0 : x%lu._stride[%lu];\n", i, k, i, j, i, j));
+                }
+            }
+            if (r < R) never = true;
+            else if (!never) {
+                flat.append(String.withFormat(" && x%lu.isContiguous()", i));
+                for (u32 k = 0; k < R; k = k + (u32)1)
+                    flat.append(String.withFormat(" && x%lu._shape[%lu] == n%lu", i, k, k));
+            }
+        }
+        if (never) flat = String.withCString("false");
+        s.append(String.withFormat("bool flat = %s;\nu64 total = %s;\n", flat.cString(), total.cString()));
+        s.append(String.withFormat("if (total == 0)\nreturn%s;\n", set ? "" : " d"));
+        // A destination that repeats an element (a broadcast view) is written
+        // in order. An f4 destination is cut on bytes: its elements must lie
+        // in rows that start on a byte, or it is written in order.
+        s.append(String.withFormat("bool serial = %s;\n", set ? "d.__repeats()" : "false"));
+        if (f4) {
+            if (set)
+                s.appendCString("if (!d.isContiguous() || (!flat && (d._offset & 1) == 1 && (n0 == 1 || (d._stride[0] & 1) == 0)))\nserial = true;\n");
+            s.appendCString("c.parity_ = (u8)(d._offset & 1);\n");
+        }
+        if (set) {
+            // An operand over the destination's storage at another offset or
+            // with other strides would read elements this write has changed:
+            // the value goes through a temporary, then into the destination.
+            bool any = false;
+            for (u32 i = 0; i < n; i = i + (u32)1) {
+                if (tkScalar(i) || !tkElemAt(i).equals(er)) continue;
+                if (!any) s.appendCString("bool alias = false;\n");
+                any = true;
+                s.append(String.withFormat("if (x%lu._storage == d._storage && !(c.o%lu_ == d._offset", i, i));
+                for (u32 k = 0; k < R; k = k + (u32)1)
+                    s.append(String.withFormat(" && (n%lu == 1 || c.s%lu_%lu_ == d._stride[%lu])", k, i, k, k));
+                s.appendCString("))\nalias = true;\n");
+            }
+            if (any) {
+                s.append(String.withFormat("if (alias)\n{\n%s t = %s_make(%s);\n", dc.cString(), dc.cString(), dims.cString()));
+                s.append(String.withFormat("c.rb_ = %st._storage.data;\nc.ro_ = 0;\n", cast.cString()));
+                for (u32 k = 0; k < R; k = k + (u32)1)
+                    s.append(String.withFormat("c.rs%lu_ = t._stride[%lu];\n", k, k));
+                s.appendCString("c.flat_ = flat;\nc.parity_ = 0;\n_xt_tensor_run((ParChunk*)c, flat ? (i64)total : (i64)n0, total, false);\n");
+                s.append(String.withFormat("c.tb_ = c.rb_;\nc.copying_ = true;\nc.rb_ = %sd._storage.data;\nc.ro_ = d._offset;\n", cast.cString()));
+                for (u32 k = 0; k < R; k = k + (u32)1)
+                    s.append(String.withFormat("c.rs%lu_ = d._stride[%lu];\n", k, k));
+                s.appendCString("c.flat_ = d.isContiguous();\n");
+                if (f4) s.appendCString("c.parity_ = (u8)(d._offset & 1);\n");
+                s.appendCString("_xt_tensor_run((ParChunk*)c, c.flat_ ? (i64)total : (i64)n0, total, serial);\nreturn;\n}\n");
+            }
+        }
+        s.append(String.withFormat("c.flat_ = flat;\n_xt_tensor_run((ParChunk*)c, flat ? (i64)total : (i64)n0, total, serial);\nreturn%s;\n}\n",
+                                   set ? "" : " d"));
+        return s;
     }
 
     // The views a unit takes, read from its tokens before the parse. A slice
@@ -10041,6 +10514,105 @@ class Parser
         return vd == (i32)-1;
     }
 
+    // A shape as a message writes it: `3 x 4`.
+    static String* tensorShapeText(Array* sh)
+    {
+        String* t = new String();
+        for (u32 k = 0; k < sh.count(); k = k + (u32)1) {
+            if (k > 0) t.appendCString(" x ");
+            t.append(String.withFormat("%lld", Parser.tensorAt(sh, k)));
+        }
+        return t;
+    }
+
+    // Size k of a shape lined up from the last dimension in rank r: 1 where
+    // the shape has no such dimension.
+    static i64 tensorDimIn(Array* sh, u32 k, u32 r)
+    {
+        if (k + sh.count() >= r) return Parser.tensorAt(sh, k + sh.count() - r);
+        return 1;
+    }
+
+    // The dimension where two shapes do not broadcast (counted in the larger
+    // rank), or -1 when they do, with the shape they broadcast to in `out`.
+    static i32 tensorBroadcastFault(Array* a, Array* b, Array* out)
+    {
+        u32 r = a.count() > b.count() ? a.count() : b.count();
+        for (u32 k = 0; k < r; k = k + (u32)1) {
+            i64 x = Parser.tensorDimIn(a, k, r);
+            i64 y = Parser.tensorDimIn(b, k, r);
+            if (x != y && y != 1 && x != 1) return (i32)k;
+            out.add((Object*)Number.withI64(x == (i64)1 ? y : x));
+        }
+        return (i32)-1;
+    }
+
+    static bool tensorElementwiseOp(Node* b)
+    {
+        String* op = b.op();
+        return op != (String*)0 && (Parser._same(op, "+") || Parser._same(op, "-") || Parser._same(op, "*") || Parser._same(op, "/")
+            || Parser._same(op, "%") || Parser._same(op, "==") || Parser._same(op, "!=") || Parser._same(op, "<")
+            || Parser._same(op, ">") || Parser._same(op, "<=") || Parser._same(op, ">="));
+    }
+
+    // The shape of an expression known as it parses: a local made once with
+    // literal dimensions, a literal (no dimensions), and the element-wise
+    // expressions over them. 0 when it is not known (or does not broadcast,
+    // which is reported where it happens). As the reference.
+    Array* tensorConstantShape(Node* n)
+    {
+        if (n == (Node*)0) return (Array*)0;
+        u16 k = n.kind();
+        if (k == (u16)nkIdent) return tensorLiteralDims(n.name());
+        if (k == (u16)nkInt) return n.nilLit() ? (Array*)0 : new Array();
+        if (k == (u16)nkFloat) return new Array();
+        if (k == (u16)nkUnary && Parser._same(n.op(), "-") && n.kidCount() > 0) return tensorConstantShape(n.kid((u32)0));
+        if (k == (u16)nkCast && n.name() != (String*)0 && n.name().hasPrefix(String.withCString("__tensor_")) && n.kidCount() > 0)
+            return tensorConstantShape(n.kid((u32)0));
+        if (k == (u16)nkMethodCall) {
+            u32 args = (u32)n.num();
+            if (n.kidCount() == 0 || n.kid((u32)0).kind() != (u16)nkIdent || !Parser._same(n.kid((u32)0).name(), "Math")
+                || args == 0 || args > 2 || n.kidCount() < args + (u32)1)
+                return (Array*)0;
+            Array* a = tensorConstantShape(n.kid((u32)1));
+            if (args == 1 || a == (Array*)0) return a;
+            Array* b = tensorConstantShape(n.kid((u32)2));
+            Array* out = new Array();
+            if (b != (Array*)0 && Parser.tensorBroadcastFault(a, b, out) < 0) return out;
+            return (Array*)0;
+        }
+        if (k == (u16)nkBinary && n.kidCount() >= 2) {
+            if (!Parser.tensorElementwiseOp(n)) return (Array*)0;
+            Array* x = tensorConstantShape(n.kid((u32)0));
+            Array* y = x != (Array*)0 ? tensorConstantShape(n.kid((u32)1)) : (Array*)0;
+            Array* out = new Array();
+            if (y != (Array*)0 && Parser.tensorBroadcastFault(x, y, out) < 0) return out;
+            return (Array*)0;
+        }
+        return (Array*)0;
+    }
+
+    // An operator of a tensor expression whose operands' shapes are known as
+    // it parses: they must broadcast. As the reference's
+    // tensorCheckConstantShapes.
+    void tensorCheckConstantShapes(Node* bin, Token* at)
+    {
+        if (_tensorNames == (Array*)0 || _tensorNames.count() == 0 || bin.kind() != (u16)nkBinary || bin.kidCount() < (u32)2
+            || !Parser.tensorElementwiseOp(bin))
+            return;
+        Array* a = tensorConstantShape(bin.kid((u32)0));
+        Array* b = a != (Array*)0 ? tensorConstantShape(bin.kid((u32)1)) : (Array*)0;
+        if (b == (Array*)0 || (a.count() == 0 && b.count() == 0)) return;
+        Array* out = new Array();
+        i32 k = Parser.tensorBroadcastFault(a, b, out);
+        if (k < 0) return;
+        u32 rk = a.count() > b.count() ? a.count() : b.count();
+        i64 x = Parser.tensorDimIn(a, (u32)k, rk);
+        i64 y = Parser.tensorDimIn(b, (u32)k, rk);
+        tensorDeferError(String.withFormat("tensor shapes %s and %s do not broadcast: dimension %ld has sizes %lld and %lld; each must be the same, or 1",
+                                           Parser.tensorShapeText(a).cString(), Parser.tensorShapeText(b).cString(), k, x, y), at);
+    }
+
     static bool tensorLitArg(Node* a)
     {
         return a != (Node*)0 && a.kind() == (u16)nkInt && !a.nilLit();
@@ -13269,6 +13841,7 @@ class Parser
             b.add(lhs);
             b.add(parseExprMinPrec(prec + (i16)1));
             lhs = b;
+            tensorCheckConstantShapes(b, opTok);
         }
         return lhs;
     }

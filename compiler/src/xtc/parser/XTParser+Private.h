@@ -156,6 +156,9 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)tensorCheckConstantView:(XTMethodCallExprNode*)call;
 - (void)tensorReportDeferred;
 - (void)tensorCheckBroadcastWrite:(XTASTNode*)lhs at:(XTSourceLocation*)loc;
+// An operator of a tensor expression whose operands' shapes are known as
+// it parses: they must broadcast.
+- (void)tensorCheckConstantShapes:(XTASTNode*)node at:(XTSourceLocation*)loc;
 - (BOOL)parTensorDisjoint:(NSString*)a with:(NSString*)b end:(NSUInteger)end;
 - (nullable NSString*)parTensorRoot:(NSString*)n end:(NSUInteger)end;
 // The run-time test that sends a par block with tensors to one thread, or nil

@@ -2318,6 +2318,7 @@ static BOOL corpusFrontendPass(NSString *rawSource, NSString *xtPath,
                                BOOL atFmt, BOOL *usesAtFmt,
                                BOOL tensor, BOOL *usesTensor,
                                NSUInteger packs, NSUInteger *wantPacks,
+                               NSArray<NSString *> *kernels, NSArray<NSString *> **wantKernels,
                                XTIRModule **outMod, XTIRFunction **outEntry,
                                XTCorpusOutcome *outcome, NSString **msg) {
     *outMod = nil; *outEntry = nil;
@@ -2325,6 +2326,7 @@ static BOOL corpusFrontendPass(NSString *rawSource, NSString *xtPath,
     *usesAtFmt = NO;
     *usesTensor = NO;
     *wantPacks = 0;
+    *wantKernels = nil;
     if (!sCorpusFrameworks) sCorpusFrameworks = [NSMutableArray array];
     XTDiagnosticEngine *diag = [[XTDiagnosticEngine alloc] init];
     XTPreprocessor *pp = [[XTPreprocessor alloc] initWithDiagnostics:diag];
@@ -2398,6 +2400,9 @@ static BOOL corpusFrontendPass(NSString *rawSource, NSString *xtPath,
     // imports it: once a first parse finds a tensor type (see after the parse).
     if (tensor)
         pp.autoImport = pp.autoImport.length ? [pp.autoImport stringByAppendingString:@";TensorStorage.xc"] : @"TensorStorage.xc";
+    // The kernels of tensor expressions run on TensorPar.xc (and Par.xc).
+    if (tensor && kernels.count)
+        pp.autoImport = [pp.autoImport stringByAppendingString:@";TensorPar.xc"];
     // A small float's routines, imported at the end of the unit once sema
     // finds one, as the driver imports them.
     if (packs)
@@ -2447,6 +2452,8 @@ static BOOL corpusFrontendPass(NSString *rawSource, NSString *xtPath,
     parser.defaultPointerPlacement = defaultPlacement;
     // With TensorStorage imported the parser writes the tensor classes.
     parser.tensorReady = tensor;
+    // The kernels of its tensor expressions, which the parse writes.
+    parser.tensorKernels = kernels;
     // `//xtc-flags: --par-style=auto`: plain loops become `par` blocks where their
     // shape allows, as the driver's --par-style=auto does.
     for (NSString *line in [rawSource componentsSeparatedByString:@"\n"]) {
@@ -2545,6 +2552,7 @@ static BOOL corpusFrontendPass(NSString *rawSource, NSString *xtPath,
     // arm64's vtable carries the conformance list, so a protocol cast the class
     // does not declare is checked at run time, as the driver tells sema.
     sema.vtableConforms = arm64Target;
+    sema.tensorKernelsGiven = kernels;
     @try {
         [sema analyzeProgram:ast];
     } @catch (NSException *e) {
@@ -2552,11 +2560,15 @@ static BOOL corpusFrontendPass(NSString *rawSource, NSString *xtPath,
         *msg = [NSString stringWithFormat:@"sema exception: %@", e.reason];
         return NO;
     }
+    // Tensor expressions: sema read each as a tree; the parse writes their
+    // kernels in the next pass, as the driver's does.
+    NSArray<NSString *> *more = [XTCompilerDriver tensorKernels:kernels with:[sema tensorKernelRequests]];
     if ((!classNames && sema.usesClassNames) || (!atFmt && sema.usesAtFormat) ||
-        (sema.packRoutines & ~packs)) {
+        (sema.packRoutines & ~packs) || more) {
         *usesClassNames = !classNames && sema.usesClassNames;
         *usesAtFmt = !atFmt && sema.usesAtFormat;
         *wantPacks = sema.packRoutines & ~packs;
+        *wantKernels = more;
         return NO;
     }
     if (diag.hasFatalError) {
@@ -2735,23 +2747,28 @@ static BOOL corpusFrontend(NSString *rawSource, NSString *xtPath,
                            XTIRModule **outMod, XTIRFunction **outEntry,
                            XTCorpusOutcome *outcome, NSString **msg) {
     // Each pass may find that the unit needs a tensor import (after the parse)
-    // or the class-name table, `%@` or a small float's routines (after sema);
-    // the next pass has them, as the driver's next front-end pass does.
+    // or the class-name table, `%@`, a small float's routines or the kernels
+    // of its tensor expressions (after sema); the next pass has them, as the
+    // driver's next front-end pass does.
     BOOL names = NO, at = NO, tensor = NO;
     NSUInteger packs = 0;
+    NSArray<NSString *> *kernels = nil;
     BOOL ok = NO;
-    for (int pass = 0; pass < 4; pass++) {
+    for (int pass = 0; pass < 6; pass++) {
         BOOL n2 = NO, a2 = NO, t2 = NO;
         NSUInteger p2 = 0;
+        NSArray<NSString *> *k2 = nil;
         ok = corpusFrontendPass(rawSource, xtPath, name, includePaths, defaultPlacement,
                                 arm64Target, names, &n2, at, &a2, tensor, &t2, packs, &p2,
-                                outMod, outEntry, outcome, msg);
-        if (!n2 && !a2 && !t2 && !p2)
+                                kernels, &k2, outMod, outEntry, outcome, msg);
+        if (!n2 && !a2 && !t2 && !p2 && !k2)
             break;
         names = names || n2;
         at = at || a2;
         tensor = tensor || t2;
         packs = packs | p2;
+        if (k2)
+            kernels = k2;
     }
     return ok;
 }

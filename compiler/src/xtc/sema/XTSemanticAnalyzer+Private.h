@@ -287,6 +287,10 @@
 @property(nonatomic, readwrite) BOOL usesClassNames;
 @property(nonatomic, readwrite) BOOL usesAtFormat;
 @property(nonatomic, readwrite) NSUInteger packRoutines;
+// Tensor expressions (XTSemanticAnalyzer+TensorExpr.m): each node's tree, and
+// the nodes a larger tree took in.
+@property(nonatomic, nullable) NSMapTable* tensorTrees;
+@property(nonatomic, nullable) NSHashTable* tensorAbsorbed;
 // Function names whose only free declaration is an AUTO-IMPORTED C proto
 // (XTFunctionDeclNode.isCImport — the DWARF libc import). Bare-call
 // resolution demotes these below a matching `use`-promoted static: libc's

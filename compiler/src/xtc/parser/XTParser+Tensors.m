@@ -379,6 +379,12 @@ static void XTTensorCloseNames(NSMutableArray<NSString*>* names, NSArray<NSStrin
     for (NSString* nm in self.importedTensorNames ?: @[])
         if (![names containsObject:nm])
             [names addObject:nm];
+    // The classes the kernels of the unit's tensor expressions use (a
+    // comparison's tensor<bool, R> may be named nowhere else).
+    for (NSString* sig in self.tensorKernels ?: @[])
+        for (NSString* nm in [XTParser tensorKernelClasses:sig])
+            if (![names containsObject:nm])
+                [names addObject:nm];
     // The views the unit takes: its slice patterns, and the ranks it views,
     // reshapes and broadcasts to. Each class gets the methods for them, and
     // the classes of their results join the unit.
@@ -400,6 +406,8 @@ static void XTTensorCloseNames(NSMutableArray<NSString*>* names, NSArray<NSStrin
             if (c)
                 [src appendString:c];
             }
+        for (NSString* sig in self.tensorKernels ?: @[])
+            [src appendString:[XTParser tensorKernelSource:sig]];
         XTLexer* lexer = [[XTLexer alloc] initWithSource:src filename:@"<tensor>" diagnostics:self.diagnostics];
         NSMutableArray<XTToken*>* toks = [[lexer tokenise] mutableCopy];
         if (toks.count && toks.lastObject.type == XTTokenEOF)
@@ -888,6 +896,103 @@ static BOOL XTTensorStridesFit(NSArray<NSNumber*>* os, NSArray<NSNumber*>* ot, N
             }
         }
     return vd == -1;
+    }
+
+// A shape as a message writes it: `3 x 4`.
+static NSString* XTTensorShapeText(NSArray<NSNumber*>* s)
+    {
+    NSMutableString* t = [NSMutableString string];
+    for (NSNumber* d in s)
+        [t appendFormat:@"%@%lld", t.length ? @" x " : @"", d.longLongValue];
+    return t;
+    }
+
+// The dimension where two shapes do not broadcast (counted in the larger
+// rank), or -1 when they do, with the shape they broadcast to in `out`.
+static NSInteger XTTensorBroadcastFault(NSArray<NSNumber*>* a, NSArray<NSNumber*>* b, NSMutableArray<NSNumber*>* out)
+    {
+    NSUInteger r = MAX(a.count, b.count);
+    for (NSUInteger k = 0; k < r; k++)
+        {
+        long long x = k + a.count >= r ? a[k + a.count - r].longLongValue : 1;
+        long long y = k + b.count >= r ? b[k + b.count - r].longLongValue : 1;
+        if (x != y && y != 1 && x != 1)
+            return (NSInteger)k;
+        [out addObject:@(x == 1 ? y : x)];
+        }
+    return -1;
+    }
+
+// The shape of an expression known as it parses: a local made once with
+// literal dimensions, a literal (no dimensions), and the element-wise
+// expressions over them. nil when it is not known (or does not broadcast,
+// which is reported where it happens).
+- (nullable NSArray<NSNumber*>*)tensorConstantShape:(XTASTNode*)n
+    {
+    if ([n isKindOfClass:[XTIdentifierNode class]])
+        return [self tensorLiteralDims:((XTIdentifierNode*)n).identName];
+    if ([n isKindOfClass:[XTLiteralIntNode class]])
+        return ((XTLiteralIntNode*)n).isNil ? nil : @[];
+    if ([n isKindOfClass:[XTLiteralFloatNode class]])
+        return @[];
+    if ([n isKindOfClass:[XTUnaryExprNode class]] && ((XTUnaryExprNode*)n).op == XTUnaryOpNeg)
+        return [self tensorConstantShape:((XTUnaryExprNode*)n).operand];
+    if ([n isKindOfClass:[XTCastExprNode class]] && [((XTCastExprNode*)n).castType.displayName hasPrefix:@"__tensor_"])
+        return [self tensorConstantShape:((XTCastExprNode*)n).operand];
+    if ([n isKindOfClass:[XTMethodCallExprNode class]])
+        {
+        XTMethodCallExprNode* m = (XTMethodCallExprNode*)n;
+        if (![m.receiver isKindOfClass:[XTIdentifierNode class]] ||
+            ![((XTIdentifierNode*)m.receiver).identName isEqualToString:@"Math"] || m.arguments.count == 0 || m.arguments.count > 2)
+            return nil;
+        NSArray<NSNumber*>* a = [self tensorConstantShape:m.arguments[0]];
+        if (m.arguments.count == 1 || !a)
+            return a;
+        NSArray<NSNumber*>* b = [self tensorConstantShape:m.arguments[1]];
+        NSMutableArray<NSNumber*>* out = [NSMutableArray array];
+        return b && XTTensorBroadcastFault(a, b, out) < 0 ? out : nil;
+        }
+    if ([n isKindOfClass:[XTBinaryExprNode class]])
+        {
+        XTBinaryExprNode* b = (XTBinaryExprNode*)n;
+        XTBinaryOp op = b.op;
+        if (!(op == XTBinaryOpAdd || op == XTBinaryOpSub || op == XTBinaryOpMul || op == XTBinaryOpDiv || op == XTBinaryOpMod ||
+              op == XTBinaryOpEq || op == XTBinaryOpNeq || op == XTBinaryOpLt || op == XTBinaryOpGt || op == XTBinaryOpLe ||
+              op == XTBinaryOpGe))
+            return nil;
+        NSArray<NSNumber*>* x = [self tensorConstantShape:b.left];
+        NSArray<NSNumber*>* y = x ? [self tensorConstantShape:b.right] : nil;
+        NSMutableArray<NSNumber*>* out = [NSMutableArray array];
+        return y && XTTensorBroadcastFault(x, y, out) < 0 ? out : nil;
+        }
+    return nil;
+    }
+
+- (void)tensorCheckConstantShapes:(XTASTNode*)node at:(XTSourceLocation*)loc
+    {
+    if (self.tensorNames.count == 0 || ![node isKindOfClass:[XTBinaryExprNode class]])
+        return;
+    XTBinaryExprNode* bin = (XTBinaryExprNode*)node;
+    XTBinaryOp op = bin.op;
+    if (!(op == XTBinaryOpAdd || op == XTBinaryOpSub || op == XTBinaryOpMul || op == XTBinaryOpDiv || op == XTBinaryOpMod ||
+          op == XTBinaryOpEq || op == XTBinaryOpNeq || op == XTBinaryOpLt || op == XTBinaryOpGt || op == XTBinaryOpLe ||
+          op == XTBinaryOpGe))
+        return;
+    NSArray<NSNumber*>* a = [self tensorConstantShape:bin.left];
+    NSArray<NSNumber*>* b = a ? [self tensorConstantShape:bin.right] : nil;
+    if (!b || (a.count == 0 && b.count == 0))
+        return;
+    NSMutableArray<NSNumber*>* out = [NSMutableArray array];
+    NSInteger k = XTTensorBroadcastFault(a, b, out);
+    if (k < 0)
+        return;
+    NSUInteger rk = MAX(a.count, b.count);
+    long long x = (NSUInteger)k + a.count >= rk ? a[k + a.count - rk].longLongValue : 1;
+    long long y = (NSUInteger)k + b.count >= rk ? b[k + b.count - rk].longLongValue : 1;
+    [self tensorDeferError:[NSString stringWithFormat:@"tensor shapes %@ and %@ do not broadcast: dimension %ld has sizes %lld and "
+                                                      @"%lld; each must be the same, or 1",
+                                                      XTTensorShapeText(a), XTTensorShapeText(b), (long)k, x, y]
+                        at:loc];
     }
 
 /****************************************************************************\

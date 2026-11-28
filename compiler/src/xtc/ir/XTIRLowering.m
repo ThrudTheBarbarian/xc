@@ -654,6 +654,11 @@ static XTASTNode* XTOperatorCallOrSelf(XTASTNode* node)
         return ((XTSliceExprNode*)node).operatorCall;
     if (node.nodeKind == XTASTNodeKindAssignExpr && ((XTAssignExprNode*)node).operatorCall)
         return ((XTAssignExprNode*)node).operatorCall;
+    // A tensor expression's Math call or cast: its kernel's call.
+    if (node.nodeKind == XTASTNodeKindMethodCallExpr && ((XTMethodCallExprNode*)node).operatorCall)
+        return ((XTMethodCallExprNode*)node).operatorCall;
+    if (node.nodeKind == XTASTNodeKindCastExpr && ((XTCastExprNode*)node).operatorCall)
+        return ((XTCastExprNode*)node).operatorCall;
     return node;
     }
 

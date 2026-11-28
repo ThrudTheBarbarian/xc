@@ -409,6 +409,8 @@ typedef NS_ENUM(NSInteger, XTAssignOp) {
 |* @return A new method call expression node.
 \****************************************************************************/
 - (instancetype)initWithReceiver:(XTASTNode*)receiver methodName:(NSString*)methodName arguments:(NSArray<XTASTNode*>*)args location:(XTSourceLocation*)location;
+// `Math.sqrt(t)` on a tensor: the call of its expression's kernel.
+@property(nonatomic, nullable) XTASTNode* operatorCall;
 @end
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -587,6 +589,8 @@ typedef NS_ENUM(NSInteger, XTAssignOp) {
 |* @return A new cast expression node.
 \****************************************************************************/
 - (instancetype)initWithType:(XTType*)type operand:(XTASTNode*)operand location:(XTSourceLocation*)location;
+// `(tensor<f16, 2>)t`: the call of its expression's kernel.
+@property(nonatomic, nullable) XTASTNode* operatorCall;
 /****************************************************************************\
 |* Failable class-pointer downcast syntax: `(T@ ?) expr`. Parsed by
 |* accepting a trailing `?` inside the cast parens; the parser sets

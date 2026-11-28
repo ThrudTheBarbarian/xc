@@ -108,7 +108,10 @@ void main(void)
     // A tensor type: read again with TensorStorage.xc imported, as the
     // oracle reads it.
     bool withTensor = false;
-    for (u32 pass = (u32)0; pass < (u32)4; pass = pass + (u32)1)
+    // The kernels of its tensor expressions, written by the parse, as the
+    // oracle does.
+    Array* kernels = (Array*)0;
+    for (u32 pass = 0; pass < 6; pass = pass + (u32)1)
         {
         if (pass > (u32)0)
             {
@@ -120,6 +123,8 @@ void main(void)
             pp2.setTailImport(Preprocessor.packTailImport(packR));
             if (withTensor)
                 pp2.setAutoImport(String.withCString("TensorStorage.xc"));
+            if (withTensor && kernels != (Array*)0)
+                pp2.addAutoImport(String.withCString("TensorPar.xc"));
             pp = pp2;
             }
         // The implicit platform prelude, gated exactly as the oracle gates it —
@@ -162,6 +167,7 @@ void main(void)
         parser.setGoalDefault(pp.goal());   // a #goal in the file, as the front end honours it
         parser.setLibraryFiles(pp.libraryFiles());
         parser.setTensorReady(withTensor);
+        parser.setTensorKernels(kernels);
         program = parser.parse();
         if (!raw && !withTensor && parser.tensorNames().count() > (u32)0)
             {
@@ -176,10 +182,14 @@ void main(void)
         // than leaning on the default: the two sides must agree on the ptrdiff
         // type or every `p - q` in the corpus reads as a divergence.
         sema.setPointerWidth((u32)8);
+        sema.setTensorKernelsGiven(kernels);
         sema.analyse(program);
-        if (raw || (sema.packRoutines() & ~packR) == (u32)0)
+        Array* wantKernels = Sema.tensorKernelsJoin(kernels, sema.tensorKernelRequests());
+        if (raw || ((sema.packRoutines() & ~packR) == 0 && wantKernels == (Array*)0))
             break;
         packR = packR | sema.packRoutines();
+        if (wantKernels != (Array*)0)
+            kernels = wantKernels;
         }
 
     // --dump-vslots mirrors XTC_DUMP_VSLOTS on xtc-fe, so the two slot

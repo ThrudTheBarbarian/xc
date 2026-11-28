@@ -99,6 +99,9 @@ NS_ASSUME_NONNULL_BEGIN
 - (nullable XTIRModule *)compileFrontendForFile:(NSString *)inputFile;
 /// The tensor class names (`__tensor_<T>_<R>`) a text holds, in order.
 + (NSArray<NSString *> *)tensorNamesInText:(NSString *)text;
+/// The tensor kernels a pass has joined with those sema asks for, sorted;
+/// nil when it asks for none it lacks.
++ (nullable NSArray<NSString *> *)tensorKernels:(nullable NSArray<NSString *> *)have with:(NSArray<NSString *> *)want;
 
 /****************************************************************************\
 |* Print the C interface this target auto-imports (the libc the driver finds

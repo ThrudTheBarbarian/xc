@@ -942,6 +942,31 @@ class Par
         }
 
     // The CPU path: one chunk per thread.
+    // The block over [lo, hi) on the CPU's threads (runCpu) when no other
+    // block holds the runtime, else serially on this thread: what a tensor
+    // expression's kernel runs through, so it nests inside a par block as
+    // Par.run does.
+    static void runCpuShared(ParChunk* proto, i64 lo, i64 hi)
+        {
+        if (hi <= lo)
+            return;
+#if !(ARCH_6502 || ARCH_m68k)
+        if (_xt_atomic_cas_i32((pointer)&gParActive, (i32)0, (i32)1) == (i32)0)
+            {
+            proto.lo = lo;
+            proto.hi = hi;
+            proto.run();
+            return;
+            }
+        Par.runCpu(proto, lo, hi);
+        _xt_atomic_store_i32((pointer)&gParActive, (i32)0);
+#else
+        proto.lo = lo;
+        proto.hi = hi;
+        proto.run();
+#endif
+        }
+
     static void runCpu(ParChunk* proto, i64 lo, i64 hi)
         {
 #if ARCH_6502 || ARCH_m68k || ARCH_wasm32
