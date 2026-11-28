@@ -39,7 +39,7 @@ cheapest passes, and `-O0` only the mandatory ones.
 | Vector combining | Bit-select and rotate on arm64, ternary logic on AVX-512. |
 | Function multiversioning | AVX2 and AVX-512 clones chosen at load time (`-msimd=auto`). |
 | Guarded devirtualisation | A virtual call becomes a class test and a direct call that can be inlined. |
-| Idiom recognition | `memset` loops, and matrix multiplication replaced by kernels xcc emits for **SME** on Apple silicon and AVX2 and AVX-512 on x86-64. |
+| Idiom recognition | `memset` loops, and matrix multiplication replaced by kernels xcc emits: **SME** on Apple silicon that has it, **NEON** on arm64 without it (M1–M3 Macs, arm64 Linux, the Raspberry Pi 5), and AVX2 and AVX-512 on x86-64. Each gives the loops' result bit for bit. On arm64, where the loops fuse each multiply and add, `:goal(accuracy)` keeps them as the unfused loops instead. |
 | Bounds-check elimination | Range analysis removes checks it can prove, when checks are on. |
 | Floating-point contraction | Fused multiply-add only in `:goal(speed)` code, on arm64 and x86-64, so an exact loop's result does not depend on which CPU or GPU runs it; C on arm64 fuses within an expression, as GCC and clang do there. |
 | Select-to-branch | A float select on one bit becomes a branch when one arm is costly (arm64). |

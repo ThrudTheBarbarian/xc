@@ -454,11 +454,12 @@ static NSString *xtArm64SmeGemmKernel(BOOL f64, BOOL check) {
 // Pi 5): the SME kernel's contract, the same arguments, checks and return,
 // and C's elements the loops' bit for bit. Each element is fused with k in
 // order from +0.0, as the nest fuses on every arm64 row (#569); fmla (by
-// element) and scalar fmadd round once. For each block of columns (8
-// floats, 4 doubles) B's K x 32-byte panel is packed once into a buffer
-// (malloc; none, and the loop runs), then read by blocks of C 8 rows tall
-// held in v16-v31 (per k: the panel's two vectors, eight of A's column,
-// sixteen fmla by element); the columns past the last block, for those rows,
+// element) and scalar fmadd round once. K is taken 256 at a time: per
+// k-block the panels of a group of 8 column blocks (8 floats or 4 doubles
+// each, 256 x 32 bytes) are packed into a 64 KB buffer (malloc; none, and the
+// loop runs) and read by blocks of C 8 rows tall held in v16-v31 (per k: the
+// panel's two vectors, eight of A's column, sixteen fmla by element), C
+// started from +0.0 and read back between k-blocks, which is exact; the columns past the last block, for those rows,
 // an element at a time with fmadd. The rows left over (all of them when M <
 // 8) start from +0.0 in C and are updated in place per k, B's rows read as
 // they lie. Every path keeps each element's k order. A NaN in C
@@ -476,7 +477,7 @@ static NSString *xtArm64NeonGemmKernel(BOOL f64, BOOL check) {
     NSMutableString *o = [NSMutableString string];
     [o appendFormat:@"\n// NEON matrix kernel (%@)\n    .p2align 2\n", name];
     [o appendFormat:@"___xt_neon_gemm_%@:\n", name];
-    [o appendString:@"    stp x29, x30, [sp, #-160]!\n    mov x29, sp\n"
+    [o appendString:@"    stp x29, x30, [sp, #-176]!\n    mov x29, sp\n"
                      @"    stp x19, x20, [sp, #16]\n    stp x21, x22, [sp, #32]\n"
                      @"    stp x23, x24, [sp, #48]\n    stp x25, x26, [sp, #64]\n"
                      @"    stp x27, x28, [sp, #80]\n    stp d8, d9, [sp, #96]\n"
@@ -502,24 +503,47 @@ static NSString *xtArm64NeonGemmKernel(BOOL f64, BOOL check) {
     [o appendFormat:@"    cmp x21, x11\n    ccmp x20, x10, #2, lo\n    b.lo %@ret\n", L];
     // strides in bytes; M rounded down to the 8-row blocks, N to the columns'
     [o appendFormat:@"%@go:\n    lsl x27, x27, #%d\n    mov x28, #0\n", L, sh];
-    // B's panel for one column block, K rows of 32 bytes, packed once and
-    // read by every 8-row block (none to read: no panel; no allocation:
-    // the loop runs)
-    [o appendFormat:@"    cbz x24, %@go2\n    cmp x22, #8\n    b.lo %@go2\n    lsl x0, x24, #5\n    bl _malloc\n    cbz x0, %@bail\n    mov x28, x0\n", L, L, L];
+    // K is taken 256 at a time. For each k-block, the panels of a group of
+    // 8 column blocks (256 rows of 32 bytes each, 64 KB) are packed once and
+    // read by every 8-row block, whose rows of A over the k-block stay in
+    // L1. C starts from +0.0 on the first k-block and is read back on the
+    // later ones: a stored partial sum is exact, so each element still
+    // sees its k in order. (Nothing to read, or no 8-row block: no panel.
+    // No allocation: the loop runs.)
+    [o appendFormat:@"    cbz x24, %@go2\n    cmp x22, #8\n    b.lo %@go2\n    movz x0, #1, lsl #16\n    bl _malloc\n    cbz x0, %@bail\n    mov x28, x0\n", L, L, L];
     [o appendFormat:@"%@go2:\n    lsl x13, x25, #%d\n    lsl x14, x26, #%d\n    and x17, x22, #0xfffffffffffffff8\n", L, sh, sh];
-    [o appendFormat:@"    and x9, x23, #%@\n    mov x11, #0\n    cbz x17, %@ir\n", f64 ? @"0xfffffffffffffffc" : @"0xfffffffffffffff8", L];
-    [o appendFormat:@"%@j8:\n    cmp x11, x9\n    b.hs %@jr\n", L, L];
-    [o appendFormat:@"    add x16, x20, x11, lsl #%d\n    mov x15, x28\n    mov x12, #0\n    cbz x24, %@p8\n", sh, L];
+    [o appendFormat:@"    and x9, x23, #%@\n    cbz x17, %@ir\n    stp x22, x23, [sp, #160]\n    mov x25, #0\n", f64 ? @"0xfffffffffffffffc" : @"0xfffffffffffffff8", L];
+    // x25: the k-block's start; x26: its length, min(K - x25, 256)
+    [o appendFormat:@"%@kb:\n    sub x26, x24, x25\n    mov x8, #256\n    cmp x26, x8\n    csel x26, x26, x8, lo\n    mov x11, #0\n", L];
+    // x11: the group's first column; x22: past its last, min(x11 + 8 blocks,
+    // x9). x0-x7 hold A's rows in the loop below, so M and N sit in the
+    // frame's spare pair meanwhile and x22, x23 serve as the group's end and
+    // column.
+    [o appendFormat:@"%@jg:\n    cmp x11, x9\n    b.hs %@kn\n    add x22, x11, #%d\n    cmp x22, x9\n    csel x22, x22, x9, lo\n", L, L, cols * (int)8];
+    [o appendFormat:@"    mov x15, x28\n    mov x23, x11\n%@pj:\n    cmp x23, x22\n    b.hs %@p8\n", L, L];
+    [o appendFormat:@"    madd x16, x25, x14, x20\n    add x16, x16, x23, lsl #%d\n    mov x12, #0\n    cbz x26, %@pn\n", sh, L];
     [o appendFormat:@"%@pk:\n    ldp q0, q1, [x16]\n    add x16, x16, x14\n    stp q0, q1, [x15], #32\n", L];
-    [o appendFormat:@"    add x12, x12, #1\n    cmp x12, x24\n    b.lo %@pk\n", L];
+    [o appendFormat:@"    add x12, x12, #1\n    cmp x12, x26\n    b.lo %@pk\n", L];
+    [o appendFormat:@"%@pn:\n    add x23, x23, #%d\n    b %@pj\n", L, cols, L];
+    // x10: the 8-row block
     [o appendFormat:@"%@p8:\n    mov x10, #0\n%@i8:\n    cmp x10, x17\n    b.hs %@jn\n", L, L, L];
-    for (int v = 16; v < 32; v++)
-        [o appendFormat:@"    eor v%d.16b, v%d.16b, v%d.16b\n", v, v, v];
-    // x0-x7: the block's eight rows of A; x16: the panel
-    [o appendString:@"    madd x0, x10, x13, x19\n"];
+    // x0-x7: the block's eight rows of A from the k-block's start
+    [o appendFormat:@"    madd x0, x10, x13, x19\n    add x0, x0, x25, lsl #%d\n", sh];
     for (int r = 1; r < 8; r++)
         [o appendFormat:@"    add x%d, x%d, x13\n", r, r - 1];
-    [o appendFormat:@"    mov x16, x28\n    mov x12, #0\n    cbz x24, %@st\n", L];
+    // x23: the column block; x15: C's block; x16: its panel, the panels
+    // being packed one after another and read in order
+    [o appendFormat:@"    mov x23, x11\n    mov x16, x28\n%@pb:\n    cmp x23, x22\n    b.hs %@nb\n", L, L];
+    [o appendFormat:@"    madd x15, x10, x27, x21\n    add x15, x15, x23, lsl #%d\n    cbnz x25, %@ld\n", sh, L];
+    for (int v = 16; v < 32; v++)
+        [o appendFormat:@"    eor v%d.16b, v%d.16b, v%d.16b\n", v, v, v];
+    [o appendFormat:@"    b %@k0\n%@ld:\n    mov x8, x15\n", L, L];
+    for (int r = 0; r < 8; r++) {
+        [o appendFormat:@"    ldp q%d, q%d, [x8]\n", 16 + r * 2, 17 + r * 2];
+        if (r < 7)
+            [o appendString:@"    add x8, x8, x27\n"];
+    }
+    [o appendFormat:@"%@k0:\n    mov x12, #0\n    cbz x26, %@st\n", L, L];
     [o appendFormat:@"%@k:\n    ldp q0, q1, [x16], #32\n", L];
     for (int r = 0; r < 8; r++)
         [o appendFormat:@"    ldr %@%d, [x%d, x12, lsl #%d]\n", S, 8 + r, r, sh];
@@ -527,16 +551,16 @@ static NSString *xtArm64NeonGemmKernel(BOOL f64, BOOL check) {
         [o appendFormat:@"    fmla v%d.%@, v0.%@, v%d.%@[0]\n", 16 + r * 2, V, V, 8 + r, S];
         [o appendFormat:@"    fmla v%d.%@, v1.%@, v%d.%@[0]\n", 17 + r * 2, V, V, 8 + r, S];
     }
-    [o appendFormat:@"    add x12, x12, #1\n    cmp x12, x24\n    b.lo %@k\n", L];
-    [o appendFormat:@"%@st:\n    madd x15, x10, x27, x21\n    add x15, x15, x11, lsl #%d\n", L, sh];
+    [o appendFormat:@"    add x12, x12, #1\n    cmp x12, x26\n    b.lo %@k\n%@st:\n", L, L];
     for (int r = 0; r < 8; r++) {
         [o appendFormat:@"    stp q%d, q%d, [x15]\n", 16 + r * 2, 17 + r * 2];
         if (r < 7)
             [o appendString:@"    add x15, x15, x27\n"];
     }
-    [o appendFormat:@"    add x10, x10, #8\n    b %@i8\n", L];
-    [o appendFormat:@"%@jn:\n    add x11, x11, #%d\n    b %@j8\n", L, cols, L];
-    // the columns past the last block, every row, an element at a time
+    [o appendFormat:@"    add x23, x23, #%d\n    b %@pb\n", cols, L];
+    [o appendFormat:@"%@nb:\n    add x10, x10, #8\n    b %@i8\n", L, L];
+    [o appendFormat:@"%@jn:\n    mov x11, x22\n    b %@jg\n", L, L];
+    [o appendFormat:@"%@kn:\n    add x25, x25, #256\n    cmp x25, x24\n    b.lo %@kb\n    ldp x22, x23, [sp, #160]\n", L, L];
     // the columns past the last block, for the 8-row blocks' rows, an
     // element at a time
     [o appendFormat:@"%@jr:\n    mov x3, x9\n%@jc:\n    cmp x3, x23\n    b.hs %@ir\n    mov x2, #0\n", L, L, L];
@@ -579,7 +603,7 @@ static NSString *xtArm64NeonGemmKernel(BOOL f64, BOOL check) {
                      @"    ldp d10, d11, [sp, #112]\n    ldp d8, d9, [sp, #96]\n"
                      @"    ldp x27, x28, [sp, #80]\n    ldp x25, x26, [sp, #64]\n"
                      @"    ldp x23, x24, [sp, #48]\n    ldp x21, x22, [sp, #32]\n"
-                     @"    ldp x19, x20, [sp, #16]\n    ldp x29, x30, [sp], #160\n    ret\n"];
+                     @"    ldp x19, x20, [sp, #16]\n    ldp x29, x30, [sp], #176\n    ret\n"];
     // One element, C[x2][x3]: the k loop's fused chain from +0.0.
     [o appendFormat:@"%@el:\n    madd x4, x2, x13, x19\n    add x5, x20, x3, lsl #%d\n    fmov %@0, %@\n    mov x6, #0\n    cbz x24, %@elst\n",
                                L, sh, S, f64 ? @"xzr" : @"wzr", L];
